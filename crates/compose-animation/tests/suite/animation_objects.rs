@@ -122,7 +122,7 @@ fn verify(
     end: AnimationVector,
     velocity: AnimationVector,
 ) {
-    let animation = TargetBasedAnimation::with_velocity_vector(spec, start, end, velocity);
+    let animation = TargetBasedAnimation::with_velocity_vector(spec.clone(), start, end, velocity);
     for time in (0..=animation.duration_millis()).step_by(100) {
         assert_eq!(
             spec.value_from_millis(time, start, end, velocity),
@@ -177,7 +177,7 @@ fn only_infinite_repeatables_are_infinite() {
     ] {
         assert_eq!(spec.is_infinite(), infinite, "{spec:?}");
         assert_eq!(
-            TargetBasedAnimation::new(spec, 0.0f32, 0.0).is_infinite(),
+            TargetBasedAnimation::new(spec.clone(), 0.0f32, 0.0).is_infinite(),
             infinite,
             "{spec:?}"
         );
@@ -433,4 +433,102 @@ fn an_int_size_animatable_never_goes_negative() {
         })
         .collect();
     assert_eq!(sizes, expected);
+}
+
+/// Compose's test spec: moving at a velocity rising linearly from the initial one to twice the
+/// average, over `duration_millis`.
+struct AverageVelocitySpec {
+    duration_millis: u32,
+}
+
+impl AverageVelocitySpec {
+    fn seconds(&self) -> f32 {
+        self.duration_millis as f32 / 1_000.0
+    }
+}
+
+impl VectorizedAnimationSpec for AverageVelocitySpec {
+    fn value_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        initial_velocity: AnimationVector,
+    ) -> AnimationVector {
+        let seconds = (play_time_nanos / 1_000_000) as f32 / 1_000.0;
+        let velocity = self.velocity_from_nanos(
+            play_time_nanos,
+            initial_value,
+            target_value,
+            initial_velocity,
+        );
+        initial_value.new_instance().map(|index, _| velocity[index] * seconds)
+    }
+
+    fn velocity_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        initial_velocity: AnimationVector,
+    ) -> AnimationVector {
+        let seconds = (play_time_nanos / 1_000_000) as f32 / 1_000.0;
+        initial_velocity.new_instance().map(|index, _| {
+            let average = (target_value[index] - initial_value[index]) / self.seconds();
+            let end = average * 2.0 - initial_velocity[index];
+            lerp(initial_velocity[index], end, seconds / self.seconds())
+        })
+    }
+
+    fn duration_nanos(&self, _: AnimationVector, _: AnimationVector, _: AnimationVector) -> i64 {
+        i64::from(self.duration_millis) * 1_000_000
+    }
+}
+
+impl VectorizedDurationBasedAnimationSpec for AverageVelocitySpec {
+    fn duration_millis(&self) -> u32 {
+        self.duration_millis
+    }
+    fn delay_millis(&self) -> u32 {
+        0
+    }
+}
+
+// Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt, testVectorizedInfiniteRepeatableSpec_velocityOnRepetitions
+#[test]
+fn a_repetitions_end_velocity_carries_into_the_next() {
+    let spec = infinite_repeatable(
+        DurationBasedSpec::custom(AverageVelocitySpec { duration_millis: 1000 }),
+        RepeatMode::Restart,
+    );
+    let (start, end, zero) = (v(&[0.0]), v(&[3.0]), v(&[0.0]));
+    let at_a = spec.velocity_from_nanos(0, start, end, zero);
+    let at_b = spec.velocity_from_nanos(1_000 * 1_000_000 - 1, start, end, zero);
+    let at_c = spec.velocity_from_nanos(1_000 * 1_000_000 + 1, start, end, zero);
+    assert_eq!(at_a, zero);
+    // Twice the average (3 a second), a nanosecond before the end.
+    assert!((at_b[0] - end[0] * 2.0).abs() <= 0.01, "{at_b:?}");
+    // The next repetition starts at that velocity.
+    assert!((at_b[0] - at_c[0]).abs() <= 0.01, "{at_b:?} then {at_c:?}");
+}
+
+/// A spec of an app's own plays in an `Animatable` as Compose's specs do, and an easing may
+/// capture what it needs.
+#[test]
+fn an_apps_own_spec_and_easing_play() {
+    let custom = AnimationSpec::custom(AverageVelocitySpec { duration_millis: 160 });
+    assert_eq!(custom, custom.clone());
+    assert_ne!(custom, AnimationSpec::custom(AverageVelocitySpec { duration_millis: 160 }));
+    let animation = TargetBasedAnimation::new(custom, 0.0f32, 100.0);
+    assert_eq!(animation.duration_millis(), 160);
+    // Half-way, the velocity is the average (625 a second), and the spec's value that velocity
+    // times the time: 50.
+    assert_eq!(animation.value_from_millis(80), 50.0);
+    assert_eq!(animation.value_from_millis(160), 100.0);
+    let steps = 4.0f32;
+    let stepped = Easing::custom(move |fraction| (fraction * steps).floor() / steps);
+    assert_eq!(stepped, stepped.clone());
+    let tween = TargetBasedAnimation::new(tween(100).easing(stepped), 0.0f32, 100.0);
+    assert_eq!(tween.value_from_millis(30), 25.0);
+    assert_eq!(tween.value_from_millis(60), 50.0);
 }

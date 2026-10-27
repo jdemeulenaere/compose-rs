@@ -23,7 +23,7 @@ fn reference_animate_value<T: Animate + ComposeArg>(
 ) -> State<T> {
     let animatable = remember(|| Animatable::new(initial_value.clone()));
     let state = animatable.as_state();
-    let keys = (initial_value.clone(), target_value.clone(), animation_spec);
+    let keys = (initial_value.clone(), target_value.clone(), animation_spec.clone());
     LaunchedEffect(keys, async move {
         animatable.snap_to(initial_value);
         animatable.animate_to(target_value, animation_spec).await;
@@ -46,8 +46,11 @@ fn compare<T: Animate + ComposeArg + std::fmt::Debug>(
     target_value: T,
     animation_spec: RepeatableSpec,
 ) {
-    let value =
-        transition.animate_value(initial_value.clone(), target_value.clone(), animation_spec);
+    let value = transition.animate_value(
+        initial_value.clone(),
+        target_value.clone(),
+        animation_spec.clone(),
+    );
     let reference = reference_animate_value(initial_value, target_value, animation_spec);
     let (value, reference) = (value.get(), reference.get());
     assert!(
@@ -204,7 +207,7 @@ fn an_infinite_transition_leaving_the_composition_stops() {
     let shown = mutable_state_of(true);
     let handle = shown.handle();
     let spec = infinite_repeatable(tween(100), RepeatMode::Reverse);
-    let mut ui = ComposeTestRule::with_manual_clock(move || Shown(handle, spec));
+    let mut ui = ComposeTestRule::with_manual_clock(move || Shown(handle, spec.clone()));
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     assert!(platform::has_frame_awaiters(), "it animates");
@@ -228,7 +231,7 @@ fn an_infinite_transition_whose_values_ended_is_idle() {
     let shown = mutable_state_of(true);
     let handle = shown.handle();
     let spec = repeatable(2, tween(100), RepeatMode::Reverse);
-    let mut ui = ComposeTestRule::with_manual_clock(move || Shown(handle, spec));
+    let mut ui = ComposeTestRule::with_manual_clock(move || Shown(handle, spec.clone()));
     frames(&mut ui, 20);
     assert!(!platform::has_frame_awaiters(), "the values ended");
     assert_eq!(VALUE.get().expect("composed").get(), 1.0);
@@ -280,7 +283,7 @@ fn MovingBetween(use_b: MutableState<bool>) {
     let a = if !use_b.get() { Some(remember_infinite_transition!()) } else { None };
     let transition = a.unwrap_or(b);
     let spec = infinite_repeatable(tween(500).easing(LINEAR_EASING), RepeatMode::Restart);
-    MOVED.set(Some(transition.animate_float(0.0, 1.0, spec)));
+    MOVED.set(Some(transition.animate_float(0.0, 1.0, spec.clone())));
     MOVED_REF.set(Some(reference_animate_value(0.0f32, 1.0, spec)));
 }
 

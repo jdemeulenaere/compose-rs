@@ -953,7 +953,7 @@ struct TransitionAnimationState<T: Animate> {
     transition: Weak<dyn TransitionNode>,
     label: String,
     target_value: RefCell<T>,
-    animation_spec: Cell<AnimationSpec>,
+    animation_spec: RefCell<AnimationSpec>,
     animation: RefCell<TargetBasedAnimation<T>>,
     is_finished: Cell<bool>,
     reset_snap_value: Cell<f32>,
@@ -977,7 +977,7 @@ impl<T: Animate> TransitionAnimationState<T> {
         let interruption_spec = AnimationSpec::Spring(spring().visibility_threshold(threshold));
         let default_spec = AnimationSpec::Spring(spring());
         let animation = TargetBasedAnimation::with_velocity_vector(
-            default_spec,
+            default_spec.clone(),
             initial_value.clone(),
             initial_value.clone(),
             zero,
@@ -987,7 +987,7 @@ impl<T: Animate> TransitionAnimationState<T> {
             transition,
             label,
             target_value: RefCell::new(initial_value.clone()),
-            animation_spec: Cell::new(default_spec),
+            animation_spec: RefCell::new(default_spec),
             animation: RefCell::new(animation),
             is_finished: Cell::new(true),
             reset_snap_value: Cell::new(NO_RESET),
@@ -1010,11 +1010,13 @@ impl<T: Animate> TransitionAnimationState<T> {
     /// interruption spring when it interrupts one still running (unless its spec is a spring),
     /// starting at the transition's play time.
     fn update_animation(&self, initial_value: T, is_interrupted: bool) {
-        let spec = self.animation_spec.get();
+        let spec = self.animation_spec.borrow().clone();
         let spec = match spec {
             AnimationSpec::Spring(_) => spec,
-            AnimationSpec::InterruptionAware(aware) if is_interrupted => aware.interruption_spec(),
-            _ if is_interrupted => self.interruption_spec,
+            AnimationSpec::InterruptionAware(aware) if is_interrupted => {
+                aware.interruption_spec().clone()
+            }
+            _ if is_interrupted => self.interruption_spec.clone(),
             _ => spec,
         };
         let play_time = self.play_time_nanos();
@@ -1041,7 +1043,7 @@ impl<T: Animate> TransitionAnimationState<T> {
             return;
         }
         *self.target_value.borrow_mut() = target_value.clone();
-        self.animation_spec.set(animation_spec);
+        *self.animation_spec.borrow_mut() = animation_spec;
         let initial_value = if self.reset_snap_value.get() == RESET_ANIMATION_SNAP {
             target_value
         } else {
@@ -1094,6 +1096,6 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
     }
 
     fn animation_spec(&self) -> AnimationSpec {
-        self.animation_spec.get()
+        self.animation_spec.borrow().clone()
     }
 }

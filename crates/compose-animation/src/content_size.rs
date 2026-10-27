@@ -87,7 +87,7 @@ impl ModifierNodeElement for ContentSizeElement {
     type Node = ContentSizeNode;
     fn create(&self) -> ContentSizeNode {
         ContentSizeNode {
-            spec: self.spec,
+            spec: self.spec.clone(),
             alignment: self.alignment,
             listener: self.listener.clone(),
             data: None,
@@ -96,7 +96,7 @@ impl ModifierNodeElement for ContentSizeElement {
     }
 
     fn update(&self, node: &mut ContentSizeNode) {
-        node.spec = self.spec;
+        node.spec = self.spec.clone();
         node.alignment = self.alignment;
         node.listener = self.listener.clone();
     }
@@ -151,7 +151,7 @@ impl ContentSizeNode {
         if target_size != data.animatable.target_value() || was_interrupted {
             data.start_size.set(current);
             let (animatable, start, spec) =
-                (data.animatable.clone(), data.start_size.clone(), self.spec);
+                (data.animatable.clone(), data.start_size.clone(), self.spec.clone());
             let listener = self.listener.clone();
             self.scope.launch(async move {
                 let result = animatable.animate_to(target_size, spec).await;

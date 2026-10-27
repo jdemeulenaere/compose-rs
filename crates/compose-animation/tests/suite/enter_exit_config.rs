@@ -8,7 +8,7 @@ use compose_ui::{Alignment, Color, IntOffset, IntSize, TransformOrigin};
 #[test]
 fn a_fade_in_sets_only_its_fade() {
     let spec = AnimationSpec::from(tween(300));
-    let config = fade_in_with(spec, 0.5).config().clone();
+    let config = fade_in_with(spec.clone(), 0.5).config().clone();
     let fade = config.fade.expect("a fade");
     assert_eq!((fade.alpha, fade.animation_spec), (0.5, spec));
     assert!(config.slide.is_none() && config.change_size.is_none() && config.scale.is_none());
@@ -19,7 +19,7 @@ fn a_fade_in_sets_only_its_fade() {
 #[test]
 fn a_fade_out_sets_its_fade() {
     let spec = AnimationSpec::from(spring());
-    let fade = fade_out_with(spec, 0.2).config().fade.clone().expect("a fade");
+    let fade = fade_out_with(spec.clone(), 0.2).config().fade.clone().expect("a fade");
     assert_eq!((fade.alpha, fade.animation_spec), (0.2, spec));
 }
 
@@ -28,8 +28,10 @@ fn a_fade_out_sets_its_fade() {
 #[test]
 fn a_slide_in_sets_its_slide() {
     let spec = AnimationSpec::from(tween(DEFAULT_DURATION_MILLIS));
-    let slide =
-        slide_in_with(spec, |size| IntOffset::new(size.width / 2, 0)).config().slide.clone();
+    let slide = slide_in_with(spec.clone(), |size| IntOffset::new(size.width / 2, 0))
+        .config()
+        .slide
+        .clone();
     let slide = slide.expect("a slide");
     assert_eq!(slide.animation_spec, spec);
     assert_eq!((slide.slide_offset)(IntSize::new(100, 40)), IntOffset::new(50, 0));
@@ -39,8 +41,10 @@ fn a_slide_in_sets_its_slide() {
 #[test]
 fn a_slide_out_sets_its_slide() {
     let spec = AnimationSpec::from(spring());
-    let slide =
-        slide_out_with(spec, |size| IntOffset::new(0, size.height / 2)).config().slide.clone();
+    let slide = slide_out_with(spec.clone(), |size| IntOffset::new(0, size.height / 2))
+        .config()
+        .slide
+        .clone();
     let slide = slide.expect("a slide");
     assert_eq!(slide.animation_spec, spec);
     assert_eq!((slide.slide_offset)(IntSize::new(100, 40)), IntOffset::new(0, 20));
@@ -50,7 +54,7 @@ fn a_slide_out_sets_its_slide() {
 #[test]
 fn an_expansion_sets_its_size_change() {
     let spec = AnimationSpec::from(spring());
-    let change = expand_in_with(spec, Alignment::BOTTOM_END, false, |size| {
+    let change = expand_in_with(spec.clone(), Alignment::BOTTOM_END, false, |size| {
         IntSize::new(size.width / 4, size.height / 4)
     })
     .config()
@@ -67,7 +71,7 @@ fn an_expansion_sets_its_size_change() {
 #[test]
 fn a_shrink_sets_its_size_change() {
     let spec = AnimationSpec::from(tween(DEFAULT_DURATION_MILLIS));
-    let change = shrink_out_with(spec, Alignment::CENTER, true, |_| IntSize::ZERO)
+    let change = shrink_out_with(spec.clone(), Alignment::CENTER, true, |_| IntSize::ZERO)
         .config()
         .change_size
         .clone()
@@ -83,7 +87,7 @@ fn a_shrink_sets_its_size_change() {
 fn a_scale_in_sets_its_scale() {
     let spec = AnimationSpec::from(tween(DEFAULT_DURATION_MILLIS));
     let origin = TransformOrigin { pivot_fraction_x: 0.1, pivot_fraction_y: 0.2 };
-    let scale = scale_in_with(spec, 0.8, origin).config().scale.clone().expect("a scale");
+    let scale = scale_in_with(spec.clone(), 0.8, origin).config().scale.clone().expect("a scale");
     assert_eq!((scale.scale, scale.transform_origin, scale.animation_spec), (0.8, origin, spec));
 }
 
@@ -91,7 +95,7 @@ fn a_scale_in_sets_its_scale() {
 #[test]
 fn a_scale_out_sets_its_scale() {
     let spec = AnimationSpec::from(spring());
-    let scale = scale_out_with(spec, 0.5, TransformOrigin::CENTER).config().scale.clone();
+    let scale = scale_out_with(spec.clone(), 0.5, TransformOrigin::CENTER).config().scale.clone();
     let scale = scale.expect("a scale");
     assert_eq!(
         (scale.scale, scale.transform_origin, scale.animation_spec),
@@ -103,8 +107,8 @@ fn a_scale_out_sets_its_scale() {
 #[test]
 fn transitions_added_keep_each_part() {
     let (fade_spec, scale_spec) = (AnimationSpec::from(tween(100)), AnimationSpec::from(spring()));
-    let enter =
-        fade_in_with(fade_spec, 0.0) + scale_in_with(scale_spec, 0.0, TransformOrigin::CENTER);
+    let enter = fade_in_with(fade_spec.clone(), 0.0)
+        + scale_in_with(scale_spec.clone(), 0.0, TransformOrigin::CENTER);
     let config = enter.config();
     assert_eq!(config.fade.as_ref().unwrap().animation_spec, fade_spec);
     assert_eq!(config.scale.as_ref().unwrap().animation_spec, scale_spec);
@@ -144,7 +148,8 @@ fn content_transforms_share_the_default_size_transform() {
 #[test]
 fn an_unveil_sets_its_veil() {
     let spec = AnimationSpec::from(tween(DEFAULT_DURATION_MILLIS));
-    let veil = unveil_in_with(spec, Color::RED, false).config().veil.clone().expect("a veil");
+    let veil =
+        unveil_in_with(spec.clone(), Color::RED, false).config().veil.clone().expect("a veil");
     assert_eq!(veil.initial_color, Color::RED);
     assert_eq!(veil.target_color, Color::RED.with_alpha(0.0));
     assert_eq!(veil.animation_spec, spec);
@@ -155,7 +160,8 @@ fn an_unveil_sets_its_veil() {
 #[test]
 fn a_veil_out_sets_its_veil() {
     let spec = AnimationSpec::from(spring());
-    let veil = veil_out_with(spec, Color::BLUE, true).config().veil.clone().expect("a veil");
+    let veil =
+        veil_out_with(spec.clone(), Color::BLUE, true).config().veil.clone().expect("a veil");
     assert_eq!(veil.initial_color, Color::BLUE.with_alpha(0.0));
     assert_eq!(veil.target_color, Color::BLUE);
     assert_eq!(veil.animation_spec, spec);

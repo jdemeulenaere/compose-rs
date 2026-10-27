@@ -108,11 +108,13 @@ pub fn Crossfade<T: Clone + PartialEq + 'static>(
                 }
             };
             // The new one in, the others out (and gone once out).
+            let entering = spec.clone();
             scope.launch(async move {
-                alpha.animate_to(1.0, spec).await;
+                alpha.animate_to(1.0, entering).await;
             });
             for item in &all.items[..all.items.len() - 1] {
                 let (alpha, id, items) = (item.alpha.clone(), item.id, items.clone());
+                let spec = spec.clone();
                 scope.launch(async move {
                     let result = alpha.animate_to(0.0, spec).await;
                     if result.end_reason == crate::AnimationEndReason::Finished {

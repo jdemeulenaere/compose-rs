@@ -22,12 +22,12 @@ fn spec() -> InterruptionAwareAnimationSpec {
 fn an_interruption_aware_spec_holds_its_two_specs() {
     let forward = AnimationSpec::from(tween(300));
     let interruption = AnimationSpec::from(spring_with(1.0, Spring::STIFFNESS_LOW));
-    let combined = InterruptionAwareAnimationSpec::new(forward, interruption);
-    assert_eq!(combined.animation_spec(), forward);
-    assert_eq!(combined.interruption_spec(), interruption);
-    assert_eq!(InterruptionAwareAnimationSpec::new(forward, interruption), combined);
-    let alone = InterruptionAwareAnimationSpec::of(forward);
-    assert_eq!((alone.animation_spec(), alone.interruption_spec()), (forward, forward));
+    let combined = InterruptionAwareAnimationSpec::new(forward.clone(), interruption.clone());
+    assert_eq!(*combined.animation_spec(), forward);
+    assert_eq!(*combined.interruption_spec(), interruption);
+    assert_eq!(InterruptionAwareAnimationSpec::new(forward.clone(), interruption), combined);
+    let alone = InterruptionAwareAnimationSpec::of(forward.clone());
+    assert_eq!((alone.animation_spec(), alone.interruption_spec()), (&forward, &forward));
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimatableTest.kt, animateTo_interruptionAwareAnimationSpec
@@ -141,10 +141,12 @@ fn an_interruption_aware_spec_is_kept_when_a_transition_is_interrupted() {
         frames.duration_millis = 200;
         frames.at(100, 50.0);
     });
+    let captured = keyframes.clone();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = update_transition(handle.get(), "InterruptibleTest");
+        let keyframes = captured.clone();
         let value = transition.animate_float(
-            move |_| InterruptionAwareAnimationSpec::of(keyframes).into(),
+            move |_| InterruptionAwareAnimationSpec::of(keyframes.clone()).into(),
             |on| if *on { 100.0 } else { 0.0 },
         );
         seen.set(value.get());

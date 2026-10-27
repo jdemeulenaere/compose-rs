@@ -55,8 +55,8 @@ fn values_follow_their_segments_specs_on_the_transitions_play_time() {
         frames.at(400, -500.0);
         frames.at(800, -1000.0);
     });
-    let keyframes_to_animation = TargetBasedAnimation::new(keyframes_to, 0.0f32, 0.0);
-    let keyframes_from_animation = TargetBasedAnimation::new(keyframes_from, 0.0f32, 0.0);
+    let keyframes_to_animation = TargetBasedAnimation::new(keyframes_to.clone(), 0.0f32, 0.0);
+    let keyframes_from_animation = TargetBasedAnimation::new(keyframes_from.clone(), 0.0f32, 0.0);
     let checked = Rc::new(Cell::new(0));
     let values = Rc::new(Cell::new((0.0, Color::BLACK)));
     let (count, seen) = (checked.clone(), values.clone());
@@ -80,9 +80,9 @@ fn values_follow_their_segments_specs_on_the_transitions_play_time() {
         let with_keyframes = transition.animate_float(
             |segment| {
                 if segment.is_transitioning_to(&From, &To) {
-                    keyframes_to.into()
+                    keyframes_to.clone().into()
                 } else {
-                    keyframes_from.into()
+                    keyframes_from.clone().into()
                 }
             },
             |_| 0.0,

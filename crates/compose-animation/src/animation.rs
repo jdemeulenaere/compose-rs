@@ -133,7 +133,7 @@ impl<T: Animate> TargetBasedAnimation<T> {
 
     /// The spec it plays.
     pub fn animation_spec(&self) -> AnimationSpec {
-        self.spec
+        self.spec.clone()
     }
 
     /// The velocity it starts with, as a vector.

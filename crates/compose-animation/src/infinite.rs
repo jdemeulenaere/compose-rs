@@ -133,7 +133,7 @@ pub fn remember_infinite_transition(
 struct TransitionAnimationState<T: Animate> {
     initial_value: RefCell<T>,
     target_value: RefCell<T>,
-    animation_spec: Cell<RepeatableSpec>,
+    animation_spec: RefCell<RepeatableSpec>,
     /// The values as vectors, converted once (a color's conversion is the dearest part of its
     /// frame).
     vectors: Cell<(AnimationVector, AnimationVector)>,
@@ -155,7 +155,7 @@ impl<T: Animate> TransitionAnimationState<T> {
         self.duration_nanos.set(animation_spec.duration_nanos(start, end, start.new_instance()));
         *self.initial_value.borrow_mut() = initial_value;
         *self.target_value.borrow_mut() = target_value;
-        self.animation_spec.set(animation_spec);
+        *self.animation_spec.borrow_mut() = animation_spec;
         self.is_finished.set(false);
         self.start_on_the_next_frame.set(true);
     }
@@ -178,7 +178,7 @@ impl<T: Animate> TransitionAnimation for TransitionAnimationState<T> {
         }
         // As Compose's `TargetBasedAnimation.getValueFromNanos`: at the target once it ends (a
         // finite repeatable's).
-        let spec = self.animation_spec.get();
+        let spec = self.animation_spec.borrow();
         let play_time = play_time.min(i64::MAX as u64) as i64;
         let velocity = start.new_instance();
         if play_time >= self.duration_nanos.get() {
@@ -210,7 +210,7 @@ impl InfiniteTransition {
             Rc::new(TransitionAnimationState {
                 initial_value: RefCell::new(initial_value.clone()),
                 target_value: RefCell::new(target_value.clone()),
-                animation_spec: Cell::new(animation_spec),
+                animation_spec: RefCell::new(animation_spec.clone()),
                 vectors: Cell::new((initial_value.to_vector(), target_value.to_vector())),
                 duration_nanos: Cell::new({
                     let start = initial_value.to_vector();
@@ -247,7 +247,7 @@ impl InfiniteTransition {
         SideEffect(move || {
             let changed = !initial_value.same(&animation.initial_value.borrow())
                 || !target_value.same(&animation.target_value.borrow())
-                || animation_spec != animation.animation_spec.get();
+                || animation_spec != *animation.animation_spec.borrow();
             if changed {
                 animation.update_values(initial_value, target_value, animation_spec);
                 if let Some(inner) = transition.try_get() {

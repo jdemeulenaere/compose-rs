@@ -41,7 +41,7 @@ fn disposing(
     let handle = show_first;
     ComposeTestRule::with_manual_clock(move || {
         let disposed = disposed.clone();
-        Crossfade!(handle.get(), animation_spec = spec, move |first| {
+        Crossfade!(handle.get(), animation_spec = spec.clone(), move |first| {
             BasicText!("{}", if first { FIRST } else { SECOND });
             let disposed = disposed.clone();
             DisposableEffect((), move |scope| scope.on_dispose(move || disposed.set(true)));

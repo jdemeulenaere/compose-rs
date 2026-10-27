@@ -371,11 +371,11 @@ fn the_default_scale_springs_threshold_is_two_thousandths() {
     };
     let threshold = Some(AnimationVector::from(0.002));
     assert_eq!(
-        spring_threshold(scale_in().config().scale.as_ref().unwrap().animation_spec),
+        spring_threshold(scale_in().config().scale.as_ref().unwrap().animation_spec.clone()),
         threshold
     );
     assert_eq!(
-        spring_threshold(scale_out().config().scale.as_ref().unwrap().animation_spec),
+        spring_threshold(scale_out().config().scale.as_ref().unwrap().animation_spec.clone()),
         threshold
     );
 }
@@ -568,7 +568,7 @@ fn a_transitions_visibility_follows_its_states() {
             |state| *state == TestState::State2,
             Modifier.test_tag("content"),
             // Linear, or the target size is reached before the animation ends.
-            expand_in_with(linear, Alignment::BOTTOM_END, true, |_| IntSize::ZERO),
+            expand_in_with(linear.clone(), Alignment::BOTTOM_END, true, |_| IntSize::ZERO),
             shrink_out_with(linear, Alignment::BOTTOM_END, true, |_| IntSize::ZERO),
             move |_| {
                 let seen = seen.clone();

@@ -36,7 +36,7 @@ fn animated(spec: AnimationSpec) -> (ComposeTestRule, OwnedState<f32>) {
     FINISHED.with(|finished| finished.borrow_mut().clear());
     let target = mutable_state_of(0.0f32);
     let handle = target.handle();
-    let ui = ComposeTestRule::with_manual_clock(move || Animated(handle, spec));
+    let ui = ComposeTestRule::with_manual_clock(move || Animated(handle, spec.clone()));
     (ui, target)
 }
 

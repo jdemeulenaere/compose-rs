@@ -5,7 +5,7 @@
 use compose_animation::*;
 
 /// The spec's value at `time_millis`, from 0 to 1 at rest, as Compose's `at`.
-fn at(spec: impl VectorizedAnimationSpec, time_millis: i32) -> f32 {
+fn at(spec: &impl VectorizedAnimationSpec, time_millis: i32) -> f32 {
     let (start, end) = (AnimationVector::from(0.0), AnimationVector::from(1.0));
     spec.value_from_millis(i64::from(time_millis), start, end, AnimationVector::from(0.0))[0]
 }
@@ -24,9 +24,9 @@ fn keyframes_ending_where_they_start() {
         frames.at(300, 0.8);
         frames.at(400, 0.0);
     });
-    assert_eq!(at(spec, 0), 0.0);
-    assert_eq!(at(spec, 250), 0.65);
-    assert_eq!(at(spec, 400), 0.0);
+    assert_eq!(at(&spec, 0), 0.0);
+    assert_eq!(at(&spec, 250), 0.65);
+    assert_eq!(at(&spec, 400), 0.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, possibleToOverrideStartAndEndValues
@@ -37,8 +37,8 @@ fn keyframes_set_the_start_and_end_values() {
         frames.at(0, 1.0f32);
         frames.at(100, 0.0);
     });
-    assert_eq!(at(spec, 0), 1.0);
-    assert_eq!(at(spec, 100), 0.0);
+    assert_eq!(at(&spec, 0), 1.0);
+    assert_eq!(at(&spec, 100), 0.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, withEasingOnFullDuration
@@ -49,7 +49,7 @@ fn a_keyframe_eases_the_whole_duration() {
         frames.at(0, 0.0f32).using(FAST_OUT_SLOW_IN_EASING);
         frames.at(100, 1.0);
     });
-    assert_eq!(at(spec, 31), FAST_OUT_SLOW_IN_EASING.transform(0.31));
+    assert_eq!(at(&spec, 31), FAST_OUT_SLOW_IN_EASING.transform(0.31));
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, easingOnTheSecondPart
@@ -60,7 +60,7 @@ fn a_keyframe_eases_the_stretch_after_it() {
         frames.at(100, 1.0f32).using(FAST_OUT_SLOW_IN_EASING);
         frames.at(200, 2.0);
     });
-    assert_eq!(at(spec, 140), 1.0 + FAST_OUT_SLOW_IN_EASING.transform(0.4));
+    assert_eq!(at(&spec, 140), 1.0 + FAST_OUT_SLOW_IN_EASING.transform(0.4));
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, firstPartIsLinearWithEasingOnTheSecondPart
@@ -71,7 +71,7 @@ fn the_stretch_before_an_eased_keyframe_is_linear() {
         frames.at(50, 0.5f32).using(FAST_OUT_SLOW_IN_EASING);
         frames.at(100, 1.0);
     });
-    assert_eq!(at(spec, 25), 0.25);
+    assert_eq!(at(&spec, 25), 0.25);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, testMultiDimensKeyframesWithEasing
@@ -104,7 +104,7 @@ fn keyframes_differing_in_duration_easing_or_keyframes_differ() {
     let spec = |duration: u32, first_easing: Easing, second: (i32, f32), third_time: i32| {
         keyframes(move |frames| {
             frames.duration_millis = duration;
-            frames.at(100, 0.0f32).using(first_easing);
+            frames.at(100, 0.0f32).using(first_easing.clone());
             frames.at(second.0, second.1).using(if first_easing == LINEAR_EASING {
                 FAST_OUT_LINEAR_IN_EASING
             } else {
@@ -136,9 +136,9 @@ fn keyframes_at_fractions_of_the_duration() {
         frames.at_fraction(0.75, 0.8);
         frames.at_fraction(1.0, 0.0);
     });
-    assert_eq!(at(spec, 0), 0.0);
-    assert_eq!(at(spec, 250), 0.65);
-    assert_eq!(at(spec, 400), 0.0);
+    assert_eq!(at(&spec, 0), 0.0);
+    assert_eq!(at(&spec, 250), 0.65);
+    assert_eq!(at(&spec, 400), 0.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, percentageBasedKeyframesWithEasing
@@ -149,7 +149,7 @@ fn a_keyframe_at_a_fraction_eases_the_stretch_after_it() {
         frames.at_fraction(0.5, 0.5f32).using(FAST_OUT_SLOW_IN_EASING);
         frames.at_fraction(1.0, 1.0);
     });
-    assert_eq!(at(spec, 25), 0.25);
+    assert_eq!(at(&spec, 25), 0.25);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, outOfRangeValuesOnly
@@ -164,15 +164,15 @@ fn keyframes_out_of_range_are_ignored() {
         frames.at(duration + 50, -3.0).using(LINEAR_EASING);
     });
     // The delay holds the start.
-    assert_eq!(at(spec, 0), 0.0);
-    assert_eq!(at(spec, 100), 0.0);
-    assert_eq!(at(spec, 200), 0.0);
-    assert_eq!(at(spec, delay), 0.0);
-    assert_eq!(at(spec, duration / 2 + delay), 0.5);
-    assert_eq!(at(spec, duration + delay), 1.0);
+    assert_eq!(at(&spec, 0), 0.0);
+    assert_eq!(at(&spec, 100), 0.0);
+    assert_eq!(at(&spec, 200), 0.0);
+    assert_eq!(at(&spec, delay), 0.0);
+    assert_eq!(at(&spec, duration / 2 + delay), 0.5);
+    assert_eq!(at(&spec, duration + delay), 1.0);
     // Past the end: the target.
-    assert_eq!(at(spec, delay + duration + 1), 1.0);
-    assert_eq!(at(spec, delay + duration + 50), 1.0);
+    assert_eq!(at(&spec, delay + duration + 1), 1.0);
+    assert_eq!(at(&spec, delay + duration + 50), 1.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt, outOfRangeValues_withForcedInitialAndTarget
@@ -188,12 +188,12 @@ fn keyframes_out_of_range_are_ignored_with_a_start_and_end_set() {
         frames.at(0, 4.0).using(LINEAR_EASING);
         frames.at(duration, 5.0).using(LINEAR_EASING);
     });
-    assert_eq!(at(spec, 0), 4.0);
-    assert_eq!(at(spec, 100), 4.0);
-    assert_eq!(at(spec, 200), 4.0);
-    assert_eq!(at(spec, delay), 4.0);
-    assert_eq!(at(spec, duration / 2 + delay), 4.5);
-    assert_eq!(at(spec, duration + delay), 5.0);
-    assert_eq!(at(spec, delay + duration + 1), 5.0);
-    assert_eq!(at(spec, delay + duration + 50), 5.0);
+    assert_eq!(at(&spec, 0), 4.0);
+    assert_eq!(at(&spec, 100), 4.0);
+    assert_eq!(at(&spec, 200), 4.0);
+    assert_eq!(at(&spec, delay), 4.0);
+    assert_eq!(at(&spec, duration / 2 + delay), 4.5);
+    assert_eq!(at(&spec, duration + delay), 5.0);
+    assert_eq!(at(&spec, delay + duration + 1), 5.0);
+    assert_eq!(at(&spec, delay + duration + 50), 5.0);
 }

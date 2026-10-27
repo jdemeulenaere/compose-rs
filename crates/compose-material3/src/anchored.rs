@@ -150,7 +150,7 @@ impl Anchored {
             self.offset.snap_to(if start.is_nan() { target } else { start });
             self.resting.set(false);
         }
-        let result = self.offset.animate_to(target, self.spec).await;
+        let result = self.offset.animate_to(target, self.spec.clone()).await;
         if result.end_reason == AnimationEndReason::Finished {
             self.settle_at(value);
         }

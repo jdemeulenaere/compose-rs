@@ -76,7 +76,7 @@ fn a_dp_tweens_frame_by_frame() {
     let (mut ui, target, slot) = animated(false, move |enabled: bool| {
         read(animate_dp_as_state!(
             if enabled { Dp(50.0) } else { Dp(250.0) },
-            animation_spec = spec
+            animation_spec = spec.clone()
         ))
     });
     assert_eq!(value(&slot), Dp(250.0));
@@ -92,7 +92,10 @@ fn a_dp_tweens_frame_by_frame() {
 fn a_float_tweens_frame_by_frame() {
     let spec = tween(200).easing(FAST_OUT_LINEAR_IN_EASING);
     let (mut ui, target, slot) = animated(false, move |enabled: bool| {
-        read(animate_float_as_state!(if enabled { 50.0 } else { 250.0 }, animation_spec = spec))
+        read(animate_float_as_state!(
+            if enabled { 50.0 } else { 250.0 },
+            animation_spec = spec.clone()
+        ))
     });
     for (play, float) in frames(&mut ui, &target, &slot, true, 15) {
         let expected = lerp(250.0, 50.0, tween_fraction(FAST_OUT_LINEAR_IN_EASING, play, 200));
@@ -108,8 +111,8 @@ fn sizes_and_offsets_tween_frame_by_frame() {
     let (start, end) = ([120.0, 56.0], [0.0, 77.0]);
     let (mut ui, target, slot) = animated(false, move |enabled: bool| {
         let [x, y] = if enabled { end } else { start };
-        let size = animate_size_as_state!(Size::new(x, y), animation_spec = spec);
-        let offset = animate_offset_as_state!(Offset::new(x, y), animation_spec = spec);
+        let size = animate_size_as_state!(Size::new(x, y), animation_spec = spec.clone());
+        let offset = animate_offset_as_state!(Offset::new(x, y), animation_spec = spec.clone());
         Rc::new(move || (size.get(), offset.get()))
     });
     for (play, (size, offset)) in frames(&mut ui, &target, &slot, true, 9) {
@@ -127,7 +130,7 @@ fn a_rect_tweens_frame_by_frame() {
     let (start, end) = ([30.0, -76.0, 280.0, 35.0], [-42.0, 89.0, 77.0, 100.0]);
     let (mut ui, target, slot) = animated(false, move |enabled: bool| {
         let [l, t, r, b] = if enabled { end } else { start };
-        read(animate_rect_as_state!(Rect::new(l, t, r, b), animation_spec = spec))
+        read(animate_rect_as_state!(Rect::new(l, t, r, b), animation_spec = spec.clone()))
     });
     for (play, rect) in frames(&mut ui, &target, &slot, true, 9) {
         let fraction = tween_fraction(LINEAR_OUT_SLOW_IN_EASING, play, 100);
@@ -144,7 +147,7 @@ fn a_color_tweens_in_oklab_frame_by_frame() {
     let (mut ui, target, slot) = animated(false, move |enabled: bool| {
         read(animate_color_as_state!(
             if enabled { cyan } else { Color::BLACK },
-            animation_spec = spec
+            animation_spec = spec.clone()
         ))
     });
     let (black, cyan_vector) = (Color::BLACK.to_vector(), cyan.to_vector());
@@ -365,7 +368,7 @@ fn a_threshold_changed_mid_tween_leaves_the_tween_alone() {
 fn an_interrupting_animation_starts_where_the_other_left_off() {
     let spec = tween(200).easing(LINEAR_EASING);
     let (mut ui, target, slot) = animated(false, move |on: bool| {
-        read(animate_float_as_state!(if on { 100.0 } else { 0.0 }, animation_spec = spec))
+        read(animate_float_as_state!(if on { 100.0 } else { 0.0 }, animation_spec = spec.clone()))
     });
     target.set(true);
     // The change composes, then the animation's first frame (play time 0), then 64 ms of it.

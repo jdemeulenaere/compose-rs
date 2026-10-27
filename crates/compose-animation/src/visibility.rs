@@ -1062,11 +1062,11 @@ impl DrawModifierNode for VeilNode {
         let (enter, exit) =
             (self.parts.enter.config.veil.clone(), self.parts.exit.config.veil.clone());
         let specs = (
-            enter.as_ref().map(|veil| veil.animation_spec),
-            exit.as_ref().map(|veil| veil.animation_spec),
+            enter.as_ref().map(|veil| veil.animation_spec.clone()),
+            exit.as_ref().map(|veil| veil.animation_spec.clone()),
         );
         let color = self.animation.animate(
-            move |segment| part_spec(segment, specs.0, specs.1, default_veil_spec()),
+            move |segment| part_spec(segment, &specs.0, &specs.1, default_veil_spec()),
             move |state| match state {
                 EnterExitState::Visible => enter
                     .as_ref()
@@ -1144,14 +1144,14 @@ impl Animate for TransformOrigin {
 /// PostExit`, the default otherwise.
 fn part_spec(
     segment: &Segment<EnterExitState>,
-    enter: Option<AnimationSpec>,
-    exit: Option<AnimationSpec>,
+    enter: &Option<AnimationSpec>,
+    exit: &Option<AnimationSpec>,
     default: AnimationSpec,
 ) -> AnimationSpec {
     if segment.is_transitioning_to(&EnterExitState::PreEnter, &EnterExitState::Visible) {
-        enter.unwrap_or(default)
+        enter.clone().unwrap_or(default)
     } else if segment.is_transitioning_to(&EnterExitState::Visible, &EnterExitState::PostExit) {
-        exit.unwrap_or(default)
+        exit.clone().unwrap_or(default)
     } else {
         default
     }
@@ -1167,15 +1167,17 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
     Modifier.graphics_layer(move |layer| {
         if let Some(alpha) = &animations.alpha {
             let fade_specs = (
-                parts.enter.config.fade.as_ref().map(|fade| fade.animation_spec),
-                parts.exit.config.fade.as_ref().map(|fade| fade.animation_spec),
+                parts.enter.config.fade.as_ref().map(|fade| fade.animation_spec.clone()),
+                parts.exit.config.fade.as_ref().map(|fade| fade.animation_spec.clone()),
             );
             let alphas = (
                 parts.enter.config.fade.as_ref().map(|fade| fade.alpha),
                 parts.exit.config.fade.as_ref().map(|fade| fade.alpha),
             );
             let value = alpha.animate(
-                move |segment| part_spec(segment, fade_specs.0, fade_specs.1, default_alpha_spec()),
+                move |segment| {
+                    part_spec(segment, &fade_specs.0, &fade_specs.1, default_alpha_spec())
+                },
                 move |state| match state {
                     EnterExitState::Visible => 1.0,
                     EnterExitState::PreEnter => alphas.0.unwrap_or(1.0),
@@ -1186,8 +1188,8 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
         }
         if let Some(scale) = &animations.scale {
             let scale_specs = (
-                parts.enter.config.scale.as_ref().map(|scale| scale.animation_spec),
-                parts.exit.config.scale.as_ref().map(|scale| scale.animation_spec),
+                parts.enter.config.scale.as_ref().map(|scale| scale.animation_spec.clone()),
+                parts.exit.config.scale.as_ref().map(|scale| scale.animation_spec.clone()),
             );
             let scales = (
                 parts.enter.config.scale.as_ref().map(|scale| scale.scale),
@@ -1195,7 +1197,7 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
             );
             let value = scale.animate(
                 move |segment| {
-                    part_spec(segment, scale_specs.0, scale_specs.1, default_scale_spec())
+                    part_spec(segment, &scale_specs.0, &scale_specs.1, default_scale_spec())
                 },
                 move |state| match state {
                     EnterExitState::Visible => 1.0,
@@ -1326,11 +1328,11 @@ impl LayoutModifierNode for EnterExitNode {
                     self.parts.exit.config.change_size.clone(),
                 );
                 let specs = (
-                    enter.as_ref().map(|change| change.animation_spec),
-                    exit.as_ref().map(|change| change.animation_spec),
+                    enter.as_ref().map(|change| change.animation_spec.clone()),
+                    exit.as_ref().map(|change| change.animation_spec.clone()),
                 );
                 let animated = size.animate(
-                    move |segment| part_spec(segment, specs.0, specs.1, default_size_spec()),
+                    move |segment| part_spec(segment, &specs.0, &specs.1, default_size_spec()),
                     move |state| match state {
                         EnterExitState::Visible => target,
                         EnterExitState::PreEnter => {
@@ -1374,11 +1376,11 @@ impl LayoutModifierNode for EnterExitNode {
                 let (enter, exit) =
                     (self.parts.enter.config.slide.clone(), self.parts.exit.config.slide.clone());
                 let specs = (
-                    enter.as_ref().map(|slide| slide.animation_spec),
-                    exit.as_ref().map(|slide| slide.animation_spec),
+                    enter.as_ref().map(|slide| slide.animation_spec.clone()),
+                    exit.as_ref().map(|slide| slide.animation_spec.clone()),
                 );
                 let animated = slide.animate(
-                    move |segment| part_spec(segment, specs.0, specs.1, default_offset_spec()),
+                    move |segment| part_spec(segment, &specs.0, &specs.1, default_offset_spec()),
                     move |state| match state {
                         EnterExitState::Visible => IntOffset::ZERO,
                         EnterExitState::PreEnter => enter

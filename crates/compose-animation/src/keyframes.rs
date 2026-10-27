@@ -1,11 +1,10 @@
 //! `keyframes`, as Compose's `KeyframesSpec`: values at given times within a duration, eased
 //! from each to the next.
 //!
-//! A spec stays `Copy`, as the others: its keyframes are kept in a table of this thread's, the
-//! spec naming its entry. Equal keyframes share one entry, so a spec built on every pass adds
-//! nothing; each distinct one stays for the thread's life (as a program's specs are constants).
+//! The spec holds its keyframes behind an `Rc`: cloning it is cheap, and two specs built alike
+//! are equal (where Compose's, without `equals`, are equal only to themselves), so a spec built
+//! on every pass doesn't restart what plays it.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::easing::{Easing, LINEAR_EASING};
@@ -14,11 +13,18 @@ use crate::vector::{Animate, AnimationVector};
 
 /// Values at times within `duration_millis`, as Compose's `KeyframesSpec`: built with
 /// [`keyframes`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 pub struct KeyframesSpec {
-    entry: u32,
+    entry: Rc<Entry>,
     duration_millis: u32,
     delay_millis: u32,
+}
+
+/// Built alike: the same duration, delay and keyframes.
+impl PartialEq for KeyframesSpec {
+    fn eq(&self, other: &KeyframesSpec) -> bool {
+        Rc::ptr_eq(&self.entry, &other.entry) || *self.entry == *other.entry
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -45,10 +51,6 @@ impl Entry {
             .ok()
             .map(|index| &self.frames[index])
     }
-}
-
-thread_local! {
-    static ENTRIES: RefCell<Vec<Rc<Entry>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// What `keyframes`' builder is given, as Compose's `KeyframesSpecConfig`: its duration and
@@ -122,18 +124,8 @@ pub fn keyframes<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> Ke
         }
     }
     timestamps.sort_unstable();
-    let entry = Entry { duration_millis, delay_millis, frames, timestamps };
-    let index = ENTRIES.with(|entries| {
-        let mut entries = entries.borrow_mut();
-        match entries.iter().position(|old| **old == entry) {
-            Some(index) => index,
-            None => {
-                entries.push(Rc::new(entry));
-                entries.len() - 1
-            }
-        }
-    });
-    KeyframesSpec { entry: index as u32, duration_millis, delay_millis }
+    let entry = Rc::new(Entry { duration_millis, delay_millis, frames, timestamps });
+    KeyframesSpec { entry, duration_millis, delay_millis }
 }
 
 impl KeyframesSpec {
@@ -144,10 +136,6 @@ impl KeyframesSpec {
 
     pub fn delay_millis(&self) -> u32 {
         self.delay_millis
-    }
-
-    fn entry(&self) -> Option<Rc<Entry>> {
-        ENTRIES.with(|entries| entries.borrow().get(self.entry as usize).cloned())
     }
 
     /// The play time in milliseconds within the duration, as Compose's `clampPlayTime`.
@@ -179,7 +167,7 @@ impl KeyframesSpec {
         };
         let (from, to) = (entry.timestamps[index], entry.timestamps[index + 1]);
         let start = entry.frame_at(from);
-        let easing = start.map_or(LINEAR_EASING, |frame| frame.easing);
+        let easing = start.map_or(&LINEAR_EASING, |frame| &frame.easing);
         let fraction = easing.transform((time - from) as f32 / (to - from) as f32);
         let start = start.map_or(initial_value, |frame| frame.value);
         let end = entry.frame_at(to).map_or(target_value, |frame| frame.value);
@@ -200,9 +188,8 @@ impl VectorizedAnimationSpec for KeyframesSpec {
         target_value: AnimationVector,
         _: AnimationVector,
     ) -> AnimationVector {
-        let Some(entry) = self.entry() else { return target_value };
         self.value_from_millis_in(
-            &entry,
+            &self.entry,
             play_time_nanos / MILLIS_TO_NANOS,
             initial_value,
             target_value,
@@ -219,10 +206,10 @@ impl VectorizedAnimationSpec for KeyframesSpec {
         target_value: AnimationVector,
         _: AnimationVector,
     ) -> AnimationVector {
-        let Some(entry) = self.entry() else { return initial_value.new_instance() };
+        let entry = &self.entry;
         let clamped = self.clamp_play_time(play_time_nanos / MILLIS_TO_NANOS);
-        let start = self.value_from_millis_in(&entry, clamped - 1, initial_value, target_value);
-        let end = self.value_from_millis_in(&entry, clamped, initial_value, target_value);
+        let start = self.value_from_millis_in(entry, clamped - 1, initial_value, target_value);
+        let end = self.value_from_millis_in(entry, clamped, initial_value, target_value);
         initial_value.map(|index, _| (component(start, index) - component(end, index)) * 1000.0)
     }
 

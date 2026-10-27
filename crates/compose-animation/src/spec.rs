@@ -2,6 +2,8 @@
 //! `repeatable` and `infinite_repeatable`, each evaluated as Compose's `Vectorized*Spec` at a
 //! play time, per component of an animated value's vector ([`VectorizedAnimationSpec`]).
 
+use std::rc::Rc;
+
 use crate::easing::{Easing, FAST_OUT_SLOW_IN_EASING};
 use crate::keyframes::KeyframesSpec;
 use crate::spring::{SpringSimulation, estimate_animation_duration_millis};
@@ -172,7 +174,7 @@ pub trait FloatAnimationSpec {
 }
 
 /// A tween of one float, as Compose's `FloatTweenSpec`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct FloatTweenSpec {
     pub duration: u32,
     pub delay: u32,
@@ -330,7 +332,7 @@ impl FloatAnimationSpec for FloatSpringSpec {
 
 /// A duration-based animation, as Compose's `TweenSpec`: from the start to the target over
 /// `duration_millis`, after `delay_millis`, along `easing`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TweenSpec {
     pub duration_millis: u32,
     pub delay_millis: u32,
@@ -349,7 +351,7 @@ impl TweenSpec {
     }
 
     fn float(&self) -> FloatTweenSpec {
-        FloatTweenSpec::new(self.duration_millis, self.delay_millis, self.easing)
+        FloatTweenSpec::new(self.duration_millis, self.delay_millis, self.easing.clone())
     }
 }
 
@@ -557,11 +559,39 @@ impl VectorizedAnimationSpec for SnapSpec {
 
 /// An animation of a fixed duration, which a repeatable plays again, as Compose's
 /// `DurationBasedAnimationSpec`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum DurationBasedSpec {
     Tween(TweenSpec),
     Keyframes(KeyframesSpec),
     Snap(SnapSpec),
+    /// One of an app's own (see [`DurationBasedSpec::custom`]).
+    Custom(CustomDurationBasedSpec),
+}
+
+/// A spec of a fixed duration after a delay, as Compose's
+/// `VectorizedDurationBasedAnimationSpec`: what an app implements for a duration-based spec of
+/// its own, which repeatables can play.
+pub trait VectorizedDurationBasedAnimationSpec: VectorizedAnimationSpec {
+    /// How long it plays after its delay, as `durationMillis`.
+    fn duration_millis(&self) -> u32;
+    /// How long it waits first, as `delayMillis`.
+    fn delay_millis(&self) -> u32;
+}
+
+/// A duration-based spec of an app's own, behind an `Rc`: equal only to its clones.
+#[derive(Clone)]
+pub struct CustomDurationBasedSpec(Rc<dyn VectorizedDurationBasedAnimationSpec>);
+
+impl PartialEq for CustomDurationBasedSpec {
+    fn eq(&self, other: &CustomDurationBasedSpec) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for CustomDurationBasedSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CustomDurationBasedSpec")
+    }
 }
 
 impl From<TweenSpec> for DurationBasedSpec {
@@ -583,12 +613,21 @@ impl From<SnapSpec> for DurationBasedSpec {
 }
 
 impl DurationBasedSpec {
+    /// A duration-based spec of an app's own, as an object implementing Compose's
+    /// `DurationBasedAnimationSpec`: equal only to itself (its clones).
+    pub fn custom(spec: impl VectorizedDurationBasedAnimationSpec + 'static) -> DurationBasedSpec {
+        DurationBasedSpec::Custom(CustomDurationBasedSpec(Rc::new(spec)))
+    }
+
     /// How long it plays, without its delay, as `durationMillis`.
     pub fn duration_millis(&self) -> u32 {
         match self {
             DurationBasedSpec::Tween(tween) => tween.duration_millis,
             DurationBasedSpec::Keyframes(keyframes) => keyframes.duration_millis(),
             DurationBasedSpec::Snap(_) => 0,
+            DurationBasedSpec::Custom(custom) => {
+                VectorizedDurationBasedAnimationSpec::duration_millis(&*custom.0)
+            }
         }
     }
 
@@ -598,6 +637,7 @@ impl DurationBasedSpec {
             DurationBasedSpec::Tween(tween) => tween.delay_millis,
             DurationBasedSpec::Keyframes(keyframes) => keyframes.delay_millis(),
             DurationBasedSpec::Snap(snap) => snap.delay_millis,
+            DurationBasedSpec::Custom(custom) => custom.0.delay_millis(),
         }
     }
 
@@ -610,6 +650,7 @@ impl DurationBasedSpec {
             DurationBasedSpec::Tween(tween) => tween,
             DurationBasedSpec::Keyframes(keyframes) => keyframes,
             DurationBasedSpec::Snap(snap) => snap,
+            DurationBasedSpec::Custom(custom) => &*custom.0,
         }
     }
 }
@@ -651,6 +692,10 @@ impl From<DurationBasedSpec> for AnimationSpec {
             DurationBasedSpec::Tween(tween) => AnimationSpec::Tween(tween),
             DurationBasedSpec::Keyframes(keyframes) => AnimationSpec::Keyframes(keyframes),
             DurationBasedSpec::Snap(snap) => AnimationSpec::Snap(snap),
+            DurationBasedSpec::Custom(custom) => {
+                let spec: Rc<dyn VectorizedAnimationSpec> = custom.0;
+                AnimationSpec::Custom(CustomSpec(spec))
+            }
         }
     }
 }
@@ -704,7 +749,7 @@ impl StartOffset {
 }
 
 /// An animation repeated, as Compose's `RepeatableSpec` and `InfiniteRepeatableSpec`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct RepeatableSpec {
     /// How many times it plays; `None`: forever.
     pub iterations: Option<u32>,
@@ -827,7 +872,7 @@ impl VectorizedAnimationSpec for RepeatableSpec {
 }
 
 /// How a value animates to its target, as Compose's `AnimationSpec`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 #[non_exhaustive]
 pub enum AnimationSpec {
     Tween(TweenSpec),
@@ -840,6 +885,31 @@ pub enum AnimationSpec {
     /// One spec, and another when it interrupts an animation running, as
     /// `InterruptionAwareAnimationSpec`.
     InterruptionAware(InterruptionAwareAnimationSpec),
+    /// A spec of an app's own (see [`AnimationSpec::custom`]).
+    Custom(CustomSpec),
+}
+
+/// A spec of an app's own, behind an `Rc`: equal only to its clones.
+#[derive(Clone)]
+pub struct CustomSpec(Rc<dyn VectorizedAnimationSpec>);
+
+impl std::ops::Deref for CustomSpec {
+    type Target = dyn VectorizedAnimationSpec;
+    fn deref(&self) -> &(dyn VectorizedAnimationSpec + 'static) {
+        &*self.0
+    }
+}
+
+impl PartialEq for CustomSpec {
+    fn eq(&self, other: &CustomSpec) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for CustomSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CustomSpec")
+    }
 }
 
 impl From<InterruptionAwareAnimationSpec> for AnimationSpec {
@@ -850,16 +920,10 @@ impl From<InterruptionAwareAnimationSpec> for AnimationSpec {
 
 /// A spec and the spec to use when it interrupts an animation still running, as Compose's
 /// `InterruptionAwareAnimationSpec`: `Animatable`, `animate*AsState` and transitions pick the
-/// interruption spec when they interrupt. It stays `Copy`: its two specs are kept in a table of
-/// this thread's, equal pairs sharing an entry (as keyframes, D150).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// interruption spec when they interrupt.
+#[derive(Clone, PartialEq, Debug)]
 pub struct InterruptionAwareAnimationSpec {
-    entry: u32,
-}
-
-thread_local! {
-    static INTERRUPTION_AWARE: std::cell::RefCell<Vec<(AnimationSpec, AnimationSpec)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    specs: Rc<(AnimationSpec, AnimationSpec)>,
 }
 
 impl InterruptionAwareAnimationSpec {
@@ -869,18 +933,9 @@ impl InterruptionAwareAnimationSpec {
         animation_spec: impl Into<AnimationSpec>,
         interruption_spec: impl Into<AnimationSpec>,
     ) -> InterruptionAwareAnimationSpec {
-        let pair = (animation_spec.into(), interruption_spec.into());
-        let entry = INTERRUPTION_AWARE.with(|entries| {
-            let mut entries = entries.borrow_mut();
-            match entries.iter().position(|old| *old == pair) {
-                Some(index) => index,
-                None => {
-                    entries.push(pair);
-                    entries.len() - 1
-                }
-            }
-        });
-        InterruptionAwareAnimationSpec { entry: entry as u32 }
+        InterruptionAwareAnimationSpec {
+            specs: Rc::new((animation_spec.into(), interruption_spec.into())),
+        }
     }
 
     /// `animation_spec` both when starting and when interrupting, as
@@ -888,21 +943,17 @@ impl InterruptionAwareAnimationSpec {
     /// value interrupted otherwise takes a spring).
     pub fn of(animation_spec: impl Into<AnimationSpec>) -> InterruptionAwareAnimationSpec {
         let spec = animation_spec.into();
-        InterruptionAwareAnimationSpec::new(spec, spec)
-    }
-
-    fn pair(&self) -> (AnimationSpec, AnimationSpec) {
-        INTERRUPTION_AWARE.with(|entries| entries.borrow()[self.entry as usize])
+        InterruptionAwareAnimationSpec::new(spec.clone(), spec)
     }
 
     /// The spec when starting from rest, as `animationSpec`.
-    pub fn animation_spec(&self) -> AnimationSpec {
-        self.pair().0
+    pub fn animation_spec(&self) -> &AnimationSpec {
+        &self.specs.0
     }
 
     /// The spec when interrupting, as `interruptionSpec`.
-    pub fn interruption_spec(&self) -> AnimationSpec {
-        self.pair().1
+    pub fn interruption_spec(&self) -> &AnimationSpec {
+        &self.specs.1
     }
 }
 
@@ -952,18 +1003,27 @@ impl AnimationSpec {
             AnimationSpec::Snap(snap) => f(snap),
             AnimationSpec::Repeatable(repeatable) => f(repeatable),
             AnimationSpec::Keyframes(keyframes) => f(keyframes),
-            AnimationSpec::InterruptionAware(aware) => f(&aware.animation_spec()),
+            AnimationSpec::InterruptionAware(aware) => f(aware.animation_spec()),
+            AnimationSpec::Custom(custom) => f(&**custom),
         }
     }
 
     /// The spec to play: an interruption-aware spec's interruption spec when it interrupts an
     /// animation running, its animation spec otherwise; any other spec as it is.
-    pub(crate) fn resolve(self, interrupting: bool) -> AnimationSpec {
+    pub(crate) fn resolve(&self, interrupting: bool) -> AnimationSpec {
         match self {
-            AnimationSpec::InterruptionAware(aware) if interrupting => aware.interruption_spec(),
-            AnimationSpec::InterruptionAware(aware) => aware.animation_spec(),
-            spec => spec,
+            AnimationSpec::InterruptionAware(aware) if interrupting => {
+                aware.interruption_spec().clone()
+            }
+            AnimationSpec::InterruptionAware(aware) => aware.animation_spec().clone(),
+            spec => spec.clone(),
         }
+    }
+
+    /// A spec of an app's own, as an `AnimationSpec` object it implements: equal only to
+    /// itself (its clones), as Compose compares such specs by identity.
+    pub fn custom(spec: impl VectorizedAnimationSpec + 'static) -> AnimationSpec {
+        AnimationSpec::Custom(CustomSpec(Rc::new(spec)))
     }
 }
 

@@ -3,9 +3,11 @@
 //! clamping), so eased values match Compose's.
 
 use std::f64::consts::PI;
+use std::rc::Rc;
 
-/// An easing curve, as Compose's `Easing`.
-#[derive(Clone, Copy, Debug)]
+/// An easing curve, as Compose's `Easing`: one of Compose's curves, or any function of the
+/// fraction (a capturing closure too, as Compose's `fun interface`, [`Easing::custom`]).
+#[derive(Clone)]
 pub enum Easing {
     /// The fraction as it is, as `LinearEasing`.
     Linear,
@@ -14,6 +16,21 @@ pub enum Easing {
     CubicBezier(CubicBezierEasing),
     /// A function of the fraction.
     Function(fn(f32) -> f32),
+    /// Any curve: a closure, which may hold data (a path, parameters), as an `Easing` object
+    /// of an app's. Equal only to itself (its clones), as Compose compares easings it can't
+    /// see into by identity.
+    Custom(Rc<dyn Fn(f32) -> f32>),
+}
+
+impl std::fmt::Debug for Easing {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Easing::Linear => formatter.write_str("Linear"),
+            Easing::CubicBezier(curve) => write!(formatter, "{curve:?}"),
+            Easing::Function(_) => formatter.write_str("Function"),
+            Easing::Custom(_) => formatter.write_str("Custom"),
+        }
+    }
 }
 
 impl PartialEq for Easing {
@@ -22,6 +39,7 @@ impl PartialEq for Easing {
             (Easing::Linear, Easing::Linear) => true,
             (Easing::CubicBezier(a), Easing::CubicBezier(b)) => a == b,
             (Easing::Function(a), Easing::Function(b)) => std::ptr::fn_addr_eq(*a, *b),
+            (Easing::Custom(a), Easing::Custom(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -145,12 +163,19 @@ impl Easing {
         Easing::CubicBezier(CubicBezierEasing::new(a, b, c, d))
     }
 
+    /// An easing of `transform`, as an `Easing { fraction -> … }` of Compose's: it may capture
+    /// what it needs.
+    pub fn custom(transform: impl Fn(f32) -> f32 + 'static) -> Easing {
+        Easing::Custom(Rc::new(transform))
+    }
+
     /// The eased fraction of `fraction`.
     pub fn transform(&self, fraction: f32) -> f32 {
-        match *self {
+        match self {
             Easing::Linear => fraction,
             Easing::Function(function) => function(fraction),
             Easing::CubicBezier(curve) => curve.transform(fraction),
+            Easing::Custom(transform) => transform(fraction),
         }
     }
 }

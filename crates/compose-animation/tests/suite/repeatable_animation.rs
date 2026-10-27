@@ -9,7 +9,7 @@ const DURATION: u32 = 50;
 const MILLIS: i64 = 1_000_000;
 
 /// The spec's value at `time_millis`, from 0 to 1 at rest, as Compose's `at`.
-fn at(spec: impl VectorizedAnimationSpec, time_millis: u32) -> f32 {
+fn at(spec: &impl VectorizedAnimationSpec, time_millis: u32) -> f32 {
     let (start, end) = (AnimationVector::from(0.0), AnimationVector::from(1.0));
     spec.value_from_millis(i64::from(time_millis), start, end, AnimationVector::from(0.0))[0]
 }
@@ -18,12 +18,12 @@ fn at(spec: impl VectorizedAnimationSpec, time_millis: u32) -> f32 {
 #[test]
 fn two_repetitions_start_over() {
     let repeat = repeatable(2, tween(DURATION), RepeatMode::Restart);
-    let animation = TargetBasedAnimation::new(repeat, 0.0f32, 0.0);
-    assert_eq!(at(repeat, 0), 0.0);
-    assert!(at(repeat, DURATION - 1) > 0.9);
-    assert!(at(repeat, DURATION + 1) < 0.1);
-    assert!(at(repeat, DURATION * 2 - 1) > 0.9);
-    assert_eq!(at(repeat, DURATION * 2), 1.0);
+    let animation = TargetBasedAnimation::new(repeat.clone(), 0.0f32, 0.0);
+    assert_eq!(at(&repeat, 0), 0.0);
+    assert!(at(&repeat, DURATION - 1) > 0.9);
+    assert!(at(&repeat, DURATION + 1) < 0.1);
+    assert!(at(&repeat, DURATION * 2 - 1) > 0.9);
+    assert_eq!(at(&repeat, DURATION * 2), 1.0);
     assert!(!animation.is_finished_from_millis(i64::from(DURATION) * 2 - 1));
     assert!(animation.is_finished_from_millis(i64::from(DURATION) * 2));
 }
