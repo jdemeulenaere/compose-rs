@@ -1625,3 +1625,20 @@ fn a_lines_visible_end_leaves_out_compose_s_line_end_spaces() {
     assert_eq!(visible("abc\t"), 4);
     assert_eq!(visible("abc\u{2007}"), "abc\u{2007}".len());
 }
+
+/// The offset for a position is a grapheme cluster's boundary, as Android's
+/// `getOffsetForHorizontal` (never between a letter and its mark), and a line other than the
+/// last ends before its last cluster (D1111).
+#[test]
+fn the_offset_for_a_position_is_a_cluster_boundary() {
+    // An "e" and its combining acute (no width), then "x".
+    let marked = paragraph("e\u{301}x", sized(10.0), None);
+    assert_eq!(marked.get_offset_for_position(Offset::new(10.0, 5.0)), 3);
+    assert_eq!(marked.get_offset_for_position(Offset::new(11.0, 5.0)), 3);
+    // A thumbs-up with its skin tone, then a line feed: past the line is before the feed, and
+    // never inside the emoji.
+    let text = "a\u{1F44D}\u{1F3FE}\nb";
+    let lines = paragraph(text, sized(10.0), None);
+    assert_eq!(lines.get_offset_for_position(Offset::new(100.0, 5.0)), text.find('\n').unwrap());
+    assert_eq!(lines.get_offset_for_position(Offset::new(21.0, 5.0)), text.find('\n').unwrap());
+}

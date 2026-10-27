@@ -241,21 +241,26 @@ impl ParagraphLayout {
     /// The offset nearest to `horizontal` on `line`, as Android's `getOffsetForHorizontal`:
     /// a line other than the last ends before its last character.
     pub fn get_offset_for_horizontal(&self, line: usize, horizontal: f32) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
         let layout = self.line(line);
+        let text = &self.text[layout.start..layout.end];
+        // Grapheme cluster boundaries only (never between a letter and its mark); a line
+        // other than the last ends before its last cluster (D1111).
         let max = if line + 1 == self.lines.len() {
             layout.end
         } else {
-            self.text[..layout.end]
-                .char_indices()
-                .next_back()
-                .map_or(layout.end, |(index, _)| index.max(layout.start))
+            text.grapheme_indices(true).next_back().map_or(layout.end, |(index, _)| layout.start + index)
         };
         let mut best = layout.start;
         let mut best_distance = (self.position(layout.start).primary - horizontal).abs();
-        for position in self.positions_in(layout.start + 1..max) {
-            let distance = (position.primary - horizontal).abs();
+        for (index, _) in text.grapheme_indices(true).skip(1) {
+            let offset = layout.start + index;
+            if offset >= max {
+                break;
+            }
+            let distance = (self.position(offset).primary - horizontal).abs();
             if distance < best_distance {
-                best = position.offset;
+                best = offset;
                 best_distance = distance;
             }
         }
