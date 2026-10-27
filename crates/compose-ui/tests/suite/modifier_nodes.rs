@@ -1770,3 +1770,128 @@ fn a_node_removed_from_a_chain_released_in_the_same_pass_is_detached_first() {
     tree.on_end_changes();
     assert_eq!(take(&log), ["detach", "release"]);
 }
+
+// ---- Second review's fixes (D1161–D1163) --------------------------------------------------------
+
+/// A node whose attach queues a side effect writing `value` to `state`.
+struct WritesOnAttach(MutableState<i32>, i32);
+
+struct WritesOnAttachNode(MutableState<i32>, i32);
+
+impl ModifierNodeElement for WritesOnAttach {
+    type Node = WritesOnAttachNode;
+    fn create(&self) -> WritesOnAttachNode {
+        WritesOnAttachNode(self.0, self.1)
+    }
+    fn update(&self, _: &mut WritesOnAttachNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for WritesOnAttachNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        let (state, value) = (self.0, self.1);
+        context.side_effect(move || state.set(value));
+    }
+}
+
+/// A side effect runs after its composition pass and before the frame's layout, as Compose's
+/// `onEndApplyChanges`: what it writes, another node's measurement reads in that first frame.
+#[test]
+fn a_side_effect_s_write_is_measured_in_its_frame() {
+    let width = mutable_state_of(10);
+    let measures = Rc::new(Cell::new(0));
+    let (written, read, counted) = (width.handle(), width.handle(), measures.clone());
+    let host = host(move || {
+        Leaf(Modifier.then_custom(WritesOnAttach(written, 42)));
+        let counted = counted.clone();
+        let policy = measure_policy(move |scope, _, _| {
+            counted.set(counted.get() + 1);
+            scope.layout(read.get(), 10)
+        });
+        Layout(Modifier, policy, callback(|| {}));
+    });
+    let size = host.with_tree(|tree| {
+        let reader = tree.children_of(tree.root_id()).nth(1).expect("the reader");
+        tree.bounds_in_root(reader)
+    });
+    assert_eq!(size.width(), 42.0, "measured with the side effect's value in the first frame");
+    assert_eq!(measures.get(), 1, "measured once");
+}
+
+/// A side effect asked outside a pass (from a task, through a handle) asks for a frame, which
+/// runs it.
+#[test]
+fn a_side_effect_asked_outside_a_pass_asks_for_a_frame() {
+    let handle = Rc::new(RefCell::new(None));
+    let held = handle.clone();
+    let mut host = host(move || Leaf(Modifier.then_custom(Handled(held.clone()))));
+    assert!(!host.needs_frame());
+    let ran = Rc::new(Cell::new(false));
+    let (node, flag) = (handle.borrow().expect("a handle"), ran.clone());
+    let task = compose_runtime::CoroutineScope::new();
+    task.launch(async move {
+        node.with_node(|_: &mut HandledNode, context| {
+            context.side_effect(move || flag.set(true));
+        });
+    });
+    compose_runtime::platform::run_ready();
+    assert!(!ran.get(), "queued, not run inside the task");
+    assert!(host.needs_frame(), "the side effect asks for a frame");
+    host.frame();
+    assert!(ran.get());
+}
+
+/// A node a paused composition's resume reuses is reset and detached as the resume ends (before
+/// the content later resumes bring, as composed at once), and attached again only once that
+/// composition is applied (`on_paused_end`): a frame in between doesn't attach it (its new
+/// content may still be to come) nor is kept busy by it, so prefetch goes on (D1162).
+#[test]
+fn a_paused_reuse_waits_for_its_apply_and_blocks_no_work() {
+    use compose_runtime::platform::{Applier, NodeRef};
+    let reuse_key = mutable_state_of(0);
+    let events = Events::default();
+    let (key, content_events) = (reuse_key.handle(), events.clone());
+    let mut host = host(move || ReusableContent(key.get(), || test_layout(0, &content_events)));
+    events.borrow_mut().clear();
+    host.with_tree(|tree| {
+        let leaf = tree.children_of(tree.root_id()).next().expect("the leaf");
+        assert!(Applier::reuse_paused(tree, NodeRef::new(leaf.to_bits())), "a shown node");
+    });
+    host.frame();
+    assert_eq!(*events.borrow(), ["reset", "detach"], "reset, its attach held until the apply");
+    assert!(!host.has_pending_work(), "nothing kept busy: prefetch may run");
+    events.borrow_mut().clear();
+    host.with_tree(|tree| {
+        Applier::on_begin_changes(tree);
+        Applier::on_paused_end(tree);
+        Applier::on_end_changes(tree);
+    });
+    assert_eq!(*events.borrow(), ["attach"]);
+}
+
+/// A combined clickable removed mid-press releases its interaction source's press, its tap
+/// detection's included.
+#[test]
+fn a_combined_clickable_removed_mid_press_releases_its_source() {
+    let source = MutableInteractionSource::new();
+    let shown = mutable_state_of(true);
+    let (is_shown, pressed) = (shown.handle(), source.clone());
+    let mut host = host(move || {
+        if is_shown.get() {
+            let options = ClickableOptions {
+                interaction_source: Some(pressed.clone()),
+                ..ClickableOptions::DEFAULT
+            };
+            Leaf(Modifier.combined_clickable_with(options, None, None, || {}).size(20.dp()));
+        }
+    });
+    host.send_pointer(PointerEvent::press(Offset::new(5.0, 5.0)));
+    host.frame();
+    assert!(source.is_pressed(), "pressed");
+    shown.set(false);
+    host.frame();
+    host.frame();
+    assert!(!source.is_pressed(), "its press released as it left");
+}

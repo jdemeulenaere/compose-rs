@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use compose_runtime::CoroutineScope;
 use compose_ui::{
-    Alignment, Constraints, IntSize, IntrinsicMeasureScope, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    Alignment, Constraints, IntSize, IntrinsicMeasureScope, LayoutModifierNode, Measurable,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
 };
 
 use crate::animatable::{Animatable, AnimationEndReason};

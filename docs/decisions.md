@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 101 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 119 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 122 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 27 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
@@ -457,10 +457,13 @@ The log is split by area into the files below, one table each, rows in number or
 | D1154 | [ui-and-layout](decisions/ui-and-layout.md#d1154) | current |
 | D1155 | [ui-and-layout](decisions/ui-and-layout.md#d1155) | current |
 | D1156 | [ui-and-layout](decisions/ui-and-layout.md#d1156) | current |
-| D1157 | [ui-and-layout](decisions/ui-and-layout.md#d1157) | current |
+| D1157 | [ui-and-layout](decisions/ui-and-layout.md#d1157) | revised by [D1161](decisions/ui-and-layout.md#d1161) |
 | D1158 | [ui-and-layout](decisions/ui-and-layout.md#d1158) | current |
 | D1159 | [ui-and-layout](decisions/ui-and-layout.md#d1159) | current |
 | D1160 | [ui-and-layout](decisions/ui-and-layout.md#d1160) | current |
+| D1161 | [ui-and-layout](decisions/ui-and-layout.md#d1161) | current |
+| D1162 | [ui-and-layout](decisions/ui-and-layout.md#d1162) | current |
+| D1163 | [ui-and-layout](decisions/ui-and-layout.md#d1163) | current |
 | D1200 | [ui-and-layout](decisions/ui-and-layout.md#d1200) | current |
 | D1201 | [ui-and-layout](decisions/ui-and-layout.md#d1201) | current |
 | D1202 | [ui-and-layout](decisions/ui-and-layout.md#d1202) | current |

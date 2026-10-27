@@ -106,6 +106,11 @@ pub trait Applier: 'static {
 
     /// Called after a pass applied its last change and released its removed nodes.
     fn on_end_changes(&mut self) {}
+
+    /// A paused composition was applied (before that apply's `on_end_changes`) or discarded:
+    /// what the applier deferred while its content resumed (a node reused with
+    /// [`reuse_paused`](Applier::reuse_paused), whose new content is only complete now) is due.
+    fn on_paused_end(&mut self) {}
 }
 
 /// The applier, with its node type erased so the runtime stays non-generic.
@@ -129,6 +134,7 @@ pub(crate) trait ErasedApplier {
     fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef);
     fn on_begin_changes(&mut self);
     fn on_end_changes(&mut self);
+    fn on_paused_end(&mut self);
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
@@ -182,6 +188,10 @@ impl<A: Applier> ErasedApplier for A {
 
     fn on_end_changes(&mut self) {
         Applier::on_end_changes(self)
+    }
+
+    fn on_paused_end(&mut self) {
+        Applier::on_paused_end(self)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

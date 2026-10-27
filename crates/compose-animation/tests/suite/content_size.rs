@@ -117,3 +117,72 @@ fn a_content_size_places_its_content_by_its_alignment_left_to_right() {
 fn a_content_size_places_its_content_by_its_alignment_right_to_left() {
     check_alignment(LayoutDirection::Rtl);
 }
+
+/// A box animating its content size, in reusable content keyed by `key` inside a host `active`
+/// says, its listener counting the animations that finish.
+#[composable]
+fn ReusedAnimated(
+    active: MutableState<bool>,
+    key: MutableState<u32>,
+    size: MutableState<f32>,
+    finished: Rc<Cell<u32>>,
+) {
+    let finished = finished.clone();
+    ReusableContentHost(active.get(), move || {
+        let finished = finished.clone();
+        ReusableContent(key.get(), move || {
+            let finished = finished.clone();
+            let side = size.get();
+            Box!(
+                modifier = Modifier
+                    .test_tag("animated")
+                    .animate_content_size_with(
+                        tween(DURATION).easing(LINEAR_OUT_SLOW_IN_EASING),
+                        Alignment::TOP_START,
+                        Some(move |_, _| finished.set(finished.get() + 1)),
+                    )
+                    .required_size((side.dp(), side.dp()))
+            );
+        });
+    });
+}
+
+/// An animation interrupted by reuse (`reuse`) or deactivation, then reactivation
+/// (`deactivate`): the reused node takes the new content's size at once, as Compose's
+/// `animData = null` on reset, and the cancelled animation tells its listener nothing (its scope
+/// cancelled at the detach, D1153).
+fn content_size_interrupted(deactivate: bool) {
+    let (active, key, size) =
+        (mutable_state_of(true), mutable_state_of(0), mutable_state_of(100.0));
+    let finished = Rc::new(Cell::new(0));
+    let (a, k, s, f) = (active.handle(), key.handle(), size.handle(), finished.clone());
+    let mut ui = ComposeTestRule::with_manual_clock(move || ReusedAnimated(a, k, s, f.clone()));
+    size.set(200.0);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(u64::from(3 * FRAME)));
+    let midway = bounds(&mut ui, "animated");
+    assert!(midway.width() > 100.0 && midway.width() < 200.0, "animating: {midway:?}");
+    if deactivate {
+        active.set(false);
+        ui.advance_time_by_frame();
+        active.set(true);
+    }
+    key.set(1);
+    size.set(50.0);
+    ui.advance_time_by_frame();
+    let reused = bounds(&mut ui, "animated");
+    assert_eq!((reused.width(), reused.height()), (50.0, 50.0), "the new size at once");
+    ui.advance_time_by(Duration::from_millis(u64::from(2 * DURATION)));
+    assert_eq!(finished.get(), 0, "the interrupted animation told nothing");
+}
+
+#[test]
+fn a_content_size_animation_interrupted_by_reuse_takes_the_new_size_at_once() {
+    content_size_interrupted(false);
+}
+
+#[test]
+fn a_content_size_animation_interrupted_by_deactivation_takes_the_new_size_at_once() {
+    content_size_interrupted(true);
+}

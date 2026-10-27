@@ -155,6 +155,9 @@ pub struct LayoutNode {
     /// Attached in the pass under way, with an ancestor that was (or itself) queued to attach
     /// its subtree's modifier nodes at the pass's end (`Lifecycle::Attach`).
     pub(crate) attaching: bool,
+    /// Reused by a paused composition's resume: its modifier nodes stay detached until that
+    /// composition is applied (D1162).
+    pub(crate) reattach_pending: bool,
 }
 
 impl LayoutNode {
@@ -187,6 +190,7 @@ impl LayoutNode {
             deactivated: false,
             attached: false,
             attaching: false,
+            reattach_pending: false,
         }
     }
 
@@ -312,6 +316,13 @@ pub struct UiTree {
     /// Pointer nodes came, went or changed: the resting mouse's hover is refreshed even if
     /// nothing was laid out.
     pub(crate) hover_stale: bool,
+    /// The lifecycle steps of nodes a paused composition's resumes reused, held until it's
+    /// applied or discarded (`Applier::on_paused_end`, D1162).
+    pub(crate) paused_lifecycle: Vec<crate::lifecycle::Lifecycle>,
+    /// What nodes asked to run once the changes under way are applied
+    /// (`NodeContext::side_effect`): the host runs them as soon as it has released the tree
+    /// after a composition pass, before the layout (D1161).
+    pub(crate) side_effects: Vec<Box<dyn FnOnce()>>,
 }
 
 impl Drop for UiTree {
@@ -374,6 +385,8 @@ impl UiTree {
             semantics_changed: false,
             scopes: std::collections::HashMap::new(),
             hover_stale: false,
+            paused_lifecycle: Vec::new(),
+            side_effects: Vec::new(),
         }
     }
 
@@ -789,7 +802,7 @@ impl UiTree {
             let parent_data_changed = self.refresh_chain(node);
             drop(previous);
             self.revalidate_focus(node, None);
-            self.auto_invalidate(node, invalidated, parent_data_changed);
+            self.auto_invalidate(node, invalidated, NodeKinds::NONE, parent_data_changed);
             return;
         }
         let matched = match_kinds(old, new, Element::same_kind);
@@ -799,8 +812,10 @@ impl UiTree {
         let mut reused = 0;
         // New nodes of a node in the tree are attached at once, as Compose's chain update marks
         // them; their `on_attach` runs when the pass ends.
-        let attached = value.attached && !value.deactivated;
+        let attached = value.attached && !value.deactivated && !value.reattach_pending;
         let mut inserted = false;
+        // The inserted and removed nodes' kinds.
+        let mut structural = NodeKinds::NONE;
         for (index, element) in new.iter().enumerate() {
             match matched[index] {
                 Some(old_index) => {
@@ -824,12 +839,14 @@ impl UiTree {
                         inserted = true;
                     }
                     invalidated |= entry.kinds;
+                    structural |= entry.kinds;
                     chain.push(entry);
                 }
             }
         }
         for removed in old_nodes.iter().flatten() {
             invalidated |= removed.kinds;
+            structural |= removed.kinds;
         }
         let changed = reused != old.len() || reused != new.len();
         if changed {
@@ -864,7 +881,7 @@ impl UiTree {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Removed(node, detaching));
         }
         self.revalidate_focus(node, Some(&matched));
-        self.auto_invalidate(node, invalidated, parent_data_changed);
+        self.auto_invalidate(node, invalidated, structural, parent_data_changed);
     }
 
     /// Invalidates what a chain change's nodes' `kinds` say, as Compose's auto-invalidation
@@ -873,19 +890,29 @@ impl UiTree {
     /// measures its parent. An overlay (compose-rs's popup windows) is positioned, and takes or
     /// gives back the focus, by the layout: it lays out again, as Compose's popup updates its
     /// window. A semantics node's change is told in the frame's stats (semantics are read
-    /// afresh when asked); a pointer node's has the resting mouse's hover refreshed (an `Enter`
-    /// for one that came under it), as the layout does; focus is revalidated by the chain
+    /// afresh when asked); a pointer node come or gone has the resting mouse's hover refreshed (an
+    /// `Enter` for one that came under it), as the layout does; focus is revalidated by the chain
     /// change itself.
-    fn auto_invalidate(&mut self, node: NodeId, kinds: NodeKinds, parent_data_changed: bool) {
+    fn auto_invalidate(
+        &mut self,
+        node: NodeId,
+        kinds: NodeKinds,
+        structural: NodeKinds,
+        parent_data_changed: bool,
+    ) {
         if kinds.any(NodeKinds::LAYOUT | NodeKinds::OVERLAY) {
             self.invalidate_measure(node);
         } else if kinds.any(NodeKinds::DRAW | NodeKinds::GRAPHICS_LAYER) {
             self.invalidate_draw_of(node);
         }
-        if kinds.any(NodeKinds::SEMANTICS) {
+        // Only for content in use: a prefetched item, not placed, isn't in the semantics yet.
+        let shown = self.get(node).is_some_and(|value| value.attached && !value.deactivated);
+        if kinds.any(NodeKinds::SEMANTICS) && shown {
             self.semantics_changed = true;
         }
-        if kinds.any(NodeKinds::POINTER_INPUT) && self.mouse.is_some() {
+        // A pointer node come or gone (a change of its hit area comes with a layout, which
+        // refreshes the hover anyway): not one only updated, as a clickable's new callback.
+        if structural.any(NodeKinds::POINTER_INPUT) && shown && self.mouse.is_some() {
             self.hover_stale = true;
         }
         if parent_data_changed && let Some(parent) = self.parent_of(node) {
@@ -1219,6 +1246,39 @@ impl UiTree {
         }
     }
 
+    /// Reuses `node` for new content (`Applier::reuse`, `reuse_paused` with `paused`).
+    fn reuse_node(&mut self, node: NodeId, paused: bool) {
+        let Some(value) = self.get_mut(node) else { return };
+        if std::mem::take(&mut value.deactivated) {
+            self.set_requesters_attached(node, true);
+            // Its parent has a child to measure again (an ordinary layout's, or a list's): it
+            // measures it again if it asked to while deactivated (`needs_measure` kept), as
+            // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
+            // active again.
+            if let Some(parent) = self.parent_of(node) {
+                self.invalidate_measure(parent);
+            }
+        } else {
+            self.reset_modifier_state(node);
+        }
+        // Reset (if it wasn't when deactivated), detached and attached again after the pass,
+        // after the new content's elements updated it: a node showing its value (a switch)
+        // shows the new one at once from its `on_attach` (D435, D1156); after the paused
+        // composition's apply, for paused content (D1162).
+        if paused {
+            // Reset when the resume ends, as composed at once (before the content later
+            // resumes bring); attached again once the composition is applied (D1162).
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Reset(node));
+            self.paused_lifecycle.push(crate::lifecycle::Lifecycle::AttachEntries(node));
+            self.node_mut(node).reattach_pending = true;
+        } else {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Reuse(node));
+        }
+        // Drawn again; measured again only if something asks, as Compose's reuse reschedules
+        // only a pending measurement (a deactivated node's asked meanwhile).
+        self.invalidate_draw_of(node);
+    }
+
     // ---- Releasing --------------------------------------------------------------------------
 
     fn alloc(&mut self, node: LayoutNode) -> NodeId {
@@ -1393,32 +1453,29 @@ impl Applier for UiTree {
         if self.get(id).is_none_or(|value| value.deactivated) {
             return false;
         }
-        Applier::reuse(self, node);
+        // Reset at the resume's end, attached again at the paused composition's apply
+        // (`on_paused_end`): its new content may come in later resumes, frames apart (a switch
+        // attached before would show the old value).
+        self.reuse_node(id, true);
         true
     }
 
     fn reuse(&mut self, node: NodeRef) {
-        let node = NodeId::from_ref(node);
-        let Some(value) = self.get_mut(node) else { return };
-        if std::mem::take(&mut value.deactivated) {
-            self.set_requesters_attached(node, true);
-            // Its parent has a child to measure again (an ordinary layout's, or a list's): it
-            // measures it again if it asked to while deactivated (`needs_measure` kept), as
-            // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
-            // active again.
-            if let Some(parent) = self.parent_of(node) {
-                self.invalidate_measure(parent);
+        self.reuse_node(NodeId::from_ref(node), false);
+    }
+
+    /// The paused composition whose resumes reused nodes is applied or discarded: their
+    /// lifecycle steps run with that pass's (or where the tree next applies its requests).
+    fn on_paused_end(&mut self) {
+        let mut paused = std::mem::take(&mut self.paused_lifecycle);
+        for step in &paused {
+            if let crate::lifecycle::Lifecycle::AttachEntries(node) = step
+                && let Some(value) = self.get_mut(*node)
+            {
+                value.reattach_pending = false;
             }
-        } else {
-            self.reset_modifier_state(node);
         }
-        // Reset (if it wasn't when deactivated), detached and attached again after the pass,
-        // after the new content's elements updated it: a node showing its value (a switch)
-        // shows the new one at once from its `on_attach` (D435, D1156).
-        self.queue_lifecycle(crate::lifecycle::Lifecycle::Reuse(node));
-        // Drawn again; measured again only if something asks, as Compose's reuse reschedules
-        // only a pending measurement (a deactivated node's asked meanwhile).
-        self.invalidate_draw_of(node);
+        self.lifecycle.append(&mut paused);
     }
 
     /// `node`'s content was deactivated (a lazy list's item kept for reuse, an inactive
@@ -1443,9 +1500,11 @@ impl Applier for UiTree {
             self.invalidate_measure(parent);
         }
         self.reset_modifier_state(node);
-        // At the end of the pass already: reset and detached now, still active as they run.
-        self.reset_and_detach(node);
+        // At the end of the pass already: reset and detached now, the node deactivated first so
+        // what the callbacks invalidate is left to its reuse (a reset asking for a measurement
+        // measures nothing around content leaving).
         self.node_mut(node).deactivated = true;
+        self.reset_and_detach(node);
         self.set_requesters_attached(node, false);
         self.measured_ahead.retain(|ahead| *ahead != node);
         self.kept.retain(|kept| *kept != node);

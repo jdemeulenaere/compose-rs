@@ -195,6 +195,20 @@ impl UiHost {
         }
     }
 
+    /// Runs the side effects modifier nodes asked for (`NodeContext::side_effect`), now that the
+    /// tree is free, as Compose's `onEndApplyChanges`: what they queue in turn runs too.
+    fn run_side_effects(&self) {
+        loop {
+            let effects = self.with_tree(|tree| std::mem::take(&mut tree.side_effects));
+            if effects.is_empty() {
+                return;
+            }
+            for effect in effects {
+                effect();
+            }
+        }
+    }
+
     /// Moves focus as `FocusRequester`s asked, now that the tree is free, running what the moves
     /// call (`on_focus_changed`) without recomposing: a frame does it first, and a test rule
     /// between frames, so what the calls write recomposes at its next frame (D906).
@@ -340,7 +354,7 @@ impl UiHost {
             || self.with_tree(|tree| tree.needs_draw)
             || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
-            || self.with_tree(|tree| tree.has_node_requests())
+            || self.with_tree(|tree| tree.has_node_requests() || !tree.side_effects.is_empty())
             || self.with_tree(|tree| tree.has_beyond_bounds_moves())
     }
 
@@ -357,6 +371,7 @@ impl UiHost {
         self.handle_focus_requests();
         // What the tasks' modifier node handles asked, in this frame.
         self.with_tree(|tree| tree.apply_node_requests());
+        self.run_side_effects();
         compose_runtime::platform::dispatch_frame();
         drop(tasks);
         let compose = crate::trace::section(c"compose-rs: recompose");
@@ -430,6 +445,8 @@ impl UiHost {
         }
         let mut recomposed =
             (self.composition.has_invalidations() && self.composition.recompose()) || composed;
+        // The pass's nodes' side effects, before the layout reads what they write (D1161).
+        self.run_side_effects();
         drop(compose);
         let size = self.size;
         let invalid_before_layout = self.composition.has_invalidations();
@@ -456,6 +473,7 @@ impl UiHost {
             // frame composed items itself again, D474).
             self.frame_requested.set(false);
             recomposed |= self.composition.recompose();
+            self.run_side_effects();
             measured |= self.lay_out(size);
         }
         // What the rounds left (they ran out) is the next frame's.
@@ -479,6 +497,7 @@ impl UiHost {
                 // As the frame's rounds (D474): what asked for this one is composed in it.
                 self.frame_requested.set(false);
                 recomposed |= self.composition.recompose();
+                self.run_side_effects();
                 measured |= self.lay_out(size);
             }
             if self.composition.has_invalidations()
@@ -573,6 +592,7 @@ impl UiHost {
         // The requests' writes are composed here: they wake nothing.
         self.framing.set(true);
         let more = self.prefetch_scheduler.run(&self.composition, deadline, unbounded_first);
+        self.run_side_effects();
         // The items composed aren't placed, and those disposed weren't: unless measuring wrote
         // state for others (observed writes, scopes invalidated), nothing needs a frame. Each
         // item is a repaint boundary, so measuring one marks only its own drawing (D155), drawn

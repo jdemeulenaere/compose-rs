@@ -941,6 +941,7 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         for node in deferred.released_nodes.drain(..) {
             applier.release(node);
         }
+        applier.on_paused_end();
         applier.on_end_changes();
     }
     // The segments in order: each paused scope's where it paused.
@@ -1112,7 +1113,10 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
                 applier.release(node);
             }
         }
+        applier.on_paused_end();
         applier.on_end_changes();
+    } else if let Ok(mut applier) = applier.try_borrow_mut() {
+        applier.on_paused_end();
     }
     // Observers remembered in the regions were never told: abandoned; the values of reused
     // content that left are forgotten.

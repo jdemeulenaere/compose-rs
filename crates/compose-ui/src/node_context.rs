@@ -113,12 +113,14 @@ impl NodeContext<'_> {
         **scope
     }
 
-    /// Runs `effect` once the tree applied the changes under way, as `Modifier.Node.sideEffect`:
-    /// after the pass's lifecycle callbacks, when the host has released the tree (with the
-    /// actions it queues outside dispatch, `take_pending_actions`, after the frame or the
-    /// prefetch), so the effect may use handles (`NodeHandle::with_node`) and the host.
+    /// Runs `effect` once the tree applied the changes under way, as `Modifier.Node.sideEffect`
+    /// (`onEndApplyChanges`): after the pass's lifecycle callbacks, as soon as the host has
+    /// released the tree after the composition pass, before the frame's layout, so the effect
+    /// may write state the layout reads and use handles (`NodeHandle::with_node`). Asked
+    /// outside a pass (from a task), it asks for a frame, which runs it.
     pub fn side_effect(&mut self, effect: impl FnOnce() + 'static) {
-        self.tree.pending_actions.push(crate::input::Action::Run(Box::new(effect)));
+        self.tree.side_effects.push(Box::new(effect));
+        self.tree.focus_requests.wake();
     }
 
     /// The density, as `requireDensity()`.

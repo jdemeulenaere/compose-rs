@@ -46,6 +46,10 @@ pub(crate) enum Lifecycle {
     Removed(NodeId, SmallVec<[ChainEntry; 2]>),
     /// A node reused for other content: its nodes' `on_reset`, `on_detach`, then `on_attach`.
     Reuse(NodeId),
+    /// A node a paused composition's resume reused: its nodes' `on_reset` and `on_detach`, at
+    /// the resume's end (before the content its later resumes compose); their `on_attach` waits
+    /// for the apply (`AttachEntries`, held apart, D1162).
+    Reset(NodeId),
     /// A node's layout direction changed: its nodes' `on_layout_direction_change`.
     LayoutDirection(NodeId),
     /// The density changed: every attached node's `on_density_change`.
@@ -145,7 +149,7 @@ impl UiTree {
     fn mark_attached(&mut self, node: NodeId) {
         let requests = self.focus_requests.clone();
         let Some(value) = self.get_mut(node) else { return };
-        if !value.attached || value.deactivated {
+        if !value.attached || value.deactivated || value.reattach_pending {
             return;
         }
         for entry in &mut value.chain {
@@ -363,6 +367,11 @@ impl UiTree {
                         }
                     }
                     Lifecycle::Removed(node, entries) => self.release_removed(node, entries),
+                    Lifecycle::Reset(node) => {
+                        if self.get(node).is_some_and(|value| !value.deactivated) {
+                            self.reset_and_detach(node);
+                        }
+                    }
                     Lifecycle::Reuse(node) => {
                         // Released, or deactivated since (reset and detached then).
                         if self.get(node).is_none_or(|value| value.deactivated) {
@@ -417,9 +426,10 @@ impl UiTree {
     }
 
     /// Whether nodes asked for something through their handles: what needs a frame. Not the
-    /// lifecycle steps queued: a pass's run at its end, and those queued between passes (a
-    /// paused composition's reuses, until it's applied; a density change, which measures)
-    /// don't by themselves ask the host for work (they had kept `prefetch` from running).
+    /// lifecycle steps queued: a pass's run at its end; a paused composition's resumes' reuses
+    /// are held apart until it's applied or discarded (`paused_lifecycle`, D1162); a density
+    /// change measures, which asks for the frame running its step. None asks the host for
+    /// work by itself (they had kept `prefetch` from running).
     pub(crate) fn has_node_requests(&self) -> bool {
         !self.focus_requests.node_invalidations.borrow().is_empty()
     }
@@ -431,7 +441,11 @@ impl UiTree {
         index: Option<usize>,
         what: Invalidation,
     ) {
-        if self.get(node).is_none_or(|value| value.deactivated) {
+        let Some(value) = self.get(node) else { return };
+        // Deactivated content draws nothing; a measurement it asks for waits for its reuse
+        // (`invalidate_layout_of` marks it so).
+        if value.deactivated && !matches!(what, Invalidation::Measurement | Invalidation::Placement)
+        {
             return;
         }
         match what {

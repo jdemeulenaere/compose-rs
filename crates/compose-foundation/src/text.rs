@@ -4,10 +4,10 @@
 
 use compose_runtime::{Callback, composable};
 use compose_ui::{
-    AnnotatedString, Constraints, ReleaseContext, DrawModifierNode, DrawScope,
-    IntrinsicMeasureScope, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
-    Modifier, ModifierNode, ModifierNodeElement, Offset, SemanticsConfiguration,
-    SemanticsModifierNode, SharedString, TextLayoutResult, TextStyle, empty_measure_policy,
+    AnnotatedString, Constraints, DrawModifierNode, DrawScope, IntrinsicMeasureScope, Layout,
+    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, Offset, ReleaseContext, SemanticsConfiguration, SemanticsModifierNode,
+    SharedString, TextLayoutResult, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 
