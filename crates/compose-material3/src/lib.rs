@@ -105,8 +105,8 @@ pub use slider::{
     remember_slider_state,
 };
 pub use snackbar::{
-    PlainTooltip, Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState,
-    SnackbarResult, SnackbarVisuals,
+    ContentSnackbar, PlainTooltip, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration,
+    SnackbarHost, SnackbarHostState, SnackbarResult, SnackbarVisuals,
 };
 pub use swipe_to_dismiss::{
     SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,

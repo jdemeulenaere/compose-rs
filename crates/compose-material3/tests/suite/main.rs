@@ -57,6 +57,7 @@ mod slide_using_keys;
 mod slider;
 mod slider_screenshots;
 mod snackbar;
+mod snackbar_overloads;
 mod surface;
 mod swipe_to_dismiss;
 mod switch;

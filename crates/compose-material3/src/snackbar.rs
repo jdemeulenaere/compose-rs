@@ -88,22 +88,55 @@ macro_rules! message_visuals {
 
 message_visuals!(&'static str, String, &String, Rc<str>, &SharedString);
 
-/// A snackbar being shown, as Compose's `SnackbarData`: its visuals, and how to end it.
+/// A snackbar being shown, as Compose's `SnackbarData`: its visuals, and how to end it. A
+/// `SnackbarHostState` makes them; [`with_callbacks`](Self::with_callbacks) makes one of your
+/// own, as implementing Compose's interface.
 #[derive(Clone)]
 pub struct SnackbarData {
     pub visuals: SnackbarVisuals,
     done: Rc<Completion>,
+    /// Its own `perform_action` and `dismiss`, for one made with `with_callbacks`.
+    callbacks: Option<Rc<SnackbarCallbacks>>,
+}
+
+/// `SnackbarData::with_callbacks`' callbacks.
+struct SnackbarCallbacks {
+    perform_action: std::boxed::Box<dyn Fn()>,
+    dismiss: std::boxed::Box<dyn Fn()>,
 }
 
 impl SnackbarData {
+    /// Data for `visuals` whose action and dismissal call `perform_action` and `dismiss`, as
+    /// an implementation of Compose's `SnackbarData` interface (a snackbar shown without a host).
+    pub fn with_callbacks(
+        visuals: SnackbarVisuals,
+        perform_action: impl Fn() + 'static,
+        dismiss: impl Fn() + 'static,
+    ) -> SnackbarData {
+        SnackbarData {
+            visuals,
+            done: Rc::new(Completion::default()),
+            callbacks: Some(Rc::new(SnackbarCallbacks {
+                perform_action: std::boxed::Box::new(perform_action),
+                dismiss: std::boxed::Box::new(dismiss),
+            })),
+        }
+    }
+
     /// Ends it as performed: `show_snackbar` returns `ActionPerformed`.
     pub fn perform_action(&self) {
-        self.done.complete(SnackbarResult::ActionPerformed);
+        match &self.callbacks {
+            Some(callbacks) => (callbacks.perform_action)(),
+            None => self.done.complete(SnackbarResult::ActionPerformed),
+        }
     }
 
     /// Ends it as dismissed.
     pub fn dismiss(&self) {
-        self.done.complete(SnackbarResult::Dismissed);
+        match &self.callbacks {
+            Some(callbacks) => (callbacks.dismiss)(),
+            None => self.done.complete(SnackbarResult::Dismissed),
+        }
     }
 }
 
@@ -277,7 +310,7 @@ impl SnackbarHostState {
         // Ends it however this coroutine ends: it leaves the queue, the next ones go on.
         let guard = Guard { host: host.clone(), done: done.clone() };
         Turn { host: host.clone(), done: done.clone() }.await;
-        let data = SnackbarData { visuals, done: done.clone() };
+        let data = SnackbarData { visuals, done: done.clone(), callbacks: None };
         host.current.set(Some(data));
         let result = done.wait().await;
         drop(guard);
@@ -354,45 +387,92 @@ pub fn SnackbarHost(
                 None => Snackbar(
                     data,
                     Modifier,
-                    MaterialTheme::shapes().extra_small,
-                    MaterialTheme::color_scheme().inverse_surface,
-                    MaterialTheme::color_scheme().inverse_on_surface,
-                    MaterialTheme::color_scheme().inverse_primary,
+                    false,
+                    SnackbarDefaults::shape(),
+                    SnackbarDefaults::color(),
+                    SnackbarDefaults::content_color(),
+                    SnackbarDefaults::action_color(),
+                    SnackbarDefaults::action_content_color(),
+                    SnackbarDefaults::dismiss_action_content_color(),
                 ),
             }
         }),
     );
 }
 
-/// A snackbar, as Compose's `Snackbar(snackbarData, …)`: its message (body-medium) and
-/// optional action (in `action_color`) and dismiss button on the inverse surface, 12 dp in from
-/// what's around it, at most 600 dp wide, at least 48 dp high (68 dp for two lines), with a
-/// 6 dp shadow.
+/// As Compose's `SnackbarDefaults` (`SnackbarTokens`).
+pub struct SnackbarDefaults;
+
+impl SnackbarDefaults {
+    /// The extra-small shape, as `shape`.
+    pub fn shape() -> Shape {
+        MaterialTheme::shapes().extra_small
+    }
+
+    /// The inverse surface, as `color`.
+    pub fn color() -> Color {
+        MaterialTheme::color_scheme().inverse_surface
+    }
+
+    /// The inverse surface's content, as `contentColor`.
+    pub fn content_color() -> Color {
+        MaterialTheme::color_scheme().inverse_on_surface
+    }
+
+    /// The inverse primary color, as `actionColor`: the data overload's action button's.
+    pub fn action_color() -> Color {
+        MaterialTheme::color_scheme().inverse_primary
+    }
+
+    /// The inverse primary color, as `actionContentColor`: around the action.
+    pub fn action_content_color() -> Color {
+        MaterialTheme::color_scheme().inverse_primary
+    }
+
+    /// The inverse surface's content, as `dismissActionContentColor`.
+    pub fn dismiss_action_content_color() -> Color {
+        MaterialTheme::color_scheme().inverse_on_surface
+    }
+}
+
+/// A snackbar of any content, as Compose's `Snackbar(action, dismissAction, actionOnNewLine, …,
+/// content)` (named apart from the data overload, D181): `content` (in the body medium style)
+/// and the optional `action` (in `action_content_color` and the label large style) and
+/// `dismiss_action` (in `dismiss_action_content_color`) on the inverse surface, at most 600 dp
+/// wide, at least 48 dp high (68 dp for two lines), with a 6 dp shadow; the action under the
+/// content, at the end, with `action_on_new_line`.
 #[composable]
-#[allow(non_snake_case)]
-pub fn Snackbar(
-    snackbar_data: SnackbarData,
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn ContentSnackbar(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::MaterialTheme::shapes().extra_small)] shape: Shape,
-    #[default(crate::MaterialTheme::color_scheme().inverse_surface)] container_color: Color,
-    #[default(crate::MaterialTheme::color_scheme().inverse_on_surface)] content_color: Color,
-    #[default(crate::MaterialTheme::color_scheme().inverse_primary)] action_color: Color,
+    #[default(None)] action: Option<impl Fn() + 'static>,
+    #[default(None)] dismiss_action: Option<impl Fn() + 'static>,
+    #[default(false)] action_on_new_line: bool,
+    #[default(crate::SnackbarDefaults::shape())] shape: Shape,
+    #[default(crate::SnackbarDefaults::color())] container_color: Color,
+    #[default(crate::SnackbarDefaults::content_color())] content_color: Color,
+    #[default(crate::SnackbarDefaults::action_content_color())] action_content_color: Color,
+    #[default(crate::SnackbarDefaults::dismiss_action_content_color())]
+    dismiss_action_content_color: Color,
+    content: impl Fn() + 'static,
 ) {
     let typography = MaterialTheme::typography();
-    let visuals = snackbar_data.visuals.clone();
-    let policy = compose_runtime::remember_keyed(
-        (visuals.action_label.is_some(), visuals.with_dismiss_action),
-        || {
+    let (has_action, has_dismiss) = (action.is_some(), dismiss_action.is_some());
+    let new_line = action_on_new_line && has_action;
+    let policy = compose_runtime::remember_keyed((has_action, has_dismiss, new_line), || {
+        if new_line {
+            Rc::new(NewLineSnackbarLayout { dismiss: has_dismiss })
+                as Rc<dyn compose_ui::MeasurePolicy>
+        } else {
             Rc::new(SnackbarLayout {
-                action: visuals.action_label.is_some(),
-                dismiss: visuals.with_dismiss_action,
+                action: has_action,
+                dismiss: has_dismiss,
                 line_height: typography.body_medium.line_height,
             }) as Rc<dyn compose_ui::MeasurePolicy>
-        },
-    );
-    // 12 dp around it, as Compose's `Snackbar(snackbarData)`.
+        }
+    });
     Surface(
-        modifier.padding(12.dp()),
+        modifier,
         shape,
         container_color,
         content_color,
@@ -400,45 +480,52 @@ pub fn Snackbar(
         6.dp(),
         None,
         compose_runtime::callback(move || {
-            let (data, visuals, policy) = (snackbar_data.clone(), visuals.clone(), policy.clone());
-            CompositionLocalProvider(
-                LOCAL_TEXT_STYLE.provides(typography.body_medium.clone()),
-                || {
-                    let (data, visuals) = (data.clone(), visuals.clone());
-                    compose_ui::Layout(
-                        Modifier.size_in(SizeSpec::bounds(
-                            Dp::UNSPECIFIED,
-                            Dp::UNSPECIFIED,
-                            600.dp(),
-                            Dp::UNSPECIFIED,
-                        )),
-                        policy.clone(),
-                        compose_runtime::callback(move || {
-                            let message = visuals.message.clone();
-                            Box(
-                                Modifier,
-                                Alignment::CENTER_START,
-                                false,
-                                compose_runtime::callback(move |_| themed_text(message.clone())),
+            let (action, dismiss, content, policy) =
+                (action.clone(), dismiss_action.clone(), content.clone(), policy.clone());
+            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_medium), || {
+                let (action, dismiss, content) = (action.clone(), dismiss.clone(), content.clone());
+                compose_ui::Layout(
+                    Modifier,
+                    policy.clone(),
+                    compose_runtime::callback(move || {
+                        let content = content.clone();
+                        Box(
+                            Modifier,
+                            Alignment::CENTER_START,
+                            false,
+                            compose_runtime::callback(move |_| content()),
+                        );
+                        if let Some(action) = action.clone() {
+                            CompositionLocalProvider(
+                                LOCAL_CONTENT_COLOR.provides(action_content_color),
+                                || {
+                                    CompositionLocalProvider(
+                                        LOCAL_TEXT_STYLE.provides(typography.label_large),
+                                        || {
+                                            let action = action.clone();
+                                            Box(
+                                                Modifier,
+                                                Alignment::TOP_START,
+                                                false,
+                                                compose_runtime::callback(move |_| action()),
+                                            );
+                                        },
+                                    );
+                                },
                             );
                         }
-                        if visuals.with_dismiss_action {
-                            let data = data.clone();
-                            IconButton(
-                                compose_runtime::callback(move || data.dismiss()),
-                                Modifier,
-                                true,
-                                crate::IconButtonDefaults::icon_button_colors(),
-                                None,
-                                crate::IconButtonDefaults::standard_shape(),
-                                compose_runtime::callback(|| {
-                                    Icon(
-                                        icons::filled::close(),
-                                        Some("Dismiss"),
+                        if let Some(dismiss) = dismiss.clone() {
+                            CompositionLocalProvider(
+                                LOCAL_CONTENT_COLOR.provides(dismiss_action_content_color),
+                                || {
+                                    let dismiss = dismiss.clone();
+                                    Box(
                                         Modifier,
-                                        LOCAL_CONTENT_COLOR.current(),
-                                    )
-                                }),
+                                        Alignment::TOP_START,
+                                        false,
+                                        compose_runtime::callback(move |_| dismiss()),
+                                    );
+                                },
                             );
                         }
                     }),
@@ -448,11 +535,89 @@ pub fn Snackbar(
     );
 }
 
+/// A snackbar of `snackbar_data`, as Compose's `Snackbar(snackbarData, …)`: its message, its
+/// action label as a text button in `action_color`, a dismiss button if it asks for one, 12 dp
+/// in from what's around it, as `ContentSnackbar`.
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn Snackbar(
+    snackbar_data: SnackbarData,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(false)] action_on_new_line: bool,
+    #[default(crate::SnackbarDefaults::shape())] shape: Shape,
+    #[default(crate::SnackbarDefaults::color())] container_color: Color,
+    #[default(crate::SnackbarDefaults::content_color())] content_color: Color,
+    #[default(crate::SnackbarDefaults::action_color())] action_color: Color,
+    #[default(crate::SnackbarDefaults::action_content_color())] action_content_color: Color,
+    #[default(crate::SnackbarDefaults::dismiss_action_content_color())]
+    dismiss_action_content_color: Color,
+) {
+    let visuals = snackbar_data.visuals.clone();
+    let action = visuals.action_label.clone().map(|label| {
+        let data = snackbar_data.clone();
+        compose_runtime::callback(move || {
+            // The action in its color, as `textButtonColors(contentColor = actionColor)`.
+            let (data, label) = (data.clone(), label.clone());
+            crate::button::Button(
+                compose_runtime::callback(move || data.perform_action()),
+                Modifier,
+                true,
+                crate::ButtonDefaults::shape(),
+                crate::ButtonColors {
+                    content_color: action_color,
+                    ..crate::ButtonDefaults::text_button_colors()
+                },
+                None,
+                None,
+                crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+                None,
+                compose_runtime::callback(move |_: RowScope| themed_text(label.clone())),
+            );
+        })
+    });
+    let dismiss = visuals.with_dismiss_action.then(|| {
+        let data = snackbar_data.clone();
+        compose_runtime::callback(move || {
+            let data = data.clone();
+            IconButton(
+                compose_runtime::callback(move || data.dismiss()),
+                Modifier,
+                true,
+                crate::IconButtonDefaults::icon_button_colors(),
+                None,
+                crate::IconButtonDefaults::standard_shape(),
+                compose_runtime::callback(|| {
+                    Icon(
+                        icons::filled::close(),
+                        Some("Dismiss"),
+                        Modifier,
+                        LOCAL_CONTENT_COLOR.current(),
+                    )
+                }),
+            );
+        })
+    });
+    let message = visuals.message.clone();
+    // 12 dp around it, as Compose's `Snackbar(snackbarData)`.
+    ContentSnackbar(
+        modifier.padding(12.dp()),
+        action,
+        dismiss,
+        action_on_new_line,
+        shape,
+        container_color,
+        content_color,
+        action_content_color,
+        dismiss_action_content_color,
+        compose_runtime::callback(move || themed_text(message.clone())),
+    );
+}
+
 /// A snackbar's row, as Compose's `OneRowSnackbar`: the message 16 dp from the start, 6 dp
 /// above and below, taking what the buttons leave; the action, then the dismiss button, at
 /// the end (8 dp in after the action alone, 0 dp after the dismiss button, 16 dp after the
-/// message alone); at least 48 dp high, 68 dp when the message takes two lines or more, all
-/// centered down it.
+/// message alone); at most 600 dp wide; at least 48 dp high, 68 dp when the message takes two
+/// lines or more, all centered down it.
 struct SnackbarLayout {
     action: bool,
     dismiss: bool,
@@ -480,7 +645,7 @@ impl compose_ui::MeasurePolicy for SnackbarLayout {
             measurables[1..].iter().map(|&button| scope.measure(button, loose)).collect();
         let buttons_width: i32 = buttons.iter().map(|button| button.width).sum();
         // At most 600 dp, as Compose's `OneRowSnackbar` (`ContainerMaxWidth`, D1207).
-        let width = constraints.max_width.min(px(600.0));
+        let width = constraints.max_width.min(px(600.0)).max(constraints.min_width);
         let text_width = (width - start - end - buttons_width).max(0);
         let text = scope.measure(
             measurables[0],
@@ -505,6 +670,56 @@ impl compose_ui::MeasurePolicy for SnackbarLayout {
 
     fn debug_name(&self) -> &'static str {
         "Snackbar"
+    }
+}
+
+/// A snackbar with its action under its message, as Compose's `NewLineButtonSnackbar`: the
+/// message 16 dp from the start and the end, 14 dp above and below; under it at the end, the
+/// action then the dismiss button, 4 dp above the bottom (and 8 dp from the end without the
+/// dismiss button); as wide as allowed up to 600 dp.
+struct NewLineSnackbarLayout {
+    dismiss: bool,
+}
+
+impl compose_ui::MeasurePolicy for NewLineSnackbarLayout {
+    fn measure(
+        &self,
+        scope: &mut compose_ui::MeasureScope<'_>,
+        measurables: &[compose_ui::Measurable],
+        constraints: compose_ui::Constraints,
+    ) -> compose_ui::MeasureResult {
+        let density = scope.density();
+        let px = |dp: f32| density.round_to_px(Dp(dp));
+        let width = constraints.max_width.min(px(600.0)).max(constraints.min_width);
+        let (start, vertical) = (px(16.0), px(14.0));
+        let text = scope.measure(
+            measurables[0],
+            compose_ui::Constraints::new(
+                0,
+                (width - 2 * start).max(0),
+                0,
+                compose_ui::Constraints::INFINITY,
+            ),
+        );
+        let loose = constraints.loosen();
+        let buttons: Vec<_> =
+            measurables[1..].iter().map(|&button| scope.measure(button, loose)).collect();
+        let buttons_width: i32 = buttons.iter().map(|button| button.width).sum();
+        let row_height = buttons.iter().map(|button| button.height).max().unwrap_or(0);
+        let end = if self.dismiss { 0 } else { px(8.0) };
+        let top = vertical + text.height + vertical;
+        let height = constraints.constrain_height(top + row_height + px(4.0));
+        scope.place_relative(&text, start, vertical);
+        let mut x = width - end - buttons_width;
+        for button in &buttons {
+            scope.place_relative(button, x, top + (row_height - button.height) / 2);
+            x += button.width;
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "NewLineButtonSnackbar"
     }
 }
 
