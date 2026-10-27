@@ -299,7 +299,7 @@ fn animated_elevation(
     let tween = |duration_millis, easing| {
         AnimationSpec::Tween(TweenSpec { duration_millis, delay_millis: 0, easing })
     };
-    let outgoing = Easing::CubicBezier(0.4, 0.0, 0.6, 1.0);
+    let outgoing = Easing::cubic_bezier(0.4, 0.0, 0.6, 1.0);
     let spec = match (interaction, previous) {
         (Some(_), _) => tween(120, FAST_OUT_SLOW_IN_EASING),
         (None, Some(ElevationInteraction::Hover)) => tween(120, outgoing),

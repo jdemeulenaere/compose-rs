@@ -9,7 +9,7 @@ use std::rc::Rc;
 use compose_animation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, Dp, Offset, Rect, Size};
+use compose_ui::{Color, Dp, DpOffset, IntOffset, IntSize, Offset, Rect, Size};
 
 /// Reads the animated values.
 type Reader<V> = Rc<dyn Fn() -> V>;
@@ -381,4 +381,34 @@ fn an_interrupting_animation_starts_where_the_other_left_off() {
     // 64 ms into its 200 ms: 32 % of the way back.
     ui.advance_time_by(std::time::Duration::from_millis(64));
     assert!((value(&slot) - at_interruption * 0.68).abs() < 0.1, "{}", value(&slot));
+}
+
+/// The types' thresholds, pinned to Compose's `VisibilityThresholds.kt` values: 0.4 dp, a
+/// pixel, 1 for integers.
+#[test]
+fn the_types_thresholds_are_composes() {
+    assert_eq!(Dp::VISIBILITY_THRESHOLD, Dp(0.4));
+    assert_eq!(DpOffset::VISIBILITY_THRESHOLD, DpOffset::new(Dp(0.4), Dp(0.4)));
+    assert_eq!(Offset::VISIBILITY_THRESHOLD, Offset::new(1.0, 1.0));
+    assert_eq!(Size::VISIBILITY_THRESHOLD, Size::new(1.0, 1.0));
+    assert_eq!(Rect::VISIBILITY_THRESHOLD, Rect::new(1.0, 1.0, 1.0, 1.0));
+    assert_eq!(IntOffset::VISIBILITY_THRESHOLD, IntOffset::new(1, 1));
+    assert_eq!(IntSize::VISIBILITY_THRESHOLD, IntSize::new(1, 1));
+    assert_eq!(i32::VISIBILITY_THRESHOLD, 1);
+}
+
+/// The default springs (stiffness 1500) from 0 to 100, pinned to Compose's estimated
+/// durations: 198 ms within 0.4 dp, 171 ms within a pixel, 303 ms within 0.01.
+#[test]
+fn the_default_springs_last_composes_durations() {
+    let dp = TargetBasedAnimation::new(__dp_default_spring(), Dp(0.0), Dp(100.0));
+    assert_eq!(dp.duration_millis(), 198);
+    let offset = TargetBasedAnimation::new(
+        __offset_default_spring(),
+        Offset::ZERO,
+        Offset::new(100.0, 100.0),
+    );
+    assert_eq!(offset.duration_millis(), 171);
+    let float = TargetBasedAnimation::new(spring(), 0.0f32, 100.0);
+    assert_eq!(float.duration_millis(), 303);
 }

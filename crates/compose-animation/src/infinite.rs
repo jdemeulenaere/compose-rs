@@ -137,6 +137,8 @@ struct TransitionAnimationState<T: Animate> {
     /// The values as vectors, converted once (a color's conversion is the dearest part of its
     /// frame).
     vectors: Cell<(AnimationVector, AnimationVector)>,
+    /// The spec's duration for the values, computed when they change, not each frame.
+    duration_nanos: Cell<i64>,
     value: OwnedState<T>,
     is_finished: Cell<bool>,
     /// Its play time starts at the next frame: it was just added or changed.
@@ -148,7 +150,9 @@ struct TransitionAnimationState<T: Animate> {
 impl<T: Animate> TransitionAnimationState<T> {
     /// New values: it starts again from `initial_value` at the next frame, as `updateValues`.
     fn update_values(&self, initial_value: T, target_value: T, animation_spec: RepeatableSpec) {
-        self.vectors.set((initial_value.to_vector(), target_value.to_vector()));
+        let (start, end) = (initial_value.to_vector(), target_value.to_vector());
+        self.vectors.set((start, end));
+        self.duration_nanos.set(animation_spec.duration_nanos(start, end, start.new_instance()));
         *self.initial_value.borrow_mut() = initial_value;
         *self.target_value.borrow_mut() = target_value;
         self.animation_spec.set(animation_spec);
@@ -177,7 +181,7 @@ impl<T: Animate> TransitionAnimation for TransitionAnimationState<T> {
         let spec = self.animation_spec.get();
         let play_time = play_time.min(i64::MAX as u64) as i64;
         let velocity = start.new_instance();
-        if play_time >= spec.duration_nanos(start, end, velocity) {
+        if play_time >= self.duration_nanos.get() {
             let target = self.target_value.borrow().clone();
             self.value.set(target);
             self.is_finished.set(true);
@@ -208,6 +212,14 @@ impl InfiniteTransition {
                 target_value: RefCell::new(target_value.clone()),
                 animation_spec: Cell::new(animation_spec),
                 vectors: Cell::new((initial_value.to_vector(), target_value.to_vector())),
+                duration_nanos: Cell::new({
+                    let start = initial_value.to_vector();
+                    animation_spec.duration_nanos(
+                        start,
+                        target_value.to_vector(),
+                        start.new_instance(),
+                    )
+                }),
                 value: compose_runtime::mutable_state_of_with(
                     initial_value.clone(),
                     crate::vector::SameValuePolicy,

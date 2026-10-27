@@ -603,3 +603,77 @@ fn a_transitions_visibility_follows_its_states() {
     ui.on_node_unmerged(has_test_tag("content")).assert_does_not_exist();
     assert!(disposed.get());
 }
+
+/// The default slides come in from half the content's size: `slideInHorizontally()` from
+/// `-width / 2`, `slideInVertically()` from `-height / 2`, as Compose's defaults.
+#[test]
+fn the_default_slides_start_half_way_out() {
+    for (enter, expected) in
+        [(slide_in_horizontally(), (-50.0, 0.0)), (slide_in_vertically(), (0.0, -50.0))]
+    {
+        let (mut ui, visible, _) = shown_box(enter, ExitTransition::NONE);
+        visible.set(true);
+        // The change composes; then the first frame of the slide, at its start.
+        ui.advance_time_by_frame();
+        ui.advance_time_by_frame();
+        let at = bounds(&mut ui, "box");
+        assert_eq!((at.left, at.top), expected);
+    }
+}
+
+/// The clip rects of the display list.
+fn clips(ui: &mut ComposeTestRule) -> Vec<Rect> {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::ClipRect(rect) => Some(*rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An expansion clips the content to the animated size, unless it's told not to.
+#[test]
+fn an_expansion_clips_to_its_animated_size_unless_told_not_to() {
+    for clip in [true, false] {
+        let enter =
+            expand_in_with(tween(160).easing(LINEAR_EASING), Alignment::TOP_START, clip, |_| {
+                IntSize::ZERO
+            });
+        let (mut ui, visible, _) = shown_box(enter, ExitTransition::NONE);
+        visible.set(true);
+        ui.advance_time_by_frame();
+        ui.advance_time_by_frame();
+        // 80 ms in: half the size.
+        ui.advance_time_by(Duration::from_millis(80));
+        let half =
+            clips(&mut ui).into_iter().any(|rect| rect.width() == 50.0 && rect.height() == 50.0);
+        assert_eq!(half, clip, "clip {clip}: {:?}", clips(&mut ui));
+    }
+}
+
+/// A scale's origin is its pivot: scaled to a half around the bottom end, the content's top
+/// start corner lands at the middle.
+#[test]
+fn a_scale_pivots_on_its_transform_origin() {
+    let enter = scale_in_with(
+        tween(160),
+        0.5,
+        TransformOrigin { pivot_fraction_x: 1.0, pivot_fraction_y: 1.0 },
+    );
+    let (mut ui, visible, _) = shown_box(enter, ExitTransition::NONE);
+    visible.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let transform = ui.host().display_list().ops.iter().find_map(|op| match op {
+        DrawOp::Transform { pivot, scale, .. } => Some((*pivot, *scale)),
+        _ => None,
+    });
+    let (pivot, scale) = transform.expect("a scale");
+    assert_eq!(scale, (0.5, 0.5));
+    // Where the content's (0, 0) lands, in its layer.
+    let corner = (pivot.x + (0.0 - pivot.x) * scale.0, pivot.y + (0.0 - pivot.y) * scale.1);
+    assert_eq!(corner, (50.0, 50.0));
+}

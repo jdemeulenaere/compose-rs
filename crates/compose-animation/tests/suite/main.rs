@@ -16,6 +16,7 @@ mod crossfade;
 mod crossfade_ported;
 mod deferred_target;
 mod easing;
+mod easing_bits;
 mod enter_exit_config;
 mod infinite;
 mod infinite_transition;

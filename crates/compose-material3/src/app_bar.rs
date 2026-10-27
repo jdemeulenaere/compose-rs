@@ -779,7 +779,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
 }
 
 /// The small title's fade, as Compose's `TopTitleAlphaEasing`.
-const TOP_TITLE_ALPHA_EASING: Easing = Easing::CubicBezier(0.8, 0.0, 0.8, 0.15);
+const TOP_TITLE_ALPHA_EASING: Easing = Easing::cubic_bezier(0.8, 0.0, 0.8, 0.15);
 
 /// A row of a top app bar, as Compose's `TopAppBarLayout`: the navigation icon, the title and
 /// the actions, laid out by `policy`.

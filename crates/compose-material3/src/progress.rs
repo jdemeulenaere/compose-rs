@@ -140,7 +140,7 @@ const ROTATIONS_PER_CYCLE: u32 = 5;
 const BASE_ROTATION_ANGLE: f32 = 286.0;
 const JUMP_ROTATION_ANGLE: f32 = 290.0;
 const ROTATION_ANGLE_OFFSET: f32 = (BASE_ROTATION_ANGLE + JUMP_ROTATION_ANGLE) % 360.0;
-const CIRCULAR_EASING: Easing = Easing::CubicBezier(0.4, 0.0, 0.2, 1.0);
+const CIRCULAR_EASING: Easing = Easing::cubic_bezier(0.4, 0.0, 0.2, 1.0);
 
 /// The indeterminate arc's start and sweep, in degrees, `time` milliseconds into a cycle, as
 /// Compose's `CircularProgressIndicator` keyframes.
@@ -249,13 +249,13 @@ impl LineEnd {
 }
 
 const FIRST_HEAD: LineEnd =
-    LineEnd { delay: 0.0, duration: 750.0, easing: Easing::CubicBezier(0.2, 0.0, 0.8, 1.0) };
+    LineEnd { delay: 0.0, duration: 750.0, easing: Easing::cubic_bezier(0.2, 0.0, 0.8, 1.0) };
 const FIRST_TAIL: LineEnd =
-    LineEnd { delay: 333.0, duration: 850.0, easing: Easing::CubicBezier(0.4, 0.0, 1.0, 1.0) };
+    LineEnd { delay: 333.0, duration: 850.0, easing: Easing::cubic_bezier(0.4, 0.0, 1.0, 1.0) };
 const SECOND_HEAD: LineEnd =
-    LineEnd { delay: 1000.0, duration: 567.0, easing: Easing::CubicBezier(0.0, 0.0, 0.65, 1.0) };
+    LineEnd { delay: 1000.0, duration: 567.0, easing: Easing::cubic_bezier(0.0, 0.0, 0.65, 1.0) };
 const SECOND_TAIL: LineEnd =
-    LineEnd { delay: 1267.0, duration: 533.0, easing: Easing::CubicBezier(0.1, 0.0, 0.45, 1.0) };
+    LineEnd { delay: 1267.0, duration: 533.0, easing: Easing::cubic_bezier(0.1, 0.0, 0.45, 1.0) };
 
 /// 240 by 4 dp unless the modifier says otherwise, as Compose's.
 fn linear_size(modifier: Modifier) -> Modifier {

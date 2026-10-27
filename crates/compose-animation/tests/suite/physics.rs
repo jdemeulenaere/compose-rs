@@ -114,7 +114,7 @@ fn a_vector_springs_components_move_as_springs_of_their_own() {
         for (index, threshold) in [1.0, 2.0, 3.0].into_iter().enumerate() {
             let one = AnimationVector::from(100.0);
             let float = alone(threshold).value_from_millis(time, one, 0.0.into(), 0.0.into());
-            assert!((float[0] - vector[index]).abs() < 1e-4, "at {time} ms: {vector:?}");
+            assert!((float[0] - vector[index]).abs() < 1e-5, "at {time} ms: {vector:?}");
         }
     }
 }

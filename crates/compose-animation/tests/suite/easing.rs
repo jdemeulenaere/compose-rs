@@ -18,26 +18,26 @@ fn a_cubic_bezier_ends_at_1() {
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt, cubicBezierDoesntExceed1
 #[test]
 fn a_cubic_bezier_within_bounds_doesnt_exceed_1() {
-    assert!(Easing::CubicBezier(0.0, 0.0, 0.15, 1.0).transform(0.999_999) <= 1.0);
+    assert!(Easing::cubic_bezier(0.0, 0.0, 0.15, 1.0).transform(0.999_999) <= 1.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt, cubicBezierDoesExceed1
 #[test]
 fn an_overshooting_cubic_bezier_exceeds_1() {
-    assert!(Easing::CubicBezier(0.34, 1.56, 0.64, 1.0).transform(0.6) > 1.0);
+    assert!(Easing::cubic_bezier(0.34, 1.56, 0.64, 1.0).transform(0.6) > 1.0);
 }
 
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt, cubicBezierEquals
 #[test]
 fn cubic_beziers_are_equal_by_their_points() {
-    let curve = Easing::CubicBezier(1.0, 2.0, 3.0, 4.0);
-    assert_eq!(curve, Easing::CubicBezier(1.0, 2.0, 3.0, 4.0));
+    let curve = Easing::cubic_bezier(1.0, 2.0, 3.0, 4.0);
+    assert_eq!(curve, Easing::cubic_bezier(1.0, 2.0, 3.0, 4.0));
     for other in [
-        Easing::CubicBezier(0.0, 2.0, 3.0, 4.0),
-        Easing::CubicBezier(1.0, 0.0, 3.0, 4.0),
-        Easing::CubicBezier(1.0, 2.0, 0.0, 4.0),
-        Easing::CubicBezier(1.0, 2.0, 3.0, 0.0),
-        Easing::CubicBezier(4.0, 3.0, 2.0, 1.0),
+        Easing::cubic_bezier(0.0, 2.0, 3.0, 4.0),
+        Easing::cubic_bezier(1.0, 0.0, 3.0, 4.0),
+        Easing::cubic_bezier(1.0, 2.0, 0.0, 4.0),
+        Easing::cubic_bezier(1.0, 2.0, 3.0, 0.0),
+        Easing::cubic_bezier(4.0, 3.0, 2.0, 1.0),
     ] {
         assert_ne!(curve, other);
     }
@@ -46,7 +46,7 @@ fn cubic_beziers_are_equal_by_their_points() {
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt, canSolveCubicForSmallFractions
 #[test]
 fn a_cubic_bezier_solves_tiny_fractions() {
-    let curve = Easing::CubicBezier(0.3, 0.0, 0.7, 1.0);
+    let curve = Easing::cubic_bezier(0.3, 0.0, 0.7, 1.0);
     for bits in [
         0x3e80_0000u32,
         0x3e00_0000,
@@ -68,7 +68,7 @@ fn a_cubic_bezier_solves_tiny_fractions() {
 
 /// The curves defined within 0..1, as Compose's test lists them.
 const IN_RANGE: [Easing; 26] = [
-    Easing::CubicBezier(0.4, 0.0, 0.2, 1.0),
+    Easing::cubic_bezier(0.4, 0.0, 0.2, 1.0),
     EASE,
     EASE_IN,
     EASE_IN_BACK,
@@ -134,7 +134,7 @@ fn a_cubic_bezier_follows_its_curve() {
         [0.34, 1.56, 0.64, 1.0],
         [0.00, 1.00, 0.00, 1.0],
     ] {
-        let easing = Easing::CubicBezier(a, b, c, d);
+        let easing = Easing::cubic_bezier(a, b, c, d);
         let point = |t: f64| {
             let u = 1.0 - t;
             let curve = |p1: f32, p2: f32| {

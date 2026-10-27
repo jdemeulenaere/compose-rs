@@ -596,3 +596,45 @@ fn child_transitions_labels_follow_their_parents() {
         assert_eq!(label.as_deref(), expected);
     }
 }
+
+/// A composition writing a state read only while measuring (a transition's target, D802): its
+/// frame lays out with the write and asks for no other (D806), and the transition it changes
+/// starts at play time 0 at the next frame.
+#[test]
+fn a_composition_writing_a_measured_state_asks_for_no_other_frame() {
+    let trigger = mutable_state_of(0u32);
+    let handle = trigger.handle();
+    let measured_values = Rc::new(RefCell::new(Vec::new()));
+    let seen = measured_values.clone();
+    let play_times = Rc::new(RefCell::new(Vec::new()));
+    let plays = play_times.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let measured = remember(|| mutable_state_of(0u32));
+        // Written as it composes, read only while measuring.
+        measured.set_in_composition(handle.get());
+        let seen = seen.clone();
+        let modifier = remember(move || {
+            Modifier.layout(move |scope, content, constraints| {
+                seen.borrow_mut().push(measured.get());
+                let placeable = scope.measure(content, constraints);
+                let size = placeable.size();
+                scope.place(&placeable, 0, 0);
+                scope.layout(size.width, size.height)
+            })
+        });
+        Box!(modifier = modifier);
+        let transition = update_transition(handle.get(), None);
+        let _ = transition.animate_float(|_| tween(100).into(), |state| *state as f32);
+        plays.borrow_mut().push(transition.play_time_nanos());
+    });
+    trigger.set(1);
+    ui.advance_time_by_frame();
+    assert_eq!(measured_values.borrow().last(), Some(&1), "measured with the write");
+    assert!(!ui.host().has_pending_work(), "the write asks for no other frame");
+    let composed = play_times.borrow().len();
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    // The transition's first frame is at play time 0, the next 16 ms on.
+    let plays = play_times.borrow();
+    assert_eq!(&plays[composed..], &[16_000_000][..], "{plays:?}");
+}
