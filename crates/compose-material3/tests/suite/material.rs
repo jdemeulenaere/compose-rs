@@ -178,3 +178,43 @@ fn a_pressed_button_shows_its_state_layer() {
     ui.wait_for_idle();
     assert!(!ui.dump_display_list().contains(&layer));
 }
+
+thread_local! {
+    static TYPOGRAPHY_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Reads the theme's typography, counting its compositions.
+#[composable]
+fn TypographyReader() {
+    TYPOGRAPHY_READS.with(|reads| reads.set(reads.get() + 1));
+    let _ = MaterialTheme::typography().body_large.font_size;
+}
+
+/// A theme made anew each pass, its typography equal, as an app's theme composable builds it.
+#[composable]
+fn Themed(tick: u32) {
+    let base = Typography::default();
+    let typography = Typography { title_large: base.title_large.clone(), ..base };
+    MaterialTheme!(
+        typography = typography,
+        content = move || {
+            // The content captures the tick: the theme runs again each pass.
+            let _ = tick;
+            TypographyReader();
+        }
+    );
+}
+
+/// The theme's typography compares by value, as Compose's: an equal typography made anew
+/// recomposes none of its readers (D1107).
+#[test]
+fn an_equal_typography_made_anew_recomposes_no_reader() {
+    TYPOGRAPHY_READS.with(|reads| reads.set(0));
+    let tick = mutable_state_of(0u32);
+    let handle = tick.handle();
+    let mut ui = compose_test(move || Themed(handle.get()));
+    assert_eq!(TYPOGRAPHY_READS.with(|reads| reads.get()), 1);
+    tick.set(1);
+    ui.wait_for_idle();
+    assert_eq!(TYPOGRAPHY_READS.with(|reads| reads.get()), 1);
+}

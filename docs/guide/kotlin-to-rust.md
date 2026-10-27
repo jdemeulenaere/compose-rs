@@ -1257,7 +1257,6 @@ pub fn AppTheme(content: impl Fn() + 'static) {
         title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
         ..typography
     };
-    let typography = std::rc::Rc::new(typography); // shared, as Compose passes it
     MaterialTheme!(color_scheme = color_scheme, typography = typography, content = content);
 }
 ```
@@ -1280,7 +1279,7 @@ pub fn Banner(text: SharedString) {
 }
 ```
 
-`MaterialTheme::typography()` is shared, as Kotlin's object is: an `Rc<Typography>`, so reading it copies no style; a composable takes one style from it with `.clone()`, and `MaterialTheme` takes a typography as an `Rc` (D1106).
+`MaterialTheme::typography()` is shared, as Kotlin's object is: an `Rc<Typography>`, so reading it copies no style; a composable takes one style from it with `.clone()`; `MaterialTheme` takes a `Typography` by value and, as Compose, compares it by value: a theme composable that builds an equal one each pass recomposes no reader (D1106, D1107).
 
 ### Composition locals
 

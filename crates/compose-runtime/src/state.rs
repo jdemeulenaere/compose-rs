@@ -728,6 +728,20 @@ impl<T: crate::ComposeArg> MutationPolicy<T> for ReferentialEqualityPolicy {
     }
 }
 
+/// Shared values (`Rc<T>`) compared by value, as Kotlin's `==` on an object: the same `Rc`
+/// first, then `T`'s `PartialEq`. For a composition local holding a shared object a provider
+/// may make anew with an equal value (a theme's typography, color scheme or shapes): its readers
+/// recompose only when the value changes (D1107). An `Rc`'s own [`ComposeArg`](crate::ComposeArg)
+/// compares pointers.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SharedValueEqualityPolicy;
+
+impl<T: PartialEq + ?Sized> MutationPolicy<std::rc::Rc<T>> for SharedValueEqualityPolicy {
+    fn equivalent(a: &std::rc::Rc<T>, b: &std::rc::Rc<T>) -> bool {
+        std::rc::Rc::ptr_eq(a, b) || **a == **b
+    }
+}
+
 /// As Compose's `referentialEqualityPolicy()`.
 pub fn referential_equality_policy() -> ReferentialEqualityPolicy {
     ReferentialEqualityPolicy

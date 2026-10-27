@@ -19,7 +19,6 @@ pub fn AppTheme(content: impl Fn() + 'static) {
         title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
         ..typography
     };
-    let typography = std::rc::Rc::new(typography); // shared, as Compose passes it
     MaterialTheme!(color_scheme = color_scheme, typography = typography, content = content);
 }
 // ANCHOR_END: theme

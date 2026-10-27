@@ -98,9 +98,9 @@ pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_hol
 pub use scope::RecomposeScope;
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState,
-    ReferentialEqualityPolicy, State, StructuralEqualityPolicy, mutable_state_list_from,
-    mutable_state_list_of, mutable_state_of, mutable_state_of_with, never_equal_policy,
-    referential_equality_policy, structural_equality_policy,
+    ReferentialEqualityPolicy, SharedValueEqualityPolicy, State, StructuralEqualityPolicy,
+    mutable_state_list_from, mutable_state_list_of, mutable_state_of, mutable_state_of_with,
+    never_equal_policy, referential_equality_policy, structural_equality_policy,
 };
 
 #[doc(hidden)]
