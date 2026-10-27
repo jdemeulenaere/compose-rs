@@ -88,3 +88,46 @@ fn a_forward_write_recomposes_its_reader_in_the_same_pass() {
     assert!(!composition.has_invalidations(), "nothing left for another pass");
     assert!(!requested.get(), "no frame asked for");
 }
+
+static BASE: CompositionLocal<i32> = CompositionLocal::new("review7.base", || 1);
+static SCALED: CompositionLocal<i32> = CompositionLocal::new("review7.scaled", || 0);
+
+#[composable]
+fn ScaledReader(runs: Counter, seen: Rc<Cell<i32>>) {
+    runs.increment();
+    seen.set(SCALED.current());
+}
+
+#[composable]
+fn ScaledProvider(
+    trigger: MutableState<i32>,
+    factor: MutableState<i32>,
+    runs: Counter,
+    seen: Rc<Cell<i32>>,
+) {
+    trigger.get();
+    let factor = factor.get();
+    CompositionLocalProvider(
+        SCALED.provides_computed(move |scope| scope.current_value(&BASE) * factor),
+        || ScaledReader(runs.clone(), seen.clone()),
+    );
+}
+
+/// A capturing `provides_computed` is memoized on its captures, as lambdas are: the provider
+/// recomposing with the same captures leaves its content alone; a changed capture recomposes
+/// the readers.
+#[test]
+fn a_computed_value_with_the_same_captures_recomposes_nothing() {
+    let mut test = composition_test();
+    let (trigger, factor) = (mutable_state_of(0), mutable_state_of(3));
+    let (runs, seen) = (Counter::new(), Rc::new(Cell::new(0)));
+    let (t, f, r, s) = (trigger.handle(), factor.handle(), runs.clone(), seen.clone());
+    test.compose(move || ScaledProvider(t, f, r.clone(), s.clone()));
+    assert_eq!((runs.get(), seen.get()), (1, 3));
+    trigger.set(1);
+    test.advance();
+    assert_eq!(runs.get(), 1, "the reader skipped");
+    factor.set(5);
+    test.advance();
+    assert_eq!((runs.get(), seen.get()), (2, 5));
+}

@@ -27,6 +27,11 @@ impl<F: ?Sized> Callback<F> {
         Callback(function)
     }
 
+    /// The shared function.
+    pub(crate) fn into_rc(self) -> Rc<F> {
+        self.0
+    }
+
     /// Whether two callbacks are the same function object.
     pub fn ptr_eq(&self, other: &Callback<F>) -> bool {
         Rc::ptr_eq(&self.0, &other.0)

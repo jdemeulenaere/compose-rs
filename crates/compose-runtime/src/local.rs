@@ -69,6 +69,25 @@ impl CompositionLocalAccessorScope {
     }
 }
 
+/// `probe.resolve(make())` for a `provides_computed` closure, with its scope parameter's type
+/// spelled out (a higher-ranked borrow, which `resolve_lazy_1` can't name).
+#[doc(hidden)]
+#[inline]
+pub fn resolve_lazy_computed<K: 'static, T: 'static, C>(
+    probe: crate::callback::LambdaProbe<K, dyn Fn(&CompositionLocalAccessorScope) -> T>,
+    make: impl FnOnce() -> C,
+) -> crate::callback::Callback<dyn Fn(&CompositionLocalAccessorScope) -> T>
+where
+    C: Fn(&CompositionLocalAccessorScope) -> T + 'static,
+{
+    match probe {
+        crate::callback::LambdaProbe::Hit(callback) => callback,
+        crate::callback::LambdaProbe::Miss(pending) => {
+            pending.store_callback(crate::callback::Callback::from_rc(Rc::new(make())))
+        }
+    }
+}
+
 /// A value for a local, for [`CompositionLocalProvider`], as Compose's `ProvidedValue`: made by
 /// [`provides`](CompositionLocal::provides), [`provides_default`](CompositionLocal::provides_default)
 /// or [`provides_computed`](CompositionLocal::provides_computed).
@@ -267,14 +286,24 @@ impl<T: 'static> CompositionLocal<T> {
     }
 
     /// A value computed from other locals where this one is read, as
-    /// `local providesComputed { … }`. A new function makes the provider recompose its content:
-    /// remember the provided value (`remember(|| LOCAL.provides_computed(…))`) if it doesn't
-    /// change.
+    /// `local providesComputed { … }`. A new function makes the provider recompose its content.
+    /// In a `#[composable]` function, a closure written in the call is memoized on its captures,
+    /// as lambdas are (D717): the provider recomposing with the same captures keeps the function.
     pub fn provides_computed(
         &self,
         compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
     ) -> ProvidedValue<T> {
         self.provided(Provided::Computed(Rc::new(compute)), true)
+    }
+
+    /// [`provides_computed`](Self::provides_computed) of a function memoized on its captures:
+    /// what the `#[composable]` macro makes of `provides_computed(closure)` (D717).
+    #[doc(hidden)]
+    pub fn provides_computed_memoized(
+        &self,
+        compute: crate::callback::Callback<dyn Fn(&CompositionLocalAccessorScope) -> T>,
+    ) -> ProvidedValue<T> {
+        self.provided(Provided::Computed(compute.into_rc()), true)
     }
 
     /// The value of the nearest provider above the composable composing now, or the default,

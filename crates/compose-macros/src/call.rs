@@ -393,7 +393,14 @@ fn callback_value(arity: usize, value: Value) -> TokenStream {
                     (closure.into_token_stream(), arity)
                 }
             };
-            memo::probe(&marked.captures, marked.unknown, closure, Some(arity), marked.nested)
+            memo::probe(
+                &marked.captures,
+                marked.unknown,
+                closure,
+                Some(arity),
+                marked.nested,
+                false,
+            )
         }
         Value::Expr(Expr::Block(block))
             if block.label.is_none() && !memo::is_probe_block(&block.block) =>

@@ -14,7 +14,8 @@
 //!   `::compose::__private::marked!((captures) …)`, and the call macro memoizes those bound to
 //!   callback parameters (it knows its parameters and their arities), a block becoming a
 //!   content lambda; a callback given as a value (a name, a default) is memoized on itself;
-//! - elsewhere, a closure wrapped as `callback(…)` or `Callback::new(…)` is memoized.
+//! - elsewhere, a closure wrapped as `callback(…)` or `Callback::new(…)` is memoized, and so is
+//!   the closure of a `provides_computed(…)` call, which becomes `provides_computed_memoized`.
 //!
 //! Closures passed to other functions (`map`, `update`, `key`, a generic `F: Fn()` parameter)
 //! keep their types.
@@ -206,6 +207,7 @@ pub(crate) fn probe(
     closure: TokenStream,
     arity: Option<usize>,
     _nested: bool,
+    computed: bool,
 ) -> TokenStream {
     let mut keys: Vec<TokenStream> = captures
         .iter()
@@ -221,9 +223,10 @@ pub(crate) fn probe(
         captures.iter().filter(|capture| !starts_uppercase(&capture.to_string())).collect();
     let site = site_of(&closure);
     let keys = key_tuple(keys);
-    let resolver = match arity.filter(|arity| *arity <= 8) {
-        Some(arity) => format_ident!("resolve_lazy_{}", arity),
-        None => format_ident!("resolve_lazy"),
+    let resolver = match (arity, computed) {
+        (_, true) => format_ident!("resolve_lazy_computed"),
+        (Some(arity), false) if arity <= 8 => format_ident!("resolve_lazy_{}", arity),
+        _ => format_ident!("resolve_lazy"),
     };
     quote! {{
         #[allow(unused_imports)]
@@ -865,11 +868,29 @@ fn memoize_closure(
     local_macros: &[String],
     closure: &mut syn::ExprClosure,
 ) -> Expr {
+    memoize_closure_as(nested, scopes, local_macros, closure, false)
+}
+
+/// [`memoize_closure`], for a `provides_computed` closure when `computed` (its resolver names
+/// the scope parameter's borrowed type).
+fn memoize_closure_as(
+    nested: bool,
+    scopes: &Scopes,
+    local_macros: &[String],
+    closure: &mut syn::ExprClosure,
+    computed: bool,
+) -> Expr {
     let (captures, unknown) =
         captures_of(scopes, local_macros, |free| free.visit_expr_closure(closure));
     closure.capture.get_or_insert_with(Default::default);
-    let tokens =
-        probe(&captures, unknown, closure.to_token_stream(), Some(closure.inputs.len()), nested);
+    let tokens = probe(
+        &captures,
+        unknown,
+        closure.to_token_stream(),
+        Some(closure.inputs.len()),
+        nested,
+        computed,
+    );
     syn::parse2(tokens).expect("a probe parses")
 }
 
@@ -1264,6 +1285,27 @@ impl VisitMut for Memoize {
                         self.reuse_argument(argument);
                     }
                 }
+            }
+            // `LOCAL.provides_computed(closure)`: memoized as a lambda (D717), so a provider
+            // recomposing with the same captures keeps the function and its content skips.
+            Expr::MethodCall(call)
+                if !self.calculation
+                    && call.method == "provides_computed"
+                    && call.args.len() == 1
+                    && matches!(&call.args[0], Expr::Closure(_)) =>
+            {
+                self.visit_expr_mut(&mut call.receiver);
+                let Some(Expr::Closure(closure)) = call.args.first_mut() else { unreachable!() };
+                self.visit_closure(closure, true);
+                let memoized = memoize_closure_as(
+                    self.depth > 0,
+                    &self.scopes,
+                    &self.local_macros,
+                    closure,
+                    true,
+                );
+                call.args[0] = memoized;
+                call.method = Ident::new("provides_computed_memoized", call.method.span());
             }
             // `remember`'s calculation runs once, while `remember` holds its slot: a callback
             // made there needs no memoization, and a probe there would take a slot out of order.
