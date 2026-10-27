@@ -268,8 +268,14 @@ fn sheet(
 /// Instead: the scrim calls `hide()`, which doesn't ask: the sheet hides and is dismissed.
 #[test]
 fn the_scrim_asks_confirm_value_change_before_hiding_the_sheet() {
-    let state =
-        SheetState::new(true, SheetValue::Hidden, |value| value != SheetValue::Hidden, false);
+    let state = SheetState::new_skipping(
+        true,
+        || 56.0,
+        || 125.0,
+        SheetValue::Hidden,
+        |value| value != SheetValue::Hidden,
+        false,
+    );
     let (mut ui, shown, _owner) = sheet(*state, 200.0);
     assert_eq!(state.current_value(), SheetValue::Expanded);
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 100.0)));
@@ -287,7 +293,8 @@ fn the_scrim_asks_confirm_value_change_before_hiding_the_sheet() {
 /// Instead: back hides it and dismisses it at once.
 #[test]
 fn back_on_an_expanded_sheet_takes_it_half_way_first() {
-    let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let (mut ui, shown, _owner) = sheet(*state, 500.0);
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
     let scope = CoroutineScope::new();

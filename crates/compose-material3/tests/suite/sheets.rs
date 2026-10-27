@@ -38,7 +38,8 @@ fn SheetApp(state: SheetState, shown: MutableState<bool>, content_height: f32) {
 fn sheet(
     content_height: f32,
 ) -> (ComposeTestRule, Owned<SheetState>, MutableState<bool>, Rc<dyn std::any::Any>) {
-    let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let owner = mutable_state_of(true);
     let shown = owner.handle();
     let given = *state;
@@ -72,7 +73,8 @@ fn a_short_sheet_shows_expanded_and_a_tall_one_half_way() {
 
 #[test]
 fn the_sheet_slides_up_as_it_shows() {
-    let state = SheetState::new(true, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(true, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let owner = mutable_state_of(false);
     let shown = owner.handle();
     let given = *state;
@@ -239,7 +241,8 @@ fn ScrollingSheetApp(state: SheetState) {
 
 #[test]
 fn the_contents_scrolls_drag_the_sheet_first() {
-    let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheetApp(given));
     ui.set_auto_advance(false);

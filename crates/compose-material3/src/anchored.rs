@@ -24,7 +24,8 @@ pub(crate) struct Anchored {
     settled: OwnedState<Key>,
     target: OwnedState<Key>,
     confirm_value_change: Box<dyn Fn(Key) -> bool>,
-    spec: AnimationSpec,
+    /// Drags' settling animation, as `anchoredDraggableMotionSpec` (its owner can change it).
+    spec: Cell<AnimationSpec>,
 }
 
 impl Anchored {
@@ -41,7 +42,7 @@ impl Anchored {
             settled: mutable_state_of(initial),
             target: mutable_state_of(initial),
             confirm_value_change,
-            spec,
+            spec: Cell::new(spec),
         }
     }
 
@@ -71,11 +72,6 @@ impl Anchored {
         self.anchors.borrow().iter().find(|(anchor, _)| *anchor == value).map(|&(_, at)| at)
     }
 
-    /// Whether `confirm_value_change` lets it go to `value`.
-    pub fn confirm(&self, value: Key) -> bool {
-        (self.confirm_value_change)(value)
-    }
-
     pub fn has_anchor(&self, value: Key) -> bool {
         self.position_of(value).is_some()
     }
@@ -92,10 +88,13 @@ impl Anchored {
 
     /// The anchors the layout found: kept for drags and animations (the offset at rest follows
     /// them).
-    pub fn update_anchors(&self, anchors: Vec<(Key, f32)>) {
-        if *self.anchors.borrow() != anchors {
+    /// Returns whether they changed.
+    pub fn update_anchors(&self, anchors: Vec<(Key, f32)>) -> bool {
+        let changed = *self.anchors.borrow() != anchors;
+        if changed {
             *self.anchors.borrow_mut() = anchors;
         }
+        changed
     }
 
     /// Moves by `delta` pixels, within the anchors, as a drag's `dispatchRawDelta`; returns
@@ -172,9 +171,24 @@ impl Anchored {
             .map(|&(value, _)| value)
     }
 
+    /// What drags settle with from now on.
+    pub fn set_spec(&self, spec: AnimationSpec) {
+        self.spec.set(spec);
+    }
+
+    /// Whether an animation to an anchor runs (a state read), as `isAnimationRunning`.
+    pub fn is_animation_running(&self) -> bool {
+        self.offset.is_running()
+    }
+
     /// Animates to `value`'s anchor (once a layout has found it), as `animateTo`; settled
     /// there when the animation finishes.
     pub async fn animate_to(&self, value: Key) {
+        self.animate_to_with(value, self.spec.get()).await;
+    }
+
+    /// [`animate_to`](Self::animate_to) along `spec`.
+    pub async fn animate_to_with(&self, value: Key, spec: AnimationSpec) {
         // Before the first layout, wait for it (a few frames at most).
         for _ in 0..8 {
             if self.position_of(value).is_some() && !self.offset().is_nan() {
@@ -183,8 +197,13 @@ impl Anchored {
             compose_runtime::with_frame_nanos(|_| ()).await;
         }
         let Some(target) = self.position_of(value) else {
-            // Nowhere to go: the value is taken as is, as Compose's.
+            // Nowhere to go: the value is taken as is, the offset where it is, as Compose's.
+            let at = self.offset();
             self.settle_at(value);
+            if !at.is_nan() {
+                self.offset.snap_to(at);
+                self.resting.set(false);
+            }
             return;
         };
         self.target.set(value);
@@ -193,7 +212,7 @@ impl Anchored {
             self.offset.snap_to(if start.is_nan() { target } else { start });
             self.resting.set(false);
         }
-        let result = self.offset.animate_to(target, self.spec.clone()).await;
+        let result = self.offset.animate_to(target, spec).await;
         if result.end_reason == AnimationEndReason::Finished {
             self.settle_at(value);
         }

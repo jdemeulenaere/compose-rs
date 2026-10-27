@@ -129,7 +129,8 @@ fn ScrollingSheet(state: SheetState) {
 /// without dispatching the fling: the sheet stays where the finger left it, between anchors.
 #[test]
 fn a_sheet_dragged_through_its_content_settles_after_a_second_finger() {
-    let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given));
     ui.set_auto_advance(false);
@@ -163,7 +164,8 @@ fn a_sheet_dragged_through_its_content_settles_after_a_second_finger() {
 /// anchors.
 #[test]
 fn a_sheet_dragged_through_its_content_settles_when_the_touch_is_cancelled() {
-    let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
+    let state =
+        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given));
     ui.set_auto_advance(false);
