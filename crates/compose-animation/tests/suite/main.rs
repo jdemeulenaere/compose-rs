@@ -33,6 +33,7 @@ mod review_round12;
 mod review_round14;
 mod review_round8;
 mod review_round9;
+mod seekable;
 mod single_value;
 mod spline_decay;
 mod spring_estimation;

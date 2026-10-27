@@ -22,6 +22,7 @@ mod deferred_target;
 mod easing;
 mod infinite;
 mod keyframes;
+mod seekable;
 mod spec;
 mod spline;
 mod spring;
@@ -71,6 +72,7 @@ pub use easing::{
 };
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
+pub use seekable::SeekableTransitionState;
 pub use spec::{
     AnimationConstants, AnimationSpec, CustomDurationBasedSpec, CustomSpec,
     DEFAULT_DURATION_MILLIS, DurationBasedSpec, FloatAnimationSpec, FloatSpringSpec,
@@ -93,7 +95,7 @@ pub use spring::{
 pub use suspend::{AnimationScope, AnimationState, animate, animate_decay, animate_value};
 pub use transition::{
     AnyTransition, MutableTransitionState, Segment, Transition, TransitionAnimation,
-    remember_transition, update_transition,
+    TransitionState, remember_transition, update_transition,
 };
 #[doc(hidden)]
 pub use vector::default_spring;

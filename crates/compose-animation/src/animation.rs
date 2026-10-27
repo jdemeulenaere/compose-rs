@@ -126,6 +126,23 @@ impl<T: Animate> TargetBasedAnimation<T> {
         self
     }
 
+    /// Starts from `initial_value` instead, as Compose's internal `mutableInitialValue`: its
+    /// duration and end velocity computed again.
+    pub(crate) fn set_initial_value(&mut self, initial_value: T) {
+        self.initial_value_vector = initial_value.to_vector();
+        self.initial_value = initial_value;
+        self.duration_nanos.set(None);
+        self.end_velocity.set(None);
+    }
+
+    /// Goes to `target_value` instead, as Compose's internal `mutableTargetValue`.
+    pub(crate) fn set_target_value(&mut self, target_value: T) {
+        self.target_value_vector = target_value.to_vector();
+        self.target_value = target_value;
+        self.duration_nanos.set(None);
+        self.end_velocity.set(None);
+    }
+
     /// Where it starts, as `initialValue`.
     pub fn initial_value(&self) -> T {
         self.initial_value.clone()
@@ -225,5 +242,66 @@ impl<T: Animate> Animation<T> for TargetBasedAnimation<T> {
             return self.end_velocity();
         }
         self.spec_velocity(play_time_nanos)
+    }
+}
+
+/// Compose's `DelayedAnimationTest`, of its internal `delayed(spec, nanos)` wrapper: compose-rs
+/// delays the animation (`TargetBasedAnimation::delayed`), not the spec, so the specs'
+/// comparison (`comparison`) has nothing to compare.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::easing::LINEAR_EASING;
+    use crate::spec::{VectorizedAnimationSpec, spring, tween};
+
+    const DELAY: i64 = 500 * 1_000_000;
+
+    fn delayed(spec: impl Into<AnimationSpec>, delay: i64) -> TargetBasedAnimation<f32> {
+        TargetBasedAnimation::with_velocity(spec, 0.0f32, 1000.0, 30.0).delayed(delay)
+    }
+
+    // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt, duration
+    #[test]
+    fn the_delay_adds_to_the_duration() {
+        let animation = delayed(tween(1000).easing(LINEAR_EASING), DELAY);
+        assert_eq!(animation.duration_nanos(), 1500 * 1_000_000);
+    }
+
+    // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt, values
+    #[test]
+    fn the_value_holds_through_the_delay() {
+        let animation = delayed(tween(1000).easing(LINEAR_EASING), DELAY);
+        for (millis, expected) in [(0, 0.0), (500, 0.0), (1000, 500.0), (1500, 1000.0)] {
+            assert_eq!(animation.value_from_millis(millis), expected, "at {millis}");
+        }
+    }
+
+    // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt, velocity
+    #[test]
+    fn the_velocity_holds_through_the_delay_then_is_the_specs() {
+        let animation = delayed(spring(), DELAY);
+        assert_eq!(animation.velocity_from_nanos(0), 30.0);
+        assert_eq!(animation.velocity_from_nanos(DELAY), 30.0);
+        let (start, end, velocity) = (
+            AnimationVector::from([0.0]),
+            AnimationVector::from([1000.0]),
+            AnimationVector::from([30.0]),
+        );
+        let spec: AnimationSpec = spring().into();
+        let duration = spec.duration_nanos(start, end, velocity);
+        for play_time in [duration / 5, duration / 2, duration] {
+            assert_eq!(
+                animation.velocity_from_nanos(DELAY + play_time),
+                spec.velocity_from_nanos(play_time, start, end, velocity)[0],
+                "{play_time} in"
+            );
+        }
+    }
+
+    // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt, zeroAnimation
+    #[test]
+    fn no_delay_and_no_change_take_no_time() {
+        let animation = TargetBasedAnimation::with_velocity(spring(), 1.0f32, 1.0, 0.0).delayed(0);
+        assert_eq!(animation.duration_nanos(), 0);
     }
 }

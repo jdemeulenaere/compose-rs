@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 134 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 135 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 27 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
@@ -457,6 +457,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D818 | [ui-and-layout](decisions/ui-and-layout.md#d818) | current |
 | D819 | [ui-and-layout](decisions/ui-and-layout.md#d819) | current |
 | D820 | [api-and-tooling](decisions/api-and-tooling.md#d820) | current |
+| D821 | [ui-and-layout](decisions/ui-and-layout.md#d821) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

@@ -130,6 +130,43 @@ impl<S: Clone + PartialEq + 'static> MutableTransitionState<S> {
     }
 }
 
+/// What a transition follows, as Compose's `TransitionState`: a [`MutableTransitionState`] or a
+/// [`SeekableTransitionState`](crate::SeekableTransitionState).
+pub(crate) enum StateHolder<S: 'static> {
+    Mutable(MutableTransitionState<S>),
+    Seekable(crate::seekable::SeekableTransitionState<S>),
+}
+
+impl<S: Clone + PartialEq + 'static> StateHolder<S> {
+    fn current_state(&self) -> S {
+        match self {
+            StateHolder::Mutable(state) => state.current_state(),
+            StateHolder::Seekable(state) => state.current_state(),
+        }
+    }
+
+    fn current_untracked(&self) -> S {
+        match self {
+            StateHolder::Mutable(state) => state.current_untracked(),
+            StateHolder::Seekable(state) => state.current_untracked(),
+        }
+    }
+
+    fn set_current(&self, current: S) {
+        match self {
+            StateHolder::Mutable(state) => state.set_current(current),
+            StateHolder::Seekable(state) => state.set_current(current),
+        }
+    }
+
+    fn set_running(&self, running: bool) {
+        match self {
+            StateHolder::Mutable(state) => state.set_running(running),
+            StateHolder::Seekable(state) => state.set_running(running),
+        }
+    }
+}
+
 /// A state's change animating values together, as Compose's `Transition`.
 pub struct Transition<S: 'static> {
     inner: Rc<TransitionInner<S>>,
@@ -147,8 +184,8 @@ impl<S: 'static> ComposeArg for Transition<S> {
     }
 }
 
-struct TransitionInner<S: 'static> {
-    state: MutableTransitionState<S>,
+pub(crate) struct TransitionInner<S: 'static> {
+    state: StateHolder<S>,
     label: Option<&'static str>,
     /// The transition whose clock it plays on, as `parentTransition`.
     parent: Option<Weak<dyn TransitionNode>>,
@@ -175,6 +212,10 @@ struct TransitionInner<S: 'static> {
     /// through, as Compose's state lists.
     lists_version: OwnedState<u32>,
     lists_count: Cell<u32>,
+    /// Bumped when a value's duration changes: what `total_duration_nanos` reads through, as
+    /// Compose's derived `totalDurationNanos`.
+    durations_version: OwnedState<u32>,
+    durations_count: Cell<u32>,
     /// Its task, waiting for something to animate.
     idle: RefCell<Option<Waker>>,
 }
@@ -193,11 +234,20 @@ trait TransitionNode {
     /// The same, without observing it: what a value changed in composition starts at.
     fn play_time_untracked(&self) -> i64;
     fn on_child_animation_updated(&self);
+    /// A value's duration changed.
+    fn on_duration_changed(&self);
     /// Whether its current state isn't its target.
     fn is_changing(&self) -> bool;
     fn on_frame_play_time(&self, play_time_nanos: i64, scale_to_end: bool);
     fn on_transition_end(&self);
     fn total_duration_nanos(&self) -> i64;
+    /// Its values at `play_time_nanos`, seeking (`seekAnimations`).
+    fn seek_animations(&self, play_time_nanos: i64);
+    /// Its values continuing from where they are along `state` (`setInitialAnimations`).
+    fn set_initial_animations(&self, state: &Rc<SeekingAnimationState>);
+    fn reset_animation_fraction(&self, fraction: f32);
+    fn clear_initial_animations(&self);
+    fn update_initial_values(&self);
 }
 
 /// A value of a transition, its type erased, as `TransitionAnimationState`.
@@ -205,6 +255,35 @@ trait AnimationEntry: ToolingEntry {
     fn on_play_time_changed(&self, play_time_nanos: i64, scale_to_end: bool);
     fn is_finished(&self) -> bool;
     fn reset_animation(&self);
+    /// Its value at `play_time_nanos`, seeking, as `seekTo`.
+    fn seek_to(&self, play_time_nanos: i64);
+    /// Its start moved along the initial-value animation, as `updateInitialValue`.
+    fn update_initial_value(&self);
+    /// Snapped to its current or target value, or to a fraction, as `resetAnimationValue`.
+    fn reset_animation_value(&self, fraction: f32);
+    /// Its animation continued from where it is along `state`, as `setInitialValueAnimation`.
+    fn set_initial_value_animation(&self, state: &Rc<SeekingAnimationState>);
+    fn clear_initial_animation(&self);
+}
+
+/// An animation of a seekable transition's fraction, as Compose's
+/// `SeekableTransitionState.SeekingAnimationState`: a running `animate_to`, or an animation of
+/// the values from where an interrupted change left them (an initial-value animation).
+#[derive(Default)]
+pub(crate) struct SeekingAnimationState {
+    /// The progress along its spec, or its duration without one.
+    pub(crate) progress_nanos: Cell<i64>,
+    /// Its spec, of a 1-component vector, or `None`: linear over its duration.
+    pub(crate) animation_spec: RefCell<Option<AnimationSpec>>,
+    pub(crate) is_complete: Cell<bool>,
+    /// The fraction it is at.
+    pub(crate) value: Cell<f32>,
+    pub(crate) start: Cell<f32>,
+    pub(crate) initial_velocity: Cell<Option<f32>>,
+    /// The transition's total duration when it was made.
+    pub(crate) duration_nanos: Cell<i64>,
+    /// Its spec's duration, kept (a spring's takes time to compute).
+    pub(crate) animation_spec_duration: Cell<i64>,
 }
 
 /// A value of a transition (or of an infinite transition), its type erased: what tools see.
@@ -356,8 +435,77 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
             || self.update_children_needed.get()
     }
 
+    /// Its values at `play_time_nanos`, as `seekAnimations`.
+    pub(crate) fn seek_animations(&self, play_time_nanos: i64) {
+        if !self.is_running_untracked() {
+            self.set_start_time(play_time_nanos);
+        }
+        self.set_play_time(play_time_nanos);
+        self.update_children_needed.set(false);
+        let animations = self.animations.borrow().clone();
+        for animation in animations {
+            animation.seek_to(play_time_nanos);
+        }
+        let transitions = self.transitions.borrow().clone();
+        for transition in transitions {
+            if transition.is_changing() {
+                transition.seek_animations(play_time_nanos);
+            }
+        }
+    }
+
+    /// As `setInitialAnimations`.
+    pub(crate) fn set_initial_animations(&self, state: &Rc<SeekingAnimationState>) {
+        for animation in self.animations.borrow().clone() {
+            animation.set_initial_value_animation(state);
+        }
+        for transition in self.transitions.borrow().clone() {
+            transition.set_initial_animations(state);
+        }
+    }
+
+    /// As `resetAnimationFraction`.
+    pub(crate) fn reset_animation_fraction(&self, fraction: f32) {
+        for animation in self.animations.borrow().clone() {
+            animation.reset_animation_value(fraction);
+        }
+        for transition in self.transitions.borrow().clone() {
+            transition.reset_animation_fraction(fraction);
+        }
+    }
+
+    /// As `clearInitialAnimations`.
+    pub(crate) fn clear_initial_animations(&self) {
+        for animation in self.animations.borrow().clone() {
+            animation.clear_initial_animation();
+        }
+        for transition in self.transitions.borrow().clone() {
+            transition.clear_initial_animations();
+        }
+    }
+
+    /// As `updateInitialValues`.
+    pub(crate) fn update_initial_values(&self) {
+        for animation in self.animations.borrow().clone() {
+            animation.update_initial_value();
+        }
+        for transition in self.transitions.borrow().clone() {
+            transition.update_initial_values();
+        }
+    }
+
+    /// Sets the play time (a root's), as the `playTimeNanos` setter.
+    pub(crate) fn set_play_time_nanos(&self, play_time_nanos: i64) {
+        self.set_play_time(play_time_nanos);
+    }
+
+    /// The duration of its longest value or child, as `totalDurationNanos`.
+    pub(crate) fn total_duration(&self) -> i64 {
+        TransitionNode::total_duration_nanos(self)
+    }
+
     /// A new target, as `updateTarget`: from where it was heading, every value updated.
-    fn update_target(&self, target_state: S) {
+    pub(crate) fn update_target(&self, target_state: S) {
         let current_target = self.target_untracked();
         if current_target == target_state {
             return;
@@ -427,11 +575,12 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
         }
     }
 
-    /// At its target, as `onTransitionEnd`.
-    fn end(&self) {
+    /// At its target, as `onTransitionEnd`: a `MutableTransitionState`'s current state the
+    /// target (a seekable state sets its own).
+    pub(crate) fn end(&self) {
         self.set_start_time(AnimationConstants::UNSPECIFIED_TIME);
         let target = self.target_untracked();
-        if self.current_untracked() != target {
+        if matches!(self.state, StateHolder::Mutable(_)) && self.current_untracked() != target {
             self.state.set_current(target);
         }
         self.set_play_time(0);
@@ -498,6 +647,12 @@ impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
         }
     }
 
+    fn on_duration_changed(&self) {
+        let version = self.durations_count.get().wrapping_add(1);
+        self.durations_count.set(version);
+        self.durations_version.set_in_composition(version);
+    }
+
     fn on_child_animation_updated(&self) {
         self.update_children_needed.set(true);
         self.wake();
@@ -515,7 +670,30 @@ impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
         self.end();
     }
 
+    fn seek_animations(&self, play_time_nanos: i64) {
+        TransitionInner::seek_animations(self, play_time_nanos);
+    }
+
+    fn set_initial_animations(&self, state: &Rc<SeekingAnimationState>) {
+        TransitionInner::set_initial_animations(self, state);
+    }
+
+    fn reset_animation_fraction(&self, fraction: f32) {
+        TransitionInner::reset_animation_fraction(self, fraction);
+    }
+
+    fn clear_initial_animations(&self) {
+        TransitionInner::clear_initial_animations(self);
+    }
+
+    fn update_initial_values(&self) {
+        TransitionInner::update_initial_values(self);
+    }
+
     fn total_duration_nanos(&self) -> i64 {
+        // State reads: a value joining, leaving or changing its duration changes it.
+        self.lists_version.get();
+        self.durations_version.get();
         let animations = self.animations.borrow().clone();
         let transitions = self.transitions.borrow().clone();
         let longest = animations.iter().map(|animation| animation.duration_nanos()).max();
@@ -527,7 +705,7 @@ impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
 
 impl<S: Clone + PartialEq + 'static> Transition<S> {
     fn new(
-        state: MutableTransitionState<S>,
+        state: StateHolder<S>,
         parent: Option<Weak<dyn TransitionNode>>,
         label: Option<&'static str>,
     ) -> Transition<S> {
@@ -551,6 +729,8 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                 transitions: RefCell::new(Vec::new()),
                 lists_version: mutable_state_of(0),
                 lists_count: Cell::new(0),
+                durations_version: mutable_state_of(0),
+                durations_count: Cell::new(0),
                 idle: RefCell::new(None),
                 state,
             }),
@@ -642,7 +822,8 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let parent = self.node();
         let label = label.into().unwrap_or("ChildTransition");
         let child = remember_keyed(self.clone(), move || {
-            Transition::new(MutableTransitionState::new(initial_state), Some(parent), Some(label))
+            let state = StateHolder::Mutable(MutableTransitionState::new(initial_state));
+            Transition::new(state, Some(parent), Some(label))
         });
         let (parent, added) = (self.inner.clone(), child.inner.clone());
         DisposableEffect(child.clone(), move |scope| {
@@ -1029,26 +1210,65 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
 ) -> Transition<S> {
     let initial = target_state.clone();
     let label = label.into();
-    let transition =
-        remember(move || Transition::new(MutableTransitionState::new(initial), None, label));
+    let transition = remember(move || {
+        Transition::new(StateHolder::Mutable(MutableTransitionState::new(initial)), None, label)
+    });
     transition.animate_to(target_state);
     on_disposed(&transition);
     transition
 }
 
-/// A transition following `transition_state`'s target, as `rememberTransition(transitionState,
-/// label)`: it puts the state's current state at the target when its values get there.
+/// What a transition is remembered with ([`remember_transition`]), as Compose's sealed
+/// `TransitionState`: a [`MutableTransitionState`] or a
+/// [`SeekableTransitionState`](crate::SeekableTransitionState).
+pub trait TransitionState<S: Clone + PartialEq + 'static> {
+    #[doc(hidden)]
+    fn remember_transition(&self, label: Option<&'static str>) -> Transition<S>;
+}
+
+impl<S: Clone + PartialEq + 'static> TransitionState<S> for MutableTransitionState<S> {
+    fn remember_transition(&self, label: Option<&'static str>) -> Transition<S> {
+        let state = self.clone();
+        let transition = remember_keyed(self.clone(), move || {
+            Transition::new(StateHolder::Mutable(state), None, label)
+        });
+        transition.animate_to(self.target_state());
+        on_disposed(&transition);
+        transition
+    }
+}
+
+impl<S: Clone + PartialEq + 'static> TransitionState<S>
+    for crate::seekable::SeekableTransitionState<S>
+{
+    fn remember_transition(&self, label: Option<&'static str>) -> Transition<S> {
+        let state = self.clone();
+        let transition = remember_keyed(self.clone(), move || {
+            Transition::new(StateHolder::Seekable(state), None, label)
+        });
+        // No frame loop: the state's `seek_to`, `animate_to` and `snap_to` drive it.
+        self.composed(&transition);
+        let (inner, state) = (transition.inner.clone(), self.clone());
+        DisposableEffect(transition.clone(), move |scope| {
+            state.transition_configured(Rc::downgrade(&inner));
+            scope.on_dispose(move || {
+                inner.end();
+                state.transition_removed();
+            })
+        });
+        transition
+    }
+}
+
+/// A transition following `transition_state`, as `rememberTransition(transitionState, label)`:
+/// a [`MutableTransitionState`]'s target, the transition putting its current state at the
+/// target when its values get there; or a
+/// [`SeekableTransitionState`](crate::SeekableTransitionState), which seeks and animates it.
 pub fn remember_transition<S: Clone + PartialEq + 'static>(
-    transition_state: &MutableTransitionState<S>,
+    transition_state: &impl TransitionState<S>,
     label: impl Into<Option<&'static str>>,
 ) -> Transition<S> {
-    let state = transition_state.clone();
-    let label = label.into();
-    let transition =
-        remember_keyed(transition_state.clone(), move || Transition::new(state, None, label));
-    transition.animate_to(transition_state.target_state());
-    on_disposed(&transition);
-    transition
+    transition_state.remember_transition(label.into())
 }
 
 /// Ends the transition when it leaves the composition, as `onDisposed`.
@@ -1063,7 +1283,9 @@ fn on_disposed<S: Clone + PartialEq + 'static>(transition: &Transition<S>) {
 
 const NO_RESET: f32 = -1.0;
 const RESET_NO_SNAP: f32 = -2.0;
-const RESET_ANIMATION_SNAP: f32 = -3.0;
+pub(crate) const RESET_ANIMATION_SNAP: f32 = -3.0;
+pub(crate) const RESET_ANIMATION_SNAP_CURRENT: f32 = -4.0;
+pub(crate) const RESET_ANIMATION_SNAP_TARGET: f32 = -5.0;
 
 /// A value of a transition, as Compose's `Transition.TransitionAnimationState`.
 struct TransitionAnimationState<T: Animate> {
@@ -1081,6 +1303,13 @@ struct TransitionAnimationState<T: Animate> {
     duration_nanos: Cell<i64>,
     /// A spring of the type's threshold, as `interruptionSpec`.
     interruption_spec: AnimationSpec,
+    /// Seeking: the animation an interrupted change left, continued along this state.
+    initial_value_state: RefCell<Option<Rc<SeekingAnimationState>>>,
+    initial_value_animation: RefCell<Option<TargetBasedAnimation<T>>>,
+    /// The initial-value animation alone moves the value, as `useOnlyInitialValue`.
+    use_only_initial_value: Cell<bool>,
+    /// Seeked: an interruption doesn't take the interruption spring.
+    is_seeking: Cell<bool>,
 }
 
 impl<T: Animate> TransitionAnimationState<T> {
@@ -1116,7 +1345,38 @@ impl<T: Animate> TransitionAnimationState<T> {
             velocity: Cell::new(zero),
             duration_nanos: Cell::new(duration),
             interruption_spec,
+            initial_value_state: RefCell::new(None),
+            initial_value_animation: RefCell::new(None),
+            use_only_initial_value: Cell::new(false),
+            is_seeking: Cell::new(false),
         }
+    }
+
+    fn set_value(&self, value: T) {
+        *self.value_untracked.borrow_mut() = value.clone();
+        self.value.set_in_composition(value);
+    }
+
+    /// The duration of its animation, kept, as `durationNanos` (a state of Compose's, which
+    /// the transition's total duration reads).
+    fn update_duration(&self) {
+        let duration = self.animation.borrow().duration_nanos();
+        if self.duration_nanos.replace(duration) != duration
+            && let Some(transition) = self.transition.upgrade()
+        {
+            transition.on_duration_changed();
+        }
+    }
+
+    /// A still animation at `value`, along the interruption spring.
+    fn still_at(&self, value: T) -> TargetBasedAnimation<T> {
+        let zero = value.to_vector().new_instance();
+        TargetBasedAnimation::with_velocity_vector(
+            self.interruption_spec.clone(),
+            value.clone(),
+            value,
+            zero,
+        )
     }
 
     fn play_time_nanos(&self) -> i64 {
@@ -1127,13 +1387,23 @@ impl<T: Animate> TransitionAnimationState<T> {
     /// interruption spring when it interrupts one still running (unless its spec is a spring),
     /// starting at the transition's play time.
     fn update_animation(&self, initial_value: T, is_interrupted: bool) {
+        let target_value = self.target_value.borrow().clone();
+        let initial_target =
+            self.initial_value_animation.borrow().as_ref().map(TargetBasedAnimation::target_value);
+        if initial_target.is_some_and(|initial_target| initial_target.same_value(&target_value)) {
+            // The initial-value animation goes to the target: it alone moves the value.
+            *self.animation.borrow_mut() = self.still_at(initial_value);
+            self.use_only_initial_value.set(true);
+            self.update_duration();
+            return;
+        }
         let spec = self.animation_spec.borrow().clone();
         let spec = match spec {
             AnimationSpec::Spring(_) => spec,
-            AnimationSpec::InterruptionAware(aware) if is_interrupted => {
+            AnimationSpec::InterruptionAware(aware) if is_interrupted && !self.is_seeking.get() => {
                 aware.interruption_spec().clone()
             }
-            _ if is_interrupted => self.interruption_spec.clone(),
+            _ if is_interrupted && !self.is_seeking.get() => self.interruption_spec.clone(),
             _ => spec,
         };
         let play_time = self.play_time_nanos();
@@ -1145,8 +1415,9 @@ impl<T: Animate> TransitionAnimationState<T> {
             self.velocity.get(),
         )
         .delayed(play_time);
-        self.duration_nanos.set(animation.duration_nanos());
         *self.animation.borrow_mut() = animation;
+        self.update_duration();
+        self.use_only_initial_value.set(false);
         if let Some(transition) = self.transition.upgrade() {
             transition.on_child_animation_updated();
         }
@@ -1154,6 +1425,17 @@ impl<T: Animate> TransitionAnimationState<T> {
 
     /// A target and spec for this pass, as `updateTargetValue`.
     fn update_target_value(&self, target_value: T, animation_spec: AnimationSpec) {
+        if self.use_only_initial_value.get() {
+            let initial_target = self
+                .initial_value_animation
+                .borrow()
+                .as_ref()
+                .map(TargetBasedAnimation::target_value);
+            if initial_target.is_some_and(|initial| initial.same_value(&target_value)) {
+                // Already going to the target through the initial-value animation.
+                return;
+            }
+        }
         if self.target_value.borrow().same_value(&target_value)
             && self.reset_snap_value.get() == NO_RESET
         {
@@ -1161,14 +1443,26 @@ impl<T: Animate> TransitionAnimationState<T> {
         }
         *self.target_value.borrow_mut() = target_value.clone();
         *self.animation_spec.borrow_mut() = animation_spec;
-        let initial_value = if self.reset_snap_value.get() == RESET_ANIMATION_SNAP {
-            target_value
+        let reset = self.reset_snap_value.get();
+        let initial_value = if reset == RESET_ANIMATION_SNAP {
+            target_value.clone()
         } else {
             self.value_untracked.borrow().clone()
         };
         let interrupted = !self.is_finished.get();
         self.update_animation(initial_value, interrupted);
-        self.is_finished.set(self.reset_snap_value.get() == RESET_ANIMATION_SNAP);
+        self.is_finished.set(reset == RESET_ANIMATION_SNAP);
+        // A target changed during a seekable change: at the fraction it was seeked to.
+        if reset >= 0.0 {
+            let duration = self.animation.borrow().duration_nanos();
+            // Kotlin's `(duration * fraction).toLong()`: in floats.
+            let play_time = (duration as f32 * reset) as i64;
+            let value = self.animation.borrow().value_from_nanos(play_time);
+            self.set_value(value);
+        } else if reset == RESET_ANIMATION_SNAP {
+            self.set_value(target_value);
+        }
+        self.use_only_initial_value.set(false);
         self.reset_snap_value.set(NO_RESET);
     }
 }
@@ -1194,6 +1488,103 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
 
     fn reset_animation(&self) {
         self.reset_snap_value.set(RESET_NO_SNAP);
+    }
+
+    fn seek_to(&self, play_time_nanos: i64) {
+        if self.reset_snap_value.get() != NO_RESET {
+            return;
+        }
+        self.is_seeking.set(true);
+        let animation = self.animation.borrow();
+        if animation.target_value().same_value(&animation.initial_value()) {
+            // The initial-value animation alone moves it (an interrupted change).
+            let target = animation.target_value();
+            drop(animation);
+            self.set_value(target);
+        } else {
+            let value = animation.value_from_nanos(play_time_nanos);
+            self.velocity.set(animation.velocity_vector_from_nanos(play_time_nanos));
+            drop(animation);
+            self.set_value(value);
+        }
+    }
+
+    fn update_initial_value(&self) {
+        let Some(state) = self.initial_value_state.borrow().clone() else { return };
+        let Some(initial_animation) = self.initial_value_animation.borrow().clone() else {
+            return;
+        };
+        // In doubles, as Compose's (floats hold too few digits of nanoseconds).
+        let play = state.duration_nanos.get() as f64 * f64::from(state.value.get());
+        let initial_play_time = (play + 0.5).floor() as i64;
+        let initial_value = initial_animation.value_from_nanos(initial_play_time);
+        {
+            let mut animation = self.animation.borrow_mut();
+            if self.use_only_initial_value.get() {
+                animation.set_target_value(initial_value.clone());
+            }
+            animation.set_initial_value(initial_value.clone());
+        }
+        self.update_duration();
+        if self.reset_snap_value.get() == RESET_NO_SNAP || self.use_only_initial_value.get() {
+            self.set_value(initial_value);
+        } else {
+            self.seek_to(self.play_time_nanos());
+        }
+        if initial_play_time >= state.duration_nanos.get() {
+            *self.initial_value_state.borrow_mut() = None;
+            *self.initial_value_animation.borrow_mut() = None;
+        } else {
+            state.is_complete.set(false);
+        }
+    }
+
+    fn reset_animation_value(&self, fraction: f32) {
+        if fraction == RESET_ANIMATION_SNAP_CURRENT || fraction == RESET_ANIMATION_SNAP_TARGET {
+            let initial = self.initial_value_animation.borrow_mut().take();
+            if let Some(initial) = initial {
+                self.animation.borrow_mut().set_initial_value(initial.target_value());
+                *self.initial_value_state.borrow_mut() = None;
+            }
+            let value = {
+                let animation = self.animation.borrow();
+                if fraction == RESET_ANIMATION_SNAP_CURRENT {
+                    animation.initial_value()
+                } else {
+                    animation.target_value()
+                }
+            };
+            {
+                let mut animation = self.animation.borrow_mut();
+                animation.set_initial_value(value.clone());
+                animation.set_target_value(value.clone());
+            }
+            self.set_value(value);
+            self.update_duration();
+        } else {
+            self.reset_snap_value.set(fraction);
+        }
+    }
+
+    fn set_initial_value_animation(&self, state: &Rc<SeekingAnimationState>) {
+        {
+            let animation = self.animation.borrow();
+            if !animation.target_value().same_value(&animation.initial_value()) {
+                // It goes on from where it is to the target, along `state`.
+                *self.initial_value_animation.borrow_mut() = Some(animation.clone());
+                *self.initial_value_state.borrow_mut() = Some(state.clone());
+            }
+        }
+        let value = self.value_untracked.borrow().clone();
+        *self.animation.borrow_mut() = self.still_at(value);
+        self.update_duration();
+        self.use_only_initial_value.set(true);
+    }
+
+    fn clear_initial_animation(&self) {
+        *self.initial_value_animation.borrow_mut() = None;
+        *self.initial_value_state.borrow_mut() = None;
+        self.use_only_initial_value.set(false);
     }
 }
 

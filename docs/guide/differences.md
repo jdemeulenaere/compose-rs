@@ -88,6 +88,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
   - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
 - **`LinearProgressIndicator`** has Material 3 1.4's gap (`gap_size`) but no stop dot at the track's end (`drawStopIndicator`), and the indeterminate one has no gaps; a determinate `CircularProgressIndicator` takes a value, as Compose's deprecated `Float` overload, with its transparent track (D572).
 - **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).
+- **`SeekableTransitionState`'s calls return whether they got to their end**: one interrupted by another returns `false` where Compose's throws a `CancellationException`, and a call can end a frame before Compose's, as a task waiting for a frame resumes before that frame's composition (D821, D817).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
 - **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`), no `GridCells.FixedSize`.
