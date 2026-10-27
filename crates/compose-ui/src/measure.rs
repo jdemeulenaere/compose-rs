@@ -165,6 +165,9 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
+        // What its semantics read may have changed with what measured it (a lazy list's
+        // ranges, a text field's text): computed again when next asked (D1257).
+        value.semantics = None;
         // What this measurement asks of its descendants' intrinsics is asked anew, unless its
         // own were asked: then what its parent asked through it holds (Compose's
         // `clearSubtreeIntrinsicsUsage`).

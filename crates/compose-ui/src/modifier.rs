@@ -1268,8 +1268,31 @@ pub trait PointerInputModifierNode {
 /// A node that adds semantics, as `SemanticsModifierNode`.
 pub trait SemanticsModifierNode {
     /// Sets the node's properties and the actions it offers, as `applySemantics`: an action is
-    /// a closure, called outside the tree when performed (D1250).
+    /// a closure, called outside the tree when performed (D1250). Its result is kept per
+    /// layout node until the node is invalidated (`invalidate_semantics`, a chain update, a
+    /// state it read written, a measurement or a focus change of its node, D1257): it may read
+    /// state, but not depend on anything else that changes unannounced.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration);
+
+    /// Whether its layout node merges its descendants' semantics, as
+    /// `shouldMergeDescendantSemantics` (or `apply_semantics` setting
+    /// `is_merging_semantics_of_descendants`).
+    fn should_merge_descendant_semantics(&self) -> bool {
+        false
+    }
+
+    /// Whether its layout node clears its descendants' and the inner modifiers' semantics, as
+    /// `shouldClearDescendantSemantics` (or `apply_semantics` setting `is_clearing_semantics`).
+    fn should_clear_descendant_semantics(&self) -> bool {
+        false
+    }
+
+    /// Whether its layout node's semantic bounds may be this modifier's, as
+    /// `isImportantForBounds`: the outermost merging one that is, else the outermost one that
+    /// is.
+    fn is_important_for_bounds(&self) -> bool {
+        true
+    }
 }
 
 /// A focus target, as `FocusTargetModifierNode`.

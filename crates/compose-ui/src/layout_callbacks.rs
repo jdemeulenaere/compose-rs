@@ -261,7 +261,7 @@ impl UiTree {
     /// assertions.
     pub fn semantics_bounds_in_root(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
         self.get(node)?;
-        let (_, layer) = self.own_semantics(node)?;
+        let layer = self.own_semantics(node)?.layer;
         if !self.is_placed_in_root(node) {
             return None;
         }

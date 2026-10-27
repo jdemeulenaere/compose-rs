@@ -147,6 +147,7 @@ impl UiTree {
 
     /// Marks `node`'s entries attached, as `markAsAttached`, if it's in the tree and active.
     fn mark_attached(&mut self, node: NodeId) {
+        self.forget_semantics(node);
         let requests = self.focus_requests.clone();
         let Some(value) = self.get_mut(node) else { return };
         if !value.attached || value.deactivated || value.reattach_pending {
@@ -210,6 +211,7 @@ impl UiTree {
 
     /// Marks `node`'s entries detached, as `markAsDetached`.
     fn mark_detached(&mut self, node: NodeId) {
+        self.forget_semantics(node);
         let count = self.get(node).map_or(0, |value| value.chain.len());
         for index in 0..count {
             let Some(entry) = self.get(node).and_then(|value| value.chain.get(index)) else {
@@ -458,8 +460,8 @@ impl UiTree {
             Invalidation::Draw => self.invalidate_draw_of_entry(node, index),
             Invalidation::Measurement | Invalidation::Placement => self.invalidate_layout_of(node),
             Invalidation::Layer => self.invalidate_layer_of_entry(node, index),
-            // Semantics are read afresh when asked; the frame says they may have changed.
-            Invalidation::Semantics => self.semantics_changed = true,
+            // Computed again when next asked; the frame says they may have changed.
+            Invalidation::Semantics => self.invalidate_semantics_of(node),
             Invalidation::ParentData => {
                 if self.refresh_parent_data(node)
                     && let Some(parent) = self.parent_of(node)

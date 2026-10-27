@@ -1043,6 +1043,28 @@ impl SemanticsConfiguration {
         }
     }
 
+    /// Whether both set the same keys to the same values, actions compared by their labels and
+    /// whether they have a function (not by identity: a configuration computed again builds
+    /// its closures again).
+    pub fn same_ignoring_functions(&self, other: &SemanticsConfiguration) -> bool {
+        fn function_free(slot: &ValueSlot) -> String {
+            // Actions print their label and whether they're set, not their function.
+            format!("{slot:?}")
+        }
+        self.is_merging_semantics_of_descendants == other.is_merging_semantics_of_descendants
+            && self.is_clearing_semantics == other.is_clearing_semantics
+            && self.entries.len() == other.entries.len()
+            && self.entries.iter().all(|entry| {
+                other.slot(entry.key).is_some_and(|value| {
+                    if entry.value.is_action() {
+                        function_free(value) == function_free(&entry.value)
+                    } else {
+                        *value == entry.value
+                    }
+                })
+            })
+    }
+
     /// The text finders match: the editable text first, then the texts.
     pub fn all_text(&self) -> impl Iterator<Item = &str> {
         let editable = self.get(&SemanticsProperties::EDITABLE_TEXT);

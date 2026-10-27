@@ -138,7 +138,28 @@ impl SemanticsNode {
 // ---- The semantics tree ----------------------------------------------------------------------
 
 use crate::node_chain::NodeKinds;
-use crate::tree::UiTree;
+use crate::tree::{Observation, UiTree, observation_key};
+
+thread_local! {
+    /// Semantics trees check the kept configurations first (`set_semantics_cache_check`).
+    static CHECK_CACHE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread's semantics trees first check every kept configuration against its
+/// modifiers' now, panicking on a stale one: compose-test's rules turn it on, so every test
+/// checks the invalidations (D1257). It computes every configuration again: for tests.
+pub fn set_semantics_cache_check(on: bool) {
+    CHECK_CACHE.with(|check| check.set(on));
+}
+use std::rc::Rc;
+
+/// A node's own semantics, kept per layout node (D1257): its modifiers' configuration and the
+/// layer whose bounds are its semantic bounds.
+#[derive(Debug)]
+pub(crate) struct OwnSemantics {
+    pub(crate) config: SemanticsConfiguration,
+    pub(crate) layer: usize,
+}
 
 thread_local! {
     /// The semantics tree being built takes deactivated content in
@@ -169,19 +190,6 @@ impl UiTree {
         self.semantics_tree(merged)
     }
 
-    /// `node`'s configuration in the unmerged tree (its own, with what its parts set), if it's
-    /// a semantics node there.
-    pub fn unmerged_semantics_config(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
-        fn find(tree: &SemanticsNode, id: NodeId) -> Option<&SemanticsConfiguration> {
-            if tree.id == id {
-                return Some(&tree.config);
-            }
-            tree.children.iter().find_map(|child| find(child, id))
-        }
-        let tree = self.semantics_tree(false);
-        find(&tree, node).cloned()
-    }
-
     /// Whether `node` is in deactivated content (it or an ancestor deactivated), as Compose's
     /// `LayoutInfo.isDeactivated`.
     pub fn is_deactivated(&self, node: NodeId) -> bool {
@@ -198,16 +206,47 @@ impl UiTree {
 }
 
 impl UiTree {
-    /// The semantics a node's own modifiers set, and the layer of the first one (whose bounds
-    /// are the node's semantic bounds).
-    pub(crate) fn own_semantics(
-        &mut self,
-        node: NodeId,
-    ) -> Option<(SemanticsConfiguration, usize)> {
-        let value = self.get_mut(node)?;
+    /// The semantics a node's own modifiers set and the layer of the one whose bounds are the
+    /// node's semantic bounds, as Compose's `LayoutNode.semanticsConfiguration`: computed when
+    /// asked and kept until invalidated (D1257), its state reads observed for a custom node's.
+    pub(crate) fn own_semantics(&mut self, node: NodeId) -> Option<Rc<OwnSemantics>> {
+        let value = self.get(node)?;
         if !value.kinds.any(NodeKinds::SEMANTICS) {
             return None;
         }
+        if let Some(cached) = &value.semantics {
+            return Some(cached.clone());
+        }
+        let observed = value.kinds.any(NodeKinds::OBSERVED);
+        // Invalidations of its semantics asked while they're computed don't count, as
+        // Compose's (`isCurrentlyCalculatingSemanticsConfiguration`).
+        let queued = self.focus_requests.node_invalidations.borrow().len();
+        let computed = match self.observer.clone().filter(|_| observed) {
+            Some(observer) => observer
+                .observe(observation_key(node, Observation::Semantics), || {
+                    self.compute_own_semantics(node)
+                }),
+            None => self.compute_own_semantics(node),
+        };
+        {
+            let mut pending = self.focus_requests.node_invalidations.borrow_mut();
+            let mut index = 0;
+            pending.retain(|&(asking, _, what)| {
+                index += 1;
+                index <= queued
+                    || asking != node
+                    || what != crate::node_context::Invalidation::Semantics
+            });
+        }
+        let computed = Rc::new(computed);
+        self.node_mut(node).semantics = Some(computed.clone());
+        Some(computed)
+    }
+
+    /// `own_semantics` computed: each semantics modifier's `apply_semantics`, tail to head, as
+    /// Compose's `calculateSemanticsConfiguration`.
+    fn compute_own_semantics(&mut self, node: NodeId) -> OwnSemantics {
+        let value = self.node_mut(node);
         let mut config = SemanticsConfiguration::default();
         let mut layers: SmallVec<[usize; 8]> = SmallVec::new();
         let mut layer = 0;
@@ -226,6 +265,9 @@ impl UiTree {
                 && let Some(semantics) = value.chain[index].node.as_semantics()
             {
                 let mut own = SemanticsConfiguration::default();
+                own.is_merging_semantics_of_descendants =
+                    semantics.should_merge_descendant_semantics();
+                own.is_clearing_semantics = semantics.should_clear_descendant_semantics();
                 semantics.apply_semantics(&mut own);
                 // Clearing drops what the modifiers after it set, as Compose's
                 // `calculateSemanticsConfiguration`.
@@ -233,15 +275,99 @@ impl UiTree {
                     config = SemanticsConfiguration::default();
                 }
                 config.apply(&own);
-                first_layer = Some(layers[index]);
-                // A merging node's bounds are those of the outermost modifier that merges.
-                if own.is_merging_semantics_of_descendants {
-                    merging_layer = Some(layers[index]);
+                // The bounds: the outermost merging modifier's that is important for them, else
+                // the outermost important one's (Compose's `findCoordinatorToGetBounds`).
+                if semantics.is_important_for_bounds() {
+                    first_layer = Some(layers[index]);
+                    if own.is_merging_semantics_of_descendants {
+                        merging_layer = Some(layers[index]);
+                    }
                 }
             }
         }
         self.bind_request_focus(node, &mut config);
-        Some((config, merging_layer.or(first_layer).unwrap_or(0)))
+        OwnSemantics { config, layer: merging_layer.or(first_layer).unwrap_or(0) }
+    }
+
+    /// Checks every kept configuration of content in use against its modifiers' now: a stale
+    /// one (an invalidation missed) panics, naming the node (`set_semantics_cache_check`).
+    fn check_semantics_cache(&mut self) {
+        let mut nodes = Vec::new();
+        let mut stack = vec![self.root_id()];
+        while let Some(node) = stack.pop() {
+            nodes.push(node);
+            stack.extend(self.node(node).children.iter().map(|child| child.node));
+        }
+        for node in nodes {
+            let Some(cached) = self.get(node).and_then(|value| {
+                (value.attached && !value.deactivated).then(|| value.semantics.clone()).flatten()
+            }) else {
+                continue;
+            };
+            let fresh = self.compute_own_semantics(node);
+            assert!(
+                fresh.layer == cached.layer && fresh.config.same_ignoring_functions(&cached.config),
+                "compose-ui: the semantics kept for {node:?} are stale (an invalidation missed, \
+                 D1257):\nkept:  {:?}\nnow:   {:?}",
+                cached.config,
+                fresh.config
+            );
+        }
+    }
+
+    /// Forgets `node`'s semantics, to be computed again when asked, and says they may have
+    /// changed (the frame's `semantics_changed`), as `invalidateSemantics`.
+    pub(crate) fn invalidate_semantics_of(&mut self, node: NodeId) {
+        if let Some(value) = self.get_mut(node) {
+            value.semantics = None;
+            if value.attached && !value.deactivated {
+                self.semantics_changed = true;
+            }
+        }
+    }
+
+    /// Forgets `node`'s semantics without telling the frame (the change that made them stale
+    /// tells it, if it should).
+    pub(crate) fn forget_semantics(&mut self, node: NodeId) {
+        if let Some(value) = self.get_mut(node) {
+            value.semantics = None;
+        }
+    }
+
+    /// `node`'s configuration in the unmerged tree, as performing its actions reads it: its own
+    /// with what its parts set (`PART_OF_PARENT`, a text field's inner field), found below it
+    /// without building the tree. `None` if it isn't a semantics node in use.
+    pub fn unmerged_semantics_config(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
+        if self.left_out(node) || self.get(node).is_some_and(|value| value.deactivated) {
+            return None;
+        }
+        let own = self.own_semantics(node)?;
+        if own.config.is_empty() || own.config.contains(&PART_OF_PARENT) {
+            return None;
+        }
+        let mut config = own.config.clone();
+        if !config.is_clearing_semantics {
+            let mut stack: SmallVec<[NodeId; 8]> =
+                self.node(node).children.iter().rev().map(|child| child.node).collect();
+            while let Some(child) = stack.pop() {
+                if self.left_out(child) || self.node(child).overlay {
+                    continue;
+                }
+                match self.own_semantics(child) {
+                    Some(part) if part.config.contains(&PART_OF_PARENT) => {
+                        let mut part = part.config.clone();
+                        part.remove(&PART_OF_PARENT);
+                        config.apply(&part);
+                    }
+                    // Another semantics node: its own and below are its.
+                    Some(other) if !other.config.is_empty() => continue,
+                    _ => {}
+                }
+                let children = &self.node(child).children;
+                stack.extend(children.iter().rev().map(|child| child.node));
+            }
+        }
+        Some(config)
     }
 
     /// Binds a `RequestFocus` offered without an action (`request_focus_of_node`) to `node`:
@@ -268,6 +394,9 @@ impl UiTree {
     /// takes their properties and hides them, unless they merge themselves; unmerged, every
     /// node with semantics appears. Nodes not placed are left out.
     pub fn semantics_tree(&mut self, merged: bool) -> SemanticsNode {
+        if CHECK_CACHE.with(std::cell::Cell::get) {
+            self.check_semantics_cache();
+        }
         let root = self.root_id();
         let mut children = Vec::new();
         let mut config = SemanticsConfiguration::default();
@@ -332,7 +461,7 @@ impl UiTree {
         if self.left_out(node) {
             return;
         }
-        let own = self.own_semantics(node).filter(|(config, _)| !config.is_empty());
+        let own = self.own_semantics(node).filter(|own| !own.config.is_empty());
         let children_of = |tree: &mut UiTree| {
             (0..tree.node(node).children.len())
                 .map(|index| tree.node(node).children[index].node)
@@ -344,15 +473,17 @@ impl UiTree {
                     self.semantics_of(child, merged, parent, out);
                 }
             }
-            Some((mut own, _)) if own.contains(&PART_OF_PARENT) => {
+            Some(own) if own.config.contains(&PART_OF_PARENT) => {
                 // Its properties are the parent's, as if its own modifiers set them.
+                let mut own = own.config.clone();
                 own.remove(&PART_OF_PARENT);
                 parent.apply(&own);
                 for child in children_of(self) {
                     self.semantics_of(child, merged, parent, out);
                 }
             }
-            Some((mut config, layer)) => {
+            Some(own) => {
+                let (mut config, layer) = (own.config.clone(), own.layer);
                 let mut children = Vec::new();
                 let mut own_config = None;
                 if config.is_clearing_semantics {
@@ -400,7 +531,8 @@ impl UiTree {
         if self.left_out(node) || self.node(node).overlay {
             return;
         }
-        if let Some((mut semantics, _)) = self.own_semantics(node) {
+        if let Some(own_semantics) = self.own_semantics(node) {
+            let mut semantics = own_semantics.config.clone();
             if semantics.is_merging_semantics_of_descendants {
                 self.semantics_of(node, true, config, children);
                 return;

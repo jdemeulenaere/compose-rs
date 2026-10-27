@@ -107,10 +107,10 @@ pub mod platform {
     pub use crate::path::{PathOperator, set_path_operator};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
-    pub use crate::semantics::SemanticsNode;
     /// A semantics value of an application's own type, as `ValueSlot` holds it: not for apps.
     #[doc(hidden)]
     pub use crate::semantics::{OtherSlot, OtherValue};
+    pub use crate::semantics::{SemanticsNode, set_semantics_cache_check};
     pub use crate::text::{
         DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer,
         TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,

@@ -28,22 +28,26 @@ pub(crate) enum Observation {
     Draw = 1,
     Layer = 2,
     InnerLayers = 3,
+    /// Its semantics modifiers' `apply_semantics` (D1257).
+    Semantics = 4,
 }
 
-/// The key `node`'s reads for `observation` are observed under: the kind in the top two bits.
+/// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
+/// (the generation's top bits go: a node's 2^29 generations wrap first).
 pub(crate) fn observation_key(node: NodeId, observation: Observation) -> u64 {
-    node.to_ref().bits() & !(3 << 62) | (observation as u64) << 62
+    node.to_ref().bits() & !(7 << 61) | (observation as u64) << 61
 }
 
 /// The node and the kind of observation `observation_key` made `key` of.
 fn observation_of(key: u64) -> (NodeId, Observation) {
-    let observation = match key >> 62 {
+    let observation = match key >> 61 {
         0 => Observation::Measure,
         1 => Observation::Draw,
         2 => Observation::Layer,
-        _ => Observation::InnerLayers,
+        3 => Observation::InnerLayers,
+        _ => Observation::Semantics,
     };
-    (NodeId::from_ref(NodeRef::new(key & !(3 << 62))), observation)
+    (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
 }
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
@@ -158,6 +162,10 @@ pub struct LayoutNode {
     /// Reused by a paused composition's resume: its modifier nodes stay detached until that
     /// composition is applied (D1162).
     pub(crate) reattach_pending: bool,
+    /// Its own semantics, computed when a tree or an action asked and kept until invalidated
+    /// (`UiTree::invalidate_semantics_of`, D1257): none for a node without semantics nodes, or
+    /// not computed since.
+    pub(crate) semantics: Option<Rc<crate::semantics::OwnSemantics>>,
 }
 
 impl LayoutNode {
@@ -191,6 +199,7 @@ impl LayoutNode {
             attached: false,
             attaching: false,
             reattach_pending: false,
+            semantics: None,
         }
     }
 
@@ -732,6 +741,7 @@ impl UiTree {
                         retained.layer_dirty = true;
                     }
                 }
+                Observation::Semantics => self.invalidate_semantics_of(node),
             }
         });
     }
@@ -846,6 +856,8 @@ impl UiTree {
         let changed = reused != old.len() || reused != new.len();
         if changed {
             value.chain_version = value.chain_version.wrapping_add(1);
+            // Which layer bounds its semantics follows the chain's layout nodes.
+            value.semantics = None;
         }
         value.chain = chain;
         value.modifier = modifier;
@@ -902,8 +914,11 @@ impl UiTree {
         }
         // Only for content in use: a prefetched item, not placed, isn't in the semantics yet.
         let shown = self.get(node).is_some_and(|value| value.attached && !value.deactivated);
-        if kinds.any(NodeKinds::SEMANTICS) && shown {
-            self.semantics_changed = true;
+        if kinds.any(NodeKinds::SEMANTICS) {
+            self.forget_semantics(node);
+            if shown {
+                self.semantics_changed = true;
+            }
         }
         // A pointer node come or gone (a change of its hit area comes with a layout, which
         // refreshes the hover anyway): not one only updated, as a clickable's new callback.
@@ -1108,7 +1123,7 @@ impl UiTree {
         let mut out = String::new();
         let mut stack = vec![(self.root, 0usize)];
         while let Some((id, depth)) = stack.pop() {
-            let config = self.own_semantics(id).map(|(config, _)| config);
+            let config = self.own_semantics(id).map(|own| own.config.clone());
             let node = self.node(id);
             let position = node.layers[0].offset;
             let size = node.layers[0].measured;
@@ -1315,6 +1330,7 @@ impl UiTree {
                 observer.forget(observation_key(id, Observation::Draw));
                 observer.forget(observation_key(id, Observation::Layer));
                 observer.forget(observation_key(id, Observation::InnerLayers));
+                observer.forget(observation_key(id, Observation::Semantics));
             }
             if self.focused() == Some(id) {
                 self.focus = None;

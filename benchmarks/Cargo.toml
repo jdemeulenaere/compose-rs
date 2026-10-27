@@ -15,6 +15,7 @@ compose = { path = "../crates/compose", features = ["test"] }
 counter = { path = "../examples/counter" }
 todo = { path = "../examples/todo" }
 feed = { path = "../examples/feed" }
+gallery = { path = "../examples/gallery", default-features = false }
 compose-skia = { path = "../crates/compose-skia" }
 compose-android = { path = "../crates/compose-android" }
 
@@ -36,4 +37,8 @@ harness = false
 
 [[bench]]
 name = "text"
+harness = false
+
+[[bench]]
+name = "semantics"
 harness = false

@@ -168,6 +168,8 @@ impl UiTree {
             };
             target.on_focus_changed(focused, &mut context);
         }
+        // Its semantics say whether it's focused (D1257).
+        self.invalidate_semantics_of(node);
         // Not its focus requests: a target answering focus with focus would loop.
         requests.focus = None;
         requests.clear_focus = false;

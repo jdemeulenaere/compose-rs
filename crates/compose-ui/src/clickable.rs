@@ -290,6 +290,8 @@ struct Down {
 pub(crate) struct ClickableNode {
     spec: Clickable,
     combined: Option<Combined>,
+    /// Its semantics' click, built once per update (D1258).
+    click_action: RefCell<Option<Rc<crate::semantics::ActionFn>>>,
     shared: Rc<RefCell<Shared>>,
     /// The indication's node, made when first needed (with its own source) or as the node is
     /// attached (with a source given), as Compose's; attached with it, as Compose's delegate.
@@ -327,6 +329,7 @@ impl ClickableNode {
         ClickableNode {
             spec,
             combined,
+            click_action: RefCell::default(),
             shared: Rc::new(RefCell::new(shared)),
             indication: None,
             indication_draws_content: false,
@@ -385,6 +388,7 @@ impl ClickableNode {
         let given_before = self.spec.interaction_source.is_some();
         self.spec = spec;
         self.combined = combined;
+        self.click_action.take();
         let given_now = self.spec.interaction_source.is_some();
         if given_before != given_now && !given_now {
             // No source given any more: the node's own is made when needed.
@@ -919,11 +923,25 @@ impl SemanticsModifierNode for ClickableNode {
         if let Some(role) = self.spec.role {
             config.set_role(role);
         }
-        let action = self.spec.action.clone();
-        config.on_click(self.spec.on_click_label.as_deref().cloned(), move || {
-            action.fire_now();
-            true
-        });
+        // The click, built once per update rather than per computation (D1258).
+        let action = self
+            .click_action
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let action = self.spec.action.clone();
+                Rc::new(move || {
+                    action.fire_now();
+                    true
+                })
+            })
+            .clone();
+        config.set(
+            &crate::semantics::SemanticsActions::ON_CLICK,
+            crate::semantics::AccessibilityAction::new(
+                self.spec.on_click_label.as_deref().cloned(),
+                action,
+            ),
+        );
         if self.spec.enabled {
             config.set_focused(self.focused);
             config.request_focus_of_node();

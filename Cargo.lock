@@ -708,6 +708,7 @@ dependencies = [
  "counter",
  "criterion",
  "feed",
+ "gallery",
  "todo",
 ]
 

@@ -12,10 +12,10 @@ This ledger maps Jetpack Compose UI's tests and public API in input, focus, sema
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `covered` | 4 | 17 |
+| `covered` | 5 | 39 |
 | `port` | 15 | 302 |
 | `partial` | 36 | 1,185 |
-| `feature:*` | 134 | 1,565 |
+| `feature:*` | 133 | 1,543 |
 | `n/a` | 50 | 456 |
 | **Total** | **239** | **3,525** |
 
@@ -34,7 +34,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | pointer-icon-api | 1 | 59 |
 | pointer-event-model | 3 | 45 |
 | scroll-capture | 3 | 44 |
-| semantics-tree-api | 3 | 43 |
+| semantics-tree-api | 2 | 21 |
 | media-query | 2 | 42 |
 | focus-search-tree | 3 | 39 |
 | nested-scroll-dispatcher | 1 | 34 |
@@ -196,7 +196,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/MergedSemanticsConfigurationTest.kt` | 11 | The merged configuration of a node: merging, clearing, deep hierarchies, nested mergers | `covered` | Ported through the merged and unmerged trees: `crates/compose-foundation/tests/suite/semantics_properties.rs` (`a_single_modifier_merges_to_itself` … `merging_goes_deep_and_stops_at_mergers_and_clearers`); the merged texts in the children's order, as `SemanticsNode`'s (the test's `SemanticsInfo.mergedSemanticsConfiguration` walks them last first). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsInfoTest.kt` | 9 | `SemanticsInfo` of layout nodes, deactivated nodes, transparency | `feature:semantics-tree-api` | Transparent (alpha 0) nodes are still in compose-rs's semantics. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsListenerTest.kt` | 13 | The owner's semantics listeners fire on property, text and focus changes | n/a: internal `SemanticsListener`; compose-rs's per-frame invalidation (D630) is tested by `and/accessibility_state.rs` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsModifierNodeTest.kt` | 22 | `applySemantics` is lazy, cached, re-run on `invalidateSemantics` and observed reads | `feature:semantics-tree-api` | compose-rs runs `apply_semantics` on every tree build, with no invalidation. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsModifierNodeTest.kt` | 22 | `applySemantics` is lazy, cached, re-run on `invalidateSemantics` and observed reads | `covered` | Ported (`crates/compose-foundation/tests/suite/semantics_modifier_node.rs`, D1257, D1260): kept per node, invalidated, observed reads, deactivated nodes, invalidations while computing, the bounds' flags; compose-rs computes when next asked where Compose computes at the invalidation, so the counts are the reads'. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsPropertiesAndroidTest.kt` | 1 | The credential-request semantics property | `feature:autofill` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsTests.kt` | 74 | Semantics tree: merging, clearing, outer over inner, updates on add/remove, action merging, z order, bounds, ids, text substitution, visibility of merged children | `partial` | Merging, clearing and override rules are tested (`fnd/review_semantics.rs`, `fnd/review_round5.rs`, `fnd/review_round3.rs`, `ui/ui.rs`); pane title, traversal properties, action collapsing and merging and the merge policies are ported (`crates/compose-foundation/tests/suite/semantics_properties.rs`, D1250); content type needs autofill, text substitution needs `BasicText`'s substitution actions; z-sorted children, bounds in parent, ids, fake nodes need semantics-tree-api. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/semantics/SemanticsHostApiTest.kt` | 12 | The experimental host API: place order, merged/unmerged queries, accessibility children, bounds, visibility, hit tests, uncovered nodes | `feature:semantics-tree-api` | Experimental (`ExperimentalComposeUiHostApi`). |

@@ -99,6 +99,9 @@ impl ComposeTestRule {
         // What compose-rs logs (a stale handle's warning) shows in the test's output.
         compose_ui::platform::install_stderr_logger();
         platform::track_recompositions(true);
+        // Each semantics tree checks the configurations kept per node first: a missed
+        // invalidation fails the test (D1257).
+        compose_ui::platform::set_semantics_cache_check(true);
         // The test's main clock: time moves only as the rule advances it.
         let origin_nanos = platform::now_nanos();
         platform::set_manual_clock(origin_nanos);
