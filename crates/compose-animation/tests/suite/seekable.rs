@@ -29,23 +29,43 @@ impl ComposeArg for AnimStates {
 /// A call on the state, as a test's content starts it.
 type Call = fn(SeekableTransitionState<AnimStates>) -> Pinned;
 
-type Pinned = std::pin::Pin<Box<dyn std::future::Future<Output = bool>>>;
+type Pinned = std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
 
-/// A call's outcome: `None` while it runs, then whether it got to its end.
-type Outcome = Rc<Cell<Option<bool>>>;
+/// A task's outcome, as the `Deferred` of Compose's tests' `async`.
+struct Outcome {
+    done: Rc<Cell<bool>>,
+    job: Job,
+}
+
+impl Outcome {
+    /// `None` while it runs, then whether it got to its end (`Some(false)`: cancelled, as
+    /// `isCancelled`, by an interrupted call).
+    fn get(&self) -> Option<bool> {
+        if self.done.get() {
+            Some(true)
+        } else if self.job.is_active() {
+            None
+        } else {
+            Some(false)
+        }
+    }
+}
 
 /// Runs `call` as a task, as Compose's tests `launch` or `async` one.
-fn launch(call: impl std::future::Future<Output = bool> + 'static) -> Outcome {
-    let outcome: Outcome = Rc::new(Cell::new(None));
-    let done = outcome.clone();
+fn launch(call: impl std::future::Future<Output = ()> + 'static) -> Outcome {
+    let done = Rc::new(Cell::new(false));
+    let finished = done.clone();
     let scope = CoroutineScope::new();
-    scope.launch(async move { done.set(Some(call.await)) });
+    let job = scope.launch(async move {
+        call.await;
+        finished.set(true);
+    });
     std::mem::forget(scope);
-    outcome
+    Outcome { done, job }
 }
 
 /// Runs `call` to its end, the clock advancing, as `runBlocking` in Compose's `runOnIdle`.
-fn block_on(ui: &mut ComposeTestRule, call: impl std::future::Future<Output = bool> + 'static) {
+fn block_on(ui: &mut ComposeTestRule, call: impl std::future::Future<Output = ()> + 'static) {
     let outcome = launch(call);
     for _ in 0..1_000 {
         ui.wait_for_idle();
@@ -573,7 +593,7 @@ fn an_animation_cancelled_for_a_third_state_goes_on_from_the_values() {
 #[test]
 fn interruptions_of_interruptions_end_at_the_last_target_values() {
     let state = SeekableTransitionState::new(From);
-    let mut ui = three_values(&state, |_| Box::pin(async { true }));
+    let mut ui = three_values(&state, |_| Box::pin(async {}));
     ui.wait_for_idle();
     let calls: [(f32, Option<AnimStates>); 5] =
         [(0.0, Some(To)), (0.5, None), (0.0, Some(Other)), (0.5, None), (0.0, Some(From))];
@@ -691,9 +711,10 @@ fn a_seek_to_the_end_then_an_animation_back() {
     let mut ui = one_value(&state, 1000);
     ui.wait_for_idle();
     let running = state.clone();
-    let _ = launch(
-        async move { running.seek_to_with(1.0, To).await && running.animate_to(From).await },
-    );
+    let _ = launch(async move {
+        running.seek_to_with(1.0, To).await;
+        running.animate_to(From).await
+    });
     // The composition after the seek: the seek sets the value.
     ui.advance_time_by_frame();
     ui.wait_for_idle();
@@ -779,14 +800,16 @@ fn conflicting(first: Call, second: Call, first_interrupted: bool) {
 fn a_second_seek_interrupts_the_first() {
     conflicting(
         |state| {
-            Box::pin(
-                async move { state.seek_to_with(1.0, To).await && state.animate_to(From).await },
-            )
+            Box::pin(async move {
+                state.seek_to_with(1.0, To).await;
+                state.animate_to(From).await
+            })
         },
         |state| {
-            Box::pin(
-                async move { state.seek_to_with(1.0, Other).await && state.animate_to(From).await },
-            )
+            Box::pin(async move {
+                state.seek_to_with(1.0, Other).await;
+                state.animate_to(From).await
+            })
         },
         true,
     );
@@ -796,8 +819,18 @@ fn a_second_seek_interrupts_the_first() {
 #[test]
 fn a_second_snap_interrupts_the_first() {
     conflicting(
-        |state| Box::pin(async move { state.snap_to(To).await && state.animate_to(From).await }),
-        |state| Box::pin(async move { state.snap_to(Other).await && state.animate_to(From).await }),
+        |state| {
+            Box::pin(async move {
+                state.snap_to(To).await;
+                state.animate_to(From).await
+            })
+        },
+        |state| {
+            Box::pin(async move {
+                state.snap_to(Other).await;
+                state.animate_to(From).await
+            })
+        },
         true,
     );
 }
@@ -807,14 +840,16 @@ fn a_second_snap_interrupts_the_first() {
 fn a_seek_to_the_current_state_then_a_conflicting_one() {
     conflicting(
         |state| {
-            Box::pin(
-                async move { state.seek_to_with(1.0, From).await && state.animate_to(To).await },
-            )
+            Box::pin(async move {
+                state.seek_to_with(1.0, From).await;
+                state.animate_to(To).await
+            })
         },
         |state| {
-            Box::pin(
-                async move { state.seek_to_with(1.0, Other).await && state.animate_to(From).await },
-            )
+            Box::pin(async move {
+                state.seek_to_with(1.0, Other).await;
+                state.animate_to(From).await
+            })
         },
         false,
     );
@@ -824,8 +859,18 @@ fn a_seek_to_the_current_state_then_a_conflicting_one() {
 #[test]
 fn a_snap_to_the_current_state_then_a_conflicting_one() {
     conflicting(
-        |state| Box::pin(async move { state.snap_to(From).await && state.animate_to(To).await }),
-        |state| Box::pin(async move { state.snap_to(Other).await && state.animate_to(From).await }),
+        |state| {
+            Box::pin(async move {
+                state.snap_to(From).await;
+                state.animate_to(To).await
+            })
+        },
+        |state| {
+            Box::pin(async move {
+                state.snap_to(Other).await;
+                state.animate_to(From).await
+            })
+        },
         false,
     );
 }
@@ -874,9 +919,9 @@ fn snaps_to_the_current_state() {
     assert_eq!(values(), [0]);
     let running = state.clone();
     let calls = launch(async move {
-        running.seek_to_with(0.5, To).await
-            && running.snap_to(From).await
-            && running.snap_to(From).await
+        running.seek_to_with(0.5, To).await;
+        running.snap_to(From).await;
+        running.snap_to(From).await
     });
     // The seek's composition, then the snap's.
     ui.advance_time_by_frame();
@@ -1233,7 +1278,8 @@ fn a_joined_value_goes_on_to_a_third_state() {
     assert_eq!((first.get(), second.get()), (2000, 2000.0));
     // Compose's ends a frame later: its coroutine resumes after the frame's composition, so the
     // change of current state composes on the next frame; compose-rs's task resumes before the
-    // composition of the same frame (D817).
+    // composition of the same frame (D817). This encodes today's order: a runtime parity
+    // item (docs/parity/runtime.md, behaviour 15), to go back to Compose's frame then.
     assert_eq!(other.get(), Some(true));
 }
 
@@ -1528,9 +1574,10 @@ fn a_child_of_a_seekable_transition_starts_uninterrupted() {
     assert_eq!((color.get(), state.current_state()), (Color::BLUE, 1));
     // The child's first change: its spec from the start (yellow), not an interruption.
     let animating = state.clone();
-    let _ = launch(
-        async move { animating.seek_to_with(0.0, 2).await && animating.animate_to(2).await },
-    );
+    let _ = launch(async move {
+        animating.seek_to_with(0.0, 2).await;
+        animating.animate_to(2).await
+    });
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     assert_eq!((color.get(), state.current_state()), (yellow, 1));
@@ -1594,11 +1641,10 @@ fn screens_added_and_removed_quickly_leave_the_first() {
         // Compose's `snapshotFlow { … }.collectLatest`: a new list starts again.
         let (animating, removing) = (given.clone(), list);
         LaunchedEffect(Screens(visible.clone()), async move {
-            if animating.animate_to(visible).await {
-                removing.update(|screens| {
-                    screens.iter().filter(|it| !it.removing()).cloned().collect()
-                });
-            }
+            animating.animate_to(visible).await;
+            // Not interrupted: done animating.
+            removing
+                .update(|screens| screens.iter().filter(|it| !it.removing()).cloned().collect());
         });
         for screen in list.get() {
             let transition = transition.clone();
@@ -1681,9 +1727,9 @@ fn an_animation_after_a_seek_to_0_shows_the_content() {
     ui.wait_for_idle();
     let running = state.clone();
     let calls = launch(async move {
-        running.animate_to(To).await
-            && running.seek_to_with(0.5, From).await
-            && running.seek_to_with(0.0, From).await
+        running.animate_to(To).await;
+        running.seek_to_with(0.5, From).await;
+        running.seek_to_with(0.0, From).await
     });
     ui.advance_time_by(millis(5_000));
     ui.wait_for_idle();
@@ -1709,4 +1755,120 @@ fn an_animation_after_a_seek_to_0_shows_the_content() {
     assert_eq!(value.get(), 1000);
     assert_eq!(visible(&child), (EnterExitState::Visible, EnterExitState::Visible));
     ui.on_node_with_tag("content").assert_is_displayed();
+}
+
+// Review M1: Compose's vectorized specs have no `equals`, so `animateTo` with a spec always
+// starts a new animation of the fraction, from where the one running is.
+#[test]
+fn an_animation_called_again_with_an_equal_spec_starts_again() {
+    let state = SeekableTransitionState::new(From);
+    let mut ui = values_rule(&state, 1000, BY_STATE);
+    ui.wait_for_idle();
+    let seeking = state.clone();
+    let seek = launch(async move { seeking.seek_to_with(0.0, To).await });
+    ui.advance_time_by_frame();
+    ui.wait_for_idle();
+    assert_eq!(seek.get(), Some(true));
+    let linear = || Some(AnimationSpec::from(tween(1000).easing(LINEAR_EASING)));
+    let animating = state.clone();
+    let _first = launch(async move { animating.animate_to_with(To, linear()).await });
+    // The start time, then 480 ms.
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(480));
+    ui.wait_for_idle();
+    assert_eq!(values(), [480]);
+    // Called again at 496 ms with an equal spec: a new 1000 ms tween from 0.48.
+    let animating = state.clone();
+    let second = launch(async move { animating.animate_to_with(To, linear()).await });
+    ui.advance_time_by_frame();
+    ui.wait_for_idle();
+    close(values()[0], 1000.0 * (0.48 + 0.52 * 16.0 / 1000.0), "a frame on");
+    // 30 frames on: 496 ms into the new tween.
+    ui.advance_time_by(millis(480));
+    ui.wait_for_idle();
+    close(values()[0], 1000.0 * (0.48 + 0.52 * 0.496), "half way");
+    ui.advance_time_by(millis(500));
+    ui.wait_for_idle();
+    assert_eq!(values(), [1000]);
+    assert_eq!(second.get(), Some(true));
+}
+
+// Review M3: an interrupted call ends its task, as Compose's `CancellationException` ends the
+// coroutine: nothing after it runs, and a loop calling again can't spin.
+#[test]
+fn an_interrupted_call_ends_its_task() {
+    let state = SeekableTransitionState::new(From);
+    let mut ui = values_rule(&state, 1000, BY_STATE);
+    ui.wait_for_idle();
+    let after = Rc::new(Cell::new(0));
+    let (animating, ran) = (state.clone(), after.clone());
+    let first = launch(async move {
+        loop {
+            animating.animate_to(To).await;
+            ran.set(ran.get() + 1);
+            animating.animate_to(From).await;
+        }
+    });
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let seeking = state.clone();
+    let seek = launch(async move { seeking.seek_to_with(0.5, Other).await });
+    ui.wait_for_idle();
+    // Cancelled as the seek starts, as `MutatorMutex.mutate` cancels the mutator it replaces.
+    assert_eq!(first.get(), Some(false));
+    // The seek ends once the values interrupted got to To.
+    ui.advance_time_by(millis(1_500));
+    ui.wait_for_idle();
+    assert_eq!(after.get(), 0);
+    assert_eq!(seek.get(), Some(true));
+}
+
+// Review L4: the play time of a seek is Kotlin's `roundToLong` of the fraction (an `f32`,
+// widened) times the total duration: 0.009 of 300 ms is 2 699 999.88 ns, so 2 700 000.
+#[test]
+fn a_seek_rounds_its_play_time_to_the_nearest_nanosecond() {
+    let state = SeekableTransitionState::new(From);
+    let (mut ui, transition, _) = running_rule(&state, |_| Box::pin(async {}));
+    ui.wait_for_idle();
+    let seeking = state.clone();
+    let _ = launch(async move { seeking.seek_to_with(0.0, To).await });
+    ui.advance_time_by_frame();
+    let seeking = state.clone();
+    let seek = launch(async move { seeking.seek_to(0.009).await });
+    ui.wait_for_idle();
+    assert_eq!(seek.get(), Some(true));
+    assert_eq!(transition.borrow().as_ref().unwrap().play_time_nanos(), 2_700_000);
+}
+
+// Review L4: a seek takes the transition's total duration with a value added while measuring
+// (a visibility's deferred fade). The duration the state keeps is the same by then: its
+// observer hears the write at once (frame requests are delivered as the write happens).
+#[test]
+fn a_seek_takes_the_total_duration_as_it_is() {
+    use compose_foundation::layout::*;
+    let state = SeekableTransitionState::new(From);
+    let watched = watched::<Transition<AnimStates>>();
+    let (seen, given) = (watched.clone(), state.clone());
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = remember_transition(&given, "Test");
+        *seen.borrow_mut() = Some(transition.clone());
+        let linear = tween(300).easing(LINEAR_EASING);
+        transition.AnimatedVisibility(
+            |state| *state == To,
+            Modifier,
+            fade_in_with(linear.clone(), 0.0),
+            fade_out_with(linear, 0.0),
+            |_| Box!(modifier = Modifier.fill_max_size()),
+        );
+    });
+    ui.wait_for_idle();
+    let seeking = state.clone();
+    let _ = launch(async move { seeking.seek_to_with(0.0, To).await });
+    // The composition of To; the fade joins while measuring.
+    ui.advance_time_by_frame();
+    let seeking = state.clone();
+    let seek = launch(async move { seeking.seek_to(0.5).await });
+    ui.wait_for_idle();
+    assert_eq!(seek.get(), Some(true));
+    assert_eq!(watched.borrow().as_ref().unwrap().play_time_nanos(), 150_000_000);
 }

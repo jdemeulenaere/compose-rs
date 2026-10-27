@@ -255,23 +255,24 @@ impl<S: Clone + PartialEq + 'static> AnimatedContentTransitionScope<S> {
     ) -> ExitTransition {
         let root = self.root.clone();
         let spec = animation_spec.into();
-        let target = self.target_state.clone();
+        // The transition's target when the offset is computed, as Compose's (a change of target
+        // after this exit was made counts).
         match self.root.horizontal(towards) {
             Some(true) => slide_out_horizontally_with(spec, move |width| {
-                let size = root.target_size(&target);
+                let size = root.target_size(&(root.target_state)());
                 target_offset(-root.offset(IntSize::new(width, width), size).x - width)
             }),
             Some(false) => slide_out_horizontally_with(spec, move |width| {
-                let size = root.target_size(&target);
+                let size = root.target_size(&(root.target_state)());
                 target_offset(-root.offset(IntSize::new(width, width), size).x + size.width)
             }),
             None => match towards {
                 SlideDirection::Up => slide_out_vertically_with(spec, move |height| {
-                    let size = root.target_size(&target);
+                    let size = root.target_size(&(root.target_state)());
                     target_offset(-root.offset(IntSize::new(height, height), size).y - height)
                 }),
                 SlideDirection::Down => slide_out_vertically_with(spec, move |height| {
-                    let size = root.target_size(&target);
+                    let size = root.target_size(&(root.target_state)());
                     target_offset(-root.offset(IntSize::new(height, height), size).y + size.height)
                 }),
                 _ => ExitTransition::NONE,
@@ -389,6 +390,9 @@ struct Root<T> {
     current_size: Cell<IntSize>,
     /// Each content's measured size, by state.
     target_sizes: RefCell<Vec<(T, State<IntSize>)>>,
+    /// The transition's target state when read, as the `transition.targetState` Compose's
+    /// slides out of the container read when they compute their offsets.
+    target_state: Box<dyn Fn() -> T>,
 }
 
 impl<T> Root<T> {
@@ -495,11 +499,13 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
 ) {
     let layout_direction = LOCAL_LAYOUT_DIRECTION.current();
     let root = remember_keyed(transition.clone(), || {
+        let read = transition.clone();
         Rc::new(Root {
             content_alignment: Cell::new(content_alignment),
             layout_direction: Cell::new(layout_direction),
             current_size: Cell::new(IntSize::ZERO),
             target_sizes: RefCell::new(Vec::new()),
+            target_state: Box::new(move || read.target_state()),
         })
     });
     let visible = remember_keyed(transition.clone(), || {

@@ -89,3 +89,25 @@ fn an_infinite_transitions_values_repeat_their_animations() {
         assert!(mismatches.is_empty(), "{} frames off: {:?}", mismatches.len(), &mismatches[..]);
     });
 }
+
+// Review H1: a spec built inline (a custom easing, equal only to itself) is new at every
+// composition; as Compose's `animateValue`, only a change of the initial or target value
+// updates the animation, so it doesn't start again each frame.
+#[test]
+fn a_spec_built_inline_does_not_restart_the_animation() {
+    let value = std::rc::Rc::new(std::cell::Cell::new(-1.0f32));
+    let seen = value.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = remember_infinite_transition!();
+        let spec = infinite_repeatable(
+            tween(1000).easing(Easing::custom(|fraction| fraction)),
+            RepeatMode::Restart,
+        );
+        let animated = transition.animate_float(0.0, 1000.0, spec);
+        seen.set(animated.get());
+    });
+    for _ in 0..20 {
+        ui.advance_time_by_frame();
+    }
+    assert!(value.get() > 100.0, "{}", value.get());
+}

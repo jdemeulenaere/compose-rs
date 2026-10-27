@@ -264,9 +264,10 @@ impl InfiniteTransition {
             })
         });
         SideEffect(move || {
+            // As Compose's: a change of spec alone updates nothing (a spec built inline, a
+            // custom easing's, is new at every composition).
             let changed = !initial_value.same(&animation.initial_value.borrow())
-                || !target_value.same(&animation.target_value.borrow())
-                || animation_spec != *animation.animation_spec.borrow();
+                || !target_value.same(&animation.target_value.borrow());
             if changed {
                 animation.update_values(initial_value, target_value, animation_spec);
                 if let Some(inner) = transition.try_get() {

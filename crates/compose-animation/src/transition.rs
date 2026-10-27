@@ -162,7 +162,8 @@ impl<S: Clone + PartialEq + 'static> StateHolder<S> {
     fn set_running(&self, running: bool) {
         match self {
             StateHolder::Mutable(state) => state.set_running(running),
-            StateHolder::Seekable(state) => state.set_running(running),
+            // Compose's `isRunning` of a seekable state is internal and never read.
+            StateHolder::Seekable(_) => {}
         }
     }
 }
@@ -248,6 +249,9 @@ trait TransitionNode {
     fn reset_animation_fraction(&self, fraction: f32);
     fn clear_initial_animations(&self);
     fn update_initial_values(&self);
+    /// Whether a value or a child's goes on along an initial-value animation, as
+    /// `hasInitialValueAnimations`.
+    fn has_initial_value_animations(&self) -> bool;
 }
 
 /// A value of a transition, its type erased, as `TransitionAnimationState`.
@@ -264,6 +268,8 @@ trait AnimationEntry: ToolingEntry {
     /// Its animation continued from where it is along `state`, as `setInitialValueAnimation`.
     fn set_initial_value_animation(&self, state: &Rc<SeekingAnimationState>);
     fn clear_initial_animation(&self);
+    /// Whether it goes on along an initial-value animation (`initialValueState != null`).
+    fn has_initial_value_animation(&self) -> bool;
 }
 
 /// An animation of a seekable transition's fraction, as Compose's
@@ -690,6 +696,11 @@ impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
         TransitionInner::update_initial_values(self);
     }
 
+    fn has_initial_value_animations(&self) -> bool {
+        self.animations.borrow().iter().any(|animation| animation.has_initial_value_animation())
+            || self.transitions.borrow().iter().any(|child| child.has_initial_value_animations())
+    }
+
     fn total_duration_nanos(&self) -> i64 {
         // State reads: a value joining, leaving or changing its duration changes it.
         self.lists_version.get();
@@ -762,6 +773,12 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// Whether its values are animating, as `isRunning` (a state read).
     pub fn is_running(&self) -> bool {
         self.inner.start_time_nanos.get() != AnimationConstants::UNSPECIFIED_TIME
+    }
+
+    /// Whether a value (or a child transition's) goes on from where an interrupted seek left
+    /// it, along an initial-value animation, as `hasInitialValueAnimations` (not a state read).
+    pub fn has_initial_value_animations(&self) -> bool {
+        TransitionNode::has_initial_value_animations(&*self.inner)
     }
 
     /// Its name for tools, after its parent's (`Parent > Child`), as `label`.
@@ -1585,6 +1602,10 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
         *self.initial_value_animation.borrow_mut() = None;
         *self.initial_value_state.borrow_mut() = None;
         self.use_only_initial_value.set(false);
+    }
+
+    fn has_initial_value_animation(&self) -> bool {
+        self.initial_value_state.borrow().is_some()
     }
 }
 

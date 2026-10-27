@@ -252,3 +252,32 @@ fn equal_keyframes_are_one_spec() {
     let repeated = infinite_repeatable(build(), RepeatMode::Reverse);
     assert_eq!(repeated.animation, DurationBasedSpec::Keyframes(build()));
 }
+
+// Review L1: Compose's `AnimationResult.endState` keeps the velocity the animation ended at (a
+// fling stopped by a bound hands it on), though the `Animatable`'s own velocity is zeroed.
+#[test]
+fn an_animation_result_keeps_the_velocity_it_ended_at() {
+    let results = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let mut ui = ComposeTestRule::with_manual_clock(|| {});
+    let scope = CoroutineScope::new();
+    let (free, bounded) = (Animatable::new(0.0f32), Animatable::new(0.0f32));
+    bounded.update_bounds(None, Some(50.0));
+    for animatable in [free.clone(), bounded.clone()] {
+        let log = results.clone();
+        scope.launch(async move {
+            let result = animatable.animate_to(100.0, tween(100).easing(LINEAR_EASING)).await;
+            log.borrow_mut().push((result.end_reason, result.end_velocity));
+        });
+    }
+    ui.advance_time_by(Duration::from_millis(300));
+    let results = results.borrow();
+    // A linear tween of 100 over 100 ms: 1000 a second.
+    assert_eq!(results.len(), 2);
+    for (reason, velocity) in results.iter() {
+        assert!((velocity - 1000.0).abs() < 1.0, "{reason:?}: {velocity}");
+    }
+    let reasons: Vec<_> = results.iter().map(|(reason, _)| *reason).collect();
+    assert!(reasons.contains(&AnimationEndReason::Finished), "{reasons:?}");
+    assert!(reasons.contains(&AnimationEndReason::BoundReached), "{reasons:?}");
+    assert_eq!((free.velocity(), bounded.velocity()), (0.0, 0.0));
+}

@@ -14,8 +14,8 @@ use compose_test::*;
 use compose_ui::Color;
 
 /// The implementation D420 replaced, word for word: a task per value, each an `Animatable`
-/// snapped to `initial_value` and animated to `target_value`, restarted when they or the spec
-/// change.
+/// snapped to `initial_value` and animated to `target_value`, restarted when they change (a
+/// change of spec alone restarts nothing, as Compose's `animateValue`).
 fn reference_animate_value<T: Animate + ComposeArg>(
     initial_value: T,
     target_value: T,
@@ -23,7 +23,7 @@ fn reference_animate_value<T: Animate + ComposeArg>(
 ) -> State<T> {
     let animatable = remember(|| Animatable::new(initial_value.clone()));
     let state = animatable.as_state();
-    let keys = (initial_value.clone(), target_value.clone(), animation_spec.clone());
+    let keys = (initial_value.clone(), target_value.clone());
     LaunchedEffect(keys, async move {
         animatable.snap_to(initial_value);
         animatable.animate_to(target_value, animation_spec).await;

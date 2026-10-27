@@ -211,7 +211,7 @@ Deprecated and left out:
 **animation-core:**
 
 - `Animatable`: `new`, `new_with(initial, visibility_threshold, label)`, `value`, `as_state`, `target_value`, `velocity`, `velocity_vector`, `is_running`, `label`, `lower_bound`/`upper_bound`/`update_bounds`, `animate_to`, `animate_to_with_velocity`, `animate_decay`, `snap_to`, `stop`.
-- `AnimationResult`, with `end_value` in place of `endState`, and `AnimationEndReason` (`Finished`, `BoundReached`, and `Interrupted` for a cancellation).
+- `AnimationResult`, with `end_value` and `end_velocity` in place of `endState` (D825), and `AnimationEndReason` (`Finished`, `BoundReached`, and `Interrupted` for a cancellation).
 - `animate_{value,float,dp,color,int,offset,int_offset,size,int_size,rect}_as_state`, with `label`, `finished_listener` and (on `animate_value_as_state`) `visibility_threshold`.
 - The specs and constants:
   - `tween` (`.delay`, `.easing`), `spring`/`spring_with` (`.visibility_threshold`), `snap(delay)`, `repeatable`/`infinite_repeatable` (their `_with` forms take a `StartOffset`), `RepeatMode`, `InterruptionAwareAnimationSpec`;
@@ -245,7 +245,7 @@ Deprecated and left out:
 | `Animatable.label`, `typeConverter`, `velocityVector` | present (`label`, `velocity_vector`; the converter is the type's `Animate`) | animatable-bounds |
 | `Animatable.animateTo(…, block)`: the per-frame callback on `Animatable` | present (`animate_to_with`, `animate_decay_with`, D819) | suspend-animate |
 | `Animatable.animateDecay(initialVelocity, DecayAnimationSpec, block)` | present without the block: `animate_decay(velocity, &spec)` (D807) | decay-animation |
-| `AnimationResult.endState: AnimationState` | `end_value` only (D819) | suspend-animate |
+| `AnimationResult.endState: AnimationState` | `end_value` and `end_velocity` (D819, D825), not the `AnimationState` itself | suspend-animate |
 | `animateIntSizeAsState`, `animateRectAsState`; `animateValueAsState(…, visibilityThreshold, …)` | present (D800) | more-converters |
 | `Animation` interface (`durationNanos`, `getValueFromNanos`, `getVelocityVectorFromNanos`, `isFinishedFromNanos`, `isInfinite`, `targetValue`, `typeConverter`); `TargetBasedAnimation`; `Animation.getVelocityFromNanos` | present: the `Animation` trait, `TargetBasedAnimation` (D800) | animation-objects |
 | `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` | the `AnimationSpec` enum and the spec types are each a `VectorizedAnimationSpec` (no separate vectorized types); `DurationBasedSpec` holds tween, keyframes and snap. `AnimationSpec::custom` and `DurationBasedSpec::custom` take specs of an app's own (D816) | animation-objects, spec-gaps |
@@ -269,7 +269,7 @@ Deprecated and left out:
 | `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813) but `pendingTargetState` | transition-state |
 | `Transition.createChildTransition(label, transform)` | present | transition-state |
 | `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present (the labels in `_with` forms, D818) | transition-state, more-converters |
-| `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | present (the calls return whether they got to their end, D821) | seekable-transition |
+| `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | present (an interrupted call cancels its task, as Compose's `CancellationException`, D823) | seekable-transition |
 | `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | missing (new at this tip) | deferred-transition |
 | `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
 | `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | present (`animations()`, `label()`, `animate_*_with(…, label)`, D818) | transition-state |
@@ -421,7 +421,7 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatableTest.testUpdateBounds`.
 - **Dependencies:** none (bounds matter most for decay-animation).
 
-#### suspend-animate (M, not exp.): done but `AnimationResult.endState` (D819)
+#### suspend-animate (M, not exp.): done but `AnimationResult.endState` as an `AnimationState` (D819, D825)
 
 - **API:** `animate(initial, target, initial_velocity, spec, block)` (`f32` and generic), `AnimationState`, `AnimationScope`, `AnimationState::animate_to`, `animate_decay`, `sequential_animation`, the per-frame `block` on `Animatable::animate_to`, and `AnimationResult::end_state`.
 - **What it does:** low-level animations without an `Animatable`.
@@ -503,7 +503,7 @@ One entry per feature. Sizes:
 
 #### seekable-transition (L, not exp.): done (D821)
 
-- **Done:** `SeekableTransitionState` (`seek_to`, `seek_to_with`, `animate_to`, `animate_to_with`, `snap_to`, `fraction`, `current_state`, `target_state`, `is_running`), `remember_transition` over the `TransitionState` trait, the transition's seeking (initial-value animations, the observed total duration). Left: `DurationScaleTransitionTest` (motion-duration-scale) and `AnimatedVisibilityTest.testSeekingAnimatedVisibility` (Compose's tooling `setPlaytimeAfterInitialAndTargetStateEstablished`).
+- **Done:** `SeekableTransitionState` (`seek_to`, `seek_to_with`, `animate_to`, `animate_to_with`, `snap_to`, `fraction`, `current_state`, `target_state`; an interrupted call cancels its task, D823), `remember_transition` over the `TransitionState` trait, the transition's seeking (initial-value animations, the observed total duration). Left: `DurationScaleTransitionTest` (motion-duration-scale) and `AnimatedVisibilityTest.testSeekingAnimatedVisibility` (Compose's tooling `setPlaytimeAfterInitialAndTargetStateEstablished`).
 
 - **API:** `SeekableTransitionState` (`seek_to(fraction, target)`, `animate_to(target, spec)`, `snap_to`, `fraction`), and Transition support for seeking (Compose's internal `delayed` wrapper).
 - **What it does:** drives a transition from a gesture. This is the basis of predictive back.

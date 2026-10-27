@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 135 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 139 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 27 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
@@ -280,7 +280,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D410 | [android-drawing](decisions/android-drawing.md#d410) | revised by [D530](decisions/ui-and-layout.md#d530), [D532](decisions/android-drawing.md#d532) |
 | D411 | [android-drawing](decisions/android-drawing.md#d411) | current |
 | D412 | [ui-and-layout](decisions/ui-and-layout.md#d412) | superseded by [D530](decisions/ui-and-layout.md#d530) |
-| D420 | [ui-and-layout](decisions/ui-and-layout.md#d420) | current |
+| D420 | [ui-and-layout](decisions/ui-and-layout.md#d420) | revised by [D822](decisions/ui-and-layout.md#d822) |
 | D421 | [runtime](decisions/runtime.md#d421) | current |
 | D422 | [ui-and-layout](decisions/ui-and-layout.md#d422) | current |
 | D423 | [ui-and-layout](decisions/ui-and-layout.md#d423) | superseded by [D803](decisions/ui-and-layout.md#d803) |
@@ -434,11 +434,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D715 | [runtime](decisions/runtime.md#d715) | current |
 | D716 | [runtime](decisions/runtime.md#d716) | current |
 | D717 | [runtime](decisions/runtime.md#d717) | current |
-| D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
 | D801 | unused | (its test-clock rounding came in as [D900](decisions/api-and-tooling.md#d900)) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
-| D802 | [runtime](decisions/runtime.md#d802) | current |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |
 | D804 | [ui-and-layout](decisions/ui-and-layout.md#d804) | current |
 | D805 | [ui-and-layout](decisions/ui-and-layout.md#d805) | current |
@@ -453,11 +451,15 @@ The log is split by area into the files below, one table each, rows in number or
 | D814 | [ui-and-layout](decisions/ui-and-layout.md#d814) | current |
 | D815 | [ui-and-layout](decisions/ui-and-layout.md#d815) | current |
 | D816 | [ui-and-layout](decisions/ui-and-layout.md#d816) | current |
-| D817 | [ui-and-layout](decisions/ui-and-layout.md#d817) | current |
+| D817 | [ui-and-layout](decisions/ui-and-layout.md#d817) | revised by [D824](decisions/ui-and-layout.md#d824) |
 | D818 | [ui-and-layout](decisions/ui-and-layout.md#d818) | current |
-| D819 | [ui-and-layout](decisions/ui-and-layout.md#d819) | current |
+| D819 | [ui-and-layout](decisions/ui-and-layout.md#d819) | revised by [D825](decisions/ui-and-layout.md#d825) |
 | D820 | [api-and-tooling](decisions/api-and-tooling.md#d820) | current |
-| D821 | [ui-and-layout](decisions/ui-and-layout.md#d821) | current |
+| D821 | [ui-and-layout](decisions/ui-and-layout.md#d821) | revised by [D823](decisions/ui-and-layout.md#d823) |
+| D822 | [ui-and-layout](decisions/ui-and-layout.md#d822) | current |
+| D823 | [ui-and-layout](decisions/ui-and-layout.md#d823) | current |
+| D824 | [ui-and-layout](decisions/ui-and-layout.md#d824) | current |
+| D825 | [ui-and-layout](decisions/ui-and-layout.md#d825) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

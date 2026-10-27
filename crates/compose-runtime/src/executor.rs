@@ -357,8 +357,9 @@ thread_local! {
 }
 
 /// Cancels the task being polled, as throwing a `CancellationException` in a coroutine: its
-/// future is dropped once this poll returns. Outside a task, nothing.
-fn cancel_current_task() {
+/// future is dropped once this poll returns. Outside a task, nothing. For libraries whose
+/// suspending calls end their caller as Compose's throw does (D901, D823).
+pub fn cancel_current_task() {
     if let Some(key) = CURRENT_TASK.with(Cell::get) {
         cancel(key);
     }
@@ -401,7 +402,7 @@ pub async fn with_infinite_animation_frame_millis<R>(on_frame: impl FnOnce(u64) 
 
 /// The job of the task being polled now, if a task is: a future can cancel the task awaiting
 /// it, as a coroutine's suspension resumed with a `CancellationException` cancels it.
-pub(crate) fn current_job() -> Option<Job> {
+pub fn current_job() -> Option<Job> {
     CURRENT_TASK.try_with(Cell::get).ok().flatten().map(|key| Job { key })
 }
 

@@ -849,7 +849,12 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
     should_dispose: ShouldDispose,
     content: compose_runtime::Callback<dyn Fn(AnimatedVisibilityScope)>,
 ) {
-    if visible(&transition.target_state()) || visible(&transition.current_state()) {
+    // As Compose's: also while values go on from an interrupted seek (the content seeked from
+    // stays while they do). `pendingTargetState` waits for deferred transitions.
+    if visible(&transition.target_state())
+        || visible(&transition.current_state())
+        || transition.has_initial_value_animations()
+    {
         let child = {
             let (parent, visible) = (transition.clone(), visible.clone());
             transition.create_child_transition("EnterExitTransition", move |state| {

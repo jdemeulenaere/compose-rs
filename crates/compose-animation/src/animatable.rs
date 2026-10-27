@@ -20,11 +20,13 @@ pub enum AnimationEndReason {
     Interrupted,
 }
 
-/// How an animation ended, as Compose's `AnimationResult`: the reason and the value then.
+/// How an animation ended, as Compose's `AnimationResult`: the reason, and the value and
+/// velocity then (its `endState`'s; the `Animatable`'s own velocity is zeroed at the end).
 #[derive(Clone, PartialEq, Debug)]
 pub struct AnimationResult<T> {
     pub end_reason: AnimationEndReason,
     pub end_value: T,
+    pub end_velocity: T,
 }
 
 /// A value animated by tasks, as Compose's `Animatable`: `animate_to` runs an animation (a new one
@@ -312,6 +314,7 @@ impl<T: Animate> Animatable<T> {
         let interrupted = || AnimationResult {
             end_reason: AnimationEndReason::Interrupted,
             end_value: self.value(),
+            end_velocity: self.velocity(),
         };
         // A value that isn't a number (NaN, infinite) can't be animated: it's at the target at
         // once (a spring would never come to rest), at the next frame.
@@ -326,6 +329,7 @@ impl<T: Animate> Animatable<T> {
             return AnimationResult {
                 end_reason: AnimationEndReason::Finished,
                 end_value: self.value(),
+                end_velocity: self.velocity(),
             };
         }
         // Interrupting: at play time 0 at once, at the interrupted animation's last frame.
@@ -335,7 +339,11 @@ impl<T: Animate> Animatable<T> {
             let ended = self.frame(animation, start_time, start_time);
             block(self);
             if let Some(reason) = ended {
-                return AnimationResult { end_reason: reason, end_value: self.value() };
+                return AnimationResult {
+                    end_reason: reason,
+                    end_value: self.value(),
+                    end_velocity: self.velocity(),
+                };
             }
         }
         // An infinite animation waits for its frames as one, which a test rule's policy can
@@ -354,7 +362,11 @@ impl<T: Animate> Animatable<T> {
             let ended = self.frame(animation, time, begin);
             block(self);
             if let Some(reason) = ended {
-                return AnimationResult { end_reason: reason, end_value: self.value() };
+                return AnimationResult {
+                    end_reason: reason,
+                    end_value: self.value(),
+                    end_velocity: self.velocity(),
+                };
             }
         }
     }

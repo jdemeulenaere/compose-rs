@@ -200,7 +200,9 @@ fn a_content_kept_by_its_key_keeps_its_saved_state() {
             // Compose resumes this task after the frame's composition, so at the next frame the
             // transition's frame comes first and it runs; compose-rs resumes it within the
             // frame, before the composition starting the transition, so this frame comes first
-            // at the next frame and the transition runs from the one after.
+            // at the next frame and the transition runs from the one after. This encodes
+            // today's order: a runtime parity item (docs/parity/runtime.md, behaviour 15), to
+            // drop once the executor dispatches continuations after the composition.
             with_frame_millis(|_| ()).await;
             with_frame_millis(move |_| assert!(watched.is_running())).await;
         });
@@ -409,4 +411,67 @@ fn an_interruption_picks_the_right_enter_and_exit() {
         assert_eq!(fixed.get(), initial);
     }
     ui.wait_for_idle();
+}
+
+// Review L3: Compose's `slideOutOfContainer` reads the transition's target state when its
+// offset is computed, not when the exit was made: a content still leaving when the target
+// changes again slides towards the new target's size. Here a seek to a third state: the
+// content seeked from, neither current nor target, stays while the values interrupted go on
+// (Compose's `hasInitialValueAnimations`).
+#[test]
+fn a_leaving_slide_follows_the_size_of_the_latest_target() {
+    let state = SeekableTransitionState::new(0);
+    let given = state.clone();
+    let contents = Rc::new(RefCell::new(Vec::<(i32, Transition<EnterExitState>)>::new()));
+    let seen = contents.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let root = remember_transition(&given, None);
+        let seen = seen.clone();
+        root.AnimatedContent(
+            Modifier,
+            |scope: AnimatedContentTransitionScope<i32>| {
+                let spec = tween(1000).easing(LINEAR_EASING);
+                fade_in_with(spec.clone(), 1.0).together_with(scope.slide_out_of_container_with(
+                    SlideDirection::Left,
+                    spec,
+                    |offset| offset,
+                ))
+            },
+            Alignment::CENTER,
+            ContentKey::state(),
+            move |scope: AnimatedContentScope, target: i32| {
+                let mut seen = seen.borrow_mut();
+                seen.retain(|(state, _)| *state != target);
+                seen.push((target, scope.transition().clone()));
+                let size = [100, 200, 50][target as usize];
+                Box!(modifier = Modifier.required_size(size.dp()));
+            },
+        );
+    });
+    let slide_target = |state: i32| {
+        let contents = contents.borrow();
+        let (_, transition) = contents.iter().find(|(shown, _)| *shown == state).unwrap();
+        transition
+            .animations()
+            .into_iter()
+            .find(|animation| animation.label().contains("slide"))
+            .and_then(|animation| animation.target_value::<IntOffset>())
+            .expect("a slide")
+    };
+    let scope = CoroutineScope::new();
+    let seeking = state.clone();
+    scope.launch(async move { seeking.seek_to_with(0.5, 1).await });
+    for _ in 0..4 {
+        ui.advance_time_by_frame();
+    }
+    // 100 centered in 200: at 50; it leaves to the left of it, at -150.
+    assert_eq!(slide_target(0), IntOffset::new(-150, 0));
+    let seeking = state.clone();
+    scope.launch(async move { seeking.seek_to_with(0.0, 2).await });
+    for _ in 0..4 {
+        ui.advance_time_by_frame();
+    }
+    // 100 centered in 50: at -25; to the left of it, at -75.
+    assert_eq!((state.current_state(), state.target_state()), (1, 2));
+    assert_eq!(slide_target(0), IntOffset::new(-75, 0));
 }

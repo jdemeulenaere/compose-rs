@@ -7,7 +7,8 @@
 //! interrupting one under way makes the values go on from where they are to their new targets
 //! along an initial-value animation, while the new change starts at fraction 0. The functions
 //! are suspending, one at a time (Compose's `MutatorMutex`): a call interrupts the one running,
-//! which returns `false`; they wait for the composition after a change of target, as Compose's.
+//! which cancels its task, as Compose's `CancellationException` ends the coroutine that called
+//! it; they wait for the composition after a change of target, as Compose's.
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -15,7 +16,8 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 
-use compose_runtime::platform::ReadObserver;
+use compose_runtime::Job;
+use compose_runtime::platform::{ReadObserver, cancel_current_task, current_job};
 use compose_runtime::{ComposeArg, OwnedState, SideEffect, mutable_state_of, with_frame_nanos};
 
 use crate::spec::{AnimationConstants, AnimationSpec, VectorizedAnimationSpec};
@@ -38,7 +40,6 @@ struct SeekableInner<S: 'static> {
     target_untracked: RefCell<S>,
     fraction: OwnedState<f32>,
     fraction_untracked: Cell<f32>,
-    is_running: OwnedState<bool>,
     transition: RefCell<Option<Weak<TransitionInner<S>>>>,
     /// The target the last composition saw, as `composedTargetState`.
     composed_target: RefCell<S>,
@@ -54,9 +55,10 @@ struct SeekableInner<S: 'static> {
     duration_observer: RefCell<Option<ReadObserver>>,
     /// The call running, as the `MutatorMutex`: a new one bumps it, and the one running stops.
     mutation: Cell<u64>,
-    /// The task of the call running: a new call wakes it, and it stops at once, as a
-    /// cancelled coroutine.
-    holder: RefCell<Option<Waker>>,
+    /// The call running: its task's job, which a new call cancels, as `MutatorMutex` cancels
+    /// the mutator it interrupts, and its waker (a call of no task, or of the new call's task,
+    /// is woken instead, and cancels its task when it sees it was interrupted).
+    holder: RefCell<Option<(Waker, Option<Job>)>>,
     last_frame_time_nanos: Cell<i64>,
     initial_value_animations: RefCell<Vec<Rc<SeekingAnimationState>>>,
     current_animation: RefCell<Option<Rc<SeekingAnimationState>>>,
@@ -102,7 +104,6 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
                 target_untracked: RefCell::new(initial_state.clone()),
                 fraction: mutable_state_of(0.0),
                 fraction_untracked: Cell::new(0.0),
-                is_running: mutable_state_of(false),
                 transition: RefCell::new(None),
                 composed_target: RefCell::new(initial_state),
                 composed: RefCell::new(None),
@@ -135,11 +136,6 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
         self.inner.fraction.get()
     }
 
-    /// Whether its transition's values animate or are seeked away from rest, as `isRunning`.
-    pub fn is_running(&self) -> bool {
-        self.inner.is_running.get()
-    }
-
     pub(crate) fn current_untracked(&self) -> S {
         self.inner.current_untracked.borrow().clone()
     }
@@ -161,10 +157,6 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     fn set_fraction(&self, fraction: f32) {
         self.inner.fraction_untracked.set(fraction);
         self.inner.fraction.set(fraction);
-    }
-
-    pub(crate) fn set_running(&self, running: bool) {
-        self.inner.is_running.set(running);
     }
 
     fn transition(&self) -> Option<Rc<TransitionInner<S>>> {
@@ -235,7 +227,8 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     }
 
     /// The transition's total duration, its reads observed: a change calls
-    /// `on_total_duration_changed` on the next frame.
+    /// `on_total_duration_changed` when the write delivers its frame requests (at once, or once
+    /// the pass in progress ends).
     fn observe_total_duration(&self, transition: &TransitionInner<S>) -> i64 {
         let mut observer = self.inner.duration_observer.borrow_mut();
         let observer = observer.get_or_insert_with(|| {
@@ -271,26 +264,32 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
         }
     }
 
-    /// Starts a call: the one running stops, woken.
+    /// Starts a call: the task of the one running is cancelled, as `MutatorMutex.mutate`.
     fn mutate(&self) -> u64 {
         let mutation = self.inner.mutation.get() + 1;
         self.inner.mutation.set(mutation);
-        if let Some(holder) = self.inner.holder.take() {
-            holder.wake();
+        let holder = self.inner.holder.take();
+        if let Some((waker, job)) = holder {
+            match job {
+                Some(job) if Some(job) != current_job() => job.cancel(),
+                _ => waker.wake(),
+            }
         }
         mutation
     }
 
     /// Runs `call`, a public function's body, as Compose's `mutatorMutex.mutate`: once it
-    /// started a call (`mutate`), a later call ends it at once, `false`, as Compose cancels
-    /// the coroutine; it doesn't wait for its next frame.
-    async fn exclusive(&self, call: impl Future<Output = Step>) -> bool {
+    /// started a call (`mutate`), a later call cancels its task, as Compose cancels the
+    /// coroutine; so does a composition of another target than the one it waited for, as
+    /// Compose's `CancellationException`.
+    async fn exclusive(&self, call: impl Future<Output = Step>) {
         let inner = self.inner.clone();
         let mut call = Box::pin(call);
         let mut mine: Option<u64> = None;
         std::future::poll_fn(move |context| {
             if mine.is_some_and(|mine| inner.mutation.get() != mine) {
-                return Poll::Ready(false);
+                cancel_current_task();
+                return Poll::Pending;
             }
             let before = inner.mutation.get();
             let poll = call.as_mut().poll(context);
@@ -304,11 +303,15 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
                     if current {
                         inner.holder.take();
                     }
-                    Poll::Ready(step.is_ok())
+                    if step.is_err() {
+                        cancel_current_task();
+                        return Poll::Pending;
+                    }
+                    Poll::Ready(())
                 }
                 Poll::Pending => {
                     if current {
-                        *inner.holder.borrow_mut() = Some(context.waker().clone());
+                        *inner.holder.borrow_mut() = Some((context.waker().clone(), current_job()));
                     }
                     Poll::Pending
                 }
@@ -322,8 +325,8 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     }
 
     /// Jumps to `target_state`, as `snapTo(targetState)`: the values at its values, every
-    /// animation stopped. Returns whether it got there (not interrupted by another call).
-    pub async fn snap_to(&self, target_state: S) -> bool {
+    /// animation stopped. Interrupted by another call, it cancels its task.
+    pub async fn snap_to(&self, target_state: S) {
         self.exclusive(self.snap(target_state)).await
     }
 
@@ -358,8 +361,8 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     }
 
     /// Seeks to `fraction` (0 to 1) of the change to its target, as `seekTo(fraction)`.
-    /// Returns whether it got there (not interrupted by another call).
-    pub async fn seek_to(&self, fraction: f32) -> bool {
+    /// Interrupted by another call, it cancels its task.
+    pub async fn seek_to(&self, fraction: f32) {
         let target = self.target_untracked();
         self.seek_to_with(fraction, target).await
     }
@@ -367,7 +370,7 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     /// Seeks to `fraction` of the change to `target_state`, as `seekTo(fraction,
     /// targetState)`: a new target starts its change at `fraction`, the values of the change
     /// interrupted going on from where they are. Panics if `fraction` isn't within 0..1.
-    pub async fn seek_to_with(&self, fraction: f32, target_state: S) -> bool {
+    pub async fn seek_to_with(&self, fraction: f32, target_state: S) {
         assert!(
             (0.0..=1.0).contains(&fraction),
             "Expecting fraction between 0 and 1. Got {fraction}"
@@ -407,30 +410,25 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
         };
         if animating {
             // The initial-value animations run on as it waits, as Compose's `launch`; the call
-            // returns once both are done.
+            // returns once both are done, or ends at once if either is interrupted.
             let this = self.clone();
             let run = async move { this.run_animations(mutation).await };
-            let (waited, ran) = join(wait, run).await;
-            waited?;
-            ran
+            join(wait, run).await
         } else {
             wait.await
         }
     }
 
     /// Animates to `target_state` from the fraction it's at, as `animateTo(targetState)`:
-    /// linearly over the rest of the total duration. Returns whether it got there.
-    pub async fn animate_to(&self, target_state: S) -> bool {
+    /// linearly over the rest of the total duration. Interrupted by another call, it cancels
+    /// its task.
+    pub async fn animate_to(&self, target_state: S) {
         self.animate_to_with(target_state, None).await
     }
 
     /// The same along `animation_spec` (a spec of the fraction, 0 to 1), as
     /// `animateTo(targetState, animationSpec)`.
-    pub async fn animate_to_with(
-        &self,
-        target_state: S,
-        animation_spec: Option<AnimationSpec>,
-    ) -> bool {
+    pub async fn animate_to_with(&self, target_state: S, animation_spec: Option<AnimationSpec>) {
         self.exclusive(self.animate(target_state, animation_spec)).await
     }
 
@@ -469,9 +467,12 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     /// as `animateTo`'s.
     fn start_animation(&self, fraction: f32, spec: Option<AnimationSpec>) {
         let running = self.inner.current_animation.borrow().clone();
-        let same_spec =
-            running.as_ref().is_some_and(|running| *running.animation_spec.borrow() == spec);
-        if running.is_some() && same_spec {
+        // Compose compares vectorized specs, which have no `equals`: only two linear animations
+        // (no spec) are the same; a spec always starts again.
+        let same_spec = running
+            .as_ref()
+            .is_some_and(|running| running.animation_spec.borrow().is_none() && spec.is_none());
+        if same_spec {
             return;
         }
         let total = self.inner.total_duration_nanos.get();
@@ -705,26 +706,21 @@ fn recalculate_animation_value(animation: &SeekingAnimationState, delta_play_tim
     animation.value.set(if value.is_nan() { 1.0 } else { value.clamp(0.0, 1.0) });
 }
 
-/// Both futures, polled together until both are done.
-async fn join<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
+/// Both steps, polled together until both are done, or until either is interrupted: as
+/// Compose's `coroutineScope`, whose child ends with it.
+async fn join(a: impl Future<Output = Step>, b: impl Future<Output = Step>) -> Step {
     let (mut a, mut b) = (Box::pin(a), Box::pin(b));
-    let (mut done_a, mut done_b) = (None, None);
+    let (mut done_a, mut done_b) = (false, false);
     std::future::poll_fn(move |context: &mut Context<'_>| {
-        if done_a.is_none()
-            && let Poll::Ready(value) = Pin::new(&mut a).poll(context)
-        {
-            done_a = Some(value);
+        if !done_a && let Poll::Ready(step) = Pin::new(&mut a).poll(context) {
+            step?;
+            done_a = true;
         }
-        if done_b.is_none()
-            && let Poll::Ready(value) = Pin::new(&mut b).poll(context)
-        {
-            done_b = Some(value);
+        if !done_b && let Poll::Ready(step) = Pin::new(&mut b).poll(context) {
+            step?;
+            done_b = true;
         }
-        if done_a.is_some() && done_b.is_some() {
-            Poll::Ready((done_a.take().unwrap(), done_b.take().unwrap()))
-        } else {
-            Poll::Pending
-        }
+        if done_a && done_b { Poll::Ready(Ok(())) } else { Poll::Pending }
     })
     .await
 }
