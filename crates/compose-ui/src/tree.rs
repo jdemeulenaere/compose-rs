@@ -810,7 +810,11 @@ impl UiTree {
 
     pub fn set_measure_policy(&mut self, node: NodeId, policy: Rc<dyn MeasurePolicy>) {
         let value = self.node_mut(node);
-        if !Rc::ptr_eq(&value.policy, &policy) {
+        // An equal policy is kept, as Compose's `measurePolicy` setter compares with `equals`
+        // (D1354).
+        if !Rc::ptr_eq(&value.policy, &policy)
+            && !MeasurePolicy::same(&*value.policy, &*policy as &dyn std::any::Any)
+        {
             let old = std::mem::replace(&mut value.policy, policy);
             self.invalidate_measure(node);
             drop(old);
@@ -1188,6 +1192,11 @@ impl UiTree {
                 }
                 Element::Align(alignment) if parent_data.alignment.is_none() => {
                     parent_data.alignment = Some(*alignment)
+                }
+                Element::FillCrossAxis(fraction)
+                    if parent_data.fill_cross_axis_fraction.is_none() =>
+                {
+                    parent_data.fill_cross_axis_fraction = Some(*fraction)
                 }
                 _ => {}
             }

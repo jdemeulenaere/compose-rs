@@ -29,7 +29,10 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::Fill(fill) => Box::new(FillNode(*fill)),
         // Parent data is read from the elements; these nodes do nothing. A zero-sized box
         // doesn't allocate.
-        Element::Weight(..) | Element::Align(_) | Element::ZIndex(_) => Box::new(Inert),
+        Element::Weight(..)
+        | Element::Align(_)
+        | Element::FillCrossAxis(_)
+        | Element::ZIndex(_) => Box::new(Inert),
         Element::Background(color, shape) => Box::new(BackgroundNode(*color, shape.clone())),
         Element::Border(width, color, shape) => Box::new(crate::border::BorderNode {
             width: *width,
@@ -80,7 +83,10 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         }
         Element::Size(spec) => set!(SizeNode, SizeNode(*spec)),
         Element::Fill(fill) => set!(FillNode, FillNode(*fill)),
-        Element::Weight(..) | Element::Align(_) | Element::ZIndex(_) => {}
+        Element::Weight(..)
+        | Element::Align(_)
+        | Element::FillCrossAxis(_)
+        | Element::ZIndex(_) => {}
         Element::Background(color, shape) => {
             set!(BackgroundNode, BackgroundNode(*color, shape.clone()))
         }

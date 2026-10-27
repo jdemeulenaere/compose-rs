@@ -4,6 +4,7 @@
 //! `Modifier` (docs/06-ui.md).
 
 mod arrangement;
+mod flow;
 mod window_insets;
 
 use std::rc::Rc;
@@ -23,6 +24,7 @@ pub use arrangement::{
     HorizontalOrVerticalArrangement, SpacedBy, VerticalArrangement, VerticalArrangementPolicy,
 };
 pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
+pub use flow::{FlowColumn, FlowColumnScope, FlowLayoutModifiers, FlowRow, FlowRowScope};
 pub use window_insets::{WindowInsets, WindowInsetsModifiers, WindowInsetsSides};
 
 /// Scratch space for a policy's children, without allocating for up to 16 of them.
@@ -102,6 +104,7 @@ impl AxisConstraints {
 /// without weight measured first with the space left, then the weighted ones sharing what
 /// remains in proportion; placed by the arrangement along the main axis and by their alignment
 /// across it.
+#[derive(PartialEq)]
 pub(crate) struct RowColumnMeasurePolicy {
     orientation: Orientation,
     arrangement: MainAxisArrangement,
@@ -134,6 +137,11 @@ impl RowColumnMeasurePolicy {
 }
 
 impl MeasurePolicy for RowColumnMeasurePolicy {
+    /// Equal data measures the same (Compose's policies are data classes; D1354).
+    fn same(&self, other: &dyn std::any::Any) -> bool {
+        other.downcast_ref::<Self>() == Some(self)
+    }
+
     fn measure(
         &self,
         scope: &mut MeasureScope<'_>,
@@ -651,12 +659,18 @@ pub fn Column(
 
 /// `Box`'s measure policy, as Compose's: children stacked, each aligned by its own `align` or
 /// the box's content alignment; the box as large as its largest child, within its constraints.
+#[derive(PartialEq)]
 pub(crate) struct BoxMeasurePolicy {
     alignment: Alignment,
     propagate_min_constraints: bool,
 }
 
 impl MeasurePolicy for BoxMeasurePolicy {
+    /// Equal data measures the same (Compose's policies are data classes; D1354).
+    fn same(&self, other: &dyn std::any::Any) -> bool {
+        other.downcast_ref::<Self>() == Some(self)
+    }
+
     fn measure(
         &self,
         scope: &mut MeasureScope<'_>,

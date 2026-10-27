@@ -66,10 +66,10 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FitOutsideTest.kt | 6 | `Modifier.fitOutside(RectRulers)` per side | feature:ruler-fit |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlexBoxDirectionTest.kt | 73 | FlexBox `justifyContent`, `alignItems`, gaps, wrap, reverse directions, grow/shrink/basis | feature:flexbox |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlexBoxTest.kt | 21 | FlexBox baselines, RTL, invalid grow/shrink, intrinsics, focus order | feature:flexbox (+ alignment-lines, intrinsics) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt | 128 | FlowRow/FlowColumn wrapping, maxItems, maxLines, weights, `fillMaxRowHeight`, arrangements, intrinsics (45), RTL | feature:flow-layout (+ intrinsics) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt | 128 | FlowRow/FlowColumn wrapping, maxItems, maxLines, weights, `fillMaxRowHeight`, arrangements, intrinsics (45), RTL | ported (`flow_layout.rs`, 94 grouped by scenario, D1350–D1353; the 6 `…MaxItemsIn…_MaxLines` intrinsic tests in their first, `Clip`, state only. Not ported: `testColumn_withCustomHorizontal_alignment`, `testColumn_withCustomHorizontalAlignModifier` and `testRow_withCustomVerticalAlignModifier`, custom `Alignment` objects, the ui ledger's alignment-api ([ui-core](ui-core.md)); 31 of the deprecated `overflow` (`…Visible`, `…SeeMore…`, `…Collapse…`, `…reuseMeasurePolicy`, `…measurePolicy_Identical`), n/a) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/GridTest.kt | 79 | The `Grid` layout: track sizes (fixed/%/fr/auto/min-max), gaps, spans, auto placement, areas, RTL | feature:grid-layout |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/IntrinsicTest.kt | 27 | `width/height(IntrinsicSize.Min/Max)`, `requiredWidth/Height(IntrinsicSize)` | ported (`intrinsics.rs`, all 27, grouped by scenario) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/LayoutReuseTest.kt | 9 | Box/Row/Column/Spacer/Flow layouts inside `ReusableContent` re-measure correctly | port (`ReusableContent` and reuse exist; the 2 Flow cases need feature:flow-layout) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/LayoutReuseTest.kt | 9 | Box/Row/Column/Spacer/Flow layouts inside `ReusableContent` re-measure correctly | ported (`layout_reuse.rs`, all 9; 8 failed before D1354: a policy remembered anew measured again) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/OffsetTest.kt | 14 | `offset`, `absoluteOffset`, lambda offsets, RTL, no remeasure on offset change | partial (`offset(x, y)` exists, checked in `rtl.rs`. Missing: `absolute_offset`, `offset { IntOffset }` (feature:layout-modifiers); 4 inspector tests n/a) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt | 19 | padding overloads, negative padding throws, absolutePadding, RTL, intrinsics | partial (padding exists, `modifiers_api.rs::padding_and_size_take_each_overloads_arguments`, `rtl.rs`. `intrinsicMeasurements` ported in `intrinsics.rs`. Missing: `absolute_padding`, `PaddingValues.Absolute`, the negative-padding panic (feature:layout-modifiers); inspector tests n/a) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingValuesTest.kt | 4 | `PaddingValues` zero, `plus`, `minus` (non-negative) | partial (`PaddingValues` exists; `+`/`-` missing: feature:layout-modifiers) |
@@ -335,7 +335,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `BoxScope.matchParentSize`, `Arrangement.Absolute` (Left, Right, Center, SpaceBetween/Around/Evenly, `spacedBy`, `aligned`), `Modifier.visible`.
 - **intrinsics:** done (D1200–D1205): `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and Compose's intrinsics on every layout here. Flow layouts, `FlexBox` and `Grid` bring theirs.
 - **alignment-lines:** `paddingFrom` (Dp and TextUnit), `paddingFromBaseline`, `RowScope.alignBy` (line or lambda), `alignByBaseline`, `ColumnScope.alignBy`.
-- **flow-layout:** `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*), `FlowRowOverflowScope`/`FlowColumnOverflowScope` (*exp*, `shownItemCount`, `totalItemCount`). The `overflow` overloads and `ContextualFlow*` are deprecated.
+- **flow-layout:** done (D1350–D1353; `flow_layout.rs`): `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*), `FlowRowOverflowScope`/`FlowColumnOverflowScope` (*exp*, `shownItemCount`, `totalItemCount`). The `overflow` overloads and `ContextualFlow*` are deprecated.
 - **flexbox:** `FlexBox`, `FlexBoxConfig`/`FlexBoxConfigScope`, `FlexConfig`/`FlexConfigScope`, `FlexBoxScope.flex`, `FlexDirection`, `FlexWrap`, `FlexJustifyContent`, `FlexAlignItems`, `FlexAlignSelf`, `FlexAlignContent`, `FlexBasis`. They are stable at tip, added 2025-12-08, after 1.12.
 - **grid-layout:** `Grid`, `GridConfigurationScope` (`row`/`column` by Dp, % or `Fr`, `gap`s, `area`, `minmax`), `GridScope.gridItem` (index, area, ranges), `GridTrackSize` (Fixed, Flex, MinMax, Percentage, Auto, MinContent, MaxContent), `Fr`, `GridFlow`, `columns`/`rows`. Stable, added 2025-12-09. Don't confuse it with lazy grids.
 - **ruler-fit:** `Modifier.fitInside(RectRulers)`, `fitOutside(RectRulers)`.
@@ -514,7 +514,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: AlignmentLineTest, RowColumnModifierTest, parts of RowColumnTest and FlexBoxTest.
     - Depends on: ui's alignment lines (`AlignmentLine`, `FirstBaseline`/`LastBaseline` in measure results, text reporting baselines; ui and text ledgers).
     - Size: L. Experimental: no.
-20. **flow-layout.**
+20. **flow-layout.** Done (D1350–D1353; `crates/compose-foundation/tests/suite/flow_layout.rs`).
     - API: `FlowRow`, `FlowColumn` and their scopes.
     - Tests: FlowRowColumnTest, 2 of LayoutReuseTest.
     - Depends on: intrinsics for 45 tests (done).
@@ -604,7 +604,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 5. **draggable** (M), then **gesture-detectors** (M), then **scroll-indicator-state** (S).
 6. **lazy-semantics** (M), **keep-focused-in-view** (M), **bring-into-view** (M).
 7. **snapping** (M), then **anchored-draggable** (M–L), then **overscroll** (L).
-8. **intrinsics** (L, done) and **alignment-lines** (L), when the ui work it depends on lands; then **flow-layout** (L).
+8. **intrinsics** (L, done) and **alignment-lines** (L), when the ui work it depends on lands; then **flow-layout** (L, done).
 9. **transformable** (M) and **scrollable2d** (M), after ui's multi-pointer events.
 10. **pinnable** (M), **beyond-bounds-api** (M), **animate-item** (L).
 11. **pager** (XL), then **staggered-grid** (L–XL).

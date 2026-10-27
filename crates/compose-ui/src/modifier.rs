@@ -210,6 +210,21 @@ impl Modifier {
         self.then_element(Element::Align(S::parent_alignment(alignment)))
     }
 
+    /// Parent data filling `fraction` of a flow layout's line across it: what foundation's
+    /// `fill_max_row_height` and `fill_max_column_width` give (D1350).
+    ///
+    /// # Panics
+    ///
+    /// If `fraction` isn't within 0 and 1, as Compose's.
+    #[doc(hidden)]
+    pub fn fill_cross_axis_parent_data(self, fraction: f32) -> Modifier {
+        assert!(
+            (0.0..=1.0).contains(&fraction),
+            "invalid fraction {fraction}; must be >= 0 and <= 1.0"
+        );
+        self.then_element(Element::FillCrossAxis(fraction))
+    }
+
     // ---- Drawing ----------------------------------------------------------------------------
 
     /// Fills the bounds behind the content with a color or a brush, as `Modifier.background`.
@@ -696,6 +711,9 @@ pub struct ParentData {
     /// The weight and fill of `weight`.
     pub weight: Option<(f32, bool)>,
     pub alignment: Option<ParentAlignment>,
+    /// The fraction of its line's cross-axis size a flow layout's child fills, as Compose's
+    /// `FlowLayoutData.fillCrossAxisFraction` (`fillMaxRowHeight`, `fillMaxColumnWidth`).
+    pub fill_cross_axis_fraction: Option<f32>,
 }
 
 /// A scope whose children take a `weight`: `RowScope` and `ColumnScope`.
@@ -790,6 +808,7 @@ pub(crate) enum Element {
     Fill(Fill),
     Weight(f32, bool),
     Align(ParentAlignment),
+    FillCrossAxis(f32),
     Background(Color, Shape),
     /// A solid border (a brush's is a custom element, as `background_with`'s).
     Border(Dp, Color, Shape),
@@ -831,6 +850,7 @@ impl Element {
             (Fill(a), Fill(b)) => a == b,
             (Weight(a, b), Weight(c, d)) => a == c && b == d,
             (Align(a), Align(b)) => a == b,
+            (FillCrossAxis(a), FillCrossAxis(b)) => a == b,
             (Background(a, b), Background(c, d)) => a == c && b == d,
             (Border(a, b, c), Border(d, e, f)) => a == d && b == e && c == f,
             (Clip(a), Clip(b)) => a == b,
@@ -884,6 +904,7 @@ impl fmt::Debug for Element {
             },
             Weight(weight, fill) => write!(formatter, "weight({weight}, {fill})"),
             Align(alignment) => write!(formatter, "align({alignment:?})"),
+            FillCrossAxis(fraction) => write!(formatter, "fill_cross_axis({fraction})"),
             Background(color, shape) => write!(formatter, "background({color:?}, {shape:?})"),
             Border(width, color, shape) => {
                 write!(formatter, "border({width:?}, {color:?}, {shape:?})")

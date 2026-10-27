@@ -121,6 +121,11 @@ impl std::fmt::Debug for MainAxisArrangement {
 }
 
 impl MainAxisArrangement {
+    /// The space between children, as `Arrangement.spacing`.
+    pub(crate) fn spacing_dp(&self) -> Dp {
+        spacing_of(self)
+    }
+
     /// The space between children, in pixels, as `Arrangement.spacing`.
     pub(crate) fn spacing(&self, density: &Density) -> i32 {
         match self {

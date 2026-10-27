@@ -7,6 +7,7 @@
 //! `scope.layout`. A node measured again with the same constraints and nothing dirty inside
 //! returns its size without running its policy.
 
+use std::any::Any;
 use std::rc::Rc;
 
 use compose_runtime::{composable, platform::current};
@@ -26,13 +27,22 @@ use crate::unit::{Density, IntOffset, IntSize};
 /// the axis asked (and by the constraint on the other one) and placing does nothing; the
 /// result's width (or height) is the answer. A layout that knows its intrinsics more cheaply,
 /// or whose `measure` has side effects, overrides them, as Compose's do.
-pub trait MeasurePolicy: 'static {
+pub trait MeasurePolicy: Any {
     fn measure(
         &self,
         scope: &mut MeasureScope<'_>,
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult;
+
+    /// Whether `other` measures as this one does, so a node given it in place of this one
+    /// needn't measure again: Compose compares a node's measure policies with `equals`, and its
+    /// layouts' are data classes, so a policy remembered anew (in reused content) is the same
+    /// (D1354). The default: the same type, zero-sized (nothing to differ by). A policy with
+    /// data compares it: `other.downcast_ref::<Self>() == Some(self)`.
+    fn same(&self, other: &dyn Any) -> bool {
+        Any::type_id(self) == other.type_id() && std::mem::size_of_val(self) == 0
+    }
 
     /// The smallest width this layout can take at `height` and still paint its content
     /// correctly, as `minIntrinsicWidth`.
@@ -144,11 +154,25 @@ pub struct Placeable {
     pub(crate) measurable: Measurable,
     pub width: i32,
     pub height: i32,
+    /// The size it measured itself, before coercion into its constraints: Compose's
+    /// `measuredWidth` and `measuredHeight`, which flow layouts wrap by (D1353).
+    pub(crate) measured: IntSize,
 }
 
 impl Placeable {
     pub fn size(&self) -> IntSize {
         IntSize::new(self.width, self.height)
+    }
+
+    /// Its width as it measured itself, which may be outside its constraints, as Compose's
+    /// `measuredWidth`; [`width`](Self::width) is within them.
+    pub fn measured_width(&self) -> i32 {
+        self.measured.width
+    }
+
+    /// Its height as it measured itself, as Compose's `measuredHeight`.
+    pub fn measured_height(&self) -> i32 {
+        self.measured.height
     }
 }
 
@@ -405,7 +429,8 @@ impl<'a> MeasureScope<'a> {
                     self.base.intrinsic(measurable, kind, constraints.max_width),
                 ),
             };
-            return Placeable { measurable, width, height };
+            let measured = IntSize::new(width, height);
+            return Placeable { measurable, width, height, measured };
         }
         let node = self.base.node;
         let tree = &mut *self.base.tree;
@@ -435,7 +460,8 @@ impl<'a> MeasureScope<'a> {
             layer.measured_in = self.run;
             tree.measure_layer(measurable.node, measurable.layer as usize, constraints)
         };
-        Placeable { measurable, width: size.width, height: size.height }
+        let measured = tree.node(measurable.node).layers[measurable.layer as usize].measured;
+        Placeable { measurable, width: size.width, height: size.height, measured }
     }
 
     /// Runs `action` after the layout, outside the tree, as the layout callbacks
