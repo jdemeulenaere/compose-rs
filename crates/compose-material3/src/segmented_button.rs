@@ -526,7 +526,70 @@ impl MeasurePolicy for IconLabelLayout {
         scope.layout(width, height)
     }
 
+    // Compose's policy takes the default intrinsics (its measure, which also starts the
+    // label's move); compose-ui's intrinsic measurement gives a child the asked axis' size as
+    // the other (the icon as wide as the width asked for a height), which would move the label
+    // back and forth: the sizes here, without the animation.
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, |scope, child| {
+            scope.min_intrinsic_width(child, height)
+        })
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, |scope, child| {
+            scope.max_intrinsic_width(child, height)
+        })
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.get(1).map_or(0, |&label| scope.min_intrinsic_height(label, width))
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.get(1).map_or(0, |&label| scope.max_intrinsic_height(label, width))
+    }
+
     fn debug_name(&self) -> &'static str {
         "SegmentedButtonContent"
+    }
+}
+
+impl IconLabelLayout {
+    /// The icon's room (at least the icon size), the spacing and the label, by `width`.
+    fn intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: impl Fn(
+            &mut compose_ui::IntrinsicMeasureScope<'_>,
+            compose_ui::IntrinsicMeasurable,
+        ) -> i32,
+    ) -> i32 {
+        let [icon, label] = measurables else { return 0 };
+        let density = scope.density();
+        let icon_size = density.round_to_px(SegmentedButtonDefaults::ICON_SIZE);
+        let spacing = density.round_to_px(ICON_SPACING);
+        width(scope, *icon).max(icon_size) + spacing + width(scope, *label)
     }
 }

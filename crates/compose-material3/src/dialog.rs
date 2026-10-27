@@ -638,15 +638,13 @@ pub fn DropdownMenu(
             })
         });
         let provider = position.clone() as Rc<dyn PopupPositionProvider>;
-        let column = remember(|| Rc::new(MenuColumn) as Rc<dyn MeasurePolicy>);
         let scroll = scroll_state;
         compose_ui::PopupWithPositionProvider(
             provider,
             Some(on_dismiss_request),
             properties,
             compose_runtime::callback(move || {
-                let (modifier, content, column, scroll) =
-                    (modifier.clone(), content.clone(), column.clone(), scroll);
+                let (modifier, content, scroll) = (modifier.clone(), content.clone(), scroll);
                 // The open and close animation, as Compose's `DropdownMenuContent`.
                 let transition = remember_transition(&expanded_state, "DropDownMenu");
                 let scale = transition.animate_float(
@@ -676,11 +674,17 @@ pub fn DropdownMenu(
                     compose_runtime::callback(move || {
                         let content = content.clone();
                         // The modifier on the items' column, its 8 dp padding outside the
-                        // scroll, as Compose's `DropdownMenuContent`.
-                        Layout(
-                            modifier.clone().padding((0.dp(), 8.dp())).vertical_scroll(scroll),
-                            column.clone(),
-                            compose_runtime::callback(move || content(ColumnScope::__new())),
+                        // scroll, as wide as its widest item, as Compose's
+                        // `DropdownMenuContent`.
+                        Column(
+                            modifier
+                                .clone()
+                                .padding((0.dp(), 8.dp()))
+                                .width(compose_ui::IntrinsicSize::Max)
+                                .vertical_scroll(scroll),
+                            Arrangement::TOP,
+                            Alignment::START,
+                            compose_runtime::callback(move |column| content(column)),
                         );
                     }),
                 );
@@ -695,41 +699,6 @@ struct OffsetKey(IntOffset, i32);
 impl compose_runtime::ComposeArg for OffsetKey {
     fn same(&self, other: &Self) -> bool {
         self == other
-    }
-}
-
-/// A menu's items, one under the other at its start, the menu as wide as the widest's natural
-/// width, as Compose's `Column(Modifier.width(IntrinsicSize.Max))` (its items 112 to 280 dp
-/// wide, filling it).
-struct MenuColumn;
-
-impl MeasurePolicy for MenuColumn {
-    fn measure(
-        &self,
-        scope: &mut MeasureScope<'_>,
-        measurables: &[Measurable],
-        constraints: Constraints,
-    ) -> MeasureResult {
-        let widest = measurables
-            .iter()
-            .map(|&child| scope.max_intrinsic_width(child, Constraints::INFINITY))
-            .max()
-            .unwrap_or(0);
-        // A width given to the menu wins, as `width(IntrinsicSize.Max)` within it.
-        let width = widest.clamp(constraints.min_width, constraints.max_width);
-        let item = Constraints::new(0, width, 0, Constraints::INFINITY);
-        let placeables: Vec<Placeable> =
-            measurables.iter().map(|&child| scope.measure(child, item)).collect();
-        let mut y = 0;
-        for placeable in &placeables {
-            scope.place_relative(placeable, 0, y);
-            y += placeable.height;
-        }
-        scope.layout(constraints.constrain_width(width), constraints.constrain_height(y))
-    }
-
-    fn debug_name(&self) -> &'static str {
-        "DropdownMenu"
     }
 }
 
@@ -753,14 +722,8 @@ pub fn DropdownMenuItem(
 ) {
     let layout = {
         let leading = leading_icon.is_some();
-        // The widest its content would like: 280 dp with the padding, as Compose's `sizeIn`
-        // (compose-ui asks a width by measuring, which a bounded `size_in` would fill).
-        let density = compose_ui::LOCAL_DENSITY.current();
-        let max_width = density.round_to_px(DROPDOWN_MENU_ITEM_MAX_WIDTH)
-            - density.round_to_px(content_padding.start)
-            - density.round_to_px(content_padding.end);
-        compose_runtime::remember_keyed((leading, max_width), move || {
-            Rc::new(MenuItemLayout { leading, max_width }) as Rc<dyn MeasurePolicy>
+        compose_runtime::remember_keyed(leading, move || {
+            Rc::new(MenuItemLayout { leading }) as Rc<dyn MeasurePolicy>
         })
     };
     // The ripple in the content color around the item, as Compose's `ripple(true)`.
@@ -776,12 +739,11 @@ pub fn DropdownMenuItem(
             on_click,
         )
         .fill_max_width()
-        // At least the width it would like when the menu asks, as Compose's `sizeIn` (the
-        // layout keeps to its maximum).
+        // The width it would like when the menu asks, as Compose's `sizeIn`.
         .size_in(compose_ui::SizeSpec::bounds(
             DROPDOWN_MENU_ITEM_MIN_WIDTH,
             48.dp(),
-            Dp::UNSPECIFIED,
+            DROPDOWN_MENU_ITEM_MAX_WIDTH,
             Dp::UNSPECIFIED,
         ))
         .padding(content_padding);
@@ -834,8 +796,6 @@ const DROPDOWN_MENU_ITEM_MAX_WIDTH: Dp = Dp(280.0);
 struct MenuItemLayout {
     /// The first child is the leading icon (the text the second).
     leading: bool,
-    /// The widest it is when its width is unbounded, in pixels.
-    max_width: i32,
 }
 
 impl MeasurePolicy for MenuItemLayout {
@@ -873,10 +833,7 @@ impl MeasurePolicy for MenuItemLayout {
             slots[text_index] = placeable.width;
             placeables[text_index] = Some(placeable);
         }
-        let mut content: i32 = slots.iter().sum::<i32>() + gap * (count.saturating_sub(1) as i32);
-        if constraints.max_width == Constraints::INFINITY {
-            content = content.min(self.max_width);
-        }
+        let content: i32 = slots.iter().sum::<i32>() + gap * (count.saturating_sub(1) as i32);
         let width = constraints.constrain_width(content);
         let height = constraints.constrain_height(
             placeables.iter().flatten().map(|placeable| placeable.height).max().unwrap_or(0),

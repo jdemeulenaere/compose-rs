@@ -120,9 +120,11 @@ fn a_navigation_bar_items_minimum_intrinsic_width_is_its_icon_and_its_minimum_pa
     assert_eq!(row.get().width, 24 + 44 * 2);
 }
 
-/// `ListItemTest`'s scene: a list item filling an intrinsically sized column's height, its
-/// leading and trailing boxes filling its height; their heights.
-fn list_item_heights(overline: bool, supporting: Option<&'static str>) -> (i32, i32, i32) {
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, clickableListItem_intrinsicSize
+// (`ListItemTest`'s intrinsics tests are the deprecated `headlineContent` overload's, removed here,
+// D1004; these are the tip's)
+#[test]
+fn a_list_items_intrinsic_height_is_its_content_and_padding_and_its_slots_fill_it() {
     let (item, leading, trailing) = (cell(), cell(), cell());
     let (item_size, leading_size, trailing_size) =
         (item.clone(), leading.clone(), trailing.clone());
@@ -131,37 +133,25 @@ fn list_item_heights(overline: bool, supporting: Option<&'static str>) -> (i32, 
             (item_size.clone(), leading_size.clone(), trailing_size.clone());
         Column!(modifier = Modifier.height(IntrinsicSize::Min), {
             let (leading_size, trailing_size) = (leading_size.clone(), trailing_size.clone());
-            ListItem!(
-                { Text!("Primary text") },
+            ClickableListItem!(
+                || {},
                 modifier = Modifier.fill_max_height().then(size_into(&item_size)),
-                overline_content = overline.then_some(|| Text!("OVERLINE")),
-                supporting_content = supporting.map(|text| move || Text!("{}", text)),
                 leading_content = Some(move || Box!(
                     modifier = Modifier.fill_max_height().then(size_into(&leading_size))
                 )),
                 trailing_content = Some(move || Box!(
                     modifier = Modifier.fill_max_height().then(size_into(&trailing_size))
-                ))
+                )),
+                { Box!(modifier = Modifier.size(200.dp())) }
             );
         });
     });
-    (item.get().height, leading.get().height, trailing.get().height)
+    // The content and the 10 dp above and below (`InteractiveListTopPadding`, `…BottomPadding`).
+    assert!((item.get().height - (200 + 10 + 10)).abs() <= 1, "{}", item.get().height);
+    assert_eq!((leading.get().height, trailing.get().height), (200, 200));
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ListItemTest.kt, listItem_oneLine_intrinsicSize,
-// listItem_twoLine_intrinsicSize and listItem_threeLine_overline_intrinsicSize
-// (`listItem_threeLine_noOverline_intrinsicSize` waits on Compose's `ListItem` layout: compose-rs's
-// counts its slots for its lines, where Compose's takes a multi-line supporting text as three)
-#[test]
-fn a_list_items_intrinsic_height_is_its_container_height_and_its_slots_fill_it() {
-    // (item, padding above and below): 56 dp and 8 dp for one line, 72 and 8 for two, 88 and
-    // 12 for three.
-    assert_eq!(list_item_heights(false, None), (56, 56 - 16, 56 - 16));
-    assert_eq!(list_item_heights(false, Some("Secondary text")), (72, 72 - 16, 72 - 16));
-    assert_eq!(list_item_heights(true, Some("Secondary text")), (88, 88 - 24, 88 - 24));
-}
-
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ListItemTest.kt, listItem_multipleItems_intrinsicSize
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, clickableListItem_multipleItems_intrinsicSize
 #[test]
 fn list_items_in_an_intrinsically_sized_column_wrap_alike() {
     let (first, second) = (cell(), cell());
@@ -170,10 +160,11 @@ fn list_items_in_an_intrinsically_sized_column_wrap_alike() {
         let (first_size, second_size) = (first_size.clone(), second_size.clone());
         Column!(modifier = Modifier.width(300.dp()).height(IntrinsicSize::Min), {
             for into in [&first_size, &second_size] {
-                ListItem!(
-                    { Text!("A B C D E F G H") },
+                ClickableListItem!(
+                    || {},
                     modifier = size_into(into),
-                    leading_content = Some(|| Box!(modifier = Modifier.width(240.dp())))
+                    leading_content = Some(|| Box!(modifier = Modifier.width(240.dp()))),
+                    { Text!("A B C D E F G H") }
                 );
             }
         });
