@@ -1953,7 +1953,9 @@ fn LazyItem(
     holder: SaveableStateHolder,
     stacking: ItemStacking,
 ) {
-    let policy = ItemLayout::shared(stacking);
+    let policy = compose_runtime::remember_keyed(stacking, || {
+        Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>
+    });
     let inner = state.inner_or_detached();
     let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
@@ -2009,26 +2011,6 @@ impl ComposeArg for ItemStacking {
 /// An item: its children stacked as its layout's `ItemStacking` says.
 struct ItemLayout {
     stacking: ItemStacking,
-}
-
-impl ItemLayout {
-    /// The policy for `stacking`, one per thread: the same across reuse, so a reused item's
-    /// node isn't measured again for a new policy (Compose's items have no node of their own).
-    fn shared(stacking: ItemStacking) -> Rc<dyn MeasurePolicy> {
-        thread_local! {
-            static POLICIES: RefCell<Vec<(ItemStacking, Rc<dyn MeasurePolicy>)>> =
-                const { RefCell::new(Vec::new()) };
-        }
-        POLICIES.with(|policies| {
-            let mut policies = policies.borrow_mut();
-            if let Some((_, policy)) = policies.iter().find(|(at, _)| *at == stacking) {
-                return policy.clone();
-            }
-            let policy = Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>;
-            policies.push((stacking, policy.clone()));
-            policy
-        })
-    }
 }
 
 impl MeasurePolicy for ItemLayout {
