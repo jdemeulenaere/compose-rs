@@ -13,17 +13,31 @@ use compose_test::*;
 use compose_ui::platform::{Optimization, Optimizations};
 use compose_ui::{IntSize, UnitExt};
 
+// The requests pause against a real-time deadline. Rather than slow parts racing a short one
+// (which a loaded machine loses), every part is instant but one, which stalls until the
+// deadline has passed: the request goes on until that part, then pauses at the next pause
+// point, whatever the machine's speed. The deadline is generous: everything before the stall
+// has `IDLE` to run.
+
+/// The idle time a request pausing at the stall gets.
+const IDLE: Duration = Duration::from_millis(400);
+
+/// When the stall ends: just after the deadline.
+fn stall_until(deadline: Instant) {
+    let end = deadline + Duration::from_millis(1);
+    std::thread::sleep(end.saturating_duration_since(Instant::now()));
+}
+
+/// A cell (row, cell), its part (counted from 1) that stalls, and the deadline it stalls until.
+type CellStall = ((usize, usize), usize, Instant);
+
 thread_local! {
-    static CELL_TIME: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     static CELL_PARTS: RefCell<HashMap<(usize, usize), usize>> = RefCell::new(HashMap::new());
+    static CELL_STALL: Cell<Option<CellStall>> = const { Cell::new(None) };
 }
 
 fn later() -> Instant {
     Instant::now() + Duration::from_secs(60)
-}
-
-fn within(millis: u64) -> Instant {
-    Instant::now() + Duration::from_millis(millis)
 }
 
 fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
@@ -31,13 +45,20 @@ fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
     ui.wait_for_idle();
 }
 
-/// A part of a carousel's cell: restartable (a pause point), taking `CELL_TIME`.
+/// A part of a carousel's cell: restartable (a pause point), instant unless it's the stall.
 #[composable]
 fn CellPart(row: usize, cell: usize) {
-    CELL_PARTS.with(|parts| *parts.borrow_mut().entry((row, cell)).or_insert(0) += 1);
-    let time = CELL_TIME.get();
-    if !time.is_zero() {
-        std::thread::sleep(time);
+    let count = CELL_PARTS.with(|parts| {
+        let mut parts = parts.borrow_mut();
+        let count = parts.entry((row, cell)).or_insert(0);
+        *count += 1;
+        *count
+    });
+    if let Some((key, part, deadline)) = CELL_STALL.get()
+        && key == (row, cell)
+        && part == count
+    {
+        stall_until(deadline);
     }
     Box!(modifier = Modifier.size((5.dp(), 20.dp())));
 }
@@ -62,7 +83,7 @@ fn carousels(
     first: usize,
     optimizations: Optimizations,
 ) -> (ComposeTestRule, Owned<LazyListState>) {
-    CELL_TIME.set(Duration::ZERO);
+    CELL_STALL.set(None);
     CELL_PARTS.with(|parts| parts.borrow_mut().clear());
     use_optimizations(optimizations);
     let state = LazyListState::new(first, 0);
@@ -96,12 +117,15 @@ fn review_a_turn_while_a_nested_request_is_paused_keeping_items_behind() {
 
 fn turn_while_nested_paused(optimizations: Optimizations) {
     let (mut ui, state) = carousels(5, optimizations);
-    // 5 px down: rows 5 and 6 show, row 7 requested. Its carousel's cells' parts take 1 ms.
-    CELL_TIME.set(Duration::from_millis(1));
+    // 5 px down: rows 5 and 6 show, row 7 requested.
     scroll(&mut ui, *state, 5.0);
     // Row 7 composes (its carousel's first cell with it, as the carousel's first layout's) and
-    // applies; its carousel's second cell (a nested request) pauses, out of time.
-    assert!(ui.host().prefetch(within(10)), "work left");
+    // applies; its carousel's second cell (a nested request) pauses, out of time at its
+    // second part.
+    let deadline = Instant::now() + IDLE;
+    CELL_STALL.set(Some(((7, 1), 2, deadline)));
+    assert!(ui.host().prefetch(deadline), "work left");
+    CELL_STALL.set(None);
     let composed =
         |cell| CELL_PARTS.with(|parts| parts.borrow().get(&(7, cell)).copied().unwrap_or(0));
     assert_eq!(composed(0), 6, "row 7 composed whole (its carousel's first cell with it)");
@@ -124,15 +148,23 @@ fn turn_while_nested_paused(optimizations: Optimizations) {
 
 thread_local! {
     static ROW_PARTS: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
-    static ROW_PART_TIME: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// The row's part (counted from 1) that stalls until the deadline.
+    static ROW_STALL: Cell<Option<(usize, usize, Instant)>> = const { Cell::new(None) };
 }
 
 #[composable]
 fn RowPart(row: usize, part: usize) {
-    ROW_PARTS.with(|parts| *parts.borrow_mut().entry(row).or_insert(0) += 1);
-    let time = ROW_PART_TIME.get();
-    if !time.is_zero() {
-        std::thread::sleep(time);
+    let count = ROW_PARTS.with(|parts| {
+        let mut parts = parts.borrow_mut();
+        let count = parts.entry(row).or_insert(0);
+        *count += 1;
+        *count
+    });
+    if let Some((stalled, at, deadline)) = ROW_STALL.get()
+        && stalled == row
+        && at == count
+    {
+        stall_until(deadline);
     }
     Box!(modifier = Modifier.size((25.dp(), 20.dp())).test_tag(format!("part {row}.{part}")));
 }
@@ -152,7 +184,7 @@ fn PartsRow(index: usize) {
 #[test]
 fn review_a_list_leaving_completes_its_paused_item_first() {
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
-    ROW_PART_TIME.set(Duration::ZERO);
+    ROW_STALL.set(None);
     use_optimizations(Optimizations::NONE);
     let shown = mutable_state_of(true);
     let shown_handle = shown.handle();
@@ -169,9 +201,12 @@ fn review_a_list_leaving_completes_its_paused_item_first() {
             );
         }
     });
-    ROW_PART_TIME.set(Duration::from_millis(4));
     scroll(&mut ui, *state, 5.0);
-    assert!(ui.host().prefetch(within(6)), "work left");
+    // Row 7's request pauses out of time at its second part.
+    let deadline = Instant::now() + IDLE;
+    ROW_STALL.set(Some((7, 2, deadline)));
+    assert!(ui.host().prefetch(deadline), "work left");
+    ROW_STALL.set(None);
     let before = ROW_PARTS.with(|parts| parts.borrow().get(&7).copied().unwrap_or(0));
     assert!(before > 0 && before < 4, "row 7 paused after {before} parts");
     let started = Instant::now();
@@ -193,7 +228,7 @@ fn review_a_list_leaving_completes_its_paused_item_first() {
 #[test]
 fn review_a_recomposition_above_the_list_completes_its_paused_item_in_the_frame() {
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
-    ROW_PART_TIME.set(Duration::ZERO);
+    ROW_STALL.set(None);
     use_optimizations(Optimizations::NONE);
     let tick = mutable_state_of(0);
     let tick_handle = tick.handle();
@@ -215,9 +250,12 @@ fn review_a_recomposition_above_the_list_completes_its_paused_item_in_the_frame(
             );
         });
     });
-    ROW_PART_TIME.set(Duration::from_millis(4));
     scroll(&mut ui, *state, 5.0);
-    assert!(ui.host().prefetch(within(6)), "work left");
+    // Row 7's request pauses out of time at its second part.
+    let deadline = Instant::now() + IDLE;
+    ROW_STALL.set(Some((7, 2, deadline)));
+    assert!(ui.host().prefetch(deadline), "work left");
+    ROW_STALL.set(None);
     let before = ROW_PARTS.with(|parts| parts.borrow().get(&7).copied().unwrap_or(0));
     assert!(before > 0 && before < 4, "row 7 paused after {before} parts");
     tick.set(1);

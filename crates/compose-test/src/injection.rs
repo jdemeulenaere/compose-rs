@@ -920,8 +920,13 @@ impl MouseInjectionScope<'_> {
         self.input().mouse_pressed = false;
         let position = self.input().mouse;
         self.mouse_event(PointerEvent::release(position));
+        // Inside the window, the cursor hovers again at once: the enter and a move where it
+        // is, as Compose's `enqueueMouseRelease` on Android (`exitHoverOnPress`).
         let inside = self.0.within_root(position);
         self.input().mouse_entered = inside;
+        if inside {
+            self.mouse_event(PointerEvent::moved(position, false));
+        }
     }
 
     /// Cancels the press, an event period on, as `cancel()`.

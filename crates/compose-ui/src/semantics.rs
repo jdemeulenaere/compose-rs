@@ -386,10 +386,15 @@ impl UiTree {
     /// reuse), where they were last placed, as Compose's `skipDeactivatedNodes = false`: for
     /// tests' `assert_is_deactivated`.
     pub fn semantics_tree_with_deactivated(&mut self, merged: bool) -> SemanticsNode {
-        let previous = WITH_DEACTIVATED.with(|with| with.replace(true));
-        let tree = self.semantics_tree(merged);
-        WITH_DEACTIVATED.with(|with| with.set(previous));
-        tree
+        /// Restores the flag however the build ends (a panic in it included).
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                WITH_DEACTIVATED.with(|with| with.set(self.0));
+            }
+        }
+        let _restore = Restore(WITH_DEACTIVATED.with(|with| with.replace(true)));
+        self.semantics_tree(merged)
     }
 
     /// Whether `node` is in deactivated content (it or an ancestor deactivated), as Compose's

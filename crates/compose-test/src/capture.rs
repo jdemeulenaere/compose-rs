@@ -3,7 +3,7 @@
 //! frame is drawn by the renderer a test installs (`set_capture_renderer`: compose-skia's
 //! `raster_colors`).
 
-use std::sync::Mutex;
+use std::cell::Cell;
 
 use compose_ui::platform::{DisplayList, NodeId, Optimizations, TextMeasurer};
 use compose_ui::{
@@ -304,27 +304,34 @@ impl SemanticsNodeInteraction<'_> {
 pub type CaptureRenderer =
     fn(&DisplayList, IntSize, &dyn TextMeasurer, Optimizations) -> Vec<Color>;
 
-/// The renderer [`set_capture_renderer`] installed.
-static RENDERER: Mutex<Option<CaptureRenderer>> = Mutex::new(None);
+thread_local! {
+    /// The renderer [`set_capture_renderer`] installed on this thread.
+    static RENDERER: Cell<Option<CaptureRenderer>> = const { Cell::new(None) };
+}
 
-/// Installs `renderer` for `capture_to_image`, for the whole test binary, as a test needing
-/// pixels does once (`set_capture_renderer(compose_skia::raster_colors)`): compose-test draws
+/// Installs `renderer` for `capture_to_image` on this thread (each test's: the UI is the
+/// thread's too), as a test needing pixels does first
+/// (`set_capture_renderer(compose_skia::raster_colors)`), or a fake one: compose-test draws
 /// nothing itself, so only the crates whose tests capture link a renderer (D904).
 pub fn set_capture_renderer(renderer: CaptureRenderer) {
-    *RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(renderer);
+    RENDERER.with(|installed| installed.set(Some(renderer)));
+}
+
+/// Removes this thread's renderer.
+pub fn clear_capture_renderer() {
+    RENDERER.with(|installed| installed.set(None));
 }
 
 /// Whether a renderer is installed (the failure pipeline takes a screenshot then).
 pub(crate) fn has_capture_renderer() -> bool {
-    RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some()
+    RENDERER.with(Cell::get).is_some()
 }
 
 /// A window's pixels (the main content's, or an overlay's), drawn from what the last frame
 /// drew.
 #[track_caller]
 fn render(rule: &mut crate::ComposeTestRule, window: Option<NodeId>) -> CapturedImage {
-    let renderer = *RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(renderer) = renderer else {
+    let Some(renderer) = RENDERER.with(Cell::get) else {
         panic!(
             "compose-test: capture_to_image needs a renderer: call \
              `set_capture_renderer(compose_skia::raster_colors)` first (D904)"

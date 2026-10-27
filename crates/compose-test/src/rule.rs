@@ -66,8 +66,12 @@ pub struct ComposeTestRule {
     /// The injected pointers and keys, kept across `perform_*_input` blocks, as Compose's
     /// `InputDispatcher` state.
     pub(crate) input: InputState,
-    /// How long waiting for idle may take (`DEFAULT_IDLE_TIMEOUT`).
+    /// How long one wait for idle may take, in test time (animations) or real time (idling
+    /// resources): `DEFAULT_IDLE_TIMEOUT`.
     idle_timeout: Duration,
+    /// When the whole test's real time is up, as Compose's `testTimeout`
+    /// (`ComposeUiTestConfig::test_timeout`, D908): waits past it fail.
+    test_deadline: Option<(std::time::Instant, Duration)>,
     /// What waiting for idle also waits for, as `registerIdlingResource`.
     idling_resources: Vec<Rc<dyn IdlingResource>>,
 }
@@ -116,6 +120,7 @@ impl ComposeTestRule {
             bounds_tolerance: DEFAULT_BOUNDS_TOLERANCE,
             input: InputState::default(),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            test_deadline: None,
             idling_resources: Vec::new(),
         };
         if let Some(optimizations) = thread_optimizations() {
@@ -242,6 +247,7 @@ impl ComposeTestRule {
         let started = std::time::Instant::now();
         let mut frames = 0;
         loop {
+            self.check_test_deadline();
             self.run_current();
             let frame_due = self.next_frame.is_some() && self.auto_advance.get();
             let busy: Vec<Option<String>> = self
@@ -312,10 +318,34 @@ impl ComposeTestRule {
         self.idling_resources.retain(|known| !Rc::ptr_eq(known, resource));
     }
 
-    /// How long waiting for idle may take before it fails (one minute by default), as the
-    /// test's `testTimeout` bounds it in Compose (here per wait, in test time or real time).
+    /// How long one wait for idle may take before it fails (one minute by default): of test
+    /// time while frames are needed (an animation that never ends), of real time while idling
+    /// resources are busy.
     pub fn set_idle_timeout(&mut self, timeout: Duration) {
         self.idle_timeout = timeout;
+    }
+
+    /// The whole test's real-time timeout from now, as Compose's `testTimeout`: waits after it's
+    /// past fail (`run_compose_ui_test_with` sets the config's).
+    pub fn set_test_timeout(&mut self, timeout: Duration) {
+        self.test_deadline = Some((std::time::Instant::now() + timeout, timeout));
+    }
+
+    /// Lifts the test's timeout (for the failure pipeline, which runs after it).
+    pub(crate) fn clear_test_timeout(&mut self) {
+        self.test_deadline = None;
+    }
+
+    /// Panics if the test's real time is up, as Compose's `testTimeout`.
+    #[track_caller]
+    pub(crate) fn check_test_deadline(&self) {
+        if let Some((deadline, timeout)) = self.test_deadline
+            && std::time::Instant::now() > deadline
+        {
+            panic!(
+                "compose-test: ComposeTimeoutException: the test did not complete within its testTimeout of {timeout:?}"
+            );
+        }
     }
 
     /// Waits for idle unless in [`run_without_implicit_wait`](Self::run_without_implicit_wait):
@@ -368,6 +398,7 @@ impl ComposeTestRule {
         let mut checked = 0;
         self.run_current();
         while !condition(self) {
+            self.check_test_deadline();
             if self.auto_advance.get() {
                 self.advance_time_by_frame();
             } else {

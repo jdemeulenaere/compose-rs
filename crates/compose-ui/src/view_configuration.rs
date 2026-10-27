@@ -19,26 +19,35 @@ pub struct ViewConfiguration {
     pub double_tap_min_time_millis: u64,
     /// How far, in pixels, a pointer moves before it's a drag, as `touchSlop`.
     pub touch_slop: f32,
+    /// How far, in pixels, a stylus moves before it's handwriting, as `handwritingSlop`.
+    pub handwriting_slop: f32,
     /// The smallest size of a touch target, as `minimumTouchTargetSize`.
     pub minimum_touch_target_size: DpSize,
     /// The fastest fling, in pixels a second, as `maximumFlingVelocity`.
     pub maximum_fling_velocity: f32,
     /// The slowest fling, in pixels a second, as `minimumFlingVelocity`.
     pub minimum_fling_velocity: f32,
+    /// The margin, in pixels, around a text line where stylus handwriting gestures apply, as
+    /// `handwritingGestureLineMargin`.
+    pub handwriting_gesture_line_margin: f32,
 }
 
 impl ViewConfiguration {
     /// Android's defaults at `density`: a long press at 400 ms, double taps 40 to 300 ms
-    /// apart, an 8 dp touch slop, 48 dp touch targets, flings between 50 and 8,000 dp a second.
+    /// apart, an 8 dp touch slop, a 2 dp handwriting slop, 48 dp touch targets, flings between
+    /// 50 and 8,000 dp a second, a 16 dp handwriting gesture line margin (Android's
+    /// `getScaledHandwritingSlop` and `getScaledHandwritingGestureLineMargin`).
     pub fn at(density: Density) -> ViewConfiguration {
         ViewConfiguration {
             long_press_timeout_millis: 400,
             double_tap_timeout_millis: 300,
             double_tap_min_time_millis: 40,
             touch_slop: density.to_px(Dp(8.0)),
+            handwriting_slop: density.to_px(Dp(2.0)),
             minimum_touch_target_size: DpSize::new(Dp(48.0), Dp(48.0)),
             maximum_fling_velocity: density.to_px(Dp(8000.0)),
             minimum_fling_velocity: density.to_px(Dp(50.0)),
+            handwriting_gesture_line_margin: density.to_px(Dp(16.0)),
         }
     }
 }

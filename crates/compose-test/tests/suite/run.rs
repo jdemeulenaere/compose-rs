@@ -12,7 +12,8 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Dp, Modifier, UnitExt};
+use compose_ui::platform::{DisplayList, Optimizations, TextMeasurer};
+use compose_ui::{Color, Dp, IntSize, Modifier, UnitExt};
 
 #[composable]
 fn ClickCounter(clicks: MutableState<i32>) {
@@ -116,6 +117,60 @@ fn a_failure_tells_the_handlers_with_the_hierarchy() {
     assert_eq!(artifact.kind, FailureArtifactType::UiHierarchy);
     assert!(artifact.file_name.ends_with("_ui.txt"));
     assert!(artifact.text.as_deref().is_some_and(|text| text.contains("Tag: 'my_box'")));
+}
+
+const FAKE_RED: Color = Color::from_argb(0xFFFF0000);
+
+/// A fake capture renderer: every pixel red.
+fn red_renderer(
+    _: &DisplayList,
+    size: IntSize,
+    _: &dyn TextMeasurer,
+    _: Optimizations,
+) -> Vec<Color> {
+    vec![FAKE_RED; (size.width.max(0) * size.height.max(0)) as usize]
+}
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/FailurePipelineTest.kt, customHandler_isCalled_withArtifacts_onAssertionFailure
+/// With a capture renderer installed on the test's thread (a fake one here), a capture draws
+/// with it, and a failure takes a screenshot of the root first, named after the test.
+#[test]
+fn a_failure_takes_a_screenshot_with_the_installed_renderer() {
+    set_capture_renderer(red_renderer);
+    let captured: Rc<RefCell<Option<FailureContext>>> = Rc::default();
+    let seen = captured.clone();
+    let config = ComposeUiTestConfig {
+        failure_policy: TestFailurePolicy {
+            failure_handlers: vec![Rc::new(move |context: &FailureContext| {
+                *seen.borrow_mut() = Some(context.clone());
+            })],
+            ..TestFailurePolicy::default()
+        },
+        ..ComposeUiTestConfig::default()
+    };
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_compose_ui_test_with(config, |ui| {
+            ui.set_content(|| Box!(modifier = Modifier.size(10.dp()).test_tag("box")));
+            let image = ui.on_node_with_tag("box").capture_to_image();
+            assert_eq!(image.size(), IntSize::new(10, 10));
+            image.assert_pixels(None, |_| Some(FAKE_RED));
+            ui.on_node_with_tag("non_existent").assert_exists();
+        })
+    }));
+    clear_capture_renderer();
+    assert!(failed.is_err(), "the failure goes on");
+    let context = captured.borrow().clone().expect("the handler was told");
+    let kinds: Vec<_> = context.artifacts.iter().map(|artifact| artifact.kind).collect();
+    assert_eq!(kinds, [FailureArtifactType::Screenshot, FailureArtifactType::UiHierarchy]);
+    let screenshot = &context.artifacts[0];
+    assert!(
+        screenshot.file_name.starts_with("run__a_failure_takes_a_screenshot")
+            && screenshot.file_name.ends_with("_screenshot.ppm"),
+        "{}",
+        screenshot.file_name
+    );
+    let image = screenshot.image.as_ref().expect("the root's pixels");
+    assert!(image.width() > 0 && image.pixels().iter().all(|&pixel| pixel == FAKE_RED));
 }
 
 /// A disabled capture captures nothing; a handler's own panic doesn't hide the failure.
@@ -223,4 +278,51 @@ fn pending_work_drives_a_frame_by_frame_loop() {
     }
     assert!(heights.iter().any(|height| height.0 > 10.0 && height.0 < 100.0), "{heights:?}");
     assert_eq!(*heights.last().unwrap(), 100.dp());
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/ComposeUiTest.kt, runComposeUiTest's testTimeout
+/// `test_timeout` bounds the test's real time, not test time: a 2 s tween runs to its end
+/// under a 1 s timeout, since the test clock jumps through it.
+#[test]
+fn the_test_timeout_does_not_bound_test_time() {
+    let config = ComposeUiTestConfig { test_timeout: Duration::from_secs(1), ..Default::default() };
+    run_compose_ui_test_with(config, |ui| {
+        let target = mutable_state_of(0.0f32);
+        let handle = target.handle();
+        ui.set_content(move || {
+            let offset = animate_float_as_state!(handle.get(), animation_spec = tween(2000));
+            Box!(
+                modifier = Modifier.size(10.dp()).offset(Dp(offset.get()), 0.dp()).test_tag("box")
+            );
+        });
+        let start = ui.current_time_millis();
+        target.set(100.0);
+        ui.on_node_with_tag("box").assert_left_position_in_root_is_equal_to(100.dp());
+        assert!(ui.current_time_millis() - start >= 2000, "the tween took 2 s of test time");
+    });
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/ComposeUiTest.kt, runComposeUiTest's testTimeout
+/// A test that runs past its `test_timeout` in real time fails at its next wait, or at its end.
+#[test]
+fn a_test_past_its_timeout_fails() {
+    for wait in [true, false] {
+        let config =
+            ComposeUiTestConfig { test_timeout: Duration::from_millis(5), ..Default::default() };
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_compose_ui_test_with(config, |ui| {
+                ui.set_content(|| Box!(modifier = Modifier.size(10.dp())));
+                std::thread::sleep(Duration::from_millis(20));
+                if wait {
+                    ui.wait_for_idle();
+                }
+            })
+        }));
+        let message =
+            failed.expect_err("timed out").downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            message.contains("ComposeTimeoutException") && message.contains("testTimeout"),
+            "{message}"
+        );
+    }
 }

@@ -71,7 +71,8 @@ pub struct TestFailurePolicy {
 /// `MotionDurationScale`, test dispatchers or input mode).
 #[derive(Clone)]
 pub struct ComposeUiTestConfig {
-    /// How long waiting for idle may take before it fails (per wait, here), as `testTimeout`.
+    /// The whole test's real-time timeout, as `testTimeout` (one minute): a wait past it, or
+    /// the body's end, fails. Each wait for idle is also bounded by a minute of test time.
     pub test_timeout: Duration,
     /// The bounds assertions' tolerance given none (`Dp::UNSPECIFIED`: 0.5 dp), as
     /// `boundsAssertionTolerance`.
@@ -102,14 +103,21 @@ pub fn run_compose_ui_test_with<R>(
     block: impl FnOnce(&mut ComposeUiTest) -> R,
 ) -> R {
     let mut rule = ComposeTestRule::empty(default_host());
-    rule.set_idle_timeout(config.test_timeout);
+    rule.set_test_timeout(config.test_timeout);
     if config.bounds_assertion_tolerance.is_specified() {
         rule.set_bounds_assertion_tolerance(config.bounds_assertion_tolerance);
     }
-    match catch_unwind(AssertUnwindSafe(|| block(&mut rule))) {
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let result = block(&mut rule);
+        // A body that ran past its time fails, even without waiting at the end.
+        rule.check_test_deadline();
+        result
+    }));
+    match outcome {
         Ok(result) => result,
         Err(panic) => {
             let error = panic_message(&*panic);
+            rule.clear_test_timeout();
             run_failure_pipeline(&mut rule, &config.failure_policy, error);
             resume_unwind(panic)
         }
@@ -138,6 +146,14 @@ fn run_failure_pipeline(rule: &mut ComposeTestRule, policy: &TestFailurePolicy, 
     };
     let hierarchy = policy.ui_hierarchy_capture_mode != CaptureMode::Disabled;
     let directory = std::env::var_os("COMPOSE_TEST_ARTIFACTS").map(std::path::PathBuf::from);
+    if let Some(directory) = &directory
+        && let Err(error) = std::fs::create_dir_all(directory)
+    {
+        eprintln!("compose-test: failed to create {}: {error}", directory.display());
+    }
+    // The test's thread name (its path, under the default test runner) tells the files of
+    // tests that fail at once apart, as Compose's file names carry the test's name.
+    let test = artifact_name(std::thread::current().name().unwrap_or("test"));
     let mut artifacts = Vec::new();
     if screenshot {
         let image = catch_unwind(AssertUnwindSafe(|| {
@@ -145,9 +161,9 @@ fn run_failure_pipeline(rule: &mut ComposeTestRule, policy: &TestFailurePolicy, 
         }));
         match image {
             Ok(image) => {
-                let file_name = format!("{time}_screenshot.ppm");
+                let file_name = format!("{test}_{time}_screenshot.ppm");
                 if let Some(directory) = &directory {
-                    let _ = std::fs::write(directory.join(&file_name), ppm(&image));
+                    write_artifact(&directory.join(&file_name), &ppm(&image));
                 }
                 artifacts.push(FailureArtifact {
                     kind: FailureArtifactType::Screenshot,
@@ -169,9 +185,9 @@ fn run_failure_pipeline(rule: &mut ComposeTestRule, policy: &TestFailurePolicy, 
         match text {
             Ok(text) => {
                 eprintln!("{text}");
-                let file_name = format!("{time}_ui.txt");
+                let file_name = format!("{test}_{time}_ui.txt");
                 if let Some(directory) = &directory {
-                    let _ = std::fs::write(directory.join(&file_name), &text);
+                    write_artifact(&directory.join(&file_name), text.as_bytes());
                 }
                 artifacts.push(FailureArtifact {
                     kind: FailureArtifactType::UiHierarchy,
@@ -190,6 +206,20 @@ fn run_failure_pipeline(rule: &mut ComposeTestRule, policy: &TestFailurePolicy, 
         if let Err(failure) = catch_unwind(AssertUnwindSafe(|| handler(&context))) {
             eprintln!("compose-test: a failure handler panicked: {}", panic_message(&*failure));
         }
+    }
+}
+
+/// A thread name as a file name: anything but letters, digits, `-` and `.` becomes `_`.
+fn artifact_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .collect()
+}
+
+/// Writes an artifact file, saying so on stderr when it can't.
+fn write_artifact(path: &std::path::Path, bytes: &[u8]) {
+    if let Err(error) = std::fs::write(path, bytes) {
+        eprintln!("compose-test: failed to write {}: {error}", path.display());
     }
 }
 

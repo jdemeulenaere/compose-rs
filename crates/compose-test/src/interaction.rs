@@ -321,27 +321,37 @@ impl<'a> SemanticsNodeInteraction<'a> {
     /// other finders leave out.
     #[track_caller]
     pub fn assert_is_deactivated(&mut self) -> &mut Self {
+        self.assert_is_deactivated_with(None)
+    }
+
+    /// The same, failing with `error_message_on_fail` (else "Failed: assertDeactivated"), the
+    /// node's semantics and the selector after it, as `assertIsDeactivated(errorMessageOnFail)`.
+    #[track_caller]
+    pub fn assert_is_deactivated_with(&mut self, error_message_on_fail: Option<&str>) -> &mut Self {
         self.rule.implicit_wait();
         let tree =
             self.rule.host.with_tree(|tree| tree.semantics_tree_with_deactivated(self.merged));
         let view = TreeView::new(&tree);
-        let found: Result<Vec<_>, String> = match self.selector.select(&view) {
-            Ok(selection) => Ok(selection.nodes.iter().map(|node| node.id()).collect()),
-            Err(error) => Err(error.to_string()),
-        };
+        let message = error_message_on_fail.unwrap_or("Failed: assertDeactivated");
         let description = self.selector.description.clone();
-        let ids = found
-            .unwrap_or_else(|error| panic!("compose-test: Failed: assertDeactivated: {error}"));
-        assert!(
-            ids.len() == 1,
-            "compose-test: Failed: assertDeactivated: expected exactly 1 node {description}, \
-             found {}",
-            ids.len()
-        );
-        let deactivated = self.rule.host.with_tree(|tree| tree.is_deactivated(ids[0]));
+        let found = match self.selector.select(&view) {
+            Ok(selection) => match selection.nodes.as_slice() {
+                [node] => Ok((node.id(), print_node(*node, 0))),
+                nodes => Err(format!(
+                    "Reason: Expected exactly '1' node but found '{}' nodes that satisfy: \
+                     ({description})",
+                    nodes.len()
+                )),
+            },
+            Err(error) => Err(format!("Reason: {error}")),
+        };
+        let (id, printed) =
+            found.unwrap_or_else(|reason| panic!("compose-test: {message}\n{reason}"));
+        let deactivated = self.rule.host.with_tree(|tree| tree.is_deactivated(id));
         assert!(
             deactivated,
-            "compose-test: Failed: assertDeactivated: the node {description} is active"
+            "compose-test: {message}\nSemantics of the node:\n{printed}\nSelector used: \
+             ({description})"
         );
         self
     }

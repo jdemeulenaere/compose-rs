@@ -359,6 +359,66 @@ fn the_view_configuration_times_the_detectors_and_the_gestures() {
     assert_eq!(*heard.borrow(), ["double"], "Android's 300 ms make it one");
 }
 
+/// Android's view configuration scales its distances by the density: at 2x, an 8 dp touch slop
+/// is 16 px, the 2 dp handwriting slop 4 px, the 16 dp handwriting line margin 32 px, flings
+/// 100 to 16,000 px a second.
+#[test]
+fn the_default_view_configuration_scales_with_the_density() {
+    let configuration = compose_ui::ViewConfiguration::at(compose_ui::Density::new(2.0));
+    assert_eq!(configuration.touch_slop, 16.0);
+    assert_eq!(configuration.handwriting_slop, 4.0);
+    assert_eq!(configuration.handwriting_gesture_line_margin, 32.0);
+    assert_eq!(configuration.minimum_fling_velocity, 100.0);
+    assert_eq!(configuration.maximum_fling_velocity, 16_000.0);
+    assert_eq!(configuration.minimum_touch_target_size, compose_ui::DpSize::new(48.dp(), 48.dp()));
+}
+
+/// How far a vertical scroll goes after a swipe up ending at `velocity` px/s, under a view
+/// configuration with flings at most `maximum` px/s (`None`: Android's 8,000 dp/s).
+fn scrolled_after_a_fling(maximum: Option<f32>, velocity: f32) -> i32 {
+    let state = ScrollState::new(0);
+    let given = *state;
+    let mut host = compose_test::default_host();
+    host.set_view_configuration(maximum.map(|maximum| compose_ui::ViewConfiguration {
+        maximum_fling_velocity: maximum,
+        ..compose_ui::ViewConfiguration::default()
+    }));
+    let mut ui = ComposeTestRule::with_host(host, move || {
+        Column!(
+            modifier = Modifier.size((100.dp(), 700.dp())).vertical_scroll(given).test_tag("list"),
+            {
+                Box!(modifier = Modifier.size((100.dp(), 1_000_000.dp())));
+            }
+        );
+    });
+    ui.on_node_with_tag("list").perform_touch_input(|touch| {
+        touch.swipe_with_velocity(
+            Offset::new(50.0, 650.0),
+            Offset::new(50.0, 50.0),
+            velocity,
+            Some(400),
+        );
+    });
+    ui.wait_for_idle();
+    state.value()
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Draggable.kt, the drag's end velocity bounded by `LocalViewConfiguration.maximumFlingVelocity`
+/// The view configuration's maximum fling velocity bounds a fling: past it, a faster swipe
+/// goes no further (D907), while under Android's bound it does.
+#[test]
+fn the_maximum_fling_velocity_bounds_a_fling() {
+    let (slower, faster) = (
+        scrolled_after_a_fling(Some(1000.0), 3000.0),
+        scrolled_after_a_fling(Some(1000.0), 6000.0),
+    );
+    assert_eq!(slower, faster, "both bounded to 1,000 px/s");
+    let (slower, faster) =
+        (scrolled_after_a_fling(None, 3000.0), scrolled_after_a_fling(None, 6000.0));
+    assert!(faster > slower, "under the 8,000 dp/s bound: {slower} then {faster}");
+    assert!(slower > scrolled_after_a_fling(Some(1000.0), 3000.0), "the bound slows it");
+}
+
 /// Content reads the host's view configuration as `LOCAL_VIEW_CONFIGURATION`, Android's at the
 /// density by default (an 8 dp touch slop).
 #[test]
@@ -592,6 +652,77 @@ fn a_mouse_moving_out_of_the_window_exits_then_moves() {
         .unwrap_or_else(|| panic!("the drag's move out of the window: {recorded:?}"));
     assert!(moved_out.pressed);
     assert_eq!(recorded.last().unwrap().kind, PointerEventType::Release);
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMousePress and enqueueMouseMove (exitHoverOnPress)
+/// A press ends the hover: dragged out of the window and back while pressed, the cursor
+/// neither exits nor enters it (the window's exit would be an unpressed `Exit` among the
+/// moves), and the release out there leaves it not hovering, so a later exit is refused. The
+/// box's own exit comes with the release out of it, the tree's (Compose's box hears a pressed
+/// `Exit` and `Enter` as the drag crosses its edge).
+#[test]
+fn a_press_ends_the_hover() {
+    let (mut ui, events) = recording_box(Offset::ZERO);
+    ui.on_node_with_tag("box").perform_mouse_input(|mouse| {
+        mouse.move_to(Offset::new(10.0, 10.0));
+        mouse.press(MouseButton::Primary);
+        mouse.move_to(Offset::new(-50.0, -50.0));
+        mouse.move_to(Offset::new(20.0, 20.0));
+        mouse.move_to(Offset::new(-50.0, -50.0));
+        mouse.release(MouseButton::Primary);
+    });
+    let recorded = events.borrow().clone();
+    let press = recorded.iter().position(|e| e.kind == PointerEventType::Press).unwrap();
+    let after: Vec<(PointerEventType, bool)> =
+        recorded[press + 1..].iter().map(|event| (event.kind, event.pressed)).collect();
+    assert_eq!(
+        after,
+        [
+            (PointerEventType::Move, true),
+            (PointerEventType::Move, true),
+            (PointerEventType::Move, true),
+            (PointerEventType::Exit, false),
+            (PointerEventType::Release, false),
+        ],
+        "only pressed moves while pressed: {recorded:?}"
+    );
+    let message = expect_error(|| {
+        ui.on_node_with_tag("box").perform_mouse_input(|mouse| mouse.exit(Offset::ZERO));
+    });
+    assert!(message.contains("mouse is not hovering"), "{message}");
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMouseRelease (the hover enter and move after the last button's release)
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_pressIn_moveInside_releaseIn
+/// A release inside the window hovers again at once: the node hears an unpressed move where
+/// the cursor is after the release, and the cursor can exit without moving first.
+#[test]
+fn a_release_inside_the_window_hovers_again() {
+    let (mut ui, events) = recording_box(Offset::ZERO);
+    ui.on_node_with_tag("box").perform_mouse_input(|mouse| {
+        mouse.move_to(Offset::new(10.0, 10.0));
+        mouse.press(MouseButton::Primary);
+        mouse.move_to(Offset::new(30.0, 30.0));
+        mouse.release(MouseButton::Primary);
+    });
+    let recorded = events.borrow().clone();
+    let press = recorded.iter().position(|e| e.kind == PointerEventType::Press).unwrap();
+    let after: Vec<(PointerEventType, bool)> =
+        recorded[press..].iter().map(|event| (event.kind, event.pressed)).collect();
+    assert_eq!(
+        after,
+        [
+            (PointerEventType::Press, true),
+            (PointerEventType::Move, true),
+            (PointerEventType::Release, false),
+            (PointerEventType::Move, false),
+        ]
+    );
+    let (release, hover) = (&recorded[press + 2], &recorded[press + 3]);
+    assert_eq!(hover.position, Offset::new(30.0, 30.0));
+    assert_eq!(hover.millis, release.millis, "at the release's time");
+    ui.on_node_with_tag("box").perform_mouse_input(|mouse| mouse.exit(Offset::new(30.0, 30.0)));
+    assert_eq!(events.borrow().last().unwrap().kind, PointerEventType::Exit);
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/MoveTest.kt

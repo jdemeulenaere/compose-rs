@@ -289,7 +289,16 @@ fn items_kept_for_reuse_are_deactivated() {
     let message = expect_error(|| {
         ui.on_node_with_tag("item0").assert_is_deactivated();
     });
-    assert!(message.contains("is active"), "{message}");
+    assert!(
+        message.contains("Failed: assertDeactivated\nSemantics of the node:")
+            && message.contains("Tag: 'item0'")
+            && message.contains("Selector used: (with tag \"item0\")"),
+        "{message}"
+    );
+    let message = expect_error(|| {
+        ui.on_node_with_tag("item0").assert_is_deactivated_with(Some("item0 should be kept"));
+    });
+    assert!(message.contains("item0 should be kept\nSemantics of the node:"), "{message}");
     count.set(0);
     ui.wait_for_idle();
     ui.on_node_with_tag("item0").assert_does_not_exist();
@@ -297,5 +306,7 @@ fn items_kept_for_reuse_are_deactivated() {
     let message = expect_error(|| {
         ui.on_node_with_tag("item9").assert_is_deactivated();
     });
-    assert!(message.contains("found 0"), "{message}");
+    assert!(message.contains("Expected exactly '1' node but found '0' nodes"), "{message}");
+    // The finders leave deactivated content out again after.
+    ui.on_node_with_tag("item0").assert_does_not_exist();
 }
