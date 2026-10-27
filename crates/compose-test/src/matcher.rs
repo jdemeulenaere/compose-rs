@@ -6,7 +6,10 @@ use std::fmt;
 use std::rc::Rc;
 
 use compose_ui::platform::{NodeId, SemanticsNode};
-use compose_ui::{ProgressBarRangeInfo, Rect, Role, SemanticsConfiguration, ToggleableState};
+use compose_ui::{
+    ImeAction, ProgressBarRangeInfo, Rect, Role, SemanticsActions, SemanticsConfiguration,
+    SemanticsProperties, SemanticsPropertyKey, SemanticsValue, SharedString, ToggleableState,
+};
 
 /// A semantics tree flattened in tree order (depth-first, a node before its children), with
 /// each node's parent and children: what finders and matchers walk.
@@ -220,7 +223,40 @@ fn equals(candidate: &str, text: &str, ignore_case: bool) -> bool {
     if ignore_case { candidate.to_lowercase() == text.to_lowercase() } else { candidate == text }
 }
 
+// ---- Keys --------------------------------------------------------------------------------------
+
+/// A node whose `key` is `expected`, as `SemanticsMatcher.expectValue`: a key it doesn't set
+/// doesn't match.
+pub fn expect_value<T: SemanticsValue>(
+    key: &'static SemanticsPropertyKey<T>,
+    expected: T,
+) -> Matcher {
+    let description = format!("{} = '{}'", key.name(), expected.clone().into_slot().display());
+    Matcher::new(description, move |config| config.get(key) == Some(&expected))
+}
+
+/// A node that sets `key`, as `SemanticsMatcher.keyIsDefined`.
+pub fn key_is_defined<T: SemanticsValue>(key: &'static SemanticsPropertyKey<T>) -> Matcher {
+    Matcher::new(format!("{} is defined", key.name()), move |config| config.contains(key))
+}
+
+/// A node that doesn't set `key`, as `SemanticsMatcher.keyNotDefined`.
+pub fn key_not_defined<T: SemanticsValue>(key: &'static SemanticsPropertyKey<T>) -> Matcher {
+    Matcher::new(format!("{} is NOT defined", key.name()), move |config| !config.contains(key))
+}
+
 // ---- Text and descriptions -----------------------------------------------------------------
+
+/// The texts a text matcher reads, as Compose's `hasText`: the input text, the editable text,
+/// then the texts.
+fn texts(config: &SemanticsConfiguration) -> impl Iterator<Item = &str> {
+    config
+        .get(&SemanticsProperties::INPUT_TEXT)
+        .into_iter()
+        .chain(config.get(&SemanticsProperties::EDITABLE_TEXT))
+        .chain(config.get(&SemanticsProperties::TEXT).into_iter().flatten())
+        .map(|text| text.as_str())
+}
 
 /// A node with exactly `text` among its texts (or its editable text), as `hasText`.
 pub fn has_text(text: &str) -> Matcher {
@@ -232,8 +268,9 @@ pub fn has_text_containing(text: &str) -> Matcher {
     has_text_with(text, true, false)
 }
 
-/// As `hasText(text, substring, ignoreCase)`: one of the node's texts or its editable text is
-/// `text` (or contains it, with `substring`), ignoring case with `ignore_case`.
+/// As `hasText(text, substring, ignoreCase)`: one of the node's texts, its editable text or
+/// its input text is `text` (or contains it, with `substring`), ignoring case with
+/// `ignore_case`.
 pub fn has_text_with(text: &str, substring: bool, ignore_case: bool) -> Matcher {
     let text = text.to_string();
     let description = match (substring, ignore_case) {
@@ -243,7 +280,7 @@ pub fn has_text_with(text: &str, substring: bool, ignore_case: bool) -> Matcher 
         (true, true) => format!("with text containing {text:?} (ignoring case)"),
     };
     Matcher::new(description, move |config| {
-        config.all_text().any(|candidate| {
+        texts(config).any(|candidate| {
             if substring {
                 contains(candidate, &text, ignore_case)
             } else {
@@ -262,7 +299,12 @@ pub fn has_text_exactly(texts: &[&str], include_editable_text: bool) -> Matcher 
         let actual: Vec<&str> = if include_editable_text {
             config.all_text().collect()
         } else {
-            config.text.iter().map(|text| text.as_str()).collect()
+            config
+                .get(&SemanticsProperties::TEXT)
+                .into_iter()
+                .flatten()
+                .map(|text| text.as_str())
+                .collect()
         };
         same_set(&actual, &expected)
     })
@@ -272,6 +314,14 @@ pub fn has_text_exactly(texts: &[&str], include_editable_text: bool) -> Matcher 
 pub(crate) fn same_set(actual: &[&str], expected: &[String]) -> bool {
     actual.iter().all(|item| expected.iter().any(|candidate| candidate == item))
         && expected.iter().all(|item| actual.contains(&item.as_str()))
+}
+
+fn content_descriptions(config: &SemanticsConfiguration) -> impl Iterator<Item = &str> {
+    config
+        .get(&SemanticsProperties::CONTENT_DESCRIPTION)
+        .into_iter()
+        .flatten()
+        .map(|text| text.as_str())
 }
 
 /// A node with exactly `description` among its content descriptions, as
@@ -293,7 +343,7 @@ pub fn has_content_description_with(
         format!("with content description {description:?}")
     };
     Matcher::new(text, move |config| {
-        config.content_description.iter().any(|candidate| {
+        content_descriptions(config).any(|candidate| {
             if substring {
                 contains(candidate, &description, ignore_case)
             } else {
@@ -308,141 +358,198 @@ pub fn has_content_description_with(
 pub fn has_content_description_exactly(descriptions: &[&str]) -> Matcher {
     let expected: Vec<String> = descriptions.iter().map(|text| text.to_string()).collect();
     Matcher::new(format!("with content descriptions exactly {expected:?}"), move |config| {
-        let actual: Vec<&str> =
-            config.content_description.iter().map(|text| text.as_str()).collect();
+        let actual: Vec<&str> = content_descriptions(config).collect();
         same_set(&actual, &expected)
     })
 }
 
 /// As `hasStateDescription`.
 pub fn has_state_description(description: &str) -> Matcher {
-    let description = description.to_string();
-    Matcher::new(format!("with state description {description:?}"), move |config| {
-        config.state_description.as_deref() == Some(description.as_str())
+    let description = SharedString::from(description.to_string());
+    Matcher::new(format!("with state description {:?}", description.as_str()), move |config| {
+        config.get(&SemanticsProperties::STATE_DESCRIPTION) == Some(&description)
     })
 }
 
 /// As `hasTestTag`.
 pub fn has_test_tag(tag: &str) -> Matcher {
-    let tag = tag.to_string();
-    Matcher::new(format!("with tag {tag:?}"), move |config| {
-        config.test_tag.as_deref() == Some(tag.as_str())
+    let tag = SharedString::from(tag.to_string());
+    Matcher::new(format!("with tag {:?}", tag.as_str()), move |config| {
+        config.get(&SemanticsProperties::TEST_TAG) == Some(&tag)
     })
 }
 
+/// A node of `role` (compose-rs's: Compose's tests use `expectValue(Role, …)`).
 pub fn has_role(role: Role) -> Matcher {
-    Matcher::new(format!("with role {role:?}"), move |config| config.role == Some(role))
+    Matcher::new(format!("with role {role:?}"), move |config| {
+        config.get(&SemanticsProperties::ROLE) == Some(&role)
+    })
 }
 
 /// As `hasProgressBarRangeInfo`.
 pub fn has_progress_bar_range_info(info: ProgressBarRangeInfo) -> Matcher {
     Matcher::new(format!("with progress {info:?}"), move |config| {
-        config.progress_bar_range_info == Some(info)
+        config.get(&SemanticsProperties::PROGRESS_BAR_RANGE_INFO) == Some(&info)
     })
+}
+
+/// As `hasImeAction`.
+pub fn has_ime_action(action: ImeAction) -> Matcher {
+    expect_value(&SemanticsProperties::IME_ACTION, action)
 }
 
 // ---- State -----------------------------------------------------------------------------------
 
+/// As `isEnabled`: `Disabled` isn't set.
 pub fn is_enabled() -> Matcher {
-    Matcher::new("is enabled", |config| !config.disabled)
+    Matcher::new("is enabled", |config| !config.contains(&SemanticsProperties::DISABLED))
 }
 
+/// As `isNotEnabled`.
 pub fn is_not_enabled() -> Matcher {
-    Matcher::new("is disabled", |config| config.disabled)
+    Matcher::new("is disabled", |config| config.contains(&SemanticsProperties::DISABLED))
 }
 
 /// A node with a toggle state, as `isToggleable`.
 pub fn is_toggleable() -> Matcher {
-    Matcher::new("is toggleable", |config| config.toggleable_state.is_some())
+    Matcher::new("is toggleable", |config| config.contains(&SemanticsProperties::TOGGLEABLE_STATE))
 }
 
 pub fn is_on() -> Matcher {
-    Matcher::new("is on", |config| config.toggleable_state == Some(ToggleableState::On))
+    Matcher::new("is on", |config| {
+        config.get(&SemanticsProperties::TOGGLEABLE_STATE) == Some(&ToggleableState::On)
+    })
 }
 
 pub fn is_off() -> Matcher {
-    Matcher::new("is off", |config| config.toggleable_state == Some(ToggleableState::Off))
+    Matcher::new("is off", |config| {
+        config.get(&SemanticsProperties::TOGGLEABLE_STATE) == Some(&ToggleableState::Off)
+    })
 }
 
 /// A node with a selected state, as `isSelectable`.
 pub fn is_selectable() -> Matcher {
-    Matcher::new("is selectable", |config| config.selected.is_some())
+    Matcher::new("is selectable", |config| config.contains(&SemanticsProperties::SELECTED))
 }
 
 pub fn is_selected() -> Matcher {
-    Matcher::new("is selected", |config| config.selected == Some(true))
+    Matcher::new("is selected", |config| config.get(&SemanticsProperties::SELECTED) == Some(&true))
 }
 
 pub fn is_not_selected() -> Matcher {
-    Matcher::new("is not selected", |config| config.selected == Some(false))
+    Matcher::new("is not selected", |config| {
+        config.get(&SemanticsProperties::SELECTED) == Some(&false)
+    })
 }
 
+/// As `isFocusable`: `Focused` is set (either way).
 pub fn is_focusable() -> Matcher {
-    Matcher::new("is focusable", |config| config.focusable)
+    Matcher::new("is focusable", |config| config.contains(&SemanticsProperties::FOCUSED))
 }
 
 pub fn is_not_focusable() -> Matcher {
-    Matcher::new("is not focusable", |config| !config.focusable)
+    Matcher::new("is not focusable", |config| !config.contains(&SemanticsProperties::FOCUSED))
 }
 
 pub fn is_focused() -> Matcher {
-    Matcher::new("is focused", |config| config.focused)
+    Matcher::new("is focused", |config| config.get(&SemanticsProperties::FOCUSED) == Some(&true))
 }
 
-/// A focusable node without the focus, as `isNotFocused` (Compose's `Focused` is defined, and
-/// false, on focusable nodes).
+/// A focusable node without the focus, as `isNotFocused` (`Focused` is false).
 pub fn is_not_focused() -> Matcher {
-    Matcher::new("is not focused", |config| config.focusable && !config.focused)
+    Matcher::new("is not focused", |config| {
+        config.get(&SemanticsProperties::FOCUSED) == Some(&false)
+    })
 }
 
 /// A dialog's node, as `isDialog`.
 pub fn is_dialog() -> Matcher {
-    Matcher::new("is dialog", |config| config.is_dialog)
+    Matcher::new("is dialog", |config| config.contains(&SemanticsProperties::IS_DIALOG))
 }
 
 /// A popup's node, as `isPopup`.
 pub fn is_popup() -> Matcher {
-    Matcher::new("is popup", |config| config.is_popup)
+    Matcher::new("is popup", |config| config.contains(&SemanticsProperties::IS_POPUP))
 }
 
-/// A node with editable text (a text field), as `isEditable`.
+/// As `isHeading`.
+pub fn is_heading() -> Matcher {
+    key_is_defined(&SemanticsProperties::HEADING)
+}
+
+/// As `isHiddenFromAccessibility`.
+pub fn is_hidden_from_accessibility() -> Matcher {
+    key_is_defined(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+}
+
+/// An editable text field, as `isEditable` (`IsEditable` is true).
 pub fn is_editable() -> Matcher {
-    Matcher::new("is editable", |config| config.editable_text.is_some())
+    Matcher::new("is editable", |config| {
+        config.get(&SemanticsProperties::IS_EDITABLE) == Some(&true)
+    })
 }
 
 // ---- Actions ---------------------------------------------------------------------------------
 
 /// As `hasClickAction`.
 pub fn has_click_action() -> Matcher {
-    Matcher::new("has click action", |config| config.clickable)
+    Matcher::new("has click action", |config| config.contains(&SemanticsActions::ON_CLICK))
 }
 
 /// As `hasNoClickAction`.
 pub fn has_no_click_action() -> Matcher {
-    Matcher::new("has no click action", |config| !config.clickable)
+    Matcher::new("has no click action", |config| !config.contains(&SemanticsActions::ON_CLICK))
 }
 
-/// A node that scrolls (`ScrollBy` with a scroll range), as `hasScrollAction`.
+/// A node that scrolls, as `hasScrollAction` (`ScrollBy`).
 pub fn has_scroll_action() -> Matcher {
-    Matcher::new("has scroll action", |config| {
-        config.horizontal_scroll_axis_range.is_some() || config.vertical_scroll_axis_range.is_some()
-    })
+    Matcher::new("has scroll action", |config| config.contains(&SemanticsActions::SCROLL_BY))
 }
 
 /// As `hasNoScrollAction`.
 pub fn has_no_scroll_action() -> Matcher {
-    !has_scroll_action()
+    Matcher::new("has no scroll action", |config| !config.contains(&SemanticsActions::SCROLL_BY))
 }
 
-/// A node that takes text (a text field), as `hasSetTextAction`: compose-rs's text fields
-/// take text through the focus, so it matches its `editable` nodes.
+/// A node whose text accessibility can set (a text field), as `hasSetTextAction`.
 pub fn has_set_text_action() -> Matcher {
-    Matcher::new("has set text action", |config| config.editable)
+    Matcher::new("has set text action", |config| config.contains(&SemanticsActions::SET_TEXT))
+}
+
+/// As `hasInsertTextAtCursorAction`.
+pub fn has_insert_text_at_cursor_action() -> Matcher {
+    key_is_defined(&SemanticsActions::INSERT_TEXT_AT_CURSOR)
+}
+
+/// As `hasPerformImeAction`.
+pub fn has_perform_ime_action() -> Matcher {
+    key_is_defined(&SemanticsActions::ON_IME_ACTION)
 }
 
 /// A node that can take the focus, as `hasRequestFocusAction`.
 pub fn has_request_focus_action() -> Matcher {
-    Matcher::new("has request focus action", |config| config.focusable)
+    Matcher::new("has request focus action", |config| {
+        config.contains(&SemanticsActions::REQUEST_FOCUS)
+    })
+}
+
+/// As `hasScrollToIndexAction`.
+pub fn has_scroll_to_index_action() -> Matcher {
+    key_is_defined(&SemanticsActions::SCROLL_TO_INDEX)
+}
+
+/// As `hasScrollToKeyAction`: `ScrollToIndex` and `IndexForKey`.
+pub fn has_scroll_to_key_action() -> Matcher {
+    key_is_defined(&SemanticsActions::SCROLL_TO_INDEX)
+        & key_is_defined(&SemanticsProperties::INDEX_FOR_KEY)
+}
+
+/// As `hasScrollToNodeAction`: `ScrollToIndex`, `ScrollBy` and a scroll range.
+pub fn has_scroll_to_node_action() -> Matcher {
+    key_is_defined(&SemanticsActions::SCROLL_TO_INDEX)
+        & key_is_defined(&SemanticsActions::SCROLL_BY)
+        & (key_is_defined(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+            | key_is_defined(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE))
 }
 
 // ---- The tree --------------------------------------------------------------------------------

@@ -63,7 +63,10 @@ fn supporting_text_and_errors_show_below_in_the_error_color() {
     // Below the 56 dp container, 4 dp under it, 16 dp in.
     assert_eq!((support.left - field.left, support.top - field.top), (16.0, 60.0));
     let node = ui.on_node_with_tag("field").fetch_semantics_node();
-    assert_eq!(node.config.error.as_deref(), Some("Invalid input"));
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::ERROR).cloned().as_deref(),
+        Some("Invalid input")
+    );
     // The outline and the supporting text in the error color.
     let error = light_color_scheme().error;
     let list = ui.dump_display_list();

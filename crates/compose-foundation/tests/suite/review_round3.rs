@@ -39,7 +39,11 @@ fn a_dialogs_semantics_node_has_its_contents_bounds() {
     let content = ui.on_node_with_tag("content").fetch_semantics_node().bounds;
     assert_eq!((content.left, content.top, content.width()), (150.0, 175.0, 100.0));
     let tree = ui.host().semantics_tree(true);
-    let dialog = tree.flatten().into_iter().find(|node| node.config.is_dialog).cloned();
+    let dialog = tree
+        .flatten()
+        .into_iter()
+        .find(|node| node.config.contains(&compose_ui::SemanticsProperties::IS_DIALOG))
+        .cloned();
     let dialog = dialog.expect("a dialog node");
     assert_eq!(
         (dialog.bounds.left, dialog.bounds.top, dialog.bounds.width(), dialog.bounds.height()),
@@ -115,12 +119,17 @@ fn an_outer_content_description_replaces_the_images_own() {
             modifier = Modifier
                 .size(24.dp())
                 .test_tag("image")
-                .semantics(|config| config.content_description.push("Rating".into())),
+                .semantics(|config| config.set_content_description("Rating")),
         );
     });
     let node = ui.on_node_with_tag("image").fetch_semantics_node();
     assert_eq!(
-        node.config.content_description.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .into_iter()
+            .flatten()
+            .map(|d| d.as_str())
+            .collect::<Vec<_>>(),
         ["Rating"],
     );
 }
@@ -185,9 +194,13 @@ fn request_focus_on_a_text_fields_node_focuses_the_field() {
         );
     });
     let node = ui.on_node_with_tag("field").fetch_semantics_node();
-    assert!(node.config.focusable, "the field's node isn't focusable: {:?}", node.config);
     assert!(
-        ui.host().perform_semantics_action(node.id, compose_ui::SemanticsAction::RequestFocus),
+        node.config.contains(&compose_ui::SemanticsProperties::FOCUSED),
+        "the field's node isn't focusable: {:?}",
+        node.config
+    );
+    assert!(
+        ui.host().perform_semantics_action(node.id, &compose_ui::SemanticsActions::REQUEST_FOCUS),
         "RequestFocus on the text field's node wasn't performed"
     );
     ui.wait_for_idle();

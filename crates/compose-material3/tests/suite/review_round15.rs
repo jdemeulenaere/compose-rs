@@ -354,6 +354,6 @@ fn tab_never_focuses_the_scrim() {
         ui.press_key(compose_ui::Key::Tab);
         let scrim =
             ui.on_node_with_content_description("Close navigation menu").fetch_semantics_node();
-        assert!(!scrim.config.focused);
+        assert!(!(scrim.config.get(&compose_ui::SemanticsProperties::FOCUSED) == Some(&true)));
     }
 }

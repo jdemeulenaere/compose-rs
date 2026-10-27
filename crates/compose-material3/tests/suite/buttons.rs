@@ -169,7 +169,10 @@ fn surfaces_click_and_select() {
     ui.on_node_with_tag("clickable").perform_click();
     assert_eq!(CLICKS.with(Cell::get), 1);
     let selectable = ui.on_node_with_tag("selectable").fetch_semantics_node();
-    assert_eq!(selectable.config.selected, Some(true));
+    assert_eq!(
+        selectable.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(),
+        Some(true)
+    );
     assert_eq!(selectable.bounds.width(), 60.0);
 }
 
@@ -233,7 +236,11 @@ fn floating_action_buttons_have_composes_sizes() {
         assert_eq!((fab.width(), fab.height()), (size, size), "{tag}");
     }
     assert_eq!(
-        ui.on_node_with_tag("regular").fetch_semantics_node().config.role,
+        ui.on_node_with_tag("regular")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::ROLE)
+            .copied(),
         Some(Role::Button)
     );
     assert_eq!(shadows(&mut ui), vec![6.0, 6.0, 6.0]);

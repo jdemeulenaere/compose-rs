@@ -1,12 +1,12 @@
 //! Semantics: what nodes mean (text, role, state, actions), as Compose's semantics tree. Tests
 //! find nodes through it, and accessibility bridges read it (docs/06-ui.md).
 
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use compose_runtime::ComposeArg;
 use smallvec::SmallVec;
 
-use crate::text::SharedString;
+pub use crate::semantics_properties::*;
 use crate::tree::NodeId;
 use crate::unit::{Offset, Rect};
 
@@ -21,33 +21,14 @@ pub enum Role {
     Tab,
     Image,
     DropdownList,
+    ValuePicker,
+    Carousel,
 }
 
 impl ComposeArg for Role {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
-}
-
-/// An action on a semantics node, as `SemanticsActions`: what accessibility services (and tests)
-/// ask of a node instead of sending it input.
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[non_exhaustive]
-pub enum SemanticsAction {
-    /// Click it, as `SemanticsActions.OnClick`.
-    OnClick,
-    /// Long-click it, as `SemanticsActions.OnLongClick` (`combined_clickable`).
-    OnLongClick,
-    /// Focus it, as `SemanticsActions.RequestFocus`.
-    RequestFocus,
-    /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
-    SetProgress(f32),
-    /// Scroll its content by `x` and `y` pixels (positive: towards the content's end, whatever
-    /// way it runs: a reversed list's later items, a right-to-left row's), as
-    /// `SemanticsActions.ScrollBy`: a scrolling container's. Android's accessibility turns its
-    /// directions into it as Compose's `AndroidComposeViewAccessibilityDelegateCompat` does
-    /// (D478, D491).
-    ScrollBy { x: f32, y: f32 },
 }
 
 /// How far a scrolling container is scrolled along an axis, as Compose's `ScrollAxisRange`: its
@@ -83,230 +64,6 @@ impl From<bool> for ToggleableState {
     }
 }
 
-/// The semantics properties of a node, as `SemanticsConfiguration`: what its modifiers set.
-#[derive(Clone, Default, PartialEq)]
-pub struct SemanticsConfiguration {
-    /// Merge descendants' semantics into this node, as a button merges its label.
-    pub merge_descendants: bool,
-    pub text: SmallVec<[SharedString; 1]>,
-    pub editable_text: Option<SharedString>,
-    /// Why its input is invalid, as `error(description)`.
-    pub error: Option<SharedString>,
-    pub content_description: SmallVec<[SharedString; 1]>,
-    pub test_tag: Option<SharedString>,
-    pub role: Option<Role>,
-    pub disabled: bool,
-    pub toggleable_state: Option<ToggleableState>,
-    pub selected: Option<bool>,
-    pub focusable: bool,
-    pub focused: bool,
-    /// Whether the node has a click action (`clickable`, `toggleable`).
-    pub clickable: bool,
-    /// Whether it has a long-click action (`combined_clickable` with `on_long_click`).
-    pub long_clickable: bool,
-    /// Whether the node takes text input (a text field).
-    pub editable: bool,
-    /// Its text is a password, shown masked, as `password()`.
-    pub password: bool,
-    /// The node's state in words (a slider's value), as `stateDescription`.
-    pub state_description: Option<SharedString>,
-    /// Its value in a range (a slider's), as `progressBarRangeInfo`.
-    pub progress_bar_range_info: Option<ProgressBarRangeInfo>,
-    /// It's a dialog (its own pane, modal), as `isDialog`.
-    pub is_dialog: bool,
-    /// It's a popup (its own window over the content), as `isPopup`.
-    pub is_popup: bool,
-    /// Its descendants have no semantics, as `clearAndSetSemantics`.
-    pub clear_descendants: bool,
-    /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
-    /// own modifiers set them: a text field's inner text, which in Compose is one semantics
-    /// node with its decoration box.
-    pub part_of_parent: bool,
-    /// It groups selectable items (radio buttons), as `selectableGroup()`.
-    pub selectable_group: bool,
-    /// It scrolls its content, horizontally or vertically, as `horizontalScrollAxisRange` and
-    /// `verticalScrollAxisRange` (with the `ScrollBy` action): scrolling containers and lazy
-    /// lists and grids (D478).
-    pub horizontal_scroll_axis_range: Option<ScrollAxisRange>,
-    pub vertical_scroll_axis_range: Option<ScrollAxisRange>,
-}
-
-impl SemanticsConfiguration {
-    /// Whether anything is set.
-    pub fn is_empty(&self) -> bool {
-        *self == SemanticsConfiguration::default()
-    }
-
-    /// Adds `child`'s properties, as merging does: lists append, the rest keep this node's
-    /// value if set.
-    pub fn merge_child(&mut self, child: &SemanticsConfiguration) {
-        self.text.extend(child.text.iter().cloned());
-        self.content_description.extend(child.content_description.iter().cloned());
-        if self.editable_text.is_none() {
-            self.editable_text = child.editable_text.clone();
-        }
-        if self.error.is_none() {
-            self.error = child.error.clone();
-        }
-        if self.state_description.is_none() {
-            self.state_description = child.state_description.clone();
-        }
-        // A role never merges up, as Compose's (`parentValue`): a clickable row holding an
-        // image is no image.
-        if self.toggleable_state.is_none() {
-            self.toggleable_state = child.toggleable_state;
-        }
-        if self.selected.is_none() {
-            self.selected = child.selected;
-        }
-        if self.progress_bar_range_info.is_none() {
-            self.progress_bar_range_info = child.progress_bar_range_info;
-        }
-        // Scroll ranges don't merge: Compose reads them, with `ScrollBy`, from a node's own
-        // (unmerged) configuration, so a merging parent offers no scroll it can't perform
-        // (D491).
-        // Compose's default merge policy, parent ?: child: a flag set below is set here.
-        self.editable |= child.editable;
-        self.password |= child.password;
-        self.focused |= child.focused;
-        self.focusable |= child.focusable;
-        self.disabled |= child.disabled;
-    }
-
-    /// Sets the properties `other` sets, as applying an outer semantics modifier over inner
-    /// ones: set values (lists too) replace, flags are or'ed, as Compose's `set`.
-    pub fn apply(&mut self, other: &SemanticsConfiguration) {
-        self.merge_descendants |= other.merge_descendants;
-        self.part_of_parent |= other.part_of_parent;
-        if !other.text.is_empty() {
-            self.text = other.text.clone();
-        }
-        if !other.content_description.is_empty() {
-            self.content_description = other.content_description.clone();
-        }
-        if other.error.is_some() {
-            self.error = other.error.clone();
-        }
-        if other.editable_text.is_some() {
-            self.editable_text = other.editable_text.clone();
-        }
-        if other.state_description.is_some() {
-            self.state_description = other.state_description.clone();
-        }
-        if other.test_tag.is_some() {
-            self.test_tag = other.test_tag.clone();
-        }
-        if other.role.is_some() {
-            self.role = other.role;
-        }
-        if other.toggleable_state.is_some() {
-            self.toggleable_state = other.toggleable_state;
-        }
-        if other.selected.is_some() {
-            self.selected = other.selected;
-        }
-        if other.progress_bar_range_info.is_some() {
-            self.progress_bar_range_info = other.progress_bar_range_info;
-        }
-        if other.horizontal_scroll_axis_range.is_some() {
-            self.horizontal_scroll_axis_range = other.horizontal_scroll_axis_range;
-        }
-        if other.vertical_scroll_axis_range.is_some() {
-            self.vertical_scroll_axis_range = other.vertical_scroll_axis_range;
-        }
-        self.is_dialog |= other.is_dialog;
-        self.is_popup |= other.is_popup;
-        self.clear_descendants |= other.clear_descendants;
-        self.disabled |= other.disabled;
-        self.focusable |= other.focusable;
-        self.focused |= other.focused;
-        self.clickable |= other.clickable;
-        self.long_clickable |= other.long_clickable;
-        self.editable |= other.editable;
-        self.password |= other.password;
-        self.selectable_group |= other.selectable_group;
-    }
-
-    /// All text, editable text first, joined by ", ": what text finders match.
-    pub fn all_text(&self) -> impl Iterator<Item = &str> {
-        self.editable_text.iter().chain(&self.text).map(|text| text.as_str())
-    }
-}
-
-impl fmt::Debug for SemanticsConfiguration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(role) = self.role {
-            parts.push(format!("role={role:?}"));
-        }
-        if !self.text.is_empty() {
-            parts.push(format!(
-                "text={:?}",
-                self.text.iter().map(|t| t.as_str()).collect::<Vec<_>>()
-            ));
-        }
-        if let Some(text) = &self.editable_text {
-            parts.push(format!("editable_text={text:?}"));
-        }
-        if let Some(error) = &self.error {
-            parts.push(format!("error={error:?}"));
-        }
-        if !self.content_description.is_empty() {
-            parts.push(format!(
-                "content_description={:?}",
-                self.content_description.iter().map(|t| t.as_str()).collect::<Vec<_>>()
-            ));
-        }
-        if let Some(tag) = &self.test_tag {
-            parts.push(format!("tag={tag:?}"));
-        }
-        if let Some(state) = self.toggleable_state {
-            parts.push(format!("toggle={state:?}"));
-        }
-        if let Some(selected) = self.selected {
-            parts.push(format!("selected={selected}"));
-        }
-        if let Some(state) = &self.state_description {
-            parts.push(format!("state={:?}", state.as_str()));
-        }
-        if let Some(info) = self.progress_bar_range_info {
-            parts.push(format!(
-                "progress={} in {}..{} steps {}",
-                info.current, info.range.0, info.range.1, info.steps
-            ));
-        }
-        for (range, axis) in [
-            (self.horizontal_scroll_axis_range, "horizontal"),
-            (self.vertical_scroll_axis_range, "vertical"),
-        ] {
-            if let Some(range) = range {
-                let reverse = if range.reverse_scrolling { " reversed" } else { "" };
-                parts.push(format!("{axis}_scroll={}/{}{reverse}", range.value, range.max_value));
-            }
-        }
-        for (flag, name) in [
-            (self.clickable, "clickable"),
-            (self.long_clickable, "long_clickable"),
-            (self.editable, "editable"),
-            (self.password, "password"),
-            (self.disabled, "disabled"),
-            (self.focusable, "focusable"),
-            (self.focused, "focused"),
-            (self.merge_descendants, "merged"),
-            (self.part_of_parent, "part_of_parent"),
-            (self.is_dialog, "dialog"),
-            (self.is_popup, "popup"),
-            (self.clear_descendants, "cleared"),
-            (self.selectable_group, "selectable_group"),
-        ] {
-            if flag {
-                parts.push(name.to_string());
-            }
-        }
-        formatter.write_str(&parts.join(" "))
-    }
-}
-
 /// A node of the semantics tree: a layout node with semantics, its bounds in the root (in
 /// pixels), and its configuration (merged, in the merged tree).
 #[derive(Clone, Debug)]
@@ -317,10 +74,18 @@ pub struct SemanticsNode {
     /// scroll's left and right go the other way (D484).
     pub rtl: bool,
     pub config: SemanticsConfiguration,
+    /// A merging node's own configuration, in the merged tree (`None`: the same as `config`):
+    /// what Compose's accessibility reads actions and scrolls from (`unmergedConfig`, D491).
+    pub own_config: Option<Box<SemanticsConfiguration>>,
     pub children: Vec<SemanticsNode>,
 }
 
 impl SemanticsNode {
+    /// The node's own configuration, unmerged, as Compose's `unmergedConfig`.
+    pub fn unmerged_config(&self) -> &SemanticsConfiguration {
+        self.own_config.as_deref().unwrap_or(&self.config)
+    }
+
     /// The center of the node's bounds, where test clicks land.
     pub fn center(&self) -> Offset {
         Offset::new(
@@ -398,6 +163,19 @@ impl UiTree {
         self.semantics_tree(merged)
     }
 
+    /// `node`'s configuration in the unmerged tree (its own, with what its parts set), if it's
+    /// a semantics node there.
+    pub fn unmerged_semantics_config(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
+        fn find(tree: &SemanticsNode, id: NodeId) -> Option<&SemanticsConfiguration> {
+            if tree.id == id {
+                return Some(&tree.config);
+            }
+            tree.children.iter().find_map(|child| find(child, id))
+        }
+        let tree = self.semantics_tree(false);
+        find(&tree, node).cloned()
+    }
+
     /// Whether `node` is in deactivated content (it or an ancestor deactivated), as Compose's
     /// `LayoutInfo.isDeactivated`.
     pub fn is_deactivated(&self, node: NodeId) -> bool {
@@ -444,19 +222,40 @@ impl UiTree {
                 let mut own = SemanticsConfiguration::default();
                 semantics.apply_semantics(&mut own);
                 // Clearing drops what the modifiers after it set, as Compose's
-                // `collapsedSemantics`.
-                if own.clear_descendants {
+                // `calculateSemanticsConfiguration`.
+                if own.is_clearing_semantics {
                     config = SemanticsConfiguration::default();
                 }
                 config.apply(&own);
                 first_layer = Some(layers[index]);
                 // A merging node's bounds are those of the outermost modifier that merges.
-                if own.merge_descendants {
+                if own.is_merging_semantics_of_descendants {
                     merging_layer = Some(layers[index]);
                 }
             }
         }
+        self.bind_request_focus(node, &mut config);
         Some((config, merging_layer.or(first_layer).unwrap_or(0)))
+    }
+
+    /// Binds a `RequestFocus` offered without an action (`request_focus_of_node`) to `node`:
+    /// performing it asks the tree to focus the node's focus target, as a `FocusRequester`
+    /// does, once the tree is free (D1251).
+    fn bind_request_focus(&self, node: NodeId, config: &mut SemanticsConfiguration) {
+        let unbound = config
+            .get(&SemanticsActions::REQUEST_FOCUS)
+            .is_some_and(|action| action.action.is_none());
+        if unbound {
+            let requests = std::rc::Rc::downgrade(&self.focus_requests);
+            let label = config.get(&SemanticsActions::REQUEST_FOCUS).and_then(|a| a.label.clone());
+            config.request_focus(label, move || match requests.upgrade() {
+                Some(requests) => {
+                    requests.push(crate::focus_requester::FocusRequest::Node(node));
+                    true
+                }
+                None => false,
+            });
+        }
     }
 
     /// The semantics tree, as Compose's: merged (`merged`), a node merging its descendants
@@ -481,7 +280,14 @@ impl UiTree {
             }
         }
         let rtl = self.node(root).layout_direction == crate::alignment::LayoutDirection::Rtl;
-        SemanticsNode { id: root, bounds: self.bounds_in_root(root), rtl, config, children }
+        SemanticsNode {
+            id: root,
+            bounds: self.bounds_in_root(root),
+            rtl,
+            config,
+            own_config: None,
+            children,
+        }
     }
 
     /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are
@@ -532,7 +338,9 @@ impl UiTree {
                     self.semantics_of(child, merged, parent, out);
                 }
             }
-            Some((own, _)) if own.part_of_parent => {
+            Some((mut own, _)) if own.contains(&PART_OF_PARENT) => {
+                // Its properties are the parent's, as if its own modifiers set them.
+                own.remove(&PART_OF_PARENT);
                 parent.apply(&own);
                 for child in children_of(self) {
                     self.semantics_of(child, merged, parent, out);
@@ -540,11 +348,16 @@ impl UiTree {
             }
             Some((mut config, layer)) => {
                 let mut children = Vec::new();
-                if config.clear_descendants {
+                let mut own_config = None;
+                if config.is_clearing_semantics {
                     // Nothing inside reads.
-                } else if merged && config.merge_descendants {
+                } else if merged && config.is_merging_semantics_of_descendants {
+                    let own = config.clone();
                     for child in children_of(self) {
                         self.merge_into(child, &mut config, &mut children);
+                    }
+                    if own != config {
+                        own_config = Some(Box::new(own));
                     }
                 } else {
                     for child in children_of(self) {
@@ -560,6 +373,7 @@ impl UiTree {
                     bounds: Rect::from_offset_size(origin, size.into()),
                     rtl,
                     config,
+                    own_config,
                     children,
                 });
             }
@@ -578,12 +392,12 @@ impl UiTree {
             return;
         }
         if let Some((own, _)) = self.own_semantics(node) {
-            if own.merge_descendants {
+            if own.is_merging_semantics_of_descendants {
                 self.semantics_of(node, true, config, children);
                 return;
             }
             config.merge_child(&own);
-            if own.clear_descendants {
+            if own.is_clearing_semantics {
                 return;
             }
         }

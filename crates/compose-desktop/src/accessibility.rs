@@ -3,7 +3,7 @@
 
 use accesskit::{Action, ActionRequest, Node, NodeId as AccessNodeId, Rect, Toggled, TreeUpdate};
 use compose_ui::{
-    Role, SemanticsAction, ToggleableState,
+    Role, SemanticsActions as A, SemanticsProperties as P, ToggleableState,
     platform::{NodeId, SemanticsNode, UiHost},
 };
 
@@ -47,10 +47,17 @@ fn id(node: NodeId) -> AccessNodeId {
 fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut dyn FnMut(NodeId)) {
     visit(node.id);
     let config = &node.config;
-    let texts = config.text.iter().map(|text| text.as_str()).collect::<Vec<_>>().join(" ");
-    let descriptions =
-        config.content_description.iter().map(|text| text.as_str()).collect::<Vec<_>>().join(" ");
-    let role = match config.role {
+    // Actions from the node's own configuration, as Compose's accessibility reads them.
+    let own = node.unmerged_config();
+    let join = |texts: Option<&compose_ui::StringList>| {
+        texts.into_iter().flatten().map(|text| text.as_str()).collect::<Vec<_>>().join(" ")
+    };
+    let texts = join(config.get(&P::TEXT));
+    let descriptions = join(config.get(&P::CONTENT_DESCRIPTION));
+    let disabled = config.contains(&P::DISABLED);
+    let clickable = own.contains(&A::ON_CLICK);
+    let range = config.get(&P::PROGRESS_BAR_RANGE_INFO).copied();
+    let role = match config.get(&P::ROLE).copied() {
         Some(Role::Button) => accesskit::Role::Button,
         Some(Role::Checkbox) => accesskit::Role::CheckBox,
         Some(Role::Switch) => accesskit::Role::Switch,
@@ -60,11 +67,11 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         Some(Role::DropdownList) => accesskit::Role::ComboBox,
         // A role added later: a generic container.
         Some(_) => accesskit::Role::GenericContainer,
-        None if config.is_dialog => accesskit::Role::Dialog,
-        None if config.password => accesskit::Role::PasswordInput,
-        None if config.editable => accesskit::Role::TextInput,
-        None if config.progress_bar_range_info.is_some() => accesskit::Role::Slider,
-        None if config.clickable => accesskit::Role::Button,
+        None if config.contains(&P::IS_DIALOG) => accesskit::Role::Dialog,
+        None if config.contains(&P::PASSWORD) => accesskit::Role::PasswordInput,
+        None if config.contains(&P::EDITABLE_TEXT) => accesskit::Role::TextInput,
+        None if range.is_some() => accesskit::Role::Slider,
+        None if clickable => accesskit::Role::Button,
         None if !texts.is_empty() => accesskit::Role::Label,
         None => accesskit::Role::GenericContainer,
     };
@@ -83,16 +90,16 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
     } else if !label.is_empty() {
         access.set_label(label);
     }
-    if let Some(text) = &config.editable_text {
+    if let Some(text) = config.get(&P::EDITABLE_TEXT) {
         access.set_value(text.as_str());
-    } else if let Some(state) = &config.state_description {
+    } else if let Some(state) = config.get(&P::STATE_DESCRIPTION) {
         access.set_value(state.as_str());
     }
-    if let Some(error) = &config.error {
+    if let Some(error) = config.get(&P::ERROR) {
         access.set_invalid(accesskit::Invalid::True);
         access.set_description(error.as_str());
     }
-    if let Some(state) = config.toggleable_state {
+    if let Some(&state) = config.get(&P::TOGGLEABLE_STATE) {
         access.set_toggled(match state {
             ToggleableState::On => Toggled::True,
             ToggleableState::Off => Toggled::False,
@@ -100,34 +107,34 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         });
     }
     // A radio button's selection is its checked state, as ARIA's `aria-checked`.
-    match config.selected {
+    match config.get(&P::SELECTED).copied() {
         Some(selected) if role == accesskit::Role::RadioButton => {
             access.set_toggled(if selected { Toggled::True } else { Toggled::False });
         }
         Some(selected) => access.set_selected(selected),
         None => {}
     }
-    if config.is_dialog {
+    if config.contains(&P::IS_DIALOG) {
         access.set_modal();
     }
-    if let Some(info) = config.progress_bar_range_info {
+    if let Some(info) = range {
         access.set_numeric_value(info.current as f64);
         access.set_min_numeric_value(info.range.0 as f64);
         access.set_max_numeric_value(info.range.1 as f64);
         access.set_numeric_value_step(progress_step(info) as f64);
-        if !config.disabled {
+        if !disabled {
             access.add_action(Action::Increment);
             access.add_action(Action::Decrement);
             access.add_action(Action::SetValue);
         }
     }
-    if config.disabled {
+    if disabled {
         access.set_disabled();
     } else {
-        if config.clickable {
+        if clickable {
             access.add_action(Action::Click);
         }
-        if config.focusable {
+        if config.contains(&P::FOCUSED) {
             access.add_action(Action::Focus);
         }
     }
@@ -158,31 +165,30 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
                 }
                 node.children.iter().find_map(|child| find(child, id))
             }
-            find(&root, node).and_then(|found| found.config.progress_bar_range_info)
+            find(&root, node)
+                .and_then(|found| found.config.get(&P::PROGRESS_BAR_RANGE_INFO).copied())
         })
     };
-    let action = match request.action {
-        Action::Click => SemanticsAction::OnClick,
-        Action::Focus => SemanticsAction::RequestFocus,
+    let progress_to = match request.action {
+        Action::Click => return host.perform_semantics_action(node, &A::ON_CLICK),
+        Action::Focus => return host.perform_semantics_action(node, &A::REQUEST_FOCUS),
         Action::Increment | Action::Decrement => {
             let Some(info) = progress() else { return false };
             let step = progress_step(info);
             let delta = if request.action == Action::Increment { step } else { -step };
-            SemanticsAction::SetProgress(info.current + delta)
+            info.current + delta
         }
         Action::SetValue => match &request.data {
-            Some(accesskit::ActionData::NumericValue(value)) => {
-                SemanticsAction::SetProgress(*value as f32)
-            }
+            Some(accesskit::ActionData::NumericValue(value)) => *value as f32,
             Some(accesskit::ActionData::Value(text)) => match text.trim().parse::<f32>() {
-                Ok(value) => SemanticsAction::SetProgress(value),
+                Ok(value) => value,
                 Err(_) => return false,
             },
             _ => return false,
         },
         _ => return false,
     };
-    host.perform_semantics_action(node, action)
+    host.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(progress_to))
 }
 
 #[cfg(test)]

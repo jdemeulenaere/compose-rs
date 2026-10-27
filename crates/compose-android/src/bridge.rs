@@ -1029,8 +1029,10 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     fn password(node: &compose_ui::platform::SemanticsNode) -> Option<bool> {
-        if node.config.focused && node.config.editable {
-            return Some(node.config.password);
+        use compose_ui::SemanticsProperties as P;
+        let config = &node.config;
+        if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {
+            return Some(config.contains(&P::PASSWORD));
         }
         node.children.iter().find_map(password)
     }
@@ -1208,20 +1210,20 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     let root = host.ui.semantics_tree(true);
     let Some((found, shown)) = crate::accessibility::find_shown(&root, id) else { return false };
     let node = found.id;
-    let action = match action {
-        0 => compose_ui::SemanticsAction::OnClick,
-        1 => compose_ui::SemanticsAction::RequestFocus,
-        2 => compose_ui::SemanticsAction::SetProgress(value),
+    use compose_ui::SemanticsActions as A;
+    match action {
+        0 => host.ui.perform_semantics_action(node, &A::ON_CLICK),
+        1 => host.ui.perform_semantics_action(node, &A::REQUEST_FOCUS),
+        2 => host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value)),
         3..=8 => {
             let direction = 1u8 << (action - 3);
             let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, shown) else {
                 return false;
             };
-            compose_ui::SemanticsAction::ScrollBy { x, y }
+            host.ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
         }
-        _ => return false,
-    };
-    host.ui.perform_semantics_action(node, action)
+        _ => false,
+    }
 }
 
 /// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes

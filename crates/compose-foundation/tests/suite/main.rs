@@ -77,6 +77,7 @@ mod scroll;
 mod scrollbar;
 mod selection;
 mod semantics_actions;
+mod semantics_properties;
 mod shadow;
 mod text_input;
 mod text_reuse;

@@ -88,11 +88,26 @@ fn clear_and_set_semantics_clears_the_semantics_after_it_on_the_same_node() {
         BasicText!(
             "Hello",
             modifier = Modifier.test_tag("greeting").clear_and_set_semantics(|config| {
-                config.content_description.push("Greeting".into());
+                config.set_content_description("Greeting");
             }),
         );
     });
     let node = ui.on_node_with_tag("greeting").fetch_semantics_node();
-    assert_eq!(node.config.content_description.len(), 1);
-    assert!(node.config.text.is_empty(), "the text is cleared: {:?}", node.config.text);
+    assert_eq!(
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .cloned()
+            .unwrap_or_default()
+            .len(),
+        1
+    );
+    assert!(
+        node.config
+            .get(&compose_ui::SemanticsProperties::TEXT)
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "the text is cleared: {:?}",
+        node.config.get(&compose_ui::SemanticsProperties::TEXT).cloned().unwrap_or_default()
+    );
 }

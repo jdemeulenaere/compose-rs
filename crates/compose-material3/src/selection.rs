@@ -332,7 +332,7 @@ pub fn RadioButton(
         None => modifier,
     };
     let modifier = modifier
-        .semantics(move |config| config.selected = Some(selected))
+        .semantics(move |config| config.set_selected(selected))
         .padding(2.dp())
         .required_size((20.dp(), 20.dp()))
         .then_custom(RadioElement { selected, enabled, colors });
@@ -524,6 +524,23 @@ struct SliderElement {
     colors: SliderColors,
 }
 
+/// Where `value` is in `range`, as a fraction.
+fn fraction_in(range: (f32, f32), value: f32) -> f32 {
+    let (start, end) = range;
+    if end <= start { 0.0 } else { ((value - start) / (end - start)).clamp(0.0, 1.0) }
+}
+
+/// The value at `fraction` of `range`, snapped to the `steps`.
+fn snapped(range: (f32, f32), steps: u32, fraction: f32) -> f32 {
+    let mut fraction = fraction.clamp(0.0, 1.0);
+    if steps > 0 {
+        let intervals = (steps + 1) as f32;
+        fraction = (fraction * intervals).round() / intervals;
+    }
+    let (start, end) = range;
+    start + (end - start) * fraction
+}
+
 struct SliderNode {
     value: f32,
     on_value_change: Callback<dyn Fn(f32)>,
@@ -598,19 +615,12 @@ impl SliderNode {
     }
 
     fn fraction_of(&self, value: f32) -> f32 {
-        let (start, end) = self.range;
-        if end <= start { 0.0 } else { ((value - start) / (end - start)).clamp(0.0, 1.0) }
+        fraction_in(self.range, value)
     }
 
     /// The value at `fraction` of the range, snapped to the steps.
     fn value_at(&self, fraction: f32) -> f32 {
-        let mut fraction = fraction.clamp(0.0, 1.0);
-        if self.steps > 0 {
-            let intervals = (self.steps + 1) as f32;
-            fraction = (fraction * intervals).round() / intervals;
-        }
-        let (start, end) = self.range;
-        start + (end - start) * fraction
+        snapped(self.range, self.steps, fraction)
     }
 
     /// Asks the application for `value`: the slider shows the value it is given back (it is
@@ -872,34 +882,37 @@ impl KeyInputModifierNode for SliderNode {
 impl SemanticsModifierNode for SliderNode {
     /// Its own node (as `progressSemantics`), its value in its range, and `SetProgress`.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.merge_descendants = true;
-        config.focusable |= self.enabled;
-        config.focused |= self.focused;
-        config.disabled |= !self.enabled;
-        config.progress_bar_range_info = Some(compose_ui::ProgressBarRangeInfo {
+        config.is_merging_semantics_of_descendants = true;
+        if self.enabled {
+            config.set_focused(self.focused);
+            config.request_focus_of_node();
+        } else {
+            config.disabled();
+        }
+        config.set_progress_bar_range_info(compose_ui::ProgressBarRangeInfo {
             current: self.value,
             range: self.range,
             steps: self.steps,
         });
-    }
-
-    /// Moves to the value asked (in the range, snapped to the steps), as Compose's slider's
-    /// `setProgress`.
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        context: &mut EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::SetProgress(target) = action else { return false };
-        if !self.enabled {
-            return false;
-        }
-        let value = self.value_at(self.fraction_of(target));
-        if value == self.asked.unwrap_or(self.value) {
-            return false;
-        }
-        self.change_to(value, context);
-        self.finish(context);
-        true
+        // Moves to the value asked (in the range, snapped to the steps), as Compose's slider's
+        // `setProgress`.
+        let (range, steps, enabled) = (self.range, self.steps, self.enabled);
+        let current = self.asked.unwrap_or(self.value);
+        let on_value_change = self.on_value_change.clone();
+        let finished = self.on_value_change_finished.clone();
+        config.set_progress(None, move |target| {
+            if !enabled {
+                return false;
+            }
+            let value = snapped(range, steps, fraction_in(range, target));
+            if value == current {
+                return false;
+            }
+            on_value_change(value);
+            if let Some(finished) = &finished {
+                finished();
+            }
+            true
+        });
     }
 }

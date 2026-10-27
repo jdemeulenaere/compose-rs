@@ -432,20 +432,14 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 
 impl compose_ui::SemanticsModifierNode for ScrimNode {
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
-        config.content_description.push(self.description.into());
-        config.clickable |= self.enabled;
-    }
-
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        context: &mut compose_ui::EventContext<'_>,
-    ) -> bool {
-        if action != compose_ui::SemanticsAction::OnClick || !self.enabled {
-            return false;
+        config.set_content_description(self.description);
+        if self.enabled {
+            let close = self.close.clone();
+            config.on_click(None, move || {
+                close();
+                true
+            });
         }
-        context.call(&self.close);
-        true
     }
 }
 
@@ -512,7 +506,7 @@ pub fn ModalDrawerSheet(
                 Dp::UNSPECIFIED,
             ))
             .fill_max_height()
-            .semantics(|config| config.content_description.push("Navigation menu".into())),
+            .semantics(|config| config.set_content_description("Navigation menu")),
         drawer_shape,
         drawer_container_color,
         content_color,
@@ -608,7 +602,7 @@ pub fn NavigationDrawerItem(
             },
             on_click,
         )
-        .semantics(move |config| config.selected = Some(selected))
+        .semantics(move |config| config.set_selected(selected))
         .padding((16.dp(), 0.dp(), 24.dp(), 0.dp()));
     let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());
     Row(

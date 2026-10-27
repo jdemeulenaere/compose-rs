@@ -298,12 +298,12 @@ fn combined_clickable_clicks_long_clicks_and_double_clicks() {
     ui.advance_time_by(Duration::from_millis(500));
     assert_eq!(*log.borrow(), vec!["click", "double", "long"]);
     // Accessibility clicks at once.
-    ui.on_node_with_tag("target").perform_semantics_action(compose_ui::SemanticsAction::OnClick);
+    ui.on_node_with_tag("target").perform_semantics_action(&compose_ui::SemanticsActions::ON_CLICK);
     assert_eq!(log.borrow().last().unwrap(), "click");
     let semantics = ui.dump_semantics();
     assert!(semantics.contains("long_clickable"), "{semantics}");
     ui.on_node_with_tag("target")
-        .perform_semantics_action(compose_ui::SemanticsAction::OnLongClick);
+        .perform_semantics_action(&compose_ui::SemanticsActions::ON_LONG_CLICK);
     assert_eq!(log.borrow().last().unwrap(), "long");
 }
 
@@ -365,8 +365,11 @@ fn selectable_and_selectable_group_set_their_semantics() {
     assert!(semantics.contains("selected=true"), "{semantics}");
     ui.on_node_with_tag("option 1").perform_click();
     let option = ui.on_node_with_tag("option 1").fetch_semantics_node();
-    assert_eq!(option.config.selected, Some(true));
-    assert_eq!(option.config.role, Some(Role::RadioButton));
+    assert_eq!(option.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
+    assert_eq!(
+        option.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+        Some(Role::RadioButton)
+    );
 }
 
 #[test]

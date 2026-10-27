@@ -43,7 +43,10 @@ fn passes_a_focused_popup_does_not_put_the_focus_on_the_node_behind_it() {
         let root = tree.semantics_tree(true);
         root.flatten()
             .into_iter()
-            .find(|node| node.config.test_tag.as_deref() == Some("card"))
+            .find(|node| {
+                node.config.get(&compose_ui::SemanticsProperties::TEST_TAG).cloned().as_deref()
+                    == Some("card")
+            })
             .map(|node| node.id)
             .expect("the card")
     });

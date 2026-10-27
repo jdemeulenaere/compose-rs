@@ -182,7 +182,13 @@ fn a_list_item_merges_its_texts_into_one_node() {
         });
     });
     let node = ui.on_node_with_tag("item").fetch_semantics_node();
-    let texts: Vec<&str> = node.config.text.iter().map(|text| text.as_str()).collect();
+    let texts: Vec<&str> = node
+        .config
+        .get(&compose_ui::SemanticsProperties::TEXT)
+        .into_iter()
+        .flatten()
+        .map(|text| text.as_str())
+        .collect();
     assert_eq!(texts, vec!["Headline", "Supporting"], "{}", ui.dump_semantics());
 }
 
@@ -230,7 +236,13 @@ fn a_hidden_navigation_label_still_names_its_tab() {
         });
     });
     let search = ui.on_node_with_tag("Search").fetch_semantics_node();
-    let texts: Vec<&str> = search.config.text.iter().map(|text| text.as_str()).collect();
+    let texts: Vec<&str> = search
+        .config
+        .get(&compose_ui::SemanticsProperties::TEXT)
+        .into_iter()
+        .flatten()
+        .map(|text| text.as_str())
+        .collect();
     assert_eq!(texts, vec!["Search"], "{}", ui.dump_semantics());
 }
 
@@ -256,11 +268,24 @@ fn a_labelled_navigation_item_does_not_repeat_its_icon_description() {
     });
     let node = ui.on_node_with_tag("home").fetch_semantics_node();
     assert!(
-        node.config.content_description.is_empty(),
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
         "the icon's description is cleared: {:?}",
-        node.config.content_description
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .cloned()
+            .unwrap_or_default()
     );
-    let texts: Vec<&str> = node.config.text.iter().map(|text| text.as_str()).collect();
+    let texts: Vec<&str> = node
+        .config
+        .get(&compose_ui::SemanticsProperties::TEXT)
+        .into_iter()
+        .flatten()
+        .map(|text| text.as_str())
+        .collect();
     assert_eq!(texts, vec!["Home"]);
 }
 

@@ -40,7 +40,12 @@ fn a_button_follows_the_material_sizes_and_states() {
     ui.wait_for_idle();
     ui.on_node_with_tag("button").assert_is_not_enabled().perform_click();
     assert_eq!(clicks.get(), 1);
-    let roles = ui.on_node_with_tag("button").fetch_semantics_node().config.role;
+    let roles = ui
+        .on_node_with_tag("button")
+        .fetch_semantics_node()
+        .config
+        .get(&compose_ui::SemanticsProperties::ROLE)
+        .copied();
     assert_eq!(roles, Some(Role::Button));
 }
 

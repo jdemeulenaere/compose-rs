@@ -12,8 +12,8 @@ This ledger maps Jetpack Compose UI's tests and public API in input, focus, sema
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `covered` | 3 | 6 |
-| `port` | 16 | 313 |
+| `covered` | 4 | 17 |
+| `port` | 15 | 302 |
 | `partial` | 36 | 1,185 |
 | `feature:*` | 134 | 1,565 |
 | `n/a` | 50 | 456 |
@@ -193,12 +193,12 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 
 | Path | `@Test` | Covers | Status | Detail |
 |---|---|---|---|---|
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/MergedSemanticsConfigurationTest.kt` | 11 | The merged configuration of a node: merging, clearing, deep hierarchies, nested mergers | `port` | Merging and clearing exist (`ui/ui.rs` `a_clickable_merges_its_descendants_semantics`, `fnd/review_semantics.rs`, `fnd/review_round5.rs`, `m3/review_round4.rs`); the test reads the internal `mergedSemanticsConfiguration()`, so port through `semantics_tree(true)`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/MergedSemanticsConfigurationTest.kt` | 11 | The merged configuration of a node: merging, clearing, deep hierarchies, nested mergers | `covered` | Ported through the merged and unmerged trees: `crates/compose-foundation/tests/suite/semantics_properties.rs` (`a_single_modifier_merges_to_itself` … `merging_goes_deep_and_stops_at_mergers_and_clearers`); the merged texts in the children's order, as `SemanticsNode`'s (the test's `SemanticsInfo.mergedSemanticsConfiguration` walks them last first). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsInfoTest.kt` | 9 | `SemanticsInfo` of layout nodes, deactivated nodes, transparency | `feature:semantics-tree-api` | Transparent (alpha 0) nodes are still in compose-rs's semantics. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsListenerTest.kt` | 13 | The owner's semantics listeners fire on property, text and focus changes | n/a: internal `SemanticsListener`; compose-rs's per-frame invalidation (D630) is tested by `and/accessibility_state.rs` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsModifierNodeTest.kt` | 22 | `applySemantics` is lazy, cached, re-run on `invalidateSemantics` and observed reads | `feature:semantics-tree-api` | compose-rs runs `apply_semantics` on every tree build, with no invalidation. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsPropertiesAndroidTest.kt` | 1 | The credential-request semantics property | `feature:autofill` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsTests.kt` | 74 | Semantics tree: merging, clearing, outer over inner, updates on add/remove, action merging, z order, bounds, ids, text substitution, visibility of merged children | `partial` | Merging, clearing and override rules are tested (`fnd/review_semantics.rs`, `fnd/review_round5.rs`, `fnd/review_round3.rs`, `ui/ui.rs`); pane title, traversal properties, content type, action labels, text substitution need semantics-properties; z-sorted children, bounds in parent, ids, fake nodes need semantics-tree-api. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/semantics/SemanticsTests.kt` | 74 | Semantics tree: merging, clearing, outer over inner, updates on add/remove, action merging, z order, bounds, ids, text substitution, visibility of merged children | `partial` | Merging, clearing and override rules are tested (`fnd/review_semantics.rs`, `fnd/review_round5.rs`, `fnd/review_round3.rs`, `ui/ui.rs`); pane title, traversal properties, action collapsing and merging and the merge policies are ported (`crates/compose-foundation/tests/suite/semantics_properties.rs`, D1250); content type needs autofill, text substitution needs `BasicText`'s substitution actions; z-sorted children, bounds in parent, ids, fake nodes need semantics-tree-api. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/semantics/SemanticsHostApiTest.kt` | 12 | The experimental host API: place order, merged/unmerged queries, accessibility children, bounds, visibility, hit tests, uncovered nodes | `feature:semantics-tree-api` | Experimental (`ExperimentalComposeUiHostApi`). |
 
 ### Accessibility (9 files, 354 methods)
@@ -545,6 +545,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 ### semantics-properties (XL)
 - **Compose API:** `SemanticsPropertyKey`, `SemanticsPropertyReceiver`, typed `SemanticsConfiguration`, `AccessibilityAction`, `CustomAccessibilityAction`, and the properties and actions listed in section 3.
 - **What:** semantics as an open set of keyed properties with merge policies and labelled actions, as Compose's, replacing the fixed `SemanticsConfiguration` struct and the `SemanticsAction` enum; every compose-rs component and both accessibility bridges move to it; test matchers on keys.
+- **Status:** done (D1250–D1254): the keys, both sets but the deprecated, autofill and `TextRange` keys, the receiver, actions as closures, custom actions, every component and both bridges moved, the key matchers. Left: components setting the new properties (lazy lists' and `selectable_group`'s `CollectionInfo`, `BasicText`'s text substitution, headings, live regions), which CollectionInfoTest needs.
 - **Tests:** CollectionInfoTest; most of what SemanticsTests, WindowContentChangeTest, AndroidAccessibilityTest and AndroidComposeViewAccessibilityDelegateCompatTest miss; every Compose test using `SemanticsMatcher.expectValue` in other areas.
 - **Depends on:** none in ui; text's `TextRange`/`AnnotatedString` (present) for text properties; foundation and Material components set the new properties (their areas).
 - **Experimental:** no (the host-facing `accessibilityExtraKey` is `ExperimentalComposeUiHostApi`).
@@ -690,7 +691,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 | `rule.runOnIdle { … }`, `waitForIdle()` | code after an action (actions run frames synchronously), `ui.wait_for_idle()` |
 | `rule.mainClock.autoAdvance = false`, `advanceTimeBy` | `ComposeTestRule::with_manual_clock`, `advance_time_by`, `advance_time_by_frame` |
 | `onNodeWithTag/Text/ContentDescription`, `onAllNodes…[i]` | `on_node_with_tag/text/content_description`, `on_all_nodes(matcher, i)`, `count_nodes`; `on_node_unmerged` for `useUnmergedTree = true` |
-| `performClick`, `performSemanticsAction(OnClick)`, `requestFocus()`, `performTextInput`, `performKeyPress` | `perform_click`, `perform_semantics_action(SemanticsAction::…)`, `request_focus`, `perform_text_input`, `perform_key_press`; `ui.press_key`, `ui.type_text` |
+| `performClick`, `performSemanticsAction(OnClick)`, `requestFocus()`, `performTextInput`, `performKeyPress` | `perform_click`, `perform_semantics_action(&SemanticsActions::ON_CLICK)`, `request_focus`, `perform_text_input`, `perform_key_press`; `ui.press_key`, `ui.type_text` |
 | `assertIsFocused`, `assertIsEnabled`, `assertIsOn`, `assertTextEquals`, `assertExists` | the same in snake case |
 | `LocalFocusManager.current.moveFocus(d)` inside content | capture `LOCAL_FOCUS_MANAGER.current()` in a `thread_local!` or a `Rc<Cell<…>>` the test reads, then `wait_for_idle()` before asserting (the move is queued, D230) |
 | `FocusRequester()` + `requestFocus()` in `runOnIdle` | `FocusRequester::new()` (a `Copy` handle) created in the test, `request_focus()`, then `wait_for_idle()` |

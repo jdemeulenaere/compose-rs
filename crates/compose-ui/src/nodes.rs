@@ -740,36 +740,43 @@ impl PointerInputModifierNode for ClickableNode {
 }
 
 impl SemanticsModifierNode for ClickableNode {
-    fn perform_action(
-        &mut self,
-        action: crate::semantics::SemanticsAction,
-        context: &mut EventContext<'_>,
-    ) -> bool {
-        if action != crate::semantics::SemanticsAction::OnClick || !self.spec.enabled() {
-            return false;
-        }
-        self.spec.fire(context);
-        true
-    }
-
+    /// As Compose's clickable: its role, its click (which a disabled one refuses), the focus
+    /// when enabled, else disabled.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.merge_descendants = true;
-        config.clickable = true;
-        config.focusable |= self.spec.enabled();
-        config.focused |= self.state.focused;
+        config.is_merging_semantics_of_descendants = true;
+        let enabled = self.spec.enabled();
+        if enabled {
+            config.set_focused(self.state.focused);
+            config.request_focus_of_node();
+        } else {
+            config.disabled();
+        }
         match &self.spec {
             Press::Click(clickable) => {
-                config.disabled |= !clickable.enabled;
-                if clickable.role.is_some() {
-                    config.role = clickable.role;
+                if let Some(role) = clickable.role {
+                    config.set_role(role);
                 }
+                let on_click = clickable.on_click.clone();
+                config.on_click(None, move || {
+                    if enabled {
+                        on_click();
+                    }
+                    enabled
+                });
             }
             Press::Toggle(toggleable) => {
-                config.disabled |= !toggleable.enabled;
-                if toggleable.role.is_some() {
-                    config.role = toggleable.role;
+                if let Some(role) = toggleable.role {
+                    config.set_role(role);
                 }
-                config.toggleable_state = Some(ToggleableState::from(toggleable.value));
+                config.set_toggleable_state(ToggleableState::from(toggleable.value));
+                let (on_value_change, value) =
+                    (toggleable.on_value_change.clone(), toggleable.value);
+                config.on_click(None, move || {
+                    if enabled {
+                        on_value_change(!value);
+                    }
+                    enabled
+                });
             }
         }
     }
@@ -1045,25 +1052,14 @@ impl SemanticsModifierNode for CombinedClickableNode {
     /// A clickable's, with a long-click action if it long-clicks.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         self.clickable.apply_semantics(config);
-        config.long_clickable |=
-            self.handlers.borrow().on_long_click.is_some() && self.clickable.spec.enabled();
-    }
-
-    fn perform_action(
-        &mut self,
-        action: crate::semantics::SemanticsAction,
-        context: &mut EventContext<'_>,
-    ) -> bool {
-        if action != crate::semantics::SemanticsAction::OnLongClick {
-            return self.clickable.perform_action(action, context);
-        }
         let on_long_click = self.handlers.borrow().on_long_click.clone();
-        match on_long_click {
-            Some(callback) if self.clickable.spec.enabled() => {
-                context.call(&callback);
+        if let Some(on_long_click) = on_long_click
+            && self.clickable.spec.enabled()
+        {
+            config.on_long_click(None, move || {
+                on_long_click();
                 true
-            }
-            _ => false,
+            });
         }
     }
 }
@@ -1211,8 +1207,10 @@ impl FocusTargetModifierNode for FocusableNode {
 
 impl SemanticsModifierNode for FocusableNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.focusable |= self.enabled;
-        config.focused |= self.focused;
+        if self.enabled {
+            config.set_focused(self.focused);
+            config.request_focus_of_node();
+        }
     }
 }
 
@@ -1255,7 +1253,7 @@ impl ModifierNode for TestTagNode {
 
 impl SemanticsModifierNode for TestTagNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.test_tag = Some(self.0.clone());
+        config.set_test_tag(self.0.clone());
     }
 }
 
@@ -1269,7 +1267,7 @@ impl ModifierNode for SemanticsNode {
 
 impl SemanticsModifierNode for SemanticsNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.merge_descendants |= self.0;
+        config.is_merging_semantics_of_descendants |= self.0;
         config.apply(&self.1);
     }
 }

@@ -4,7 +4,10 @@
 
 use compose_ui::ImeAction;
 use compose_ui::platform::{NodeId, SemanticsNode};
-use compose_ui::{Key, ProgressBarRangeInfo, SemanticsAction};
+use compose_ui::{
+    AccessibilityAction, ActionFn, Key, ProgressBarRangeInfo, SemanticsActions,
+    SemanticsProperties, SemanticsPropertyKey, SemanticsValue,
+};
 
 use crate::matcher::{Matcher, NodeRef, TreeView, same_set};
 use crate::print::print_node;
@@ -151,13 +154,80 @@ impl<'a> SemanticsNodeInteraction<'a> {
         self.perform_touch_input(|touch| touch.click())
     }
 
-    /// Performs `action` on the node, as `performSemanticsAction` (an accessibility service's
-    /// request, not input), then waits for idle. Panics if the node doesn't offer it.
+    /// Performs the node's action `key`, as `performSemanticsAction(key)` (an accessibility
+    /// service's request, not input): the action is called (what it returns is ignored, as
+    /// Compose's), then the rule waits for idle. Panics if the node doesn't offer it.
     #[track_caller]
-    pub fn perform_semantics_action(&mut self, action: SemanticsAction) -> &mut Self {
+    pub fn perform_semantics_action(
+        &mut self,
+        key: &'static SemanticsPropertyKey<AccessibilityAction<ActionFn>>,
+    ) -> &mut Self {
+        self.perform_semantics_action_with(key, |action| {
+            action();
+        })
+    }
+
+    /// Performs an action with arguments, as `performSemanticsAction(key) { action -> … }`:
+    /// `invocation` calls it.
+    #[track_caller]
+    pub fn perform_semantics_action_with<F: ?Sized + 'static>(
+        &mut self,
+        key: &'static SemanticsPropertyKey<AccessibilityAction<F>>,
+        invocation: impl FnOnce(&F),
+    ) -> &mut Self
+    where
+        AccessibilityAction<F>: SemanticsValue,
+    {
         let node = self.fetch_semantics_node();
-        let performed = self.rule.host.perform_semantics_action(node.id, action);
-        assert!(performed, "compose-test: the node doesn't offer {action:?}: {:?}", node.config);
+        let Some(action) = node.config.get(key) else {
+            panic!(
+                "compose-test: Failed to perform {} action.\nThe node is missing '{}': {:?}",
+                key.name(),
+                key.name(),
+                node.config
+            )
+        };
+        if let Some(action) = action.action.clone() {
+            invocation(&action);
+        }
+        self.rule.run_current();
+        self.rule.wait_for_idle();
+        self
+    }
+
+    /// Performs the node's custom action labelled `label`, as
+    /// `performCustomAccessibilityActionWithLabel`: fails unless exactly one has it.
+    #[track_caller]
+    pub fn perform_custom_accessibility_action_with_label(&mut self, label: &str) -> &mut Self {
+        self.perform_custom_accessibility_action_where(&format!("label is {label:?}"), |l| {
+            l == label
+        })
+    }
+
+    /// Performs the node's custom action whose label matches, as
+    /// `performCustomAccessibilityActionWithLabelMatching`: fails unless exactly one does.
+    #[track_caller]
+    pub fn perform_custom_accessibility_action_where(
+        &mut self,
+        description: &str,
+        predicate: impl Fn(&str) -> bool,
+    ) -> &mut Self {
+        let node = self.fetch_semantics_node();
+        let actions =
+            node.config.get(&SemanticsActions::CUSTOM_ACTIONS).cloned().unwrap_or_default();
+        let matching: Vec<_> = actions.iter().filter(|action| predicate(&action.label)).collect();
+        match matching.as_slice() {
+            [action] => {
+                (action.action)();
+            }
+            [] => panic!("compose-test: No custom accessibility actions matched [{description}]"),
+            many => panic!(
+                "compose-test: Expected exactly one custom accessibility action to match \
+                 [{description}], but found {}",
+                many.len()
+            ),
+        }
+        self.rule.run_current();
         self.rule.wait_for_idle();
         self
     }
@@ -167,12 +237,12 @@ impl<'a> SemanticsNodeInteraction<'a> {
     fn focus_for_text(&mut self, what: &str, require_editable: bool) -> SemanticsNode {
         let node = self.fetch_semantics_node();
         assert!(
-            !node.config.disabled,
+            !node.config.contains(&SemanticsProperties::DISABLED),
             "compose-test: {what} on a node that isn't enabled: {:?}",
             node.config
         );
         assert!(
-            !require_editable || node.config.editable,
+            !require_editable || node.config.get(&SemanticsProperties::IS_EDITABLE) == Some(&true),
             "compose-test: {what} on a node that isn't editable: {:?}",
             node.config
         );
@@ -239,9 +309,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
             let scroll = self
                 .with_node(|node| {
                     let scrollable = node.ancestors().find(|ancestor| {
-                        let config = ancestor.config();
-                        config.horizontal_scroll_axis_range.is_some()
-                            || config.vertical_scroll_axis_range.is_some()
+                        ancestor.config().contains(&SemanticsActions::SCROLL_BY)
                     })?;
                     let viewport = scrollable.bounds();
                     let target = node.bounds();
@@ -253,19 +321,21 @@ impl<'a> SemanticsNodeInteraction<'a> {
                         }
                     };
                     let config = scrollable.config();
+                    let horizontal = config.get(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE);
+                    let vertical = config.get(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE);
                     let mut dx = delta(target.left - viewport.left, target.right - viewport.right);
-                    if config.horizontal_scroll_axis_range.is_some_and(|r| r.reverse_scrolling) {
+                    if horizontal.is_some_and(|r| r.reverse_scrolling) {
                         dx = -dx;
                     }
                     if scrollable.node().rtl {
                         dx = -dx;
                     }
                     let mut dy = delta(target.top - viewport.top, target.bottom - viewport.bottom);
-                    if config.vertical_scroll_axis_range.is_some_and(|r| r.reverse_scrolling) {
+                    if vertical.is_some_and(|r| r.reverse_scrolling) {
                         dy = -dy;
                     }
-                    let scrolls = (dx != 0.0 && config.horizontal_scroll_axis_range.is_some())
-                        || (dy != 0.0 && config.vertical_scroll_axis_range.is_some());
+                    let scrolls =
+                        (dx != 0.0 && horizontal.is_some()) || (dy != 0.0 && vertical.is_some());
                     Some((scrollable.id(), scrolls.then_some((dx, dy))))
                 })
                 .unwrap_or_else(|message| panic!("compose-test: performScrollTo: {message}"));
@@ -282,7 +352,11 @@ impl<'a> SemanticsNodeInteraction<'a> {
                 "compose-test: Action performScrollTo() cannot scroll the node into view because \
                  mainClock.autoAdvance is set to false: scrolls take frames"
             );
-            self.rule.host.perform_semantics_action(scrollable, SemanticsAction::ScrollBy { x, y });
+            self.rule.host.perform_semantics_action_with(
+                scrollable,
+                &SemanticsActions::SCROLL_BY,
+                |action| action(x, y),
+            );
         }
         panic!("compose-test: performScrollTo never brought the node into view");
     }
@@ -469,7 +543,12 @@ impl<'a> SemanticsNodeInteraction<'a> {
     pub fn assert_content_description_equals(&mut self, descriptions: &[&str]) -> &mut Self {
         let expected: Vec<String> = descriptions.iter().map(|d| d.to_string()).collect();
         self.assert(Matcher::new(format!("content descriptions = {expected:?}"), move |config| {
-            let actual: Vec<&str> = config.content_description.iter().map(|d| d.as_str()).collect();
+            let actual: Vec<&str> = config
+                .get(&SemanticsProperties::CONTENT_DESCRIPTION)
+                .into_iter()
+                .flatten()
+                .map(|d| d.as_str())
+                .collect();
             same_set(&actual, &expected)
         }))
     }

@@ -14,7 +14,10 @@ use compose_ui::{Modifier, UnitExt};
 
 /// The bounds of the field's inner text (its focus target), in the root.
 fn inner_text_bounds(ui: &mut ComposeTestRule) -> compose_ui::Rect {
-    ui.on_node(Matcher::new("editable", |config| config.editable)).request_focus();
+    ui.on_node(Matcher::new("editable", |config| {
+        config.contains(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
+    }))
+    .request_focus();
     let bounds = ui.host().with_tree(|tree| tree.bounds_in_root(tree.focused().expect("focused")));
     ui.host().clear_focus();
     ui.wait_for_idle();

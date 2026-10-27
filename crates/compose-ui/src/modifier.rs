@@ -324,13 +324,13 @@ impl Modifier {
         options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.semantics(|config| config.selected = Some(selected)).clickable_with(options, on_click)
+        self.semantics(|config| config.set_selected(selected)).clickable_with(options, on_click)
     }
 
     /// Groups selectable items (radio buttons) for accessibility, as
     /// `Modifier.selectableGroup`.
     pub fn selectable_group(self) -> Modifier {
-        self.semantics(|config| config.selectable_group = true)
+        self.semantics(|config| config.selectable_group())
     }
 
     /// A click, a double click and a long press, as `Modifier.combinedClickable`: with
@@ -453,7 +453,7 @@ impl Modifier {
     ) -> Modifier {
         self.semantics(|config| {
             properties(config);
-            config.clear_descendants = true;
+            config.is_clearing_semantics = true;
         })
     }
 }
@@ -1229,16 +1229,9 @@ pub trait PointerInputModifierNode {
 
 /// A node that adds semantics, as `SemanticsModifierNode`.
 pub trait SemanticsModifierNode {
+    /// Sets the node's properties and the actions it offers, as `applySemantics`: an action is
+    /// a closure, called outside the tree when performed (D1250).
     fn apply_semantics(&self, config: &mut SemanticsConfiguration);
-    /// Performs `action` if this node offers it (as its semantics say), returning whether it
-    /// did.
-    fn perform_action(
-        &mut self,
-        _action: crate::semantics::SemanticsAction,
-        _context: &mut EventContext<'_>,
-    ) -> bool {
-        false
-    }
 }
 
 /// A focus target, as `FocusTargetModifierNode`.

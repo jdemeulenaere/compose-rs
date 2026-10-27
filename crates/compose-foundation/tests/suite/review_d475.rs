@@ -426,7 +426,13 @@ fn moving_down_in_a_spaced_list_moves_to_the_next_row() {
         frames += 1;
     }
     let row_3 = ui.count_nodes(&has_test_tag("row 3")) == 1
-        && ui.on_node_with_tag("row 3").fetch_semantics_node().config.focused;
+        && ui
+            .on_node_with_tag("row 3")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::FOCUSED)
+            .copied()
+            .unwrap_or(false);
     assert!(row_3, "row 3 not focused after {frames} frames:\n{}", ui.dump_semantics());
 }
 

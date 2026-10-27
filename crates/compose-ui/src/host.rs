@@ -793,20 +793,57 @@ impl UiHost {
         self.with_tree(|tree| tree.focus_requests.software_keyboard.take())
     }
 
-    /// Moves focus to `node`'s focus target.
-    /// Performs a semantics action on `node` (an accessibility service's click or focus), then
-    /// runs the handlers' actions. Returns whether the node did it.
+    /// The action `key` that `node` offers, from its own (unmerged) configuration, as Compose's
+    /// accessibility reads it (`unmergedConfig`), with what its parts set (a text field's inner
+    /// field).
+    pub fn semantics_action<F: ?Sized + 'static>(
+        &self,
+        node: NodeId,
+        key: &'static crate::semantics::SemanticsPropertyKey<
+            crate::semantics::AccessibilityAction<F>,
+        >,
+    ) -> Option<Rc<F>>
+    where
+        crate::semantics::AccessibilityAction<F>: crate::semantics::SemanticsValue,
+    {
+        let config = self.with_tree(|tree| tree.unmerged_semantics_config(node))?;
+        config.get(key)?.action.clone()
+    }
+
+    /// Performs `node`'s action `key` (an accessibility service's click or focus), as Compose's
+    /// `performSemanticsAction`: the action is called outside the tree, then the focus moves
+    /// it asked for. Returns what the action did (`false` if the node offers none).
     pub fn perform_semantics_action(
         &mut self,
         node: NodeId,
-        action: crate::semantics::SemanticsAction,
+        key: &'static crate::semantics::SemanticsPropertyKey<
+            crate::semantics::AccessibilityAction<crate::semantics::ActionFn>,
+        >,
     ) -> bool {
-        let (performed, actions) =
-            self.with_tree(|tree| tree.perform_semantics_action(node, action));
-        Self::run(actions);
-        performed
+        self.perform_semantics_action_with(node, key, |action| action())
     }
 
+    /// `perform_semantics_action` for an action with arguments: `perform` calls it (Compose's
+    /// `performSemanticsAction(key) { action -> … }`).
+    pub fn perform_semantics_action_with<F: ?Sized + 'static>(
+        &mut self,
+        node: NodeId,
+        key: &'static crate::semantics::SemanticsPropertyKey<
+            crate::semantics::AccessibilityAction<F>,
+        >,
+        perform: impl FnOnce(&F) -> bool,
+    ) -> bool
+    where
+        crate::semantics::AccessibilityAction<F>: crate::semantics::SemanticsValue,
+    {
+        let Some(action) = self.semantics_action(node, key) else { return false };
+        let done = perform(&action);
+        self.handle_focus_requests();
+        self.wake_if_dirty();
+        done
+    }
+
+    /// Moves focus to `node`'s focus target.
     pub fn request_focus(&mut self, node: NodeId) {
         let actions = self.with_tree(|tree| tree.request_focus(node));
         Self::run(actions);

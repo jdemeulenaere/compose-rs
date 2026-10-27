@@ -70,9 +70,11 @@ impl KeyInputModifierNode for FieldNode {
 
 impl SemanticsModifierNode for FieldNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.editable = true;
-        config.editable_text = Some(self.name.into());
-        config.disabled = !self.enabled;
+        config.set_is_editable(true);
+        config.set_editable_text(self.name);
+        if !self.enabled {
+            config.disabled();
+        }
     }
 }
 

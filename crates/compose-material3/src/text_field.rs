@@ -491,7 +491,7 @@ fn decorated_field(
     };
     // In error, the field says so, as Compose's `semantics { error(…) }`.
     let modifier = if is_error {
-        modifier.semantics(|config| config.error = Some("Invalid input".into()))
+        modifier.semantics(|config| config.error("Invalid input"))
     } else {
         modifier
     };

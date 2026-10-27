@@ -47,8 +47,11 @@ fn a_password_shows_masked_and_says_so() {
     ui.on_node_with_tag("field").perform_text_input("héllo");
     assert_eq!(*value.borrow(), "héllo");
     let node = ui.on_node_with_tag("field").fetch_semantics_node();
-    assert_eq!(node.config.editable_text.as_deref(), Some("•••••"));
-    assert!(node.config.password);
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).cloned().as_deref(),
+        Some("•••••")
+    );
+    assert!(node.config.contains(&compose_ui::SemanticsProperties::PASSWORD));
     // The cursor follows the text: typing on appends.
     ui.type_text("!");
     assert_eq!(*value.borrow(), "héllo!");

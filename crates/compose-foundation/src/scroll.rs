@@ -301,21 +301,16 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
             reverse_scrolling: false,
         };
         if self.vertical {
-            config.vertical_scroll_axis_range = Some(range);
+            config.set_vertical_scroll_axis_range(range);
         } else {
-            config.horizontal_scroll_axis_range = Some(range);
+            config.set_horizontal_scroll_axis_range(range);
         }
-    }
-
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        _context: &mut compose_ui::EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
-        // Towards the content's end (its value growing), as Compose's (D491).
-        let delta = if self.vertical { y } else { x };
-        delta != 0.0 && scroll_state_by(&self.state, delta, &mut self.fraction) != 0.0
+        let (state, vertical) = (self.state, self.vertical);
+        config.scroll_by(None, move |x, y| {
+            // Towards the content's end (its value growing), as Compose's (D491).
+            let delta = if vertical { y } else { x };
+            delta != 0.0 && scroll_state_by(&state, delta, &mut 0.0) != 0.0
+        });
     }
 }
 

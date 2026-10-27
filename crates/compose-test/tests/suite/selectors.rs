@@ -320,8 +320,9 @@ fn all_or_any_of_the_nodes_satisfy_a_matcher() {
 fn the_unmerged_tree_shows_what_merging_hides() {
     let mut ui = compose_test(|| {
         Box!(
-            modifier =
-                Modifier.semantics(|config| config.merge_descendants = true).test_tag("parent"),
+            modifier = Modifier
+                .semantics(|config| config.is_merging_semantics_of_descendants = true)
+                .test_tag("parent"),
             {
                 Leaf("child");
             }

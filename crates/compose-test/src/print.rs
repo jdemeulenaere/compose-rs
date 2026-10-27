@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use compose_ui::SemanticsConfiguration;
+use compose_ui::{SemanticsConfiguration, SemanticsProperties, ValueSlot};
 
 use crate::matcher::NodeRef;
 
@@ -44,7 +44,7 @@ fn print_inner(
         bounds.bottom
     );
     let config = node.config();
-    if let Some(tag) = &config.test_tag {
+    if let Some(tag) = config.get(&SemanticsProperties::TEST_TAG) {
         let _ = write!(out, ", Tag: '{tag}'");
     }
     append_config(config, &new_indent, out);
@@ -82,84 +82,36 @@ fn print_inner(
     }
 }
 
-/// The properties, sorted by Compose's names, then the flags, the actions and the merging.
+/// The properties, sorted by name (the test tag left out: it's on the node's line), then the
+/// flags (`Unit` values), the actions and the merging, as Compose's `appendConfigInfo`.
 fn append_config(config: &SemanticsConfiguration, indent: &str, out: &mut String) {
-    let mut properties: Vec<(&str, String)> = Vec::new();
-    if !config.content_description.is_empty() {
-        let list: Vec<&str> = config.content_description.iter().map(|d| d.as_str()).collect();
-        properties.push(("ContentDescription", format!("[{}]", list.join(", "))));
-    }
-    if let Some(text) = &config.editable_text {
-        properties.push(("EditableText", text.to_string()));
-    }
-    if let Some(error) = &config.error {
-        properties.push(("Error", error.to_string()));
-    }
-    if config.focusable {
-        properties.push(("Focused", config.focused.to_string()));
-    }
-    if let Some(range) = config.horizontal_scroll_axis_range {
-        properties.push(("HorizontalScrollAxisRange", format!("{range:?}")));
-    }
-    if let Some(info) = config.progress_bar_range_info {
-        properties.push(("ProgressBarRangeInfo", format!("{info:?}")));
-    }
-    if let Some(role) = config.role {
-        properties.push(("Role", format!("{role:?}")));
-    }
-    if let Some(selected) = config.selected {
-        properties.push(("Selected", selected.to_string()));
-    }
-    if let Some(state) = &config.state_description {
-        properties.push(("StateDescription", state.to_string()));
-    }
-    if !config.text.is_empty() {
-        let list: Vec<&str> = config.text.iter().map(|t| t.as_str()).collect();
-        properties.push(("Text", format!("[{}]", list.join(", "))));
-    }
-    if let Some(state) = config.toggleable_state {
-        properties.push(("ToggleableState", format!("{state:?}")));
-    }
-    if let Some(range) = config.vertical_scroll_axis_range {
-        properties.push(("VerticalScrollAxisRange", format!("{range:?}")));
-    }
+    let mut properties: Vec<(&str, &ValueSlot)> = config
+        .properties()
+        .filter(|(key, _)| key.name() != SemanticsProperties::TEST_TAG.name())
+        .map(|(key, value)| (key.name(), value))
+        .collect();
     properties.sort_by_key(|(name, _)| *name);
+    let mut flags = Vec::new();
+    let mut actions = Vec::new();
     for (name, value) in properties {
-        let _ = write!(out, "\n{indent}{name} = '{value}'");
+        if value.is_action() {
+            actions.push(name);
+        } else if value.is_unit() {
+            flags.push(name);
+        } else {
+            let _ = write!(out, "\n{indent}{name} = '{}'", value.display());
+        }
     }
-    let flags: Vec<&str> = [
-        (config.disabled, "Disabled"),
-        (config.is_dialog, "IsDialog"),
-        (config.is_popup, "IsPopup"),
-        (config.password, "Password"),
-        (config.selectable_group, "SelectableGroup"),
-    ]
-    .into_iter()
-    .filter_map(|(set, name)| set.then_some(name))
-    .collect();
     if !flags.is_empty() {
         let _ = write!(out, "\n{indent}[{}]", flags.join(", "));
     }
-    let scrolls = config.horizontal_scroll_axis_range.is_some()
-        || config.vertical_scroll_axis_range.is_some();
-    let actions: Vec<&str> = [
-        (config.clickable, "OnClick"),
-        (config.long_clickable, "OnLongClick"),
-        (config.focusable, "RequestFocus"),
-        (scrolls, "ScrollBy"),
-        (config.editable, "SetText"),
-        (config.progress_bar_range_info.is_some(), "SetProgress"),
-    ]
-    .into_iter()
-    .filter_map(|(set, name)| set.then_some(name))
-    .collect();
     if !actions.is_empty() {
         let _ = write!(out, "\n{indent}Actions = [{}]", actions.join(", "));
     }
-    if config.merge_descendants {
+    if config.is_merging_semantics_of_descendants {
         let _ = write!(out, "\n{indent}MergeDescendants = 'true'");
     }
-    if config.clear_descendants {
+    if config.is_clearing_semantics {
         let _ = write!(out, "\n{indent}ClearAndSetSemantics = 'true'");
     }
 }

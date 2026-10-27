@@ -274,8 +274,8 @@ impl DrawModifierNode for ImageNode {
 impl SemanticsModifierNode for ImageNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         if let Some(description) = self.content_description {
-            config.content_description.push(description.into());
-            config.role = Some(Role::Image);
+            config.set_content_description(description);
+            config.set_role(Role::Image);
         }
     }
 }

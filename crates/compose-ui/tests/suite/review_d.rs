@@ -18,7 +18,11 @@ fn first_child(host: &UiHost) -> NodeId {
 }
 
 fn focused_count(host: &UiHost) -> usize {
-    host.semantics_tree(true).flatten().iter().filter(|node| node.config.focused).count()
+    host.semantics_tree(true)
+        .flatten()
+        .iter()
+        .filter(|node| node.config.get(&compose_ui::SemanticsProperties::FOCUSED) == Some(&true))
+        .count()
 }
 
 // ---- Incremental measurement -------------------------------------------------------------------
@@ -395,7 +399,7 @@ fn a_semantics_modifier_lets_its_receiver_skip() {
         static RUNS: Cell<u32> = const { Cell::new(0) };
     }
     fn labelled() -> Modifier {
-        Modifier.size(10.dp()).semantics(|config| config.text.push("label".into()))
+        Modifier.size(10.dp()).semantics(|config| config.set_text("label"))
     }
     #[composable]
     fn Receiver(modifier: Modifier) {
@@ -517,12 +521,9 @@ fn constraints_offset_adds_as_in_compose() {
 #[test]
 fn a_merging_node_takes_its_descendants_focus() {
     let mut host = host(|| {
-        Stack!(
-            modifier = Modifier.semantics_with(true, |config| config.text.push("row".into())),
-            {
-                Leaf(Modifier.size(10.dp()).focusable());
-            }
-        );
+        Stack!(modifier = Modifier.semantics_with(true, |config| config.set_text("row")), {
+            Leaf(Modifier.size(10.dp()).focusable());
+        });
     });
     host.send_key(KeyEvent::down(Key::Tab));
     host.frame();

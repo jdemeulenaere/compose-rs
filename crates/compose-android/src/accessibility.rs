@@ -7,7 +7,7 @@
 //! role, and its texts. Little-endian, as the display list.
 
 use compose_ui::{
-    Rect, Role, SemanticsConfiguration, ToggleableState,
+    Rect, Role, SemanticsActions as A, SemanticsProperties as P, SharedString, ToggleableState,
     platform::{NodeId, SemanticsNode},
 };
 
@@ -77,32 +77,39 @@ fn write_string(out: &mut Writer, text: &str) {
     out.bytes.extend_from_slice(text.as_bytes());
 }
 
-fn join(texts: &[compose_ui::SharedString]) -> String {
-    texts.iter().map(|text| text.as_str()).collect::<Vec<_>>().join(" ")
+fn join(texts: Option<&compose_ui::StringList>) -> String {
+    texts.into_iter().flatten().map(|text| text.as_str()).collect::<Vec<_>>().join(" ")
 }
 
-fn flags(config: &SemanticsConfiguration) -> u32 {
+fn text_of(text: Option<&SharedString>) -> &str {
+    text.map_or("", |text| text.as_str())
+}
+
+/// The node's flags: its actions from its own configuration, as Compose's accessibility reads
+/// them (`unmergedConfig`), the rest from the merged one.
+fn flags(node: &SemanticsNode) -> u32 {
+    let config = &node.config;
     let mut flags = 0;
     let set = |flags: &mut u32, on: bool, bit: u32| {
         if on {
             *flags |= bit;
         }
     };
-    set(&mut flags, config.clickable, flag::CLICKABLE);
-    set(&mut flags, config.focusable, flag::FOCUSABLE);
-    set(&mut flags, config.focused, flag::FOCUSED);
-    set(&mut flags, config.editable, flag::EDITABLE);
-    set(&mut flags, config.password, flag::PASSWORD);
-    set(&mut flags, config.disabled, flag::DISABLED);
-    set(&mut flags, config.is_dialog, flag::DIALOG);
-    set(&mut flags, config.progress_bar_range_info.is_some(), flag::RANGE);
-    if let Some(state) = config.toggleable_state {
+    set(&mut flags, node.unmerged_config().contains(&A::ON_CLICK), flag::CLICKABLE);
+    set(&mut flags, config.contains(&P::FOCUSED), flag::FOCUSABLE);
+    set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
+    set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
+    set(&mut flags, config.contains(&P::PASSWORD), flag::PASSWORD);
+    set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
+    set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
+    set(&mut flags, config.contains(&P::PROGRESS_BAR_RANGE_INFO), flag::RANGE);
+    if let Some(&state) = config.get(&P::TOGGLEABLE_STATE) {
         flags |= flag::CHECKABLE;
         set(&mut flags, state == ToggleableState::On, flag::CHECKED);
     }
-    if let Some(selected) = config.selected {
+    if let Some(&selected) = config.get(&P::SELECTED) {
         // A radio button's selection is its checked state, as Android's.
-        if config.role == Some(Role::RadioButton) {
+        if config.get(&P::ROLE) == Some(&Role::RadioButton) {
             flags |= flag::CHECKABLE;
             set(&mut flags, selected, flag::CHECKED);
         } else {
@@ -123,11 +130,8 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     let id = virtual_id(node.id);
     let visible = clipped(node.bounds, clip);
     let bounds = visible.unwrap_or(node.bounds);
-    let scroll = config
-        .vertical_scroll_axis_range
-        .map(|range| (range, false))
-        .or(config.horizontal_scroll_axis_range.map(|range| (range, true)));
-    let mut flags = flags(config);
+    let scroll = scroll_range(node);
+    let mut flags = flags(node);
     if visible.is_none() {
         flags |= flag::HIDDEN;
     }
@@ -150,7 +154,7 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     out.f32(bounds.right);
     out.f32(bounds.bottom);
     out.u32(flags);
-    out.u8(match config.role {
+    out.u8(match config.get(&P::ROLE) {
         None => 0,
         Some(Role::Button) => 1,
         Some(Role::Checkbox) => 2,
@@ -162,12 +166,12 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
         // A role added later: none the platform knows.
         Some(_) => 0,
     });
-    write_string(out, &join(&config.text));
-    write_string(out, &join(&config.content_description));
-    write_string(out, config.editable_text.as_deref().unwrap_or(""));
-    write_string(out, config.state_description.as_deref().unwrap_or(""));
-    write_string(out, config.error.as_deref().unwrap_or(""));
-    if let Some(info) = config.progress_bar_range_info {
+    write_string(out, &join(config.get(&P::TEXT)));
+    write_string(out, &join(config.get(&P::CONTENT_DESCRIPTION)));
+    write_string(out, text_of(config.get(&P::EDITABLE_TEXT)));
+    write_string(out, text_of(config.get(&P::STATE_DESCRIPTION)));
+    write_string(out, text_of(config.get(&P::ERROR)));
+    if let Some(info) = config.get(&P::PROGRESS_BAR_RANGE_INFO) {
         out.f32(info.current);
         out.f32(info.range.0);
         out.f32(info.range.1);
@@ -186,6 +190,15 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     for child in &node.children {
         write_node(child, id, inner, out);
     }
+}
+
+/// The scroll range of `node` along its axis (horizontal: `true`), from its own
+/// configuration, as Compose's accessibility reads it (D491): vertical first.
+fn scroll_range(node: &SemanticsNode) -> Option<(compose_ui::ScrollAxisRange, bool)> {
+    let own = node.unmerged_config();
+    own.get(&P::VERTICAL_SCROLL_AXIS_RANGE)
+        .map(|&range| (range, false))
+        .or(own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE).map(|&range| (range, true)))
 }
 
 /// The node of virtual id `id` in `root`'s tree.
@@ -220,7 +233,8 @@ pub fn scroll_actions(node: &SemanticsNode) -> u8 {
         if range.reverse_scrolling { range.value < range.max_value } else { range.value > 0.0 }
     };
     let mut actions = 0;
-    if let Some(range) = node.config.horizontal_scroll_axis_range {
+    let own = node.unmerged_config();
+    if let Some(&range) = own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE) {
         if forward(range) {
             actions |= FORWARD | if node.rtl { LEFT } else { RIGHT };
         }
@@ -228,7 +242,7 @@ pub fn scroll_actions(node: &SemanticsNode) -> u8 {
             actions |= BACKWARD | if node.rtl { RIGHT } else { LEFT };
         }
     }
-    if let Some(range) = node.config.vertical_scroll_axis_range {
+    if let Some(&range) = own.get(&P::VERTICAL_SCROLL_AXIS_RANGE) {
         if forward(range) {
             actions |= FORWARD | DOWN;
         }
@@ -247,8 +261,7 @@ pub fn find_shown(root: &SemanticsNode, id: i32) -> Option<(&SemanticsNode, Rect
         if virtual_id(node.id) == id {
             return Some((node, shown.unwrap_or(node.bounds)));
         }
-        let scrolls = node.config.vertical_scroll_axis_range.is_some()
-            || node.config.horizontal_scroll_axis_range.is_some();
+        let scrolls = scroll_range(node).is_some();
         let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
         node.children.iter().find_map(|child| visit(child, id, inner))
     }
@@ -268,7 +281,8 @@ pub fn scroll_amount(node: &SemanticsNode, action: u8, page: Rect) -> Option<(f3
     let can = |range: compose_ui::ScrollAxisRange, amount: f32| {
         (amount < 0.0 && range.value > 0.0) || (amount > 0.0 && range.value < range.max_value)
     };
-    if let Some(range) = node.config.horizontal_scroll_axis_range
+    let own = node.unmerged_config();
+    if let Some(&range) = own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE)
         && action & (FORWARD | BACKWARD | LEFT | RIGHT) != 0
     {
         let mut amount = page.width();
@@ -285,7 +299,7 @@ pub fn scroll_amount(node: &SemanticsNode, action: u8, page: Rect) -> Option<(f3
             return Some((amount, 0.0));
         }
     }
-    if let Some(range) = node.config.vertical_scroll_axis_range
+    if let Some(&range) = own.get(&P::VERTICAL_SCROLL_AXIS_RANGE)
         && action & (FORWARD | BACKWARD | UP | DOWN) != 0
     {
         let mut amount = page.height();

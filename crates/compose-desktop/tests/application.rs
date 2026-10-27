@@ -29,7 +29,14 @@ fn texts(host: &UiHost) -> Vec<String> {
     host.semantics_tree(true)
         .flatten()
         .iter()
-        .flat_map(|node| node.config.text.iter().map(|text| text.to_string()).collect::<Vec<_>>())
+        .flat_map(|node| {
+            node.config
+                .get(&compose_ui::SemanticsProperties::TEXT)
+                .into_iter()
+                .flatten()
+                .map(|text| text.to_string())
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 

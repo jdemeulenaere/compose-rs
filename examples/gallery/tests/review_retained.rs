@@ -7,7 +7,11 @@ use compose::ui::{Offset, PointerEvent};
 
 fn described(description: &'static str) -> Matcher {
     Matcher::new("described", move |config| {
-        config.content_description.iter().any(|text| text.as_str() == description)
+        config
+            .get(&compose::ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .into_iter()
+            .flatten()
+            .any(|text| text.as_str() == description)
     })
 }
 

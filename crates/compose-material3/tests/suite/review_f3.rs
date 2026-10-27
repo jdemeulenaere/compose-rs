@@ -17,7 +17,10 @@ use compose_ui::{Modifier, Offset, PointerEvent};
 
 /// The bounds of the field's inner text (its focus target), in the root; leaves it focused.
 fn focus_inner_text(ui: &mut ComposeTestRule) -> compose_ui::Rect {
-    ui.on_node(Matcher::new("editable", |config| config.editable)).request_focus();
+    ui.on_node(Matcher::new("editable", |config| {
+        config.contains(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
+    }))
+    .request_focus();
     ui.host().with_tree(|tree| tree.bounds_in_root(tree.focused().expect("focused")))
 }
 

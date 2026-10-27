@@ -7,7 +7,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
 use compose_ui::ClickableOptions;
-use compose_ui::{ImageBitmap, Role, SemanticsAction, UnitExt};
+use compose_ui::{ImageBitmap, Role, SemanticsActions, UnitExt};
 
 fn pixel() -> ImageBitmap {
     ImageBitmap::from_rgba_premultiplied(1, 1, vec![255, 0, 0, 255])
@@ -26,12 +26,18 @@ fn a_merging_parent_does_not_take_its_childs_role() {
     });
     let node = ui.on_node_with_tag("row").fetch_semantics_node();
     assert_eq!(
-        node.config.content_description.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .into_iter()
+            .flatten()
+            .map(|d| d.as_str())
+            .collect::<Vec<_>>(),
         ["Star"],
         "the description merges (a list)"
     );
     assert_eq!(
-        node.config.role, None,
+        node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+        None,
         "the child's Role::Image merged into the row: {:?}",
         node.config
     );
@@ -46,7 +52,7 @@ fn an_outer_semantics_modifier_wins_over_an_inner_one() {
         Box!(
             modifier = Modifier
                 .test_tag("tab")
-                .semantics(|config| config.role = Some(Role::Tab))
+                .semantics(|config| config.set_role(Role::Tab))
                 .clickable_with(
                     ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
                     || {}
@@ -54,7 +60,14 @@ fn an_outer_semantics_modifier_wins_over_an_inner_one() {
                 .size(20.dp()),
         );
     });
-    assert_eq!(ui.on_node_with_tag("tab").fetch_semantics_node().config.role, Some(Role::Tab));
+    assert_eq!(
+        ui.on_node_with_tag("tab")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::ROLE)
+            .copied(),
+        Some(Role::Tab)
+    );
 }
 
 /// `RequestFocus` is an action of focusable nodes only (`Modifier.focusable`, `clickable`):
@@ -69,11 +82,18 @@ fn request_focus_on_a_node_without_the_action_is_not_performed() {
     });
     let column = ui.on_node_with_tag("column").node_id();
     assert!(
-        !ui.host().perform_semantics_action(column, SemanticsAction::RequestFocus),
+        !ui.host().perform_semantics_action(column, &SemanticsActions::REQUEST_FOCUS),
         "a non-focusable node performed RequestFocus"
     );
     ui.wait_for_idle();
-    assert!(!ui.on_node_with_tag("button").fetch_semantics_node().config.focused);
+    assert!(
+        !ui.on_node_with_tag("button")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::FOCUSED)
+            .copied()
+            .unwrap_or(false)
+    );
 }
 
 /// Lock-in: bounds are in the root's pixels (density 2: a 20 dp box 10 dp in is 40 px at 20 px),

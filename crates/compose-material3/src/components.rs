@@ -356,9 +356,7 @@ pub(crate) fn surface(
                     click.on_click,
                 );
             match click.selected {
-                Some(selected) => {
-                    modifier.semantics(move |config| config.selected = Some(selected))
-                }
+                Some(selected) => modifier.semantics(move |config| config.set_selected(selected)),
                 None => modifier,
             }
         }

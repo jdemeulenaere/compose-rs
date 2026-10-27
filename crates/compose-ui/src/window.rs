@@ -170,7 +170,7 @@ pub fn PopupWithPositionProvider(
             }
             let mut modifier = Modifier.overlay(position_provider.clone(), properties.focusable);
             // The popup's window, as Compose's `popup()` semantics on its layout.
-            modifier = modifier.semantics(|config| config.is_popup = true);
+            modifier = modifier.semantics(|config| config.popup());
             if properties.focusable {
                 modifier = modifier.focusable();
             }
@@ -249,7 +249,7 @@ pub fn Dialog(
             let content = compose_runtime::callback(move || {
                 let content = content.clone();
                 Layout(
-                    Modifier.semantics(|config| config.is_dialog = true),
+                    Modifier.semantics(|config| config.dialog()),
                     stack.clone(),
                     compose_runtime::callback(move || content()),
                 );

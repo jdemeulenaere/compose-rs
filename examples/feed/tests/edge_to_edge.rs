@@ -59,8 +59,9 @@ fn top_bar(ui: &mut ComposeTestRule, title: &str) -> [f32; 4] {
 /// The bounds of the screen's vertically scrolling content (a lazy list, a grid, a scrolling
 /// column), if it has one: inside its scaffold's padding.
 fn scrolling_content(ui: &mut ComposeTestRule) -> Option<[f32; 4]> {
-    let matcher =
-        Matcher::new("scrolls vertically", |config| config.vertical_scroll_axis_range.is_some());
+    let matcher = Matcher::new("scrolls vertically", |config| {
+        config.get(&compose::ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE).copied().is_some()
+    });
     if ui.count_nodes(&matcher) == 0 {
         return None;
     }

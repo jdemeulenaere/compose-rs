@@ -173,7 +173,7 @@ fn navigation_item(
             },
             on_click,
         )
-        .semantics(move |config| config.selected = Some(selected));
+        .semantics(move |config| config.set_selected(selected));
     let (icon, label) = (icon.clone(), label.clone());
     let (pill_width, pill_height) = pill_size;
     Layout(

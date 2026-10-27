@@ -16,10 +16,19 @@ fn field_text(host: &UiHost) -> String {
     let field = tree
         .flatten()
         .into_iter()
-        .find(|node| node.config.test_tag.as_deref() == Some("field"))
+        .find(|node| {
+            node.config.get(&compose_ui::SemanticsProperties::TEST_TAG).cloned().as_deref()
+                == Some("field")
+        })
         .expect("the field")
         .clone();
-    field.config.editable_text.as_deref().unwrap_or_default().to_string()
+    field
+        .config
+        .get(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
+        .cloned()
+        .as_deref()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// A host showing one empty `BasicTextField`, focused.

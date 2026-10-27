@@ -629,7 +629,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
   - `performMouseInput { scroll(d) }` is `PointerEvent::scroll(position, Offset)`. Check the sign and scale against compose-rs's wheel handling (`scroll.rs`, `lazy.rs`): Compose Android multiplies by the view's scroll factor.
 - **Touch slop.** Compose tests read `LocalViewConfiguration.current.touchSlop`. compose-rs's is 8 dp (`PointerInputScope::touch_slop`, `review_lazy2.rs::the_touch_slop_is_in_dp`): add the slop to drag distances as Compose's tests do.
 - **Keys.** `performKeyInput { pressKey(Key.PageDown) }` is `press_key(Key::PageDown)` or `perform_key_press`.
-- **Accessibility.** `performSemanticsAction(SemanticsActions.ScrollBy)` is `perform_semantics_action(SemanticsAction::ScrollBy { x, y })`. Android's `AccessibilityNodeInfo` checks go in `compose-android/tests` (see `accessibility_scroll.rs`).
+- **Accessibility.** `performSemanticsAction(SemanticsActions.ScrollBy)` is `perform_semantics_action_with(&SemanticsActions::SCROLL_BY, |scroll| { scroll(x, y); })`. Android's `AccessibilityNodeInfo` checks go in `compose-android/tests` (see `accessibility_scroll.rs`).
 - **Prefetch.**
   - Compose's `TestPrefetchScheduler` (`waitForPrefetch()`) is `host().prefetch(deadline)` / `prefetch_with(deadline, true)`.
   - Composition is observed with a `DisposableEffect` keyed by index, as `prefetch_parity.rs` does. Compose's prefetch tests use `onNodeWithTag(i).assertExists()` with `assertIsNotPlaced()`: compose-rs has no `assert_is_not_placed`, so check composition through the effect.

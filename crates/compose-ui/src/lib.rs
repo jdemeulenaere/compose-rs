@@ -51,6 +51,7 @@ mod pointer_input;
 mod prefetch;
 mod render;
 mod semantics;
+mod semantics_properties;
 mod text;
 mod text_input;
 mod text_selection;
@@ -166,8 +167,13 @@ pub use prefetch::{
     LOCAL_PREFETCH_SCHEDULER, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler,
 };
 pub use semantics::{
-    ProgressBarRangeInfo, Role, ScrollAxisRange, SemanticsAction, SemanticsConfiguration,
-    ToggleableState,
+    AccessibilityAction, ActionFn, AnySemanticsPropertyKey, CollectionInfo, CollectionItemInfo,
+    ColorProducer, CustomAccessibilityAction, GetScrollViewportLengthFn, GetTextLayoutResultFn,
+    IndexForKey, IndexForKeyFn, InputTextSuggestionState, LiveRegionMode, OtherSlot, OtherValue,
+    PART_OF_PARENT, ProgressBarRangeInfo, Role, ScrollAxisRange, ScrollByFn, ScrollByOffset,
+    ScrollByOffsetFn, ScrollToIndexFn, SemanticsActions, SemanticsConfiguration,
+    SemanticsProperties, SemanticsPropertyKey, SemanticsValue, SetProgressFn, SetSelectionFn,
+    ShowTextSubstitutionFn, StringList, TextActionFn, ToggleableState, ValueSlot,
 };
 pub use text::{
     FontFamily, FontStyle, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim,

@@ -23,8 +23,16 @@ fn an_icon_is_24_dp_and_described() {
     });
     assert_eq!(bounds(&mut ui, "icon").width(), 24.0);
     let node = ui.on_node_with_tag("icon").fetch_semantics_node();
-    assert_eq!(node.config.content_description.first().map(|text| text.as_str()), Some("Add"));
-    assert_eq!(node.config.role, Some(Role::Image));
+    assert_eq!(
+        node.config
+            .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
+            .cloned()
+            .unwrap_or_default()
+            .first()
+            .map(|text| text.as_str()),
+        Some("Add")
+    );
+    assert_eq!(node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(), Some(Role::Image));
     let paths = ui
         .host()
         .display_list()
@@ -136,12 +144,20 @@ fn radio_buttons_select_one() {
     ui.on_node_with_tag("choice 2").perform_click();
     let selected: Vec<Option<bool>> = (0..3)
         .map(|index| {
-            ui.on_node_with_tag(&format!("choice {index}")).fetch_semantics_node().config.selected
+            ui.on_node_with_tag(&format!("choice {index}"))
+                .fetch_semantics_node()
+                .config
+                .get(&compose_ui::SemanticsProperties::SELECTED)
+                .copied()
         })
         .collect();
     assert_eq!(selected, [Some(false), Some(false), Some(true)]);
     assert_eq!(
-        ui.on_node_with_tag("choice 2").fetch_semantics_node().config.role,
+        ui.on_node_with_tag("choice 2")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::ROLE)
+            .copied(),
         Some(Role::RadioButton)
     );
 }
@@ -373,12 +389,25 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
         });
     });
     let node = ui.on_node_with_tag("slider").fetch_semantics_node();
-    let info = node.config.progress_bar_range_info.expect("a range");
+    let info = node
+        .config
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied()
+        .expect("a range");
     assert_eq!((info.current, info.range, info.steps), (0.0, (0.0, 1.0), 3));
-    ui.on_node_with_tag("slider")
-        .perform_semantics_action(compose_ui::SemanticsAction::SetProgress(0.3));
+    ui.on_node_with_tag("slider").perform_semantics_action_with(
+        &compose_ui::SemanticsActions::SET_PROGRESS,
+        |set| {
+            set(0.3);
+        },
+    );
     assert_eq!(value.get(), 0.25, "snapped to the nearest of the 5 stops");
-    let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
+    let info = ui
+        .on_node_with_tag("slider")
+        .fetch_semantics_node()
+        .config
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied();
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
 
@@ -431,7 +460,11 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
     // Sizes and semantics, as Compose's.
     let circular = ui.on_node_with_tag("circular").fetch_semantics_node();
     assert_eq!((circular.bounds.width(), circular.bounds.height()), (40.0, 40.0));
-    let info = circular.config.progress_bar_range_info.expect("a range");
+    let info = circular
+        .config
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied()
+        .expect("a range");
     assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
     let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
     assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
@@ -531,12 +564,19 @@ fn a_navigation_bar_shares_its_width_and_selects_on_click() {
     let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
     assert_eq!(bar.height(), 80.0);
     let home = ui.on_node_with_tag("Home").fetch_semantics_node();
-    assert_eq!(home.config.selected, Some(true));
+    assert_eq!(home.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
     // Two items sharing 400 px, 8 dp apart.
     assert_eq!(home.bounds.width(), 196.0);
     ui.on_node_with_tag("Search").perform_click();
     assert_eq!(selected.get(), 1);
-    assert_eq!(ui.on_node_with_tag("Search").fetch_semantics_node().config.selected, Some(true));
+    assert_eq!(
+        ui.on_node_with_tag("Search")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
 }
 
 #[test]
@@ -649,7 +689,7 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     let row = ui.on_node_with_tag("row").fetch_semantics_node().bounds;
     let two = ui.on_node_with_tag("Two").fetch_semantics_node();
     assert_eq!((row.height(), two.bounds.left, two.bounds.width()), (48.0, 200.0, 200.0));
-    assert_eq!(two.config.role, Some(Role::Tab));
+    assert_eq!(two.config.get(&compose_ui::SemanticsProperties::ROLE).copied(), Some(Role::Tab));
     let indicator = |ui: &mut ComposeTestRule| {
         ui.host().display_list().ops.iter().rev().find_map(|op| match op {
             DrawOp::DrawRect(rect, _) if rect.height() == 3.0 => Some(rect.left),
@@ -663,7 +703,14 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     assert!(sliding > 0.0 && sliding < 200.0, "{sliding}");
     ui.advance_time_by(std::time::Duration::from_millis(300));
     assert_eq!(indicator(&mut ui), Some(200.0));
-    assert_eq!(ui.on_node_with_tag("Two").fetch_semantics_node().config.selected, Some(true));
+    assert_eq!(
+        ui.on_node_with_tag("Two")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
 }
 
 #[test]
@@ -691,10 +738,17 @@ fn chips_and_badges_are_sized_and_behave_as_compose() {
     // 32 dp high (in a 48 dp touch target).
     let filter = ui.on_node_with_tag("filter").fetch_semantics_node();
     assert_eq!(filter.bounds.height(), 32.0);
-    assert_eq!(filter.config.selected, Some(false));
+    assert_eq!(filter.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(false));
     ui.on_node_with_tag("filter").perform_click();
     assert!(selected.get());
-    assert_eq!(ui.on_node_with_tag("filter").fetch_semantics_node().config.selected, Some(true));
+    assert_eq!(
+        ui.on_node_with_tag("filter")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
     ui.on_node_with_tag("assist").assert_exists();
     // The dot: 6 dp, its start 6 dp before the icon's end, centered on its top.
     let icon = ui.on_node_with_tag("badged").fetch_semantics_node().bounds;

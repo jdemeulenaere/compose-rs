@@ -351,8 +351,14 @@ fn toggleable_calls_back_with_the_new_value() {
     click(&mut host, 5.0, 5.0);
     assert!(checked.get());
     let tree = host.semantics_tree(true);
-    assert_eq!(tree.children[0].config.toggleable_state, Some(ToggleableState::On));
-    assert_eq!(tree.children[0].config.role, Some(Role::Checkbox));
+    assert_eq!(
+        tree.children[0].config.get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE).copied(),
+        Some(ToggleableState::On)
+    );
+    assert_eq!(
+        tree.children[0].config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+        Some(Role::Checkbox)
+    );
     click(&mut host, 5.0, 5.0);
     assert!(!checked.get());
 }
@@ -402,8 +408,12 @@ fn tab_moves_focus_through_clickables_and_enter_clicks() {
             "a focused false"
         ]
     );
-    let focused =
-        host.semantics_tree(true).flatten().iter().filter(|node| node.config.focused).count();
+    let focused = host
+        .semantics_tree(true)
+        .flatten()
+        .iter()
+        .filter(|node| node.config.get(&compose_ui::SemanticsProperties::FOCUSED) == Some(&true))
+        .count();
     assert_eq!(focused, 1);
 }
 

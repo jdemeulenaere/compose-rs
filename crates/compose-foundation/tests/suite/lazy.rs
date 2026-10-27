@@ -412,27 +412,37 @@ fn a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action() {
             }
         );
     });
-    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.expect("a range");
+    let range = scroll_node(&mut ui, "list")
+        .config
+        .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+        .copied()
+        .expect("a range");
     assert_eq!(range.value, 0.0);
     // 50 rows of 20 px in 100 px: 900 px more (estimated from the average).
     assert_eq!(range.max_value, 900.0);
     assert!(!range.reverse_scrolling);
     // A page down.
     let node = scroll_node(&mut ui, "list").id;
-    assert!(ui.host().perform_semantics_action(
+    assert!(ui.host().perform_semantics_action_with(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, 100.0)
     ));
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 5);
-    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.unwrap();
+    let range = scroll_node(&mut ui, "list")
+        .config
+        .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+        .copied()
+        .unwrap();
     assert_eq!((range.value, range.max_value), (100.0, 900.0));
     // At the start, nothing to scroll back by.
     state.scroll_to_item(0, 0);
     ui.wait_for_idle();
-    assert!(!ui.host().perform_semantics_action(
+    assert!(!ui.host().perform_semantics_action_with(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, -100.0)
     ));
 }
 
@@ -452,15 +462,18 @@ fn a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action() {
             }
         );
     });
-    let range = scroll_node(&mut ui, "column").config.vertical_scroll_axis_range.unwrap();
+    let range = scroll_node(&mut ui, "column")
+        .config
+        .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+        .copied()
+        .unwrap();
     assert_eq!((range.value, range.max_value), (0.0, 100.0));
     let node = scroll_node(&mut ui, "column").id;
-    assert!(
-        ui.host().perform_semantics_action(
-            node,
-            compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 60.0 }
-        )
-    );
+    assert!(ui.host().perform_semantics_action_with(
+        node,
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, 60.0)
+    ));
     ui.wait_for_idle();
     assert_eq!(scroll.value(), 60);
 }
@@ -483,16 +496,22 @@ fn scroll_by_goes_towards_the_end_of_a_reversed_list() {
         );
     });
     let node = scroll_node(&mut ui, "list").id;
-    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.unwrap();
+    let range = scroll_node(&mut ui, "list")
+        .config
+        .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+        .copied()
+        .unwrap();
     assert!(range.reverse_scrolling);
     // Back towards the first item: already there.
-    assert!(!ui.host().perform_semantics_action(
+    assert!(!ui.host().perform_semantics_action_with(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, -100.0)
     ));
-    assert!(ui.host().perform_semantics_action(
+    assert!(ui.host().perform_semantics_action_with(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, 100.0)
     ));
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 5);

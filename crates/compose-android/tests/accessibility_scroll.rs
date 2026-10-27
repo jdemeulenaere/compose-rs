@@ -134,8 +134,16 @@ fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsNode {
     fn find(
         node: &compose_ui::platform::SemanticsNode,
     ) -> Option<compose_ui::platform::SemanticsNode> {
-        if node.config.vertical_scroll_axis_range.is_some()
-            || node.config.horizontal_scroll_axis_range.is_some()
+        if node
+            .config
+            .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+            .copied()
+            .is_some()
+            || node
+                .config
+                .get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+                .copied()
+                .is_some()
         {
             return Some(node.clone());
         }
@@ -267,8 +275,16 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
     fn find(
         node: &compose_ui::platform::SemanticsNode,
     ) -> Option<&compose_ui::platform::SemanticsNode> {
-        if node.config.horizontal_scroll_axis_range.is_some()
-            && node.config.vertical_scroll_axis_range.is_some()
+        if node
+            .config
+            .get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+            .copied()
+            .is_some()
+            && node
+                .config
+                .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+                .copied()
+                .is_some()
         {
             return Some(node);
         }

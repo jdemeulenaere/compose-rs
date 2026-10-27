@@ -227,7 +227,7 @@ impl BottomSheetDefaults {
         let color = MaterialTheme::color_scheme().on_surface_variant.with_alpha(0.4);
         crate::components::Surface(
             Modifier.padding((Dp(0.0), 22.dp())).semantics(|config| {
-                config.content_description.push("Drag handle".into());
+                config.set_content_description("Drag handle");
             }),
             MaterialTheme::shapes().extra_large,
             color,
@@ -438,7 +438,7 @@ pub fn ModalBottomSheet(
             move |velocity| settle(velocity),
         )
         .nested_scroll(connection)
-        .semantics(|config| config.content_description.push("Bottom sheet".into()));
+        .semantics(|config| config.set_content_description("Bottom sheet"));
     compose_ui::PopupWithPositionProvider(
         provider,
         Some(back),

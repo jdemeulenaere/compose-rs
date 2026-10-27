@@ -55,7 +55,12 @@ fn word() -> KeyModifiers {
 
 fn text_of(ui: &mut ComposeTestRule) -> String {
     let node = ui.on_node_with_tag("field").fetch_semantics_node();
-    node.config.editable_text.as_deref().unwrap_or_default().to_string()
+    node.config
+        .get(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
+        .cloned()
+        .as_deref()
+        .unwrap_or_default()
+        .to_string()
 }
 
 // ---- Keys ---------------------------------------------------------------------------------------

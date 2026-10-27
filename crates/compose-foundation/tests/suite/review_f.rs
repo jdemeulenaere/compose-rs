@@ -148,7 +148,11 @@ fn a_text_field_in_a_clickable_row_is_a_node_of_its_own() {
     }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Row);
     let row = ui.on_node_with_tag("row").fetch_semantics_node().config;
-    assert!(!row.editable && !row.disabled, "the row took the field over: {row:?}");
+    use compose_ui::SemanticsProperties as P;
+    assert!(
+        !row.contains(&P::EDITABLE_TEXT) && !row.contains(&P::DISABLED),
+        "the row took the field over: {row:?}"
+    );
     ui.on_node_with_tag("field").assert_exists();
 }
 

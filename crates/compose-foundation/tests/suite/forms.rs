@@ -239,7 +239,10 @@ fn a_password_field_takes_its_transformation_without_into() {
         );
     });
     let node = ui.on_node_with_tag("field").fetch_semantics_node();
-    assert_eq!(node.config.editable_text.as_deref(), Some("••••••"));
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).cloned().as_deref(),
+        Some("••••••")
+    );
 }
 
 // ---- Line bounds ---------------------------------------------------------------------------

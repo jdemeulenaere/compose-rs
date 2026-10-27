@@ -7,7 +7,7 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::ClickableOptions;
-use compose_ui::{SemanticsAction, UnitExt};
+use compose_ui::{SemanticsActions, UnitExt};
 
 #[test]
 fn on_click_clicks_and_toggles_without_input() {
@@ -39,12 +39,12 @@ fn on_click_clicks_and_toggles_without_input() {
             );
         });
     });
-    ui.on_node_with_tag("button").perform_semantics_action(SemanticsAction::OnClick);
+    ui.on_node_with_tag("button").perform_semantics_action(&SemanticsActions::ON_CLICK);
     assert_eq!(count.get(), 1);
-    ui.on_node_with_tag("toggle").perform_semantics_action(SemanticsAction::OnClick);
+    ui.on_node_with_tag("toggle").perform_semantics_action(&SemanticsActions::ON_CLICK);
     assert!(checked.get());
     let disabled = ui.on_node_with_tag("disabled").node_id();
-    assert!(!ui.host().perform_semantics_action(disabled, SemanticsAction::OnClick));
+    assert!(!ui.host().perform_semantics_action(disabled, &SemanticsActions::ON_CLICK));
 }
 
 #[test]
@@ -52,6 +52,6 @@ fn request_focus_focuses_the_node() {
     let mut ui = compose_test(|| {
         Box!(modifier = Modifier.size((50.dp(), 20.dp())).clickable(|| {}).test_tag("button"));
     });
-    ui.on_node_with_tag("button").perform_semantics_action(SemanticsAction::RequestFocus);
+    ui.on_node_with_tag("button").perform_semantics_action(&SemanticsActions::REQUEST_FOCUS);
     ui.on_node_with_tag("button").assert_is_focused();
 }

@@ -43,7 +43,12 @@ fn chord(ui: &mut ComposeTestRule, key: Key, modifiers: KeyModifiers) {
 
 fn text_of(ui: &mut ComposeTestRule, tag: &str) -> String {
     let node = ui.on_node_with_tag(tag).fetch_semantics_node();
-    node.config.editable_text.as_deref().unwrap_or_default().to_string()
+    node.config
+        .get(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
+        .cloned()
+        .as_deref()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// The text of the paragraph the field draws.

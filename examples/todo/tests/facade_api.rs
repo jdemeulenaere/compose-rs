@@ -60,8 +60,8 @@ impl DrawModifierNode for MarkerNode {
 
 impl SemanticsModifierNode for MarkerNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.content_description.push("marker".into());
-        config.role = Some(Role::Image);
+        config.set_content_description("marker");
+        config.set_role(Role::Image);
     }
 }
 

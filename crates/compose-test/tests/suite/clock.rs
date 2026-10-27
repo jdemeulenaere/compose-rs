@@ -224,7 +224,9 @@ fn waiting_until_nodes_exist_or_not() {
 #[composable]
 fn MergedParent(children: usize) {
     Box!(
-        modifier = Modifier.semantics(|config| config.merge_descendants = true).test_tag("parent"),
+        modifier = Modifier
+            .semantics(|config| config.is_merging_semantics_of_descendants = true)
+            .test_tag("parent"),
         {
             for _ in 0..children {
                 Box!(modifier = Modifier.size(1.dp()).test_tag("child"));

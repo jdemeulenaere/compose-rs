@@ -311,29 +311,20 @@ fn printing_nodes_lists_their_properties_and_relatives() {
 #[test]
 fn printing_the_root_draws_the_hierarchy() {
     let mut ui = compose_test(|| {
-        Column!(
-            modifier = Modifier.semantics(|config| config.disabled = true).test_tag("column"),
-            {
+        Column!(modifier = Modifier.semantics(|config| config.disabled()).test_tag("column"), {
+            Box!(modifier = Modifier.semantics(|config| config.disabled()).test_tag("box"), {
                 Box!(
-                    modifier = Modifier.semantics(|config| config.disabled = true).test_tag("box"),
+                    modifier = Modifier.clickable_with(
+                        ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
+                        || {}
+                    ),
                     {
-                        Box!(
-                            modifier = Modifier.clickable_with(
-                                ClickableOptions {
-                                    role: Some(Role::Button),
-                                    ..ClickableOptions::DEFAULT
-                                },
-                                || {}
-                            ),
-                            {
-                                BasicText!("Button");
-                            }
-                        );
+                        BasicText!("Button");
                     }
                 );
-                BasicText!("Hello");
-            }
-        );
+            });
+            BasicText!("Hello");
+        });
     });
     let printed = ui.on_root().print_to_string(usize::MAX);
     assert_eq!(
@@ -391,23 +382,22 @@ fn toggle_and_selection_states_are_asserted() {
     let mut ui = compose_test(|| {
         Box!(
             modifier = Modifier
-                .semantics(|config| config.toggleable_state = Some(ToggleableState::On))
+                .semantics(|config| config.set_toggleable_state(ToggleableState::On))
                 .test_tag("on")
         );
         Box!(
             modifier = Modifier
-                .semantics(|config| config.toggleable_state = Some(ToggleableState::Off))
+                .semantics(|config| config.set_toggleable_state(ToggleableState::Off))
                 .test_tag("off")
         );
         Box!(
-            modifier =
-                Modifier.semantics(|config| config.selected = Some(true)).test_tag("selected")
+            modifier = Modifier.semantics(|config| config.set_selected(true)).test_tag("selected")
         );
         Box!(
             modifier =
-                Modifier.semantics(|config| config.selected = Some(false)).test_tag("unselected")
+                Modifier.semantics(|config| config.set_selected(false)).test_tag("unselected")
         );
-        Box!(modifier = Modifier.semantics(|config| config.focusable = true).test_tag("plain"));
+        Box!(modifier = Modifier.semantics(|config| config.set_focused(false)).test_tag("plain"));
     });
     ui.on_node_with_tag("on").assert_is_on().assert_is_toggleable();
     ui.on_node_with_tag("off").assert_is_off().assert_is_toggleable();
@@ -448,19 +438,22 @@ fn texts_descriptions_values_and_ranges_are_asserted() {
         Box!(
             modifier = Modifier
                 .semantics(|config| {
-                    config.merge_descendants = true;
-                    config.content_description.push("first".into());
-                    config.state_description = Some("half".into());
-                    config.progress_bar_range_info =
-                        Some(ProgressBarRangeInfo { current: 0.5, range: (0.0, 1.0), steps: 0 });
+                    config.is_merging_semantics_of_descendants = true;
+                    config.set_content_description("first");
+                    config.set_state_description("half");
+                    config.set_progress_bar_range_info(ProgressBarRangeInfo {
+                        current: 0.5,
+                        range: (0.0, 1.0),
+                        steps: 0,
+                    });
                 })
                 .test_tag("node"),
             {
                 BasicText!("a");
                 BasicText!("b");
                 Box!(
-                    modifier = Modifier
-                        .semantics(|config| config.content_description.push("second".into()))
+                    modifier =
+                        Modifier.semantics(|config| config.set_content_description("second"))
                 );
             }
         );

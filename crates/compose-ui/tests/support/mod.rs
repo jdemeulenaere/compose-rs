@@ -197,7 +197,7 @@ impl DrawModifierNode for TextNode {
 
 impl SemanticsModifierNode for TextNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.text.push(self.text.clone());
+        config.set_text(self.text.clone());
     }
 }
 

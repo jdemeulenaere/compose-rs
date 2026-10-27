@@ -1653,7 +1653,7 @@ pub fn Rating(stars: u32) {
     Row!(
         // One description for the row instead of five unlabeled icons.
         modifier = Modifier.clear_and_set_semantics(move |config| {
-            config.content_description.push(format!("{stars} of 5 stars").into());
+            config.set_content_description(format!("{stars} of 5 stars"));
         }),
         {
             for index in 0..5 {

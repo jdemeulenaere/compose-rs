@@ -1503,18 +1503,33 @@ impl KeyInputModifierNode for TextFieldNode {
 impl SemanticsModifierNode for TextFieldNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         // The field's node is its decoration's, as Compose's `CoreTextField`.
-        config.part_of_parent = true;
+        config.part_of_parent();
         // What's shown: a password's mask, as Compose's.
         let text = self.display_text();
-        config.editable_text = Some(match self.visual_transformation.filter(&text) {
-            Some(transformed) => transformed.text.into(),
+        config.set_editable_text(match self.visual_transformation.filter(&text) {
+            Some(transformed) => compose_ui::SharedString::from(transformed.text),
             None => text.into_owned().into(),
         });
-        config.password |= self.visual_transformation.is_password();
-        config.editable = true;
-        config.focusable |= self.enabled;
-        config.focused |= self.focused;
-        config.disabled |= !self.enabled;
+        if self.visual_transformation.is_password() {
+            config.password();
+        }
+        // As Compose's `CoreTextField`: editable, and its text set by accessibility, when
+        // enabled and not read-only.
+        let editable = self.enabled && !self.read_only;
+        config.set_is_editable(editable);
+        if editable {
+            let on_value_change = self.on_value_change.clone();
+            config.set_text_action(None, move |text| {
+                on_value_change(text.as_str().to_string());
+                true
+            });
+        }
+        if self.enabled {
+            config.set_focused(self.focused);
+            config.request_focus_of_node();
+        } else {
+            config.disabled();
+        }
     }
 }
 

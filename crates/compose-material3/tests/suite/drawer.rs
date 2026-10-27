@@ -62,7 +62,14 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
     assert!(state.is_open());
     let sheet = ui.on_node_with_tag("sheet").fetch_semantics_node().bounds;
     assert_eq!(sheet.width(), 360.0);
-    assert_eq!(ui.on_node_with_tag("inbox").fetch_semantics_node().config.selected, Some(true));
+    assert_eq!(
+        ui.on_node_with_tag("inbox")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
     // The scrim, beside the sheet, closes it.
     ui.host().send_pointer(PointerEvent::press(Offset::new(600.0, 300.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(600.0, 300.0)));

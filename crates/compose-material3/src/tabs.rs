@@ -337,7 +337,7 @@ pub fn Tab(
             },
             on_click,
         )
-        .semantics(move |config| config.selected = Some(selected));
+        .semantics(move |config| config.set_selected(selected));
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.title_small), || {
             let (text, icon) = (text.clone(), icon.clone());

@@ -61,7 +61,7 @@ fn chip(
         on_click,
     );
     if let Some(selected) = selected {
-        surface = surface.semantics(move |config| config.selected = Some(selected));
+        surface = surface.semantics(move |config| config.set_selected(selected));
     }
     let start = if leading_icon.is_some() { 8.dp() } else { 16.dp() };
     let end = if trailing_icon.is_some() { 8.dp() } else { 16.dp() };

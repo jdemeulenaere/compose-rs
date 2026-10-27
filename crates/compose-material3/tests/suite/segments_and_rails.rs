@@ -48,14 +48,46 @@ fn segmented_buttons_share_the_row_and_select_one() {
     assert_eq!(day.height(), 40.0);
     assert_eq!(week.left, day.right - 1.0);
     assert_eq!(bounds(&mut ui, "row").width(), 3.0 * day.width() - 2.0);
-    assert!(ui.on_node_with_tag("row").fetch_semantics_node().config.selectable_group);
+    assert!(
+        ui.on_node_with_tag("row")
+            .fetch_semantics_node()
+            .config
+            .contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
+    );
     let node = ui.on_node_with_tag("Day").fetch_semantics_node();
-    assert_eq!((node.config.role, node.config.selected), (Some(Role::RadioButton), Some(true)));
+    assert_eq!(
+        (
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            node.config.get(&compose_ui::SemanticsProperties::SELECTED).copied()
+        ),
+        (Some(Role::RadioButton), Some(true))
+    );
     // The selected one shows a check before its label.
-    assert_eq!(ui.on_node_with_tag("Week").fetch_semantics_node().config.selected, Some(false));
+    assert_eq!(
+        ui.on_node_with_tag("Week")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(false)
+    );
     ui.on_node_with_tag("Week").perform_click();
-    assert_eq!(ui.on_node_with_tag("Week").fetch_semantics_node().config.selected, Some(true));
-    assert_eq!(ui.on_node_with_tag("Day").fetch_semantics_node().config.selected, Some(false));
+    assert_eq!(
+        ui.on_node_with_tag("Week")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
+    assert_eq!(
+        ui.on_node_with_tag("Day")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(false)
+    );
     // Given the width, they share it.
     let mut ui = ComposeTestRule::sized(IntSize::new(600, 400), || Segments(true));
     assert_eq!(bounds(&mut ui, "row").width(), 600.0);
@@ -111,9 +143,22 @@ fn a_navigation_rail_is_80_dp_its_items_56_dp() {
     let bare = bounds(&mut ui, "bare");
     assert_eq!((bare.width(), bare.height()), (56.0, 56.0));
     let node = ui.on_node_with_tag("Home").fetch_semantics_node();
-    assert_eq!((node.config.role, node.config.selected), (Some(Role::Tab), Some(true)));
+    assert_eq!(
+        (
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            node.config.get(&compose_ui::SemanticsProperties::SELECTED).copied()
+        ),
+        (Some(Role::Tab), Some(true))
+    );
     ui.on_node_with_tag("Settings").perform_click();
-    assert_eq!(ui.on_node_with_tag("Settings").fetch_semantics_node().config.selected, Some(true));
+    assert_eq!(
+        ui.on_node_with_tag("Settings")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied(),
+        Some(true)
+    );
 }
 
 #[test]

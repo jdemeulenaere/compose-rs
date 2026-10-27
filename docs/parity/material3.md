@@ -461,7 +461,7 @@ Add a module per Compose test file under `crates/compose-material3/tests/suite/`
 | `performMouseInput { enter(); moveTo(); exit(); scroll() }` | `PointerEvent::moved(p, false)` (hover), `host().send_pointer_left()`, `PointerEvent::scroll(p, delta)` |
 | `performKeyInput`, `pressKey`, `performKeyPress` | `ui.press_key(key)`, `perform_key_press(key)`, `host().send_key(KeyEvent::down/up(key))` |
 | `performTextInput`, `performTextReplacement`, `performImeAction` | `perform_text_input`, `type_text`; no text replacement or IME action helpers (send `Key::Enter` to a focused field with an action) |
-| `performSemanticsAction(SemanticsActions.SetProgress) { it(v) }` | `perform_semantics_action(SemanticsAction::SetProgress(v))`; `OnClick`, `OnLongClick`, `RequestFocus`, `ScrollBy` too. No `Dismiss`, `Expand`, `Collapse`, `SetText`, custom actions (dep:semantics-gaps) |
+| `performSemanticsAction(SemanticsActions.SetProgress) { it(v) }` | `perform_semantics_action_with(&SemanticsActions::SET_PROGRESS, \|set\| { set(v); })`; `OnClick`, `OnLongClick`, `RequestFocus`, `ScrollBy` too. No `Dismiss`, `Expand`, `Collapse`, `SetText`, custom actions (dep:semantics-gaps) |
 | `Espresso.pressBack()`, `onBackPressedDispatcher.onBackPressed()` | `ui.host().on_back_pressed()` (Escape on desktop does the same) |
 | `mainClock.autoAdvance = false`, `advanceTimeBy`, `advanceTimeByFrame`, `currentTime` | `ComposeTestRule::with_manual_clock` or `set_auto_advance(false)`, `advance_time_by`, `advance_time_by_frame`, `current_time_millis` (16 ms frames, as Compose's) |
 | `waitForIdle`, `runOnIdle { }` | `wait_for_idle()`, or plain code after an action (each action waits for idle) |

@@ -55,7 +55,13 @@ fn tab_into_a_scrolled_list_focuses_its_first_row_in_view() {
         .filter(|index| {
             let tag = format!("row {index}");
             ui.count_nodes(&has_test_tag(&tag)) > 0
-                && ui.on_node_with_tag(&tag).fetch_semantics_node().config.focused
+                && ui
+                    .on_node_with_tag(&tag)
+                    .fetch_semantics_node()
+                    .config
+                    .get(&compose_ui::SemanticsProperties::FOCUSED)
+                    .copied()
+                    .unwrap_or(false)
         })
         .collect();
     assert_eq!(
