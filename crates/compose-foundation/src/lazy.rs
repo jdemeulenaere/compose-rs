@@ -2284,7 +2284,7 @@ impl MeasurePolicy for LazyListLayout {
                 match measure(*index - 1, sizes) {
                     Some(placeable) => {
                         *index -= 1;
-                        *offset += (main_of(&placeable) + spacing) as f32;
+                        *offset += (main_of(&placeable) + spacing).max(0) as f32;
                     }
                     None => {
                         // Far back: jumped over by the average size (an estimate, as the items
@@ -2322,7 +2322,7 @@ impl MeasurePolicy for LazyListLayout {
                 }
                 break;
             };
-            let size = (main_of(&placeable) + spacing) as f32;
+            let size = (main_of(&placeable) + spacing).max(0) as f32;
             if offset >= size {
                 offset -= size;
                 index += 1;
@@ -2363,7 +2363,7 @@ impl MeasurePolicy for LazyListLayout {
                     Some(placeable) => {
                         let size = main_of(&placeable);
                         placed.push((placeable, main));
-                        main += size + spacing;
+                        main += (size + spacing).max(0);
                         end_index += 1;
                     }
                     None => {
@@ -2418,12 +2418,32 @@ impl MeasurePolicy for LazyListLayout {
                     wanted_before += wanted.min(lead);
                     break;
                 };
-                start -= main_of(&placeable) + spacing;
+                start -= (main_of(&placeable) + spacing).max(0);
                 leading.push((placeable, start));
                 lead -= 1;
             }
             leading.reverse();
             placed.splice(0..0, leading);
+        }
+        // At a negative spacing, Compose's walk back to fill it makes the first item laid out
+        // the first visible one, but for those wholly before the content's start at their size
+        // with the spacing (at least 0, `mainAxisSizeWithSpacings`), unless at the start itself:
+        // items overlapping by more than their size stack, the first of them first (D873).
+        if spacing < 0 && lead < index && scrolled_back == 0 {
+            let mut first = 0;
+            let mut into = before - placed[0].1;
+            while into > 0 && first + 1 < placed.len() {
+                let size = (main_of(&placed[first].0) + spacing).max(0);
+                if size > into {
+                    break;
+                }
+                into -= size;
+                first += 1;
+            }
+            if into >= 0 {
+                index = lead + first;
+                offset = into as f32;
+            }
         }
         // The list's length: the viewport once scrolled, else its content's, within the
         // constraints.
@@ -2646,7 +2666,7 @@ impl MeasurePolicy for LazyListLayout {
         for next in end_index..placed_end.min(count) {
             if let Some(placeable) = measure(next, &mut sizes) {
                 beyond.push((placeable, main));
-                main += main_of(&placeable) + spacing;
+                main += (main_of(&placeable) + spacing).max(0);
             }
         }
         // How far the list can scroll each way: known when the composed items reach its ends.
@@ -2657,7 +2677,7 @@ impl MeasurePolicy for LazyListLayout {
         let mut main = placed.first().map_or(before, |(_, main)| *main);
         for previous in (placed_start.min(lead)..lead).rev() {
             if let Some(placeable) = measure(previous, &mut sizes) {
-                main -= main_of(&placeable) + spacing;
+                main -= (main_of(&placeable) + spacing).max(0);
                 ahead.push((placeable, main));
             }
         }

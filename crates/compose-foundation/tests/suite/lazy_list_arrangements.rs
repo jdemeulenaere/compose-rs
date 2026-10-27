@@ -327,3 +327,18 @@ fn items_overlap_by_a_negative_spacing() {
         );
     }
 }
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyArrangementsTest.kt, column_negativeSpacingLargerThanItem_itemsVisible
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyArrangementsTest.kt, row_negativeSpacingLargerThanItem_itemsVisible
+#[test]
+fn a_negative_spacing_larger_than_the_items_stacks_them() {
+    for lazy in [Lazy::column(), Lazy::row()] {
+        let state = LazyListState::new(2, 0);
+        let mut ui = spaced(lazy, ITEM_SIZE, -ITEM_SIZE * 1.5, 4, ITEM_SIZE, *state);
+        for index in 0..4 {
+            assert_eq!(lazy.main_start(&mut ui, &index.to_string()), 0.0, "{lazy:?}: {index}");
+        }
+        let position = (state.first_visible_item_index(), state.first_visible_item_scroll_offset());
+        assert_eq!(position, (0, 0), "{lazy:?}");
+    }
+}

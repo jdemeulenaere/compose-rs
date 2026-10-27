@@ -30,9 +30,9 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 11 | 196 |
+| `ported` | 12 | 225 |
 | `port` | 12 | 87 |
-| `partial` | 26 | 895 |
+| `partial` | 25 | 866 |
 | `feature:<name>` | 113 | 1,686 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
@@ -90,7 +90,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 
 | Path | Tests | Covers | Status |
 |---|---|---|---|
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyArrangementsTest.kt | 29 | Main-axis arrangements of short lists, spacedBy, RTL, spacing in wrap content, after scrolls | partial (`lazy_list_arrangements.rs`: 8 tests porting 27; the reversed defaults pass `BOTTOM`/`END` (D171). Left: `column_`/`row_negativeSpacingLargerThanItem_itemsVisible` fail: a spacing of -1.5 items from item 2 lays the items out back from the last (first visible 3, at 75, 50, 25, 0) where Compose's test expects all four at 0 and the position (0, 0); not yet understood (Compose's `spacedBy.arrange` alone would give 0, -25, -50, -75)) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyArrangementsTest.kt | 29 | Main-axis arrangements of short lists, spacedBy, RTL, spacing in wrap content, after scrolls | ported (`lazy_list_arrangements.rs`: 9 tests, all 29; the reversed defaults pass `BOTTOM`/`END` (D171); the negative spacing larger than an item found D873) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnMouseHoverTest.kt | 4 | Hover follows content scrolled by the wheel under a resting mouse | port (`review_round6.rs::scrolling_under_a_resting_mouse_moves_the_hover` covers one case) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTest.kt | 20 | Disposal when data changes or the list leaves, removals, alignment, a fling stopped by a press, nested LazyRow reuse, recomposition order | partial (`lazy_column_row.rs` and `lazy_list.rs`: 12 of 20. Left: `nestedLazyRowChildren…AreReused` (2): a reused node is always measured again (`UiTree::reuse` sets `needs_measure`, where Compose's `onReuse` only reschedules a pending measure; compose-ui's tree, D869), `scrolledAwayItemIsNotDisplayedAnymore` (a pixel capture), `scrollingDeactivatedListIsNotCrashing` (`SubcomposeLayout`: feature), the four `awaitFirstLayout…` (internal: n/a) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTrackpadHoverTest.kt | 8 | Hover during trackpad pans | feature:pointer-input-types (trackpad pan events, ui) |
