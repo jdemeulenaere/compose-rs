@@ -611,7 +611,7 @@ fn a_composition_writing_a_measured_state_asks_for_no_other_frame() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let measured = remember(|| mutable_state_of(0u32));
         // Written as it composes, read only while measuring.
-        measured.set_in_composition(handle.get());
+        measured.set(handle.get());
         let seen = seen.clone();
         let modifier = remember(move || {
             Modifier.layout(move |scope, content, constraints| {

@@ -650,7 +650,7 @@ impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
     fn on_duration_changed(&self) {
         let version = self.durations_count.get().wrapping_add(1);
         self.durations_count.set(version);
-        self.durations_version.set_in_composition(version);
+        self.durations_version.set(version);
     }
 
     fn on_child_animation_updated(&self) {
@@ -1354,7 +1354,7 @@ impl<T: Animate> TransitionAnimationState<T> {
 
     fn set_value(&self, value: T) {
         *self.value_untracked.borrow_mut() = value.clone();
-        self.value.set_in_composition(value);
+        self.value.set(value);
     }
 
     /// The duration of its animation, kept, as `durationNanos` (a state of Compose's, which

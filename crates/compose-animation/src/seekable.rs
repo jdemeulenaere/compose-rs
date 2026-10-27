@@ -150,21 +150,21 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
 
     pub(crate) fn set_current(&self, current: S) {
         *self.inner.current_untracked.borrow_mut() = current.clone();
-        self.inner.current.set_in_composition(current);
+        self.inner.current.set(current);
     }
 
     fn set_target(&self, target: S) {
         *self.inner.target_untracked.borrow_mut() = target.clone();
-        self.inner.target.set_in_composition(target);
+        self.inner.target.set(target);
     }
 
     fn set_fraction(&self, fraction: f32) {
         self.inner.fraction_untracked.set(fraction);
-        self.inner.fraction.set_in_composition(fraction);
+        self.inner.fraction.set(fraction);
     }
 
     pub(crate) fn set_running(&self, running: bool) {
-        self.inner.is_running.set_in_composition(running);
+        self.inner.is_running.set(running);
     }
 
     fn transition(&self) -> Option<Rc<TransitionInner<S>>> {
