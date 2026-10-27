@@ -118,6 +118,9 @@ pub struct LayoutNode {
     /// Bumped when the chain's nodes change, so pointer captures of removed nodes lapse.
     pub(crate) chain_version: u32,
     pub(crate) parent_data: ParentData,
+    /// What its `ParentDataModifierNode`s give its parent, folded tail to head
+    /// (`IntrinsicMeasureScope::parent_data_any`).
+    pub(crate) custom_parent_data: Option<Rc<dyn std::any::Any>>,
     pub(crate) layers: SmallVec<[Layer; 2]>,
     /// The constraints of the last measurement.
     pub(crate) constraints: Option<crate::constraints::Constraints>,
@@ -183,6 +186,7 @@ impl LayoutNode {
             layout_indices: SmallVec::new(),
             chain_version: 0,
             parent_data: ParentData::default(),
+            custom_parent_data: None,
             layers: SmallVec::from_elem(Layer::default(), 1),
             constraints: None,
             needs_measure: true,
@@ -465,9 +469,14 @@ impl UiTree {
             self.density = density;
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Density);
             for index in 0..self.slots.len() {
-                if let Some(node) = &mut self.slots[index].node {
-                    node.needs_measure = true;
-                    node.subtree_needs_measure = true;
+                let slot = &mut self.slots[index];
+                let Some(node) = &mut slot.node else { continue };
+                node.needs_measure = true;
+                node.subtree_needs_measure = true;
+                // Parent data is given at a density (`modify_parent_data`).
+                if node.kinds.any(NodeKinds::PARENT_DATA) {
+                    let id = NodeId { index: index as u32, generation: slot.generation };
+                    self.refresh_custom_parent_data(id);
                 }
             }
             self.invalidate_draw();
@@ -822,7 +831,11 @@ impl UiTree {
                 }
             }
             let previous = std::mem::replace(&mut value.modifier, modifier);
-            let parent_data_changed = self.refresh_chain(node);
+            let mut parent_data_changed = self.refresh_chain(node);
+            // Updated parent data nodes tell the parent, as Compose's `invalidateParentData`.
+            if invalidated.any(NodeKinds::PARENT_DATA) {
+                parent_data_changed |= self.refresh_custom_parent_data(node);
+            }
             drop(previous);
             self.revalidate_focus(node, None);
             self.auto_invalidate(node, invalidated, NodeKinds::NONE, parent_data_changed);
@@ -882,7 +895,12 @@ impl UiTree {
         // A node attached in this pass attaches its whole subtree when it ends.
         let attaching = value.attaching;
         self.next_entry = next_entry;
-        let parent_data_changed = self.refresh_chain(node);
+        let mut parent_data_changed = self.refresh_chain(node);
+        // Parent data nodes updated, inserted or removed tell the parent (`invalidated` has
+        // the inserted and removed nodes' kinds too).
+        if invalidated.any(NodeKinds::PARENT_DATA) {
+            parent_data_changed |= self.refresh_custom_parent_data(node);
+        }
         if changed {
             self.remap_captures(node, &matched);
         }
@@ -1417,6 +1435,7 @@ impl Applier for UiTree {
         assert!(index <= length, "compose-ui: insert at {index} past {length} children");
         self.node_mut(parent).children.insert(index, Measurable { node: id, layer: 0 });
         self.refresh_chain(id);
+        self.refresh_custom_parent_data(id);
         self.invalidate_measure(parent);
         id.to_ref()
     }
@@ -1428,6 +1447,7 @@ impl Applier for UiTree {
         node.parent = None;
         let id = self.alloc(node);
         self.refresh_chain(id);
+        self.refresh_custom_parent_data(id);
         id.to_ref()
     }
 

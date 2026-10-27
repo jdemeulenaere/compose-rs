@@ -1035,6 +1035,10 @@ pub trait ModifierNode: Any {
     ) -> Option<&mut dyn crate::layout_callbacks::GlobalPositionAwareModifierNode> {
         None
     }
+    /// Gives its layout node's parent data, as `ParentDataModifierNode`.
+    fn as_parent_data(&self) -> Option<&dyn crate::parent_data::ParentDataModifierNode> {
+        None
+    }
     /// Told when state its `NodeContext::observe_reads` block read changes, as
     /// `ObserverModifierNode`.
     fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {

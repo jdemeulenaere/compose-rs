@@ -88,6 +88,7 @@ impl NodeKinds {
         add(node.as_focus_target().is_some(), NodeKinds::FOCUS_TARGET);
         add(node.as_key_input().is_some(), NodeKinds::KEY_INPUT);
         add(node.as_global_position_aware().is_some(), NodeKinds::GLOBAL_POSITION_AWARE);
+        add(node.as_parent_data().is_some(), NodeKinds::PARENT_DATA);
         // Not `SELECTABLE`: a text answers `as_selectable` by its element's `selectable`, which
         // an update changes, so the selection walks ask each node.
         add(node.is_repaint_boundary(), NodeKinds::REPAINT_BOUNDARY);

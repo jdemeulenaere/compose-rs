@@ -13,6 +13,7 @@ mod paragraph;
 mod paragraph_style;
 mod node_invalidation;
 mod observer_nodes;
+mod parent_data;
 mod retained_drawing;
 mod review_d;
 mod review_d2;

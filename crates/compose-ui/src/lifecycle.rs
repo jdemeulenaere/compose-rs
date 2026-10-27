@@ -483,7 +483,8 @@ impl UiTree {
             // Computed again when next asked; the frame says they may have changed.
             Invalidation::Semantics => self.invalidate_semantics_of(node),
             Invalidation::ParentData => {
-                if self.refresh_parent_data(node)
+                let fixed = self.refresh_parent_data(node);
+                if (self.refresh_custom_parent_data(node) || fixed)
                     && let Some(parent) = self.parent_of(node)
                 {
                     self.invalidate_measure(parent);

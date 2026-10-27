@@ -54,6 +54,7 @@ mod optimizations;
 mod overlay;
 mod paragraph;
 mod paragraph_style;
+mod parent_data;
 mod path;
 mod platform_services;
 mod platform_text_style;
@@ -195,6 +196,7 @@ pub use observer_node::ObserverModifierNode;
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use paragraph::{Paragraph, TextLayoutInput};
 pub use paragraph_style::ParagraphStyle;
+pub use parent_data::{LayoutIdParentData, ParentDataModifierNode};
 pub use path::{
     CornerRadius, ImageVector, Matrix, Path, PathCommand, PathData, PathDirection, PathError,
     PathFillType, PathOperation, PathStep, RoundRect,
