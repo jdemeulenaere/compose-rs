@@ -114,6 +114,7 @@ fn a_panicking_effect_does_not_lose_the_frame_request() {
     });
     armed.set(true);
     count.set(10);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert_eq!(requests.get(), 1);
     assert!(catch_unwind(AssertUnwindSafe(|| composition.recompose())).is_err());
     assert!(!composition.is_poisoned());
@@ -121,6 +122,7 @@ fn a_panicking_effect_does_not_lose_the_frame_request() {
     // Later writes, from handlers: still nothing.
     count.set(20);
     count.set(30);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert!(
         requests.get() > 1,
         "the composition is invalid but no frame was requested after the effect's write \
@@ -151,8 +153,15 @@ fn a_panicking_frame_requester_does_not_lose_the_others() {
     second.set_content(move || {
         let _ = handle.get();
     });
-    assert!(catch_unwind(AssertUnwindSafe(|| shared.set(1))).is_err());
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            shared.set(1);
+            compose_runtime::snapshots::Snapshot::send_apply_notifications();
+        }))
+        .is_err()
+    );
     shared.set(2);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert!(second.has_invalidations());
     assert!(requests.get() >= 1, "the second composition never got a frame request");
 }
@@ -191,7 +200,9 @@ fn a_dropped_state_lives_until_the_pass_after_the_handler() {
     let title = owner.handle();
     drop(owner);
     tick.set(2);
-    assert_eq!(title.try_get(), None, "the synchronous pass ran inside the handler");
+    assert_eq!(title.try_get(), Some("detached".to_string()), "until the turn's send (D751)");
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    assert_eq!(title.try_get(), None, "the synchronous pass ran in the send");
 }
 
 // ---- Finding 5 (minor): cells retired by a disposal are freed before anyone's next pass ------

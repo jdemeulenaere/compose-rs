@@ -207,6 +207,10 @@ fn a_synchronous_frame_requester_survives_a_side_effect_write() {
             }
         });
     });
+    // Each effect's write is sent at its turn's end (D751), here by hand: the requester
+    // recomposes in the send.
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert_eq!(tree(&composition), "count=2\n");
 }
 

@@ -34,6 +34,9 @@ pub(crate) struct Observing {
     /// Reads register here even during composition (a derived state's calculation), not with
     /// the composing scope.
     pub(crate) exclusive: bool,
+    /// The snapshot observer frames when it started: a `without_read_observation` started
+    /// since stops it recording.
+    pub(crate) depth: u32,
 }
 
 /// A state read observed under a key.
@@ -158,7 +161,14 @@ impl ReadObserver {
                 }
                 None => return runtime.observing,
             };
-            runtime.observing.replace(Observing { observer: self.index, key, epoch, exclusive })
+            let depth = runtime.snapshots.depth();
+            runtime.observing.replace(Observing {
+                observer: self.index,
+                key,
+                epoch,
+                exclusive,
+                depth,
+            })
         });
         struct Restore(Option<Observing>);
         impl Drop for Restore {
@@ -201,6 +211,11 @@ impl ReadObserver {
                 entry.invalidated = keys;
             }
         });
+    }
+
+    /// The keys whose current observation read `state`.
+    pub(crate) fn keys_reading(&self, state: crate::state::StateId) -> Vec<u64> {
+        with_runtime(|runtime| crate::state::observed_keys(runtime, state, self.index))
     }
 
     /// Forgets `key`'s reads (its node is gone).

@@ -39,6 +39,8 @@ pub(crate) struct Runtime {
     pub removal_stack: Vec<RemovalStep>,
     /// Frame requesters to call once the borrow ends; kept for its capacity.
     pub frame_requests: Vec<Rc<dyn Fn()>>,
+    /// The thread's snapshot world (D750, D751): the global snapshot's changes and observers.
+    pub snapshots: crate::snapshots::Snapshots,
     /// Observers of reads outside composition, and the observation in progress.
     pub observers: crate::observe::Observers,
     pub observing: Option<crate::observe::Observing>,
@@ -103,6 +105,7 @@ impl Runtime {
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
+            snapshots: crate::snapshots::Snapshots::new(),
             observers: crate::observe::Observers::new(),
             observing: None,
             pending_move: None,
@@ -196,7 +199,8 @@ pub(crate) fn release_if_empty() {
             && runtime.compositions.live() == 0
             && runtime.cells.live_count() == 0
             && runtime.scopes.live_count() == 0
-            && runtime.observers.is_empty();
+            && runtime.observers.is_empty()
+            && runtime.snapshots.is_empty();
         if !empty {
             return None;
         }

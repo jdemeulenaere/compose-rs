@@ -214,6 +214,7 @@ impl UiHost {
     /// call (`on_focus_changed`) without recomposing: a frame does it first, and a test rule
     /// between frames, so what the calls write recomposes at its next frame (D906).
     pub fn handle_focus_requests(&self) {
+        let _turn = compose_runtime::platform::Turn::begin();
         loop {
             let pending = self.with_tree(|tree| tree.focus_requests.pending.take());
             if pending.is_empty() {
@@ -240,6 +241,7 @@ impl UiHost {
     }
 
     pub fn resize(&mut self, size: IntSize) {
+        let _turn = compose_runtime::platform::Turn::begin();
         if self.size != size {
             self.size = size;
             self.window_size.set(size);
@@ -250,6 +252,7 @@ impl UiHost {
     /// Lays the content out in `direction` (the window's: right-to-left for Arabic or Hebrew
     /// locales), as `LocalLayoutDirection` at the root.
     pub fn set_layout_direction(&mut self, direction: crate::alignment::LayoutDirection) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.layout_direction.set(direction);
         self.with_tree(|tree| {
             let root = tree.root_id();
@@ -265,6 +268,7 @@ impl UiHost {
         &mut self,
         configuration: Option<crate::view_configuration::ViewConfiguration>,
     ) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.with_tree(|tree| tree.set_view_configuration(configuration));
         self.view_configuration.set(configuration);
         self.wake();
@@ -276,6 +280,7 @@ impl UiHost {
     }
 
     pub fn set_density(&mut self, density: Density) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.with_tree(|tree| tree.set_density(density));
         self.density.set(density);
         self.wake();
@@ -284,6 +289,7 @@ impl UiHost {
     /// The platform's configuration, which content reads as `LOCAL_CONFIGURATION` (on desktop,
     /// the window's size in dp and the system's dark mode).
     pub fn set_configuration(&mut self, configuration: crate::configuration::Configuration) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.configuration.set(configuration);
     }
 
@@ -294,6 +300,7 @@ impl UiHost {
     /// The window's insets (system bars, the keyboard, a cutout), which the insets paddings and
     /// `LOCAL_PLATFORM_WINDOW_INSETS` read.
     pub fn set_window_insets(&mut self, insets: crate::configuration::PlatformWindowInsets) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.window_insets.set(insets);
     }
 
@@ -312,6 +319,7 @@ impl UiHost {
     /// `BackHandler` gets it. Returns whether one did; if none, the platform goes back itself
     /// (Android's activity finishes).
     pub fn on_back_pressed(&mut self) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
         let handled = self.back_dispatcher.on_back_pressed();
         self.wake_if_dirty();
         handled
@@ -349,6 +357,8 @@ impl UiHost {
     /// Whether a frame would do anything besides resuming the tasks waiting for one: state
     /// changed, something to draw, a task ready.
     pub fn has_pending_work(&self) -> bool {
+        // Writes not sent yet ask for a frame once sent (D751).
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
         self.frame_requested.get()
             || self.pending_content.borrow().is_some()
             || self.composition.has_invalidations()
@@ -364,6 +374,7 @@ impl UiHost {
     /// frame's time), recomposes invalid scopes, measures and draws what changed, then starts the
     /// tasks the pass launched.
     pub fn frame(&mut self) -> FrameStats {
+        let _turn = compose_runtime::platform::Turn::begin();
         // The tasks due and those waiting for this frame write state this frame recomposes,
         // measures and draws: they ask for no other frame.
         self.framing.set(true);
@@ -532,6 +543,8 @@ impl UiHost {
             self.with_tree(|tree| tree.apply_node_requests());
         }
         let draw = crate::trace::section(c"compose-rs: draw");
+        // Layout's and its callbacks' writes reach the drawing (D751).
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
         let (drew, actions) = self.with_tree(|tree| (tree.draw(), tree.take_pending_actions()));
         drop(draw);
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
@@ -602,6 +615,8 @@ impl UiHost {
         // item is a repaint boundary, so measuring one marks only its own drawing (D155), drawn
         // when a frame places it; the boundary around the list, if any, is marked as the list
         // is (its children changed), and drawn again with the list's next measurement.
+        // The requests' writes invalidate what read them (D751).
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
         let quiet = self.with_tree(|tree| {
             tree.needs_draw = false;
             tree.apply_observed_writes();
@@ -671,6 +686,7 @@ impl UiHost {
             return None;
         }
         let _section = crate::trace::section(c"compose-rs: draw ahead");
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
         self.with_tree(|tree| tree.draw_ahead())
     }
 
@@ -690,6 +706,8 @@ impl UiHost {
         // A callback's writes read by measurements are laid out here too (those read by
         // composition, by the frame's next round).
         for _ in 0..4 {
+            // The writes so far invalidate what read them (D751), then the layout applies them.
+            compose_runtime::snapshots::Snapshot::send_apply_notifications();
             let again = self.with_tree(|tree| {
                 tree.apply_node_requests();
                 tree.apply_observed_writes();
@@ -708,6 +726,7 @@ impl UiHost {
 
     /// Dispatches a pointer event (its position in the root), then runs the handlers' actions.
     pub fn send_pointer(&mut self, mut event: PointerEvent) {
+        let _turn = compose_runtime::platform::Turn::begin();
         if event.time_nanos == 0 {
             event.time_nanos = compose_runtime::platform::now_nanos();
         }
@@ -723,6 +742,7 @@ impl UiHost {
 
     /// The mouse left the window: what it was over hears `Exit` (hover states end).
     pub fn send_pointer_left(&mut self) {
+        let _turn = compose_runtime::platform::Turn::begin();
         let actions = self.with_tree(|tree| tree.pointer_left());
         Self::run(actions);
         self.wake_if_dirty();
@@ -732,6 +752,7 @@ impl UiHost {
     /// that nothing focused takes goes back (`on_back_pressed`), as a dialog window takes it
     /// on desktop.
     pub fn send_key(&mut self, event: KeyEvent) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
         Self::run(actions);
         if !consumed
@@ -746,6 +767,7 @@ impl UiHost {
 
     /// Dispatches committed text to the focused node; returns whether it was taken.
     pub fn send_text(&mut self, text: &str) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_text(text));
         Self::run(actions);
         self.wake_if_dirty();
@@ -755,6 +777,7 @@ impl UiHost {
     /// Dispatches an input method's composition to the focused node; returns whether it was
     /// taken.
     pub fn send_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_preedit(text, cursor));
         Self::run(actions);
         self.wake_if_dirty();
@@ -784,6 +807,7 @@ impl UiHost {
     /// The input method's action key (Android's `performEditorAction`): the focused field runs
     /// its `KeyboardActions`. Returns whether it was taken.
     pub fn perform_ime_action(&mut self, action: crate::text_input::ImeAction) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_ime_action(action));
         Self::run(actions);
         self.wake_if_dirty();
@@ -847,6 +871,7 @@ impl UiHost {
     where
         crate::semantics::AccessibilityAction<F>: crate::semantics::SemanticsValue,
     {
+        let _turn = compose_runtime::platform::Turn::begin();
         let Some(action) = self.semantics_action(node, key) else { return false };
         let done = perform(&action);
         self.handle_focus_requests();
@@ -856,12 +881,14 @@ impl UiHost {
 
     /// Moves focus to `node`'s focus target.
     pub fn request_focus(&mut self, node: NodeId) {
+        let _turn = compose_runtime::platform::Turn::begin();
         let actions = self.with_tree(|tree| tree.request_focus(node));
         Self::run(actions);
         self.wake_if_dirty();
     }
 
     pub fn clear_focus(&mut self) {
+        let _turn = compose_runtime::platform::Turn::begin();
         let actions = self.with_tree(|tree| tree.clear_focus());
         Self::run(actions);
         self.wake_if_dirty();

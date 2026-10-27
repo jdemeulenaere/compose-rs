@@ -3,9 +3,14 @@
 //!
 //! Each thread has its own snapshot world, as its own state (D14, D750).
 
+mod global;
+mod observer;
 mod records;
 
-pub(crate) use records::{Records, StateObjectCell};
+pub use global::{ChangeSet, ObserverHandle, Snapshot, StateObserverFn, Turn};
+pub(crate) use global::{Snapshots, global_id, notify_read, pass_composed, wrote};
+pub use observer::SnapshotStateObserver;
+pub(crate) use records::{Records, SnapshotId, StateObjectCell};
 
 use std::fmt;
 

@@ -1,0 +1,493 @@
+//! Snapshot observation (docs/parity/design/snapshots.md, step S1): the global snapshot's apply
+//! notifications, apply and write observers, `Snapshot::observe`, `without_read_observation`
+//! and `SnapshotStateObserver`, as Compose's `SnapshotTests` (their observer tests) and
+//! `SnapshotStateObserverTestsCommon`/`Jvm` (those needing no isolated snapshot, derived or
+//! computed state).
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use compose_runtime::snapshots::{Snapshot, SnapshotStateObserver, StateObjectId};
+use compose_runtime::*;
+
+/// How many applies changed `state` while `block` ran and was sent, as `changesOf`.
+fn changes_of<T: 'static>(state: MutableState<T>, block: impl FnOnce()) -> usize {
+    let changes = Rc::new(Cell::new(0));
+    let counted = changes.clone();
+    let id = state.state_object_id();
+    let _observer = Snapshot::register_apply_observer(move |changed, _| {
+        if changed.contains(id) {
+            counted.set(counted.get() + 1);
+        }
+    });
+    block();
+    Snapshot::send_apply_notifications();
+    changes.get()
+}
+
+/// How many reads `block` made, as `readsOf` (observed without a snapshot: isolation comes
+/// later).
+fn reads_of(block: impl FnOnce()) -> usize {
+    let reads = Rc::new(Cell::new(0));
+    let counted = reads.clone();
+    Snapshot::observe(Some(Rc::new(move |_| counted.set(counted.get() + 1))), None, block);
+    reads.get()
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, globalChangesCanBeObserved
+#[test]
+fn global_changes_are_heard_at_the_send() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let observed = Rc::new(Cell::new(false));
+    let seen = observed.clone();
+    let id = state.state_object_id();
+    let _observer = Snapshot::register_apply_observer(move |changed, _| {
+        assert!(changed.contains(id));
+        seen.set(true);
+    });
+    state.set(2);
+    assert!(!observed.get(), "nothing observed yet");
+    Snapshot::send_apply_notifications();
+    assert!(observed.get());
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, applyObserverNotificationIsPendingWhileSendingApplyNotifications
+#[test]
+fn notifications_are_pending_while_sent() {
+    let state = mutable_state_of(0);
+    let pending_while_observing = Rc::new(Cell::new(false));
+    let seen = pending_while_observing.clone();
+    let _observer = Snapshot::register_apply_observer(move |_, _| {
+        seen.set(Snapshot::is_apply_observer_notification_pending());
+    });
+    assert!(!Snapshot::is_apply_observer_notification_pending());
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert!(pending_while_observing.get());
+    assert!(!Snapshot::is_apply_observer_notification_pending());
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, changingAnEqualityPolicyStateToItsCurrentValueIsNotConsideredAChange
+#[test]
+fn writing_an_equivalent_value_is_not_a_change() {
+    let value = Rc::new(0);
+    let state = mutable_state_of_with(value.clone(), referential_equality_policy());
+    let handle = state.handle();
+    assert_eq!(changes_of(handle, || handle.set(value)), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, changingANeverEqualPolicyStateToItsCurrentValueIsConsideredAChange
+#[test]
+fn writing_the_same_value_under_a_never_equal_policy_is_a_change() {
+    let value = Rc::new(0);
+    let state = mutable_state_of_with(value.clone(), never_equal_policy());
+    let handle = state.handle();
+    assert_eq!(changes_of(handle, || handle.set(value)), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, toStringOfMutableStateDoesNotTriggerReadObserver
+#[test]
+fn formatting_a_state_reads_nothing() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    assert_eq!(
+        reads_of(|| {
+            handle.get();
+        }),
+        1
+    );
+    assert_eq!(reads_of(|| drop(format!("{handle} {handle:?}"))), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, toStringValueOfMutableState
+#[test]
+fn a_state_displays_its_value() {
+    let state = mutable_state_of(10);
+    let id = format!("{:?}", state.state_object_id());
+    assert!(format!("{}", *state).starts_with("MutableState(value=10)@"));
+    state.set(20);
+    assert!(format!("{}", *state).starts_with("MutableState(value=20)@"));
+    assert_ne!(id, "");
+}
+
+/// A write observer of `Snapshot::observe` hears the write at once; a global write observer
+/// hears global writes at once too, before any send.
+#[test]
+fn write_observers_hear_writes_at_once() {
+    let state = mutable_state_of(0);
+    let written: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let global = Rc::new(Cell::new(0));
+    let counted = global.clone();
+    let _global = Snapshot::register_global_write_observer(move |_| counted.set(counted.get() + 1));
+    let log = written.clone();
+    Snapshot::observe(None, Some(Rc::new(move |id| log.borrow_mut().push(id))), || {
+        state.set(2);
+        assert_eq!(written.borrow().len(), 1);
+    });
+    assert_eq!(*written.borrow(), [state.state_object_id()]);
+    assert_eq!(global.get(), 1);
+}
+
+// ---- SnapshotStateObserver ---------------------------------------------------------------
+
+/// A started observer that runs its callbacks at once, `Snapshot.notifyObjectsInitialized()`,
+/// `block`, a write to its state and a send, as `runSimpleTest`.
+fn run_simple_test(block: impl FnOnce(&SnapshotStateObserver, MutableState<i32>)) {
+    let observer = SnapshotStateObserver::new(|run| run());
+    let state = mutable_state_of(0);
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    block(&observer, state.handle());
+    state.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    observer.stop();
+}
+
+/// A scope callback, as Compose's `(T) -> Unit`.
+type Callback = Rc<dyn Fn(&&'static str)>;
+
+fn counting(changes: &Rc<Cell<u32>>) -> Callback {
+    let changes = changes.clone();
+    Rc::new(move |_| changes.set(changes.get() + 1))
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, stateChangeTriggersCallback
+#[test]
+fn a_state_change_calls_its_scopes_callback() {
+    let changes = Rc::new(Cell::new(0));
+    let state = mutable_state_of(0);
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    let counted = changes.clone();
+    let on_change: Rc<dyn Fn(&&'static str)> = Rc::new(move |affected| {
+        assert_eq!(*affected, "Hello World");
+        assert_eq!(counted.get(), 0);
+        counted.set(counted.get() + 1);
+    });
+    observer.observe_reads("Hello World", &on_change, || state.get());
+    Snapshot::notify_objects_initialized();
+    state.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, multipleStagesWorksTogether
+#[test]
+fn several_stages_are_called_each() {
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    let models = [mutable_state_of(0), mutable_state_of(0), mutable_state_of(0)];
+    let changes: Vec<Rc<Cell<u32>>> = (0..3).map(|_| Rc::default()).collect();
+    let names = ["Stage1", "Stage2", "Stage3"];
+    let callbacks: Vec<Callback> = (0..3)
+        .map(|stage| {
+            let (changes, name) = (changes[stage].clone(), names[stage]);
+            Rc::new(move |affected: &&'static str| {
+                assert_eq!(*affected, name);
+                assert_eq!(changes.get(), 0);
+                changes.set(changes.get() + 1);
+            }) as Rc<dyn Fn(&&'static str)>
+        })
+        .collect();
+    for stage in 0..3 {
+        let model = models[stage].handle();
+        observer.observe_reads(names[stage], &callbacks[stage], || model.get());
+    }
+    Snapshot::notify_objects_initialized();
+    for model in &models {
+        model.update(|value| value + 1);
+    }
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.iter().map(|changes| changes.get()).collect::<Vec<_>>(), [1, 1, 1]);
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, enclosedStagesCorrectlyObserveChanges
+#[test]
+fn nested_stages_record_their_own_reads() {
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    let (stage1, stage2_1, stage2_2) =
+        (mutable_state_of(0), mutable_state_of(0), mutable_state_of(0));
+    let stage1_changes = Rc::new(Cell::new(0));
+    let stage2_changes: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let counted = stage1_changes.clone();
+    let on_stage1: Rc<dyn Fn(&&'static str)> = Rc::new(move |affected| {
+        assert_eq!(*affected, "stage 1");
+        assert_eq!(counted.get(), 0);
+        counted.set(counted.get() + 1);
+    });
+    let log = stage2_changes.clone();
+    let on_stage2: Rc<dyn Fn(&&'static str)> = Rc::new(move |affected| {
+        assert_ne!(*affected, "stage 1", "stage 1 called in stage 2");
+        assert!(!log.borrow().contains(affected));
+        log.borrow_mut().push(affected);
+    });
+    let (a, b, c) = (stage2_1.handle(), stage2_2.handle(), stage1.handle());
+    observer.observe_reads("stage 1 - value 1", &on_stage2, || {
+        a.get();
+        observer.observe_reads("stage 2 - value 2", &on_stage2, || {
+            b.get();
+            observer.observe_reads("stage 1", &on_stage1, || c.get());
+        });
+    });
+    Snapshot::notify_objects_initialized();
+    stage2_1.update(|value| value + 1);
+    stage2_2.update(|value| value + 1);
+    stage1.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(stage1_changes.get(), 1);
+    let mut stage2 = stage2_changes.borrow().clone();
+    stage2.sort();
+    assert_eq!(stage2, ["stage 1 - value 1", "stage 2 - value 2"]);
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, withoutReadObservationStopsObserving
+#[test]
+fn reads_without_observation_are_not_observed() {
+    let changes = Rc::new(Cell::new(0));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &counting(&changes), || {
+            Snapshot::without_read_observation(|| state.get())
+        });
+    });
+    assert_eq!(changes.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, changeAfterWithoutReadObservationIsObserving
+#[test]
+fn a_read_after_without_read_observation_is_observed() {
+    let changes = Rc::new(Cell::new(0));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &counting(&changes), || {
+            Snapshot::without_read_observation(|| state.get());
+            state.get()
+        });
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, nestedWithoutReadObservation
+#[test]
+fn nested_reads_without_observation_are_not_observed() {
+    let changes = Rc::new(Cell::new(0));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &counting(&changes), || {
+            Snapshot::without_read_observation(|| {
+                Snapshot::without_read_observation(|| state.get());
+                state.get()
+            })
+        });
+    });
+    assert_eq!(changes.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, simpleObserving
+#[test]
+fn an_observed_read_is_called_back() {
+    let changes = Rc::new(Cell::new(0));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &counting(&changes), || state.get());
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, observeWithinWithoutReadObservation
+#[test]
+fn an_observation_inside_without_read_observation_observes() {
+    let (outer, inner) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &counting(&outer), || {
+            Snapshot::without_read_observation(|| {
+                observer.observe_reads("data", &counting(&inner), || state.get())
+            })
+        });
+    });
+    assert_eq!((outer.get(), inner.get()), (0, 1));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, withoutReadsPausesNestedObservation
+#[test]
+fn without_read_observation_pauses_nested_observations() {
+    let (first, second) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("scope1", &counting(&first), || {
+            observer.observe_reads("scope2", &counting(&second), || {
+                Snapshot::without_read_observation(|| state.get())
+            })
+        });
+    });
+    assert_eq!((first.get(), second.get()), (0, 0));
+}
+
+fn recursive_apply(states: usize) {
+    let observer = SnapshotStateObserver::new(|run| run());
+    let states: Rc<Vec<OwnedState<i32>>> =
+        Rc::new((0..states).map(|_| mutable_state_of(0)).collect());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let written = states.clone();
+    let on_change: Rc<dyn Fn(&String)> = Rc::new(move |scope| {
+        if scope == "scope" && written[0].get() < 2 {
+            for state in written.iter() {
+                state.update(|value| value + 1);
+                Snapshot::send_apply_notifications();
+            }
+        }
+    });
+    let read = |states: &Rc<Vec<OwnedState<i32>>>| {
+        for state in states.iter() {
+            state.get();
+        }
+    };
+    observer.observe_reads("scope".to_string(), &on_change, || read(&states));
+    for index in 0..10 {
+        observer.observe_reads(format!("scope {index}"), &on_change, || read(&states));
+    }
+    for state in states.iter() {
+        state.update(|value| value + 1);
+    }
+    Snapshot::send_apply_notifications();
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, testRecursiveApplyChanges_SingleRecursive
+#[test]
+fn a_callback_writing_and_sending_again_is_fine() {
+    recursive_apply(2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, testRecursiveApplyChanges_MultiRecursive
+#[test]
+fn a_callback_writing_and_sending_several_times_is_fine() {
+    recursive_apply(4);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingValueAfterClearInvalidates
+#[test]
+fn a_scope_observed_again_after_a_clear_is_called_back() {
+    let changes = Rc::new(Cell::new(0));
+    run_simple_test(|observer, state| {
+        let callback = counting(&changes);
+        observer.observe_reads("scope", &callback, || state.get());
+        observer.clear(&"scope");
+        observer.observe_reads("scope", &callback, || state.get());
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsJvm.kt, nestedObservationIsClearingThePreviousScopesBeforeReexecuting
+#[test]
+fn a_nested_observation_run_again_forgets_its_old_reads() {
+    let observer = SnapshotStateObserver::new(|run| run());
+    let (state1, state2) = (mutable_state_of(true), mutable_state_of(0));
+    let changes = Rc::new(Cell::new(0));
+    let on_changed1: Rc<dyn Fn(&&'static str)> = Rc::new(|_| {});
+    let on_changed2 = counting(&changes);
+    let (first, second) = (state1.handle(), state2.handle());
+    let run = || {
+        observer.observe_reads("data1", &on_changed1, || {
+            observer.observe_reads("data2", &on_changed2, || {
+                if first.get() {
+                    second.update(|value| value + 1);
+                }
+            })
+        })
+    };
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    run();
+    assert_eq!(changes.get(), 0);
+    state1.set(false);
+    Snapshot::send_apply_notifications();
+    run();
+    assert_eq!(changes.get(), 1);
+    state2.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+    observer.stop();
+}
+
+/// A stopped observer hears nothing; started again, it hears what changes then.
+#[test]
+fn a_stopped_observer_hears_nothing() {
+    let changes = Rc::new(Cell::new(0));
+    let observer = SnapshotStateObserver::new(|run| run());
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || handle.get());
+    Snapshot::notify_objects_initialized();
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0, "not started");
+    observer.start();
+    observer.observe_reads("scope", &callback, || handle.get());
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+// ---- When invalidation happens (D751) ------------------------------------------------------
+
+/// A write outside composition invalidates its readers at the send, not at the write: a scope
+/// reading it is valid until then, and the frame is asked for then.
+#[test]
+fn readers_are_invalidated_at_the_send() {
+    let state = mutable_state_of(0);
+    let requested = Rc::new(Cell::new(0));
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let counted = requested.clone();
+    composition.set_frame_requester(move || counted.set(counted.get() + 1));
+    let handle = state.handle();
+    composition.set_content(move || {
+        handle.get();
+    });
+    state.set(1);
+    state.set(2);
+    assert_eq!(requested.get(), 0, "nothing invalidated at the writes");
+    Snapshot::send_apply_notifications();
+    assert_eq!(requested.get(), 1, "invalidated once, at the send");
+    assert!(composition.recompose());
+}
+
+/// The executor's turn sends at its end: what a task writes invalidates its readers before
+/// `run_ready` returns.
+#[test]
+fn a_tasks_writes_are_sent_when_its_turn_ends() {
+    let state = mutable_state_of(0);
+    let requested = Rc::new(Cell::new(false));
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let flag = requested.clone();
+    composition.set_frame_requester(move || flag.set(true));
+    let handle = state.handle();
+    composition.set_content(move || {
+        handle.get();
+    });
+    let scope = CoroutineScope::new();
+    scope.launch(async move { handle.set(3) });
+    compose_runtime::platform::run_ready();
+    assert!(requested.get());
+}
+
+/// A state made and written in the same global snapshot isn't a change (Compose's
+/// `overwritableRecord` writes the record made with it), until the snapshot advances.
+#[test]
+fn a_state_written_where_it_was_made_is_not_a_change() {
+    let changes = Rc::new(Cell::new(0));
+    let counted = changes.clone();
+    let _observer = Snapshot::register_apply_observer(move |changed, _| {
+        counted.set(counted.get() + changed.len());
+    });
+    let state = mutable_state_of(0);
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0);
+    Snapshot::notify_objects_initialized();
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}

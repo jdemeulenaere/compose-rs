@@ -57,7 +57,9 @@ impl Composition {
 
     /// Runs a pass if any scope is invalid. Returns whether a pass ran.
     pub fn recompose(&self) -> bool {
-        // Derived states whose dependencies changed tell their readers first.
+        // The changes of the turn so far invalidate their readers first (D751), and derived
+        // states whose dependencies changed tell theirs.
+        crate::snapshots::Snapshot::send_apply_notifications();
         crate::derived::flush_derived_states();
         // What was asked of the paused composition, if any, first (a cancel during a layout, a
         // completion a layout needs).
@@ -72,11 +74,13 @@ impl Composition {
 
     /// Whether some scope is invalid, so [`recompose`](Composition::recompose) would run a pass.
     pub fn has_invalidations(&self) -> bool {
-        // A derived state whose dependencies changed may have changed: computed now.
-        if crate::derived::has_pending_derived_states()
-            && !crate::runtime::with_runtime(|runtime| runtime.is_busy())
-        {
-            crate::derived::flush_derived_states();
+        // The turn's changes invalidate their readers first (D751); a derived state whose
+        // dependencies changed may have changed: computed now.
+        if !crate::runtime::with_runtime(|runtime| runtime.is_busy()) {
+            crate::snapshots::Snapshot::send_apply_notifications();
+            if crate::derived::has_pending_derived_states() {
+                crate::derived::flush_derived_states();
+            }
         }
         with_runtime(|runtime| self.data(runtime).has_invalidations())
     }
@@ -448,6 +452,8 @@ impl Pass {
         }
         let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
+            // As Compose applies the composition's snapshot: what it made is initialized.
+            crate::snapshots::pass_composed(runtime);
             runtime.pause = None;
             runtime.pausable_pass = false;
             runtime.resume_next = None;

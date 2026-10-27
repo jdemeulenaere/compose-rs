@@ -16,8 +16,6 @@ pub(crate) const FIRST_GLOBAL: SnapshotId = 2;
 /// A record: the snapshot that wrote it, the write that made it (a per-thread counter: what a
 /// derived state validates its dependencies against), and the object's data as of that write.
 pub(crate) struct Record<R> {
-    // Read once snapshots other than the global one exist (step S5).
-    #[allow(dead_code)]
     pub(crate) id: SnapshotId,
     pub(crate) version: u32,
     pub(crate) data: R,
@@ -33,10 +31,8 @@ pub(crate) struct Records<R> {
 impl<R> Records<R> {
     /// One record holding `data`, written now.
     pub(crate) fn new(data: R) -> Records<R> {
-        Records {
-            head: Record { id: FIRST_GLOBAL, version: next_version(), data },
-            rest: Vec::new(),
-        }
+        let id = super::global::global_id();
+        Records { head: Record { id, version: next_version(), data }, rest: Vec::new() }
     }
 
     /// The record a read sees.
@@ -45,11 +41,17 @@ impl<R> Records<R> {
         &self.head.data
     }
 
-    /// The record a write overwrites: marked as a new write.
+    /// Makes the head the record a write in snapshot `id` overwrites, with a new version:
+    /// returns whether that's a new record for the snapshot (the head was written in an
+    /// earlier one), as Compose's `overwritableRecord` records the state as modified then.
+    /// While only the global snapshot exists nothing older can be read, so the head is
+    /// overwritten in place (D752).
     #[inline]
-    pub(crate) fn writable(&mut self) -> &mut R {
+    pub(crate) fn write_in(&mut self, id: SnapshotId) -> bool {
         self.head.version = next_version();
-        &mut self.head.data
+        let new_record = self.head.id != id;
+        self.head.id = id;
+        new_record
     }
 
     /// The version of the record a read sees.

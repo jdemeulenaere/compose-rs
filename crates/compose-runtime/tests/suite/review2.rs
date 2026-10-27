@@ -197,7 +197,10 @@ fn a_released_node_may_write_state_with_an_immediate_frame_requester() {
         }
         let _ = count;
     });
-    let result = catch_unwind(AssertUnwindSafe(|| show.set(false)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        show.set(false);
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    }));
     if let Err(payload) = result {
         panic!("hiding the node panicked: {}", panic_message(payload));
     }
@@ -295,7 +298,10 @@ fn a_nested_pass_during_disposal_keeps_the_cells_it_retired() {
         let _reader = remember(|| Rc::new(ReadsOnDrop(owned)));
         Leaf("disposed");
     });
-    let result = catch_unwind(AssertUnwindSafe(|| drop(disposed)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        drop(disposed);
+        compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    }));
     TRIGGER.with(|slot| slot.set(None));
     if let Err(payload) = result {
         panic!("disposal panicked: {}", panic_message(payload));
@@ -354,6 +360,8 @@ fn an_observer_of_a_completed_pass_is_not_abandoned() {
             composer.end_group();
         }
     });
+    // The effect's write, at the turn's send (D751).
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     let events = EVENTS.with(|events| events.borrow().clone());
     assert_eq!(events, ["remembered", "forgotten"]);
 }

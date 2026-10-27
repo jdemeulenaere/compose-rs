@@ -208,6 +208,7 @@ fn a_disposed_invalidated_composition_does_not_leak() {
         s.get();
     });
     state.set(1);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert!(frame_requested.get(), "never requested a frame");
     assert!(composition.has_invalidations());
     assert!(weak.upgrade().is_some(), "composition prematurely dropped");
@@ -286,4 +287,25 @@ fn a_composition_is_dropped_while_a_scope_of_it_is_held() {
     assert!(weak.upgrade().is_none(), "the composition leaked");
     held.invalidate();
     assert_eq!(live_scope_count(), scopes);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/RecomposerTests.kt, readDuringWithoutReadObservationDoesntCauseRecomposition
+#[test]
+fn a_read_without_observation_recomposes_nothing() {
+    #[composable]
+    fn Use(value: i32) {
+        let _ = value;
+    }
+    let mut test = composition_test();
+    let some_state = mutable_state_of(0);
+    let recompositions = Rc::new(Cell::new(0));
+    let (s, r) = (some_state.handle(), recompositions.clone());
+    test.compose(move || {
+        r.set(r.get() + 1);
+        Use(compose_runtime::snapshots::Snapshot::without_read_observation(|| s.get()));
+    });
+    assert_eq!(recompositions.get(), 1);
+    some_state.update(|value| value + 1);
+    test.advance();
+    assert_eq!(recompositions.get(), 1);
 }

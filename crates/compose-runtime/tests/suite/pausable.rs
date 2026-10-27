@@ -440,6 +440,7 @@ fn state_written_once_complete_makes_it_incomplete() {
     let paused = scene.composition.recompose_pausable();
     assert!(paused.resume(|| false));
     scene.items[0].value.set(2);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert!(!paused.is_complete(), "invalidated before it was applied");
     take_events();
     assert!(paused.resume(|| false));

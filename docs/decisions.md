@@ -17,7 +17,7 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 109 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 112 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 228 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 82 |
@@ -83,7 +83,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D50 | [runtime](decisions/runtime.md#d50) | current |
 | D51 | [runtime](decisions/runtime.md#d51) | current |
 | D52 | [runtime](decisions/runtime.md#d52) | current |
-| D53 | [runtime](decisions/runtime.md#d53) | current |
+| D53 | [runtime](decisions/runtime.md#d53) | revised by [D751](decisions/runtime.md#d751) |
 | D54 | [runtime](decisions/runtime.md#d54) | current |
 | D55 | [runtime](decisions/runtime.md#d55) | current |
 | D56 | [runtime](decisions/runtime.md#d56) | current |
@@ -435,6 +435,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D716 | [runtime](decisions/runtime.md#d716) | current |
 | D717 | [runtime](decisions/runtime.md#d717) | current |
 | D750 | [runtime](decisions/runtime.md#d750) | current |
+| D751 | [runtime](decisions/runtime.md#d751) | current |
+| D752 | [runtime](decisions/runtime.md#d752) | current |
+| D753 | [runtime](decisions/runtime.md#d753) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |

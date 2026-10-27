@@ -681,6 +681,8 @@ impl PausedComposition {
     }
 
     fn resume_with(&self, should_pause: Option<Rc<dyn ShouldPauseCallback>>) -> bool {
+        // The turn's changes invalidate their readers first (D751), as before a pass.
+        crate::snapshots::Snapshot::send_apply_notifications();
         match self.state.get() {
             PausedState::ApplyPending => return true,
             PausedState::Applied | PausedState::Cancelled => {

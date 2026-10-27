@@ -270,6 +270,8 @@ fn is_live(key: TaskKey) -> bool {
 /// that yields) waits for the next call, so it can't hold the thread: frames and input come
 /// between its steps, as Compose's `yield()`. Returns whether a task ran.
 pub fn run_ready() -> bool {
+    // A turn: what the tasks write is sent when it ends (D751).
+    let _turn = crate::snapshots::Turn::begin();
     let mut ran = false;
     // A set: a frame resumes hundreds of tasks (an animated value each), and a scan per key
     // made that quadratic; the first few in an array, so a run polling a task or two (an

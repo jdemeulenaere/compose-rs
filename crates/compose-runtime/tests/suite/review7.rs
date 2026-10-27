@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_runtime::platform::NodeTree;
+use compose_runtime::snapshots::Snapshot;
 use compose_runtime::*;
 
 use crate::mock::*;
@@ -82,6 +83,9 @@ fn a_forward_write_recomposes_its_reader_in_the_same_pass() {
     });
     assert_eq!(seen.get(), 0);
     trigger.set(1);
+    // The write's invalidation, and its frame request, come with the send (D751).
+    Snapshot::send_apply_notifications();
+    assert!(requested.get());
     requested.set(false);
     composition.recompose();
     assert_eq!(seen.get(), 10, "the reader ran in the pass that wrote");

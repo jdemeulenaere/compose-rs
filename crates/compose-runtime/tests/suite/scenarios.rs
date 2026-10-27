@@ -888,9 +888,11 @@ fn frame_requests_are_coalesced_until_the_next_pass() {
     composition.set_content(move || Reader("r", handle));
     state.set(1);
     state.set(2);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert_eq!(requests.get(), 1);
     composition.recompose();
     state.set(3);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert_eq!(requests.get(), 2);
 }
 
