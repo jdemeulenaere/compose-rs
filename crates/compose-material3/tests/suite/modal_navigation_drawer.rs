@@ -13,7 +13,7 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
     BackHandler, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
-    PaddingValues, PointerEvent, SemanticsAction, UnitExt, platform::FixedTextMeasurer,
+    PaddingValues, PointerEvent, SemanticsActions, UnitExt, platform::FixedTextMeasurer,
 };
 
 const DRAWER_TAG: &str = "drawer";
@@ -325,7 +325,7 @@ fn the_scrim_is_a_clickable_node_only_while_open() {
     assert_eq!(bounds(&mut ui, "content").left, 0.0);
     let mut scrim = ui.on_node_with_content_description("Close navigation menu");
     scrim.assert_exists();
-    scrim.perform_semantics_action(SemanticsAction::OnClick);
+    scrim.perform_semantics_action(&SemanticsActions::ON_CLICK);
     ui.wait_for_idle();
     ui.on_node_with_tag("content").assert_does_not_exist();
     ui.on_node_with_content_description("Close navigation menu").assert_does_not_exist();

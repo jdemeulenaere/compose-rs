@@ -530,18 +530,14 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 impl compose_ui::SemanticsModifierNode for ScrimNode {
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
         if let Some(description) = self.description {
-            config.content_description.push(description.into());
+            config.set_content_description(description);
         }
-        config.clickable |= self.enabled;
-    }
-
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        context: &mut compose_ui::EventContext<'_>,
-    ) -> bool {
-        if action != compose_ui::SemanticsAction::OnClick || !self.enabled {
-            return false;
+        if self.enabled {
+            let close = self.close.clone();
+            config.on_click(None, move || {
+                close();
+                true
+            });
         }
     }
 }

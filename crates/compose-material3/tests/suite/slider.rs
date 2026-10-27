@@ -25,7 +25,7 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
     Dp, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset, PointerEvent,
-    ProgressBarRangeInfo, Rect, SemanticsAction, SizeSpec, UnitExt,
+    ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
 };
 
 const TAG: &str = "slider";
@@ -76,7 +76,8 @@ fn range_info(ui: &mut ComposeTestRule) -> ProgressBarRangeInfo {
     ui.on_node_with_tag(TAG)
         .fetch_semantics_node()
         .config
-        .progress_bar_range_info
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied()
         .expect("a progress bar range")
 }
 
@@ -134,7 +135,12 @@ fn a_continuous_slider_reports_its_value_and_takes_set_progress() {
     state.set_value(0.5);
     ui.wait_for_idle();
     assert_eq!(range_info(&mut ui), info(0.5, 0));
-    ui.on_node_with_tag(TAG).perform_semantics_action(SemanticsAction::SetProgress(0.7));
+    ui.on_node_with_tag(TAG).perform_semantics_action_with(
+        &SemanticsActions::SET_PROGRESS,
+        |set| {
+            set(0.7);
+        },
+    );
     ui.wait_for_idle();
     assert_eq!(range_info(&mut ui), info(0.7, 0));
 }
@@ -148,7 +154,12 @@ fn a_stepped_slider_reports_its_steps_and_snaps_set_progress() {
     state.set_value(0.6);
     ui.wait_for_idle();
     assert_eq!(range_info(&mut ui), info(0.6, 4));
-    ui.on_node_with_tag(TAG).perform_semantics_action(SemanticsAction::SetProgress(0.75));
+    ui.on_node_with_tag(TAG).perform_semantics_action_with(
+        &SemanticsActions::SET_PROGRESS,
+        |set| {
+            set(0.75);
+        },
+    );
     ui.wait_for_idle();
     assert_eq!(range_info(&mut ui), info(0.8, 4));
 }
@@ -160,7 +171,12 @@ fn a_slider_is_focusable() {
     let mut ui = compose_test(material(move || {
         Slider!(*state, |_| {}, modifier = Modifier.test_tag(TAG));
     }));
-    assert!(ui.on_node_with_tag(TAG).fetch_semantics_node().config.focusable);
+    assert!(
+        ui.on_node_with_tag(TAG)
+            .fetch_semantics_node()
+            .config
+            .contains(&compose_ui::SemanticsProperties::FOCUSED)
+    );
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, slider_semantics_disabled
@@ -393,7 +409,12 @@ fn set_progress_finishes() {
     let state = SliderState::new(0.0, 0, (0.0, 1.0));
     let mut ui = compose_test(finishing(*state, finished.clone()));
     assert_eq!(finished.get(), 0);
-    ui.on_node_with_tag(TAG).perform_semantics_action(SemanticsAction::SetProgress(0.8));
+    ui.on_node_with_tag(TAG).perform_semantics_action_with(
+        &SemanticsActions::SET_PROGRESS,
+        |set| {
+            set(0.8);
+        },
+    );
     ui.wait_for_idle();
     assert_eq!(finished.get(), 1);
 }
@@ -634,7 +655,7 @@ fn only_a_slider_whose_range_goes_below_zero_describes_its_state() {
                 custom,
                 |_| {},
                 modifier = Modifier
-                    .semantics(|config| config.state_description = Some("0:13 of 0:18".into()))
+                    .semantics(|config| config.set_state_description("0:13 of 0:18"))
                     .test_tag("custom"),
             );
             let centered = remember_slider_state!(0.0, 0, (-50.0, 50.0));
@@ -642,15 +663,23 @@ fn only_a_slider_whose_range_goes_below_zero_describes_its_state() {
         });
     }));
     let standard = ui.on_node_with_tag("standard").fetch_semantics_node().config;
-    assert_eq!(standard.state_description, None);
-    assert_eq!(standard.progress_bar_range_info, Some(info(0.5, 0)));
+    let description = |config: &compose_ui::SemanticsConfiguration| {
+        config
+            .get(&compose_ui::SemanticsProperties::STATE_DESCRIPTION)
+            .map(|text| text.as_str().to_string())
+    };
+    let range = |config: &compose_ui::SemanticsConfiguration| {
+        config.get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO).copied()
+    };
+    assert_eq!(description(&standard), None);
+    assert_eq!(range(&standard), Some(info(0.5, 0)));
     let custom = ui.on_node_with_tag("custom").fetch_semantics_node().config;
-    assert_eq!(custom.state_description.as_deref(), Some("0:13 of 0:18"));
-    assert_eq!(custom.progress_bar_range_info, Some(info(0.5, 0)));
+    assert_eq!(description(&custom).as_deref(), Some("0:13 of 0:18"));
+    assert_eq!(range(&custom), Some(info(0.5, 0)));
     let centered = ui.on_node_with_tag("centered").fetch_semantics_node().config;
-    assert_eq!(centered.state_description.as_deref(), Some("0.0"));
+    assert_eq!(description(&centered).as_deref(), Some("0.0"));
     assert_eq!(
-        centered.progress_bar_range_info,
+        range(&centered),
         Some(ProgressBarRangeInfo { current: 0.0, range: (-50.0, 50.0), steps: 0 })
     );
 }

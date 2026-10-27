@@ -7,8 +7,6 @@ use compose_ui::{
     Color, Dp, DrawModifierNode, DrawScope, Modifier, ModifierNode, ModifierNodeElement,
     MutableInteractionSource, Offset, Paint, Rect, Role, UnitExt,
 };
-use std::cell::Cell;
-use std::rc::Rc;
 
 use crate::components::minimum_interactive_component_size;
 use crate::theme::MaterialTheme;

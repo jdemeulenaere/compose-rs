@@ -26,7 +26,10 @@ fn a_checkbox_is_an_enabled_checkbox_on_or_off() {
     });
     for (tag, on) in [("unchecked", false), ("checked", true)] {
         let node = ui.on_node_with_tag(tag).fetch_semantics_node();
-        assert_eq!(node.config.role, Some(Role::Checkbox));
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            Some(Role::Checkbox)
+        );
         ui.on_node_with_tag(tag).assert_is_enabled();
         if on {
             ui.on_node_with_tag(tag).assert_is_on();
@@ -70,10 +73,7 @@ fn a_second_click_unchecks_it() {
 /// Focused by its own semantics: Compose's `semantics { focused = true }` defines the key
 /// `isFocusable` looks for; compose-rs's matcher reads `focusable`.
 fn focused(modifier: Modifier) -> Modifier {
-    modifier.semantics(|config| {
-        config.focusable = true;
-        config.focused = true;
-    })
+    modifier.semantics(|config| config.set_focused(true))
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/CheckboxTest.kt, checkBoxTest_untoggleable_whenEmptyLambda

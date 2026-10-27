@@ -393,11 +393,20 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
         .copied()
         .expect("a range");
     assert_eq!((info.current, info.range, info.steps), (0.0, (0.0, 1.0), 3));
-    ui.on_node_with_tag("slider")
-        .perform_semantics_action(compose_ui::SemanticsAction::SetProgress(0.3));
+    ui.on_node_with_tag("slider").perform_semantics_action_with(
+        &compose_ui::SemanticsActions::SET_PROGRESS,
+        |set| {
+            set(0.3);
+        },
+    );
     let value = STATE.with(Cell::get).expect("composed").value();
     assert_eq!(value, 0.25, "snapped to the nearest of the 5 stops");
-    let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
+    let info = ui
+        .on_node_with_tag("slider")
+        .fetch_semantics_node()
+        .config
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied();
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
 
@@ -456,11 +465,11 @@ fn a_sliders_set_progress_goes_on_from_the_value_asked() {
         MaterialTheme!({
             let seen = seen.clone();
             // A value the application never changes.
+            let state = remember_slider_state!(0.0, 3);
             Slider!(
-                0.0,
+                state,
                 move |new| seen.borrow_mut().push(new),
-                modifier = Modifier.test_tag("slider"),
-                steps = 3,
+                modifier = Modifier.test_tag("slider")
             );
         });
     });

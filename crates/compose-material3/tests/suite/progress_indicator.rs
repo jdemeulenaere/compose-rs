@@ -146,7 +146,8 @@ fn range_info(ui: &mut ComposeTestRule, tag: &str) -> ProgressBarRangeInfo {
     ui.on_node_with_tag(tag)
         .fetch_semantics_node()
         .config
-        .progress_bar_range_info
+        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+        .copied()
         .expect("a progress bar range")
 }
 

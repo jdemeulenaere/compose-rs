@@ -24,7 +24,10 @@ fn a_switch_is_an_enabled_switch_on_or_off() {
     });
     for (tag, on) in [("checked", true), ("unchecked", false)] {
         let node = ui.on_node_with_tag(tag).fetch_semantics_node();
-        assert_eq!(node.config.role, Some(Role::Switch));
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            Some(Role::Switch)
+        );
         ui.on_node_with_tag(tag).assert_is_enabled();
         if on {
             ui.on_node_with_tag(tag).assert_is_on();
@@ -81,10 +84,7 @@ fn a_disabled_switch_with_a_callback_has_a_click_action() {
 /// Focused by its own semantics, as the test's `semantics { focused = true }` (compose-rs's
 /// matcher reads `focusable`).
 fn focused(modifier: Modifier) -> Modifier {
-    modifier.semantics(|config| {
-        config.focusable = true;
-        config.focused = true;
-    })
+    modifier.semantics(|config| config.set_focused(true))
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SwitchTest.kt, switch_untoggleable_whenEmptyLambda

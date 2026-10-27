@@ -160,7 +160,7 @@ impl ModifierNode for ProgressSemanticsNode {
 
 impl SemanticsModifierNode for ProgressSemanticsNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.progress_bar_range_info = Some(match &self.progress {
+        config.set_progress_bar_range_info(match &self.progress {
             Some(progress) => ProgressBarRangeInfo {
                 current: coerce_progress(progress()),
                 range: (0.0, 1.0),

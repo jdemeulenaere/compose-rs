@@ -22,7 +22,7 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
 /// Nodes with a selection, as Compose's `isSelectable()` (a private helper: compose-test has
 /// no selection matcher yet).
 fn is_selectable() -> Matcher {
-    Matcher::new("selectable", |config| config.selected.is_some())
+    Matcher::new("selectable", |config| config.contains(&compose_ui::SemanticsProperties::SELECTED))
 }
 
 /// The selectable nodes' selection, in order.
@@ -30,7 +30,12 @@ fn selections(ui: &mut ComposeTestRule) -> Vec<bool> {
     let count = ui.count_nodes(&is_selectable());
     (0..count)
         .map(|index| {
-            ui.on_all_nodes(is_selectable()).get(index).fetch_semantics_node().config.selected
+            ui.on_all_nodes(is_selectable())
+                .get(index)
+                .fetch_semantics_node()
+                .config
+                .get(&compose_ui::SemanticsProperties::SELECTED)
+                .copied()
                 == Some(true)
         })
         .collect()
@@ -77,13 +82,29 @@ fn a_tab_is_a_selected_enabled_clickable_tab_in_a_selectable_group() {
     });
     for tag in ["tab", "leading"] {
         let node = ui.on_node_with_tag(tag).fetch_semantics_node();
-        assert_eq!(node.config.role, Some(Role::Tab), "{tag}");
-        assert_eq!(node.config.selected, Some(true), "{tag}");
-        assert!(!node.config.disabled && node.config.clickable, "{tag}");
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            Some(Role::Tab),
+            "{tag}"
+        );
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(),
+            Some(true),
+            "{tag}"
+        );
+        assert!(
+            !node.config.contains(&compose_ui::SemanticsProperties::DISABLED)
+                && node.config.contains(&compose_ui::SemanticsActions::ON_CLICK),
+            "{tag}"
+        );
     }
     for tag in ["row", "leading row"] {
         let group = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node();
-        assert!(group.config.selectable_group, "{tag}: {}", ui.dump_semantics());
+        assert!(
+            group.config.contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP),
+            "{tag}: {}",
+            ui.dump_semantics()
+        );
     }
 }
 
@@ -118,9 +139,19 @@ fn a_disabled_tab_says_so_and_takes_no_clicks() {
     });
     for tag in ["tab", "leading"] {
         let node = ui.on_node_with_tag(tag).fetch_semantics_node();
-        assert_eq!(node.config.role, Some(Role::Tab));
-        assert_eq!(node.config.selected, Some(true));
-        assert!(node.config.disabled && node.config.clickable, "{tag}");
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+            Some(Role::Tab)
+        );
+        assert_eq!(
+            node.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(),
+            Some(true)
+        );
+        assert!(
+            node.config.contains(&compose_ui::SemanticsProperties::DISABLED)
+                && node.config.contains(&compose_ui::SemanticsActions::ON_CLICK),
+            "{tag}"
+        );
         ui.on_node_with_tag(tag).perform_click();
     }
     assert_eq!(CLICKS.with(Cell::get), 0);
@@ -462,7 +493,7 @@ fn a_scrollable_row_selects_its_first_tab_then_the_clicked_one() {
 fn a_scrollable_row_scrolls_to_an_initially_selected_tab_off_screen() {
     let mut ui = text_tabs(10, true, 9);
     let last = ui.on_all_nodes(is_selectable()).get(9).fetch_semantics_node();
-    assert_eq!(last.config.selected, Some(true));
+    assert_eq!(last.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
     // Displayed: inside the 400 dp window.
     assert!(last.bounds.left >= 0.0 && last.bounds.right <= 400.0, "{:?}", last.bounds);
 }

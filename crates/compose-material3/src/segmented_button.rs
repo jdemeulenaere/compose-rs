@@ -309,7 +309,7 @@ pub fn SegmentedButton(
         checked: None,
         elevations: None,
     };
-    let modifier = modifier.semantics(|config| config.role = Some(Role::RadioButton));
+    let modifier = modifier.semantics(|config| config.set_role(Role::RadioButton));
     segmented_button(
         selected,
         click,

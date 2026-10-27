@@ -329,7 +329,7 @@ impl Modifier {
         options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.semantics(|config| config.toggleable_state = Some(state))
+        self.semantics(move |config| config.set_toggleable_state(state))
             .clickable_with(options, on_click)
     }
 

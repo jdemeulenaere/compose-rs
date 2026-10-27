@@ -400,14 +400,12 @@ pub(crate) fn surface(
                     click.on_click,
                 );
             let modifier = match click.selected {
-                Some(selected) => {
-                    modifier.semantics(move |config| config.selected = Some(selected))
-                }
+                Some(selected) => modifier.semantics(move |config| config.set_selected(selected)),
                 None => modifier,
             };
             match click.checked {
                 Some(checked) => {
-                    modifier.semantics(move |config| config.toggleable_state = Some(checked.into()))
+                    modifier.semantics(move |config| config.set_toggleable_state(checked.into()))
                 }
                 None => modifier,
             }

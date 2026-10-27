@@ -721,8 +721,8 @@ struct SliderInputNode {
     drag_lag: Option<f32>,
     focused: bool,
     /// The value last asked for, until the state takes it: keys pressed before the next frame
-    /// go on from it.
-    asked: Option<f32>,
+    /// go on from it (shared with the semantics' `SetProgress`).
+    asked: Rc<Cell<Option<f32>>>,
 }
 
 impl ModifierNodeElement for SliderInput {
@@ -737,13 +737,13 @@ impl ModifierNodeElement for SliderInput {
             press: None,
             drag_lag: None,
             focused: false,
-            asked: None,
+            asked: Rc::new(Cell::new(None)),
         }
     }
 
     fn update(&self, node: &mut SliderInputNode) {
         node.state = self.state;
-        node.asked = None;
+        node.asked.set(None);
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
         node.enabled = self.enabled;
@@ -781,13 +781,19 @@ impl SliderInputNode {
         self.state.snapped(value)
     }
 
-    /// Asks for `value` (through `on_value_change`), if it's new.
+    /// Asks for `value` (through `on_value_change`), if it's new: a drag's.
     fn change_to(&mut self, value: f32, context: &mut EventContext<'_>) {
-        if value != self.asked.unwrap_or(self.state.value()) {
-            self.asked = Some(value);
-            let callback = self.on_value_change.clone();
-            context.run(move || callback(value));
+        if value != self.asked.get().unwrap_or(self.state.value()) {
+            self.ask(value, context);
         }
+    }
+
+    /// Asks for `value` (through `on_value_change`), new or not: a key's, as Compose's
+    /// `slideOnKeyEvents` calls `onValueChange` on every key down, at the ends too.
+    fn ask(&mut self, value: f32, context: &mut EventContext<'_>) {
+        self.asked.set(Some(value));
+        let callback = self.on_value_change.clone();
+        context.run(move || callback(value));
     }
 
     fn finish(&self, context: &mut EventContext<'_>) {
@@ -819,7 +825,7 @@ impl ModifierNode for SliderInputNode {
         self.press = None;
         self.drag_lag = None;
         self.focused = false;
-        self.asked = None;
+        self.asked.set(None);
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
@@ -956,7 +962,7 @@ impl KeyInputModifierNode for SliderInputNode {
         let page = (actual_steps / 10).clamp(1, 10) as f32;
         let sign =
             if context.layout_direction() == compose_ui::LayoutDirection::Rtl { -1.0 } else { 1.0 };
-        let value = self.asked.unwrap_or(self.state.value());
+        let value = self.asked.get().unwrap_or(self.state.value());
         let target = match event.key {
             Key::MoveHome => start,
             Key::MoveEnd => end,
@@ -976,56 +982,65 @@ impl SemanticsModifierNode for SliderInputNode {
     /// `sliderSemantics`; disabled when it is.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         let (start, end) = self.state.track_range();
-        config.focusable |= self.enabled;
-        config.focused |= self.focused;
-        config.disabled |= !self.enabled;
+        if self.enabled {
+            config.set_focused(self.focused);
+            config.request_focus_of_node();
+        } else {
+            config.disabled();
+        }
         if start < 0.0 {
             // As Compose's: the value, two decimals at most, for a range below zero.
             let value = (self.state.value() * 100.0).round() / 100.0;
             // Kotlin's float formatting: a whole number keeps its ".0".
             let text =
                 if value.fract() == 0.0 { format!("{value:.1}") } else { format!("{value}") };
-            config.state_description = Some(text.into());
+            config.set_state_description(text);
         }
-        config.progress_bar_range_info = Some(compose_ui::ProgressBarRangeInfo {
+        config.set_progress_bar_range_info(compose_ui::ProgressBarRangeInfo {
             current: self.state.value().clamp(start.min(end), start.max(end)),
             range: (start, end),
             steps: self.state.steps(),
         });
+        // Moves to the value asked (in the range, at the nearest stop), as Compose's
+        // `setProgress`; no change from the state's value is no action.
+        let (state, enabled, asked) = (self.state, self.enabled, self.asked.clone());
+        let on_value_change = self.on_value_change.clone();
+        let finished = self.on_value_change_finished.clone();
+        config.set_progress(None, move |target| {
+            if !enabled {
+                return false;
+            }
+            let value = nearest_stop(state, target);
+            if value == asked.get().unwrap_or(state.value()) {
+                return false;
+            }
+            asked.set(Some(value));
+            on_value_change(value);
+            if let Some(finished) = &finished {
+                finished();
+            }
+            true
+        });
     }
+}
 
-    /// Moves to the value asked (in the range, at the nearest stop), as Compose's `setProgress`.
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        context: &mut EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::SetProgress(target) = action else { return false };
-        if !self.enabled {
-            return false;
-        }
-        let (start, end) = self.state.track_range();
-        let target = target.clamp(start.min(end), start.max(end));
-        // The nearest stop, the last of two as near (`<=`), as `sliderSemantics`' (where the
-        // value's setter takes the first).
-        let steps = self.state.steps();
-        let mut value = target;
-        let mut distance = f32::INFINITY;
-        for index in 0..=steps + 1 {
-            if steps == 0 {
-                break;
-            }
-            let stop = start + (end - start) * (index as f32 / (steps + 1) as f32);
-            if (stop - target).abs() <= distance {
-                distance = (stop - target).abs();
-                value = stop;
-            }
-        }
-        if value == self.asked.unwrap_or(self.state.value()) {
-            return false;
-        }
-        self.change_to(value, context);
-        self.finish(context);
-        true
+/// `target` in the state's range at its nearest stop, as `sliderSemantics`' search: the last
+/// of two stops as near (`<=`).
+fn nearest_stop(state: SliderState, target: f32) -> f32 {
+    let (start, end) = state.track_range();
+    let target = target.clamp(start.min(end), start.max(end));
+    let steps = state.steps();
+    if steps == 0 {
+        return target;
     }
+    let mut value = target;
+    let mut distance = f32::INFINITY;
+    for index in 0..=steps + 1 {
+        let stop = start + (end - start) * (index as f32 / (steps + 1) as f32);
+        if (stop - target).abs() <= distance {
+            distance = (stop - target).abs();
+            value = stop;
+        }
+    }
+    value
 }

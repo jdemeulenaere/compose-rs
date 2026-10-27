@@ -79,7 +79,10 @@ fn check_semantics(kind: Kind) {
         });
     });
     let node = ui.on_node(is_toggleable()).fetch_semantics_node();
-    assert_eq!(node.config.role, Some(Role::Checkbox));
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+        Some(Role::Checkbox)
+    );
     ui.on_node(is_toggleable()).assert_is_enabled().assert_is_off().perform_click().assert_is_on();
 }
 
@@ -91,7 +94,10 @@ fn check_disabled_semantics(kind: Kind) {
         });
     });
     let node = ui.on_node(is_toggleable()).fetch_semantics_node();
-    assert_eq!(node.config.role, Some(Role::Checkbox));
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
+        Some(Role::Checkbox)
+    );
     ui.on_node(is_toggleable()).assert_is_not_enabled().assert_is_off();
 }
 

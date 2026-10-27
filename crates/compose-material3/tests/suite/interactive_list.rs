@@ -238,7 +238,10 @@ fn a_clickable_item_clicks_and_long_clicks() {
         });
     });
     let node = ui.on_node_unmerged(has_test_tag("list")).fetch_semantics_node();
-    assert!(node.config.clickable && node.config.long_clickable);
+    assert!(
+        node.config.contains(&compose_ui::SemanticsActions::ON_CLICK)
+            && node.config.contains(&compose_ui::SemanticsActions::ON_LONG_CLICK)
+    );
     ui.on_node_unmerged(has_test_tag("list")).perform_click();
     assert_eq!(CLICKS.with(Cell::get), (1, 0));
     long_click(&mut ui, "list");
@@ -266,7 +269,11 @@ fn a_selectable_item_says_it_is_selected_and_long_clicks() {
         });
     });
     let selection = |ui: &mut ComposeTestRule| {
-        ui.on_node_unmerged(has_test_tag("list")).fetch_semantics_node().config.selected
+        ui.on_node_unmerged(has_test_tag("list"))
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::SELECTED)
+            .copied()
     };
     assert_eq!(selection(&mut ui), Some(false));
     long_click(&mut ui, "list");
@@ -297,7 +304,11 @@ fn a_toggleable_item_turns_on_and_long_clicks() {
         });
     });
     let state = |ui: &mut ComposeTestRule| {
-        ui.on_node_unmerged(has_test_tag("list")).fetch_semantics_node().config.toggleable_state
+        ui.on_node_unmerged(has_test_tag("list"))
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE)
+            .copied()
     };
     assert_eq!(state(&mut ui), Some(ToggleableState::Off));
     long_click(&mut ui, "list");
@@ -349,5 +360,10 @@ fn a_selected_item_takes_the_selected_colors_and_a_disabled_one_says_so() {
     // on the extra small (4 dp) shape in the surface.
     assert!(fills.contains(&(16.0, scheme.secondary_container)), "{fills:?}");
     assert!(fills.contains(&(4.0, scheme.surface)), "{fills:?}");
-    assert!(ui.on_node_with_tag("disabled").fetch_semantics_node().config.disabled);
+    assert!(
+        ui.on_node_with_tag("disabled")
+            .fetch_semantics_node()
+            .config
+            .contains(&compose_ui::SemanticsProperties::DISABLED)
+    );
 }

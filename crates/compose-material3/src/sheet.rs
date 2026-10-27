@@ -812,7 +812,7 @@ pub fn ModalBottomSheet(
     } else {
         sheet_modifier
     }
-    .semantics(|config| config.content_description.push("Bottom sheet".into()));
+    .semantics(|config| config.set_content_description("Bottom sheet"));
     // A click on the drag handle expands the sheet, dismisses it once expanded, as Compose's.
     let handle_click = {
         let (state, scope, dismiss) = (sheet_state, scope, dismiss.clone());

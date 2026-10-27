@@ -131,7 +131,12 @@ fn a_single_choice_row_is_a_selectable_group() {
             );
         });
     });
-    assert!(ui.on_node_with_tag("row").fetch_semantics_node().config.selectable_group);
+    assert!(
+        ui.on_node_with_tag("row")
+            .fetch_semantics_node()
+            .config
+            .contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
+    );
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SegmentedButtonTest.kt, segmentedButton_icon

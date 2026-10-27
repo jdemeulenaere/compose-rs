@@ -550,17 +550,20 @@ fn interactive_list_item(
     let modifier = modifier.semantics_with(true, move |config| match semantics {
         ItemSemantics::None => {
             if !enabled && !is_clickable {
-                config.disabled = true;
+                config.disabled();
             }
         }
         ItemSemantics::Selectable(selected) => {
-            config.selected = Some(selected);
-            config.role = Some(Role::RadioButton);
+            config.set_selected(selected);
+            config.set_role(Role::RadioButton);
         }
         ItemSemantics::Toggleable(checked) => {
-            config.toggleable_state =
-                Some(if checked { ToggleableState::On } else { ToggleableState::Off });
-            config.role = Some(Role::Checkbox);
+            config.set_toggleable_state(if checked {
+                ToggleableState::On
+            } else {
+                ToggleableState::Off
+            });
+            config.set_role(Role::Checkbox);
         }
     });
     let modifier =
