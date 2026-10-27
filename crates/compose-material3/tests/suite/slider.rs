@@ -722,3 +722,29 @@ fn whole_number_stops_give_whole_numbers() {
         assert_eq!(divisible_by_7.value(), expected as f32);
     }
 }
+
+/// The thumb is measured with the slider's constraints, as Compose's `SliderImpl`
+/// (`measure(constraints)`): a custom thumb smaller than the slider's minimum (4 by 16 dp) sits
+/// in a box of that height (its own width kept by the thumb's `wrapContentWidth`, centred in the
+/// handle's 4 dp), at the box's top: at the slider's top, not 7 dp down (centred) as a loosened
+/// thumb would be.
+#[test]
+fn a_small_custom_thumb_is_measured_with_the_sliders_constraints() {
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(material(move || {
+        Slider!(
+            handle,
+            |_| {},
+            modifier = Modifier.test_tag(TAG),
+            thumb = Some(|_: SliderState| Box!(modifier = Modifier.size(2.dp()).test_tag("thumb"))),
+            track =
+                Some(|_: SliderState| Box!(modifier = Modifier.fill_max_width().height(2.dp()))),
+        );
+    }));
+    let slider = layout_bounds(&mut ui);
+    let thumb = ui.on_node_with_tag_unmerged("thumb").fetch_semantics_node().bounds;
+    assert_eq!(thumb.top - slider.top, 0.0, "{slider:?} {thumb:?}");
+    // Centred in the 4 dp wrapper at the start.
+    assert_eq!(thumb.left - slider.left, 1.0, "{slider:?} {thumb:?}");
+}

@@ -655,7 +655,8 @@ impl MeasurePolicy for SliderLayout {
         let [thumb, track] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
-        let thumb = scope.measure(*thumb, constraints.loosen());
+        // With the slider's constraints, as Compose's (its minimum 4 by 16 dp).
+        let thumb = scope.measure(*thumb, constraints);
         let track = scope.measure(
             *track,
             Constraints::new(
