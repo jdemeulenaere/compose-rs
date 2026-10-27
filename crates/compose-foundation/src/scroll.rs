@@ -398,7 +398,6 @@ fn event_time(event: &PointerEvent) -> u64 {
     if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::platform::now_nanos() }
 }
 
-
 /// Scrolls by `delta` (pixels towards the end, before a right-to-left reversal) through the
 /// nested-scroll `chain`, as Compose's scrollables with their `NestedScrollDispatcher`: the
 /// connections around first, then `scroll_by`, then the connections again with what's left;

@@ -103,7 +103,7 @@ async fn search(
     scroll_offset: i32,
     items_for_teleport: usize,
     (target_distance, bound_distance, minimum_distance): (f32, f32, f32),
-    anim: &mut AnimationState,
+    anim: &mut AnimationState<f32>,
 ) -> Option<i32> {
     let forward = index > scope.first_visible_item_index();
     let overshot = || {
@@ -129,7 +129,7 @@ async fn search(
         } else {
             -target_distance
         };
-        *anim = anim.with_value(0.0);
+        *anim = anim.clone().with_value(0.0);
         let mut previous = 0.0f32;
         let mut outcome: Option<Option<i32>> = None;
         let sequential = anim.velocity() != 0.0;

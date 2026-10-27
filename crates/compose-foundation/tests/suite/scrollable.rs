@@ -368,7 +368,8 @@ fn animate_scroll_by_follows_a_keyframed_animation_back_and_forth() {
     });
     ui.set_auto_advance(false);
     launch(async move {
-        let spec = keyframes::<f32>(2500, |frames| {
+        let spec = keyframes::<f32>(|frames| {
+            frames.duration_millis = 2500;
             frames.at(0, 0.0);
             frames.at(500, 100.0);
             frames.at(1000, 100.0);

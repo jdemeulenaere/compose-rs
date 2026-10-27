@@ -1,21 +1,24 @@
-//! `animate` and `AnimationState`, as animation-core's for a `Float`: a value animated frame by
-//! frame (`with_frame_nanos`), the caller told each frame's value and velocity, which is how
-//! scrolls animate (`animateScrollBy`, `animateScrollToItem`).
+//! `animate` and `AnimationState`, as animation-core's `SuspendAnimation.kt`: a value animated
+//! frame by frame (`with_frame_nanos`) along a `TargetBasedAnimation`, the caller told each
+//! frame's value and velocity, which is how scrolls animate (`animateScrollBy`,
+//! `animateScrollToItem`).
 
 use compose_runtime::with_frame_nanos;
 
-use crate::spec::{AnimationSpec, Spring};
+use crate::animation::{Animation, TargetBasedAnimation};
+use crate::spec::AnimationSpec;
+use crate::vector::{Animate, AnimationVector};
 
 /// Animates from `initial_value` to `target_value` along `spec`, starting at `initial_velocity`
 /// (per second), calling `block` with each frame's value and velocity, as animation-core's
 /// `animate(initialValue, targetValue, initialVelocity, animationSpec, block)`. The first frame
-/// gives the initial value; the last, the target.
-pub async fn animate(
-    initial_value: f32,
-    target_value: f32,
-    initial_velocity: f32,
+/// is at play time 0 (the initial value); the last, the target.
+pub async fn animate<T: Animate>(
+    initial_value: T,
+    target_value: T,
+    initial_velocity: T,
     spec: impl Into<AnimationSpec>,
-    mut block: impl FnMut(f32, f32),
+    mut block: impl FnMut(T, T),
 ) {
     let mut state = AnimationState::new(initial_value, initial_velocity);
     state
@@ -23,35 +26,42 @@ pub async fn animate(
         .await;
 }
 
-/// A float's animation state, as animation-core's `AnimationState<Float, AnimationVector1D>`:
-/// its value and velocity, as the last animation left them, which the next one starts from.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct AnimationState {
-    value: f32,
-    velocity: f32,
+/// A value's animation state, as animation-core's `AnimationState<T, V>`: its value and
+/// velocity, as the last animation left them, which the next one starts from.
+#[derive(Clone, Debug)]
+pub struct AnimationState<T: Animate> {
+    value: T,
+    velocity_vector: AnimationVector,
     is_running: bool,
     /// The last frame's time (nanoseconds; 0: none yet), where a sequential animation starts.
     last_frame_time_nanos: u64,
+    /// When the last animation finished (nanoseconds; 0: none has).
+    finished_time_nanos: u64,
 }
 
-impl AnimationState {
+impl<T: Animate> AnimationState<T> {
     /// At `initial_value`, moving at `initial_velocity` (per second).
-    pub fn new(initial_value: f32, initial_velocity: f32) -> AnimationState {
+    pub fn new(initial_value: T, initial_velocity: T) -> AnimationState<T> {
         AnimationState {
+            velocity_vector: initial_velocity.to_vector(),
             value: initial_value,
-            velocity: initial_velocity,
             is_running: false,
             last_frame_time_nanos: 0,
+            finished_time_nanos: 0,
         }
     }
 
-    pub fn value(&self) -> f32 {
-        self.value
+    pub fn value(&self) -> T {
+        self.value.clone()
     }
 
     /// Per second.
-    pub fn velocity(&self) -> f32 {
-        self.velocity
+    pub fn velocity(&self) -> T {
+        T::from_vector(self.velocity_vector)
+    }
+
+    pub fn velocity_vector(&self) -> AnimationVector {
+        self.velocity_vector
     }
 
     pub fn is_running(&self) -> bool {
@@ -63,52 +73,58 @@ impl AnimationState {
         self.last_frame_time_nanos
     }
 
+    /// When the last animation finished, in nanoseconds (0 if none has).
+    pub fn finished_time_nanos(&self) -> u64 {
+        self.finished_time_nanos
+    }
+
     /// The same state at `value`, as `copy(value = …)`: its velocity and last frame kept.
-    pub fn with_value(self, value: f32) -> AnimationState {
+    pub fn with_value(self, value: T) -> AnimationState<T> {
         AnimationState { value, ..self }
     }
 
     /// Animates from the current value at the current velocity to `target` along `spec`, a step
-    /// each frame, as `AnimationState.animateTo`: `block` sees each frame's values and can stop
-    /// the animation (`AnimationScope::cancel_animation`). A `sequential_animation` starts at the
-    /// last frame's time, as one continuing the one before. Returns when it finished or was
-    /// stopped; the state then holds the last frame's value and velocity.
+    /// each frame, as `AnimationState.animateTo`: a `TargetBasedAnimation` played from the first
+    /// frame (play time 0), or, `sequential_animation`, from the last frame's time, as one
+    /// continuing the one before. `block` sees each frame's values and can stop the animation
+    /// (`AnimationScope::cancel_animation`). Returns when it finished or was stopped; the state
+    /// then holds the last frame's value and velocity (the animation's end velocity once
+    /// finished, as Compose's `doAnimationFrame`).
     pub async fn animate_to(
         &mut self,
-        target: f32,
+        target: T,
         spec: impl Into<AnimationSpec>,
         sequential_animation: bool,
-        mut block: impl FnMut(&mut AnimationScope),
+        mut block: impl FnMut(&mut AnimationScope<T>),
     ) {
-        let spec = spec.into();
-        let (start, velocity) = (self.value, self.velocity);
+        let animation = TargetBasedAnimation::with_velocity_vector(
+            spec,
+            self.value.clone(),
+            target.clone(),
+            self.velocity_vector,
+        );
         self.is_running = true;
-        let mut started = (sequential_animation && self.last_frame_time_nanos != 0)
+        let mut start = (sequential_animation && self.last_frame_time_nanos != 0)
             .then_some(self.last_frame_time_nanos);
         loop {
             let time = with_frame_nanos(|time| time).await;
-            let begin = *started.get_or_insert(time);
-            let frame = spec.frame(
-                time.saturating_sub(begin),
-                [start],
-                [target],
-                [velocity],
-                Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
-            );
-            self.value = frame.values[0];
-            self.velocity = frame.velocities[0];
+            let begin = *start.get_or_insert(time);
+            let play_time = time.saturating_sub(begin).min(i64::MAX as u64) as i64;
+            self.value = animation.value_from_nanos(play_time);
+            self.velocity_vector = animation.velocity_vector_from_nanos(play_time);
             self.last_frame_time_nanos = time;
-            if frame.finished {
-                self.velocity = 0.0;
+            let finished = animation.is_finished_from_nanos(play_time);
+            if finished {
+                self.finished_time_nanos = time;
             }
             let mut scope = AnimationScope {
-                value: self.value,
-                velocity: self.velocity,
-                target_value: target,
+                value: self.value.clone(),
+                velocity_vector: self.velocity_vector,
+                target_value: target.clone(),
                 cancelled: false,
             };
             block(&mut scope);
-            if scope.cancelled || frame.finished {
+            if scope.cancelled || finished {
                 self.is_running = false;
                 return;
             }
@@ -119,25 +135,29 @@ impl AnimationState {
 /// An animation frame, as animation-core's `AnimationScope`: its value and velocity, and a way
 /// to stop the animation.
 #[derive(Debug)]
-pub struct AnimationScope {
-    value: f32,
-    velocity: f32,
-    target_value: f32,
+pub struct AnimationScope<T: Animate> {
+    value: T,
+    velocity_vector: AnimationVector,
+    target_value: T,
     cancelled: bool,
 }
 
-impl AnimationScope {
-    pub fn value(&self) -> f32 {
-        self.value
+impl<T: Animate> AnimationScope<T> {
+    pub fn value(&self) -> T {
+        self.value.clone()
     }
 
     /// Per second.
-    pub fn velocity(&self) -> f32 {
-        self.velocity
+    pub fn velocity(&self) -> T {
+        T::from_vector(self.velocity_vector)
     }
 
-    pub fn target_value(&self) -> f32 {
-        self.target_value
+    pub fn velocity_vector(&self) -> AnimationVector {
+        self.velocity_vector
+    }
+
+    pub fn target_value(&self) -> T {
+        self.target_value.clone()
     }
 
     /// Stops the animation after this frame, as `cancelAnimation`.

@@ -39,6 +39,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 38 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 39 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 40 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 41 |
 
 ## Index by number
 
@@ -476,7 +477,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D851 | [api-and-tooling](decisions/api-and-tooling.md#d851) | current |
 | D852 | [ui-and-layout](decisions/ui-and-layout.md#d852) | current |
 | D853 | [api-and-tooling](decisions/api-and-tooling.md#d853) | current |
-| D854 | [api-and-tooling](decisions/api-and-tooling.md#d854) | current |
+| D854 | [api-and-tooling](decisions/api-and-tooling.md#d854) | revised by [D871](decisions/api-and-tooling.md#d871) |
 | D855 | [ui-and-layout](decisions/ui-and-layout.md#d855) | current |
 | D856 | [ui-and-layout](decisions/ui-and-layout.md#d856) | current |
 | D857 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d857) | current |
@@ -493,6 +494,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D868 | [api-and-tooling](decisions/api-and-tooling.md#d868) | current |
 | D869 | [ui-and-layout](decisions/ui-and-layout.md#d869) | current |
 | D870 | [ui-and-layout](decisions/ui-and-layout.md#d870) | current |
+| D871 | [api-and-tooling](decisions/api-and-tooling.md#d871) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |
