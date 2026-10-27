@@ -57,6 +57,19 @@ pub struct FixedTextMeasurer {
     metrics: FixedFontMetrics,
     paragraphs: Vec<Option<FixedParagraph>>,
     free: Vec<u64>,
+    scratch: std::cell::RefCell<FixedScratch>,
+}
+
+/// Buffers a layout works in, kept so laying text out allocates only its result.
+#[derive(Default)]
+struct FixedScratch {
+    glyphs: Vec<Glyph>,
+    /// The hard paragraphs' glyph ranges.
+    paragraphs: Vec<Range<usize>>,
+    /// One hard paragraph's lines.
+    breaks: Vec<Range<usize>>,
+    /// The lines: their hard paragraph and glyph range.
+    lines: Vec<(usize, Range<usize>)>,
 }
 
 /// A laid-out paragraph: its lines' vertical metrics, measured when it's laid out, and its
@@ -72,10 +85,54 @@ struct FixedParagraph {
 /// What a paragraph was laid out from.
 struct FixedInput {
     text: AnnotatedString,
-    style: TextStyle,
+    style: LayoutStyle,
     options: TextLayoutOptions,
     constraints: Constraints,
     density: Density,
+}
+
+/// The attributes of a style the fixed measurer lays text out by: kept with a paragraph to lay
+/// it out wholly later, without cloning the whole style.
+#[derive(Clone, Copy)]
+struct LayoutStyle {
+    font_size: crate::unit::TextUnit,
+    letter_spacing: crate::unit::TextUnit,
+    text_geometric_transform: Option<crate::text_attributes::TextGeometricTransform>,
+    line_height: crate::unit::TextUnit,
+    line_height_style: Option<LineHeightStyle>,
+    text_align: Option<TextAlign>,
+    text_direction: Option<TextDirection>,
+    text_indent: Option<crate::text_attributes::TextIndent>,
+}
+
+impl LayoutStyle {
+    fn of(style: &TextStyle) -> LayoutStyle {
+        LayoutStyle {
+            font_size: style.font_size,
+            letter_spacing: style.letter_spacing,
+            text_geometric_transform: style.text_geometric_transform,
+            line_height: style.line_height,
+            line_height_style: style.line_height_style,
+            text_align: style.text_align,
+            text_direction: style.text_direction,
+            text_indent: style.text_indent,
+        }
+    }
+
+    /// A style with these attributes: what the layout reads of the original.
+    fn to_style(self) -> TextStyle {
+        TextStyle {
+            font_size: self.font_size,
+            letter_spacing: self.letter_spacing,
+            text_geometric_transform: self.text_geometric_transform,
+            line_height: self.line_height,
+            line_height_style: self.line_height_style,
+            text_align: self.text_align,
+            text_direction: self.text_direction,
+            text_indent: self.text_indent,
+            ..TextStyle::DEFAULT
+        }
+    }
 }
 
 impl FixedTextMeasurer {
@@ -114,7 +171,7 @@ impl FixedTextMeasurer {
             Rc::new(self.lay_out(
                 input.text.as_str(),
                 Some(&input.text),
-                &input.style,
+                &input.style.to_style(),
                 input.options,
                 input.constraints,
                 &input.density,
@@ -134,8 +191,13 @@ impl FixedTextMeasurer {
     ) -> ParagraphHandle {
         let measured =
             self.lay_out(text.as_str(), Some(&text), style, options, constraints, density, false);
-        let input =
-            FixedInput { text, style: style.clone(), options, constraints, density: *density };
+        let input = FixedInput {
+            text,
+            style: LayoutStyle::of(style),
+            options,
+            constraints,
+            density: *density,
+        };
         self.store(FixedParagraph { measured, input, full: std::cell::OnceCell::new() })
     }
 
@@ -220,8 +282,7 @@ fn needs_bidi(text: &str) -> bool {
 /// Lines of one hard paragraph (`glyphs`, without its line feed) broken greedily, its first line
 /// at `first_width` and the others at `rest_width`: each line's glyph index range, its trailing
 /// spaces included.
-fn break_lines(glyphs: &[Glyph], first_width: f32, rest_width: f32) -> Vec<Range<usize>> {
-    let mut lines = Vec::new();
+fn break_lines(glyphs: &[Glyph], first_width: f32, rest_width: f32, lines: &mut Vec<Range<usize>>) {
     let mut start = 0;
     while start < glyphs.len() {
         let width = if lines.is_empty() { first_width } else { rest_width };
@@ -256,7 +317,6 @@ fn break_lines(glyphs: &[Glyph], first_width: f32, rest_width: f32) -> Vec<Range
         lines.push(start..end);
         start = end;
     }
-    lines
 }
 
 impl FixedTextMeasurer {
@@ -276,9 +336,21 @@ impl FixedTextMeasurer {
     ) -> ParagraphLayout {
         let metrics = self.metrics;
         let base_px = resolve_font_size_px(style, density);
-        let mut glyphs = Vec::with_capacity(string.len());
+        // The measurer's buffers, kept from layout to layout.
+        let mut scratch = self.scratch.borrow_mut();
+        let FixedScratch { glyphs, paragraphs, breaks, lines } = &mut *scratch;
+        glyphs.clear();
+        paragraphs.clear();
+        lines.clear();
+        // Only a span's size, letter spacing or scale changes its characters' metrics: other
+        // spans (colors, weights) leave the text one run.
+        let sized = |span: &crate::span_style::SpanStyle| {
+            span.font_size.is_specified()
+                || span.letter_spacing.is_specified()
+                || span.text_geometric_transform.is_some()
+        };
         let runs = match spans {
-            Some(text) if text.has_span_styles() => {
+            Some(text) if text.span_style_ranges().any(|(span, _, _)| sized(span)) => {
                 text.runs(style).into_iter().map(|(range, style, _)| (range, Some(style))).collect()
             }
             _ => vec![(0..string.len(), None)],
@@ -306,7 +378,6 @@ impl FixedTextMeasurer {
             }
         }
         // The hard paragraphs: glyph ranges without their line feeds.
-        let mut paragraphs = Vec::new();
         let mut start = 0;
         for (index, glyph) in glyphs.iter().enumerate() {
             if glyph.character == '\n' {
@@ -363,16 +434,15 @@ impl FixedTextMeasurer {
             (px(indent.first_line), px(indent.rest_line))
         });
         // Lines: (hard paragraph index, glyph range), a paragraph's line feed in its last line.
-        let mut lines: Vec<(usize, Range<usize>)> = Vec::new();
         for (index, paragraph) in paragraphs.iter().enumerate() {
-            let breaks =
-                break_lines(&glyphs[paragraph.clone()], width - indent.0, width - indent.1);
+            breaks.clear();
+            break_lines(&glyphs[paragraph.clone()], width - indent.0, width - indent.1, breaks);
             let feed = usize::from(paragraph.end < glyphs.len());
             if breaks.is_empty() {
                 lines.push((index, paragraph.start..paragraph.end + feed));
             }
             let count = breaks.len();
-            for (line, range) in breaks.into_iter().enumerate() {
+            for (line, range) in breaks.drain(..).enumerate() {
                 let end = paragraph.start + range.end + if line + 1 == count { feed } else { 0 };
                 lines.push((index, paragraph.start + range.start..end));
             }

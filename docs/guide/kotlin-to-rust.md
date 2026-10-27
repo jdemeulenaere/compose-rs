@@ -136,7 +136,7 @@ fun Fruit() {
 #[composable]
 pub fn Section(title: impl Into<SharedString>, content: impl Fn() + 'static) {
     Column!(modifier = Modifier.padding(8.dp()), {
-        Text!(title, style = MaterialTheme::typography().title_medium);
+        Text!(title, style = MaterialTheme::typography().title_medium.clone());
         content();
     });
 }
@@ -1257,6 +1257,7 @@ pub fn AppTheme(content: impl Fn() + 'static) {
         title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
         ..typography
     };
+    let typography = std::rc::Rc::new(typography); // shared, as Compose passes it
     MaterialTheme!(color_scheme = color_scheme, typography = typography, content = content);
 }
 ```
@@ -1273,11 +1274,13 @@ pub fn Banner(text: SharedString) {
         Text!(
             text,
             modifier = Modifier.padding(16.dp()),
-            style = MaterialTheme::typography().title_large
+            style = MaterialTheme::typography().title_large.clone()
         );
     });
 }
 ```
+
+`MaterialTheme::typography()` is shared, as Kotlin's object is: an `Rc<Typography>`, so reading it copies no style; a composable takes one style from it with `.clone()`, and `MaterialTheme` takes a typography as an `Rc` (D1106).
 
 ### Composition locals
 
@@ -1403,7 +1406,7 @@ Column {
 #[composable]
 pub fn Headline(title: SharedString, summary: SharedString) {
     Column!({
-        Text!(title, style = MaterialTheme::typography().headline_small, max_lines = 1);
+        Text!(title, style = MaterialTheme::typography().headline_small.clone(), max_lines = 1);
         Text!(
             summary,
             color = MaterialTheme::color_scheme().on_surface_variant,

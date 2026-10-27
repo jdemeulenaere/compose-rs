@@ -118,7 +118,7 @@ pub fn ResizeGrid() {
                                         "R{} C{}",
                                         row + 1,
                                         column + 1,
-                                        style = MaterialTheme::typography().label_medium,
+                                        style = MaterialTheme::typography().label_medium.clone(),
                                         color = Color::WHITE
                                     );
                                 }
@@ -139,7 +139,7 @@ pub fn ResizeDeep(level: u32) {
             "Level {} · {}",
             level + 1,
             TAGS[(level % 6) as usize],
-            style = MaterialTheme::typography().label_large
+            style = MaterialTheme::typography().label_large.clone()
         );
         if level + 1 < RESIZE_LEVELS {
             ResizeDeep(level + 1);

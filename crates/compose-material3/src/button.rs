@@ -265,7 +265,7 @@ pub fn Button(
 ) {
     let interaction_source = remembered_interaction_source(interaction_source);
     let tonal = elevation.map_or(Dp(0.0), |elevation| elevation.tonal_elevation(enabled));
-    let label = MaterialTheme::typography().label_large;
+    let label = MaterialTheme::typography().label_large.clone();
     let click = SurfaceClick {
         on_click,
         enabled,

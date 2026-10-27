@@ -36,7 +36,7 @@ pub fn Greetings() {
 #[composable]
 pub fn Section(title: impl Into<SharedString>, content: impl Fn() + 'static) {
     Column!(modifier = Modifier.padding(8.dp()), {
-        Text!(title, style = MaterialTheme::typography().title_medium);
+        Text!(title, style = MaterialTheme::typography().title_medium.clone());
         content();
     });
 }

@@ -11,7 +11,7 @@ use compose::ui::*;
 #[composable]
 pub fn Headline(title: SharedString, summary: SharedString) {
     Column!({
-        Text!(title, style = MaterialTheme::typography().headline_small, max_lines = 1);
+        Text!(title, style = MaterialTheme::typography().headline_small.clone(), max_lines = 1);
         Text!(
             summary,
             color = MaterialTheme::color_scheme().on_surface_variant,

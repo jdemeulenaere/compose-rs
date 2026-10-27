@@ -145,7 +145,7 @@ fn fab(
             disabled: elevation.default_elevation,
         }),
     };
-    let label = MaterialTheme::typography().label_large;
+    let label = MaterialTheme::typography().label_large.clone();
     surface(
         modifier.size_in(SizeSpec::bounds(minimum, minimum, Dp::UNSPECIFIED, Dp::UNSPECIFIED)),
         shape,

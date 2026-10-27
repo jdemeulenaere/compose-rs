@@ -519,8 +519,8 @@ pub fn MediumTopAppBar(
     let typography = MaterialTheme::typography();
     two_rows_top_app_bar(TwoRows {
         title,
-        title_style: typography.headline_small,
-        small_title_style: typography.title_large,
+        title_style: typography.headline_small.clone(),
+        small_title_style: typography.title_large.clone(),
         title_bottom_padding: Dp(24.0),
         modifier,
         navigation_icon,
@@ -550,8 +550,8 @@ pub fn LargeTopAppBar(
     let typography = MaterialTheme::typography();
     two_rows_top_app_bar(TwoRows {
         title,
-        title_style: typography.headline_medium,
-        small_title_style: typography.title_large,
+        title_style: typography.headline_medium.clone(),
+        small_title_style: typography.title_large.clone(),
         title_bottom_padding: Dp(28.0),
         modifier,
         navigation_icon,
@@ -616,7 +616,7 @@ fn single_row_top_app_bar(
             }) as Rc<dyn MeasurePolicy>
         }
     });
-    let title_style = MaterialTheme::typography().title_large;
+    let title_style = MaterialTheme::typography().title_large.clone();
     let actions = actions_row(actions);
     // Read while drawing: the transition draws again only.
     let container = Modifier.draw_behind(move |scope| {

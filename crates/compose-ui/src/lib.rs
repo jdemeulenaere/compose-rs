@@ -226,8 +226,7 @@ pub use text_selection::Selectable;
 pub use text_style::TextStyle;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
-    TextUnitType,
-    UnitExt,
+    TextUnitType, UnitExt,
 };
 pub use view_configuration::{LOCAL_VIEW_CONFIGURATION, ViewConfiguration};
 pub use window::{

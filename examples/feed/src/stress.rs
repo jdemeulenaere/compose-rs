@@ -163,7 +163,7 @@ fn SectionHeader(section: u32) {
             Text!(
                 "Section {}",
                 section + 1,
-                style = MaterialTheme::typography().title_small,
+                style = MaterialTheme::typography().title_small.clone(),
                 color = scheme.on_secondary_container
             );
         }
@@ -191,7 +191,7 @@ fn Carousel(index: u32) {
                 Text!(
                     "Collection {}",
                     index,
-                    style = MaterialTheme::typography().title_medium,
+                    style = MaterialTheme::typography().title_medium.clone(),
                     modifier = Modifier.weight(row, 1.0)
                 );
                 Icon!(icons::filled::arrow_forward(), Some("More"));
@@ -223,7 +223,7 @@ fn Tile(index: u32, tile: u32) {
         Text!(
             "Tile {}",
             tile + 1,
-            style = MaterialTheme::typography().body_small,
+            style = MaterialTheme::typography().body_small.clone(),
             max_lines = 1,
             modifier = Modifier.padding((0.dp(), 4.dp()))
         );
@@ -338,7 +338,7 @@ pub(crate) fn Counted(icon: ImageVector, count: u32) {
             tint = MaterialTheme::color_scheme().on_surface_variant
         );
         Spacer(Modifier.width(4.dp()));
-        Text!("{}", count, style = MaterialTheme::typography().label_medium);
+        Text!("{}", count, style = MaterialTheme::typography().label_medium.clone());
     });
 }
 
@@ -490,7 +490,7 @@ fn Ticker() {
         "Frame {} · {} ms",
         frames.get(),
         millis.get(),
-        style = MaterialTheme::typography().title_medium
+        style = MaterialTheme::typography().title_medium.clone()
     );
 }
 
@@ -603,7 +603,7 @@ fn Percent(fraction: State<f32>) {
         "{} %",
         percent.get(),
         modifier = Modifier.width(48.dp()),
-        style = MaterialTheme::typography().label_large
+        style = MaterialTheme::typography().label_large.clone()
     );
 }
 
@@ -625,7 +625,7 @@ fn ExpandingCard() {
                 .animate_content_size_with(tween(500), Alignment::TOP_START, None::<fn(_, _)>)
                 .padding(12.dp()),
             {
-                Text!("Release notes", style = MaterialTheme::typography().title_small);
+                Text!("Release notes", style = MaterialTheme::typography().title_small.clone());
                 if is_expanded {
                     Text!(
                         "{} {} {} {}",
@@ -633,7 +633,7 @@ fn ExpandingCard() {
                         SENTENCES[1],
                         SENTENCES[2],
                         SENTENCES[3],
-                        style = MaterialTheme::typography().body_medium,
+                        style = MaterialTheme::typography().body_medium.clone(),
                         max_lines = 4,
                         overflow = TextOverflow::Ellipsis
                     );
@@ -641,7 +641,7 @@ fn ExpandingCard() {
                     Text!(
                         "{}",
                         SENTENCES[0],
-                        style = MaterialTheme::typography().body_medium,
+                        style = MaterialTheme::typography().body_medium.clone(),
                         max_lines = 1,
                         overflow = TextOverflow::Ellipsis
                     );

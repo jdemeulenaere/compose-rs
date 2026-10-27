@@ -267,7 +267,7 @@ pub fn SegmentedButton(
         selected: Some(selected),
         elevations: None,
     });
-    let label_style = MaterialTheme::typography().label_large;
+    let label_style = MaterialTheme::typography().label_large.clone();
     let policy = remember(|| Rc::new(IconLabelLayout) as Rc<dyn MeasurePolicy>);
     let modifier = modifier
         .size_in(compose_ui::SizeSpec::bounds(

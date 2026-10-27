@@ -1,6 +1,8 @@
 //! `MaterialTheme`: the color scheme, typography and shapes, provided to a subtree through
 //! composition locals, as Compose's (Material 3 baseline values).
 
+use std::rc::Rc;
+
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
 use compose_ui::{
     Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape,
@@ -311,8 +313,18 @@ compose_arg_by_eq!(ColorScheme, Typography, Shapes);
 
 pub static LOCAL_COLOR_SCHEME: CompositionLocal<ColorScheme> =
     CompositionLocal::new("LocalColorScheme", light_color_scheme);
-pub static LOCAL_TYPOGRAPHY: CompositionLocal<Typography> =
-    CompositionLocal::new("LocalTypography", Typography::default);
+/// The theme's text styles, shared: a read hands out the same styles (an `Rc`), as Compose's
+/// reads hand out the same object, so it copies none of them (D1106).
+pub static LOCAL_TYPOGRAPHY: CompositionLocal<Rc<Typography>> =
+    CompositionLocal::new("LocalTypography", default_typography);
+
+/// Material's default type scale, made once per thread.
+fn default_typography() -> Rc<Typography> {
+    thread_local! {
+        static DEFAULT: Rc<Typography> = Rc::new(Typography::default());
+    }
+    DEFAULT.with(Rc::clone)
+}
 pub static LOCAL_SHAPES: CompositionLocal<Shapes> =
     CompositionLocal::new("LocalShapes", Shapes::default);
 /// The color content draws with, as Compose's `LocalContentColor`.
@@ -336,7 +348,7 @@ pub const DEFAULT_TEXT_STYLE: TextStyle =
 pub fn MaterialTheme(
     #[default(crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
     #[default(crate::MaterialTheme::shapes())] shapes: Shapes,
-    #[default(crate::MaterialTheme::typography())] typography: Typography,
+    #[default(crate::MaterialTheme::typography())] typography: Rc<Typography>,
     content: impl Fn() + 'static,
 ) {
     CompositionLocalProvider(LOCAL_COLOR_SCHEME.provides(color_scheme), || {
@@ -361,7 +373,9 @@ impl MaterialTheme {
         LOCAL_COLOR_SCHEME.current()
     }
 
-    pub fn typography() -> Typography {
+    /// The theme's text styles, shared (D1106): `MaterialTheme::typography().body_large`
+    /// reads one without copying the others.
+    pub fn typography() -> Rc<Typography> {
         LOCAL_TYPOGRAPHY.current()
     }
 

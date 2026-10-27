@@ -240,7 +240,7 @@ fn LiveHeader() {
                     modifier = Modifier.graphics_layer(move |layer| layer.rotation_z = turn.get()),
                     tint = scheme.primary
                 );
-                Text!("Live updates", style = MaterialTheme::typography().title_medium);
+                Text!("Live updates", style = MaterialTheme::typography().title_medium.clone());
             }
         );
     });

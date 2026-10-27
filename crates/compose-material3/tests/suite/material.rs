@@ -79,7 +79,7 @@ fn text_takes_its_style_from_the_theme() {
         Text!(
             "title",
             modifier = Modifier.test_tag("title"),
-            style = MaterialTheme::typography().title_large
+            style = MaterialTheme::typography().title_large.clone()
         );
         Text!("big", modifier = Modifier.test_tag("big"), font_size = 30.sp());
     }

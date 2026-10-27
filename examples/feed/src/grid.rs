@@ -79,7 +79,7 @@ fn GridTile(index: u32) {
                 Text!(
                     "Tile {}",
                     index + 1,
-                    style = MaterialTheme::typography().label_medium,
+                    style = MaterialTheme::typography().label_medium.clone(),
                     color = Color::WHITE
                 );
             });

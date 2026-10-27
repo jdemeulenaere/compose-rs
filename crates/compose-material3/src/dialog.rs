@@ -366,7 +366,7 @@ pub fn DropdownMenuItem(
 ) {
     let scheme = MaterialTheme::color_scheme();
     let color = if enabled { scheme.on_surface } else { scheme.on_surface.with_alpha(0.38) };
-    let label = MaterialTheme::typography().label_large;
+    let label = MaterialTheme::typography().label_large.clone();
     let layout = {
         let leading = leading_icon.is_some();
         compose_runtime::remember_keyed(leading, move || {

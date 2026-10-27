@@ -96,7 +96,7 @@ fn Home(about: bool, on_open_card: impl Fn(u32) + 'static) {
                 Text!(
                     "compose-rs",
                     modifier = Modifier.padding((28.dp(), 24.dp(), 16.dp(), 16.dp())),
-                    style = MaterialTheme::typography().title_medium
+                    style = MaterialTheme::typography().title_medium.clone()
                 );
                 NavigationDrawerItem!(
                     { Text!("Gallery") },
@@ -202,7 +202,7 @@ fn TopBar(
                     query.get(),
                     move |value| query.set(value),
                     modifier = Modifier.fill_max_width().focus_requester(search_field),
-                    text_style = MaterialTheme::typography().body_large,
+                    text_style = MaterialTheme::typography().body_large.clone(),
                     placeholder = Some(|| Text!("Search the cards")),
                     single_line = true,
                 );
@@ -440,7 +440,7 @@ fn CardScreen(card: u32, on_back: impl Fn() + 'static) {
                 {
                     Text!(
                         "A screen of its own: back, or the arrow, returns to the gallery as it was.",
-                        style = MaterialTheme::typography().body_large
+                        style = MaterialTheme::typography().body_large.clone()
                     );
                     Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
                         IconToggleButton!(liked.get(), move |checked| liked.set(checked), {

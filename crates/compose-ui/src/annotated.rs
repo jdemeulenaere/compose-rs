@@ -299,7 +299,11 @@ pub struct AnnotatedString {
 impl AnnotatedString {
     /// Plain text, no annotations, as `AnnotatedString(text)`.
     pub fn new(text: impl Into<SharedString>) -> AnnotatedString {
-        AnnotatedString { text: text.into(), annotations: Rc::from([]) }
+        thread_local! {
+            // No annotations, shared: a plain text allocates none.
+            static NONE: Rc<[AnnotatedRange<Annotation>]> = Rc::from([]);
+        }
+        AnnotatedString { text: text.into(), annotations: NONE.with(Rc::clone) }
     }
 
     /// `text` with `annotations`, as `AnnotatedString(text, annotations)`. Panics if paragraph
@@ -396,7 +400,7 @@ impl AnnotatedString {
         self.span_style_ranges().next().is_some()
     }
 
-    fn span_style_ranges(&self) -> impl Iterator<Item = (&SpanStyle, usize, usize)> {
+    pub(crate) fn span_style_ranges(&self) -> impl Iterator<Item = (&SpanStyle, usize, usize)> {
         self.annotations.iter().filter_map(|range| match &range.item {
             Annotation::SpanStyle(style) => Some((style, range.start, range.end)),
             _ => None,
