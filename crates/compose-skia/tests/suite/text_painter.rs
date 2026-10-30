@@ -21,7 +21,7 @@ use compose::ui::{
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
-const LONG_TEXT: &str = "Lorem ipsum dolor sit amet, consectetur \
+pub(super) const LONG_TEXT: &str = "Lorem ipsum dolor sit amet, consectetur \
     adipiscing elit. Curabitur augue leo, finibus vitae felis ac, pretium condimentum \
     augue. Nullam non libero sed lectus aliquet venenatis non at purus. Fusce id arcu \
     eu mauris pulvinar laoreet.";
@@ -32,12 +32,16 @@ fn style_of(font_size: f32) -> TextStyle {
 
 /// A picture: the pixels of a window, row by row.
 #[derive(PartialEq)]
-struct Picture {
+pub(super) struct Picture {
     width: i32,
     pixels: Vec<Color>,
 }
 
 impl Picture {
+    pub(super) fn pixel(&self, x: i32, y: i32) -> Color {
+        self.pixels[(y * self.width + x) as usize]
+    }
+
     /// Whether nothing is drawn in the columns from `left` on and the rows from `top` on.
     fn is_empty_from(&self, left: i32, top: i32) -> bool {
         self.pixels.iter().enumerate().all(|(index, pixel)| {
@@ -50,7 +54,7 @@ impl Picture {
         self.pixels.contains(&color)
     }
 
-    fn is_blank(&self) -> bool {
+    pub(super) fn is_blank(&self) -> bool {
         self.is_empty_from(0, 0)
     }
 }
@@ -66,7 +70,7 @@ type Block = dyn Fn(&mut DrawScope<'_>, &TextMeasurer);
 
 /// Draws `block` in a node of `canvas` pixels, in a window of `window` pixels at `density`, with
 /// a measurer keeping `cache_size` layouts, and returns the window's picture.
-fn draw_with(
+pub(super) fn draw_with(
     window: (i32, i32),
     canvas: (i32, i32),
     density: f32,
@@ -93,7 +97,7 @@ fn draw_with(
     render(&mut host, window)
 }
 
-fn render(host: &mut UiHost, window: (i32, i32)) -> Picture {
+pub(super) fn render(host: &mut UiHost, window: (i32, i32)) -> Picture {
     let mut renderer = RasterRenderer::new(window.0, window.1);
     host.with_tree(|tree| {
         renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
@@ -837,9 +841,7 @@ fn sample_font_picture(text: &'static str) -> Picture {
 
 #[test]
 fn the_sample_fonts_glyphs_point_along_their_direction() {
-    let ink_at = |picture: &Picture, x: i32, y: i32| {
-        picture.pixels[(y * picture.width + x) as usize] != Color::WHITE
-    };
+    let ink_at = |picture: &Picture, x: i32, y: i32| picture.pixel(x, y) != Color::WHITE;
     let latin = sample_font_picture("a");
     assert!(ink_at(&latin, 2, 3), "the top of a triangle pointing right is at its left");
     assert!(!ink_at(&latin, 47, 3));

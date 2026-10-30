@@ -39,7 +39,7 @@ fn skia_paint_with(
     skia
 }
 
-fn skia_shader(
+pub(crate) fn skia_shader(
     shader: &compose_ui::platform::Shader,
     local: Option<&skia_safe::Matrix>,
 ) -> Option<skia_safe::Shader> {
@@ -281,7 +281,12 @@ fn draw_op(
         DrawOp::DrawParagraph(handle, offset) => {
             if let Some(paragraph) = measurer.and_then(|measurer| measurer.skia_paragraph(*handle))
             {
-                paragraph.paint(canvas, (offset.x, offset.y));
+                // Through the canvas, not `paint`'s offset: a gradient in the paragraph's
+                // paint is in the paragraph's coordinates, wherever it's drawn.
+                canvas.save();
+                canvas.translate((offset.x, offset.y));
+                paragraph.paint(canvas, (0.0, 0.0));
+                canvas.restore();
             }
         }
         DrawOp::DrawPath { path, offset, scale, paint } => {

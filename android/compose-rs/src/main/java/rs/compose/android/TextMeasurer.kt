@@ -3,8 +3,12 @@ package rs.compose.android
 import android.annotation.TargetApi
 import android.content.res.AssetManager
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RenderNode
+import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
 import android.os.Build
@@ -28,6 +32,7 @@ import java.nio.ByteOrder
 import java.text.BreakIterator
 import java.util.PriorityQueue
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 /**
  * Paragraphs laid out for compose-rs (`crates/compose-android/src/text.rs`), as Compose's
@@ -70,6 +75,9 @@ internal class TextMeasurer(
      * draws all its lines, not only those within a recording's size when it was recorded (D646).
      */
     private val textCanvas = TextAndroidCanvas()
+    /** The size of the layout being drawn, which a run's gradient is over ([RunSpan]). */
+    private var drawingWidth = 0f
+    private var drawingHeight = 0f
 
     /** What of a text style its paint holds: the key of [paints]. */
     private data class PaintStyle(
@@ -98,7 +106,146 @@ internal class TextMeasurer(
         val lineHeightPx: Float,
         val lineHeightStyle: LineHeightStyle,
         val background: Int,
+        val extras: PaintExtras?,
     )
+
+    /**
+     * A gradient over a paragraph, as Compose's `ShaderBrush` over its `Size`: its positions are
+     * resolved at the size it's drawn at, its shader kept while that stays.
+     */
+    private class TextBrush(
+        private val kind: Int,
+        private val tile: Shader.TileMode,
+        val alpha: Float,
+        colors: IntArray,
+        stops: FloatArray?,
+        private val first: Float,
+        private val second: Float,
+        private val third: Float,
+        private val fourth: Float,
+    ) {
+        // A gradient needs two colors: one is a solid color.
+        private val colors = if (colors.size == 1) intArrayOf(colors[0], colors[0]) else colors
+        private val stops = stops?.takeIf { it.size == this.colors.size }
+        private var shader: Shader? = null
+        private var resolvedWidth = -1f
+        private var resolvedHeight = -1f
+
+        fun shaderAt(width: Float, height: Float): Shader? {
+            if (width != resolvedWidth || height != resolvedHeight) {
+                shader = make(width, height)
+                resolvedWidth = width
+                resolvedHeight = height
+            }
+            return shader
+        }
+
+        private fun make(width: Float, height: Float): Shader? {
+            if (colors.isEmpty()) return null
+            val x = { value: Float -> if (value.isInfinite()) width else value }
+            val y = { value: Float -> if (value.isInfinite()) height else value }
+            val centerX = if (first.isNaN()) width / 2f else x(first)
+            val centerY = if (second.isNaN()) height / 2f else y(second)
+            return when (kind) {
+                0 -> LinearGradient(x(first), y(second), x(third), y(fourth), colors, stops, tile)
+                1 -> {
+                    val radius = if (third.isInfinite()) minOf(width, height) / 2f else third
+                    // Android refuses it, and there's nothing to spread the colors over.
+                    if (radius > 0f) RadialGradient(centerX, centerY, radius, colors, stops, tile) else null
+                }
+                else -> SweepGradient(centerX, centerY, colors, stops)
+            }
+        }
+    }
+
+    /**
+     * What a paint has beyond its color and decoration, set on it only while it draws, as
+     * Compose's `AndroidTextPaint.setBrush`, `setShadow` and `setDrawStyle`.
+     */
+    private class PaintExtras(
+        val brush: TextBrush?,
+        val shadowColor: Int,
+        val shadowX: Float,
+        val shadowY: Float,
+        val shadowBlur: Float,
+        val hasShadow: Boolean,
+        val strokeWidth: Float,
+        val strokeMiter: Float,
+        val strokeCap: Paint.Cap,
+        val strokeJoin: Paint.Join,
+        val hasStroke: Boolean,
+    ) {
+        fun applyTo(paint: TextPaint, width: Float, height: Float) {
+            brush?.shaderAt(width, height)?.let { shader ->
+                paint.color = 0xFF000000.toInt()
+                paint.alpha = (brush.alpha * 255f).roundToInt()
+                paint.shader = shader
+            }
+            if (hasShadow) {
+                // As Compose's `correctBlurRadius`: a radius of 0 would remove the shadow.
+                val blur = if (shadowBlur == 0f) Float.MIN_VALUE else shadowBlur
+                paint.setShadowLayer(blur, shadowX, shadowY, shadowColor)
+            }
+            if (hasStroke) {
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = strokeWidth
+                paint.strokeMiter = strokeMiter
+                paint.strokeCap = strokeCap
+                paint.strokeJoin = strokeJoin
+            }
+        }
+
+        fun clearFrom(paint: TextPaint) {
+            if (brush != null) paint.shader = null
+            if (hasShadow) paint.clearShadowLayer()
+            if (hasStroke) paint.style = Paint.Style.FILL
+        }
+    }
+
+    /** What [flags] (of a style's decoration byte) say follow, as Rust's `encode_paint_extras`. */
+    private fun readExtras(request: ByteBuffer, flags: Int): PaintExtras? {
+        if (flags and 0x1C == 0) return null
+        var brush: TextBrush? = null
+        if (flags and 4 != 0) {
+            val kind = request.get().toInt()
+            val tile = when (request.get().toInt()) {
+                1 -> Shader.TileMode.REPEAT
+                2 -> Shader.TileMode.MIRROR
+                // Transparent past the ends: API 31+, clamped below.
+                3 -> if (Build.VERSION.SDK_INT >= 31) Shader.TileMode.DECAL else Shader.TileMode.CLAMP
+                else -> Shader.TileMode.CLAMP
+            }
+            val alpha = request.float()
+            val colors = IntArray(request.getInt()) { request.getInt() }
+            val stopCount = request.getInt()
+            val stops = if (stopCount == 0) null else FloatArray(stopCount) { request.float() }
+            brush = TextBrush(
+                kind, tile, alpha, colors, stops, request.float(), request.float(), request.float(), request.float(),
+            )
+        }
+        val hasShadow = flags and 8 != 0
+        val shadowColor = if (hasShadow) request.getInt() else 0
+        val shadowX = if (hasShadow) request.float() else 0f
+        val shadowY = if (hasShadow) request.float() else 0f
+        val shadowBlur = if (hasShadow) request.float() else 0f
+        val hasStroke = flags and 16 != 0
+        val strokeWidth = if (hasStroke) request.float() else 0f
+        val strokeMiter = if (hasStroke) request.float() else 0f
+        val strokeCap = if (!hasStroke) Paint.Cap.BUTT else when (request.get().toInt()) {
+            1 -> Paint.Cap.ROUND
+            2 -> Paint.Cap.SQUARE
+            else -> Paint.Cap.BUTT
+        }
+        val strokeJoin = if (!hasStroke) Paint.Join.MITER else when (request.get().toInt()) {
+            1 -> Paint.Join.ROUND
+            2 -> Paint.Join.BEVEL
+            else -> Paint.Join.MITER
+        }
+        return PaintExtras(
+            brush, shadowColor, shadowX, shadowY, shadowBlur, hasShadow, strokeWidth, strokeMiter, strokeCap, strokeJoin,
+            hasStroke,
+        )
+    }
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
@@ -113,6 +260,8 @@ internal class TextMeasurer(
             name = String(bytes, Charsets.UTF_8)
         }
         val typeface = if (family == 5) request.getInt() else -1
+        val letterSpacingPx = request.float()
+        val decoration = request.get().toInt()
         val paint = PaintStyle(
             color = color,
             fontPx = fontPx,
@@ -121,14 +270,15 @@ internal class TextMeasurer(
             family = family,
             familyName = name,
             typeface = typeface,
-            letterSpacingPx = request.float(),
-            decoration = request.get().toInt(),
+            letterSpacingPx = letterSpacingPx,
+            decoration = decoration and 3,
         )
         val lineHeightPx = request.float()
         val topRatio = request.float()
         val trim = request.get().toInt()
         val lineHeightStyle = LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
-        return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
+        val background = request.getInt()
+        return Style(paint, lineHeightPx, lineHeightStyle, background, readExtras(request, decoration))
     }
 
     /** Applies a font's variation settings, as Compose's `setFontVariationSettings`. */
@@ -261,8 +411,13 @@ internal class TextMeasurer(
         private val style: PaintStyle,
         private val ownColor: Boolean,
         private val ownDecoration: Boolean,
+        private val extras: PaintExtras?,
     ) : MetricAffectingSpan() {
-        override fun updateDrawState(paint: TextPaint) = applyRun(paint)
+        override fun updateDrawState(paint: TextPaint) {
+            applyRun(paint)
+            // Over the paragraph's size, as Compose's `ShaderBrushSpan`.
+            extras?.applyTo(paint, drawingWidth, drawingHeight)
+        }
 
         override fun updateMeasureState(paint: TextPaint) = applyRun(paint)
 
@@ -312,6 +467,9 @@ internal class TextMeasurer(
          */
         val maxIntrinsicWidth: Float,
     ) {
+        /** What the paint has beyond its color and decoration, for the drawing. */
+        var extras: PaintExtras? = null
+
         /**
          * The width of the widest segment of [content] between line break opportunities, as
          * Compose's `LayoutIntrinsics.minIntrinsicWidth`: measured when first asked.
@@ -369,7 +527,9 @@ internal class TextMeasurer(
                 val inherits = request.get().toInt()
                 val style = readStyle(request)
                 if (start < end) {
-                    val span = RunSpan(style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0)
+                    val span = RunSpan(
+                        style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0, style.extras,
+                    )
                     spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
                     if (style.background != 0) {
@@ -402,6 +562,7 @@ internal class TextMeasurer(
             content, base.paint, paint, direction, boring, lineHeight, base.lineHeightStyle, letterSpaced, softWrap,
             maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
         )
+        kept.extras = base.extras
         layoutAt(handle, kept, minWidth, maxWidth, drawn = !probe)
     }
 
@@ -450,6 +611,16 @@ internal class TextMeasurer(
         intrinsics.put(handle, kept.inPaint(color, decoration))
         if (collectingLaidOut) laidOut.add(handle)
         return true
+    }
+
+    /**
+     * Gives paragraph [handle], just [restyle]d or [painted], the gradient, shadow and stroke in
+     * [extras] (a flags byte, then what they say), as Rust's `encode_paint_extras`.
+     */
+    fun paintExtras(handle: Int, extras: ByteBuffer) {
+        extras.order(ByteOrder.LITTLE_ENDIAN)
+        val flags = extras.get().toInt()
+        intrinsics.get(handle)?.extras = readExtras(extras, flags)
     }
 
     /**
@@ -920,9 +1091,13 @@ internal class TextMeasurer(
     private fun drawInPaint(handle: Int, layout: Layout, target: Canvas) {
         textCanvas.setCanvas(target)
         val canvas: Canvas = textCanvas
-        val wanted = intrinsics.get(handle)?.paint
+        drawingWidth = layout.width.toFloat()
+        drawingHeight = layout.height.toFloat()
+        val kept = intrinsics.get(handle)
+        val wanted = kept?.paint ?: layout.paint
+        val extras = kept?.extras
         val held = layout.paint
-        if (wanted == null || wanted === held) {
+        if (wanted === held && extras == null) {
             layout.draw(canvas)
             return
         }
@@ -932,9 +1107,11 @@ internal class TextMeasurer(
         held.color = wanted.color
         held.isUnderlineText = wanted.isUnderlineText
         held.isStrikeThruText = wanted.isStrikeThruText
+        extras?.applyTo(held, drawingWidth, drawingHeight)
         try {
             layout.draw(canvas)
         } finally {
+            extras?.clearFrom(held)
             held.color = color
             held.isUnderlineText = underline
             held.isStrikeThruText = strike

@@ -636,7 +636,7 @@ impl SkiaTextMeasurer {
     ) -> ParagraphHandle {
         let mut resolved_fonts = ResolvedFonts::default();
         let alias = self.alias_of(&mut resolved_fonts, style);
-        let text_style = skia_text_style(style, density, alias.as_deref());
+        let mut text_style = skia_text_style(style, density, alias.as_deref());
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
         // A trimmed line height leaves the first line's top or the last line's bottom at the
@@ -682,26 +682,33 @@ impl SkiaTextMeasurer {
         if ellipsis {
             paragraph_style.set_ellipsis("\u{2026}");
         }
-        let mut builder = ParagraphBuilder::new(&paragraph_style, self.collection.clone());
-        builder.push_style(&text_style);
-        if runs.is_empty() {
-            builder.add_text(text);
-        } else {
-            // Each run in its style, as SkParagraph's styled runs.
-            for (range, run_style, background) in runs {
-                let alias = self.alias_of(&mut resolved_fonts, run_style);
-                let mut run = skia_text_style(run_style, density, alias.as_deref());
-                if background.is_specified() {
-                    let mut paint = skia_safe::Paint::default();
-                    paint.set_color(skia_safe::Color::new(background.argb()));
-                    run.set_background_paint(&paint);
-                }
-                builder.push_style(&run);
+        // Each run in its style, as SkParagraph's styled runs.
+        let mut run_styles: Vec<SkiaTextStyle> = Vec::with_capacity(runs.len());
+        for (_, run_style, background) in runs {
+            let alias = self.alias_of(&mut resolved_fonts, run_style);
+            let mut run = skia_text_style(run_style, density, alias.as_deref());
+            if background.is_specified() {
+                let mut paint = skia_safe::Paint::default();
+                paint.set_color(skia_safe::Color::new(background.argb()));
+                run.set_background_paint(&paint);
+            }
+            run_styles.push(run);
+        }
+        let collection = &self.collection;
+        let build = |text_style: &SkiaTextStyle, run_styles: &[SkiaTextStyle]| {
+            let mut builder = ParagraphBuilder::new(&paragraph_style, collection.clone());
+            builder.push_style(text_style);
+            if runs.is_empty() {
+                builder.add_text(text);
+            }
+            for ((range, _, _), run) in runs.iter().zip(run_styles) {
+                builder.push_style(run);
                 builder.add_text(&text[range.clone()]);
                 builder.pop();
             }
-        }
-        let mut paragraph = builder.build();
+            builder.build()
+        };
+        let mut paragraph = build(&text_style, &run_styles);
         let width = if (options.soft_wrap || ellipsis) && constraints.has_bounded_width() {
             constraints.max_width as f32
         } else {
@@ -728,6 +735,17 @@ impl SkiaTextMeasurer {
             max_intrinsic_width.ceil().clamp(min_width, width)
         };
         if measured_width != width {
+            paragraph.layout(measured_width);
+        }
+        // A gradient is over the paragraph's size, known now: built again with it. skia-safe
+        // can't change a paragraph's paints (D555).
+        let painted_size = compose_ui::Size::new(measured_width, paragraph.height());
+        let mut shaded = apply_gradient(&mut text_style, style, painted_size);
+        for (run, (_, run_style, _)) in run_styles.iter_mut().zip(runs) {
+            shaded |= apply_gradient(run, run_style, painted_size);
+        }
+        if shaded {
+            paragraph = build(&text_style, &run_styles);
             paragraph.layout(measured_width);
         }
         let size = IntSize::new(measured_width.ceil() as i32, paragraph.height().ceil() as i32);
@@ -820,5 +838,64 @@ fn skia_text_style(style: &TextStyle, density: &Density, alias: Option<&str>) ->
         let centered = alignment == compose_ui::LineHeightAlignment::CENTER;
         text_style.set_half_leading(centered);
     }
+    if let Some(compose_ui::DrawStyle::Stroke(_)) = style.draw_style {
+        text_style.set_foreground_paint(&foreground_paint(style, color));
+    }
+    if let Some(shadow) = style.shadow {
+        text_style.add_shadow(skia_safe::textlayout::TextShadow::new(
+            skia_safe::Color::new(shadow.color.argb()),
+            (shadow.offset.x, shadow.offset.y),
+            blur_sigma(shadow.blur_radius),
+        ));
+    }
     text_style
+}
+
+/// The sigma of a blur of `radius`, as Skia converts the radius Android's `setShadowLayer` takes.
+fn blur_sigma(radius: f32) -> f64 {
+    if radius > 0.0 { f64::from(radius) * 0.57735 + 0.5 } else { 0.0 }
+}
+
+/// A text's paint for `color` and `style`'s draw style.
+fn foreground_paint(style: &TextStyle, color: compose_ui::Color) -> skia_safe::Paint {
+    use skia_safe::paint;
+    let mut foreground = skia_safe::Paint::default();
+    foreground.set_anti_alias(true);
+    foreground.set_color(skia_safe::Color::new(color.argb()));
+    if let Some(compose_ui::DrawStyle::Stroke(stroke)) = style.draw_style {
+        foreground.set_style(paint::Style::Stroke);
+        foreground.set_stroke_width(stroke.width);
+        foreground.set_stroke_miter(stroke.miter);
+        foreground.set_stroke_cap(match stroke.cap {
+            compose_ui::StrokeCap::Butt => paint::Cap::Butt,
+            compose_ui::StrokeCap::Round => paint::Cap::Round,
+            compose_ui::StrokeCap::Square => paint::Cap::Square,
+        });
+        foreground.set_stroke_join(match stroke.join {
+            compose_ui::StrokeJoin::Miter => paint::Join::Miter,
+            compose_ui::StrokeJoin::Round => paint::Join::Round,
+            compose_ui::StrokeJoin::Bevel => paint::Join::Bevel,
+        });
+    }
+    foreground
+}
+
+/// Gives `text_style` `style`'s gradient over a paragraph of `size`: whether it has one.
+fn apply_gradient(
+    text_style: &mut SkiaTextStyle,
+    style: &TextStyle,
+    size: compose_ui::Size,
+) -> bool {
+    let compose_ui::TextForegroundStyle::Brush { brush, alpha } = style.foreground() else {
+        return false;
+    };
+    let alpha = if alpha.is_nan() { 1.0 } else { alpha };
+    let Some(shader) = brush.shader(size, compose_ui::Offset::ZERO, alpha) else {
+        return false;
+    };
+    let mut foreground = foreground_paint(style, compose_ui::Color::BLACK);
+    foreground.set_alpha_f(shader.alpha());
+    foreground.set_shader(crate::render::skia_shader(&shader, None));
+    text_style.set_foreground_paint(&foreground);
+    true
 }

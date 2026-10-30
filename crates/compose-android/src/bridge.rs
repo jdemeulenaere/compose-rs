@@ -620,6 +620,25 @@ impl TextBackend for JniText {
         })
     }
 
+    fn paint_extras(&mut self, handle: u32, extras: &[u8]) {
+        with_main_env(|env| {
+            let _ = env.with_local_frame(2, |env| -> jni::errors::Result<()> {
+                // SAFETY: Kotlin only reads the buffer, during the call.
+                let extras = unsafe {
+                    env.new_direct_byte_buffer(extras.as_ptr() as *mut u8, extras.len())?
+                };
+                env.call_method(
+                    &*self.measurer,
+                    jni_str!("paintExtras"),
+                    jni_sig!("(ILjava/nio/ByteBuffer;)V"),
+                    &[JValue::Int(handle as jint), (&extras).into()],
+                )?;
+                Ok(())
+            });
+            check(env, "TextMeasurer.paintExtras");
+        });
+    }
+
     fn min_intrinsic_width(&self, handle: u32) -> Option<f32> {
         with_main_env(|env| {
             // SAFETY: the method's signature is `(I)F`.

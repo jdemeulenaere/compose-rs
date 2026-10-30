@@ -9,8 +9,8 @@
 //! Compose's `ParagraphIntrinsics` (D550).
 
 use compose_ui::{
-    AnnotatedString, Color, Constraints, Density, FontFamily, LayoutDirection, Offset, Rect,
-    TextAlign, TextOverflow, TextStyle,
+    AnnotatedString, Brush, Color, Constraints, Density, DrawStyle, FontFamily, LayoutDirection,
+    Offset, Rect, TextAlign, TextOverflow, TextStyle, TileMode,
     platform::{
         NoFontLoader, ParagraphHandle, ParagraphMetrics, PlatformFontLoader, PlatformFonts,
         ResolvedFonts, TextLayoutOptions, TextMeasurer, TextPosition,
@@ -62,6 +62,10 @@ pub trait TextBackend: 'static {
     /// Gives paragraph `previous`'s layout, as paragraph `handle` too, the paint of `color` (ARGB)
     /// and `decoration`, as `restyle`, `previous` staying as it is. False (the default: a backend
     /// keeping nothing) adds nothing.
+    /// Gives paragraph `handle`, just restyled or painted, what `extras` encodes
+    /// ([`encode_paint_extras`]): what its paint has beyond a color and decoration.
+    fn paint_extras(&mut self, _handle: u32, _extras: &[u8]) {}
+
     fn painted(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
         false
     }
@@ -200,6 +204,17 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         let handle = self.next;
         self.next = self.next.wrapping_add(1);
         handle
+    }
+
+    /// Gives paragraph `handle` `style`'s gradient, shadow and stroke, if it has any.
+    fn send_paint_extras(&mut self, handle: u32, style: &TextStyle) {
+        let flags = paint_extras_flags(style);
+        if flags != 0 {
+            self.request.bytes.clear();
+            self.request.u8(flags);
+            encode_paint_extras(&mut self.request, style, flags);
+            self.backend.paint_extras(handle, &self.request.bytes);
+        }
     }
 
     /// Lays out `text` in `style` and `runs`; for intrinsic sizes (`probe`: Kotlin doesn't
@@ -344,6 +359,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         if !self.backend.restyle(previous, handle, color, decoration) {
             return None;
         }
+        self.send_paint_extras(handle, style);
         let entry = self.paragraphs.remove(&previous).expect("checked above");
         self.paragraphs.insert(handle, entry);
         Some(ParagraphHandle(handle as u64))
@@ -369,6 +385,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         if !self.backend.painted(previous, handle, color, decoration) {
             return None;
         }
+        self.send_paint_extras(handle, style);
         self.paragraphs.insert(handle, entry);
         Some(ParagraphHandle(handle as u64))
     }
@@ -603,9 +620,9 @@ pub fn byte_offset(text: &str, index: usize) -> usize {
     text.len()
 }
 
-/// `text`'s runs, each with its own color and decoration only (none if its spans set none), the
-/// paragraph's paint giving the rest, so a new paint (`restyle`) reaches the runs that don't set
-/// them. None without spans.
+/// `text`'s runs, each with its own paint only (none if its spans set none), the paragraph's paint
+/// giving the rest, so a new paint (`restyle`) reaches the runs that don't set them. None without
+/// spans.
 fn paint_free_runs(
     text: &AnnotatedString,
     style: &TextStyle,
@@ -613,7 +630,14 @@ fn paint_free_runs(
     if !text.has_span_styles() {
         return Vec::new();
     }
-    text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..style.clone() })
+    text.runs(&TextStyle {
+        color: Color::UNSPECIFIED,
+        brush: None,
+        text_decoration: None,
+        shadow: None,
+        draw_style: None,
+        ..style.clone()
+    })
 }
 
 /// The minimum and maximum width Kotlin lays a paragraph out between (`i32::MAX`: unbounded).
@@ -629,7 +653,8 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
 /// length and UTF-8 bytes, 5 a typeface, then its number), letter spacing (px f32), decoration (u8: 1 underline, 2 line
-/// through), line height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
+/// through, and [`paint_extras_flags`]'s: what follows the style, [`encode_paint_extras`]), line
+/// height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
 /// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
 /// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style.
 #[allow(clippy::too_many_arguments)]
@@ -688,6 +713,82 @@ fn paint_of(style: &TextStyle) -> (u32, u8) {
     (color.argb(), u8::from(decoration.underline) | (u8::from(decoration.line_through) << 1))
 }
 
+/// What `style`'s paint has beyond a color and decoration, as a style's decoration byte has it:
+/// 4 a gradient, 8 a shadow, 16 a stroke.
+fn paint_extras_flags(style: &TextStyle) -> u8 {
+    let gradient = matches!(
+        style.foreground(),
+        compose_ui::TextForegroundStyle::Brush { brush, .. } if !matches!(brush, Brush::Solid(_))
+    );
+    u8::from(gradient) << 2
+        | u8::from(style.shadow.is_some()) << 3
+        | u8::from(matches!(style.draw_style, Some(DrawStyle::Stroke(_)))) << 4
+}
+
+/// What `flags` say `style` has, in that order. A gradient: its kind (u8: 0 linear, 1 radial,
+/// 2 sweep), tile mode (u8: 0 clamp, 1 repeated, 2 mirror, 3 decal), alpha (f32), colors (a count,
+/// ARGB u32s), stops (a count, 0 for none, f32s), and four floats unresolved, Kotlin knowing the
+/// size it's drawn at: a linear gradient's start and end (infinite: the size's), a radial's center
+/// (NaN: the middle) and radius (infinite: half the smaller side), a sweep's center. A shadow:
+/// its color (ARGB u32), offset (two f32) and blur radius (f32). A stroke: its width and miter
+/// (f32), cap (u8: 0 butt, 1 round, 2 square) and join (u8: 0 miter, 1 round, 2 bevel).
+fn encode_paint_extras(out: &mut Writer, style: &TextStyle, flags: u8) {
+    if flags & 4 != 0
+        && let compose_ui::TextForegroundStyle::Brush { brush, alpha } = style.foreground()
+    {
+        let (kind, gradient, coordinates) = match &brush {
+            Brush::Linear { gradient, start, end } => {
+                (0, gradient, [start.x, start.y, end.x, end.y])
+            }
+            Brush::Radial { gradient, center, radius } => {
+                (1, gradient, [center.x, center.y, *radius, 0.0])
+            }
+            Brush::Sweep { gradient, center } => (2, gradient, [center.x, center.y, 0.0, 0.0]),
+            Brush::Solid(_) => unreachable!("a solid brush is a color"),
+        };
+        out.u8(kind);
+        out.u8(match gradient.tile_mode {
+            TileMode::Clamp => 0,
+            TileMode::Repeated => 1,
+            TileMode::Mirror => 2,
+            TileMode::Decal => 3,
+        });
+        out.f32(if alpha.is_nan() { 1.0 } else { alpha.clamp(0.0, 1.0) });
+        out.u32(gradient.colors.len() as u32);
+        for color in gradient.colors.iter() {
+            out.u32(color.argb());
+        }
+        let stops = gradient.stops.as_deref().unwrap_or_default();
+        out.u32(stops.len() as u32);
+        for stop in stops {
+            out.f32(*stop);
+        }
+        for coordinate in coordinates {
+            out.f32(coordinate);
+        }
+    }
+    if let Some(shadow) = style.shadow {
+        out.u32(shadow.color.argb());
+        out.f32(shadow.offset.x);
+        out.f32(shadow.offset.y);
+        out.f32(shadow.blur_radius);
+    }
+    if let Some(DrawStyle::Stroke(stroke)) = style.draw_style {
+        out.f32(stroke.width);
+        out.f32(stroke.miter);
+        out.u8(match stroke.cap {
+            compose_ui::StrokeCap::Butt => 0,
+            compose_ui::StrokeCap::Round => 1,
+            compose_ui::StrokeCap::Square => 2,
+        });
+        out.u8(match stroke.join {
+            compose_ui::StrokeJoin::Miter => 0,
+            compose_ui::StrokeJoin::Round => 1,
+            compose_ui::StrokeJoin::Bevel => 2,
+        });
+    }
+}
+
 /// What a request's styles resolve their fonts with.
 struct RequestFonts<'a> {
     fonts: &'a Rc<PlatformFonts>,
@@ -702,6 +803,7 @@ fn encode_style(
     fonts: &mut RequestFonts<'_>,
 ) {
     let (color, decoration) = paint_of(style);
+    let extras = paint_extras_flags(style);
     let font_px = compose_ui::platform::resolve_font_size_px(style, density);
     out.u32(color);
     out.f32(font_px);
@@ -732,7 +834,7 @@ fn encode_style(
     }
     let px = |unit| compose_ui::platform::resolve_text_unit_px(unit, font_px, density);
     out.f32(px(style.letter_spacing).unwrap_or(0.0));
-    out.u8(decoration);
+    out.u8(decoration | extras);
     out.f32(px(style.line_height).unwrap_or(0.0));
     // How the line height is spread, as Compose's `LineHeightStyleSpan`: the alignment's top
     // ratio (-1 proportional) and the trim (1 the first line's top, 2 the last line's bottom).
@@ -743,6 +845,9 @@ fn encode_style(
     let trim = line_height_style.trim;
     out.u8(u8::from(trim.trims_first_line_top()) | (u8::from(trim.trims_last_line_bottom()) << 1));
     out.u32(if background.is_specified() { background.argb() } else { 0 });
+    if extras != 0 {
+        encode_paint_extras(out, style, extras);
+    }
 }
 
 #[cfg(test)]
@@ -756,6 +861,7 @@ mod tests {
     struct Fake {
         live: std::collections::HashSet<u32>,
         requests: Vec<Vec<u8>>,
+        extras: Vec<(u32, Vec<u8>)>,
         layouts: bool,
         texts: std::collections::HashMap<u32, String>,
     }
@@ -777,6 +883,18 @@ mod tests {
                 did_exceed_max_lines: text.contains('\n'),
                 max_intrinsic_width: Some(units as f32 * 10.0),
             }
+        }
+        fn restyle(&mut self, previous: u32, handle: u32, _color: u32, _decoration: u8) -> bool {
+            self.live.remove(&previous);
+            self.live.insert(handle);
+            true
+        }
+        fn painted(&mut self, _previous: u32, handle: u32, _color: u32, _decoration: u8) -> bool {
+            self.live.insert(handle);
+            true
+        }
+        fn paint_extras(&mut self, handle: u32, extras: &[u8]) {
+            self.extras.push((handle, extras.to_vec()));
         }
         fn hit_test(&self, _handle: u32, position: Offset) -> usize {
             (position.x / 10.0).round() as usize
@@ -800,6 +918,160 @@ mod tests {
         fn release(&mut self, handle: u32) {
             self.live.remove(&handle);
         }
+    }
+
+    /// Where a plain style's decoration byte is in a request: the options, then a style's color,
+    /// font size, weight, italic, family and letter spacing.
+    const DECORATION_AT: usize = 16 + 4 + 4 + 4 + 1 + 1 + 4;
+    /// A request's length with a plain style and no runs.
+    const PLAIN_REQUEST: usize = DECORATION_AT + 1 + 4 + 4 + 1 + 4 + 4;
+
+    fn request_of(style: &TextStyle) -> Vec<u8> {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        measurer.layout(
+            "text",
+            style,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        measurer.backend.requests.remove(0)
+    }
+
+    fn gradient() -> Brush {
+        Brush::horizontal_gradient([Color::RED, Color::BLUE])
+    }
+
+    fn u32_at(bytes: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    fn f32_at(bytes: &[u8], at: usize) -> f32 {
+        f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn a_plain_style_sends_no_paint_extras() {
+        let request = request_of(&TextStyle::DEFAULT);
+        assert_eq!(request.len(), PLAIN_REQUEST);
+        assert_eq!(request[DECORATION_AT], 0);
+        // A solid brush is a color, not a gradient.
+        let solid = TextStyle::DEFAULT.with_brush(Some(Brush::solid(Color::RED)), f32::NAN);
+        let request = request_of(&solid);
+        assert_eq!(request.len(), PLAIN_REQUEST);
+        assert_eq!(u32_at(&request, 16), Color::RED.argb());
+        // A filled draw style is the default's.
+        let filled = TextStyle { draw_style: Some(DrawStyle::Fill), ..TextStyle::DEFAULT };
+        assert_eq!(request_of(&filled).len(), PLAIN_REQUEST);
+    }
+
+    #[test]
+    fn a_gradient_is_sent_after_the_style_unresolved() {
+        let style = TextStyle::DEFAULT.with_brush(Some(gradient()), 0.5);
+        let request = request_of(&style);
+        assert_eq!(request[DECORATION_AT], 4);
+        let extras = &request[PLAIN_REQUEST - 4..];
+        // Linear, clamped, at half its alpha.
+        assert_eq!(&extras[..2], &[0, 0]);
+        assert_eq!(f32_at(extras, 2), 0.5);
+        assert_eq!(u32_at(extras, 6), 2);
+        assert_eq!(u32_at(extras, 10), Color::RED.argb());
+        assert_eq!(u32_at(extras, 14), Color::BLUE.argb());
+        // No stops.
+        assert_eq!(u32_at(extras, 18), 0);
+        // The drawing's width, as Kotlin will know it, is what's infinite.
+        assert_eq!(f32_at(extras, 22), 0.0);
+        assert_eq!(f32_at(extras, 26), 0.0);
+        assert!(f32_at(extras, 30).is_infinite());
+        assert_eq!(f32_at(extras, 34), 0.0);
+        assert_eq!(extras.len(), 38 + 4, "and the runs' count");
+    }
+
+    #[test]
+    fn a_shadow_and_a_stroke_are_sent_in_their_order() {
+        let style = TextStyle {
+            shadow: Some(compose_ui::Shadow {
+                color: Color::GREEN,
+                offset: Offset::new(1.0, 2.0),
+                blur_radius: 3.0,
+            }),
+            draw_style: Some(DrawStyle::Stroke(compose_ui::Stroke {
+                cap: compose_ui::StrokeCap::Round,
+                join: compose_ui::StrokeJoin::Bevel,
+                ..compose_ui::Stroke::new(5.0)
+            })),
+            ..TextStyle::DEFAULT
+        };
+        let request = request_of(&style);
+        assert_eq!(request[DECORATION_AT], 8 | 16);
+        let extras = &request[PLAIN_REQUEST - 4..];
+        assert_eq!(u32_at(extras, 0), Color::GREEN.argb());
+        assert_eq!((f32_at(extras, 4), f32_at(extras, 8), f32_at(extras, 12)), (1.0, 2.0, 3.0));
+        assert_eq!((f32_at(extras, 16), f32_at(extras, 20)), (5.0, 4.0));
+        assert_eq!(&extras[24..26], &[1, 2]);
+    }
+
+    #[test]
+    fn a_decoration_keeps_its_bits_beside_the_extras() {
+        let style = TextStyle {
+            text_decoration: Some(compose_ui::TextDecoration::UNDERLINE),
+            ..TextStyle::DEFAULT.with_brush(Some(gradient()), f32::NAN)
+        };
+        assert_eq!(request_of(&style)[DECORATION_AT], 4 | 1);
+    }
+
+    #[test]
+    fn a_run_is_sent_only_the_paint_its_spans_set() {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let spanned = AnnotatedString::build(|builder| {
+            builder.append("plain");
+            builder.with_style(compose_ui::SpanStyle::DEFAULT, |builder| {
+                builder.append("span");
+            });
+        });
+        let style = TextStyle {
+            shadow: Some(compose_ui::Shadow::NONE),
+            ..TextStyle::DEFAULT.with_brush(Some(gradient()), f32::NAN)
+        };
+        measurer.layout_annotated(
+            &spanned,
+            &style,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let request = &measurer.backend.requests[0];
+        assert_eq!(request[DECORATION_AT], 4 | 8);
+        // The paragraph's gradient and shadow are the paragraph's: its runs set none.
+        let (base_extras, shadow) = (38, 16);
+        let runs_at = PLAIN_REQUEST - 4 + base_extras + shadow;
+        assert_eq!(u32_at(request, runs_at), 2);
+        let first_run_style = runs_at + 4 + 4 + 4 + 1;
+        assert_eq!(request[first_run_style + DECORATION_AT - 16], 0);
+    }
+
+    #[test]
+    fn a_new_paint_sends_its_extras_and_a_plain_one_none() {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let handle = measurer.layout(
+            "text",
+            &TextStyle::DEFAULT,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let plain = measurer.restyle(handle, &TextStyle::DEFAULT).unwrap();
+        assert!(measurer.backend.extras.is_empty());
+        let brushed = TextStyle::DEFAULT.with_brush(Some(gradient()), f32::NAN);
+        let restyled = measurer.restyle(plain, &brushed).unwrap();
+        let painted = measurer.painted(restyled, &brushed).unwrap();
+        let extras = &measurer.backend.extras;
+        assert_eq!(extras.len(), 2);
+        assert_eq!(extras[0].0, restyled.0 as u32);
+        assert_eq!(extras[1].0, painted.0 as u32);
+        // Its flags, then what they say.
+        assert_eq!(extras[0].1[0], 4);
+        assert_eq!(extras[0].1.len(), 1 + 38);
     }
 
     #[test]
