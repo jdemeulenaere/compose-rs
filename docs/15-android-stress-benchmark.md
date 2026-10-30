@@ -100,6 +100,7 @@ What changes at parity, on both lists:
 | The composition | Pausable, or whole with the flag off | Pausable, always |
 | Scrolling back under a sticky header | The item before those in view | The item before the header, urgent, and on back with each scroll; none in the first section (D895) |
 | An item leaving view | Deactivated in that measurement | Stays until the next measurement, by the window's bound before the scroll (D896) |
+| Overscroll (D1464) | Every list, carousel `LazyRow`s included, has an effect: an `EdgeEffectWrapper`, a `StretchOverscrollNode` with a pointer-input delegate, stretch checks per delta through `applyToScroll`, and a state read per draw | Nothing: no platform effect yet, so an effect is a `None` checked per delta. **The two apps differ here until the stretch lands**, and it's a cost only bench-compose pays |
 | A chip's tree (D1041) | One `Layout` with `ChipLayoutMeasurePolicy`, 14 layout nodes a row of the three chips | `Row`s and spacers: 19 here (the tip has 21; compose-rs leaves out an end's box until it has an icon), `IntrinsicSize.Max` on the assist and the suggestion chip, an intrinsic pass each |
 
 What to read first in the next round, not yet measured:

@@ -191,6 +191,8 @@ pub fn Counter() {
 }
 ```
 
+`remember` returns a clone of what it keeps, unless that's a state or a state holder, so a value you write to goes behind an `Rc`: `remember(|| Rc::new(RefCell::new(0)))`. A bare `RefCell` or `Cell` would lose every write, and panics at its first composition; a `Clone` struct of your own holding one directly loses them too, unseen, so put it behind an `Rc` as well.
+
 `remember(|| mutable_state_of(0))` keeps the state in the composition and returns a `MutableState<i32>`, a `Copy` handle: closures capture it with `move` and no cloning. Its methods:
 
 - `get()` reads a copy, and subscribes the reading scope;

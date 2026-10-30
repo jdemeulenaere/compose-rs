@@ -20,7 +20,7 @@ use compose_ui::{
 use crate::fling::Fling;
 use crate::gestures::Orientation;
 use crate::mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
-use crate::overscroll::OverscrollEffect;
+use crate::overscroll::{OverscrollEffect, same_overscroll};
 use crate::scroll::same_fling;
 
 pub use compose_ui::LocalBoxFuture;
@@ -415,11 +415,19 @@ pub trait FlingBehavior {
 pub struct DefaultFlingBehavior {
     /// Pixels per dp: the spline's deceleration is in physical units.
     density: f32,
+    /// The scale it runs at whatever the scale around, as `DefaultScrollMotionDurationScale`.
+    motion_scale: f32,
 }
 
 impl DefaultFlingBehavior {
     pub fn new(density: f32) -> DefaultFlingBehavior {
-        DefaultFlingBehavior { density }
+        DefaultFlingBehavior { density, motion_scale: 1.0 }
+    }
+
+    /// Tests' `DefaultFlingBehavior(flingDecay, motionDurationScale)`: it runs at `scale`.
+    #[doc(hidden)]
+    pub fn with_motion_scale(density: f32, scale: f32) -> DefaultFlingBehavior {
+        DefaultFlingBehavior { density, motion_scale: scale }
     }
 }
 
@@ -433,7 +441,7 @@ impl FlingBehavior for DefaultFlingBehavior {
         scope: ScrollScope,
         initial_velocity: f32,
     ) -> LocalBoxFuture<'a, f32> {
-        let density = self.density;
+        let (density, motion_scale) = (self.density, self.motion_scale);
         Box::pin(async move {
             // As Compose's: slower than a pixel a second doesn't move.
             if initial_velocity.abs() <= 1.0 {
@@ -444,7 +452,12 @@ impl FlingBehavior for DefaultFlingBehavior {
             let mut covered = 0.0f32;
             loop {
                 let now = compose_runtime::with_frame_nanos(|time| time).await;
-                let play_time = Fling::play_time_nanos(now.saturating_sub(start));
+                // At a scale of 0 it's over at once.
+                let play_time = if motion_scale == 0.0 {
+                    course.duration_nanos as i64
+                } else {
+                    Fling::play_time_nanos(now.saturating_sub(start), motion_scale)
+                };
                 let target = course.distance_at(play_time);
                 let delta = target - covered;
                 covered = target;
@@ -751,8 +764,10 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
             || node.reverse_direction != self.reverse_direction
             || (node.enabled && !self.enabled)
         {
-            node.drag.cancel();
-            if !same_state {
+            if same_state {
+                node.drag.cancel();
+            } else {
+                node.drag.cancel_leaving();
                 node.drag.stop_fling();
             }
         }
@@ -773,6 +788,7 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
             && other.enabled == self.enabled
             && other.reverse_direction == self.reverse_direction
             && same_fling(&other.fling_behavior, &self.fling_behavior)
+            && same_overscroll(&other.overscroll, &self.overscroll)
             && other.interaction_source == self.interaction_source
     }
 
@@ -840,12 +856,12 @@ impl ModifierNode for ScrollableNode {
     }
 
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
-        self.drag.cancel();
+        self.drag.cancel_leaving();
         self.drag.detach();
     }
 
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.drag.cancel();
+        self.drag.cancel_leaving();
         self.drag.detach();
     }
 }

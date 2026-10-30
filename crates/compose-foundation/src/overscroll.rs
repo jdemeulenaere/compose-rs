@@ -124,6 +124,8 @@ pub fn remember_overscroll_effect() -> Option<Rc<dyn OverscrollEffect>> {
     });
     let mut slot = slot.borrow_mut();
     let factory = factory?;
+    // By identity, where Compose's `remember(overscrollFactory)` uses `equals`: a factory is an
+    // `Rc` made once where it's provided (D1465), so identity is what an app means by the same one.
     match &*slot {
         Some((made_by, effect)) if Rc::ptr_eq(made_by, &factory) => Some(effect.clone()),
         _ => {

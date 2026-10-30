@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::compose_arg::ComposeArg;
 use crate::composer::{SlotPosition, current};
-use crate::error::misuse;
+use crate::error::{ComposeError, misuse};
 use crate::hash::{hash_key, key_of};
 use crate::runtime::with_runtime;
 use crate::slot_table::SlotValue;
@@ -19,6 +19,7 @@ use crate::state::{MutableState, Owned, OwnedState};
 /// | Remembered `T`               | The slot keeps | The call returns         |
 /// |------------------------------|----------------|--------------------------|
 /// | `Clone` values (incl. `Rc`)  | the value      | a clone of it            |
+/// | `RefCell` or `Cell`          | refused: a clone would lose every write; `Rc<RefCell<_>>` |  |
 /// | `OwnedState<V>`              | the owner      | its handle `MutableState<V>` |
 /// | `Owned<H>` (a state holder)  | the owner      | its handle `H`           |
 pub trait Remember: Sized + 'static {
@@ -136,8 +137,17 @@ fn remembered<T: Remember>(reuse: bool) -> Result<T::Output, SlotPosition> {
     Err(position)
 }
 
+/// A `RefCell` or a `Cell` remembered as itself would come back a clone each time, and every write
+/// would be lost. Stable Rust can't leave them out of the blanket `Remember`.
+fn refuse_a_bare_cell(type_name: &'static str) {
+    if type_name.starts_with("core::cell::RefCell<") || type_name.starts_with("core::cell::Cell<") {
+        misuse(ComposeError::RememberedCell(type_name));
+    }
+}
+
 /// Stores a new value in the slot [`remembered`] reserved.
 fn remember_new<T: Remember>(position: SlotPosition, value: T) -> T::Output {
+    refuse_a_bare_cell(type_name::<T>());
     let stored = Rc::new(value.into_stored());
     let output = T::output(&stored);
     slot_set(position, SlotValue::Plain(stored), type_name::<T::Stored>());

@@ -72,8 +72,8 @@ impl Fling {
 
     /// The play time `elapsed_nanos` after its start, as Compose's `animateDecay` computes it under
     /// a fling's scale of 1: `(elapsed / durationScale).toLong()`, a `Long` over a `Float`.
-    pub(crate) fn play_time_nanos(elapsed_nanos: u64) -> i64 {
-        (elapsed_nanos as f32 / 1.0) as i64
+    pub(crate) fn play_time_nanos(elapsed_nanos: u64, motion_scale: f32) -> i64 {
+        (elapsed_nanos as f32 / motion_scale) as i64
     }
 
     /// Whether it's over at `play_time_nanos`, as `isFinishedFromNanos`.

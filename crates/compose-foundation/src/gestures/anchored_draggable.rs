@@ -11,7 +11,10 @@ use compose_animation::{
     AnimationSpec, AnimationState, DecayAnimationSpec, FloatDecayAnimationSpec, animate,
     exponential_decay, generate_decay_animation_spec, tween,
 };
-use compose_runtime::{ComposeArg, CoroutineScope, OwnedState, composable, mutable_state_of};
+use compose_runtime::{
+    ComposeArg, CoroutineScope, DerivedState, OwnedState, composable, derived_state_of,
+    mutable_state_of,
+};
 use compose_ui::{
     Density, Dp, EventContext, Modifier, ModifierNodeElement, MutableInteractionSource,
     NestedScrollSource, Offset, Velocity,
@@ -32,38 +35,36 @@ const MIN_FLING_VELOCITY: Dp = Dp(125.0);
 /// may be at the same position. Compose's is an interface with one implementation.
 #[derive(Clone, PartialEq, Debug)]
 pub struct DraggableAnchors<T> {
-    keys: Vec<T>,
-    positions: Vec<f32>,
+    // Behind `Rc`s: a drag reads them at each delta.
+    keys: Rc<Vec<T>>,
+    positions: Rc<Vec<f32>>,
 }
 
 /// Where a [`DraggableAnchors`] is built, as `DraggableAnchorsConfig`.
 pub struct DraggableAnchorsConfig<T> {
-    anchors: DraggableAnchors<T>,
+    keys: Vec<T>,
+    positions: Vec<f32>,
 }
 
-impl<T: PartialEq> DraggableAnchorsConfig<T> {
-    /// `anchor` at `position`, as `anchor at position`. Given twice, the last counts.
+impl<T> DraggableAnchorsConfig<T> {
+    /// `anchor` at `position`, as `anchor at position`. Given twice, it's there twice, and
+    /// [`position_of`](DraggableAnchors::position_of) finds the first, as Compose's.
     pub fn at(&mut self, anchor: T, position: f32) {
-        match self.anchors.keys.iter().position(|key| *key == anchor) {
-            Some(index) => self.anchors.positions[index] = position,
-            None => {
-                self.anchors.keys.push(anchor);
-                self.anchors.positions.push(position);
-            }
-        }
+        self.keys.push(anchor);
+        self.positions.push(position);
     }
 }
 
 impl<T: Clone + PartialEq> DraggableAnchors<T> {
     /// As `DraggableAnchors { A at 0f; B at 100f }`.
     pub fn new(build: impl FnOnce(&mut DraggableAnchorsConfig<T>)) -> DraggableAnchors<T> {
-        let mut config = DraggableAnchorsConfig { anchors: DraggableAnchors::empty() };
+        let mut config = DraggableAnchorsConfig { keys: Vec::new(), positions: Vec::new() };
         build(&mut config);
-        config.anchors
+        DraggableAnchors { keys: Rc::new(config.keys), positions: Rc::new(config.positions) }
     }
 
     fn empty() -> DraggableAnchors<T> {
-        DraggableAnchors { keys: Vec::new(), positions: Vec::new() }
+        DraggableAnchors { keys: Rc::default(), positions: Rc::default() }
     }
 
     /// How many anchors there are, as `size`.
@@ -139,7 +140,7 @@ impl<T: Clone + PartialEq> DraggableAnchors<T> {
 
     /// Each anchor and its position, as `forEach`.
     pub fn for_each(&self, mut block: impl FnMut(&T, f32)) {
-        for (key, position) in self.keys.iter().zip(&self.positions) {
+        for (key, position) in self.keys.iter().zip(self.positions.iter()) {
             block(key, *position);
         }
     }
@@ -203,9 +204,12 @@ struct Inner<T: Clone + PartialEq + 'static> {
     last_velocity: OwnedState<f32>,
     drag_target: OwnedState<Option<T>>,
     anchors: OwnedState<DraggableAnchors<T>>,
+    /// As `targetValue`: what reads it isn't told of each delta.
+    target_value: DerivedState<T>,
     /// What a drag restarts on: new anchors, or a new target.
     restarts: Cell<u64>,
-    restart_wakers: RefCell<Vec<Waker>>,
+    /// The drag running, one at a time: the mutex lets a new one in after the last ends.
+    restart_waker: RefCell<Option<Waker>>,
     left_bound: RefCell<Option<T>>,
     right_bound: RefCell<Option<T>>,
 }
@@ -213,7 +217,8 @@ struct Inner<T: Clone + PartialEq + 'static> {
 impl<T: Clone + PartialEq + 'static> Inner<T> {
     fn restart_drag(&self) {
         self.restarts.set(self.restarts.get() + 1);
-        for waker in self.restart_wakers.borrow_mut().drain(..) {
+        let waker = self.restart_waker.borrow_mut().take();
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
@@ -295,6 +300,14 @@ where
     T: Clone + PartialEq + 'static,
     Fut: Future<Output = ()>,
 {
+    /// Takes the waker of the drag away however it ends.
+    struct ClearWaker<'a, T: Clone + PartialEq + 'static>(&'a Inner<T>);
+    impl<T: Clone + PartialEq + 'static> Drop for ClearWaker<'_, T> {
+        fn drop(&mut self) {
+            self.0.restart_waker.borrow_mut().take();
+        }
+    }
+    let _clear = ClearWaker(&**inner);
     loop {
         let started = inner.restarts.get();
         let mut running = std::pin::pin!(block());
@@ -305,7 +318,11 @@ where
             match running.as_mut().poll(context) {
                 Poll::Ready(()) => Poll::Ready(true),
                 Poll::Pending => {
-                    inner.restart_wakers.borrow_mut().push(context.waker().clone());
+                    let mut kept = inner.restart_waker.borrow_mut();
+                    match &mut *kept {
+                        Some(waker) => waker.clone_from(context.waker()),
+                        None => *kept = Some(context.waker().clone()),
+                    }
                     Poll::Pending
                 }
             }
@@ -356,18 +373,43 @@ impl<T: Clone + PartialEq + 'static> AnchoredDraggableState<T> {
         initial_value: T,
         confirm_value_change: impl Fn(&T) -> bool + 'static,
     ) -> AnchoredDraggableState<T> {
+        let current_value = mutable_state_of(initial_value.clone());
+        let offset = mutable_state_of(f32::NAN);
+        let drag_target = mutable_state_of(None);
+        let anchors = mutable_state_of(DraggableAnchors::empty());
+        let target_value = {
+            let (drag_target, offset, current, anchors) =
+                (drag_target.handle(), offset.handle(), current_value.handle(), anchors.handle());
+            derived_state_of(move || {
+                drag_target.get().unwrap_or_else(|| {
+                    let offset = offset.get();
+                    let current = current.get();
+                    if offset.is_nan() {
+                        return current;
+                    }
+                    let anchors = anchors.get();
+                    let at_current = anchors.position_of(&current);
+                    if at_current.is_nan() || offset == at_current {
+                        current
+                    } else {
+                        anchors.closest_anchor(offset).unwrap_or(current)
+                    }
+                })
+            })
+        };
         AnchoredDraggableState {
             inner: Rc::new(Inner {
                 mutex: MutatorMutex::new(),
                 confirm_value_change: Rc::new(confirm_value_change),
-                current_value: mutable_state_of(initial_value.clone()),
+                current_value,
                 settled_value: mutable_state_of(initial_value),
-                offset: mutable_state_of(f32::NAN),
+                offset,
                 last_velocity: mutable_state_of(0.0),
-                drag_target: mutable_state_of(None),
-                anchors: mutable_state_of(DraggableAnchors::empty()),
+                drag_target,
+                anchors,
+                target_value,
                 restarts: Cell::new(0),
-                restart_wakers: RefCell::default(),
+                restart_waker: RefCell::default(),
                 left_bound: RefCell::default(),
                 right_bound: RefCell::default(),
             }),
@@ -408,20 +450,7 @@ impl<T: Clone + PartialEq + 'static> AnchoredDraggableState<T> {
 
     /// The anchor it's going to: what's animated to, else the closest, as `targetValue`.
     pub fn target_value(&self) -> T {
-        self.inner.drag_target.get().unwrap_or_else(|| {
-            let offset = self.inner.offset.get();
-            let current = self.inner.current_value.get();
-            if offset.is_nan() {
-                return current;
-            }
-            let anchors = self.inner.anchors.get();
-            let at_current = anchors.position_of(&current);
-            if at_current.is_nan() || offset == at_current {
-                current
-            } else {
-                anchors.closest_anchor(offset).unwrap_or(current)
-            }
-        })
+        self.inner.target_value.get()
     }
 
     /// Where it is, NaN before its anchors are known, as `offset`.
@@ -1020,7 +1049,11 @@ impl<T: Clone + PartialEq + 'static> DragBehavior for AnchoredBehavior<T> {
                 let (state, fling) = (state.clone(), fling.clone());
                 Box::pin(async move {
                     let available = if horizontal { available.x } else { available.y };
-                    let left = anchored_fling(&state, &fling, available).await.unwrap_or(0.0);
+                    let Ok(left) = anchored_fling(&state, &fling, available).await else {
+                        // As Compose's cancellation through `applyToFling`.
+                        compose_runtime::platform::cancel_current_task();
+                        return std::future::pending().await;
+                    };
                     let offset = state.require_offset();
                     let anchors = state.anchors();
                     // Its velocity for the effect only at the first or last anchor, as Compose's,

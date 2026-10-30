@@ -910,3 +910,45 @@ fn a_fling_stopped_by_an_edge_returns_the_decay_s_velocity_there() {
     assert_eq!(left, spec.velocity_from_nanos(play_time, 0.0, velocity));
     assert!(left > 0.0 && left < velocity, "{left}");
 }
+
+/// How many deltas the default fling gives under `ambient`.
+fn deltas_of(behavior: DefaultFlingBehavior, ambient: f32) -> u32 {
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {});
+    let count = Rc::new(Cell::new(0));
+    let noted = count.clone();
+    let state = scrollable_state(move |delta| {
+        noted.set(noted.get() + 1);
+        delta
+    });
+    crate::scroll_support::run(&mut ui, async move {
+        let _ = state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                compose_ui::with_motion_duration_scale(
+                    ambient,
+                    behavior.perform_fling(scope, 1000.0),
+                )
+                .await;
+            })
+            .await;
+    });
+    count.get()
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, disableSystemAnimations_defaultFlingBehaviorShouldContinueToWork
+#[test]
+fn the_default_fling_runs_whatever_the_scale_around() {
+    let behavior = DefaultFlingBehavior::new(1.0);
+    let normal = deltas_of(behavior, 1.0);
+    assert!(normal > 1, "{normal}");
+    assert_eq!(deltas_of(behavior, 0.0), normal);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, defaultFlingBehavior_useScrollMotionDurationScale
+#[test]
+fn the_default_fling_runs_at_a_scale_of_its_own() {
+    let at = |scale| deltas_of(DefaultFlingBehavior::with_motion_scale(1.0, scale), 1.0);
+    let normal = at(1.0);
+    assert!(normal > 1, "{normal}");
+    assert_eq!(at(0.0), 1, "at once");
+    assert!(at(2.0) > normal, "slower");
+}

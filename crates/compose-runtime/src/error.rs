@@ -8,6 +8,9 @@ use std::fmt;
 /// A violation of the composer protocol or of a runtime rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComposeError {
+    /// `remember` of a `RefCell` or a `Cell` itself: what it returns is a clone, and every write to
+    /// it is lost. It holds the type.
+    RememberedCell(&'static str),
     /// The composer was used while no composition pass was running on this thread.
     NotComposing,
     /// A pass was started while another one was running on this thread.
@@ -44,6 +47,13 @@ pub enum ComposeError {
 impl fmt::Display for ComposeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            ComposeError::RememberedCell(type_name) => {
+                return write!(
+                    formatter,
+                    "remember returns a clone of a Clone value, so writes to a remembered \
+                     {type_name} are lost: remember an Rc of it"
+                );
+            }
             ComposeError::NotComposing => "the composer was used outside a composition pass",
             ComposeError::PassInProgress => {
                 "a composition pass is already running on this thread (one pass at a time)"

@@ -42,6 +42,14 @@ pub trait SnapLayoutInfoProvider {
     /// The distance to where it lands from here, with the `velocity` the approach left, as
     /// `calculateSnapOffset`.
     fn calculate_snap_offset(&self, velocity: f32) -> f32;
+
+    /// Whether what it reads hasn't been laid out yet, and a frame should pass before it's asked:
+    /// compose-rs's, whose lists lay out what's scrolled in the next frame where Compose's measure
+    /// in the scroll. A provider wrapping a list's asks it.
+    #[doc(hidden)]
+    fn is_layout_behind(&self) -> bool {
+        false
+    }
 }
 
 /// Where a [`SnapPosition::Custom`] puts an item, given the layout's size, the item's, the paddings
@@ -149,6 +157,12 @@ fn approach_less(average: i32, decay_offset: f32) -> f32 {
     (decay_offset.abs() - average as f32).max(0.0) * sign
 }
 
+/// Whether what's scrolled since the last layout has gone past the items on the way it goes, so the
+/// one to land on may not be laid out yet.
+fn is_past_laid_items(pending: f32, (lower, upper): (f32, f32)) -> bool {
+    (pending > 0.0 && upper.is_infinite()) || (pending < 0.0 && lower.is_infinite())
+}
+
 /// Snapping a list's items to `snap_position`, as `SnapLayoutInfoProvider(lazyListState, …)`.
 pub fn list_snap_layout_info_provider(
     state: LazyListState,
@@ -173,6 +187,17 @@ pub fn list_snap_layout_info_provider(
         }
 
         fn calculate_snap_offset(&self, velocity: f32) -> f32 {
+            let (lower, upper) = self.bounds();
+            final_offset(final_snapping_item(velocity, self.density), lower, upper)
+        }
+
+        fn is_layout_behind(&self) -> bool {
+            is_past_laid_items(self.state.pending_scroll(), self.bounds())
+        }
+    }
+    impl ListProvider {
+        /// The distances to the items around where it lands, as `calculateSnapOffset`'s.
+        fn bounds(&self) -> (f32, f32) {
             let info = self.state.layout_info();
             // What's scrolled since that layout, as Compose's layout info copied with the delta.
             let pending = self.state.pending_scroll();
@@ -199,7 +224,7 @@ pub fn list_snap_layout_info_provider(
                     upper = offset;
                 }
             }
-            final_offset(final_snapping_item(velocity, self.density), lower, upper)
+            (lower, upper)
         }
     }
     Rc::new(ListProvider { state, snap_position, density })
@@ -233,6 +258,17 @@ pub fn grid_snap_layout_info_provider(
         }
 
         fn calculate_snap_offset(&self, velocity: f32) -> f32 {
+            let (lower, upper) = self.bounds();
+            final_offset(final_snapping_item(velocity, self.density), lower, upper)
+        }
+
+        fn is_layout_behind(&self) -> bool {
+            is_past_laid_items(self.state.pending_scroll(), self.bounds())
+        }
+    }
+    impl GridProvider {
+        /// The distances to the lines around where it lands, as `calculateSnapOffset`'s.
+        fn bounds(&self) -> (f32, f32) {
             let info = self.state.layout_info();
             let vertical = info.orientation == Orientation::Vertical;
             let pending = self.state.pending_scroll();
@@ -257,7 +293,7 @@ pub fn grid_snap_layout_info_provider(
                     upper = distance;
                 }
             }
-            final_offset(final_snapping_item(velocity, self.density), lower, upper)
+            (lower, upper)
         }
     }
     Rc::new(GridProvider { state, snap_position, density })
@@ -269,6 +305,8 @@ pub struct SnapFlingBehavior {
     provider: Rc<dyn SnapLayoutInfoProvider>,
     decay_spec: DecayAnimationSpec,
     snap_spec: AnimationSpec,
+    /// The scale its animations run at whatever the scale around, as `motionScaleDuration`.
+    motion_scale: Rc<Cell<f32>>,
 }
 
 /// As `snapFlingBehavior(snapLayoutInfoProvider, decayAnimationSpec, snapAnimationSpec)`.
@@ -277,19 +315,26 @@ pub fn snap_fling_behavior(
     decay_spec: DecayAnimationSpec,
     snap_spec: impl Into<AnimationSpec>,
 ) -> SnapFlingBehavior {
-    SnapFlingBehavior { provider, decay_spec, snap_spec: snap_spec.into() }
+    SnapFlingBehavior {
+        provider,
+        decay_spec,
+        snap_spec: snap_spec.into(),
+        motion_scale: Rc::new(Cell::new(1.0)),
+    }
 }
 
 /// As `rememberSnapFlingBehavior(snapLayoutInfoProvider)`: the spline's decay, a medium-low spring.
 #[composable(non_restartable)]
-pub fn remember_snap_fling_behavior(provider: Rc<dyn SnapLayoutInfoProvider>) -> SnapFlingBehavior {
+pub fn remember_snap_fling_behavior(
+    provider: Rc<dyn SnapLayoutInfoProvider>,
+) -> Rc<SnapFlingBehavior> {
     let density = compose_ui::LOCAL_DENSITY.current();
     compose_runtime::remember_keyed((ProviderKey(provider.clone()), density), move || {
-        snap_fling_behavior(
+        Rc::new(snap_fling_behavior(
             provider,
             spline_based_decay(density),
             spring_with(Spring::DAMPING_RATIO_NO_BOUNCY, Spring::STIFFNESS_MEDIUM_LOW),
-        )
+        ))
     })
 }
 
@@ -298,7 +343,7 @@ pub fn remember_snap_fling_behavior(provider: Rc<dyn SnapLayoutInfoProvider>) ->
 pub fn remember_list_snap_fling_behavior(
     state: LazyListState,
     snap_position: SnapPosition,
-) -> SnapFlingBehavior {
+) -> Rc<SnapFlingBehavior> {
     let density = compose_ui::LOCAL_DENSITY.current();
     let provider = compose_runtime::remember_keyed((state, density), move || {
         list_snap_layout_info_provider(state, snap_position, density)
@@ -311,7 +356,7 @@ pub fn remember_list_snap_fling_behavior(
 pub fn remember_grid_snap_fling_behavior(
     state: LazyGridState,
     snap_position: SnapPosition,
-) -> SnapFlingBehavior {
+) -> Rc<SnapFlingBehavior> {
     let density = compose_ui::LOCAL_DENSITY.current();
     let provider = compose_runtime::remember_keyed((state, density), move || {
         grid_snap_layout_info_provider(state, snap_position, density)
@@ -416,6 +461,12 @@ async fn animate_with_target(
 }
 
 impl SnapFlingBehavior {
+    /// Tests' `motionScaleDuration`: its animations run at `scale`, 1 by default.
+    #[doc(hidden)]
+    pub fn set_motion_scale(&self, scale: f32) {
+        self.motion_scale.set(scale);
+    }
+
     /// As `fling`: what's left, and the velocity.
     async fn fling(
         &self,
@@ -449,6 +500,11 @@ impl SnapFlingBehavior {
             let target = offset.abs() * sign;
             animate_with_target(scope, target, offset, &approach, &self.snap_spec, &step).await.1
         };
+        // An approach past all that's laid out has nothing to measure from: Compose's lists measure
+        // in the scroll, compose-rs's in the frame.
+        if self.provider.is_layout_behind() {
+            compose_runtime::with_frame_nanos(|time| time).await;
+        }
         let final_snap_offset = self.provider.calculate_snap_offset(approach_velocity);
         assert!(
             !final_snap_offset.is_nan(),
@@ -485,8 +541,12 @@ impl TargetedFlingBehavior for SnapFlingBehavior {
         on_remaining_distance_updated: Rc<dyn Fn(f32)>,
     ) -> LocalBoxFuture<'a, f32> {
         Box::pin(async move {
-            let (remaining, velocity) =
-                self.fling(&scope, initial_velocity, &*on_remaining_distance_updated).await;
+            // Its own scale, 1 by default: system animations turned off don't stop a fling.
+            let (remaining, velocity) = compose_ui::with_motion_duration_scale(
+                self.motion_scale.get(),
+                self.fling(&scope, initial_velocity, &*on_remaining_distance_updated),
+            )
+            .await;
             if remaining == 0.0 { 0.0 } else { velocity }
         })
     }

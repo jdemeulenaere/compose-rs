@@ -7,8 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_animation::{
-    DecayAnimationSpec, FloatDecayAnimationSpec, SplineBasedFloatDecayAnimationSpec,
-    generate_decay_animation_spec, spring,
+    AnimationSpec, AnimationVector, DecayAnimationSpec, FloatDecayAnimationSpec,
+    SplineBasedFloatDecayAnimationSpec, VectorizedAnimationSpec, generate_decay_animation_spec,
+    spring,
 };
 use compose_foundation::gestures::{
     FlingBehavior, LocalBoxFuture, MIN_FLING_VELOCITY, SnapFlingBehavior, SnapLayoutInfoProvider,
@@ -21,7 +22,7 @@ use compose_foundation::*;
 use compose_test::*;
 use compose_ui::{Density, IntSize, NestedScrollConnection, Offset, PointerEvent, UnitExt};
 
-use crate::scroll_support::run;
+use crate::scroll_support::{launch, run};
 
 const MIN_OFFSET: f32 = -200.0;
 const MAX_OFFSET: f32 = 300.0;
@@ -61,6 +62,59 @@ impl SnapLayoutInfoProvider for TestProvider {
 struct CountingDecay {
     inner: SplineBasedFloatDecayAnimationSpec,
     durations: Rc<Cell<u32>>,
+}
+
+/// A spring, counting the animations run on it: a target-based animation asks its duration once.
+struct CountingSpring {
+    inner: AnimationSpec,
+    durations: Rc<Cell<u32>>,
+}
+
+impl VectorizedAnimationSpec for CountingSpring {
+    fn value_from_nanos(
+        &self,
+        time: i64,
+        value: AnimationVector,
+        target: AnimationVector,
+        velocity: AnimationVector,
+    ) -> AnimationVector {
+        self.inner.value_from_nanos(time, value, target, velocity)
+    }
+    fn velocity_from_nanos(
+        &self,
+        time: i64,
+        value: AnimationVector,
+        target: AnimationVector,
+        velocity: AnimationVector,
+    ) -> AnimationVector {
+        self.inner.velocity_from_nanos(time, value, target, velocity)
+    }
+    fn duration_nanos(
+        &self,
+        value: AnimationVector,
+        target: AnimationVector,
+        velocity: AnimationVector,
+    ) -> i64 {
+        self.durations.set(self.durations.get() + 1);
+        self.inner.duration_nanos(value, target, velocity)
+    }
+    fn end_velocity(
+        &self,
+        value: AnimationVector,
+        target: AnimationVector,
+        velocity: AnimationVector,
+    ) -> AnimationVector {
+        self.inner.end_velocity(value, target, velocity)
+    }
+}
+
+fn counting_spring() -> (AnimationSpec, Rc<Cell<u32>>) {
+    let durations = Rc::new(Cell::new(0));
+    let spec = AnimationSpec::custom(CountingSpring {
+        inner: spring().into(),
+        durations: durations.clone(),
+    });
+    (spec, durations)
 }
 
 impl FloatDecayAnimationSpec for CountingDecay {
@@ -183,10 +237,11 @@ fn an_approach_offset_of_nan_is_refused() {
 #[test]
 fn an_approach_the_decay_cant_reach_animates() {
     let (decay, decays) = counting_decay();
+    let (springs, sprung) = counting_spring();
     let reach = decay.calculate_target_value(0.0f32, TEST_VELOCITY);
     let provider = Rc::new(TestProvider { min: MIN_OFFSET, max: 100.0, approach: reach + 1.0 });
-    let (told, _) = perform(snap_fling_behavior(provider, decay, spring()), TEST_VELOCITY, 1.0);
-    assert_eq!(decays.get(), 0);
+    let (told, _) = perform(snap_fling_behavior(provider, decay, springs), TEST_VELOCITY, 1.0);
+    assert_eq!((decays.get(), sprung.get()), (0, 2));
     assert_eq!(told[0], reach + 1.0);
     assert!(told.contains(&100.0), "{told:?}");
 }
@@ -195,21 +250,22 @@ fn an_approach_the_decay_cant_reach_animates() {
 #[test]
 fn an_approach_the_decay_reaches_decays() {
     let (decay, decays) = counting_decay();
+    let (springs, sprung) = counting_spring();
     let reach = decay.calculate_target_value(0.0f32, TEST_VELOCITY);
     let provider = Rc::new(TestProvider { min: MIN_OFFSET, max: 100.0, approach: reach - 1.0 });
-    perform(snap_fling_behavior(provider, decay, spring()), TEST_VELOCITY, 1.0);
-    assert!(decays.get() >= 1);
+    perform(snap_fling_behavior(provider, decay, springs), TEST_VELOCITY, 1.0);
+    assert_eq!((decays.get(), sprung.get()), (1, 1));
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt, approach_usedDefaultApproach_useHighVelocityApproachAndSnap, approach_usedDefaultApproach_shouldDecay
 #[test]
 fn the_default_approach_is_the_decays_target() {
     let (decay, decays) = counting_decay();
+    let (springs, sprung) = counting_spring();
     let velocity = 5.0 * TEST_VELOCITY;
     let reach = decay.calculate_target_value(0.0f32, velocity);
-    let (told, _) =
-        perform(snap_fling_behavior(provider(f32::NAN), decay, spring()), velocity, 1.0);
-    assert!(decays.get() >= 1);
+    let (told, _) = perform(snap_fling_behavior(provider(f32::NAN), decay, springs), velocity, 1.0);
+    assert_eq!((decays.get(), sprung.get()), (1, 1));
     assert!((told[0] - reach).abs() < 0.1, "{} {reach}", told[0]);
 }
 
@@ -259,8 +315,8 @@ fn snapping_list(vertical: bool, first: usize) -> (Snapping, LazyListState) {
     let state = LazyListState::new(first, 0);
     let handle = *state;
     let ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
-        let behavior = remember_list_snap_fling_behavior(handle, SnapPosition::Center);
-        let fling: Rc<dyn FlingBehavior> = Rc::new(behavior);
+        let fling: Rc<dyn FlingBehavior> =
+            remember_list_snap_fling_behavior(handle, SnapPosition::Center);
         let content = |scope: LazyListScope| {
             scope.items(200, |_| Box!(modifier = Modifier.size(200.dp())));
         };
@@ -297,7 +353,7 @@ fn snapping_grid(vertical: bool, first: usize) -> (Snapping, LazyGridState) {
     let handle = *state;
     let ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
         let behavior = remember_grid_snap_fling_behavior(handle, SnapPosition::Center);
-        let fling: Rc<dyn FlingBehavior> = Rc::new(behavior);
+        let fling: Rc<dyn FlingBehavior> = behavior;
         let cells = GridCells::FixedSize(200.dp());
         let content = |scope: LazyGridScope| {
             scope.items(200, |_| Box!(modifier = Modifier.size(200.dp())));
@@ -453,7 +509,7 @@ fn nested_list(first: usize, left: Rc<Cell<f32>>) -> (ComposeTestRule, LazyListS
     let connection: Rc<dyn NestedScrollConnection> = Rc::new(LeftVelocity(left));
     let ui = ComposeTestRule::sized(IntSize::new(650, 650), move || {
         let behavior = remember_list_snap_fling_behavior(handle, SnapPosition::Center);
-        let fling: Rc<dyn FlingBehavior> = Rc::new(behavior);
+        let fling: Rc<dyn FlingBehavior> = behavior;
         Box!(modifier = Modifier.fill_max_size().nested_scroll(connection.clone()), {
             let fling = fling.clone();
             LazyColumn!(
@@ -682,4 +738,298 @@ fn with_no_item_to_land_on_there_is_nothing_to_go() {
     let provider = list_snap_layout_info_provider(handle, SnapPosition::Start, density());
     assert_eq!(provider.calculate_snap_offset(threshold() * 2.0), 0.0);
     assert_eq!(provider.calculate_snap_offset(-threshold() * 2.0), 0.0);
+}
+
+type MakeProvider = Rc<dyn Fn(LazyListState) -> Rc<dyn SnapLayoutInfoProvider>>;
+
+/// A row of 200 items of `item` px in `viewport`, snapping to the center by `provider`, flung by
+/// hand; its state.
+fn snapping_row(
+    viewport: i32,
+    item: f32,
+    provider: Option<MakeProvider>,
+) -> (ComposeTestRule, LazyListState, Rc<SnapFlingBehavior>) {
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    std::mem::forget(state);
+    let behavior = snap_fling_behavior(
+        match provider {
+            Some(make) => make(handle),
+            None => list_snap_layout_info_provider(handle, SnapPosition::Center, density()),
+        },
+        compose_animation::spline_based_decay(density()),
+        spring(),
+    );
+    let behavior = Rc::new(behavior);
+    let given: Rc<dyn FlingBehavior> = behavior.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(viewport, 300), move || {
+        LazyRow!(
+            modifier = Modifier.fill_max_size(),
+            state = handle,
+            fling_behavior = Some(given.clone()),
+            content = move |scope: LazyListScope| {
+                scope.items(200, move |_| Box!(modifier = Modifier.size(item.dp())));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    (ui, handle, behavior)
+}
+
+/// Flings `behavior` by hand under `ambient`, a frame at a time; the frames it took.
+fn fling_under(
+    ui: &mut ComposeTestRule,
+    state: LazyListState,
+    behavior: Rc<SnapFlingBehavior>,
+    ambient: f32,
+    velocity: f32,
+) -> u32 {
+    ui.set_auto_advance(false);
+    let job = launch(async move {
+        let _ = state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                compose_ui::with_motion_duration_scale(
+                    ambient,
+                    behavior.perform_fling(scope, velocity),
+                )
+                .await;
+            })
+            .await;
+    });
+    let mut frames = 0;
+    while job.is_active() {
+        ui.advance_time_by_frame();
+        frames += 1;
+        assert!(frames < 5000, "it ended");
+    }
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    frames
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt, disableSystemAnimations_defaultFlingBehaviorShouldContinueToWork
+#[test]
+fn a_snap_runs_the_same_whatever_the_scale_around() {
+    let mut landed = Vec::new();
+    for ambient in [1.0, 0.0, 5.0] {
+        let (mut ui, state, behavior) = snapping_row(600, 20.0, None);
+        let frames = fling_under(&mut ui, state, behavior, ambient, 10000.0);
+        landed.push((
+            frames,
+            state.first_visible_item_index(),
+            state.first_visible_item_scroll_offset(),
+        ));
+    }
+    assert_eq!(landed[0], landed[1], "at 0");
+    assert_eq!(landed[0], landed[2], "at 5");
+    assert!(landed[0].0 > 1 && landed[0].1 > 0, "{:?}", landed[0]);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt, defaultFlingBehavior_useScrollMotionDurationScale
+#[test]
+fn a_snap_runs_at_a_scale_of_its_own() {
+    let (mut ui, state, behavior) = snapping_row(600, 150.0, None);
+    behavior.set_motion_scale(0.0);
+    let frames = fling_under(&mut ui, state, behavior.clone(), 1.0, 10000.0);
+    assert!(frames <= 3, "at once: {frames}");
+    assert!(state.first_visible_item_index() > 0);
+    let before = state.first_visible_item_index();
+    behavior.set_motion_scale(1.0);
+    let frames = fling_under(&mut ui, state, behavior, 1.0, 10000.0);
+    assert!(frames > 3, "as long as it takes: {frames}");
+    assert_ne!(state.first_visible_item_index(), before);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt, performFling_cancellationShouldTriggerAnimationCancellation
+#[test]
+fn a_fling_cancelled_in_its_first_delta_runs_no_decay() {
+    let (decay, decays) = counting_decay();
+    let behavior = snap_fling_behavior(provider(0.0), decay, spring());
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {});
+    let scrolled = Rc::new(Cell::new(0));
+    let noted = scrolled.clone();
+    let job = launch(async move {
+        let scope = ScrollScope::new(move |_| {
+            noted.set(noted.get() + 1);
+            compose_runtime::platform::cancel_current_task();
+            0.0
+        });
+        behavior.perform_fling(scope, 3000.0).await;
+    });
+    ui.wait_for_idle();
+    assert!(!job.is_active());
+    assert_eq!(decays.get(), 0);
+    assert_eq!(scrolled.get(), 1, "not on");
+}
+
+/// Flings under a provider whose approach is `approach`, and asks the rest of the list's.
+struct Approach {
+    inner: Rc<dyn SnapLayoutInfoProvider>,
+    approach: f32,
+}
+
+impl SnapLayoutInfoProvider for Approach {
+    fn calculate_approach_offset(&self, _velocity: f32, _decay_offset: f32) -> f32 {
+        self.approach
+    }
+    fn calculate_snap_offset(&self, velocity: f32) -> f32 {
+        self.inner.calculate_snap_offset(velocity)
+    }
+    fn is_layout_behind(&self) -> bool {
+        self.inner.is_layout_behind()
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt: fling, with `applyMeasureResult`'s remeasure in the scroll: a scroll past what's laid out is laid out before the snap asks
+#[test]
+fn a_frames_scroll_past_all_thats_laid_out_still_lands_on_an_item() {
+    let make: MakeProvider = Rc::new(|state| {
+        Rc::new(Approach {
+            inner: list_snap_layout_info_provider(state, SnapPosition::Center, density()),
+            approach: 310.0,
+        })
+    });
+    let (mut ui, state, behavior) = snapping_row(100, 20.0, Some(make));
+    fling_under(&mut ui, state, behavior, 1.0, 30000.0);
+    assert_eq!(state.first_visible_item_scroll_offset() % 20, 0, "on an item");
+    assert!(state.first_visible_item_index() >= 15);
+}
+
+/// Scrolls 180 px with `end`, then lands; where.
+fn drag_and(end: impl FnOnce(&mut TouchInjectionScope)) -> i32 {
+    let (mut snapping, state) = snapping_list(true, 0);
+    snapping.ui.wait_for_idle();
+    let moved = Offset::new(0.0, -180.0);
+    snapping.ui.on_root().perform_touch_input(|touch| {
+        touch.down(Offset::new(300.0, 400.0));
+        touch.move_by(moved);
+        end(touch);
+    });
+    snapping.ui.wait_for_idle();
+    state.first_visible_item_index() as i32 * 200 + state.first_visible_item_scroll_offset()
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureNode.kt, processDragCancel: onDragStopped(Zero); Scrollable.kt, onDragStopped
+#[test]
+fn a_cancelled_drag_snaps_as_a_release_does() {
+    let released = drag_and(|touch| {
+        touch.advance_event_time(3000);
+        touch.up();
+    });
+    assert_eq!(released % 200, 0, "{released}");
+    assert_eq!(drag_and(|touch| touch.cancel()), released);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt: animateWithTarget, coerceToTarget(animationState.velocity, initialVelocity)
+#[test]
+fn a_snap_stopped_short_leaves_no_more_velocity_than_it_got() {
+    let provider = Rc::new(TestProvider { min: MIN_OFFSET, max: MAX_OFFSET, approach: 0.0 });
+    let (_, left) = perform(fling_of(provider), 10.0, 0.5);
+    assert_eq!(left, 10.0, "the spring is faster by then");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt: fling, onRemainingScrollOffsetUpdate(0f) at its end
+#[test]
+fn what_remains_is_told_as_none_at_the_end_even_stopped_short() {
+    let provider = Rc::new(TestProvider { min: MIN_OFFSET, max: MAX_OFFSET, approach: 0.0 });
+    let (told, _) = perform(fling_of(provider), TEST_VELOCITY, 0.5);
+    assert_ne!(told[told.len() - 2], 0.0, "stopped short: {told:?}");
+    assert_eq!(told.last(), Some(&0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/LazyGridSnapLayoutInfoProvider.kt, with the grid's remeasure in the scroll: a scroll past what's laid out is laid out before the snap asks
+#[test]
+fn a_frames_scroll_past_all_thats_laid_out_of_a_grid_still_lands_on_a_line() {
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    std::mem::forget(state);
+    let behavior = Rc::new(snap_fling_behavior(
+        Rc::new(Approach {
+            inner: grid_snap_layout_info_provider(handle, SnapPosition::Center, density()),
+            approach: 310.0,
+        }),
+        compose_animation::spline_based_decay(density()),
+        spring(),
+    ));
+    let given: Rc<dyn FlingBehavior> = behavior.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        LazyHorizontalGrid!(
+            GridCells::Fixed(1),
+            modifier = Modifier.fill_max_size(),
+            state = handle,
+            fling_behavior = Some(given.clone()),
+            content = |scope: LazyGridScope| {
+                scope.items(200, |_| Box!(modifier = Modifier.size(20.dp())));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    let job = launch(async move {
+        let _ = handle
+            .scroll(MutatePriority::Default, move |scope| async move {
+                behavior.perform_fling(scope, 30000.0).await;
+            })
+            .await;
+    });
+    let mut frames = 0;
+    while job.is_active() {
+        ui.advance_time_by_frame();
+        frames += 1;
+        assert!(frames < 5000, "it ended");
+    }
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    assert_eq!(handle.first_visible_item_scroll_offset() % 20, 0, "on a line");
+    assert!(handle.first_visible_item_index() >= 15);
+}
+
+/// Notes the frame it's asked where to land in.
+struct Asked {
+    frame: Rc<Cell<u32>>,
+    asked_in: Rc<Cell<u32>>,
+}
+
+impl SnapLayoutInfoProvider for Asked {
+    fn calculate_approach_offset(&self, _velocity: f32, _decay_offset: f32) -> f32 {
+        100.0
+    }
+    fn calculate_snap_offset(&self, _velocity: f32) -> f32 {
+        self.asked_in.set(self.frame.get());
+        0.0
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt: fling, nothing between the approach and calculateSnapOffset
+#[test]
+fn with_the_layout_up_to_date_a_snap_asks_where_to_land_in_the_approachs_last_frame() {
+    let (frame, asked_in) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let behavior = fling_of(Rc::new(Asked { frame: frame.clone(), asked_in: asked_in.clone() }));
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {});
+    ui.set_auto_advance(false);
+    let (last_delta, noted, now) =
+        (Rc::new(Cell::new(0)), Rc::new(Cell::new(0.0f32)), frame.clone());
+    let (approach_ended, summed) = (last_delta.clone(), noted.clone());
+    let state = scrollable_state(move |delta| {
+        // The approach's last delta: it's used up by it.
+        if summed.get() < 100.0 {
+            approach_ended.set(now.get());
+        }
+        summed.set(summed.get() + delta);
+        delta
+    });
+    let job = launch(async move {
+        let _ = state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                behavior.perform_fling(scope, 5000.0).await;
+            })
+            .await;
+    });
+    while job.is_active() {
+        frame.set(frame.get() + 1);
+        ui.advance_time_by_frame();
+        assert!(frame.get() < 1000);
+    }
+    assert!(last_delta.get() > 1, "an approach over frames");
+    assert_eq!(asked_in.get(), last_delta.get());
 }

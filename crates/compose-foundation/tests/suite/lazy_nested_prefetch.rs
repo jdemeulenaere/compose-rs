@@ -384,3 +384,104 @@ fn a_nested_grid_prefetch_starts_from_its_first_visible_item() {
         );
     }
 }
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListNestedPrefetchingTest.kt, automaticNestedPrefetchingBasedOnNumberOfVisibleItems
+#[test]
+fn a_nested_list_prefetches_as_many_as_the_last_one_showed() {
+    let _clock = compose_ui::PrefetchClock::hold();
+    let track: Rc<Track> = Rc::default();
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = nested_list(true, handle, 4, track.clone());
+    prefetch(&mut ui);
+    let actions = track.while_doing(&mut ui, |ui| {
+        scrolled_list(handle, ui, 5.0);
+        prefetch(ui);
+    });
+    // Two, then the rest of those in view: here two are all a nested list of these shows.
+    let first = [
+        Compose(2, None),
+        Compose(2, Some(4)),
+        Compose(2, Some(5)),
+        Measure(2, None),
+        Measure(2, Some(4)),
+        Measure(2, Some(5)),
+    ];
+    assert_eq!(actions, first);
+    crate::scroll_support::run(&mut ui, async move {
+        let _ = handle.scroll_to_item(10, 0).await;
+    });
+    prefetch(&mut ui);
+    let actions = track.while_doing(&mut ui, |ui| {
+        scrolled_list(handle, ui, 5.0);
+        prefetch(ui);
+    });
+    assert_eq!(
+        actions,
+        [
+            Compose(12, None),
+            Compose(12, Some(4)),
+            Compose(12, Some(5)),
+            Measure(12, None),
+            Measure(12, Some(4)),
+            Measure(12, Some(5)),
+        ]
+    );
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridNestedPrefetchingTest.kt, automaticNestedPrefetchingBasedOnNumberOfVisibleItems
+#[test]
+fn a_nested_grid_prefetches_as_many_as_the_last_one_showed() {
+    let _clock = compose_ui::PrefetchClock::hold();
+    let track: Rc<Track> = Rc::default();
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    let mut ui = nested_grid(true, handle, 4, track.clone());
+    prefetch(&mut ui);
+    let actions = track.while_doing(&mut ui, |ui| {
+        scrolled_grid(handle, ui, 40.0);
+        prefetch(ui);
+    });
+    // Two, then the rest of those in view, in a pass after the measurement short of them, where
+    // Compose's measurement composes them.
+    assert_eq!(
+        actions,
+        [
+            Compose(2, None),
+            Compose(2, Some(4)),
+            Compose(2, Some(5)),
+            Measure(2, None),
+            Measure(2, Some(4)),
+            Measure(2, Some(5)),
+            Compose(2, Some(6)),
+            Compose(2, Some(7)),
+            Measure(2, None),
+            Measure(2, Some(6)),
+            Measure(2, Some(7)),
+        ]
+    );
+    crate::scroll_support::run(&mut ui, async move {
+        let _ = handle.scroll_to_item(10, 0).await;
+    });
+    prefetch(&mut ui);
+    let actions = track.while_doing(&mut ui, |ui| {
+        scrolled_grid(handle, ui, 40.0);
+        prefetch(ui);
+    });
+    // Then as many as that one showed, at once.
+    assert_eq!(
+        actions,
+        [
+            Compose(12, None),
+            Compose(12, Some(4)),
+            Compose(12, Some(5)),
+            Compose(12, Some(6)),
+            Compose(12, Some(7)),
+            Measure(12, None),
+            Measure(12, Some(4)),
+            Measure(12, Some(5)),
+            Measure(12, Some(6)),
+            Measure(12, Some(7)),
+        ]
+    );
+}

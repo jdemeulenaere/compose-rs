@@ -1094,3 +1094,180 @@ fn a_drag_to_a_target_ends_on_it_whatever_its_block_did() {
     assert_eq!(state.require_offset(), 200.0);
     assert_eq!(state.current_value(), C);
 }
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableStateTest.kt, anchoredDraggable_currentValue_updatedWithDeltaDispatch, testProgression
+#[test]
+fn every_pixel_of_a_drag_is_the_value_half_way_says() {
+    let state = AnchoredDraggableState::with_anchors(A, anchors(&[(A, 0.0), (B, 20.0), (C, 40.0)]));
+    let mut ui = rule();
+    for (from, to) in [(A, B), (B, C)] {
+        let dragging = state.clone();
+        run(&mut ui, async move {
+            let reading = dragging.clone();
+            let _ = dragging
+                .anchored_drag(MutatePriority::Default, move |scope, anchors| {
+                    let dragging = reading.clone();
+                    async move {
+                        let origin = anchors.position_of(&from) as i32;
+                        let destination = anchors.position_of(&to) as i32;
+                        let distance = destination - origin;
+                        for value in origin..=destination {
+                            scope.drag_to(value as f32, 0.0);
+                            let expected = if value < origin + distance / 2 { from } else { to };
+                            assert_eq!(dragging.current_value(), expected, "at {value}");
+                        }
+                    }
+                })
+                .await;
+            dragging.settle(AnchoredDraggableDefaults::snap_animation_spec()).await.expect("free");
+        });
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, AnchoredDraggableState.settle(animationSpec)
+#[test]
+fn settling_goes_to_the_closest_anchor_or_back_from_a_veto() {
+    let state = AnchoredDraggableState::with_anchors_and_confirm(A, abc(), |value| *value != C);
+    let mut ui = rule();
+    state.dispatch_raw_delta(60.0);
+    let settling = state.clone();
+    run(&mut ui, async move {
+        settling.settle(compose_animation::tween(100)).await.expect("free");
+    });
+    assert_eq!((state.current_value(), state.require_offset()), (B, 100.0));
+    assert_eq!(state.settled_value(), B);
+    state.dispatch_raw_delta(70.0);
+    let settling = state.clone();
+    run(&mut ui, async move {
+        settling.settle(compose_animation::tween(100)).await.expect("free");
+    });
+    assert_eq!((state.current_value(), state.require_offset()), (B, 100.0), "C is vetoed");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, AnchoredDraggableState.anchoredDrag(targetValue): if (confirmValueChange(targetValue))
+#[test]
+fn a_drag_to_a_vetoed_target_doesnt_end_as_it() {
+    let state = AnchoredDraggableState::with_anchors_and_confirm(A, abc(), |value| *value != C);
+    let mut ui = rule();
+    let snapping = state.clone();
+    run(&mut ui, async move {
+        snapping.snap_to(C).await.expect("free");
+    });
+    assert_eq!(state.current_value(), A);
+    assert_eq!(state.settled_value(), A);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, animateToWithDecay: velocity - remainingVelocity
+#[test]
+fn a_decay_returns_the_velocity_it_used() {
+    let state = AnchoredDraggableState::with_anchors(A, anchors(&[(A, 0.0), (B, 500.0)]));
+    let mut ui = rule();
+    let going = state.clone();
+    let decay = compose_animation::generate_decay_animation_spec(LinearDecay { to: 600.0 });
+    let used = run(&mut ui, async move {
+        going
+            .animate_to_with_decay(B, 1250.0, compose_animation::tween(100), decay)
+            .await
+            .expect("free")
+    });
+    // It goes at 6000 px/s by the fake, and stops on the target going that fast.
+    assert_eq!(used, 1250.0 - 6000.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt: performFling, withContext(motionScaleDuration)
+#[test]
+fn an_anchored_fling_runs_the_same_whatever_the_scale_around() {
+    let mut frames_of = Vec::new();
+    for ambient in [1.0, 0.0] {
+        let state = AnchoredDraggableState::with_anchors(A, anchors(&[(A, 0.0), (B, 500.0)]));
+        state.dispatch_raw_delta(300.0);
+        let mut ui = rule();
+        ui.set_auto_advance(false);
+        let fling = anchored_fling_behavior(
+            state.clone(),
+            compose_ui::Density::new(1.0),
+            Rc::new(AnchoredDraggableDefaults::positional_threshold),
+            AnchoredDraggableDefaults::snap_animation_spec(),
+        );
+        let flinging = state.clone();
+        let job = launch(async move {
+            let moving = flinging.clone();
+            let scope = ScrollScope::new(move |pixels| moving.dispatch_raw_delta(pixels));
+            compose_ui::with_motion_duration_scale(ambient, fling.perform_fling(scope, 1000.0))
+                .await;
+        });
+        let mut frames = 0;
+        while job.is_active() {
+            ui.advance_time_by_frame();
+            frames += 1;
+            assert!(frames < 500);
+        }
+        assert_eq!(state.require_offset(), 500.0);
+        frames_of.push(frames);
+    }
+    assert!(frames_of[0] > 2, "{frames_of:?}");
+    assert_eq!(frames_of[0], frames_of[1]);
+}
+
+/// Counts its wakes; an `Arc`'s strong count says what holds it.
+#[derive(Default)]
+struct CountedWake(std::sync::atomic::AtomicU32);
+
+impl std::task::Wake for CountedWake {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, restartable: a collector, one however often it's resumed
+#[test]
+fn a_drag_polled_again_holds_one_waker() {
+    let state = AnchoredDraggableState::with_anchors(A, abc());
+    let arc = std::sync::Arc::new(CountedWake::default());
+    let waker = std::task::Waker::from(arc.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut drag =
+        Box::pin(state.anchored_drag(MutatePriority::Default, |_, _| std::future::pending::<()>()));
+    assert!(drag.as_mut().poll(&mut context).is_pending());
+    let held = std::sync::Arc::strong_count(&arc);
+    for _ in 0..50 {
+        assert!(drag.as_mut().poll(&mut context).is_pending());
+    }
+    assert_eq!(std::sync::Arc::strong_count(&arc), held);
+    drop(drag);
+    drop(waker);
+    assert_eq!(std::sync::Arc::strong_count(&arc), 1, "none left");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, targetValue by derivedStateOf
+#[test]
+fn what_reads_the_target_recomposes_only_when_it_changes() {
+    let state = AnchoredDraggableState::with_anchors(A, abc());
+    let compositions = Rc::new(Cell::new(0));
+    let (given, noted) = (state.clone(), compositions.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        given.target_value();
+        noted.set(noted.get() + 1);
+    });
+    ui.wait_for_idle();
+    assert_eq!(compositions.get(), 1);
+    for _ in 0..20 {
+        state.dispatch_raw_delta(1.0);
+        ui.wait_for_idle();
+    }
+    assert_eq!(compositions.get(), 1, "still A");
+    state.dispatch_raw_delta(40.0);
+    ui.wait_for_idle();
+    assert_eq!(state.target_value(), B);
+    assert_eq!(compositions.get(), 2);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, DefaultDraggableAnchors.positionOf: the first of an anchor given twice
+#[test]
+fn an_anchor_given_twice_is_at_the_first_place_and_counts_twice() {
+    let anchors = anchors(&[(A, 0.0), (B, 100.0), (A, 300.0)]);
+    assert_eq!(anchors.size(), 3);
+    assert_eq!(anchors.position_of(&A), 0.0);
+    assert_eq!(anchors.max_position(), 300.0);
+    assert_eq!(anchors.closest_anchor(280.0), Some(A));
+}

@@ -229,7 +229,7 @@ impl OverscrollFactory for Factory {
     }
 }
 
-// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt, rememberOverscrollEffect_defaultValue, rememberOverscrollEffect_nullOverscrollFactory, rememberOverscrollEffect_ChangeOverscrollFactory
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt, rememberOverscrollEffect_nullOverscrollFactory, rememberOverscrollEffect_ChangeOverscrollFactory
 #[test]
 fn an_effect_is_remembered_until_the_factory_changes() {
     let made = Rc::new(Cell::new(0));
@@ -251,7 +251,7 @@ fn an_effect_is_remembered_until_the_factory_changes() {
         });
     });
     ui.wait_for_idle();
-    // Compose's default is the platform's; compose-rs has none yet.
+    // No factory, no effect.
     assert!(seen.borrow().last().expect("composed").is_none());
     which.set(Some(0));
     ui.wait_for_idle();
@@ -811,4 +811,273 @@ fn a_release_without_velocity_leaves_it_nothing() {
     assert_eq!(state.current_value(), 2);
     assert_eq!(effect.applied_to_fling.get(), 1);
     assert!(effect.fling_left.get().x.abs() < 1.0, "{:?}", effect.fling_left.get());
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt, modifierUpdatesToNewNode
+#[test]
+fn a_scrollable_takes_a_new_effect() {
+    let effects = [Rc::new(Effect::default()), Rc::new(Effect::default())];
+    let which = mutable_state_of(0usize);
+    let read = which.handle();
+    let given = effects.clone();
+    let (state, _) = counting(all());
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        let effect = given[read.get()].clone() as Rc<dyn OverscrollEffect>;
+        Box!(
+            modifier = Modifier.size(300.dp()).scrollable_overscroll(
+                state.clone(),
+                Orientation::Horizontal,
+                Some(effect),
+                true,
+                false,
+                None,
+                None,
+            )
+        );
+    });
+    ui.wait_for_idle();
+    which.set(1);
+    ui.wait_for_idle();
+    drag_and_rest(&mut ui);
+    assert_eq!(effects[0].applied_to_scroll.get(), 0);
+    assert!(effects[1].applied_to_scroll.get() > 0);
+}
+
+/// Takes half of what it's offered before the scroll and the fling, and notes it.
+#[derive(Default)]
+struct TakesHalfFirst {
+    offered: Cell<Offset>,
+    fling_offered: Cell<Offset>,
+    left: Cell<Offset>,
+}
+
+impl NestedScrollConnection for TakesHalfFirst {
+    fn on_pre_scroll(&self, available: Offset, _: NestedScrollSource) -> Offset {
+        self.offered.set(available);
+        Offset::new(available.x / 2.0, available.y / 2.0)
+    }
+    fn on_post_scroll(&self, _: Offset, available: Offset, _: NestedScrollSource) -> Offset {
+        self.left.set(available);
+        Offset::ZERO
+    }
+    fn on_pre_fling(&self, available: Offset) -> LocalBoxFuture<'_, Offset> {
+        self.fling_offered.set(available);
+        Box::pin(async move { Offset::new(available.x / 2.0, available.y / 2.0) })
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Scrollable.kt, ScrollingLogic.scrollByWithOverscroll, performScroll: the effect, then the connections, then the state
+#[test]
+fn the_effect_has_a_drag_before_the_connections_and_those_before_the_state() {
+    let effect = Effect::taking_a_tenth();
+    let around = Rc::new(TakesHalfFirst::default());
+    let (state, total) = counting(all());
+    let mut setup = Setup::new(state, effect.clone());
+    setup.around = Some(around.clone());
+    let mut ui = setup.rule();
+    drag_and_rest(&mut ui);
+    let delta = 1000.0 - SLOP;
+    assert_eq!(effect.delta.get().x, delta, "all of it");
+    assert!((around.offered.get().x - delta * 0.9).abs() < 0.01, "{:?}", around.offered.get());
+    assert!((total.get().abs() - delta * 0.45).abs() < 0.01, "{}", total.get());
+    assert!(effect.left.get().x.abs() < 0.01, "all used: {:?}", effect.left.get());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Scrollable.kt, ScrollingLogic.onScrollStopped: the effect, then the connections, then the fling
+#[test]
+fn the_effect_has_a_fling_before_the_connections_and_those_before_the_behavior() {
+    let effect = Effect::taking_a_tenth();
+    let around = Rc::new(TakesHalfFirst::default());
+    let noted = Rc::new(Cell::new(0.0));
+    let (state, _) = counting(all());
+    let mut setup = Setup::new(state, effect.clone());
+    setup.around = Some(around.clone());
+    setup.fling = Some(Rc::new(Noted(noted.clone())));
+    let mut ui = setup.rule();
+    flick(&mut ui, 3000.0);
+    assert!((effect.pre_fling.get().x - 3000.0).abs() < 0.1, "{:?}", effect.pre_fling.get());
+    assert!((around.fling_offered.get().x - 2700.0).abs() < 0.1);
+    assert!((noted.get().abs() - 1350.0).abs() < 0.1, "{}", noted.get());
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, scrollable_blocksDownEvents_ifOverscrollSettling
+#[test]
+fn a_press_while_it_shows_doesnt_click_inside() {
+    let effect = Rc::new(Effect::default());
+    effect.running.set(true);
+    let clicks = Rc::new(Cell::new(0));
+    let noted = clicks.clone();
+    let (state, _) = counting(all());
+    let given: Rc<dyn OverscrollEffect> = effect.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        let noted = noted.clone();
+        Box!(
+            modifier = Modifier.size(300.dp()).scrollable_overscroll(
+                state.clone(),
+                Orientation::Horizontal,
+                Some(given.clone()),
+                true,
+                false,
+                None,
+                None,
+            ),
+            {
+                Box!(
+                    modifier = Modifier.size(300.dp()).clickable({
+                        let noted = noted.clone();
+                        move || noted.set(noted.get() + 1)
+                    })
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_root().perform_touch_input(|touch| touch.click());
+    ui.wait_for_idle();
+    assert_eq!(clicks.get(), 0);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, overscroll_applyToScrollCalledIfIsInProgress
+#[test]
+fn showing_it_is_told_even_with_nothing_to_scroll() {
+    let effect = Rc::new(Effect::default());
+    effect.running.set(true);
+    let (state, _) = counting(all());
+    let mut setup = Setup::new(Able(state, Rc::new(Cell::new(false))), effect.clone());
+    setup.orientation = Orientation::Vertical;
+    let mut ui = setup.rule();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.swipe(CENTER, Offset::new(150.0, 250.0), 100);
+    });
+    ui.wait_for_idle();
+    assert!(effect.applied_to_scroll.get() > 0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Scrollable.kt, ScrollingLogic.onScrollStopped: shouldDispatchOverscroll
+#[test]
+fn a_cancelled_drag_with_nothing_to_scroll_doesnt_tell_it() {
+    let effect = Rc::new(Effect::default());
+    let (state, _) = counting(all());
+    let mut ui = Setup::new(Able(state, Rc::new(Cell::new(false))), effect.clone()).rule();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.down(CENTER);
+        touch.move_by(Offset::new(100.0, 0.0));
+        touch.cancel();
+    });
+    ui.wait_for_idle();
+    assert_eq!(effect.applied_to_fling.get(), 0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt: the node's onDragStopped, cancelled as `performFling` is
+#[test]
+fn an_interrupted_anchored_fling_doesnt_go_on_in_the_effect() {
+    let effect = Rc::new(Effect::default());
+    let state = AnchoredDraggableState::with_anchors(
+        1u8,
+        DraggableAnchors::new(|config| {
+            config.at(1, 0.0);
+            config.at(2, 250.0);
+        }),
+    );
+    let (given, as_effect) = (state.clone(), effect.clone() as Rc<dyn OverscrollEffect>);
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        Box!(
+            modifier = Modifier.size(200.dp()).anchored_draggable(
+                given.clone(),
+                Orientation::Horizontal,
+                AnchoredDraggableOptions {
+                    overscroll_effect: Some(as_effect.clone()),
+                    ..AnchoredDraggableOptions::default()
+                }
+            )
+        );
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    ui.on_root().perform_touch_input(|touch| {
+        touch.swipe_with_velocity(Offset::new(1.0, 1.0), Offset::new(199.0, 1.0), 4000.0, None);
+    });
+    ui.advance_time_by_frame();
+    assert_eq!(effect.applied_to_fling.get(), 1);
+    assert!(state.require_offset() < 250.0, "going on");
+    let taking = state.clone();
+    crate::scroll_support::launch(async move {
+        let _ = taking.anchored_drag(MutatePriority::PreventUserInput, |_, _| async {}).await;
+    });
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    assert!(!effect.fling_ended.get(), "its fling's cancelled, so is it");
+}
+
+/// Makes effects it keeps.
+#[derive(Default)]
+struct KeptFactory(RefCell<Vec<Rc<Effect>>>);
+
+impl OverscrollFactory for KeptFactory {
+    fn create_overscroll_effect(&self) -> Rc<dyn OverscrollEffect> {
+        let effect = Rc::new(Effect::default());
+        self.0.borrow_mut().push(effect.clone());
+        effect
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Scroll.kt, verticalScroll without an effect: useLocalOverscrollFactory
+#[test]
+fn a_scroll_modifier_without_an_effect_gets_one_from_the_factory() {
+    let factories = [Rc::new(KeptFactory::default()), Rc::new(KeptFactory::default())];
+    let which = mutable_state_of(0usize);
+    let read = which.handle();
+    let given = factories.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        let factory: Rc<dyn OverscrollFactory> = given[read.get()].clone();
+        CompositionLocalProvider(LOCAL_OVERSCROLL_FACTORY.provides(Some(factory)), move || {
+            let state = remember_scroll_state(0);
+            Box!(modifier = Modifier.size(300.dp()).vertical_scroll(state), {
+                Box!(modifier = Modifier.size(2000.dp()))
+            });
+        });
+    });
+    ui.wait_for_idle();
+    let swipe = |ui: &mut ComposeTestRule| {
+        ui.on_root().perform_touch_input(|touch| {
+            touch.swipe(Offset::new(150.0, 290.0), Offset::new(150.0, 10.0), 200);
+        });
+        ui.wait_for_idle();
+    };
+    swipe(&mut ui);
+    swipe(&mut ui);
+    assert_eq!(factories[0].0.borrow().len(), 1, "one effect");
+    assert!(factories[0].0.borrow()[0].applied_to_scroll.get() > 0);
+    which.set(1);
+    ui.wait_for_idle();
+    swipe(&mut ui);
+    assert_eq!(factories[1].0.borrow().len(), 1, "a new factory, a new effect");
+    assert!(factories[1].0.borrow()[0].applied_to_scroll.get() > 0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Scroll.kt, verticalScroll(state, overscrollEffect = null)
+#[test]
+fn a_scroll_modifier_given_no_effect_asks_no_factory() {
+    let factory = Rc::new(KeptFactory::default());
+    let given = factory.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        let provided: Rc<dyn OverscrollFactory> = given.clone();
+        CompositionLocalProvider(LOCAL_OVERSCROLL_FACTORY.provides(Some(provided)), move || {
+            let state = remember_scroll_state(0);
+            Box!(
+                modifier = Modifier
+                    .size(300.dp())
+                    .vertical_scroll_overscroll(state, None, true, None, false),
+                { Box!(modifier = Modifier.size(2000.dp())) }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.swipe(Offset::new(150.0, 290.0), Offset::new(150.0, 10.0), 200);
+    });
+    ui.wait_for_idle();
+    assert_eq!(factory.0.borrow().len(), 0);
 }

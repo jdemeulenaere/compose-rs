@@ -3317,3 +3317,43 @@ fn a_scope_invalidating_itself_while_its_parent_recomposes() {
     });
     test.verify_consistent();
 }
+
+// compose-rs's: `remember` returns a clone of a `Clone` value, so a bare cell would lose every write.
+#[test]
+#[should_panic(expected = "writes to a remembered core::cell::RefCell<i32> are lost")]
+fn remembering_a_ref_cell_is_refused() {
+    let mut test = composition_test();
+    test.compose(|| {
+        let _ = remember(|| std::cell::RefCell::new(0));
+    });
+}
+
+// compose-rs's: as a `RefCell`.
+#[test]
+#[should_panic(expected = "writes to a remembered core::cell::Cell<i32> are lost")]
+fn remembering_a_cell_is_refused() {
+    let mut test = composition_test();
+    test.compose(|| {
+        let _ = remember(|| std::cell::Cell::new(0));
+    });
+}
+
+// compose-rs's: what the refusal points to.
+#[test]
+fn a_cell_behind_an_rc_keeps_its_writes() {
+    let mut test = composition_test();
+    let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+    let tick = mutable_state_of(0);
+    let (noted, ticks) = (seen.clone(), tick.handle());
+    test.compose(move || {
+        ticks.get();
+        let kept = remember(|| std::rc::Rc::new(std::cell::Cell::new(0)));
+        kept.set(kept.get() + 1);
+        noted.set(kept.get());
+        Text(&kept.get().to_string());
+    });
+    assert_eq!(seen.get(), 1);
+    tick.set(1);
+    test.expect_changes();
+    assert_eq!(seen.get(), 2);
+}

@@ -438,13 +438,13 @@ impl LazyListState {
         self.inner().map_or(0, |inner| inner.first_offset.get())
     }
 
-    /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, without
-    /// animation, as `requestScrollToItem`: a scroll going on (a fling) is stopped.
     /// What's scrolled since the last layout, for what reads its offsets before the next.
     pub(crate) fn pending_scroll(&self) -> f32 {
         self.inner().map_or(0.0, |inner| inner.pending.get())
     }
 
+    /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, without
+    /// animation, as `requestScrollToItem`: a scroll going on (a fling) is stopped.
     pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
         if inner.core.is_scroll_in_progress_untracked() {
@@ -3237,7 +3237,7 @@ impl ModifierNodeElement for LazyScrollElement {
         // A fling scrolls the state it started with: a new state stops it (the old one's
         // owner may be going, D240).
         if node.state != self.state {
-            node.drag.cancel();
+            node.drag.cancel_leaving();
             node.drag.stop_fling();
             node.dyn_state = Rc::new(self.state);
             node.set_outer = outer_setter(self.state, node.outer_axis.clone());
@@ -3249,7 +3249,7 @@ impl ModifierNodeElement for LazyScrollElement {
         node.fling_behavior = self.fling_behavior.clone();
         node.overscroll = self.overscroll.clone();
         if node.enabled && !self.enabled {
-            node.drag.cancel();
+            node.drag.cancel_leaving();
             node.drag.stop_fling();
         }
         node.enabled = self.enabled;
@@ -3376,12 +3376,12 @@ impl ModifierNode for LazyScrollNode {
     }
 
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
-        self.drag.cancel();
+        self.drag.cancel_leaving();
         self.drag.detach();
     }
 
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.drag.cancel();
+        self.drag.cancel_leaving();
         self.drag.detach();
     }
 
