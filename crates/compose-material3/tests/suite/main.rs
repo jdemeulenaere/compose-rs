@@ -13,6 +13,7 @@ mod components;
 mod content_description;
 mod divider;
 mod drawer;
+mod fab_elevation;
 mod icon_toggle_button;
 mod icon_toggle_button_screenshots;
 mod interactive_list;

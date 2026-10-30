@@ -7,8 +7,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use compose_foundation::BorderStroke;
 use compose_foundation::layout::*;
-use compose_foundation::{BorderStroke, RoundedCornerShape};
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
@@ -216,21 +216,25 @@ fn the_dark_disabled_menu_golden() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/MenuScreenshotTest.kt, dropdownMenu_customAppearance
 #[test]
 fn a_restyled_menu_golden() {
-    // Compose's golden cuts the corners (`CutCornerShape(12.dp)`); compose-rs has rounded
-    // shapes only (the generic-shape feature), so 12 dp rounded corners stand in.
     let appearance = Appearance {
-        shape: Some(RoundedCornerShape(12.dp())),
+        shape: Some(compose_foundation::CutCornerShape(12.dp())),
         container_color: Some(Color::YELLOW),
         tonal_elevation: 0.dp(),
         shadow_elevation: 0.dp(),
         border: Some(BorderStroke::new(1.dp(), Color::BLACK)),
     };
     let mut ui = test_menu(light_color_scheme(), true, appearance);
-    assert_container(&mut ui, 12.0, Color::YELLOW);
+    // Cut corners are a path: the container's, and the border stroked inside it (a 1 px stroke
+    // twice as wide, clipped to the path, as Compose's `drawGenericBorder`).
+    let container = ops(&mut ui).iter().any(|op| {
+        matches!(op, DrawOp::DrawPath { paint, .. }
+            if paint.color == Color::YELLOW && paint.style == PaintStyle::Fill)
+    });
+    assert!(container, "no cut container in yellow: {}", ui.dump_display_list());
     assert!(shadows(&mut ui).is_empty(), "no shadow");
     let border = ops(&mut ui).iter().any(|op| {
-        matches!(op, DrawOp::DrawRoundRect(_, _, paint)
-            if paint.color == Color::BLACK && paint.style == PaintStyle::Stroke(1.0))
+        matches!(op, DrawOp::DrawPath { paint, .. }
+            if paint.color == Color::BLACK && paint.style == PaintStyle::Stroke(2.0))
     });
     assert!(border, "a 1 px black border: {}", ui.dump_display_list());
 }

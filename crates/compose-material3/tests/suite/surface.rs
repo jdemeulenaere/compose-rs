@@ -349,3 +349,49 @@ fn a_toggleable_surface_toggles_on_each_click() {
 fn a_click_outside_a_round_toggleable_surface_misses() {
     check_click_outside_the_shape(Kind::Toggleable);
 }
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_interactionSource
+#[test]
+fn a_clickable_surface_emits_its_press_and_release() {
+    use compose_ui::{Interaction, MutableInteractionSource, PressInteraction};
+    let source = MutableInteractionSource::new();
+    let given = source.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let given = given.clone();
+        MaterialTheme!({
+            ClickableSurface!(
+                || {},
+                modifier = Modifier.test_tag("surface"),
+                interaction_source = Some(given.clone()),
+                {
+                    compose_foundation::layout::Spacer(Modifier.size(30.dp()));
+                }
+            );
+        });
+    });
+    let seen: std::rc::Rc<std::cell::RefCell<Vec<Interaction>>> = Default::default();
+    let sink = seen.clone();
+    let interactions = source.interactions();
+    compose_runtime::platform::launch(async move {
+        interactions.collect(move |interaction| sink.borrow_mut().push(interaction)).await
+    });
+    ui.advance_time_by_frame();
+    assert!(seen.borrow().is_empty());
+    ui.on_node_with_tag("surface").perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+    });
+    ui.advance_time_by(std::time::Duration::from_millis(100));
+    let press = match seen.borrow().as_slice() {
+        [Interaction::Press(PressInteraction::Press(press))] => *press,
+        other => panic!("{other:?}"),
+    };
+    ui.on_node_with_tag("surface").perform_touch_input(|touch| touch.up());
+    ui.advance_time_by_frame();
+    match seen.borrow().as_slice() {
+        [_, Interaction::Press(PressInteraction::Release(released))] => {
+            assert_eq!(*released, press)
+        }
+        other => panic!("{other:?}"),
+    };
+}
