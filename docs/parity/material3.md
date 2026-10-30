@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1558): 35 source files (27,249 lines), 88 modules with 1343 `#[test]`s; the statuses below are the current ones.
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1559): 36 source files (27,515 lines), 89 modules with 1356 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -18,11 +18,11 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `ported` | 32 | 499 |
+| `ported` | 33 | 510 |
 | `covered` | 1 | 7 |
-| `port` | 15 | 182 |
+| `port` | 16 | 185 |
 | `partial` | 41 | 1,132 |
-| `feature:<name>` | 68 | 916 |
+| `feature:<name>` | 66 | 902 |
 | `n/a` | 4 | 34 |
 | **Total** | **161** | **2,770** |
 
@@ -143,8 +143,8 @@ Screenshot tests (`*ScreenshotTest.kt`) compare against Android goldens, which c
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrimTest.kt` | 7 | Scrim click and tap dismissal, semantics, null onDismissRequest, unspecified color, traversal index, fills the size | `partial` | `suite/scrim.rs` (all 7; D1018, D1027). |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollFieldScreenshotTest.kt` | 7 | ScrollField light/dark, disabled, focused | `feature:scroll-field` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollFieldTest.kt` | 12 | ScrollField state, selection, setProgress semantics, descriptions, keyboard, coercion | `feature:scroll-field` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarScreenshotTest.kt` | 3 | nonInteractiveScrollbar drawn, colors and thickness, track insets | `feature:non-interactive-scrollbar` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarTest.kt` | 11 | nonInteractiveScrollbar fade, updates on scroll, hides when content fits, thumb length limits, track insets, modifier equality | `feature:non-interactive-scrollbar` |  |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarScreenshotTest.kt` | 3 | nonInteractiveScrollbar drawn, colors and thickness, track insets | `port` | The feature exists (D1559); its three scenarios are what `suite/scrollbar.rs` reads from the display list. |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarTest.kt` | 11 | nonInteractiveScrollbar fade, updates on scroll, hides when content fits, thumb length limits, track insets, modifier equality | `ported` | `crates/compose-material3/tests/suite/scrollbar.rs`, its pixels read from the display list; `inspectableProperties` and the element's `equals` have no counterpart. |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SearchBarScreenshotTest.kt` | 38 | SearchBar, DockedSearchBar, the new (state-based) search bars, AppBarWithSearch: collapsed/expanded, icons, colors, shadows, predictive back | `feature:search-bar` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SearchBarTest.kt` | 28 | search bars expanding with focus, back, IME action, sizes, insets, icon clicks, keyboard reachability, AppBarWithSearch scroll behavior and widths | `feature:search-bar` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SecureTextFieldScreenshotTest.kt` | 4 | SecureTextField/OutlinedSecureTextField without obfuscation and with a custom character | `feature:secure-text-field` |  |
@@ -317,7 +317,6 @@ Done (D1005): the four rows, `LeadingIconTab`, `Tab`'s content overload (`Conten
 
 - **Carousel** (`androidx.compose.material3.carousel`): `HorizontalMultiBrowseCarousel`, `HorizontalUncontainedCarousel`, `HorizontalCenteredHeroCarousel`, `CarouselState`, `rememberCarouselState`, `CarouselItemScope` (`Modifier.maskClip`, `maskBorder`, `rememberMaskShape`, `carouselItemDrawInfo`), `CarouselItemDrawInfo`, `CarouselDefaults` (fling behaviors, spacings, small item sizes), `Modifier.carouselParallaxScrollEffect` [exp], `CarouselParallaxScrollEffectState` [exp], `CarouselParallaxScrollEffectItemInfo` [exp].
 - **Pull to refresh** (`androidx.compose.material3.pulltorefresh`): `PullToRefreshBox`, `Modifier.pullToRefresh`, `PullToRefreshState`, `rememberPullToRefreshState`, `PullToRefreshDefaults` (`Indicator`, `IndicatorBox`, `LoadingIndicator` [exp-expressive], colors, thresholds).
-- **`Modifier.nonInteractiveScrollbar`**, `NonInteractiveScrollbarDefaults`.
 
 ### Shapes
 
@@ -363,7 +362,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `scroll-field` | `ScrollField`, `ScrollFieldState`, `rememberScrollFieldState`, `ScrollFieldColors`, `ScrollFieldDefaults` | A vertical wheel picker of numbers | ScrollFieldScreenshotTest, ScrollFieldTest (19) | dep:pager (vertical), dep:snapping | M | no |
 | `predictive-back` (component side) | predictive back in `ModalNavigationDrawer` and `DismissibleNavigationDrawer` (done, D1049), `ModalBottomSheet`, `SearchBar`, `MaterialTransitions` | Scale and offset the surfaces with the back gesture's progress | ModalBottomSheetScreenshotTest, ModalNavigationDrawerScreenshotTest (18), parts of SearchBarScreenshotTest | dep:predictive-back | M | no |
 | `fab-menu` | `FloatingActionButtonMenu`, `FloatingActionButtonMenuItem`, `ToggleFloatingActionButton`, their scopes and defaults | A FAB that opens into a menu of items, its icon morphing | FloatingActionButtonMenuScreenshotTest, FloatingActionButtonMenuTest (15) | fab-expressive; button-shapes | M | no |
-| `non-interactive-scrollbar` | `Modifier.nonInteractiveScrollbar`, `NonInteractiveScrollbarDefaults` | A thin scroll indicator that fades in while scrolling | ScrollbarScreenshotTest, ScrollbarTest (14) | foundation's scroll-indicator-state (`ScrollIndicatorState` on `ScrollState` and the lazy states: missing) | S | no |
+| `non-interactive-scrollbar` (done, D1559) | `Modifier.nonInteractiveScrollbar`, `NonInteractiveScrollbarDefaults` | A thin scroll indicator that fades in while scrolling | ScrollbarScreenshotTest, ScrollbarTest (14) | foundation's `ScrollIndicatorState` (done, D1559) | S | no |
 | `vertical-drag-handle` (done, D1032) | `VerticalDragHandle`, `VerticalDragHandleDefaults`, `DragHandleColors/Shapes/Sizes` | A pane-resizing handle that grows when pressed | DragHandleTest (11) | the interaction stream's dragged state | S | no |
 | `text-field-label-position` (done, D1554) | `TextFieldLabelPosition` (`Inside`, `Cutout`, `Above`), `TextFieldLabelScope`, `label_position` on the fields | The label inside, cut into the outline, or above the field; alignments; always minimized | TextFieldLabelPositionTest (9), ~40 tests across the text field files | none | M | no |
 | `text-field-decorator` (done, D1555) | `TextFieldDecorationBox`, `OutlinedTextFieldDecorationBox` (`DecorationBox`, standing for `decorator` until `TextFieldState`), `TextFieldContainer`, `OutlinedTextFieldContainer`, `Modifier::indicator_line`, `content_padding_with_label`/`without_label`, `tonal_colors`, `rounded_shape`; `shape`, `content_padding`, `interaction_source` on the fields; `interaction_source` on `BasicTextField` | The decoration box as public API: build a Material field around a `BasicTextField`, override paddings, containers and indicators | TextFieldDecoratorTest (40 of 48 ported, 8 `normalize_*` n/a, `text_field_decorator.rs`), part of the text field screenshot tests | done | M | no |

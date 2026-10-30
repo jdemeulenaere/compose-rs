@@ -36,6 +36,7 @@ mod range_slider;
 mod ripple;
 mod scaffold;
 mod scrim;
+mod scrollbar;
 mod segmented_button;
 mod selection;
 mod sheet;
@@ -138,6 +139,9 @@ pub use scaffold::{
     HorizontalDivider, OutlinedCard, Scaffold, ScaffoldDefaults, VerticalDivider,
 };
 pub use scrim::{Scrim, ScrimDefaults};
+pub use scrollbar::{
+    NonInteractiveScrollbarDefaults, NonInteractiveScrollbarModifiers, NonInteractiveScrollbarStyle,
+};
 pub use segmented_button::{
     CheckableSegmentedButton, MultiChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRowScope,
     SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,

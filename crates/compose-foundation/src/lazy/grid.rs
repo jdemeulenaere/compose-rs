@@ -423,6 +423,10 @@ impl super::LazyLayoutScrollScope for GridScrollScope {
 }
 
 impl ScrollableState for LazyGridState {
+    fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
+        Some(std::rc::Rc::new(*self))
+    }
+
     fn scroll_boxed<'a>(
         &'a self,
         priority: MutatePriority,

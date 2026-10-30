@@ -115,6 +115,7 @@ mod review_x575;
 mod rtl;
 mod saveable_state_holder;
 mod scroll;
+mod scroll_indicator;
 mod scroll_state;
 mod scroll_support;
 mod scrollable;

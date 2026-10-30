@@ -21,6 +21,7 @@ pub mod lazy;
 mod mutator;
 mod overscroll;
 mod scroll;
+mod scroll_indicator;
 pub mod scrollbar;
 pub mod shape;
 mod text;
@@ -73,6 +74,7 @@ pub use overscroll::{
     PerformFling, remember_overscroll_effect, without_event_handling, without_visual_effect,
 };
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
+pub use scroll_indicator::ScrollIndicatorState;
 pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,
     VerticalScrollbar, remember_lazy_list_scrollbar_adapter, remember_scrollbar_adapter,

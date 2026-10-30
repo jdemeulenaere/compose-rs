@@ -95,6 +95,11 @@ pub trait ScrollableState {
     /// returns the pixels used.
     fn dispatch_raw_delta(&self, delta: f32) -> f32;
 
+    /// What a scroll indicator needs of it, if it has that, as `scrollIndicatorState`.
+    fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
+        None
+    }
+
     /// Whether a scroll (a block, a drag, a fling) is going on, as `isScrollInProgress` (a
     /// state read).
     fn is_scroll_in_progress(&self) -> bool;

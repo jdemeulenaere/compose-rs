@@ -65,6 +65,8 @@ struct ScrollStates {
     content_size: OwnedState<i32>,
     /// The fraction of a pixel scrolled but not shown, as Compose's `accumulator`.
     accumulator: Cell<f32>,
+    /// As its container last said, for `ScrollIndicatorState`.
+    reverse_scrolling: Cell<bool>,
     /// Its scrolls' mutex and flags.
     core: ScrollCore,
 }
@@ -78,6 +80,7 @@ impl ScrollState {
             viewport: mutable_state_of(0),
             content_size: mutable_state_of(0),
             accumulator: Cell::new(0.0),
+            reverse_scrolling: Cell::new(false),
             core: ScrollCore::new(),
         };
         let (value, max, viewport) =
@@ -127,6 +130,11 @@ impl ScrollState {
         self.read(self.viewport, 0)
     }
 
+    /// Whether its container scrolls in reverse, as last laid out.
+    pub(crate) fn reverse_scrolling(&self) -> bool {
+        self.object.try_get().is_some_and(|states| states.reverse_scrolling.get())
+    }
+
     /// The interaction source its container reports its drags to, as `interactionSource`.
     pub fn interaction_source(&self) -> MutableInteractionSource {
         self.object.try_get().map_or_else(MutableInteractionSource::new, |states| {
@@ -170,6 +178,10 @@ impl ScrollState {
 }
 
 impl ScrollableState for ScrollState {
+    fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
+        Some(std::rc::Rc::new(*self))
+    }
+
     fn scroll_boxed<'a>(
         &'a self,
         priority: MutatePriority,
@@ -802,6 +814,9 @@ impl LayoutModifierNode for ScrollNode {
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
         // Before placing: the value is coerced into the new range at once, as Compose's.
         self.state.set_max_value(max);
+        if let Some(states) = self.state.object.try_get() {
+            states.reverse_scrolling.set(self.reverse_scrolling);
+        }
         let viewport = if self.vertical { height } else { width };
         if self.state.viewport_size() != viewport {
             self.state.write(self.state.viewport, viewport);
