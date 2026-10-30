@@ -687,6 +687,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1124 | [text](decisions/text.md#d1124) | current |
 | D1125 | [text](decisions/text.md#d1125) | current |
 | D1126 | [text](decisions/text.md#d1126) | current |
+| D1127 | [text](decisions/text.md#d1127) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

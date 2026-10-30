@@ -101,6 +101,11 @@ pub trait Paragraph {
     }
     /// The area of `start..end`'s selection, as Android's `Layout.getSelectionPath`.
     fn get_path_for_range(&self, start: usize, end: usize) -> Path;
+    /// Where each placeholder went, `None` for one cut by the maximum lines or an ellipsis, as
+    /// Compose's `placeholderRects`.
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        Vec::new()
+    }
 }
 
 impl fmt::Debug for dyn Paragraph {
@@ -239,6 +244,8 @@ pub struct ParagraphLayout {
     pub lines: Vec<LineLayout>,
     /// One per character boundary, in order, the text's end included.
     pub positions: Vec<CharPosition>,
+    /// Where each placeholder went.
+    pub placeholder_rects: Vec<Option<Rect>>,
 }
 
 impl ParagraphLayout {
@@ -350,6 +357,10 @@ impl ParagraphLayout {
 }
 
 impl Paragraph for ParagraphLayout {
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        self.placeholder_rects.clone()
+    }
+
     fn text(&self) -> &str {
         &self.text
     }
@@ -620,6 +631,7 @@ pub fn sampled_paragraph<M: crate::text::TextMeasurer + ?Sized>(
         text,
         lines,
         positions,
+        placeholder_rects: Vec::new(),
     }
 }
 
@@ -809,6 +821,7 @@ impl ParagraphLayout {
             did_exceed_max_lines: size.did_exceed_max_lines,
             lines: layout_lines,
             positions,
+            placeholder_rects: Vec::new(),
         }
     }
 }

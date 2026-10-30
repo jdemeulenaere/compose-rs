@@ -219,14 +219,15 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         }
     }
 
-    /// Lays out `text` in `style` and `runs`; for intrinsic sizes (`probe`: Kotlin doesn't
-    /// record it ahead) or to be drawn.
+    /// Lays out `text` in `style` and `runs`, around `placeholders`; for intrinsic sizes (`probe`:
+    /// Kotlin doesn't record it ahead) or to be drawn.
     #[allow(clippy::too_many_arguments)]
     fn layout_runs(
         &mut self,
         text: &str,
         style: &TextStyle,
         runs: &[(std::ops::Range<usize>, TextStyle, Color)],
+        placeholders: &[compose_ui::AnnotatedRange<compose_ui::Placeholder>],
         options: TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
@@ -243,6 +244,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             text,
             style,
             runs,
+            placeholders,
             options,
             constraints,
             density,
@@ -268,7 +270,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.layout_runs(text, style, &[], options, constraints, density, false)
+        self.layout_runs(text, style, &[], &[], options, constraints, density, false)
     }
 
     fn layout_annotated(
@@ -280,7 +282,21 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         density: &Density,
     ) -> ParagraphHandle {
         let runs = paint_free_runs(text, style);
-        self.layout_runs(text.as_str(), style, &runs, options, constraints, density, false)
+        self.layout_runs(text.as_str(), style, &runs, &[], options, constraints, density, false)
+    }
+
+    fn layout_with_placeholders(
+        &mut self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        placeholders: &[compose_ui::AnnotatedRange<compose_ui::Placeholder>],
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        let runs = paint_free_runs(text, style);
+        let text = text.as_str();
+        self.layout_runs(text, style, &runs, placeholders, options, constraints, density, false)
     }
 
     /// From what Kotlin kept of `measured` where it can (`probe_layout`), else anew; either way
@@ -315,7 +331,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             }
         }
         let runs = paint_free_runs(text, style);
-        self.layout_runs(text.as_str(), style, &runs, options, constraints, density, true)
+        self.layout_runs(text.as_str(), style, &runs, &[], options, constraints, density, true)
     }
 
     fn fonts(&self) -> Option<Rc<PlatformFonts>> {
@@ -524,7 +540,8 @@ pub fn paragraph_from_layout(
     let (lines, length) = (header[0] as usize, header[1] as usize);
     let units: usize = text.chars().map(char::len_utf16).sum();
     let offsets_at = PARAGRAPH_HEADER + lines * PARAGRAPH_LINE;
-    if length != units || data.len() != offsets_at + (length + 1) * PARAGRAPH_OFFSET {
+    let offsets_end = offsets_at + (length + 1) * PARAGRAPH_OFFSET;
+    if length != units || data.len() < offsets_end {
         return None;
     }
     let offset_data = |index: usize| &data[offsets_at + index * PARAGRAPH_OFFSET..][..3];
@@ -595,6 +612,7 @@ pub fn paragraph_from_layout(
         did_exceed_max_lines: exceeded,
         lines: line_layouts,
         positions: Vec::new(),
+        placeholder_rects: Vec::new(),
     };
     if ellipsized && let Some(last) = layout.lines.last_mut() {
         last.ellipsized = true;
@@ -609,6 +627,14 @@ pub fn paragraph_from_layout(
         }
     }
     layout.positions = positions;
+    // After the offsets, each placeholder's: whether it's there, then its box.
+    let (boxes, _) = data[offsets_end..].as_chunks::<5>();
+    layout.placeholder_rects = boxes
+        .iter()
+        .map(|[there, left, top, right, bottom]| {
+            (*there != 0.0).then(|| Rect::new(*left, *top, *right, *bottom))
+        })
+        .collect();
     Some(layout)
 }
 
@@ -652,7 +678,7 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
-/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only), max lines (u32), ellipsis (u8: 0
+/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only, 4 placeholders follow), max lines (u32), ellipsis (u8: 0
 /// none, 1 at the end, 2 at the start, 3 in the middle), alignment (u8: 0 normal, 1
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
@@ -661,14 +687,17 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 /// through, and [`paint_extras_flags`]'s: what follows the style, [`encode_paint_extras`]), line
 /// height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
 /// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
-/// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style. Last, the maximum
-/// height (i32).
+/// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style. Then the maximum
+/// height (i32). Last, with its flag, the placeholders: their count, then each one's UTF-16 start
+/// and end, width and height (f32 and u8: in px, or 1 in ems of the font around it) and alignment
+/// (u8, as `PlaceholderVerticalAlign`'s order).
 #[allow(clippy::too_many_arguments)]
 fn encode_request(
     out: &mut Writer,
     text: &str,
     style: &TextStyle,
     runs: &[(std::ops::Range<usize>, TextStyle, Color)],
+    placeholders: &[compose_ui::AnnotatedRange<compose_ui::Placeholder>],
     options: TextLayoutOptions,
     constraints: Constraints,
     density: &Density,
@@ -680,7 +709,9 @@ fn encode_request(
     // As Compose: an ellipsis without soft wrapping is one line.
     let max_lines =
         if options.overflow.is_ellipsis() && !options.soft_wrap { 1 } else { options.max_lines };
-    out.u8(u8::from(options.soft_wrap) | (u8::from(probe) << 1));
+    out.u8(u8::from(options.soft_wrap)
+        | (u8::from(probe) << 1)
+        | (u8::from(!placeholders.is_empty()) << 2));
     // A Java `int`: unlimited is `Integer.MAX_VALUE`, not -1.
     out.u32(max_lines.clamp(1, i32::MAX as u32));
     out.u8(match options.overflow {
@@ -715,6 +746,28 @@ fn encode_request(
         encode_style(out, run_style, *background, density, fonts);
     }
     out.u32(constraints.max_height as u32);
+    if !placeholders.is_empty() {
+        use compose_ui::PlaceholderVerticalAlign as Align;
+        out.u32(placeholders.len() as u32);
+        for range in placeholders {
+            out.u32(utf16_index(text, range.start) as u32);
+            out.u32(utf16_index(text, range.end) as u32);
+            for unit in [range.item.width(), range.item.height()] {
+                let px = compose_ui::platform::resolve_text_unit_px(unit, 1.0, density);
+                out.f32(px.unwrap_or(0.0));
+                out.u8(u8::from(unit.is_em()));
+            }
+            out.u8(match range.item.placeholder_vertical_align() {
+                Align::AboveBaseline => 0,
+                Align::Top => 1,
+                Align::Bottom => 2,
+                Align::Center => 3,
+                Align::TextTop => 4,
+                Align::TextBottom => 5,
+                Align::TextCenter => 6,
+            });
+        }
+    }
 }
 
 /// What of `style` only paints: its color (ARGB, black if unset) and decoration (1 underline,
@@ -990,6 +1043,36 @@ mod tests {
             assert_eq!(u32_at(request, 1), if kind == 0 { 4 } else { 1 }, "{overflow:?}");
             assert_eq!(u32_at(request, request.len() - 4), 77, "the height, last");
         }
+    }
+
+    #[test]
+    fn placeholders_follow_the_height_with_their_flag() {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let placeholder = compose_ui::Placeholder::new(
+            compose_ui::UnitExt::em(2.0),
+            compose_ui::UnitExt::sp(10.0),
+            compose_ui::PlaceholderVerticalAlign::TextBottom,
+        );
+        let range = compose_ui::AnnotatedRange::new(placeholder, 3, 7);
+        measurer.layout_with_placeholders(
+            &AnnotatedString::from("a\u{e9}\u{1F600}b"),
+            &TextStyle::DEFAULT,
+            &[range],
+            TextLayoutOptions::default(),
+            Constraints::new(0, 100, 0, 77),
+            &Density::new(2.0),
+        );
+        let request = &measurer.backend.requests[0];
+        assert_eq!(request[0] & 4, 4);
+        let at = PLAIN_REQUEST;
+        assert_eq!(u32_at(request, at - 4), 77);
+        assert_eq!(u32_at(request, at), 1);
+        // The emoji's UTF-16 range.
+        assert_eq!((u32_at(request, at + 4), u32_at(request, at + 8)), (2, 4));
+        assert_eq!((f32_at(request, at + 12), request[at + 16]), (2.0, 1), "2 em");
+        assert_eq!((f32_at(request, at + 17), request[at + 21]), (20.0, 0), "10 sp at density 2");
+        assert_eq!(request[at + 22], 5);
+        assert_eq!(request.len(), at + 23);
     }
 
     #[test]

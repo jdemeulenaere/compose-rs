@@ -185,6 +185,12 @@ impl TextLayoutResult {
         }
     }
 
+    /// Where each placeholder went, `None` for one cut by the maximum lines or an ellipsis, as
+    /// Compose's `placeholderRects`.
+    pub fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        self.multi_paragraph.placeholder_rects()
+    }
+
     /// The text doesn't fit: it's clipped, ellipsized or drawn past its bounds, as Compose's
     /// `hasVisualOverflow`.
     pub fn has_visual_overflow(&self) -> bool {
@@ -361,6 +367,19 @@ pub trait TextMeasurer: std::any::Any {
         density: &Density,
     ) -> ParagraphHandle {
         self.layout(text.as_str(), style, options, constraints, density)
+    }
+    /// Lays out styled text leaving room for `placeholders` over its ranges, each hiding the
+    /// characters it covers, as Compose's. The default leaves none (a measurer that can't).
+    fn layout_with_placeholders(
+        &mut self,
+        text: &crate::annotated::AnnotatedString,
+        style: &TextStyle,
+        _placeholders: &[crate::annotated::AnnotatedRange<crate::placeholder::Placeholder>],
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        self.layout_annotated(text, style, options, constraints, density)
     }
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics;
     /// Whether the text had more lines than its `max_lines` (cut or ellipsized), as

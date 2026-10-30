@@ -8,6 +8,7 @@ mod line_height;
 mod paragraph;
 mod path_semantics;
 mod path_steps;
+mod placeholders;
 mod review_f;
 mod review_f2;
 mod review_f3;

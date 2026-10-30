@@ -13,7 +13,7 @@ use std::rc::Rc;
 use compose_runtime::{ComposeArg, composable};
 
 use crate::alignment::LayoutDirection;
-use crate::annotated::AnnotatedString;
+use crate::annotated::{AnnotatedRange, AnnotatedString};
 use crate::constraints::Constraints;
 use crate::draw::DrawScope;
 use crate::font::{FontFamilyResolver, LOCAL_FONT_FAMILY_RESOLVER, LOCAL_TREE_TEXT_MEASURER};
@@ -21,6 +21,7 @@ use crate::graphics::{Color, DrawStyle, Shadow};
 use crate::intl::LocaleList;
 use crate::paragraph::{Paragraph, TextLayoutInput};
 use crate::path::Path;
+use crate::placeholder::Placeholder;
 use crate::text::{
     ParagraphHandle, ParagraphKeeper, ParagraphMetrics, SharedTextMeasurer, TextLayoutOptions,
     TextLayoutResult,
@@ -58,7 +59,12 @@ pub struct TextMeasureOptions {
     pub skip_cache: bool,
     /// The locales of a style naming none.
     pub default_locale_list: Option<LocaleList>,
+    /// The boxes to leave room for, over ranges of the text (`TextLayoutResult::placeholder_rects`).
+    pub placeholders: Placeholders,
 }
+
+/// A text's placeholders, shared by what's laid out from it.
+pub type Placeholders = Rc<[AnnotatedRange<Placeholder>]>;
 
 impl Default for TextMeasureOptions {
     fn default() -> Self {
@@ -73,6 +79,7 @@ impl Default for TextMeasureOptions {
             font_family_resolver: None,
             skip_cache: false,
             default_locale_list: None,
+            placeholders: Rc::new([]),
         }
     }
 }
@@ -145,15 +152,21 @@ impl TextMeasurer {
             constraints: options.constraints,
         };
         let cache = inner.cache.as_ref();
+        let placeholders = options.placeholders;
         if !options.skip_cache
-            && let Some(cached) = cache.and_then(|cache| cache.borrow_mut().get(&input))
+            && let Some(cached) = cache
+                .and_then(|cache| cache.borrow_mut().get_with_placeholders(&input, &placeholders))
         {
             let size = input.constraints.constrain(cached.laid_out_size());
             return cached.copy(input, size);
         }
-        let result = lay_out(input);
+        let result = lay_out(input, placeholders.clone());
         if let Some(cache) = cache {
-            cache.borrow_mut().put(&result.layout_input, result.clone());
+            cache.borrow_mut().put_with_placeholders(
+                &result.layout_input,
+                placeholders,
+                result.clone(),
+            );
         }
         result
     }
@@ -179,16 +192,17 @@ impl fmt::Debug for TextMeasurer {
 
 /// `input` laid out, as Compose's `TextMeasurer.layout`. The measurer chooses the width
 /// (Compose's `finalMaxWidth`, D104) and the lines of an ellipsis without wrapping.
-fn lay_out(input: TextLayoutInput) -> TextLayoutResult {
+fn lay_out(input: TextLayoutInput, placeholders: Placeholders) -> TextLayoutResult {
     assert!(input.max_lines >= 1, "max_lines should be greater than 0");
     let platform = input.font_family_resolver.platform().clone();
-    let measured = LaidOutParagraph::lay_out(&platform, &input, &input.style);
+    let measured = LaidOutParagraph::lay_out(&platform, &input, &placeholders, &input.style);
     let size = input.constraints.constrain(measured.0.metrics.size);
     let queries: Rc<dyn Paragraph> =
         Rc::new(MeasuredParagraph { laid_out: measured.clone(), queries: OnceCell::new() });
     let drawable = Rc::new(DrawableParagraphs {
         measured: Some(measured.clone()),
         elsewhere: RefCell::default(),
+        placeholders,
     });
     TextLayoutResult::of_measured(input, &measured, queries, drawable, size)
 }
@@ -196,6 +210,8 @@ fn lay_out(input: TextLayoutInput) -> TextLayoutResult {
 /// What a draw scope draws of a [`TextLayoutResult`].
 #[derive(Default)]
 pub(crate) struct DrawableParagraphs {
+    /// What it was laid out around, which a layout on another stack needs again.
+    pub(crate) placeholders: Placeholders,
     /// The paragraph a [`TextMeasurer`] laid out.
     pub(crate) measured: Option<LaidOutParagraph>,
     /// One laid out from the input when first drawn, where there's no such paragraph on the
@@ -259,6 +275,7 @@ struct LaidOutInner {
     keeper: ParagraphKeeper,
     metrics: ParagraphMetrics,
     did_exceed_max_lines: bool,
+    placeholders: Placeholders,
     /// The paint it's drawn in.
     paint: TextPaint,
     /// The same layout in the last other paints it was asked to draw in, the most recent last.
@@ -281,6 +298,7 @@ impl LaidOutParagraph {
     fn lay_out(
         platform: &SharedTextMeasurer,
         input: &TextLayoutInput,
+        placeholders: &Placeholders,
         style: &TextStyle,
     ) -> LaidOutParagraph {
         // Nothing draws what was dropped, and no measurement needs it: this keeps a measurer
@@ -296,20 +314,32 @@ impl LaidOutParagraph {
         // As Compose's: a direction left unspecified is the layout's.
         let style = TextStyle::resolve_defaults(style, input.layout_direction);
         let mut measurer = platform.borrow_mut();
-        let handle = measurer.layout_annotated(
-            &input.text,
-            &style,
-            options,
-            input.constraints,
-            &input.density,
-        );
-        LaidOutParagraph::of_handle(platform, &mut *measurer, handle, paint)
+        let handle = if placeholders.is_empty() {
+            measurer.layout_annotated(
+                &input.text,
+                &style,
+                options,
+                input.constraints,
+                &input.density,
+            )
+        } else {
+            measurer.layout_with_placeholders(
+                &input.text,
+                &style,
+                placeholders,
+                options,
+                input.constraints,
+                &input.density,
+            )
+        };
+        LaidOutParagraph::of_handle(platform, &mut *measurer, handle, placeholders, paint)
     }
 
     fn of_handle(
         platform: &SharedTextMeasurer,
         measurer: &mut dyn crate::text::TextMeasurer,
         handle: ParagraphHandle,
+        placeholders: &Placeholders,
         paint: TextPaint,
     ) -> LaidOutParagraph {
         LaidOutParagraph(Rc::new(LaidOutInner {
@@ -317,6 +347,7 @@ impl LaidOutParagraph {
             keeper: platform.keeper(handle),
             metrics: measurer.metrics(handle),
             did_exceed_max_lines: measurer.did_exceed_max_lines(handle),
+            placeholders: placeholders.clone(),
             paint,
             repainted: RefCell::default(),
         }))
@@ -342,10 +373,19 @@ impl LaidOutParagraph {
         let painted = {
             let mut measurer = platform.borrow_mut();
             measurer.painted(self.0.keeper.handle(), &style).map(|handle| {
-                LaidOutParagraph::of_handle(platform, &mut *measurer, handle, paint.clone())
+                let placeholders = &self.0.placeholders;
+                LaidOutParagraph::of_handle(
+                    platform,
+                    &mut *measurer,
+                    handle,
+                    placeholders,
+                    paint.clone(),
+                )
             })
         };
-        let copy = painted.unwrap_or_else(|| LaidOutParagraph::lay_out(platform, input, &style));
+        let copy = painted.unwrap_or_else(|| {
+            LaidOutParagraph::lay_out(platform, input, &self.0.placeholders, &style)
+        });
         let mut repainted = self.0.repainted.borrow_mut();
         if repainted.len() == REPAINTED_COPIES {
             repainted.remove(0);
@@ -499,6 +539,9 @@ impl Paragraph for MeasuredParagraph {
     fn get_path_for_range(&self, start: usize, end: usize) -> Path {
         self.queries().get_path_for_range(start, end)
     }
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        self.queries().placeholder_rects()
+    }
 }
 
 /// The cache's key, as Compose's `CacheTextLayoutInput`: an input, compared by what affects its
@@ -506,17 +549,27 @@ impl Paragraph for MeasuredParagraph {
 #[derive(Clone, Debug)]
 pub struct CacheTextLayoutInput {
     input: TextLayoutInput,
+    placeholders: Placeholders,
 }
 
 impl CacheTextLayoutInput {
     pub fn new(input: TextLayoutInput) -> CacheTextLayoutInput {
-        CacheTextLayoutInput { input }
+        CacheTextLayoutInput::with_placeholders(input, Rc::new([]))
+    }
+
+    /// Compose's input has its placeholders in it; here they're beside it, until the keyboard
+    /// path's text field lands (D1127).
+    pub fn with_placeholders(
+        input: TextLayoutInput,
+        placeholders: Placeholders,
+    ) -> CacheTextLayoutInput {
+        CacheTextLayoutInput { input, placeholders }
     }
 }
 
 impl PartialEq for CacheTextLayoutInput {
     fn eq(&self, other: &Self) -> bool {
-        same_layout(&self.input, &other.input)
+        same_layout(&self.input, &other.input) && self.placeholders == other.placeholders
     }
 }
 
@@ -555,7 +608,16 @@ impl TextLayoutCache {
     /// The result of what lays out as `key`, now the most recently used. The paragraph it holds
     /// is another input's if they differ in what's drawn.
     pub fn get(&mut self, key: &TextLayoutInput) -> Option<TextLayoutResult> {
-        let found = self.position_of(key)?;
+        self.get_with_placeholders(key, &[])
+    }
+
+    /// [`get`](Self::get), of a text laid out around `placeholders`.
+    pub fn get_with_placeholders(
+        &mut self,
+        key: &TextLayoutInput,
+        placeholders: &[AnnotatedRange<Placeholder>],
+    ) -> Option<TextLayoutResult> {
+        let found = self.position_of(key, placeholders)?;
         let entry = self.entries.remove(found)?;
         // A font arrived since: no longer valid to measure or draw, as Compose's.
         if entry.1.has_stale_resolved_fonts() {
@@ -566,19 +628,36 @@ impl TextLayoutCache {
         Some(result)
     }
 
-    fn position_of(&self, key: &TextLayoutInput) -> Option<usize> {
-        self.entries.iter().rposition(|(input, _)| same_layout(&input.input, key))
+    fn position_of(
+        &self,
+        key: &TextLayoutInput,
+        placeholders: &[AnnotatedRange<Placeholder>],
+    ) -> Option<usize> {
+        self.entries.iter().rposition(|(input, _)| {
+            same_layout(&input.input, key) && &*input.placeholders == placeholders
+        })
     }
 
     /// Keeps `value` for what lays out as `key`, as the most recently used, evicting the least.
     pub fn put(&mut self, key: &TextLayoutInput, value: TextLayoutResult) {
-        if let Some(found) = self.position_of(key) {
+        self.put_with_placeholders(key, Rc::new([]), value);
+    }
+
+    /// [`put`](Self::put), of a text laid out around `placeholders`.
+    pub fn put_with_placeholders(
+        &mut self,
+        key: &TextLayoutInput,
+        placeholders: Placeholders,
+        value: TextLayoutResult,
+    ) {
+        if let Some(found) = self.position_of(key, &placeholders) {
             self.entries.remove(found);
         }
         if self.entries.len() == self.capacity {
             self.entries.pop_front();
         }
-        self.entries.push_back((CacheTextLayoutInput::new(key.clone()), value));
+        let input = CacheTextLayoutInput::with_placeholders(key.clone(), placeholders);
+        self.entries.push_back((input, value));
     }
 }
 
@@ -775,7 +854,8 @@ impl DrawScope<'_> {
             return laid_out.clone();
         }
         let input = &result.layout_input;
-        let laid_out = LaidOutParagraph::lay_out(platform, input, &input.style);
+        let placeholders = &result.drawable.placeholders;
+        let laid_out = LaidOutParagraph::lay_out(platform, input, placeholders, &input.style);
         *elsewhere = Some(laid_out.clone());
         laid_out
     }

@@ -25,6 +25,7 @@ import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.text.style.LineHeightSpan
 import android.text.style.MetricAffectingSpan
+import android.text.style.ReplacementSpan
 import android.util.Log
 import android.util.SparseArray
 import java.nio.ByteBuffer
@@ -200,6 +201,63 @@ internal class TextMeasurer(
             if (hasShadow) paint.clearShadowLayer()
             if (hasStroke) paint.style = Paint.Style.FILL
         }
+    }
+
+    /**
+     * The room for a placeholder, as Compose's `PlaceholderSpan`: nothing drawn, its size in the
+     * font around it, and the line's ascent and descent as it needs them.
+     */
+    private class PlaceholderSpan(
+        private val width: Float,
+        private val widthInEm: Boolean,
+        private val height: Float,
+        private val heightInEm: Boolean,
+        val align: Int,
+    ) : ReplacementSpan() {
+        var widthPx = 0
+        var heightPx = 0
+        var fontAscent = 0
+        var fontDescent = 0
+
+        override fun getSize(paint: Paint, text: CharSequence?, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
+            val font = paint.fontMetricsInt
+            fontAscent = font.ascent
+            fontDescent = font.descent
+            widthPx = ceil(if (widthInEm) width * paint.textSize else width).toInt()
+            heightPx = ceil(if (heightInEm) height * paint.textSize else height).toInt()
+            if (fm != null) {
+                fm.ascent = font.ascent
+                fm.descent = font.descent
+                fm.leading = font.leading
+                when (align) {
+                    // Top and the text's: too tall, it goes down.
+                    1, 4 -> if (fm.ascent + heightPx > fm.descent) fm.descent = fm.ascent + heightPx
+                    // Bottom and the text's: too tall, it goes up.
+                    2, 5 -> if (fm.ascent > fm.descent - heightPx) fm.ascent = fm.descent - heightPx
+                    // Center and the text's: too tall, both ways.
+                    3, 6 -> if (fm.descent - fm.ascent < heightPx) {
+                        fm.ascent -= (heightPx - (fm.descent - fm.ascent)) / 2
+                        fm.descent = fm.ascent + heightPx
+                    }
+                    else -> if (fm.ascent > -heightPx) fm.ascent = -heightPx
+                }
+                fm.top = minOf(font.top, fm.ascent)
+                fm.bottom = maxOf(font.bottom, fm.descent)
+            }
+            return widthPx
+        }
+
+        override fun draw(
+            canvas: Canvas,
+            text: CharSequence?,
+            start: Int,
+            end: Int,
+            x: Float,
+            top: Int,
+            y: Int,
+            bottom: Int,
+            paint: Paint,
+        ) {}
     }
 
     /** What [flags] (of a style's decoration byte) say follow, as Rust's `encode_paint_extras`. */
@@ -471,6 +529,9 @@ internal class TextMeasurer(
         /** What the paint has beyond its color and decoration, for the drawing. */
         var extras: PaintExtras? = null
 
+        /** The placeholders in [content], in the order they were given. */
+        var placeholders: Array<PlaceholderSpan>? = null
+
         /**
          * The width of the widest segment of [content] between line break opportunities, as
          * Compose's `LayoutIntrinsics.minIntrinsicWidth`: measured when first asked.
@@ -486,10 +547,12 @@ internal class TextMeasurer(
          */
         fun inPaint(color: Int, decoration: Int): Intrinsics {
             val style = paintStyle.copy(color = color, decoration = decoration)
-            return Intrinsics(
+            val painted = Intrinsics(
                 content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, lineHeightStyle, letterSpaced,
                 softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
             )
+            painted.placeholders = placeholders
+            return painted
         }
 
         val alignment = when (align) {
@@ -506,6 +569,7 @@ internal class TextMeasurer(
         request.order(ByteOrder.LITTLE_ENDIAN)
         val flags = request.get().toInt()
         val softWrap = flags and 1 != 0
+        val hasPlaceholders = flags and 4 != 0
         // For an intrinsic probe only: measured, never drawn, so not recorded ahead (D556).
         val probe = flags and 2 != 0
         val maxLines = request.getInt()
@@ -523,7 +587,7 @@ internal class TextMeasurer(
         val paint = paint(base.paint)
         val runCount = request.getInt()
         var letterSpaced = paint.letterSpacing != 0f
-        val content: CharSequence = if (runCount == 0) {
+        val content: CharSequence = if (runCount == 0 && !hasPlaceholders) {
             text
         } else {
             val spannable = SpannableString(text)
@@ -551,6 +615,21 @@ internal class TextMeasurer(
             spannable
         }
         val maxHeight = request.getInt()
+        var placeholders: Array<PlaceholderSpan>? = null
+        if (hasPlaceholders) {
+            val spannable = content as SpannableString
+            placeholders = Array(request.getInt()) {
+                val start = request.getInt()
+                val end = request.getInt()
+                val width = request.float()
+                val widthInEm = request.get().toInt() != 0
+                val height = request.float()
+                val heightInEm = request.get().toInt() != 0
+                val span = PlaceholderSpan(width, widthInEm, height, heightInEm, request.get().toInt())
+                spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                span
+            }
+        }
         // A line height over every line (Compose's span, [StyledLineHeightSpan]), an empty text's
         // included (its line takes it from [lastLineMetrics], as Compose's).
         val lineHeight = if (base.lineHeightPx > 0f) base.lineHeightPx else 0f
@@ -570,6 +649,7 @@ internal class TextMeasurer(
             maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
         )
         kept.extras = base.extras
+        kept.placeholders = placeholders
         layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = !probe)
     }
 
@@ -1013,7 +1093,10 @@ internal class TextMeasurer(
         val lines = (kept?.maxLines ?: layout.lineCount).coerceIn(1, layout.lineCount.coerceAtLeast(1))
         val lastLine = lastLines.get(handle)
         val lastEllipsized = layout.getEllipsisCount(lines - 1) > 0
-        val out = FloatArray(PARAGRAPH_HEADER + lines * PARAGRAPH_LINE + (length + 1) * PARAGRAPH_OFFSET)
+        val placeholders = kept?.placeholders ?: emptyArray()
+        val out = FloatArray(
+            PARAGRAPH_HEADER + lines * PARAGRAPH_LINE + (length + 1) * PARAGRAPH_OFFSET + placeholders.size * PARAGRAPH_PLACEHOLDER,
+        )
         out[0] = lines.toFloat()
         out[1] = length.toFloat()
         out[2] = layout.width.toFloat()
@@ -1045,7 +1128,54 @@ internal class TextMeasurer(
             out[at + 1] = layout.getSecondaryHorizontal(offset)
             out[at + 2] = if (offset < length && layout.isRtlCharAt(offset)) 1f else 0f
         }
+        val boxes = offsets + (length + 1) * PARAGRAPH_OFFSET
+        for ((index, span) in placeholders.withIndex()) {
+            placeholderBox(layout, span, lines, lastLine, out, boxes + index * PARAGRAPH_PLACEHOLDER)
+        }
         return out
+    }
+
+    /**
+     * Where placeholder [span] went in [layout], at [at] in [out], as Compose's `placeholderRects`:
+     * nothing written for one cut by the maximum lines or an ellipsis.
+     */
+    private fun placeholderBox(
+        layout: Layout,
+        span: PlaceholderSpan,
+        lines: Int,
+        lastLine: Paint.FontMetricsInt?,
+        out: FloatArray,
+        at: Int,
+    ) {
+        val text = layout.text as? Spanned ?: return
+        val start = text.getSpanStart(span)
+        val end = text.getSpanEnd(span)
+        if (start < 0) return
+        val line = layout.getLineForOffset(start)
+        val ellipsized = layout.getEllipsisCount(line) > 0 && end > layout.getLineStart(line) + layout.getEllipsisStart(line)
+        if (line >= lines || ellipsized || end > layout.getLineEnd(line)) return
+        val leftToRightLine = layout.getParagraphDirection(line) == Layout.DIR_LEFT_TO_RIGHT
+        val rightToLeftCharacter = layout.isRtlCharAt(start)
+        val edge = if (leftToRightLine != rightToLeftCharacter) layout.getPrimaryHorizontal(start) else layout.getSecondaryHorizontal(start)
+        val left = if (rightToLeftCharacter) edge - span.widthPx else edge
+        val baseline = lineBaseline(layout, line, lines, lastLine)
+        val lineTop = layout.getLineTop(line).toFloat()
+        val bottom = lineBottom(layout, line, lines, lastLine)
+        val height = span.heightPx.toFloat()
+        val top = when (span.align) {
+            1 -> lineTop
+            2 -> bottom - height
+            3 -> (lineTop + bottom - height) / 2f
+            4 -> span.fontAscent + baseline
+            5 -> span.fontDescent + baseline - height
+            6 -> (span.fontAscent + span.fontDescent - height) / 2f + baseline
+            else -> baseline - height
+        }
+        out[at] = 1f
+        out[at + 1] = left
+        out[at + 2] = top
+        out[at + 3] = left + span.widthPx
+        out[at + 4] = top + height
     }
 
     /**
@@ -1264,6 +1394,7 @@ internal class TextMeasurer(
         const val PARAGRAPH_HEADER = 8
         const val PARAGRAPH_LINE = 10
         const val PARAGRAPH_OFFSET = 3
+        const val PARAGRAPH_PLACEHOLDER = 5
     }
 }
 

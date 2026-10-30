@@ -256,8 +256,9 @@ struct Entry {
     min_intrinsic_width: f32,
     /// It ends with an ellipsis (more lines than its maximum, ellipsized).
     ellipsized: bool,
-    /// It's a start or middle ellipsis: its line ends where the text does.
-    ellipsis_inside: bool,
+    /// Where a start or middle ellipsis hides from: its line ends where the text does.
+    ellipsis_start: Option<usize>,
+    placeholders: Vec<compose_ui::platform::ResolvedPlaceholder>,
 }
 
 /// The queries of `entry`'s paragraph (D1105): its lines from SkParagraph's line metrics, each
@@ -284,7 +285,10 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         let end = byte_at(line.end_including_newline);
         // As Compose's `lineEndToVisibleEnd` (SkParagraph's own takes a tab for whitespace too),
         // but an ellipsized line, which ends where its ellipsis starts.
-        let visible_end = if entry.ellipsized && !entry.ellipsis_inside && number + 1 == count {
+        let visible_end = if entry.ellipsized
+            && entry.ellipsis_start.is_none()
+            && number + 1 == count
+        {
             byte_at(line.end_excluding_whitespaces).max(start)
         } else {
             start + text[start..end].trim_end_matches(compose_ui::platform::is_line_end_space).len()
@@ -345,7 +349,10 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         did_exceed_max_lines: paragraph.did_exceed_max_lines(),
         ellipsized: entry.ellipsized,
     };
-    ParagraphLayout::from_lines(text.clone(), size, lines)
+    let mut layout = ParagraphLayout::from_lines(text.clone(), size, lines);
+    layout.placeholder_rects =
+        compose_ui::platform::placeholder_rects(&layout, &entry.placeholders, entry.ellipsis_start);
+    layout
 }
 
 /// Lays out paragraphs with SkParagraph and the system's fonts, keeping each until released:
@@ -484,7 +491,7 @@ impl TextMeasurer for SkiaTextMeasurer {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.layout_runs(text, &[], style, options, constraints, density)
+        self.layout_runs(text, &[], &[], style, options, constraints, density)
     }
 
     fn layout_annotated(
@@ -496,7 +503,20 @@ impl TextMeasurer for SkiaTextMeasurer {
         density: &Density,
     ) -> ParagraphHandle {
         let runs = text.runs(style);
-        self.layout_runs(text.as_str(), &runs, style, options, constraints, density)
+        self.layout_runs(text.as_str(), &runs, &[], style, options, constraints, density)
+    }
+
+    fn layout_with_placeholders(
+        &mut self,
+        text: &compose_ui::AnnotatedString,
+        style: &TextStyle,
+        placeholders: &[compose_ui::AnnotatedRange<compose_ui::Placeholder>],
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        let runs = text.runs(style);
+        self.layout_runs(text.as_str(), &runs, placeholders, style, options, constraints, density)
     }
 
     fn fonts(&self) -> Option<Rc<PlatformFonts>> {
@@ -626,11 +646,14 @@ impl TextMeasurer for SkiaTextMeasurer {
 }
 
 impl SkiaTextMeasurer {
-    /// Lays out `text` in `style`, its `runs` (if any) each in its own style and background.
+    /// Lays out `text` in `style`, its `runs` (if any) each in its own style and background,
+    /// around `placeholders`.
+    #[allow(clippy::too_many_arguments)]
     fn layout_runs(
         &mut self,
         text: &str,
         runs: &[(std::ops::Range<usize>, TextStyle, compose_ui::Color)],
+        placeholders: &[compose_ui::AnnotatedRange<compose_ui::Placeholder>],
         style: &TextStyle,
         options: TextLayoutOptions,
         constraints: Constraints,
@@ -699,6 +722,26 @@ impl SkiaTextMeasurer {
             run_styles.push(run);
         }
         let collection = &self.collection;
+        // A placeholder's box and how it sits, in the text style around it.
+        let mut resolved_placeholders = Vec::with_capacity(placeholders.len());
+        let mut placeholder_styles = Vec::with_capacity(placeholders.len());
+        for range in placeholders {
+            let found = runs.iter().position(|(run, _, _)| run.contains(&range.start));
+            let (around, around_style) = match found {
+                Some(index) => (&runs[index].1, &run_styles[index]),
+                None => (style, &text_style),
+            };
+            let (resolved, placeholder_style) = placeholder_of(
+                range,
+                font_px_of(around, density),
+                around_style,
+                &paragraph_style,
+                collection,
+                density,
+            );
+            resolved_placeholders.push(resolved);
+            placeholder_styles.push(placeholder_style);
+        }
         // What's shown: the text, but where a start or middle ellipsis hides some of it.
         let mut shown = ShownText::whole(text);
         let build = |paragraph_style: &ParagraphStyle,
@@ -708,11 +751,23 @@ impl SkiaTextMeasurer {
             let mut builder = ParagraphBuilder::new(paragraph_style, collection.clone());
             builder.push_style(text_style);
             if runs.is_empty() {
-                builder.add_text(&*shown.text);
+                add_around_placeholders(
+                    &mut builder,
+                    shown,
+                    0..text.len(),
+                    &resolved_placeholders,
+                    &placeholder_styles,
+                );
             }
             for ((range, _, _), run) in runs.iter().zip(run_styles) {
                 builder.push_style(run);
-                builder.add_text(shown.range(range.clone()));
+                add_around_placeholders(
+                    &mut builder,
+                    shown,
+                    range.clone(),
+                    &resolved_placeholders,
+                    &placeholder_styles,
+                );
                 builder.pop();
             }
             builder.build()
@@ -736,7 +791,7 @@ impl SkiaTextMeasurer {
         }
         // A start or middle ellipsis, on one line only (else a clip, as `StaticLayout`).
         let middle = options.overflow == compose_ui::TextOverflow::MiddleEllipsis;
-        let mut ellipsis_inside = false;
+        let mut ellipsis_start = None;
         if width.is_finite()
             && max_lines == 1
             && (middle || options.overflow == compose_ui::TextOverflow::StartEllipsis)
@@ -764,7 +819,7 @@ impl SkiaTextMeasurer {
                 );
                 if count > 0 {
                     shown = ShownText::hiding(text, start, count);
-                    ellipsis_inside = true;
+                    ellipsis_start = Some(shown.hidden_start);
                     paragraph = build(&paragraph_style, &shown, &text_style, &run_styles);
                 }
             }
@@ -817,7 +872,7 @@ impl SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
-        let ellipsized = (ellipsis && paragraph.did_exceed_max_lines()) || ellipsis_inside;
+        let ellipsized = (ellipsis && paragraph.did_exceed_max_lines()) || ellipsis_start.is_some();
         let entry = Entry {
             resolved_fonts,
             paragraph,
@@ -827,7 +882,8 @@ impl SkiaTextMeasurer {
             max_intrinsic_width,
             min_intrinsic_width,
             ellipsized,
-            ellipsis_inside,
+            ellipsis_start,
+            placeholders: resolved_placeholders,
         };
         match self.free.pop() {
             Some(index) => {
@@ -880,6 +936,13 @@ impl<'a> ShownText<'a> {
         ShownText { original: text, text: shown.into(), hidden_start, hidden_end }
     }
 
+    /// Whether nothing of `range` is hidden.
+    fn shows(&self, range: std::ops::Range<usize>) -> bool {
+        self.hidden_start == self.hidden_end
+            || range.end <= self.hidden_start
+            || range.start >= self.hidden_end
+    }
+
     /// The part of the shown text a range of the original's bytes is: what's hidden goes with
     /// the run the first of it starts.
     fn range(&self, range: std::ops::Range<usize>) -> &str {
@@ -895,6 +958,86 @@ impl<'a> ShownText<'a> {
         };
         &self.text[at(range.start)..at(range.end)]
     }
+}
+
+/// `range` of the text in `builder`, a placeholder for the first character each of `placeholders`
+/// covers and U+FEFF for the others, unit for unit, so a query's offsets are the text's.
+fn add_around_placeholders(
+    builder: &mut ParagraphBuilder,
+    shown: &ShownText<'_>,
+    range: std::ops::Range<usize>,
+    placeholders: &[compose_ui::platform::ResolvedPlaceholder],
+    styles: &[skia_safe::textlayout::PlaceholderStyle],
+) {
+    let mut at = range.start;
+    for (placeholder, style) in placeholders.iter().zip(styles) {
+        let covered = placeholder.start.max(range.start)..placeholder.end.min(range.end);
+        if covered.is_empty() || !shown.shows(placeholder.start..placeholder.end) {
+            continue;
+        }
+        builder.add_text(shown.range(at..covered.start));
+        let mut units = shown.original[covered.clone()].encode_utf16().count();
+        if covered.start == placeholder.start {
+            builder.add_placeholder(style);
+            units -= 1;
+        }
+        for _ in 0..units {
+            builder.add_text("\u{FEFF}");
+        }
+        at = covered.end;
+    }
+    builder.add_text(shown.range(at..range.end));
+}
+
+/// `range`'s placeholder in a text of `font_px` pixels in `around`, for the measurer's queries and
+/// for SkParagraph: a line's own alignments are SkParagraph's, the text's the baseline's offset.
+fn placeholder_of(
+    range: &compose_ui::AnnotatedRange<compose_ui::Placeholder>,
+    font_px: f32,
+    around: &SkiaTextStyle,
+    paragraph_style: &ParagraphStyle,
+    collection: &FontCollection,
+    density: &Density,
+) -> (compose_ui::platform::ResolvedPlaceholder, skia_safe::textlayout::PlaceholderStyle) {
+    use compose_ui::PlaceholderVerticalAlign as Align;
+    use skia_safe::textlayout::{PlaceholderAlignment, PlaceholderStyle, TextBaseline};
+    let (width, height) = range.item.size_in(font_px, density);
+    // The font's own, whole pixels as a paint's `FontMetricsInt`, a line height left out.
+    let (ascent, descent) = {
+        let mut font_style = around.clone();
+        font_style.set_height_override(false);
+        let mut builder = ParagraphBuilder::new(paragraph_style, collection.clone());
+        builder.push_style(&font_style);
+        builder.add_text("H");
+        let mut probe = builder.build();
+        probe.layout(f32::INFINITY);
+        let lines = probe.get_line_metrics();
+        lines
+            .first()
+            .map_or((0.0, 0.0), |line| (line.ascent.round() as f32, line.descent.round() as f32))
+    };
+    let align = range.item.placeholder_vertical_align();
+    let (alignment, baseline_offset) = match align {
+        Align::AboveBaseline => (PlaceholderAlignment::AboveBaseline, 0.0),
+        Align::Top => (PlaceholderAlignment::Top, 0.0),
+        Align::Bottom => (PlaceholderAlignment::Bottom, 0.0),
+        Align::Center => (PlaceholderAlignment::Middle, 0.0),
+        Align::TextTop => (PlaceholderAlignment::Baseline, ascent),
+        Align::TextBottom => (PlaceholderAlignment::Baseline, height - descent),
+        Align::TextCenter => (PlaceholderAlignment::Baseline, (height + ascent - descent) / 2.0),
+    };
+    let resolved = compose_ui::platform::ResolvedPlaceholder {
+        start: range.start,
+        end: range.end,
+        width,
+        height,
+        align,
+        ascent,
+        descent,
+    };
+    let style =
+        PlaceholderStyle::new(width, height, alignment, TextBaseline::Alphabetic, baseline_offset);
+    (resolved, style)
 }
 
 /// The width of each UTF-16 unit of `line`, the start of `paragraph` laid out on a line: all a

@@ -9,13 +9,14 @@ use std::rc::Rc;
 
 use unicode_bidi::{BidiClass, Level, ParagraphBidiInfo, bidi_class};
 
-use crate::annotated::AnnotatedString;
+use crate::annotated::{AnnotatedRange, AnnotatedString};
 use crate::constraints::Constraints;
 use crate::font::{Font, FontStyle, FontWeight, PlatformFontLoader, Typeface};
 use crate::font_resolver::{PlatformFonts, ResolvedFonts};
 use crate::paragraph::{
     GlyphBox, LaidOutLine, LineLayout, Paragraph, ParagraphLayout, ParagraphSize,
 };
+use crate::placeholder::{Placeholder, ResolvedPlaceholder, placeholder_rects};
 use crate::text::{
     ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition,
     resolve_font_size_px, resolve_text_unit_px,
@@ -115,6 +116,7 @@ struct FixedParagraph {
 
 /// What a paragraph was laid out from.
 struct FixedInput {
+    placeholders: Vec<AnnotatedRange<Placeholder>>,
     text: AnnotatedString,
     style: LayoutStyle,
     options: TextLayoutOptions,
@@ -207,6 +209,7 @@ impl FixedTextMeasurer {
             Rc::new(self.lay_out(
                 input.text.as_str(),
                 Some(&input.text),
+                &input.placeholders,
                 &input.style.to_style(),
                 input.options,
                 input.constraints,
@@ -220,13 +223,22 @@ impl FixedTextMeasurer {
     fn measure_and_store(
         &mut self,
         text: AnnotatedString,
+        placeholders: Vec<AnnotatedRange<Placeholder>>,
         style: &TextStyle,
         options: TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        let measured =
-            self.lay_out(text.as_str(), Some(&text), style, options, constraints, density, false);
+        let measured = self.lay_out(
+            text.as_str(),
+            Some(&text),
+            &placeholders,
+            style,
+            options,
+            constraints,
+            density,
+            false,
+        );
         // Its glyphs don't depend on them, but a font arriving is a new layout on any measurer.
         let mut resolved_fonts = ResolvedFonts::default();
         resolved_fonts.resolve(&self.fonts, style);
@@ -237,6 +249,7 @@ impl FixedTextMeasurer {
         }
         let input = FixedInput {
             text,
+            placeholders,
             style: LayoutStyle::of(style),
             options,
             constraints,
@@ -377,6 +390,7 @@ impl FixedTextMeasurer {
         &self,
         string: &str,
         spans: Option<&AnnotatedString>,
+        placeholders: &[AnnotatedRange<Placeholder>],
         style: &TextStyle,
         options: TextLayoutOptions,
         constraints: Constraints,
@@ -425,6 +439,33 @@ impl FixedTextMeasurer {
                     descent: font_px * metrics.descent,
                 });
             }
+        }
+        // A placeholder is its first character's advance and leaves its line the height it needs;
+        // the others it covers are hidden.
+        let mut resolved_placeholders = Vec::with_capacity(placeholders.len());
+        for range in placeholders {
+            let first = glyphs.partition_point(|glyph| glyph.offset < range.start);
+            let last = glyphs.partition_point(|glyph| glyph.offset < range.end);
+            let font_px = glyphs.get(first).map_or(base_px, |glyph| {
+                if metrics.ascent > 0.0 { glyph.ascent / metrics.ascent } else { base_px }
+            });
+            let (width, height) = range.item.size_in(font_px, density);
+            let resolved = ResolvedPlaceholder {
+                start: range.start,
+                end: range.end,
+                width,
+                height,
+                align: range.item.placeholder_vertical_align(),
+                ascent: font_px * metrics.ascent,
+                descent: font_px * metrics.descent,
+            };
+            let (ascent, descent) = resolved.line_metrics();
+            for (index, glyph) in glyphs[first..last].iter_mut().enumerate() {
+                glyph.advance = if index == 0 { width } else { 0.0 };
+                glyph.ascent = if index == 0 { ascent } else { glyph.ascent };
+                glyph.descent = if index == 0 { descent } else { glyph.descent };
+            }
+            resolved_placeholders.push(resolved);
         }
         // The hard paragraphs: glyph ranges without their line feeds.
         let mut start = 0;
@@ -530,6 +571,17 @@ impl FixedTextMeasurer {
         let offset_of = |index: usize| glyphs.get(index).map_or(string.len(), |g| g.offset);
         let mut laid_out = Vec::with_capacity(lines.len());
         let mut top = 0.0;
+        // To the bidi algorithm a placeholder is a neutral object, whatever it covers: here a
+        // neutral per byte, so the offsets stay the text's.
+        let bidi_string: std::borrow::Cow<'_, str> = if placeholders.is_empty() {
+            string.into()
+        } else {
+            let mut bytes = string.as_bytes().to_vec();
+            for range in placeholders {
+                bytes[range.start..range.end.min(string.len())].fill(b'!');
+            }
+            String::from_utf8_lossy(&bytes).into_owned().into()
+        };
         // The current hard paragraph's index, bidi levels (none when all left to right) and
         // direction.
         let mut bidi: Option<(usize, Option<ParagraphBidiInfo<'_>>, bool)> = None;
@@ -616,11 +668,12 @@ impl FixedTextMeasurer {
                 continue;
             }
             let paragraph_text = &string[offset_of(paragraph.start)..offset_of(paragraph.end)];
+            let bidi_text = &bidi_string[offset_of(paragraph.start)..offset_of(paragraph.end)];
             if bidi.as_ref().is_none_or(|(index, _, _)| index != paragraph_index) {
                 let rtl = paragraph_is_rtl(paragraph_text, direction);
                 let level = if rtl { Level::rtl() } else { Level::ltr() };
-                let info = (rtl || needs_bidi(paragraph_text))
-                    .then(|| ParagraphBidiInfo::new(paragraph_text, Some(level)));
+                let info = (rtl || needs_bidi(bidi_text))
+                    .then(|| ParagraphBidiInfo::new(bidi_text, Some(level)));
                 bidi = Some((*paragraph_index, info, rtl));
             }
             let (_, info, rtl) = bidi.as_ref().expect("set above");
@@ -756,7 +809,16 @@ impl FixedTextMeasurer {
             let fitting = bottoms.iter().take_while(|bottom| **bottom <= limit).count();
             drop(scratch);
             let options = TextLayoutOptions { max_lines: fitting.max(1) as u32, ..options };
-            return self.lay_out(string, spans, style, options, constraints, density, full);
+            return self.lay_out(
+                string,
+                spans,
+                placeholders,
+                style,
+                options,
+                constraints,
+                density,
+                full,
+            );
         }
         let size = ParagraphSize {
             width,
@@ -776,12 +838,16 @@ impl FixedTextMeasurer {
                 did_exceed_max_lines: exceeded,
                 lines: measured_lines,
                 positions: Vec::new(),
+                placeholder_rects: Vec::new(),
             };
         }
         let mut layout = ParagraphLayout::from_lines(string.to_string(), size, laid_out);
         if let (Some(shown), Some(last)) = (shown_visible_end, layout.lines.last_mut()) {
             last.visible_end = shown;
         }
+        let ellipsis_start = (!hidden.is_empty()).then(|| offset_of(hidden.start));
+        layout.placeholder_rects =
+            placeholder_rects(&layout, &resolved_placeholders, ellipsis_start);
         layout
     }
 }
@@ -795,7 +861,8 @@ impl TextMeasurer for FixedTextMeasurer {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.measure_and_store(AnnotatedString::from(text), style, options, constraints, density)
+        let text = AnnotatedString::from(text);
+        self.measure_and_store(text, Vec::new(), style, options, constraints, density)
     }
 
     fn layout_annotated(
@@ -806,7 +873,20 @@ impl TextMeasurer for FixedTextMeasurer {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.measure_and_store(text.clone(), style, options, constraints, density)
+        self.measure_and_store(text.clone(), Vec::new(), style, options, constraints, density)
+    }
+
+    fn layout_with_placeholders(
+        &mut self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        placeholders: &[AnnotatedRange<Placeholder>],
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        let placeholders = placeholders.to_vec();
+        self.measure_and_store(text.clone(), placeholders, style, options, constraints, density)
     }
 
     fn metrics(&self, handle: ParagraphHandle) -> ParagraphMetrics {
@@ -848,6 +928,7 @@ impl TextMeasurer for FixedTextMeasurer {
             measured: kept.measured.clone(),
             input: FixedInput {
                 text: kept.input.text.clone(),
+                placeholders: kept.input.placeholders.clone(),
                 style: kept.input.style,
                 options: kept.input.options,
                 constraints: kept.input.constraints,
