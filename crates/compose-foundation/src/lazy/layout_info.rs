@@ -300,14 +300,17 @@ impl LaidOut {
             scratch.sort_unstable_by_key(|item| item.index);
         }
         let mut items = self.items.borrow_mut();
+        // Unread, nothing to tell: kept without comparing (a frame's work per item).
+        if !self.read.get() {
+            std::mem::swap(&mut *items, &mut *scratch);
+            self.viewport.set(viewport);
+            return;
+        }
         if !keys_changed && *items == *scratch && self.viewport.get() == viewport {
             return;
         }
         std::mem::swap(&mut *items, &mut *scratch);
         self.viewport.set(viewport);
-        if !self.read.get() {
-            return;
-        }
         let version = self.written.get().wrapping_add(1);
         self.written.set(version);
         self.version.set(version);
@@ -345,5 +348,23 @@ mod tests {
         assert!(!laid.was_read());
         laid.read(|items, _| assert!(items.is_empty()));
         assert!(laid.was_read());
+    }
+
+    #[test]
+    fn a_layout_unread_is_kept_and_a_later_one_tells_its_readers() {
+        let laid = LaidOut::new();
+        let viewport = LaidViewport { max_span: 1, ..LaidViewport::default() };
+        let lay_out = |index: usize| {
+            laid.begin().push(LaidItem { index, ..LaidItem::default() });
+            laid.end(viewport, false);
+        };
+        lay_out(1);
+        assert_eq!(laid.version.get(), 0, "no one to tell");
+        lay_out(2);
+        laid.read(|items, _| assert_eq!(items[0].index, 2, "the first read sees the last layout"));
+        lay_out(2);
+        assert_eq!(laid.version.get(), 0, "read, and nothing changed");
+        lay_out(3);
+        assert_eq!(laid.version.get(), 1, "read, and it changed");
     }
 }

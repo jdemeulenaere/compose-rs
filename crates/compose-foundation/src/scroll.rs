@@ -176,6 +176,16 @@ impl ScrollableState for ScrollState {
         self.consume(delta)
     }
 
+    fn scroll_now(
+        &self,
+        priority: MutatePriority,
+        block: &mut dyn FnMut(&ScrollScope),
+    ) -> Option<bool> {
+        let states = self.object.get()?;
+        let state = *self;
+        Some(states.core.scroll_now(priority, || Rc::new(move |delta| state.consume(delta)), block))
+    }
+
     fn is_scroll_in_progress(&self) -> bool {
         self.object.try_get().is_some_and(|states| states.core.is_scroll_in_progress())
     }
@@ -845,15 +855,19 @@ impl DragScroller {
         // right-to-left layout goes the other way, as Compose's `reverseDirection`.
         let chain = &self.chain;
         let set_outer = driver.set_outer;
-        let drag_by = |session: &Option<DragSession>, delta: f32| {
-            let Some(scope) = session.as_ref().and_then(DragSession::scope) else { return };
+        let scope_by = |scope: &ScrollScope, delta: f32| {
             let mut own = |delta: f32| {
                 let delta = if reverse { -delta } else { delta };
                 let used =
-                    scope_scroll(&scope, set_outer, chain, NestedScrollSource::UserInput, delta);
+                    scope_scroll(scope, set_outer, chain, NestedScrollSource::UserInput, delta);
                 if reverse { -used } else { used }
             };
             dispatch_scroll(chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
+        };
+        let drag_by = |session: &Option<DragSession>, delta: f32| {
+            if let Some(scope) = session.as_ref().and_then(DragSession::scope) {
+                scope_by(&scope, delta);
+            }
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         // Where the pointer is in the window: the deltas don't count the content's own moves (a
@@ -866,11 +880,9 @@ impl DragScroller {
                     return;
                 }
                 // The scrollables and connections around had what's left along the axis.
-                let session = Some(DragSession::start(driver.state.clone()));
-                drag_by(&session, delta);
-                if let Some(session) = session {
-                    session.end();
-                }
+                DragSession::scroll_now(driver.state, MutatePriority::UserInput, &mut |scope| {
+                    scope_by(scope, delta)
+                });
                 if vertical {
                     event.scroll_delta.y = 0.0;
                 } else {

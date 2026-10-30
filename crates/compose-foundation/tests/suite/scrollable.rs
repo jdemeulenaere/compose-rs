@@ -624,6 +624,156 @@ fn a_wheel_turn_is_a_user_scroll_that_stops_an_animation() {
     assert!(!state.is_scroll_in_progress());
 }
 
+// D879: a wheel turn runs in place, in the state's scroll, so a scroll of a higher priority going
+// on refuses it, as `MutatorMutex.mutate` refuses, and goes on.
+#[test]
+fn a_scroll_of_a_higher_priority_refuses_a_wheel_turn() {
+    let (state, total) = total_state();
+    let scrolled = state.clone();
+    let mut ui =
+        scrollable_content(move || Modifier.scrollable(scrolled.clone(), Orientation::Vertical));
+    let result: Rc<RefCell<Option<Result<(), MutationInterrupted>>>> = Rc::default();
+    let (held, into) = (state.clone(), result.clone());
+    launch(async move {
+        *into.borrow_mut() = Some(
+            held.scroll(MutatePriority::PreventUserInput, |_| std::future::pending::<()>()).await,
+        );
+    });
+    ui.wait_for_idle();
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    assert_eq!(total.get(), 0.0, "refused");
+    assert!(state.is_scroll_in_progress(), "the other scroll goes on");
+    assert_eq!(*result.borrow(), None);
+}
+
+// D879: a wheel turn holds the state's mutex while it applies: what its deltas start at a lower
+// priority is refused, as a mutation under a running one is.
+#[test]
+fn a_wheel_turn_refuses_a_lower_scroll_started_from_its_deltas() {
+    let refused: Rc<RefCell<Option<Result<(), MutationInterrupted>>>> = Rc::default();
+    let seen: Rc<RefCell<Option<DefaultScrollableState>>> = Rc::default();
+    let (reader, into) = (seen.clone(), refused.clone());
+    let state = scrollable_state(move |delta| {
+        let Some(state) = reader.borrow().clone() else { return delta };
+        let into = into.clone();
+        let job = launch(async move {
+            *into.borrow_mut() = Some(state.stop_scroll(MutatePriority::Default).await);
+        });
+        compose_runtime::platform::poll_now(job);
+        delta
+    });
+    *seen.borrow_mut() = Some(state.clone());
+    let scrolled = state.clone();
+    let mut ui =
+        scrollable_content(move || Modifier.scrollable(scrolled.clone(), Orientation::Vertical));
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    assert_eq!(*refused.borrow(), Some(Err(MutationInterrupted)));
+    assert!(!state.is_scroll_in_progress());
+}
+
+// D879: nothing observes a wheel turn's in-progress flag, which never reaches a state: what reads
+// `is_scroll_in_progress` isn't composed again by the wheel (a task per turn wrote it twice).
+#[test]
+fn a_wheel_turn_does_not_recompose_what_reads_is_scroll_in_progress() {
+    let (state, _) = total_state();
+    let compositions = Rc::new(Cell::new(0));
+    let (scrolled, counted) = (state.clone(), compositions.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        counted.set(counted.get() + 1);
+        let _ = scrolled.is_scroll_in_progress();
+        Box!(
+            modifier = Modifier.size(100.dp()).scrollable(scrolled.clone(), Orientation::Vertical)
+        );
+    });
+    let before = compositions.get();
+    for _ in 0..3 {
+        wheel(&mut ui, Offset::new(0.0, 10.0));
+    }
+    assert_eq!(compositions.get(), before);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/ScrollableState.kt, DefaultScrollableState's scope notes the direction of each scroll, a wheel turn's too
+#[test]
+fn a_wheel_turn_notes_which_way_it_went() {
+    let (state, _) = total_state();
+    let scrolled = state.clone();
+    let mut ui =
+        scrollable_content(move || Modifier.scrollable(scrolled.clone(), Orientation::Vertical));
+    // A wheel turned towards the end gives positive deltas here, as a drag towards it.
+    wheel(&mut ui, Offset::new(0.0, -10.0));
+    assert!(state.last_scrolled_forward() && !state.last_scrolled_backward());
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    assert!(state.last_scrolled_backward() && !state.last_scrolled_forward());
+}
+
+/// An app's own state: the required functions only, handed to an inner state.
+#[derive(Clone)]
+struct OwnState(DefaultScrollableState);
+
+impl ScrollableState for OwnState {
+    fn scroll_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: compose_foundation::gestures::ScrollBlock<'a>,
+    ) -> compose_foundation::gestures::LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
+        self.0.scroll_boxed(priority, block)
+    }
+
+    fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.0.dispatch_raw_delta(delta)
+    }
+
+    fn is_scroll_in_progress(&self) -> bool {
+        self.0.is_scroll_in_progress()
+    }
+}
+
+impl ComposeArg for OwnState {
+    fn same(&self, other: &Self) -> bool {
+        self.0.same(&other.0)
+    }
+}
+
+// D879: a state implementing the trait itself has no scroll in place: its wheel turns hold a
+// scroll of the user-input priority in a task, ended within the event. It says it's scrolling
+// while the delta applies, and stops an animated scroll.
+#[test]
+fn a_wheel_turn_scrolls_an_apps_own_state() {
+    let seen: Rc<RefCell<Option<DefaultScrollableState>>> = Rc::default();
+    let in_progress = Rc::new(Cell::new(None::<bool>));
+    let total = Rc::new(Cell::new(0.0f32));
+    let (reader, flag, into) = (seen.clone(), in_progress.clone(), total.clone());
+    let inner = scrollable_state(move |delta| {
+        if let Some(state) = reader.borrow().as_ref() {
+            flag.set(Some(state.is_scroll_in_progress()));
+        }
+        into.set(into.get() + delta);
+        delta
+    });
+    *seen.borrow_mut() = Some(inner.clone());
+    let state = OwnState(inner);
+    let scrolled = state.clone();
+    let mut ui =
+        scrollable_content(move || Modifier.scrollable(scrolled.clone(), Orientation::Vertical));
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    assert_eq!(total.get().abs(), 10.0);
+    assert_eq!(in_progress.get(), Some(true));
+    assert!(!state.is_scroll_in_progress());
+
+    ui.set_auto_advance(false);
+    let result: Rc<RefCell<Option<Result<f32, MutationInterrupted>>>> = Rc::default();
+    let (animated, into) = (state.clone(), result.clone());
+    launch(async move {
+        *into.borrow_mut() = Some(animated.animate_scroll_by(1000.0, tween(1000)).await);
+    });
+    ui.advance_time_by(Duration::from_millis(100));
+    assert!(state.is_scroll_in_progress(), "animating");
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    ui.advance_time_by(Duration::from_millis(16));
+    assert!(matches!(*result.borrow(), Some(Err(MutationInterrupted))), "the wheel stopped it");
+    assert!(!state.is_scroll_in_progress());
+}
+
 // Review of D855: `Modifier.scrollable` without an interaction source reports its drags to none
 // (Compose's `scrollable(interactionSource = null)` emits nothing), not to its state's own
 // source, which only `vertical_scroll` and the lazy layouts give it.

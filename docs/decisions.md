@@ -487,7 +487,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D856 | [ui-and-layout](decisions/ui-and-layout.md#d856) | superseded by [D874](decisions/ui-and-layout.md#d874) |
 | D857 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d857) | current |
 | D858 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d858) | current |
-| D859 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d859) | current |
+| D859 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d859) | revised by [D881](decisions/lazy-and-prefetch.md#d881) |
 | D860 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d860) | current |
 | D861 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d861) | current |
 | D862 | [ui-and-layout](decisions/ui-and-layout.md#d862) | current |
@@ -509,6 +509,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D878 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d878) | current |
 | D879 | [ui-and-layout](decisions/ui-and-layout.md#d879) | current |
 | D880 | [ui-and-layout](decisions/ui-and-layout.md#d880) | current |
+| D881 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d881) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

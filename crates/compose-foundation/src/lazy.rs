@@ -554,6 +554,23 @@ impl ScrollableState for LazyListState {
         Box::pin(async move { inner.core.scroll(priority, consume, block).await })
     }
 
+    fn scroll_now(
+        &self,
+        priority: MutatePriority,
+        block: &mut dyn FnMut(&ScrollScope),
+    ) -> Option<bool> {
+        let inner = self.inner()?;
+        let state = *self;
+        // As `scroll_boxed`'s scope: the deltas learn the parents around from the node.
+        let consume = move || -> Rc<dyn Fn(f32) -> f32> {
+            Rc::new(move |delta: f32| {
+                let outer = state.inner().and_then(|inner| inner.scroll_outer.borrow().clone());
+                state.dispatch(delta, outer)
+            })
+        };
+        Some(inner.core.scroll_now(priority, consume, block))
+    }
+
     /// Scrolls by up to `delta` pixels (positive: towards the end) at the next layout, as far
     /// as the list goes as last laid out (an end not laid out isn't known: it takes it all,
     /// D476); returns the pixels it will move.
