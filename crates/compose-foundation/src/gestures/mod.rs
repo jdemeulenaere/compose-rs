@@ -13,6 +13,7 @@ pub use draggable::{
     remember_draggable_2d_state, remember_draggable_state,
 };
 
+pub(crate) use drag_gesture::{DRAG_GESTURES, GestureState, aligned, parent_aligned};
 pub(crate) use mouse_wheel::MouseWheel;
 pub use scrollable::{
     DefaultFlingBehavior, DefaultScrollableState, FlingBehavior, LocalBoxFuture, ScrollBlock,

@@ -22,6 +22,9 @@ use compose_ui::{
     PointerInputModifierNode, Rect, platform::NestedScrollChain,
 };
 
+use compose_ui::KeyInputModifierNode;
+
+use crate::gestures::{DRAG_GESTURES, GestureState, Orientation, aligned, parent_aligned};
 use crate::gestures::{
     DefaultFlingBehavior, DragSession, FlingBehavior, LocalBoxFuture, MouseWheel, ScrollBlock,
     ScrollCore, ScrollScope, ScrollableState, ScrollableStateExt,
@@ -421,7 +424,7 @@ pub(crate) fn touch_slop(context: &EventContext<'_>) -> f32 {
     context.view_configuration().touch_slop
 }
 
-struct ScrollNode {
+pub(crate) struct ScrollNode {
     state: ScrollState,
     /// The state as a scrollable state, for drags and flings.
     dyn_state: Rc<dyn ScrollableState>,
@@ -482,7 +485,51 @@ impl compose_ui::FocusTargetModifierNode for ScrollNode {
     }
 }
 
+impl ScrollNode {
+    pub(crate) fn drag_gesture(&self) -> (Option<Orientation>, GestureState) {
+        let orientation =
+            if self.vertical { Orientation::Vertical } else { Orientation::Horizontal };
+        let state = if self.enabled { self.drag.gesture_state() } else { GestureState::Idle };
+        (Some(orientation), state)
+    }
+}
+
+impl KeyInputModifierNode for ScrollNode {
+    fn on_key_event(
+        &mut self,
+        event: &compose_ui::KeyEvent,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
+        let driver = ScrollDriver {
+            state: &self.dyn_state,
+            fling_behavior: self.fling_behavior.as_ref(),
+            interaction_source: None,
+            state_source: true,
+            set_outer: None,
+        };
+        self.drag.on_key_event(event, self.vertical, reverse, context, &driver)
+    }
+}
+
+impl compose_ui::TraversableNode for ScrollNode {
+    fn traverse_key(&self) -> &'static compose_ui::TraverseKey {
+        &DRAG_GESTURES
+    }
+}
+
 impl ModifierNode for ScrollNode {
+    fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
+        Some(self)
+    }
+
+    fn as_traversable(&mut self) -> Option<&mut dyn compose_ui::TraversableNode> {
+        Some(self)
+    }
+
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
         Some(self)
     }
@@ -1006,6 +1053,50 @@ impl NestedScrollConnection for ScrollableConnection {
 }
 
 impl DragScroller {
+    /// Where its detection is, for the gestures inside.
+    pub(crate) fn gesture_state(&self) -> GestureState {
+        match &self.drag {
+            Some(drag) if drag.scrolling => GestureState::Recognized,
+            Some(_) => GestureState::Waiting,
+            None => GestureState::Idle,
+        }
+    }
+
+    /// Page Up and Page Down scroll by the viewport, as `ScrollableNode.onKeyEvent`. It isn't told
+    /// to the nested-scroll connections around: they're found by a gesture's events, and a key's
+    /// don't go through them.
+    pub(crate) fn on_key_event(
+        &mut self,
+        event: &compose_ui::KeyEvent,
+        vertical: bool,
+        reverse: bool,
+        context: &mut EventContext<'_>,
+        driver: &ScrollDriver<'_>,
+    ) -> bool {
+        let page_up = event.key == compose_ui::Key::PageUp;
+        if !(page_up || event.key == compose_ui::Key::PageDown)
+            || event.kind != compose_ui::KeyEventType::KeyDown
+            || event.modifiers.ctrl
+        {
+            return false;
+        }
+        let size = context.layout_size();
+        let viewport = if vertical { size.height } else { size.width } as f32;
+        // The pointer's way is the content's other: Page Down goes as a drag up.
+        let delta = if page_up { -viewport } else { viewport };
+        let mut target = self.target(driver, reverse, context.density().density);
+        target.chain = NestedScrollChain::default();
+        let state = driver.state.clone();
+        context.coroutine_scope().launch(async move {
+            let _ = state
+                .scroll(MutatePriority::UserInput, move |scope| async move {
+                    target.user_scroll(&scope, delta);
+                })
+                .await;
+        });
+        true
+    }
+
     /// The wheel's and the drags' deltas scroll the driver's state in scrolls of the user-input
     /// priority; `flinger` gives a scroll usable later, as the nested-scroll parent of the
     /// scrollables inside.
@@ -1017,7 +1108,7 @@ impl DragScroller {
         bounds: IntSize,
         vertical: bool,
         reverse: bool,
-        context: &EventContext<'_>,
+        context: &mut EventContext<'_>,
         driver: &ScrollDriver<'_>,
         flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
@@ -1127,6 +1218,14 @@ impl DragScroller {
                 let moved = position - drag.start;
                 let along = if vertical { moved.y } else { moved.x };
                 if along.abs() >= slop {
+                    // At an angle that isn't its way, while it's the way of a gesture waiting
+                    // around: that one goes first, as `DragGestureNode`.
+                    let angle = moved.y.abs().atan2(moved.x.abs()).to_degrees();
+                    let own =
+                        if vertical { Orientation::Vertical } else { Orientation::Horizontal };
+                    if !aligned(own, angle) && parent_aligned(context, angle) {
+                        return;
+                    }
                     drag.scrolling = true;
                     event.consume();
                     Self::begin_scroll(&mut self.session, &mut self.dragged, driver);

@@ -665,7 +665,7 @@ struct ScrollableElement<S> {
     interaction_source: Option<MutableInteractionSource>,
 }
 
-struct ScrollableNode {
+pub(crate) struct ScrollableNode {
     /// The state as given, to compare with the next one.
     state: Box<dyn std::any::Any>,
     dyn_state: Rc<dyn ScrollableState>,
@@ -733,7 +733,55 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
     }
 }
 
+impl ScrollableNode {
+    pub(crate) fn drag_gesture(&self) -> (Option<super::Orientation>, super::GestureState) {
+        let orientation = if self.vertical {
+            super::Orientation::Vertical
+        } else {
+            super::Orientation::Horizontal
+        };
+        let state =
+            if self.enabled { self.drag.gesture_state() } else { super::GestureState::Idle };
+        (Some(orientation), state)
+    }
+}
+
+impl compose_ui::KeyInputModifierNode for ScrollableNode {
+    fn on_key_event(
+        &mut self,
+        event: &compose_ui::KeyEvent,
+        context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let interaction_source = self.interaction_source.clone();
+        let driver = crate::scroll::ScrollDriver {
+            state: &self.dyn_state,
+            fling_behavior: self.fling_behavior.as_ref(),
+            interaction_source: interaction_source.as_ref(),
+            state_source: false,
+            set_outer: None,
+        };
+        self.drag.on_key_event(event, self.vertical, !self.reverse_direction, context, &driver)
+    }
+}
+
+impl compose_ui::TraversableNode for ScrollableNode {
+    fn traverse_key(&self) -> &'static compose_ui::TraverseKey {
+        &super::DRAG_GESTURES
+    }
+}
+
 impl ModifierNode for ScrollableNode {
+    fn as_key_input(&mut self) -> Option<&mut dyn compose_ui::KeyInputModifierNode> {
+        Some(self)
+    }
+
+    fn as_traversable(&mut self) -> Option<&mut dyn compose_ui::TraversableNode> {
+        Some(self)
+    }
+
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }

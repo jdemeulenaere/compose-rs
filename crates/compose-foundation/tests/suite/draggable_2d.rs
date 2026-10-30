@@ -30,7 +30,7 @@ fn drag_box(
 ) -> ComposeTestRule {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let on_delta = on_delta.clone();
-        let state = remember_draggable_2d_state!(move |delta| on_delta(delta));
+        let state = remember_draggable_2d_state!(on_delta);
         Box!(modifier = Modifier.size(100.dp()).draggable_2d(state, options()));
     });
     ui.wait_for_idle();
@@ -266,7 +266,7 @@ fn the_inner_takes_the_drag_from_a_2d_or_a_1d_outer() {
         let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
             let (add_outer, add_inner) = (add_outer.clone(), add_inner.clone());
             let around = if outer_2d {
-                let state = remember_draggable_2d_state!(move |delta| add_outer(delta));
+                let state = remember_draggable_2d_state!(add_outer);
                 Modifier.size(300.dp()).draggable_2d(state, Draggable2DOptions::default())
             } else {
                 let state = remember_draggable_state!(move |x| add_outer(Offset::new(x, 0.0)));
@@ -278,7 +278,7 @@ fn the_inner_takes_the_drag_from_a_2d_or_a_1d_outer() {
             };
             Box!(modifier = around, {
                 let add_inner = add_inner.clone();
-                let state = remember_draggable_2d_state!(move |delta| add_inner(delta));
+                let state = remember_draggable_2d_state!(add_inner);
                 Box!(
                     modifier =
                         Modifier.size(300.dp()).draggable_2d(state, Draggable2DOptions::default())
@@ -296,7 +296,7 @@ fn the_inner_takes_the_drag_from_a_2d_or_a_1d_outer() {
 #[test]
 fn drags_show_on_the_source_and_cancel_when_it_changes() {
     let (one, two) = (MutableInteractionSource::new(), MutableInteractionSource::new());
-    let (recorded_one, recorded_two) = (record(&one.as_source()), record(&two.as_source()));
+    let (recorded_one, recorded_two) = (record(one.as_source()), record(two.as_source()));
     let current = mutable_state_of(one);
     let read = current.handle();
     let mut ui = drag_box(

@@ -601,7 +601,7 @@ impl DragGestureNode {
 
 /// Whether a gesture at `angle` degrees (0: sideways, 90: up or down) goes along `orientation`, as
 /// `isDragAngleAlignedWithOrientation`.
-fn aligned(orientation: Orientation, angle: f32) -> bool {
+pub(crate) fn aligned(orientation: Orientation, angle: f32) -> bool {
     match orientation {
         Orientation::Horizontal => angle <= HORIZONTAL_ANGLE_UPPER_BOUND,
         Orientation::Vertical => {
@@ -610,13 +610,25 @@ fn aligned(orientation: Orientation, angle: f32) -> bool {
     }
 }
 
-/// Whether a drag gesture around is waiting, and a gesture at `angle` is its way.
-fn parent_aligned(context: &mut NodeContext<'_>, angle: f32) -> bool {
+/// Whether a drag gesture around is waiting, and a gesture at `angle` is its way. A scrollable is
+/// one, as Compose's, whose nodes are `DragGestureNode`s; here they have their own detection.
+pub(crate) fn parent_aligned(context: &mut NodeContext<'_>, angle: f32) -> bool {
     let mut found = false;
     context.traverse_ancestors_with_key(&DRAG_GESTURES, |node, _| {
-        if let Some(parent) = node.downcast_ref::<DragGestureNode>() {
-            found = parent.gesture_state() == GestureState::Waiting
-                && parent.orientation.is_some_and(|parent| aligned(parent, angle));
+        let around: Option<(Option<Orientation>, GestureState)> =
+            if let Some(parent) = node.downcast_ref::<DragGestureNode>() {
+                Some((parent.orientation, parent.gesture_state()))
+            } else if let Some(parent) = node.downcast_ref::<crate::scroll::ScrollNode>() {
+                Some(parent.drag_gesture())
+            } else if let Some(parent) = node.downcast_ref::<crate::lazy::LazyScrollNode>() {
+                Some(parent.drag_gesture())
+            } else {
+                node.downcast_ref::<super::scrollable::ScrollableNode>()
+                    .map(super::scrollable::ScrollableNode::drag_gesture)
+            };
+        if let Some((orientation, state)) = around {
+            found = state == GestureState::Waiting
+                && orientation.is_some_and(|parent| aligned(parent, angle));
         }
         !found
     });

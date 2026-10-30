@@ -3167,7 +3167,7 @@ struct LazyScrollElement {
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
 }
 
-struct LazyScrollNode {
+pub(crate) struct LazyScrollNode {
     state: LazyListState,
     /// The state as a scrollable state, for drags and flings.
     dyn_state: Rc<dyn ScrollableState>,
@@ -3293,7 +3293,59 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
     }
 }
 
+impl LazyScrollNode {
+    pub(crate) fn drag_gesture(
+        &self,
+    ) -> (Option<crate::gestures::Orientation>, crate::gestures::GestureState) {
+        use crate::gestures::Orientation;
+        let orientation =
+            if self.vertical { Orientation::Vertical } else { Orientation::Horizontal };
+        let state = if self.enabled {
+            self.drag.gesture_state()
+        } else {
+            crate::gestures::GestureState::Idle
+        };
+        (Some(orientation), state)
+    }
+}
+
+impl compose_ui::KeyInputModifierNode for LazyScrollNode {
+    fn on_key_event(
+        &mut self,
+        event: &compose_ui::KeyEvent,
+        context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
+        let dyn_state = self.dyn_state.clone();
+        let driver = ScrollDriver {
+            state: &dyn_state,
+            fling_behavior: self.fling_behavior.as_ref(),
+            interaction_source: None,
+            state_source: true,
+            set_outer: Some(&self.set_outer),
+        };
+        self.drag.on_key_event(event, self.vertical, reverse, context, &driver)
+    }
+}
+
+impl compose_ui::TraversableNode for LazyScrollNode {
+    fn traverse_key(&self) -> &'static compose_ui::TraverseKey {
+        &crate::gestures::DRAG_GESTURES
+    }
+}
+
 impl ModifierNode for LazyScrollNode {
+    fn as_key_input(&mut self) -> Option<&mut dyn compose_ui::KeyInputModifierNode> {
+        Some(self)
+    }
+
+    fn as_traversable(&mut self) -> Option<&mut dyn compose_ui::TraversableNode> {
+        Some(self)
+    }
+
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
         Some(self)
     }

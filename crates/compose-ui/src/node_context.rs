@@ -149,6 +149,11 @@ impl NodeContext<'_> {
         self.node
     }
 
+    /// The size of the layout node it's on, as last measured: what its parent sees.
+    pub fn layout_size(&self) -> crate::IntSize {
+        self.tree.node(self.node).layers.first().map_or(crate::IntSize::ZERO, |layer| layer.size)
+    }
+
     /// Whether the node is attached, as `Modifier.Node.isAttached`: its layout node is in the
     /// tree and active (not content kept for reuse).
     pub fn is_attached(&self) -> bool {

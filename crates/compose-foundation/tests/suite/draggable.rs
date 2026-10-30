@@ -45,7 +45,7 @@ fn dragging(
 ) -> ComposeTestRule {
     drag_box(move || {
         let on_delta = on_delta.clone();
-        let state = remember_draggable_state!(move |delta| on_delta(delta));
+        let state = remember_draggable_state!(on_delta);
         Modifier.draggable_with(state, orientation, options())
     })
 }
@@ -480,7 +480,7 @@ fn drag_of(
 ) -> impl Fn() -> Modifier + Clone + 'static {
     move || {
         let on_delta = on_delta.clone();
-        let state = remember_draggable_state!(move |delta| on_delta(delta));
+        let state = remember_draggable_state!(on_delta);
         Modifier.draggable_with(
             state,
             orientation,
@@ -510,7 +510,7 @@ fn the_inner_of_two_takes_the_drag_and_the_outer_gets_nothing() {
 #[test]
 fn a_drag_starts_and_stops_on_the_source() {
     let source = MutableInteractionSource::new();
-    let recorded = record(&source.as_source());
+    let recorded = record(source.as_source());
     let given = source.clone();
     let mut ui = dragging(
         Orientation::Horizontal,
@@ -536,7 +536,7 @@ fn a_drag_starts_and_stops_on_the_source() {
 #[test]
 fn a_drag_cancels_on_the_source_when_disposed() {
     let source = MutableInteractionSource::new();
-    let recorded = record(&source.as_source());
+    let recorded = record(source.as_source());
     let shown = mutable_state_of(true);
     let read = shown.handle();
     let given = source.clone();
@@ -566,7 +566,7 @@ fn a_drag_cancels_on_the_source_when_disposed() {
 #[test]
 fn a_drag_cancels_on_the_source_when_disabled() {
     let source = MutableInteractionSource::new();
-    let recorded = record(&source.as_source());
+    let recorded = record(source.as_source());
     let enabled = mutable_state_of(true);
     let read = enabled.handle();
     let given = source.clone();
@@ -614,7 +614,7 @@ fn the_velocity_is_limited_by_the_view_configuration() {
 #[test]
 fn a_drag_cancels_on_the_old_source_and_starts_nothing_on_the_new() {
     let (one, two) = (MutableInteractionSource::new(), MutableInteractionSource::new());
-    let (recorded_one, recorded_two) = (record(&one.as_source()), record(&two.as_source()));
+    let (recorded_one, recorded_two) = (record(one.as_source()), record(two.as_source()));
     let current = mutable_state_of(one);
     let read = current.handle();
     let mut ui = dragging(
@@ -793,7 +793,7 @@ fn a_parent_takes_over_once_the_child_is_gone() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
         let (add_parent, add_child) = (add_parent.clone(), add_child.clone());
         let child_total = child_total.clone();
-        let outer = remember_draggable_state!(move |delta| add_parent(delta));
+        let outer = remember_draggable_state!(add_parent);
         Box!(
             modifier = Modifier.size(400.dp()).draggable_with(
                 outer,
@@ -841,7 +841,7 @@ fn a_parent_picking_up_midway_is_told_the_whole_drag() {
     let distance = 400.0f32;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
         let (add_parent, told) = (add_parent.clone(), told.clone());
-        let outer = remember_draggable_state!(move |delta| add_parent(delta));
+        let outer = remember_draggable_state!(add_parent);
         Box!(
             modifier = Modifier.size(400.dp()).draggable_with(
                 outer,
@@ -1226,7 +1226,7 @@ fn a_gesture_at_its_angle_does_not_go_to_a_disabled_one_around() {
     let mut ui = nested(
         move || {
             let add_outer = add_outer.clone();
-            let state = remember_draggable_state!(move |delta| add_outer(delta));
+            let state = remember_draggable_state!(add_outer);
             Modifier.draggable_with(
                 state,
                 Orientation::Vertical,
@@ -1377,7 +1377,7 @@ fn the_short_form_is_the_full_one() {
     let (total, add) = counter();
     let mut ui = drag_box(move || {
         let add = add.clone();
-        let state = remember_draggable_state!(move |delta| add(delta));
+        let state = remember_draggable_state!(add);
         Modifier.draggable(state, Orientation::Vertical, true, true, |_| {}, |_| {})
     });
     swipe(&mut ui, Offset::new(0.0, 40.0), 100);
@@ -1393,7 +1393,7 @@ fn a_move_taken_by_another_stops_the_drag_without_velocity() {
     let taking = take.clone();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let (add, on_stop, taking) = (add.clone(), on_stop.clone(), taking.clone());
-        let state = remember_draggable_state!(move |delta| add(delta));
+        let state = remember_draggable_state!(add);
         Box!(
             modifier = Modifier
                 .size(100.dp())
