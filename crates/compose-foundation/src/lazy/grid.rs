@@ -984,13 +984,21 @@ impl ComposeArg for LazyGridScope {
 
 impl Interval {
     /// With the items' spans (a grid's).
-    fn spanned(mut self, span: SpanOf) -> Interval {
+    pub(super) fn spanned(mut self, span: SpanOf) -> Interval {
         self.span = Some(span);
         self
     }
 }
 
 impl Items {
+    /// Whether a staggered grid's item `index` takes all its lanes (a span of 0 cells).
+    pub(super) fn is_full_span(&self, index: usize) -> bool {
+        let scope = LazyGridItemSpanScope { max_line_span: 0, max_current_line_span: 0 };
+        self.find(index).is_some_and(|(interval, local)| {
+            interval.span.as_ref().is_some_and(|span| span(scope, local).0 == 0)
+        })
+    }
+
     /// Item `index`'s span in `scope`, in cells (1 without one).
     fn span(&self, index: usize, scope: LazyGridItemSpanScope) -> usize {
         match self.find(index) {
@@ -1247,7 +1255,7 @@ fn LazyGrid(
 
 /// An item's constraints, `size` across the grid: fixed across, unbounded along, as Compose's
 /// `Constraints.fixedWidth` (a vertical grid's) and `fixedHeight`.
-fn cell_constraints(vertical: bool, size: i32) -> Constraints {
+pub(super) fn cell_constraints(vertical: bool, size: i32) -> Constraints {
     if vertical {
         Constraints::new(size, size, 0, Constraints::INFINITY)
     } else {
@@ -1256,15 +1264,15 @@ fn cell_constraints(vertical: bool, size: i32) -> Constraints {
 }
 
 /// The cells across a grid, as Compose's `LazyGridSlots`: their sizes and offsets.
-struct Slots {
-    sizes: Vec<i32>,
-    positions: Vec<i32>,
+pub(super) struct Slots {
+    pub(super) sizes: Vec<i32>,
+    pub(super) positions: Vec<i32>,
 }
 
 impl Slots {
     /// Placed by the arrangement across, as Compose's `rememberColumnWidthSums`: from the left in
     /// any layout direction, mirrored when placed.
-    fn new(
+    pub(super) fn new(
         sizes: Vec<i32>,
         arrangement: &MainAxisArrangement,
         room: i32,
@@ -1281,12 +1289,12 @@ impl Slots {
         Slots { sizes, positions }
     }
 
-    fn count(&self) -> usize {
+    pub(super) fn count(&self) -> usize {
         self.sizes.len()
     }
 
     /// The offset and size across the grid of an item taking `span` cells from `slot`.
-    fn of(&self, slot: usize, span: usize) -> (i32, i32) {
+    pub(super) fn of(&self, slot: usize, span: usize) -> (i32, i32) {
         let last = (slot + span).min(self.count()) - 1;
         let start = self.positions[slot];
         (start, (self.positions[last] + self.sizes[last] - start).max(0))

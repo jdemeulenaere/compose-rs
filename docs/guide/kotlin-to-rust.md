@@ -909,6 +909,41 @@ pub fn Albums(albums: ImmutableList<Album>) {
 
 `LazyVerticalGrid` and `LazyHorizontalGrid` take a `LazyGridScope` with the list's forms (`item`, `items`, `items_keyed`, `items_list`, `items_indexed`, …), whose `_with` forms take Compose's `contentType` after the key, as a list's (`items_keyed_with(count, key, content_type, content)`), and whose `_with_span` forms take Compose's `span` and `contentType`, in Compose's order (`items_keyed_with_span(count, key, span, content_type, content)`, D454). A span is a closure returning a `GridItemSpan` from the `LazyGridItemSpanScope` (`max_line_span()`, `max_current_line_span()`) and the item: `|_, _| GridItemSpan(1)` is Compose's default. Give spans only where items take more than a cell: with spans, which items a line holds is found by asking the spans from the first item, again each time the grid's content changes. The content gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`). Each item is composed on its own and reused by content type, as in a lazy list (D450).
 
+### Staggered grids
+
+```kotlin
+LazyVerticalStaggeredGrid(
+    columns = StaggeredGridCells.Adaptive(120.dp),
+    modifier = Modifier.fillMaxSize(),
+    verticalItemSpacing = 4.dp,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+) {
+    item(span = StaggeredGridItemSpan.FullLine) { Text("Pins") }
+    items(heights) { height -> Box(Modifier.fillMaxWidth().height(height.dp)) }
+}
+```
+
+<!-- snippet: src/layouts.rs#staggered -->
+```rust
+#[composable]
+pub fn Pinboard(heights: ImmutableList<f32>) {
+    LazyVerticalStaggeredGrid!(
+        StaggeredGridCells::Adaptive(120.dp()),
+        modifier = Modifier.fill_max_size(),
+        vertical_item_spacing = 4.dp(),
+        horizontal_arrangement = Arrangement::spaced_by(4.dp()),
+        move |scope: LazyStaggeredGridScope| {
+            scope.item_with_span((), StaggeredGridItemSpan::FullLine, || Text!("Pins"));
+            scope.items_list(heights.clone(), |height| {
+                Box!(modifier = Modifier.fill_max_width().height(Dp(*height)));
+            });
+        }
+    );
+}
+```
+
+`LazyVerticalStaggeredGrid` and `LazyHorizontalStaggeredGrid` take a `LazyStaggeredGridScope` with the list's forms; the `_with_span` forms take Compose's `contentType` and `span`. Each item goes in the lane that ends first, so which lane it's in depends on the sizes of those before it. `remember_lazy_staggered_grid_state` keeps the position per lane. What's different: it has no prefetch yet, so a scroll composes in the frame what it reaches (D1469).
+
 ### Pagers
 
 ```kotlin

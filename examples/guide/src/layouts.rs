@@ -196,6 +196,24 @@ pub fn Albums(albums: ImmutableList<Album>) {
 }
 // ANCHOR_END: grid
 
+// ANCHOR: staggered
+#[composable]
+pub fn Pinboard(heights: ImmutableList<f32>) {
+    LazyVerticalStaggeredGrid!(
+        StaggeredGridCells::Adaptive(120.dp()),
+        modifier = Modifier.fill_max_size(),
+        vertical_item_spacing = 4.dp(),
+        horizontal_arrangement = Arrangement::spaced_by(4.dp()),
+        move |scope: LazyStaggeredGridScope| {
+            scope.item_with_span((), StaggeredGridItemSpan::FullLine, || Text!("Pins"));
+            scope.items_list(heights.clone(), |height| {
+                Box!(modifier = Modifier.fill_max_width().height(Dp(*height)));
+            });
+        }
+    );
+}
+// ANCHOR_END: staggered
+
 // ANCHOR: pager
 #[composable]
 pub fn Pictures(titles: ImmutableList<SharedString>) {

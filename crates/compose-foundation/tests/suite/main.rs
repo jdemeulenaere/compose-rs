@@ -47,6 +47,7 @@ mod lazy_nested_prefetch;
 mod lazy_request_scroll;
 mod lazy_reuse;
 mod lazy_scroll;
+mod lazy_staggered_grid;
 mod lazy_state_restoration;
 mod lazy_support;
 mod legacy;

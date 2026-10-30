@@ -26,6 +26,7 @@ mod grid;
 mod layout_info;
 pub(crate) mod pager;
 mod prefetch;
+mod staggered;
 
 pub use animate_scroll::LazyLayoutScrollScope;
 pub use cache_window::{
@@ -38,6 +39,12 @@ pub use grid::{
     LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
 };
 pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, LazyListLayoutInfo};
+pub use staggered::{
+    LazyHorizontalStaggeredGrid, LazyStaggeredGridItemInfo, LazyStaggeredGridLaneInfo,
+    LazyStaggeredGridLayoutInfo, LazyStaggeredGridScope, LazyStaggeredGridState,
+    LazyVerticalStaggeredGrid, StaggeredGridCells, StaggeredGridItemSpan,
+    remember_lazy_staggered_grid_state,
+};
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -2376,6 +2383,9 @@ impl compose_ui::PinnableContainer for ItemPin {
 pub(crate) enum ItemStacking {
     /// At the top start, as large as the largest: a grid's, as Compose's `LazyGridMeasuredItem`.
     AtTheOrigin,
+    /// At the end along the axis, as large as the largest: a reversed staggered grid's, as Compose's
+    /// `mainAxisLayoutSize - offset - placeable.mainAxisSize`.
+    AtTheEnd { vertical: bool },
     /// One after the other along the axis (the last first, reversed), as Compose's
     /// `LazyListMeasuredItem`: a list's.
     Along { vertical: bool, reverse: bool },
@@ -2434,7 +2444,12 @@ impl MeasurePolicy for ItemLayout {
             },
         );
         for placeable in &placeables {
-            scope.place_relative(placeable, 0, 0);
+            let (x, y) = match self.stacking {
+                ItemStacking::AtTheEnd { vertical: true } => (0, size.height - placeable.height),
+                ItemStacking::AtTheEnd { vertical: false } => (size.width - placeable.width, 0),
+                _ => (0, 0),
+            };
+            scope.place_relative(placeable, x, y);
         }
         scope.layout(size.width, size.height)
     }

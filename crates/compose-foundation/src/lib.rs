@@ -62,11 +62,14 @@ pub use lazy::pager::{
 pub use lazy::{
     CrossAxisCells, GridCells, GridItemSpan, LazyColumn, LazyGridDefaults, LazyGridItemInfo,
     LazyGridItemScope, LazyGridItemSpanScope, LazyGridLayoutInfo, LazyGridScope, LazyGridState,
-    LazyHorizontalGrid, LazyItemModifiers, LazyItemScope, LazyLayoutCacheWindow,
-    LazyLayoutScrollScope, LazyListDefaults, LazyListItemInfo, LazyListLayoutInfo, LazyListScope,
-    LazyListState, LazyRow, LazyVerticalGrid, lazy_layout_cache_window,
-    lazy_layout_cache_window_fraction, lazy_layout_cache_window_fraction_with,
-    lazy_layout_cache_window_with, remember_lazy_grid_state, remember_lazy_list_state,
+    LazyHorizontalGrid, LazyHorizontalStaggeredGrid, LazyItemModifiers, LazyItemScope,
+    LazyLayoutCacheWindow, LazyLayoutScrollScope, LazyListDefaults, LazyListItemInfo,
+    LazyListLayoutInfo, LazyListScope, LazyListState, LazyRow, LazyStaggeredGridItemInfo,
+    LazyStaggeredGridLaneInfo, LazyStaggeredGridLayoutInfo, LazyStaggeredGridScope,
+    LazyStaggeredGridState, LazyVerticalGrid, LazyVerticalStaggeredGrid, StaggeredGridCells,
+    StaggeredGridItemSpan, lazy_layout_cache_window, lazy_layout_cache_window_fraction,
+    lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
+    remember_lazy_grid_state, remember_lazy_list_state, remember_lazy_staggered_grid_state,
 };
 pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 pub use overscroll::{

@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 57 | 769 |
-| `port` | 2 | 11 |
-| `partial` | 41 | 1,078 |
-| `feature:<name>` | 62 | 1,006 |
+| `ported` | 63 | 841 |
+| `port` | 6 | 65 |
+| `partial` | 43 | 1,144 |
+| `feature:<name>` | 50 | 814 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -170,30 +170,30 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 
 ### Lazy staggered grids (`lazy.staggeredgrid`)
 
-All 20 files need `feature:staggered-grid`; the animation files also need `animate-item`, the cache window file `cache-window`, and `LazyStaggeredGridInLookaheadTest` needs ui's lookahead.
+The grid is there (D1469), but for prefetch and its cache window (`feature:staggered-prefetch`).
 
 | Path | Tests | Covers | Status |
 |---|---|---|---|
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridAnimatedScrollTest.kt | 19 | `animateScrollBy` / `animateScrollToItem` | feature:staggered-grid (+ lazy-state-api) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridArrangementsTest.kt | 7 | Spacing both ways, negative spacing | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridBeyondBoundsTest.kt | 11 | Beyond-bounds layout | feature:staggered-grid (+ beyond-bounds-api) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridCacheWindowTest.kt | 15 | Per-lane cache window | feature:staggered-grid (+ cache-window) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridContentPaddingTest.kt | 11 | Content padding | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridCustomKeysTest.kt | 21 | Keys keep state | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridInLookaheadTest.kt | 13 | Positions under lookahead | feature:staggered-grid (+ ui lookahead) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemAppearanceAnimationTest.kt | 10 | `animateItem` fade-in | feature:staggered-grid (+ animate-item) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemDisappearanceAnimationTest.kt | 12 | `animateItem` fade-out | feature:staggered-grid (+ animate-item) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemPlacementAnimationTest.kt | 49 | `animateItem` placement | feature:staggered-grid (+ animate-item) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLaneInfoTest.kt | 10 | Lane bookkeeping (internal `LazyStaggeredGridLaneInfo`) | feature:staggered-grid (an internal class: adapt to compose-rs's own lane store) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLayoutInfoTest.kt | 6 | `layoutInfo` | feature:staggered-grid (+ lazy-layout-info) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridPinnableContainerTest.kt | 13 | Pinning | feature:staggered-grid (+ pinnable) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridPrefetcherTest.kt | 15 | Prefetch | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridRequestScrollTest.kt | 9 | `requestScrollToItem` | feature:staggered-grid (+ lazy-state-api) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridReverseLayoutTest.kt | 12 | Reverse layout | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridScrollIndicatorTest.kt | 9 | `scrollIndicatorState` | feature:staggered-grid (+ scroll-indicator-state) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridScrollTest.kt | 18 | `scrollToItem` in and out of bounds, lanes | feature:staggered-grid |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridSemanticTest.kt | 2 | Item semantics | feature:staggered-grid (+ lazy-semantics) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridTest.kt | 55 | Distribution across lanes, spans (`FullLine`), scrolling, sizes | feature:staggered-grid |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridAnimatedScrollTest.kt | 19 | `animateScrollBy` / `animateScrollToItem` | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridArrangementsTest.kt | 7 | Spacing both ways, negative spacing | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridBeyondBoundsTest.kt | 11 | Beyond-bounds layout | port |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridCacheWindowTest.kt | 15 | Per-lane cache window | feature:staggered-prefetch (+ cache-window) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridContentPaddingTest.kt | 11 | Content padding | partial (`lazy_staggered_grid.rs`: 10 of 11; `pinnedItemWorksIsPlacedOnceInContentPadding` with the pinning file) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridCustomKeysTest.kt | 21 | Keys keep state | port |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridInLookaheadTest.kt | 13 | Positions under lookahead | feature:ui-lookahead |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemAppearanceAnimationTest.kt | 10 | `animateItem` fade-in | feature:animate-item |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemDisappearanceAnimationTest.kt | 12 | `animateItem` fade-out | feature:animate-item |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemPlacementAnimationTest.kt | 49 | `animateItem` placement | feature:animate-item |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLaneInfoTest.kt | 10 | Lane bookkeeping (internal `LazyStaggeredGridLaneInfo`) | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLayoutInfoTest.kt | 6 | `layoutInfo` | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridPinnableContainerTest.kt | 13 | Pinning | port |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridPrefetcherTest.kt | 15 | Prefetch | feature:staggered-prefetch |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridRequestScrollTest.kt | 9 | `requestScrollToItem` | port |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridReverseLayoutTest.kt | 12 | Reverse layout | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridScrollIndicatorTest.kt | 9 | `scrollIndicatorState` | feature:scroll-indicator-state |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridScrollTest.kt | 18 | `scrollToItem` in and out of bounds, lanes | ported (`lazy_staggered_grid.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridSemanticTest.kt | 2 | Item semantics | feature:lazy-semantics (`IndexForKey`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridTest.kt | 55 | Distribution across lanes, spans (`FullLine`), scrolling, sizes | partial (`lazy_staggered_grid.rs`: 50 of 55; left: the three on lookahead, `onlyOneInitialMeasurePass` as items are composed in rounds, D125, and `customOverscroll`) |
 
 ### Pager (`pager`)
 
@@ -376,6 +376,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **lazy-list-params:** done: `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect` (D1464). `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
 - **grid-parity:** done but for `LazyGridItemScope`'s `animateItem` (with animate-item), D1451; `overscrollEffect` D1464.
 - **cache-window:** done for lists and grids (D892). Left: `LazyStaggeredGridDefaults.cacheWindow(state)`, with staggered grids.
+- **staggered-prefetch:** a staggered grid's `cacheWindow` parameter, `LazyStaggeredGridDefaults.cacheWindow(state)` and `MultiLaneCacheWindow`: until then it composes in the frame what a scroll reaches (D1469).
 - **lazy-semantics:** `CollectionInfo`, `ScrollToIndex` and `scrollByOffset` are done on lists, grids and pagers (D1468), a traversal group too. Left: `CollectionItemInfo` and `IndexForKey`, for `performScrollToKey`.
 - **pinnable:** (Started, D1282: `LOCAL_PINNABLE_CONTAINER`, `PinnableContainer` and `PinnedHandle` in ui, lazy items pinned one at a time by what's focusable; the rest of this waits.) `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
 - **beyond-bounds-api:** ui's `BeyondBoundsLayout` (`ModifierLocalBeyondBoundsLayout`, `layout(direction) {}`) answered by lazy layouts. compose-rs answers focus searches only.
@@ -384,7 +385,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - layout: `LazyLayout(itemProvider, modifier, prefetchState, measurePolicy)`, `LazyLayoutItemProvider`, `LazyLayoutMeasurePolicy`, `LazyLayoutMeasureScope.compose(index)`;
   - prefetch: `LazyLayoutPrefetchState` (`schedulePrecomposition`, `schedulePrecompositionAndPremeasure`, `PrefetchHandle.cancel`/`markAsUrgent`, `PrefetchResultScope`), the `onNestedPrefetch` constructor (*exp*), `NestedPrefetchScope` (*exp*);
   - content: `LazyLayoutIntervalContent`, `IntervalList`/`MutableIntervalList`, `LazyLayoutKeyIndexMap`, `getDefaultLazyLayoutKey`.
-- **staggered-grid:** `LazyVerticalStaggeredGrid`, `LazyHorizontalStaggeredGrid`, `StaggeredGridCells` (Fixed, Adaptive, FixedSize), `StaggeredGridItemSpan` (FullLine, SingleLane), `LazyStaggeredGridScope` (`item`, `items`, list and indexed forms), `LazyStaggeredGridState` (`rememberLazyStaggeredGridState`, all the scroll API, `layoutInfo`), `LazyStaggeredGridItemInfo`/`LayoutInfo`, `LazyStaggeredGridItemScope`.
+- **staggered-grid:** Done (D1469) but for prefetch (`staggered-prefetch`), `animateItem`, `scrollIndicatorState` and `IndexForKey`: `LazyVerticalStaggeredGrid`, `LazyHorizontalStaggeredGrid`, `StaggeredGridCells`, `StaggeredGridItemSpan`, `LazyStaggeredGridScope`, `LazyStaggeredGridState`, `LazyStaggeredGridLayoutInfo`, `LazyLayoutScrollScope(state, scope)`.
 - **pager:** Done (D1467; `scrollIndicatorState` too, D1559) but for `PagerDefaults.bringIntoViewSpec` and `PagerState` as an abstract class:
   - composables: `HorizontalPager`, `VerticalPager`;
   - state: `PagerState` (abstract) and `PagerState(…, pageCount)`, `rememberPagerState`;
@@ -535,7 +536,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: all 25 pager files.
     - Depends on: scrollable, lazy-state-api, snapping, cache-window, bring-into-view, pinnable, lazy-semantics, scroll-indicator-state. Built on compose-rs's lazy list internals.
     - Size: XL. Experimental: no.
-27. **staggered-grid.**
+27. **staggered-grid.** The grid is done (D1469), on compose-rs's lazy list's composition; 132 of the 317 tests ported. Next: custom keys, request scroll, pinning and beyond bounds (their API is there), then `staggered-prefetch`.
     - API: `LazyVerticalStaggeredGrid`, `LazyHorizontalStaggeredGrid` and their API.
     - Tests: all 20 staggered files.
     - Depends on: lazy-layout-info, lazy-state-api, cache-window (staggered's default), animate-item, pinnable, beyond-bounds-api, ui lookahead.
