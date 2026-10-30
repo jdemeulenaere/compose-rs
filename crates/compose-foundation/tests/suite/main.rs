@@ -124,6 +124,7 @@ mod semantics_modifier_node;
 mod semantics_properties;
 mod shadow;
 mod shape_parity;
+mod snapping;
 mod text_input;
 mod text_reuse;
 mod text_selection_colors;

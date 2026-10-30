@@ -25,6 +25,10 @@ pub struct LazyListItemInfo {
     pub size: i32,
     /// Its content type, hashed (`None`: Compose's `null`).
     pub content_type: Option<u64>,
+    /// It's a sticking header, not where the scroll puts it, as Compose's internal
+    /// `nonScrollableItem`: what snaps skips it.
+    #[doc(hidden)]
+    pub non_scrollable: bool,
 }
 
 /// What a lazy list laid out last, as Compose's `LazyListLayoutInfo`.

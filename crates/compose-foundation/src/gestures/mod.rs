@@ -6,6 +6,7 @@ mod drag_gesture;
 mod draggable;
 mod mouse_wheel;
 mod scrollable;
+mod snapping;
 
 pub use draggable::{
     DefaultDraggable2DState, DefaultDraggableState, Drag2DBlock, Drag2DScope, DragBlock, DragScope,
@@ -22,6 +23,12 @@ pub use scrollable::{
     remember_scrollable_state, scrollable_state,
 };
 pub(crate) use scrollable::{DragSession, ScrollCore};
+pub use snapping::{
+    MIN_FLING_VELOCITY, SnapFlingBehavior, SnapLayoutInfoProvider, SnapPosition,
+    TargetedFlingBehavior, grid_snap_layout_info_provider, list_snap_layout_info_provider,
+    remember_grid_snap_fling_behavior, remember_list_snap_fling_behavior,
+    remember_snap_fling_behavior, snap_fling_behavior,
+};
 
 use compose_runtime::ComposeArg;
 

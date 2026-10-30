@@ -222,6 +222,11 @@ impl LazyGridState {
 
     /// Scrolls to the line of item `index` (and `scroll_offset` pixels into it) at the next
     /// layout, as `requestScrollToItem`: a scroll going on is stopped.
+    /// What's scrolled since the last layout, for what reads its offsets before the next.
+    pub(crate) fn pending_scroll(&self) -> f32 {
+        self.list.pending_scroll()
+    }
+
     pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
         self.list.request_scroll_to_item(index, scroll_offset);
     }

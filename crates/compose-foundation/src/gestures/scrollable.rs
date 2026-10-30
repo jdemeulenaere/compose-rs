@@ -52,7 +52,7 @@ impl ScrollScope {
         ScrollScope { scroll_by: Rc::new(scroll_by), fling_cancelled: Some(cancelled) }
     }
 
-    fn is_fling_cancelled(&self) -> bool {
+    pub(crate) fn is_fling_cancelled(&self) -> bool {
         self.fling_cancelled.as_ref().is_some_and(|cancelled| cancelled.get())
     }
 

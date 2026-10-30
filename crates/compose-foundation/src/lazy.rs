@@ -439,6 +439,11 @@ impl LazyListState {
 
     /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, without
     /// animation, as `requestScrollToItem`: a scroll going on (a fling) is stopped.
+    /// What's scrolled since the last layout, for what reads its offsets before the next.
+    pub(crate) fn pending_scroll(&self) -> f32 {
+        self.inner().map_or(0.0, |inner| inner.pending.get())
+    }
+
     pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
         if inner.core.is_scroll_in_progress_untracked() {
@@ -598,6 +603,7 @@ impl LazyListState {
                     offset: item.main,
                     size: item.main_size,
                     content_type: items.as_ref().and_then(|items| items.content_type(item.index)),
+                    non_scrollable: item.sticky,
                 })
                 .collect(),
             viewport_start_offset: viewport.start,

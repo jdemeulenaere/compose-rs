@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 40 | 645 |
+| `ported` | 42 | 651 |
 | `port` | 1 | 1 |
-| `partial` | 23 | 811 |
-| `feature:<name>` | 98 | 1,407 |
+| `partial` | 26 | 845 |
+| `feature:<name>` | 93 | 1,367 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -262,11 +262,11 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/ForEachGestureTest.kt | 3 | `forEachGesture` | n/a: `forEachGesture` is `@Deprecated` (AwaitEachGestureTest covers its replacement) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/TapGestureDetectorTest.kt | 27 | `detectTapGestures`: tap, double tap, long press, misses, out and in, consumption, `PressGestureScope` | partial (`detect_tap_gestures` exists: `pointer_input.rs::taps_double_taps_and_long_presses_are_told_apart`, `review_round7.rs`. Missing: `PressGestureScope` (`awaitRelease`, `tryAwaitRelease`), `awaitFirstDown(pass)` (feature:gesture-detectors)) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/TransformGestureDetectorTest.kt | 9 | `detectTransformGestures`: pan, zoom, rotation, lock, slop | feature:transformable |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyGridSnapFlingBehaviorTest.kt | 8 | Snap fling on grids by velocity and distance | feature:snapping |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyGridSnapLayoutInfoProviderTest.kt | 3 | Grid `SnapLayoutInfoProvider.calculateSnapOffset` | feature:snapping |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyListSnapFlingBehaviorTest.kt | 9 | Snap fling on lists | feature:snapping |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyListSnapLayoutInfoProviderTest.kt | 3 | List `SnapLayoutInfoProvider` | feature:snapping |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt | 17 | `snapFlingBehavior` approach and snap phases, remaining offset, velocity | feature:snapping |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyGridSnapFlingBehaviorTest.kt | 8 | Snap fling on grids by velocity and distance | partial (`snapping.rs`: its 5 of velocity and distance, on `FixedSize` cells. Left: the edges' velocity and the remaining offset, as the list's, tested there) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyGridSnapLayoutInfoProviderTest.kt | 3 | Grid `SnapLayoutInfoProvider.calculateSnapOffset` | ported (`snapping.rs`: all 3, one test) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyListSnapFlingBehaviorTest.kt | 9 | Snap fling on lists | partial (`snapping.rs`: 8 of 9. Left: `remainingScrollOffset_shouldFollowAnimationOffsets`, covered by `SnapFlingBehaviorTest`'s) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/LazyListSnapLayoutInfoProviderTest.kt | 3 | List `SnapLayoutInfoProvider` | ported (`snapping.rs`: all 3, one test, with a header and without) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehaviorTest.kt | 17 | `snapFlingBehavior` approach and snap phases, remaining offset, velocity | partial (`snapping.rs`: 13 of 17. Left: `findClosestOffset`'s 2, of the test's own provider; `MotionDurationScale`'s 2, as it isn't here) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewRequesterViewIntegrationTest.kt | 4 | `bringIntoView` reaching Android's `requestRectangleOnScreen` | n/a: Android View interop |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewResponderTest.kt | 20 | `BringIntoViewRequester` propagating up through responders, interrupting requests | feature:bring-into-view |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewScrollableInteractionTest.kt | 24 | Scrollables scroll requested rects into view (leading, trailing, center, bigger than the parent) | feature:bring-into-view (compose-rs scrolls a focused node into view, `ModifierNode::bring_into_view`: some cases can be checked through focus now) |
@@ -475,7 +475,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: BringIntoViewResponderTest, BringIntoViewScrollableInteractionTest.
     - Depends on: scrollable.
     - Size: M. Experimental: no.
-15. **snapping.**
+15. **snapping.** Done (D1462).
     - API: `SnapLayoutInfoProvider`, `SnapPosition`, `snapFlingBehavior`, `rememberSnapFlingBehavior`, `TargetedFlingBehavior`.
     - Tests: the five files in `gestures/snapping`.
     - Depends on: scrollable (`FlingBehavior`), lazy-layout-info, animation's decay specs (`DecayAnimationSpec`, `exponentialDecay`, `splineBasedDecay`: animation ledger).
