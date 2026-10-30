@@ -625,8 +625,8 @@ fn a_wheel_turn_is_a_user_scroll_that_stops_an_animation() {
     assert!(!state.is_scroll_in_progress(), "and ended");
 }
 
-// D879: a wheel turn runs in place, in the state's scroll, so a scroll of a higher priority going
-// on refuses it, as `MutatorMutex.mutate` refuses, and goes on.
+// D888: a wheel's gesture is a scroll of the user-input priority, so a scroll of a higher priority
+// going on refuses it, as `MutatorMutex.mutate` refuses, and goes on.
 #[test]
 fn a_scroll_of_a_higher_priority_refuses_a_wheel_turn() {
     let (state, total) = total_state();
@@ -647,8 +647,8 @@ fn a_scroll_of_a_higher_priority_refuses_a_wheel_turn() {
     assert_eq!(*result.borrow(), None);
 }
 
-// D879: a wheel turn holds the state's mutex while it applies: what its deltas start at a lower
-// priority is refused, as a mutation under a running one is.
+// D888: a wheel's gesture holds the state's mutex: what its deltas start at a lower priority is
+// refused, as a mutation under a running one is.
 #[test]
 fn a_wheel_turn_refuses_a_lower_scroll_started_from_its_deltas() {
     let refused: Rc<RefCell<Option<Result<(), MutationInterrupted>>>> = Rc::default();
@@ -714,9 +714,8 @@ impl ComposeArg for OwnState {
     }
 }
 
-// D879: a state implementing the trait itself has no scroll in place: its wheel turns hold a
-// scroll of the user-input priority in a task, ended within the event. It says it's scrolling
-// while the delta applies, and stops an animated scroll.
+// D888: a state implementing the trait itself gets the wheel through its `scroll` as any: it says
+// it's scrolling while the delta applies, and the wheel stops an animated scroll.
 #[test]
 fn a_wheel_turn_scrolls_an_apps_own_state() {
     let seen: Rc<RefCell<Option<DefaultScrollableState>>> = Rc::default();

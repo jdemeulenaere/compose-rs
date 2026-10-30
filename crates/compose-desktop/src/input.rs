@@ -52,6 +52,19 @@ fn key_of(key: &WinitKey) -> Option<Key> {
     })
 }
 
+/// Whether a wheel's event follows the fingers or a freely turning wheel, so it applies at once, as
+/// Compose Desktop's `isPreciseWheelScroll`: pixels (a macOS or Wayland trackpad), or a fraction of
+/// a line (X11's smooth scrolling). Not on Windows, whose ordinary wheels can report fractions.
+fn is_precise_wheel(delta: &MouseScrollDelta) -> bool {
+    if cfg!(target_os = "windows") {
+        return false;
+    }
+    match delta {
+        MouseScrollDelta::PixelDelta(_) => true,
+        MouseScrollDelta::LineDelta(x, y) => x.fract() != 0.0 || y.fract() != 0.0,
+    }
+}
+
 pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEvent) -> Outcome {
     match event {
         WindowEvent::CursorMoved { position, .. } => {
@@ -72,13 +85,16 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             }
         }
         WindowEvent::MouseWheel { delta, .. } => {
+            let precise = is_precise_wheel(delta);
             let delta = match delta {
                 MouseScrollDelta::LineDelta(x, y) => Offset::new(-x * 40.0, -y * 40.0),
                 MouseScrollDelta::PixelDelta(position) => {
                     Offset::new(-position.x as f32, -position.y as f32)
                 }
             };
-            host.send_pointer(PointerEvent::scroll(state.cursor, delta));
+            host.send_pointer(
+                PointerEvent::scroll(state.cursor, delta).with_precise_wheel(precise),
+            );
         }
         WindowEvent::Touch(Touch { phase, location, id, .. }) => {
             let position = Offset::new(location.x as f32, location.y as f32);
@@ -154,4 +170,26 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
         _ => return Outcome::Ignored,
     }
     Outcome::Handled
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use winit::dpi::PhysicalPosition;
+
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn pixels_and_fractions_of_a_line_are_precise() {
+        assert!(is_precise_wheel(&MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 3.0))));
+        assert!(is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, 0.25)));
+        assert!(is_precise_wheel(&MouseScrollDelta::LineDelta(0.5, 2.0)));
+        assert!(!is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, -2.0)));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn nothing_is_precise_on_windows() {
+        assert!(!is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, 0.25)));
+    }
 }

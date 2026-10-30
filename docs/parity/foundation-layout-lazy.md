@@ -656,6 +656,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 
 ### compose-rs behaviour that likely differs from Compose
 
+- **The wheel's step, per platform.** A turn's size comes from each host, not from Compose's `ScrollConfig`: the desktop's line is a flat 40 px, where Compose Desktop has 10 dp on macOS, the height / 20 on Windows and sqrt(height) on Linux, each times `scrollAmount`; Android's is a fixed 64 dp, not `scaledVerticalScrollFactor`. To do with the remaining port rows.
 - **`ScrollState::scroll_to`** clamps at once, as Compose's (D853), and is `async`; a jump outside a task is `dispatch_raw_delta`. The lazy states' synchronous jump is `request_scroll_to_item`, `scroll_to_item` being `async`. Tests port `runBlocking { state.scrollTo(…) }` with `scroll_support::run`.
 - **Velocity tracking** is Compose's `VelocityTracker1D` (Lsq2, 20 samples, the 40 ms cut-off; D862) since this workstream. Left: tip's draggable tracking per pointer and counting the first still events (Tip differences 7).
 

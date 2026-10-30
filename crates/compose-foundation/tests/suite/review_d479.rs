@@ -333,8 +333,9 @@ fn a_wheel_past_an_estimated_start_offers_the_rest() {
         (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
         (0, 0)
     );
+    // The tween's frames are 16 px apart here: what the one that got there had left over.
     let offered = left_y(&records);
-    assert!(offered > 0.0 && offered <= 30.0, "{offered}");
+    assert!((offered - 18.84).abs() < 0.5, "{offered}");
 }
 
 /// A 100 px `LazyColumn` of 50 px rows (two in view), each a `LazyRow` of two focusable 50 px

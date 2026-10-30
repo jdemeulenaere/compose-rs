@@ -20,6 +20,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 217 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 202 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 203 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 82 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
@@ -498,8 +499,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D885 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d885) | current |
 | D886 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d886) | current |
 | D887 | [ui-and-layout](decisions/ui-and-layout.md#d887) | revised by [D888](decisions/ui-and-layout.md#d888) |
-| D888 | [ui-and-layout](decisions/ui-and-layout.md#d888) | current |
+| D888 | [ui-and-layout](decisions/ui-and-layout.md#d888) | revised by [D890](decisions/ui-and-layout.md#d890) |
 | D889 | [ui-and-layout](decisions/ui-and-layout.md#d889) | current |
+| D890 | [ui-and-layout](decisions/ui-and-layout.md#d890) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

@@ -66,6 +66,9 @@ pub struct PointerEvent {
     pub pressed: bool,
     /// The scroll amount of a `Scroll` event, in pixels.
     pub scroll_delta: Offset,
+    /// A `Scroll` event from a high-resolution wheel or a trackpad, following the fingers: it
+    /// applies at once, not animated, as Compose's `isPreciseWheelScroll`.
+    pub precise_wheel: bool,
     /// Set by a handler that used the event: handlers after it should ignore it, as
     /// `PointerInputChange.consume()`.
     pub consumed: bool,
@@ -83,6 +86,7 @@ impl PointerEvent {
             position,
             pressed,
             scroll_delta: Offset::ZERO,
+            precise_wheel: false,
             consumed: false,
             time_nanos: 0,
         }
@@ -107,6 +111,11 @@ impl PointerEvent {
             scroll_delta: delta,
             ..PointerEvent::new(PointerEventType::Scroll, position, false)
         }
+    }
+
+    /// The same `Scroll` event from a high-resolution wheel or a trackpad, if `precise`.
+    pub fn with_precise_wheel(self, precise: bool) -> PointerEvent {
+        PointerEvent { precise_wheel: precise, ..self }
     }
 
     /// The same event, as it happened at `time_nanos` (by the executor's clock).

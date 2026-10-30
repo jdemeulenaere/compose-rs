@@ -421,3 +421,251 @@ fn a_turn_of_no_number_does_nothing() {
     advance(&mut ui, 100);
     assert_eq!(total.get(), 0.0);
 }
+
+/// The totals after each frame of `frames`.
+fn frames_of(ui: &mut ComposeTestRule, total: &Cell<f32>, frames: usize) -> Vec<f32> {
+    (0..frames)
+        .map(|_| {
+            advance(ui, 16);
+            total.get()
+        })
+        .collect()
+}
+
+const P: &str = "the path of its gesture";
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, a turn the other way mid-tween: the frame's delta, a new step back, then a tween from there on the same animation (sequential: its first frame at once)
+#[test]
+fn a_turn_back_during_the_tween_reverses_it() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state);
+    turn(&mut ui, -100.0);
+    assert_eq!(frames_of(&mut ui, &total, 2), [6.0, 22.0], "{P}");
+    turn(&mut ui, 100.0);
+    // 38 at the frame, then 6 back at once; then down to the sum of the turns, 0.
+    assert_eq!(frames_of(&mut ui, &total, 4), [32.0, 16.0, 0.0, 0.0], "{P}");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, waitNextScrollDelta(ScrollProgressTimeout - durationMillis): the hold counts the tween's time
+#[test]
+fn the_hold_counts_the_time_of_the_tween() {
+    let (state, _) = total_state();
+    let mut ui = box_of(state.clone());
+    // 24 ms of tween, from its first frame at 16 ms: 26 ms of hold left at its end.
+    turn(&mut ui, -30.0);
+    advance(&mut ui, 64);
+    assert!(state.is_scroll_in_progress(), "the hold goes on");
+    advance(&mut ui, 32);
+    assert!(!state.is_scroll_in_progress(), "over 50 ms from the tween's start, not its end");
+
+    // Longer than the hold: none.
+    let (state, _) = total_state();
+    let mut ui = box_of(state.clone());
+    turn(&mut ui, -100.0);
+    advance(&mut ui, 96);
+    assert!(state.is_scroll_in_progress(), "its last frame is the next one");
+    advance(&mut ui, 16);
+    assert!(!state.is_scroll_in_progress());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, isLowScrollingDelta on what a step left: under half a pixel unused, the tween goes on
+#[test]
+fn a_tween_goes_on_past_a_step_nearly_used() {
+    let total = Rc::new(Cell::new(0.0f32));
+    let into = total.clone();
+    let state = scrollable_state(move |delta| {
+        into.set(into.get() + delta);
+        delta - 0.4f32.copysign(delta)
+    });
+    let mut ui = box_of(state);
+    turn(&mut ui, -100.0);
+    advance(&mut ui, 300);
+    assert_eq!(total.get(), 100.0);
+}
+
+// Compose: the same, half a pixel or more unused: the tween stops
+#[test]
+fn a_tween_stops_at_a_step_not_used() {
+    let total = Rc::new(Cell::new(0.0f32));
+    let into = total.clone();
+    let state = scrollable_state(move |delta| {
+        into.set(into.get() + delta);
+        delta - 0.6f32.copysign(delta)
+    });
+    let mut ui = box_of(state);
+    turn(&mut ui, -100.0);
+    advance(&mut ui, 300);
+    assert_eq!(total.get(), 22.0, "the step, used or not; the tween's first delta, and no more");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, waitNextScrollDelta: a turn too small to see in the hold ends the gesture
+#[test]
+fn a_turn_too_small_to_see_in_the_hold_ends_the_gesture() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state.clone());
+    turn(&mut ui, -5.0);
+    advance(&mut ui, 16);
+    turn(&mut ui, -0.3);
+    advance(&mut ui, 16);
+    assert_eq!(total.get(), 5.0);
+    assert!(!state.is_scroll_in_progress());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, shouldCancelAnimation: turns bringing the target back to where it is end the tween
+#[test]
+fn turns_back_to_where_the_tween_is_end_it() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state);
+    turn(&mut ui, -100.0);
+    assert_eq!(frames_of(&mut ui, &total, 2), [6.0, 22.0], "{P}");
+    // The next frame's value is 38, a fifth of a pixel from where they ask.
+    turn(&mut ui, 61.8);
+    assert_eq!(frames_of(&mut ui, &total, 3), [38.0, 38.0, 38.0], "{P}");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, animateMouseWheelScroll: frames whose delta is too small to see wait until it isn't (a low density)
+#[test]
+fn a_tweens_deltas_too_small_to_see_add_up() {
+    let deltas: Rc<RefCell<Vec<f32>>> = Rc::default();
+    let into = deltas.clone();
+    let state = scrollable_state(move |delta| {
+        into.borrow_mut().push(delta);
+        delta
+    });
+    let given = state.clone();
+    let mut ui = compose_test_with(
+        IntSize::new(300, 300),
+        compose_ui::Density::new(0.02),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+        move || {
+            Box!(
+                modifier =
+                    Modifier.size(5000.dp()).scrollable(given.clone(), Orientation::Vertical)
+            );
+        },
+    );
+    ui.set_auto_advance(false);
+    ui.wait_for_idle();
+    // 6 dp is 0.12 px; 2 px then take 94 ms, 0.32 px a frame.
+    turn(&mut ui, -2.0);
+    advance(&mut ui, 200);
+    let deltas = deltas.borrow();
+    assert!(deltas.len() > 1, "{deltas:?}");
+    assert!(deltas[1..].iter().all(|delta| *delta >= 0.5), "{deltas:?}");
+}
+
+/// A custom behavior's velocities, in a box.
+fn recording_box(state: DefaultScrollableState) -> (ComposeTestRule, Rc<RecordingFling>) {
+    let fling = Rc::new(RecordingFling::default());
+    let behavior = fling.clone();
+    let ui = sized(move || {
+        let behavior: Rc<dyn FlingBehavior> = behavior.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).scrollable_with(
+                state.clone(),
+                Orientation::Vertical,
+                true,
+                false,
+                Some(behavior),
+                None
+            )
+        );
+    });
+    (ui, fling)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollStopped's velocity of a single data point: at most the animation's speed
+#[test]
+fn a_single_turns_velocity_is_at_most_the_animations_speed() {
+    let (state, _) = total_state();
+    let (mut ui, fling) = recording_box(state);
+    turn(&mut ui, -200.0);
+    advance(&mut ui, 500);
+    assert_eq!(*fling.velocities.borrow(), vec![1000.0]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, trackVelocity: several turns' speed, measured on the raw deltas
+#[test]
+fn several_turns_give_their_own_velocity() {
+    let (state, _) = total_state();
+    let (mut ui, fling) = recording_box(state);
+    for _ in 0..3 {
+        ui.host().send_pointer(
+            PointerEvent::scroll(CENTER, Offset::new(0.0, -50.0))
+                .at_time(compose_runtime::platform::now_nanos()),
+        );
+        advance(&mut ui, 16);
+    }
+    advance(&mut ui, 500);
+    let velocities = fling.velocities.borrow();
+    assert_eq!(velocities.len(), 1);
+    assert!(velocities[0] > 1000.0, "beyond the cap of a single turn: {velocities:?}");
+}
+
+/// A precise turn: a trackpad's, or a high-resolution wheel's.
+fn precise_turn(ui: &mut ComposeTestRule, pixels: f32) {
+    ui.host().send_pointer(
+        PointerEvent::scroll(CENTER, Offset::new(0.0, pixels)).with_precise_wheel(true),
+    );
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, shouldApplyImmediately: a precise turn has no step and no tween, the first turn's flag holding for the gesture
+#[test]
+fn a_precise_turn_applies_at_once() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state.clone());
+    precise_turn(&mut ui, -100.0);
+    assert_eq!(total.get(), 100.0, "all of it, in the event");
+    assert!(state.is_scroll_in_progress(), "held as any");
+    // Later turns join it as what it is, whatever they say.
+    turn(&mut ui, -100.0);
+    advance(&mut ui, 16);
+    assert_eq!(total.get(), 200.0, "at the next frame, whole");
+    advance(&mut ui, 200);
+    assert!(!state.is_scroll_in_progress());
+}
+
+// Compose: the same, the other way: a precise turn joining an ordinary gesture is animated
+#[test]
+fn a_precise_turn_joining_an_ordinary_gesture_is_animated() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state);
+    turn(&mut ui, -5.0);
+    advance(&mut ui, 16);
+    precise_turn(&mut ui, -100.0);
+    advance(&mut ui, 16);
+    assert_eq!(total.get(), 11.0, "a step");
+    advance(&mut ui, 300);
+    assert_eq!(total.get(), 105.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, dispatchMouseWheelScroll: the 0.5 px early return holds for a precise turn too
+#[test]
+fn a_precise_turn_too_small_to_see_is_dropped() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state.clone());
+    precise_turn(&mut ui, -0.4);
+    assert_eq!(total.get(), 0.0);
+    assert!(!state.is_scroll_in_progress());
+}
+
+// A panic in a delta's consumer takes the wheel's task with it: nothing stays held, and the next
+// turn scrolls.
+#[test]
+fn the_wheel_goes_on_after_a_panic_in_its_consumer() {
+    let panics = Rc::new(Cell::new(true));
+    let total = Rc::new(Cell::new(0.0f32));
+    let (armed, into) = (panics.clone(), total.clone());
+    let state = scrollable_state(move |delta| {
+        assert!(!armed.get(), "the delta's consumer panics");
+        into.set(into.get() + delta);
+        delta
+    });
+    let mut ui = box_of(state.clone());
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| turn(&mut ui, -5.0)));
+    assert!(unwound.is_err());
+    panics.set(false);
+    assert!(!state.is_scroll_in_progress(), "its scroll ended");
+    turn(&mut ui, -5.0);
+    assert_eq!(total.get(), 5.0);
+}
