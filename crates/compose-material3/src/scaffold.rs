@@ -261,6 +261,7 @@ pub fn Card(
             pressed: elevation.pressed_elevation,
             focused: elevation.focused_elevation,
             hovered: elevation.hovered_elevation,
+            dragged: elevation.default_elevation,
             disabled: elevation.disabled_elevation,
         }),
     });

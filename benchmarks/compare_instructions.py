@@ -50,6 +50,7 @@ SCENARIOS = {
     "cells_animated_positioned": 1000,
     "first_frame_list_items": 100,
     "first_frame_selectable_items": 100,
+    "first_frame_chips": 100,
     "nav_selection": 300,
     "list_selection": 100,
     "field_focus": 300,

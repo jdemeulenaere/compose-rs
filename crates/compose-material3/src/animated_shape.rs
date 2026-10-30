@@ -9,6 +9,27 @@ use compose_animation::{Animatable, AnimationSpec};
 use compose_runtime::{LaunchedEffect, OwnedState, mutable_state_of};
 use compose_ui::{CustomShape, Density, LayoutDirection, Outline, Shape, Size};
 
+/// For a `key(shapes)`: equal shapes hash alike, a custom shape's by its kind alone.
+pub(crate) fn hash_shapes<'a, H: std::hash::Hasher>(
+    shapes: impl IntoIterator<Item = &'a Shape>,
+    state: &mut H,
+) {
+    use std::hash::Hash;
+    for shape in shapes {
+        std::mem::discriminant(shape).hash(state);
+        for corner in shape.corners().into_iter().flatten() {
+            let (kind, size) = match corner {
+                compose_ui::CornerSize::Dp(size) => (0u8, size.0),
+                compose_ui::CornerSize::Px(size) => (1u8, size),
+                compose_ui::CornerSize::Percent(size) => (2u8, size),
+            };
+            kind.hash(state);
+            // Plus zero: minus zero is equal to it, and hashes alike then.
+            (size + 0.0).to_bits().hash(state);
+        }
+    }
+}
+
 /// `start` to `target`, `progress` of the way, as `AnimatedShapeState`.
 struct AnimatedShapeState {
     start: RefCell<Shape>,

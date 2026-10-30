@@ -58,7 +58,12 @@ pub use button::{
     OutlinedButton, TextButton,
 };
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
-pub use chips::{AssistChip, Badge, BadgedBox, FilterChip, SuggestionChip};
+pub use chips::{
+    AssistChip, AssistChipDefaults, Badge, BadgedBox, ChipBorder, ChipColors, ChipElevation,
+    ChipShapes, ElevatedAssistChip, ElevatedFilterChip, ElevatedSuggestionChip, FilterChip,
+    FilterChipDefaults, InputChip, InputChipDefaults, SelectableChipColors,
+    SelectableChipElevation, SuggestionChip, SuggestionChipDefaults,
+};
 pub use components::{
     AnnotatedText, ClickableSurface, LOCAL_ABSOLUTE_TONAL_ELEVATION,
     LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE, MINIMUM_INTERACTIVE_SIZE, SelectableSurface, Surface,

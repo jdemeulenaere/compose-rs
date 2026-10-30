@@ -292,6 +292,8 @@ pub(crate) struct Elevations {
     pub pressed: Dp,
     pub focused: Dp,
     pub hovered: Dp,
+    /// A chip's alone: the others' are their default, and don't read the state.
+    pub dragged: Dp,
     pub disabled: Dp,
 }
 
@@ -301,6 +303,7 @@ enum ElevationInteraction {
     Press,
     Hover,
     Focus,
+    Drag,
 }
 
 /// The elevation of a component in its interaction state, and the interaction it is that of
@@ -322,6 +325,8 @@ fn elevation_and_interaction(
         (elevations.hovered, Some(ElevationInteraction::Hover))
     } else if elevations.focused != default && source.is_focused() {
         (elevations.focused, Some(ElevationInteraction::Focus))
+    } else if elevations.dragged != default && source.is_dragged() {
+        (elevations.dragged, Some(ElevationInteraction::Drag))
     } else {
         (default, None)
     }
@@ -350,7 +355,9 @@ fn animated_elevation(
         (None, Some(_)) => tween(150, outgoing),
         (None, None) => compose_animation::snap(0).into(),
     };
-    compose_animation::animate_dp_as_state(target, spec, "ElevationAnimation", None).get()
+    crate::lazy_animation::animate_lazily(target, spec, |start: Dp, stop: Dp, fraction| {
+        Dp(start.0 + (stop.0 - start.0) * fraction)
+    })
 }
 
 /// A surface's body, as Compose's `Surface` overloads share: the container (clickable with

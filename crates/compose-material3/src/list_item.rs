@@ -173,22 +173,9 @@ impl compose_runtime::ComposeArg for ListItemShapes {
     }
 }
 
-/// For `key(shapes)`: equal shapes hash alike, a custom shape's by its kind alone.
 impl std::hash::Hash for ListItemShapes {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for shape in self.all() {
-            std::mem::discriminant(shape).hash(state);
-            for corner in shape.corners().into_iter().flatten() {
-                let (kind, size) = match corner {
-                    CornerSize::Dp(size) => (0u8, size.0),
-                    CornerSize::Px(size) => (1u8, size),
-                    CornerSize::Percent(size) => (2u8, size),
-                };
-                kind.hash(state);
-                // Plus zero: minus zero is equal to it, and hashes alike then.
-                (size + 0.0).to_bits().hash(state);
-            }
-        }
+        crate::animated_shape::hash_shapes(self.all(), state);
     }
 }
 

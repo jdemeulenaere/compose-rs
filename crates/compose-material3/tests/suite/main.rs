@@ -10,6 +10,7 @@ mod bottom_sheet_scaffold;
 mod buttons;
 mod checkbox;
 mod checkbox_screenshots;
+mod chip;
 mod components;
 mod content_description;
 mod divider;

@@ -1194,6 +1194,106 @@ fn a_fields_frames_compose_the_label_alone() {
     assert!(LABEL_COMPOSED.get() >= label + 5, "the label: {label} to {}", LABEL_COMPOSED.get());
 }
 
+/// A chip's icon coming: its width on fast spatial and its alpha on slow effects; going, on default
+/// effects and fast effects, as `SelectableChip`'s, whether it was there at first or not.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
+#[test]
+fn a_filter_chips_icon_comes_and_goes_with_the_scheme() {
+    let run = |at_first: bool, scheme: MotionScheme| {
+        let shows = mutable_state_of(at_first);
+        let read = shows.handle();
+        let mut ui = themed(scheme, move || {
+            let leading = read.get().then_some(|| {
+                Box!(modifier = Modifier.size(18.dp()).background(Color::RED));
+            });
+            FilterChip!(
+                false,
+                || {},
+                || Box!(modifier = Modifier.size((30.dp(), 18.dp())).test_tag("label")),
+                leading_icon = leading,
+            );
+        });
+        let label_left = |ui: &mut ComposeTestRule| {
+            ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left
+        };
+        let icon_alpha = |ui: &mut ComposeTestRule| {
+            let list = ui.host().display_list();
+            let layers = list.groups.iter().filter_map(|group| group.layer.as_ref());
+            layers.fold(1.0f32, |alpha, layer| alpha.min(layer.alpha))
+        };
+        // 16 dp in with no icon, 34 with one, the width it's at telling how far along.
+        let (from, to) = if at_first { (34.0, 16.0) } else { (16.0, 34.0) };
+        assert_eq!(label_left(&mut ui), from);
+        shows.set(!at_first);
+        to_halfway(&mut ui);
+        let left = label_left(&mut ui);
+        let alpha = icon_alpha(&mut ui);
+        vec![along(left, from, to), if at_first { 1.0 - alpha } else { alpha }]
+    };
+    // A spec's short end: the icon's gone, or at 1, its layer not being there.
+    let going = |scheme: MotionScheme| {
+        let mut along = run(true, scheme);
+        if along[1] == 0.0 {
+            along[1] = 1.0;
+        }
+        along
+    };
+    assert_each_property_animates_with(&[FastSpatial, SlowEffects], |scheme| run(false, scheme));
+    assert_each_property_animates_with(&[DefaultEffects, FastEffects], going);
+}
+
+/// With `shapes`, coming and going on fast spatial and default effects.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
+#[test]
+fn a_shaped_filter_chips_icon_comes_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        let shows = mutable_state_of(false);
+        let read = shows.handle();
+        let mut ui = themed(scheme, move || {
+            let leading = read.get().then_some(|| {
+                Box!(modifier = Modifier.size(18.dp()));
+            });
+            FilterChip!(
+                false,
+                || {},
+                || Box!(modifier = Modifier.size((30.dp(), 18.dp())).test_tag("label")),
+                shapes = FilterChipDefaults::shapes(),
+                leading_icon = leading,
+            );
+        });
+        shows.set(true);
+        to_halfway(&mut ui);
+        let left = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left;
+        // Compact beside it: 8, 18 and 4, 30 in all, from the 16 before.
+        vec![along(left, 16.0, 30.0)]
+    });
+}
+
+/// A chip's corners on the fast spatial spec, as its `defaultAnimationSpec`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
+#[test]
+fn a_chips_corners_animate_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        let selected = mutable_state_of(false);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            let colors = SelectableChipColors {
+                container_color: Color::BLUE,
+                ..FilterChipDefaults::filter_chip_colors()
+            };
+            let shapes = ChipShapes {
+                shape: round(2.0),
+                selected_shape: round(12.0),
+                pressed_shape: round(12.0),
+            };
+            FilterChip!(read.get(), || {}, || Text!("a"), shapes = shapes, colors = colors);
+        });
+        selected.set(true);
+        to_halfway(&mut ui);
+        vec![along(round_corner(&mut ui), 2.0, 12.0)]
+    });
+}
+
 /// Reversed before it's finished, a shape goes back from where it is, not its start: as
 /// `animateToShape`'s flip of the progress.
 #[test]

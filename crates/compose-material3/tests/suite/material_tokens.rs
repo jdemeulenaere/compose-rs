@@ -123,7 +123,7 @@ fn the_buttons_and_tracks_colors_are_material_3_1_4s() {
 
 /// The flat chips' outline is `FlatOutlineColor` (`AssistChipTokens`, `SuggestionChipTokens`;
 /// `FilterChipTokens.FlatUnselectedOutlineColor`): 1 dp of the outline-variant color; a
-/// selected filter chip has none. Each is drawn outside the chip's clip, as Compose's
+/// selected filter chip has a transparent hairline. Each is drawn outside the chip's clip, as Compose's
 /// `Surface` orders its border, color and clip (D573).
 #[test]
 fn the_chips_outlines_are_outline_variant_outside_their_clip() {
@@ -158,7 +158,7 @@ fn the_chips_outlines_are_outline_variant_outside_their_clip() {
         let border = chip.find(&format!("border(1.dp, {outline}")).expect(chip);
         assert!(border < chip.find("clip(").expect(chip), "the border outside the clip: {chip}");
     }
-    assert!(!chips[3].contains("border("), "a selected filter chip has no outline");
+    assert!(!chips[3].contains("border(1.dp"), "a selected filter chip has no outline to see");
 }
 
 /// `LocalTextStyle`'s default is Material's `DefaultTextStyle` (material3 1.4.0's

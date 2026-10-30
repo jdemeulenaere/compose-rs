@@ -229,6 +229,25 @@ fn ManySelectableItems() {
     });
 }
 
+/// A first frame of a hundred rows of the benchmark screens' three chips.
+#[composable]
+fn ManyChips() {
+    use compose::material3::*;
+    MaterialTheme!({
+        Column!({
+            for index in 0..100usize {
+                key(index, || {
+                    Row!({
+                        AssistChip!(|| {}, || Text!("Assist"));
+                        FilterChip!(index.is_multiple_of(3), || {}, || Text!("Filter"));
+                        SuggestionChip!(|| {}, || Text!("Hint"));
+                    });
+                });
+            }
+        });
+    });
+}
+
 thread_local! {
     static PICKED: compose::runtime::OwnedState<usize> = mutable_state_of(0);
     static VALUE: compose::runtime::OwnedState<String> = mutable_state_of(String::new());
@@ -395,6 +414,7 @@ fn main() {
         }
         "first_frame_list_items" => first_frames(ManyListItems, n),
         "first_frame_selectable_items" => first_frames(ManySelectableItems, n),
+        "first_frame_chips" => first_frames(ManyChips, n),
         "nav_selection" => selections(NavigationItems, 5, n),
         "list_selection" => selections(SelectedListItem, 2, n),
         "field_focus" => {
