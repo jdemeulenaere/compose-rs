@@ -1041,3 +1041,225 @@ fn a_text_field_disabled_with_the_focus_loses_it_and_a_listener_above_hears_its_
     ui.wait_for_idle();
     assert!(requester.request_focus());
 }
+
+// ---- What a review asked of it ------------------------------------------------------------------------------
+
+#[test]
+fn touch_mode_gives_a_clickable_no_focus_and_a_field_keeps_it_through_a_click() {
+    let clicks: &'static Cell<i32> = Box::leak(Box::new(Cell::new(0)));
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        Column!({
+            BasicTextField!(
+                String::new(),
+                |_| {},
+                single_line = true,
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            Box!(
+                modifier = Modifier
+                    .size((100.dp(), 40.dp()))
+                    .clickable(move || clicks.set(clicks.get() + 1))
+                    .test_tag("button")
+            );
+        });
+    });
+    ui.host().set_input_mode(InputMode::Touch);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").assert_is_focused();
+    ui.on_node_with_tag("button").perform_click();
+    ui.wait_for_idle();
+    assert_eq!(clicks.get(), 1);
+    ui.on_node_with_tag("field").assert_is_focused();
+
+    // Keyboard mode: Tab reaches it. Back to touch, it can't keep the focus.
+    ui.host().set_input_mode(InputMode::Keyboard);
+    tab(&mut ui, false);
+    ui.on_node_with_tag("button").assert_is_focused();
+    ui.host().set_input_mode(InputMode::Touch);
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
+}
+
+#[test]
+fn a_focused_lazy_item_keeps_the_focus_moved_by_key_and_scrolled_away_and_loses_it_removed() {
+    let items = Box::leak(Box::new(mutable_state_of(vec![0, 1, 2, 3, 4]))).handle();
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 60.dp())),
+            state = given,
+            move |scope: LazyListScope| {
+                for item in items.get() {
+                    scope.item_keyed(item, move || {
+                        Box!(
+                            modifier = Modifier
+                                .size((100.dp(), 30.dp()))
+                                .focusable()
+                                .test_tag(format!("i{item}"))
+                        );
+                    });
+                }
+            }
+        );
+    });
+    ui.on_node_with_tag("i1").request_focus();
+    ui.wait_for_idle();
+    items.set(vec![1, 0, 2, 3, 4]);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("i1").assert_is_focused();
+    state.request_scroll_to_item(4, 0);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("i1").assert_is_focused();
+    items.set(vec![0, 2, 3, 4]);
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
+}
+
+#[test]
+fn a_search_gets_past_items_without_targets_longer_than_the_list_both_ways() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 200), || {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
+            scope.items(40, |index| {
+                let shown = Modifier.size((100.dp(), 30.dp()));
+                if index % 15 == 0 {
+                    Box!(modifier = shown.focusable().test_tag(format!("i{index}")));
+                } else {
+                    Box!(modifier = shown);
+                }
+            });
+        });
+    });
+    for (shift, tag) in [(false, "i0"), (false, "i15"), (false, "i30"), (true, "i15"), (true, "i0")]
+    {
+        tab(&mut ui, shift);
+        ui.on_node_with_tag(tag).assert_is_focused();
+    }
+}
+
+#[test]
+fn escape_closes_a_dialog_and_gives_a_field_its_focus_back() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Column!({
+            BasicTextField!(
+                String::new(),
+                |_| {},
+                single_line = true,
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            if open.get() {
+                Dialog!(on_dismiss_request = move || open.set(false), {
+                    Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("in"));
+                });
+            }
+        });
+    });
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    open.set(true);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").assert_is_not_focused();
+    ui.host().send_key(KeyEvent::down(Key::Escape));
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in").assert_does_not_exist();
+    ui.on_node_with_tag("field").assert_is_focused();
+}
+
+#[test]
+fn the_listener_of_a_removed_target_can_ask_for_the_focus_elsewhere() {
+    let shown = Box::leak(Box::new(mutable_state_of(true))).handle();
+    let other = FocusRequester::new();
+    let was: &'static Cell<bool> = Box::leak(Box::new(Cell::new(false)));
+    let mut ui = compose_test(move || {
+        Column!({
+            if shown.get() {
+                Box!(
+                    modifier = Modifier
+                        .size(20.dp())
+                        .on_focus_changed(move |state: FocusState| {
+                            if was.get() && !state.is_focused() {
+                                other.request_focus();
+                            }
+                            was.set(state.is_focused());
+                        })
+                        .focusable()
+                        .test_tag("going")
+                );
+            }
+            Box!(
+                modifier =
+                    Modifier.size(20.dp()).focus_requester(other).focusable().test_tag("other")
+            );
+        });
+    });
+    ui.on_node_with_tag("going").request_focus();
+    ui.wait_for_idle();
+    shown.set(false);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("other").assert_is_focused();
+}
+
+/// Three lazy rows with restorers in a host of `saved`: what has the focus after `steps`, and its
+/// state.
+fn lazy_rows_in_a_host(
+    saved: Option<SavedState>,
+    steps: impl FnOnce(&mut ComposeTestRule, &FocusManager),
+) -> (SavedState, Vec<String>) {
+    let host = UiHost::new(
+        IntSize::new(400, 800),
+        Density::new(1.0),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+    );
+    if let Some(saved) = saved {
+        host.restore_state(saved);
+    }
+    let kept: Manager = Rc::default();
+    let keeping = kept.clone();
+    let mut ui = ComposeTestRule::with_host(host, move || {
+        *keeping.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
+        LazyColumn!(modifier = Modifier.size((100.dp(), 200.dp())), |scope: LazyListScope| {
+            scope.items(3, |row| {
+                Row!(modifier = Modifier.focus_restorer(FocusRequester::DEFAULT).focus_group(), {
+                    for column in 0..3 {
+                        Box!(
+                            modifier = Modifier
+                                .size(30.dp())
+                                .focusable()
+                                .test_tag(format!("r{row}c{column}"))
+                        );
+                    }
+                });
+            });
+        });
+    });
+    ui.wait_for_idle();
+    steps(&mut ui, &manager_of(&kept));
+    ui.wait_for_idle();
+    let focused = ui
+        .on_all_nodes(is_focused())
+        .fetch_semantics_nodes()
+        .iter()
+        .filter_map(|node| {
+            node.config.get(&SemanticsProperties::TEST_TAG).map(|tag| tag.to_string())
+        })
+        .collect();
+    (ui.host().save_state(), focused)
+}
+
+#[test]
+fn restorers_in_lazy_items_each_keep_their_own_child_across_a_recreated_host() {
+    let (saved, _) = lazy_rows_in_a_host(None, |ui, _| {
+        ui.on_node_with_tag("r1c1").request_focus();
+        ui.wait_for_idle();
+        ui.on_node_with_tag("r2c0").request_focus();
+    });
+    let (_, focused) = lazy_rows_in_a_host(Some(saved), |ui, manager| {
+        ui.on_node_with_tag("r2c0").request_focus();
+        ui.wait_for_idle();
+        manager.move_focus(FocusDirection::Up);
+    });
+    assert_eq!(focused, ["r1c1"]);
+}
