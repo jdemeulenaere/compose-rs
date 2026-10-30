@@ -85,6 +85,12 @@ pub(crate) struct SetRecord<T> {
     set: Rc<OrderedSet<T>>,
 }
 
+impl<T> Clone for SetRecord<T> {
+    fn clone(&self) -> Self {
+        SetRecord { set: self.set.clone() }
+    }
+}
+
 /// A `Copy` handle to a set state, as Compose's `SnapshotStateSet`. Reads subscribe to the whole
 /// set; [`OwnedStateSet`] owns it.
 pub struct SnapshotStateSet<T: 'static> {

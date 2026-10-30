@@ -4,13 +4,47 @@
 
 use std::any::Any;
 
+use super::id_set::IdSet;
+
 /// A snapshot's id, as Compose's `SnapshotId`: records carry the id of the snapshot that wrote
 /// them.
 pub(crate) type SnapshotId = u64;
 
-/// The id of the first global snapshot (Compose's ids start there: 0 is `INVALID`, 1
-/// `PreexistingSnapshotId`).
+/// The id no snapshot has, as `INVALID_SNAPSHOT`.
+pub(crate) const INVALID: SnapshotId = 0;
+
+/// The id of a record every snapshot can read, as `PreexistingSnapshotId`: a state made in a
+/// snapshot other than the global one is readable everywhere (`testSnapshotStateIsBornAccessible`).
+pub(crate) const PREEXISTING: SnapshotId = 1;
+
+/// The id of the first global snapshot (Compose's ids start there).
 pub(crate) const FIRST_GLOBAL: SnapshotId = 2;
+
+/// What a read or a write sees through, when isolation is in use: a snapshot's id and invalid set.
+#[derive(Clone)]
+pub(crate) struct View {
+    pub(crate) id: SnapshotId,
+    pub(crate) invalid: IdSet,
+    /// Writes are refused.
+    pub(crate) read_only: bool,
+    /// The global snapshot's: a write may overwrite in place a record no open snapshot can read,
+    /// one above `open_highest`.
+    pub(crate) global: bool,
+    pub(crate) open_highest: SnapshotId,
+}
+
+impl View {
+    /// As Compose's `valid(currentSnapshot, candidateSnapshot, invalid)`.
+    #[inline]
+    pub(crate) fn valid(&self, id: SnapshotId) -> bool {
+        id != INVALID && id <= self.id && !self.invalid.get(id)
+    }
+
+    /// A view through `id` and `invalid` alone, as the apply's readable calls.
+    pub(crate) fn of(id: SnapshotId, invalid: IdSet) -> View {
+        View { id, invalid, read_only: false, global: false, open_highest: 0 }
+    }
+}
 
 /// A record: the snapshot that wrote it, the write that made it (a per-thread counter: what a
 /// derived state validates its dependencies against), and the object's data as of that write.
@@ -20,20 +54,34 @@ pub(crate) struct Record<R> {
     pub(crate) data: R,
 }
 
-/// A state object's records, newest first: the head inline, older ones in `rest` (empty while
-/// only the global snapshot exists, nearly always).
+/// A state object's records, in no order: the head inline, others in `rest`. While no snapshot is
+/// open `rest` is empty and the head is what a read sees, nearly always.
 pub(crate) struct Records<R> {
     pub(crate) head: Record<R>,
     pub(crate) rest: Vec<Record<R>>,
+    /// The snapshot the object was made in. Compose gives an object made outside the global
+    /// snapshot two records with the same value, one `PREEXISTING` and one of that snapshot; here
+    /// the first stands for both (a value needs no `Clone` to be born): `effective_id` tells which
+    /// a view sees.
+    pub(crate) born: SnapshotId,
+}
+
+/// Where a write goes (Compose's `overwritableRecord` and `writableRecord`).
+pub(crate) enum WriteSlot {
+    /// A record the write may overwrite, at this index.
+    Own(usize),
+    /// A new record, the readable one at this index staying.
+    New(usize),
 }
 
 impl<R> Records<R> {
-    /// One record holding `data`, written in snapshot `id` as write `version`.
-    pub(crate) fn new(data: R, id: SnapshotId, version: u32) -> Records<R> {
-        Records { head: Record { id, version, data }, rest: Vec::new() }
+    /// One record holding `data`, written in snapshot `id` as write `version`; `born` tells of the
+    /// snapshot it's made in.
+    pub(crate) fn new(data: R, id: SnapshotId, born: SnapshotId, version: u32) -> Records<R> {
+        Records { head: Record { id, version, data }, rest: Vec::new(), born }
     }
 
-    /// The record a read sees.
+    /// The record a read sees, with no snapshot open.
     #[inline]
     pub(crate) fn readable(&self) -> &R {
         &self.head.data
@@ -52,15 +100,197 @@ impl<R> Records<R> {
         new_record
     }
 
-    /// The version of the record a read sees.
-    #[inline]
-    pub(crate) fn version(&self) -> u32 {
-        self.head.version
-    }
-
     pub(crate) fn len(&self) -> usize {
         1 + self.rest.len()
     }
+
+    /// The record at `index`: the head at 0.
+    #[inline]
+    pub(crate) fn at(&self, index: usize) -> &Record<R> {
+        if index == 0 { &self.head } else { &self.rest[index - 1] }
+    }
+
+    /// The record at `index`, to write.
+    #[inline]
+    pub(crate) fn at_mut(&mut self, index: usize) -> &mut Record<R> {
+        if index == 0 { &mut self.head } else { &mut self.rest[index - 1] }
+    }
+
+    /// The index of the record `view` reads, as Compose's `readable`: the highest valid id.
+    pub(crate) fn index_in(&self, view: &View) -> Option<usize> {
+        let mut best = None;
+        let mut best_id = INVALID;
+        if view.valid(self.head.id) {
+            best = Some(0);
+            best_id = self.head.id;
+        }
+        for (index, record) in self.rest.iter().enumerate() {
+            if record.id > best_id && view.valid(record.id) {
+                best = Some(index + 1);
+                best_id = record.id;
+            }
+        }
+        best
+    }
+
+    /// The record `view` reads. Panics as Compose's `readError` if there's none.
+    #[inline]
+    pub(crate) fn readable_in(&self, view: &View) -> &Record<R> {
+        match self.index_in(view) {
+            Some(index) => self.at(index),
+            None => read_error(),
+        }
+    }
+
+    /// The version of the record `view` reads; with no view, of the head.
+    #[inline]
+    pub(crate) fn version_in(&self, view: Option<&View>) -> Option<u32> {
+        match view {
+            None => Some(self.head.version),
+            Some(view) => Some(self.at(self.index_in(view)?).version),
+        }
+    }
+
+    /// The id of the record at `index`, as `view` sees it: a state's first record is the
+    /// `PREEXISTING` one, or the record of the snapshot it was born in if `view` can see that one.
+    pub(crate) fn effective_id(&self, index: usize, view: &View) -> SnapshotId {
+        let id = self.at(index).id;
+        if id == PREEXISTING && view.valid(self.born) { self.born } else { id }
+    }
+
+    /// Where a write in `view` goes, and whether it records the state as modified there (the
+    /// record it reads wasn't written in the snapshot, as Compose's two functions decide).
+    pub(crate) fn write_slot(&self, view: &View) -> (WriteSlot, bool) {
+        let Some(index) = self.index_in(view) else { read_error() };
+        let id = self.at(index).id;
+        if id == view.id {
+            return (WriteSlot::Own(index), false);
+        }
+        if id == PREEXISTING {
+            // Written in the snapshot it was born in: the record is its own, as Compose's.
+            let born_here = self.effective_id(index, view) == view.id;
+            return (WriteSlot::New(index), !born_here);
+        }
+        // Nothing but later global snapshots can read it (D752).
+        if view.global && id > view.open_highest {
+            return (WriteSlot::Own(index), true);
+        }
+        (WriteSlot::New(index), true)
+    }
+
+    /// Adds a record: its index.
+    pub(crate) fn push(&mut self, id: SnapshotId, version: u32, data: R) -> usize {
+        self.rest.push(Record { id, version, data });
+        self.rest.len()
+    }
+
+    /// Takes out the record at `index`; `rest` must not be empty. Its value goes to the caller,
+    /// which drops it outside the runtime's borrow.
+    pub(crate) fn remove(&mut self, index: usize) -> Record<R> {
+        if index == 0 {
+            let replacement = self.rest.pop().expect("another record");
+            std::mem::replace(&mut self.head, replacement)
+        } else {
+            self.rest.swap_remove(index - 1)
+        }
+    }
+
+    /// Drops the records of an abandoned snapshot, as Compose's `abandon` makes them invalid: its
+    /// id, and those it had before.
+    pub(crate) fn abandon(
+        &mut self,
+        id: SnapshotId,
+        previous: &IdSet,
+        garbage: &mut Vec<Box<dyn Any>>,
+    ) where
+        R: 'static,
+    {
+        let mut index = self.len();
+        while index > 0 {
+            index -= 1;
+            let record_id = self.at(index).id;
+            if record_id == id || previous.get(record_id) {
+                if self.rest.is_empty() {
+                    // The state has no other record: nothing can read it.
+                    self.head.id = INVALID;
+                } else {
+                    garbage.push(Box::new(self.remove(index)));
+                }
+            }
+        }
+    }
+
+    /// Drops the records no open snapshot can read, as Compose's `overwriteUnusedRecordsLocked`
+    /// with `reuse_limit`: of those below it only the newest stays. Returns whether more than one
+    /// record remains. With every record below the limit (no snapshot open), the head is then
+    /// what any read sees.
+    pub(crate) fn reclaim(
+        &mut self,
+        reuse_limit: SnapshotId,
+        garbage: &mut Vec<Box<dyn Any>>,
+    ) -> bool
+    where
+        R: 'static,
+    {
+        if self.rest.is_empty() {
+            return false;
+        }
+        let mut newest = INVALID;
+        for index in 0..self.len() {
+            let id = self.at(index).id;
+            if id < reuse_limit && id > newest {
+                newest = id;
+            }
+        }
+        let mut index = self.len();
+        while index > 0 {
+            index -= 1;
+            let id = self.at(index).id;
+            if id < reuse_limit && id != newest {
+                garbage.push(Box::new(self.remove(index)));
+            }
+        }
+        !self.rest.is_empty()
+    }
+}
+
+/// As Compose's `readError`.
+#[cold]
+pub(crate) fn read_error() -> ! {
+    panic!(
+        "Reading a state that was created after the snapshot was taken or in a snapshot that has \
+         not yet been applied"
+    )
+}
+
+/// As Compose's `reportReadonlySnapshotWrite`.
+#[cold]
+pub(crate) fn report_read_only_write() -> ! {
+    panic!("Cannot modify a state object in a read-only snapshot")
+}
+
+/// What a state object's merge decides at an apply, as `StateObject.mergeRecords`'s result.
+pub(crate) enum Merged {
+    /// No conflict, or the snapshot's record stands.
+    Nothing,
+    /// The state as it is now stands: the state leaves the snapshot's modified list.
+    Current,
+    /// A new record, the merge's: goes in under a new id.
+    New(Box<dyn Any>),
+    /// A conflict: the apply fails.
+    Fail,
+}
+
+/// The views of an apply, as `innerApplyLocked`'s `readable` calls.
+pub(crate) struct ApplyViews {
+    /// What the snapshot started from: not its own writes.
+    pub(crate) start: View,
+    /// The state as it is now where the snapshot applies to.
+    pub(crate) current: View,
+    /// The snapshot's own view: its writes.
+    pub(crate) applied: View,
+    /// No nested snapshot of it is active: nothing else reads its records.
+    pub(crate) alone: bool,
 }
 
 /// A state object's cell in the thread's arena, as Compose's `StateObject`, erased: what the
@@ -72,11 +302,11 @@ pub(crate) trait StateObjectCell: Any {
     /// The write that just ended was write `version` in snapshot `id`: whether it made a new
     /// record there. Runs in the runtime's borrow, once the write's user code is over.
     fn wrote_in(&self, id: SnapshotId, version: u32) -> bool;
-    /// The version of the record a read would see, a derived state brought up to date first:
-    /// `None` if the records are borrowed for writing. May run a calculation: outside the
-    /// runtime's borrow.
-    fn current_version(&self) -> Option<u32>;
-    /// Whether a derived state was found valid at `mark` (the global snapshot and the write
+    /// The version of the record a read through `view` would see, a derived state brought up to
+    /// date first: `None` if the records are borrowed for writing, or `view` sees none. May run a
+    /// calculation: outside the runtime's borrow.
+    fn current_version(&self, view: Option<&View>) -> Option<u32>;
+    /// Whether a derived state was found valid at `mark` (the current snapshot and the write
     /// counter), so it still is; a value state needs no validating.
     #[inline]
     fn valid_at(&self, _mark: (SnapshotId, u32)) -> bool {
@@ -84,4 +314,22 @@ pub(crate) trait StateObjectCell: Any {
     }
     /// Adds what this object read, a derived state's dependencies, each once.
     fn collect_dependencies(&self, _into: &mut Vec<crate::state::StateId>) {}
+    /// Decides this state's part of an apply, as `innerApplyLocked`'s loop and `mergeRecords`. User
+    /// code (the policy): outside the runtime's borrow.
+    fn merge_at_apply(&self, _views: &ApplyViews) -> Merged {
+        Merged::Nothing
+    }
+    /// Adds a record `merge_at_apply` made, under the apply's new id.
+    fn prepend_merged(&self, _record: Box<dyn Any>, _id: SnapshotId, _version: u32) {}
+    /// Drops the records of an abandoned snapshot.
+    fn abandon(&self, id: SnapshotId, previous: &IdSet, garbage: &mut Vec<Box<dyn Any>>);
+    /// Drops the records no open snapshot can read: whether more than one remains (a record
+    /// borrowed now counts as more: it's tried again).
+    fn reclaim(&self, reuse_limit: SnapshotId, garbage: &mut Vec<Box<dyn Any>>) -> bool;
+    /// An `edit`'s closure sent, advancing the global snapshot: its record goes on under the new
+    /// id.
+    fn relabel(&self, _from: SnapshotId, _to: SnapshotId) {}
+    /// A write of the head ended with a snapshot opened meanwhile: only its version changes, the
+    /// record staying as readable as it was.
+    fn touch(&self, _version: u32) {}
 }

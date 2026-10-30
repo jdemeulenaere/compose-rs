@@ -186,6 +186,44 @@ fn state_writes(c: &mut Criterion) {
     });
 }
 
+/// What isolation costs while it's in use (design §3.16); the paths above pay nothing for it.
+fn snapshot_costs(c: &mut Criterion) {
+    use compose::runtime::snapshots::Snapshot;
+    let state = mutable_state_of(0u64);
+    c.bench_function("empty mutable snapshot, taken and applied", |b| {
+        b.iter(|| {
+            let snapshot = Snapshot::take_mutable_snapshot(None, None);
+            snapshot.apply().check();
+        })
+    });
+    c.bench_function("read-only snapshot, taken, read once and disposed", |b| {
+        b.iter(|| {
+            let snapshot = Snapshot::take_snapshot(None);
+            black_box(snapshot.enter(|| state.get()));
+        })
+    });
+    let mut value = 0;
+    c.bench_function("with_mutable_snapshot writing a state", |b| {
+        b.iter(|| {
+            value += 1;
+            Snapshot::with_mutable_snapshot(|| state.set(black_box(value)));
+        })
+    });
+    let snapshot = Snapshot::take_mutable_snapshot(None, None);
+    c.bench_function("state get in a mutable snapshot", |b| {
+        b.iter(|| black_box(snapshot.enter(|| state.get())))
+    });
+    snapshot.enter(|| state.set(1));
+    c.bench_function("state get with a snapshot open", |b| b.iter(|| black_box(state.get())));
+    c.bench_function("state set with a snapshot open", |b| {
+        b.iter(|| {
+            value += 1;
+            state.set(black_box(value));
+        })
+    });
+    snapshot.dispose();
+}
+
 /// What composing a big screen does a lot of (docs/14, #5): reading a composition local whose
 /// provider is dozens of groups up, and reading one state from thousands of scopes (every layout
 /// node reads the layout direction).
@@ -237,6 +275,7 @@ criterion_group!(
     send_to_many_derived,
     derived_reads,
     state_list_push,
+    snapshot_costs,
     many_readers
 );
 criterion_main!(benches);

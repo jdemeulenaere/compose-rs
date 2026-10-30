@@ -1,6 +1,5 @@
 //! `SnapshotStateSet` (docs/parity/design/snapshots.md, step S3), from Compose's
-//! `SnapshotStateSetTests`. The one taking a snapshot waits for step S5; the concurrent ones are
-//! n/a (D14).
+//! `SnapshotStateSetTests`. The concurrent ones are n/a (D14).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -195,4 +194,17 @@ fn a_set_handle_hashes_and_its_owner_knows_its_alive() {
     let handles: std::collections::HashSet<SnapshotStateSet<i32>> =
         [one.handle(), one.handle(), other.handle()].into_iter().collect();
     assert_eq!(handles.len(), 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateSetTests.kt, stateSetsCanBeSnapshot
+#[test]
+fn state_sets_can_be_snapshot() {
+    let original = [0, 1, 2, 3, 4, 5, 6];
+    let set = compose_runtime::snapshots::mutable_state_set_from(original);
+    let snapshot = Snapshot::take_snapshot(None);
+    set.remove(&0);
+    assert_eq!(items(set.handle()), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(snapshot.enter(|| items(set.handle())), original);
+    snapshot.dispose();
+    assert_eq!(items(set.handle()), [1, 2, 3, 4, 5, 6]);
 }

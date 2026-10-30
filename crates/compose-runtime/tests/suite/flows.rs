@@ -642,3 +642,30 @@ fn a_state_flow_is_set_from_another_thread() {
     assert!(!flow.compare_and_set(1, 3));
     assert_eq!(flow.value(), 2);
 }
+
+/// A snapshot flow's block runs in a read-only snapshot (D775): writing there refuses, as Compose's.
+#[test]
+fn a_snapshot_flows_block_is_in_a_read_only_snapshot() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let mut flow = snapshot_flow(move || {
+        assert!(Snapshot::current().read_only());
+        handle.get()
+    });
+    let values = collect_now(&mut flow);
+    assert_eq!(values, [0]);
+    Snapshot::with_mutable_snapshot(|| state.set(1));
+    assert_eq!(collect_now(&mut flow), [1]);
+}
+
+/// What's polled now of a flow.
+fn collect_now<S: Stream + Unpin>(flow: &mut S) -> Vec<S::Item> {
+    let mut values = Vec::new();
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    while let std::task::Poll::Ready(Some(value)) =
+        std::pin::Pin::new(&mut *flow).poll_next(&mut context)
+    {
+        values.push(value);
+    }
+    values
+}

@@ -169,13 +169,13 @@ impl<T> SnapshotFlow<T> {
         self.manager.register();
         let reads: Rc<RefCell<HashSet<StateObjectId>>> = Rc::default();
         let log = reads.clone();
-        let value = Snapshot::observe(
-            Some(Rc::new(move |state| {
-                log.borrow_mut().insert(state);
-            })),
-            None,
-            &self.block,
-        );
+        // As Compose's: a read-only snapshot, so what the block reads is consistent, whatever it
+        // runs (D775).
+        let snapshot = Snapshot::take_snapshot(Some(Rc::new(move |state| {
+            log.borrow_mut().insert(state);
+        })));
+        let value = snapshot.enter(&self.block);
+        drop(snapshot);
         self.manager.watch(&self.watcher, reads.take());
         value
     }

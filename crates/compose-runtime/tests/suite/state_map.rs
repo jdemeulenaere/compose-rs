@@ -1,8 +1,8 @@
 //! `SnapshotStateMap` (docs/parity/design/snapshots.md, step S3), from Compose's
 //! `SnapshotStateMapTests`: the map API; Kotlin's views of the entries, the keys and the values
 //! are snapshots here, written through the map's `retain` and `remove`. Adding through a view,
-//! which Kotlin refuses at run time (`verifyMutableMap…Add`, `validate…Add`), doesn't exist. Those
-//! taking snapshots wait for step S5; the concurrent ones are n/a (D14).
+//! which Kotlin refuses at run time (`verifyMutableMap…Add`, `validate…Add`), doesn't exist. The
+//! concurrent ones are n/a (D14).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -296,4 +296,48 @@ fn a_map_handle_hashes_and_its_owner_knows_its_alive() {
     let handles: std::collections::HashSet<SnapshotStateMap<i32, i32>> =
         [one.handle(), one.handle(), other.handle()].into_iter().collect();
     assert_eq!(handles.len(), 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateMapTests.kt, validateMapsCanBeSnapshot
+#[test]
+fn maps_can_be_snapshot() {
+    let map = compose_runtime::snapshots::mutable_state_map_from(default_entries());
+    let snapshot = Snapshot::take_snapshot(None);
+    map.insert(100, 100.0);
+    assert!(map.contains_key(&100));
+    assert!(snapshot.enter(|| !map.contains_key(&100)));
+    snapshot.dispose();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateMapTests.kt, currentValueOfTheMap
+#[test]
+fn the_current_value_of_the_map() {
+    let map = compose_runtime::snapshots::mutable_state_map_of::<i32, String>();
+    let mut maps = Vec::new();
+    for value in 0..100 {
+        Snapshot::with_mutable_snapshot(|| {
+            map.insert(value, value.to_string());
+            maps.push(map.with(|map| map.clone()));
+        });
+    }
+    for (index, current) in maps.iter().enumerate() {
+        assert_eq!(current.len(), index + 1);
+        for value in 0..index as i32 {
+            assert_eq!(current.get(&value), Some(&value.to_string()));
+        }
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateMapTests.kt, modificationAcrossSnapshots
+#[test]
+fn modification_across_snapshots() {
+    let map = compose_runtime::snapshots::mutable_state_map_of::<i32, i32>();
+    for value in 0..100 {
+        Snapshot::with_mutable_snapshot(|| {
+            map.insert(value, value);
+        });
+    }
+    for value in 0..100 {
+        assert_eq!(map.get(&value), Some(value));
+    }
 }

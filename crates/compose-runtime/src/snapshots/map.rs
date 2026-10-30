@@ -24,6 +24,12 @@ pub(crate) struct MapRecord<K, V> {
     map: Rc<StateMapContents<K, V>>,
 }
 
+impl<K, V> Clone for MapRecord<K, V> {
+    fn clone(&self) -> Self {
+        MapRecord { map: self.map.clone() }
+    }
+}
+
 /// A `Copy` handle to a map state, as Compose's `SnapshotStateMap`. Reads subscribe to the whole
 /// map; [`OwnedStateMap`] owns it.
 pub struct SnapshotStateMap<K: 'static, V: 'static> {

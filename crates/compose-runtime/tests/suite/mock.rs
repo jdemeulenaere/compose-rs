@@ -347,6 +347,7 @@ pub fn identity<T>(item: &Rc<T>) -> usize {
 #[derive(Clone)]
 pub struct ContactModel(pub Rc<OwnedState<ContactModelData>>);
 
+#[derive(Clone)]
 pub struct ContactModelData {
     pub filter: String,
     pub contacts: Vec<ContactRef>,

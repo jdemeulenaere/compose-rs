@@ -1,5 +1,5 @@
 //! Compose's `DerivedSnapshotStateTests`, adapted: `derived_state_of` outside composition is
-//! lazy and cached. The tests that take snapshots wait for snapshot isolation (D702).
+//! lazy and cached, and each snapshot sees its own result.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -104,7 +104,6 @@ fn nested_derived_states_produce_a_result() {
 }
 
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateReadsCanBeObserved
-// On `Snapshot::observe`: taking a snapshot with its read observer comes with step S5.
 #[test]
 fn a_read_observer_hears_a_derived_state_and_what_it_read() {
     use compose_runtime::snapshots::{Snapshot, StateObjectId};
@@ -416,4 +415,290 @@ fn a_with_closure_can_write_a_dependency_and_read_again() {
         (*value, read.get())
     });
     assert_eq!((first, second), (2, 4));
+}
+
+// ---- In snapshots (step S5) ---------------------------------------------------------------------
+
+mod in_snapshots {
+    use super::*;
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+
+    fn atomic<R>(block: impl FnOnce() -> R) -> R {
+        Snapshot::with_mutable_snapshot(block)
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, statesCanBeUsedInSnapshot
+    #[test]
+    fn states_can_be_used_in_a_snapshot() {
+        let a = mutable_state_of(1);
+        let b = mutable_state_of(10);
+        let (read_a, read_b) = (a.handle(), b.handle());
+        let c = derived_state_of(move || read_a.get() + read_b.get());
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        assert_eq!(c.get(), 11);
+        a.update(|value| value + 1);
+        assert_eq!(c.get(), 12);
+        b.update(|value| value + 10);
+        assert_eq!(c.get(), 22);
+        snapshot.dispose();
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, snapshotsAreIsolatedFromGlobalChanges
+    #[test]
+    fn snapshots_are_isolated_from_global_changes() {
+        let state = mutable_state_of(0);
+        let read = state.handle();
+        let derived = derived_state_of(move || read.get());
+        let snapshot = Snapshot::take_snapshot(None);
+        state.set(1);
+        assert_eq!(state.get(), 1);
+        assert_eq!(derived.get(), 1);
+        assert_eq!(snapshot.enter(|| state.get()), 0);
+        assert_eq!(snapshot.enter(|| derived.get()), 0);
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, mutableSnapshotsCanBeApplied
+    #[test]
+    fn mutable_snapshots_can_be_applied() {
+        let state = mutable_state_of(0);
+        let read = state.handle();
+        let derived = derived_state_of(move || read.get());
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            assert_eq!(state.get(), 0);
+            assert_eq!(derived.get(), 0);
+            state.set(1);
+            assert_eq!(state.get(), 1);
+            assert_eq!(derived.get(), 1);
+        });
+        assert_eq!(state.get(), 0);
+        assert_eq!(derived.get(), 0);
+        snapshot.apply().check();
+        assert_eq!(state.get(), 1);
+        assert_eq!(derived.get(), 1);
+        snapshot.dispose();
+        atomic(|| {
+            assert_eq!(state.get(), 1);
+            assert_eq!(derived.get(), 1);
+            state.set(2);
+            assert_eq!(state.get(), 2);
+            assert_eq!(derived.get(), 2);
+        });
+        assert_eq!(state.get(), 2);
+        assert_eq!(derived.get(), 2);
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, multipleSnapshotsAreIsolatedAndCanBeApplied
+    #[test]
+    fn multiple_snapshots_are_isolated_and_can_be_applied() {
+        let count = 2;
+        let states: Vec<_> = (0..count).map(|_| mutable_state_of(0)).collect();
+        let derived: Vec<_> = states
+            .iter()
+            .map(|state| {
+                let read = state.handle();
+                derived_state_of(move || read.get())
+            })
+            .collect();
+        let snapshots: Vec<_> =
+            (0..count).map(|_| Snapshot::take_mutable_snapshot(None, None)).collect();
+        for index in 0..count {
+            assert_eq!(states[index].get(), 0);
+            assert_eq!(derived[index].get(), 0);
+        }
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            snapshot.enter(|| states[index].set(index));
+        }
+        for index in 0..count {
+            assert_eq!(states[index].get(), 0);
+            assert_eq!(derived[index].get(), 0);
+        }
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            snapshot.enter(|| {
+                for other in 0..count {
+                    let expected = if other == index { other } else { 0 };
+                    assert_eq!(states[other].get(), expected);
+                    assert_eq!(derived[other].get(), expected);
+                }
+            });
+        }
+        for snapshot in &snapshots {
+            snapshot.apply().check();
+        }
+        for index in 0..count {
+            assert_eq!(states[index].get(), index);
+            assert_eq!(derived[index].get(), index);
+        }
+    }
+
+    fn logging(
+        log: &Rc<RefCell<Vec<StateObjectId>>>,
+    ) -> Option<compose_runtime::snapshots::StateObserverFn> {
+        let log = log.clone();
+        Some(Rc::new(move |id| log.borrow_mut().push(id)))
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateReadsCanBeObserved
+    #[test]
+    fn state_reads_can_be_observed() {
+        let state = mutable_state_of(0);
+        let read = state.handle();
+        let derived = derived_state_of(move || read.get());
+        let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+        let snapshot = Snapshot::take_snapshot(logging(&reads));
+        assert_eq!(snapshot.enter(|| derived.get()), 0);
+        assert_eq!(reads.borrow().len(), 2, "1 for the derived state, 1 for the state");
+        assert!(reads.borrow().contains(&state.state_object_id()));
+        assert!(reads.borrow().contains(&derived.as_state().state_object_id()));
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateReadsCanBeObservedEvenIfCached
+    #[test]
+    fn state_reads_can_be_observed_even_if_cached() {
+        let state = mutable_state_of(0);
+        let read = state.handle();
+        let derived = derived_state_of(move || read.get());
+        assert_eq!(derived.get(), 0);
+        let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+        let snapshot = Snapshot::take_snapshot(logging(&reads));
+        assert_eq!(snapshot.enter(|| derived.get()), 0);
+        assert_eq!(
+            *reads.borrow(),
+            [derived.as_state().state_object_id(), state.state_object_id()]
+        );
+    }
+
+    // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateUpdatedInSnapshotIsNotRecalculated
+    #[test]
+    fn a_state_updated_in_a_snapshot_is_not_recalculated() {
+        let runs = Rc::new(Cell::new(0));
+        let dependency = mutable_state_of(0);
+        let (count, read) = (runs.clone(), dependency.handle());
+        let a = derived_state_of(move || {
+            count.set(count.get() + 1);
+            read.get()
+        });
+        let read_a = a.as_state();
+        let b = derived_state_of(move || read_a.get());
+        let read_in_a_snapshot = || {
+            let snapshot = Snapshot::take_mutable_snapshot(None, None);
+            snapshot.enter(|| b.get());
+            snapshot.apply().check();
+        };
+        read_in_a_snapshot();
+        dependency.update(|value| value + 1);
+        read_in_a_snapshot();
+        read_in_a_snapshot();
+        assert_eq!(runs.get(), 2);
+    }
+
+    /// A calculation in a snapshot that reads other states than the global one's doesn't stop a
+    /// write to what the global one's read from reaching a reader of the derived state (the
+    /// debt S2 left: S5's records per snapshot).
+    #[test]
+    fn a_snapshots_calculation_leaves_the_global_ones_dependencies() {
+        let (switch, left, right) =
+            (mutable_state_of(true), mutable_state_of(1), mutable_state_of(2));
+        let (read_switch, read_left, read_right) = (switch.handle(), left.handle(), right.handle());
+        let derived =
+            derived_state_of(
+                move || {
+                    if read_switch.get() { read_left.get() } else { read_right.get() }
+                },
+            );
+        let read = derived.as_state();
+        let notified = Rc::new(Cell::new(0));
+        let count = notified.clone();
+        let observer = platform::ReadObserver::new(move || count.set(count.get() + 1));
+        observer.observe(1, || read.get());
+        assert_eq!(read.get(), 1);
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            switch.set(false);
+            assert_eq!(read.get(), 2);
+        });
+        // Nothing changed for the global snapshot.
+        assert_eq!(read.get(), 1);
+        assert_eq!(notified.get(), 0);
+        snapshot.dispose();
+        left.set(10);
+        Snapshot::send_apply_notifications();
+        assert_eq!(read.get(), 10);
+        assert_eq!(notified.get(), 1);
+    }
+
+    /// What a snapshot's calculation read counts once its record is the global one's: the applied
+    /// snapshot's record stands, and a write to what it read reaches a reader.
+    #[test]
+    fn an_applied_calculations_dependencies_count() {
+        let (switch, left, right) =
+            (mutable_state_of(true), mutable_state_of(1), mutable_state_of(2));
+        let (read_switch, read_left, read_right) = (switch.handle(), left.handle(), right.handle());
+        let derived =
+            derived_state_of(
+                move || {
+                    if read_switch.get() { read_left.get() } else { read_right.get() }
+                },
+            );
+        let read = derived.as_state();
+        let notified = Rc::new(Cell::new(0));
+        let count = notified.clone();
+        let observer = platform::ReadObserver::new(move || count.set(count.get() + 1));
+        observer.observe(1, || read.get());
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            switch.set(false);
+            assert_eq!(read.get(), 2);
+        });
+        snapshot.apply().check();
+        drop(snapshot);
+        // The switch's apply told the reader.
+        assert_eq!(notified.get(), 1);
+        observer.drain_invalidated(|_| {});
+        observer.observe(1, || assert_eq!(read.get(), 2));
+        right.set(20);
+        Snapshot::send_apply_notifications();
+        assert_eq!(notified.get(), 2);
+        assert_eq!(read.get(), 20);
+    }
+
+    /// The mark carries the snapshot: a read in a snapshot, then in another with no write between,
+    /// doesn't take the first's result for its own.
+    #[test]
+    fn a_result_valid_in_one_snapshot_isnt_valid_in_another() {
+        let state = mutable_state_of(1);
+        let read = state.handle();
+        let runs = Rc::new(Cell::new(0));
+        let count = runs.clone();
+        let derived = derived_state_of(move || {
+            count.set(count.get() + 1);
+            read.get()
+        });
+        let first = Snapshot::take_mutable_snapshot(None, None);
+        let second = Snapshot::take_mutable_snapshot(None, None);
+        first.enter(|| state.set(10));
+        second.enter(|| state.set(20));
+        assert_eq!(first.enter(|| derived.get()), 10);
+        assert_eq!(second.enter(|| derived.get()), 20);
+        assert_eq!(first.enter(|| derived.get()), 10);
+        assert_eq!(second.enter(|| derived.get()), 20);
+        assert_eq!(runs.get(), 2, "each snapshot keeps its own result");
+        assert_eq!(derived.get(), 1);
+    }
+
+    /// A derived state made in a snapshot is readable elsewhere, as a state is.
+    #[test]
+    fn a_derived_state_made_in_a_snapshot_is_born_accessible() {
+        let state = mutable_state_of(1);
+        let read = state.handle();
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        let derived = snapshot.enter(|| {
+            let derived = derived_state_of(move || read.get());
+            assert_eq!(derived.get(), 1);
+            derived
+        });
+        state.set(2);
+        assert_eq!(derived.get(), 2);
+        assert_eq!(snapshot.enter(|| derived.get()), 1);
+    }
 }

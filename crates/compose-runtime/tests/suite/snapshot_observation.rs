@@ -25,12 +25,12 @@ fn changes_of<T: 'static>(state: MutableState<T>, block: impl FnOnce()) -> usize
     changes.get()
 }
 
-/// How many reads `block` made, as `readsOf` (observed without a snapshot: isolation comes
-/// later).
+/// How many reads `block` made, as `readsOf`.
 fn reads_of(block: impl FnOnce()) -> usize {
     let reads = Rc::new(Cell::new(0));
     let counted = reads.clone();
-    Snapshot::observe(Some(Rc::new(move |_| counted.set(counted.get() + 1))), None, block);
+    let snapshot = Snapshot::take_snapshot(Some(Rc::new(move |_| counted.set(counted.get() + 1))));
+    snapshot.enter(block);
     reads.get()
 }
 
@@ -1514,4 +1514,82 @@ fn notify_changes_on_an_observer_not_started_ignores_earlier_sends() {
     other.set(1);
     Snapshot::send_apply_notifications();
     assert_eq!(changes.get(), 0, "it read nothing of what these changes name");
+}
+
+// ---- With isolated snapshots (step S5) ----------------------------------------------------------
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, stateReadTriggersCallbackAfterSwitchingAdvancingGlobalWithinObserveReads
+#[test]
+fn a_read_in_a_snapshot_taken_in_an_observation_triggers_its_callback() {
+    let changes = Rc::new(Cell::new(0));
+    let state = mutable_state_of(0);
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let on_changed = counting(&changes);
+    observer.observe_reads("Hello", &on_changed, || {
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| state.get());
+        snapshot.apply().check();
+    });
+    state.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, withoutReadsPausesNestedObservationWhenNewMutableSnapshotIsEnteredWithin
+#[test]
+fn without_reads_pauses_nested_observation_when_a_new_mutable_snapshot_is_entered_within() {
+    let (changes1, changes2) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (callback1, callback2) = (counting(&changes1), counting(&changes2));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("scope1", &callback1, || {
+            observer.observe_reads("scope2", &callback2, || {
+                Snapshot::without_read_observation(|| {
+                    let snapshot = Snapshot::take_mutable_snapshot(None, None);
+                    snapshot.enter(|| state.get());
+                    snapshot.apply().check();
+                    snapshot.dispose();
+                });
+            });
+        });
+    });
+    assert_eq!(changes1.get(), 0);
+    assert_eq!(changes2.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, withoutReadsPausesNestedObservationWhenNewSnapshotIsEnteredWithin
+#[test]
+fn without_reads_pauses_nested_observation_when_a_new_snapshot_is_entered_within() {
+    let (changes1, changes2) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (callback1, callback2) = (counting(&changes1), counting(&changes2));
+    run_simple_test(|observer, state| {
+        observer.observe_reads("scope1", &callback1, || {
+            observer.observe_reads("scope2", &callback2, || {
+                Snapshot::without_read_observation(|| {
+                    let snapshot = Snapshot::take_snapshot(None);
+                    snapshot.enter(|| state.get());
+                    snapshot.dispose();
+                });
+            });
+        });
+    });
+    assert_eq!(changes1.get(), 0);
+    assert_eq!(changes2.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, withoutReadsInReadOnlySnapshot
+#[test]
+fn without_reads_in_a_read_only_snapshot() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        observer.observe_reads("scope", &callback, || {
+            let snapshot = Snapshot::take_snapshot(None);
+            snapshot.enter(|| Snapshot::without_read_observation(|| state.get()));
+            snapshot.dispose();
+        });
+    });
+    assert_eq!(changes.get(), 0);
 }

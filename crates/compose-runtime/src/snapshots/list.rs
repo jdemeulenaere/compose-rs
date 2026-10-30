@@ -24,6 +24,12 @@ pub(crate) struct ListRecord<T> {
     structural: u32,
 }
 
+impl<T> Clone for ListRecord<T> {
+    fn clone(&self) -> Self {
+        ListRecord { list: self.list.clone(), structural: self.structural }
+    }
+}
+
 /// A `Copy` handle to a list state, as Compose's `SnapshotStateList`. Reads subscribe to the whole
 /// list; [`OwnedStateList`] owns it.
 pub struct SnapshotStateList<T: 'static> {

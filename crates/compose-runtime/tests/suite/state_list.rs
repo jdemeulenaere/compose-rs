@@ -734,3 +734,60 @@ fn a_sublist_removes_one_occurrence_per_value_given() {
     assert_eq!(sub_list.to_vec(), [1, 2]);
     assert_eq!(items(*list), [1, 2]);
 }
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateListTests.kt, stateListsCanBeSnapshot
+#[test]
+fn state_lists_can_be_snapshot() {
+    let original: Vec<i32> = (0..7).collect();
+    let mut expected = original.clone();
+    let list = snapshot_state_list(7, |index| index as i32);
+    let snapshot = Snapshot::take_snapshot(None);
+    list.set(1, 100);
+    expected[1] = 100;
+    assert_eq!(items(list.handle()), expected);
+    assert_eq!(snapshot.enter(|| items(list.handle())), original);
+    snapshot.dispose();
+    assert_eq!(items(list.handle()), expected);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateListTests.kt, modificationAcrossSnapshots
+#[test]
+fn modification_across_snapshots() {
+    let list = mutable_state_list_of::<i32>();
+    for value in 0..100 {
+        Snapshot::with_mutable_snapshot(|| list.push(value));
+    }
+    for value in 0..100 {
+        assert_eq!(list.get(value as usize), Some(value));
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateListTests.kt, currentValueOfTheList
+#[test]
+fn the_current_value_of_the_list() {
+    let list = mutable_state_list_of::<i32>();
+    let mut lists = Vec::new();
+    for value in 0..100 {
+        Snapshot::with_mutable_snapshot(|| {
+            list.push(value);
+            lists.push(items(list.handle()));
+        });
+    }
+    for (index, current) in lists.iter().enumerate() {
+        assert_eq!(current.len(), index + 1);
+        assert!(current.iter().enumerate().all(|(i, value)| i as i32 == *value));
+    }
+}
+
+/// Two snapshots writing a list conflict, as `mergeRecords` of a list is `null`.
+#[test]
+fn snapshots_writing_a_list_conflict() {
+    let list = mutable_state_list_of::<i32>();
+    let first = Snapshot::take_mutable_snapshot(None, None);
+    let second = Snapshot::take_mutable_snapshot(None, None);
+    first.enter(|| list.push(1));
+    second.enter(|| list.push(2));
+    first.apply().check();
+    assert!(!second.apply().succeeded());
+    assert_eq!(items(list.handle()), [1]);
+}
