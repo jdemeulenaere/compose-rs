@@ -296,3 +296,83 @@ fn a_multi_line_field_is_between_min_lines_and_max_lines_high() {
     ui.wait_for_idle();
     assert_eq!(height(&mut ui), 32.0 + 4.0 * 24.0);
 }
+
+/// A field with `ab`, an icon button at each end, and `requester` on it.
+#[compose_runtime::composable]
+fn FieldWithIconButtons(requester: compose_ui::FocusRequester) {
+    MaterialTheme!({
+        TextField!(
+            String::from("ab"),
+            |_| {},
+            modifier = Modifier.test_tag("field").focus_requester(requester),
+            leading_icon =
+                Some(|| IconButton!(on_click = || {}, modifier = Modifier.test_tag("leading"), {
+                    Icon!(icons::filled::search(), None);
+                })),
+            trailing_icon =
+                Some(|| IconButton!(on_click = || {}, modifier = Modifier.test_tag("trailing"), {
+                    Icon!(icons::filled::close(), None);
+                })),
+            single_line = true,
+        );
+    });
+}
+
+#[test]
+fn a_requester_on_a_field_with_icon_buttons_focuses_the_field() {
+    let requester = compose_ui::FocusRequester::new();
+    let mut ui = compose_test(move || FieldWithIconButtons(requester));
+    assert!(requester.request_focus());
+    ui.wait_for_idle();
+    assert!(ui.host().text_input_options().is_some(), "the field, not one of its icons");
+    ui.on_node_with_tag("leading").assert_is_not_focused();
+    ui.on_node_with_tag("trailing").assert_is_not_focused();
+}
+
+#[test]
+fn a_tap_on_a_fields_padding_focuses_the_field_and_not_its_icon_button() {
+    let mut ui = compose_test(|| FieldWithIconButtons(compose_ui::FocusRequester::new()));
+    let field = bounds(&mut ui, "field");
+    // Above the text, between the icons.
+    let at = compose_ui::Offset::new(field.left + field.width() / 2.0, field.top + 2.0);
+    ui.host().send_pointer(compose_ui::PointerEvent::press(at));
+    ui.host().send_pointer(compose_ui::PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert!(ui.host().text_input_options().is_some(), "the field, not one of its icons");
+    ui.on_node_with_tag("leading").assert_is_not_focused();
+    ui.on_node_with_tag("trailing").assert_is_not_focused();
+}
+
+#[test]
+fn typing_into_a_field_with_an_icon_button_reaches_its_text() {
+    let value = compose_runtime::mutable_state_of(String::new());
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            TextField!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("field"),
+                trailing_icon = Some(|| IconButton!(on_click = || {}, {
+                    Icon!(icons::filled::close(), None);
+                })),
+            );
+        });
+    });
+    ui.on_node_with_tag("field").perform_text_input("typed");
+    assert_eq!(value.get(), "typed");
+}
+
+#[test]
+fn tab_goes_from_the_field_to_its_icon_buttons() {
+    let requester = compose_ui::FocusRequester::new();
+    let mut ui = compose_test(move || FieldWithIconButtons(requester));
+    assert!(requester.request_focus());
+    ui.wait_for_idle();
+    ui.host().send_key(compose_ui::KeyEvent::down(compose_ui::Key::Tab));
+    ui.wait_for_idle();
+    ui.on_node_with_tag("leading").assert_is_focused();
+    ui.host().send_key(compose_ui::KeyEvent::down(compose_ui::Key::Tab));
+    ui.wait_for_idle();
+    ui.on_node_with_tag("trailing").assert_is_focused();
+}

@@ -526,6 +526,10 @@ fn decorated_field(
             let style = style.clone();
             let (prefix_style, suffix_style) = (prefix_style.clone(), suffix_style.clone());
             let content = compose_runtime::callback(move || {
+                // The text first: what focuses the field finds the first focus target below it,
+                // and Tab goes from the text to its icons, as Compose's, whose field's target
+                // is above them (D1298).
+                inner_text_field();
                 // Each icon in a 48 dp box, centered, as Compose's `IconDefaultSizeModifier`.
                 for (icon, color) in
                     [(&slots.leading_icon, leading_color), (&slots.trailing_icon, trailing_color)]
@@ -586,7 +590,6 @@ fn decorated_field(
                         });
                     }
                 }
-                inner_text_field();
                 if variant == Variant::Filled {
                     IndicatorLine(indicator_state, indicator, thickness_state, unfocused_thickness);
                 }
@@ -723,13 +726,13 @@ impl DecorationLayout {
         let mut children = measurables.iter().copied();
         let mut next = |present: bool| if present { children.next() } else { None };
         DecorationSlots {
+            text: next(true),
             leading: next(self.has_leading),
             trailing: next(self.has_trailing),
             label: next(self.has_label),
             placeholder: next(self.has_placeholder),
             prefix: next(self.has_prefix),
             suffix: next(self.has_suffix),
-            text: next(true),
         }
     }
 
@@ -859,15 +862,15 @@ impl MeasurePolicy for DecorationLayout {
         let vertical =
             density.round_to_px(if self.has_label && !outlined { 8.dp() } else { 16.dp() });
         let mut children = measurables.iter().copied();
+        let Some(text) = children.next() else {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        };
         let leading = if self.has_leading { children.next() } else { None };
         let trailing = if self.has_trailing { children.next() } else { None };
         let label = if self.has_label { children.next() } else { None };
         let placeholder = if self.has_placeholder { children.next() } else { None };
         let prefix = if self.has_prefix { children.next() } else { None };
         let suffix = if self.has_suffix { children.next() } else { None };
-        let Some(text) = children.next() else {
-            return scope.layout(constraints.min_width, constraints.min_height);
-        };
         let indicator = children.next();
         let icon_constraints = constraints.loosen();
         let leading = leading.map(|icon| scope.measure(icon, icon_constraints));
