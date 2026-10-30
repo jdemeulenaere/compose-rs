@@ -4,7 +4,7 @@ compose-rs is Jetpack Compose's programming model in Rust: write UIs as composab
 
 > **Disclaimer:** this is not an officially supported Google product, and it is not affiliated with or endorsed by the Jetpack Compose team. Jetpack Compose and Android are trademarks of Google LLC.
 
-**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). Doing only what Jetpack Compose 1.12.1 does ("parity mode"), compose-rs on a Pixel 8 Pro starts faster, uses less memory and does about half the main-thread work per frame, and with its recommended optimizations on, its default, it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). The benchmarks compare like for like at parity, which apps can pick too ([below](#parity-mode-and-the-optimizations)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
+**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). Doing only what Jetpack Compose does (the "parity mode", which follows androidx-main's tip since D705; the numbers here were measured at 1.12.1's rules on both sides), compose-rs on a Pixel 8 Pro starts faster, uses less memory and does about half the main-thread work per frame, and with its recommended optimizations on, its default, it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). The benchmarks compare like for like at parity, which apps can pick too ([below](#parity-mode-and-the-optimizations)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
 
 | Crate | Contents |
 |---|---|
@@ -166,7 +166,7 @@ Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 r
 | Flag | Default | What it does | Measured alone |
 |---|---|---|---|
 | `performance_hint` | on | A hint session of its own for the main thread and the RenderThread, reporting both threads' CPU time (Android) | Scrolls: every percentile on both threads 24–46 % shorter; CPU-rail power +1.8 to +2.9 % (D500) |
-| `draw_prefetched_ahead` | on | Draws and records prefetched items between frames (Android) | Scrolls: main thread p90 / p99 13–23 % shorter |
+| `draw_prefetched_ahead` | on | Draws and records prefetched items between frames (Android) | Scrolls: main thread p90 / p99 13–23 % shorter (measured at Compose 1.12.1's one-item strategy) |
 | `single_drawing_fade` | on | Fades a layer holding one drawing by its paint, not offscreen (as `ModulateAlpha`) | Stress animation: RenderThread work −42 %; GPU caches +31 % unless the next flag is on too |
 | `flush_layers_before_dropped_paths` | on | Flushes HWUI's layers before a frame that drops a stroked path (Android) | Frees a frame's worth of path masks: −28 MB of graphics memory without offscreen layers (D510) |
 | `reuse_paragraph_at_same_layout_width` | on | Keeps a text's paragraph while the width it's laid out at stays the same | Width-changing screen: 14 times fewer text layouts, main-thread work −52 % (D551); no change elsewhere |

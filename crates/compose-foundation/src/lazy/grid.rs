@@ -125,6 +125,24 @@ impl LazyGridState {
         self.list.cache_window()
     }
 
+    /// The window's units with requests under way, for tests, whatever they request.
+    #[doc(hidden)]
+    pub fn prefetch_units_held(&self) -> Vec<usize> {
+        self.list.inner().map_or_else(Vec::new, |inner| inner.prefetch.units_held())
+    }
+
+    /// Measures the grid again, as Compose's `Remeasurement.forceRemeasure`, for tests.
+    #[doc(hidden)]
+    pub fn force_remeasure(&self) {
+        self.list.force_remeasure();
+    }
+
+    /// The window's requests under way, for tests: their items, and whether they are urgent.
+    #[doc(hidden)]
+    pub fn prefetch_requests(&self) -> Vec<(usize, bool)> {
+        self.list.prefetch_requests()
+    }
+
     /// Scrolled to the line of item `first_visible_item_index`,
     /// `first_visible_item_scroll_offset` pixels into it.
     #[track_caller]
@@ -960,7 +978,8 @@ fn LazyGrid(
     // The list state its position is in (detached once the grid state's owner went, D240).
     let list = state.list;
     let inner = list.inner_or_detached();
-    inner.prefetch.use_window(&inner, cache_window);
+    let owner = compose_runtime::remember(|| Rc::new(()));
+    inner.prefetch.use_window(&inner, cache_window, &owner);
     let info = GridInfo {
         items: items.clone(),
         cells,
@@ -1537,6 +1556,17 @@ impl MeasurePolicy for LazyGridLayout {
             } else {
                 state.pending.set(state.pending.get() + offset - state.position.get().1);
             }
+            // Nothing visible: the window starts over.
+            state.prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                None,
+                0,
+                false,
+                None,
+                &[],
+                &mut |_| 0,
+            );
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
             state.room_forward.set(0.0);
@@ -1804,11 +1834,10 @@ impl MeasurePolicy for LazyGridLayout {
             if let Some(laid) = &laid {
                 // Lines beyond those placed (`GRID_LINES_BEYOND`) count as the average.
                 for line in laid.first..=laid.last {
-                    sizes.push(if (lead..end_index).contains(&line) {
-                        m.size_of(line)
-                    } else {
-                        average
-                    });
+                    sizes.push((
+                        line,
+                        if (lead..end_index).contains(&line) { m.size_of(line) } else { average },
+                    ));
                 }
             }
             // In the layout the lines are borrowed: a view of them.
@@ -1830,6 +1859,9 @@ impl MeasurePolicy for LazyGridLayout {
         // requests composed next to them.
         // A focus search that laid lines out beyond the bounds is over: they go (D482, D577).
         let beyond_ended = state.beyond_ended.take();
+        if beyond_ended {
+            prefetch.search_ended();
+        }
         let limits = {
             // The line after the wanted ones the scroll's way, if no focus search just ended.
             let next = if prefetch.forward.get() {

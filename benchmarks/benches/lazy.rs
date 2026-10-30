@@ -204,7 +204,11 @@ fn prefetch_in_pauses(criterion: &mut Criterion) {
                 }
                 let start = Instant::now();
                 let deadline = start + budget.unwrap_or(Duration::from_secs(1));
-                host.prefetch(deadline);
+                // A request whose stretch doesn't fit these idle times would wait for ever here,
+                // up to the cap, which made the shortest budgets' times bimodal (D899): no frame for
+                // two intervals, the third has no limit for the first request, as Compose's
+                // `isFrameIdle`.
+                host.prefetch_with(deadline, idle_times % 3 == 2);
                 spent += start.elapsed();
                 idle_times += 1;
             }

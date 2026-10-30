@@ -1,5 +1,6 @@
 //! Prefetch at the default, as Compose's at the tip (D705, D892): the window's one item's worth
-//! ahead (at rows of the sizes here, in 10 to 50 % of the viewport) and none behind; a request
+//! ahead (at rows of the sizes here, in 10 to 50 % of the viewport) and none behind, what a scroll
+//! leaves behind going with the next measurement (D896); a request
 //! cancelled when the direction turns, or once its item leaves the window; urgent when the same
 //! scroll again would reach the item; each step only while the time left exceeds that step's
 //! average for the item's content type (any time left when urgent), a step that doesn't fit
@@ -26,6 +27,11 @@ thread_local! {
     /// How long composing an even (odd) row takes.
     static SLOW_EVEN: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     static SLOW_ODD: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// How many stretches a slow row's composition takes.
+    static SLOW_PARTS: Cell<u64> = const { Cell::new(4) };
+    /// How long measuring an even row takes, and each row's measurements.
+    static SLOW_MEASURE_EVEN: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    static MEASURED: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
 }
 
 fn compositions(index: usize) -> usize {
@@ -42,18 +48,37 @@ fn live_items() -> Vec<usize> {
 fn Row(index: usize) {
     COMPOSED.with(|composed| *composed.borrow_mut().entry(index).or_insert(0) += 1);
     let slow = if index.is_multiple_of(2) { SLOW_EVEN.get() } else { SLOW_ODD.get() };
-    if !slow.is_zero() {
-        std::thread::sleep(slow);
-    }
     DisposableEffect(index, move |scope| {
         LIVE.with(|live| live.borrow_mut().insert(index));
         scope.on_dispose(move || {
             LIVE.with(|live| live.borrow_mut().remove(&index));
         })
     });
-    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}")), {
-        BasicText!("item {}", index);
+    let measured = Modifier.layout(move |scope, measurable, constraints: Constraints| {
+        MEASURED.with(|measured| *measured.borrow_mut().entry(index).or_insert(0) += 1);
+        if index.is_multiple_of(2) {
+            std::thread::sleep(SLOW_MEASURE_EVEN.get());
+        }
+        let placeable = scope.measure(measurable, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
     });
+    Box!(modifier = measured.size((100.dp(), 20.dp())).test_tag(format!("row {index}")), {
+        BasicText!("item {}", index);
+        // Last, so the running average of a stretch ends on these.
+        if !slow.is_zero() {
+            let parts = SLOW_PARTS.get();
+            for _ in 0..parts {
+                SlowPart(slow.as_micros() as u64 / parts);
+            }
+        }
+    });
+}
+
+/// A stretch of composition of a row: a pause point of its own, as a composable taking `time`.
+#[composable]
+fn SlowPart(micros: u64) {
+    std::thread::sleep(Duration::from_micros(micros));
 }
 
 /// A list of 20 px rows in a 100 px viewport (rows of two content types, even and odd), with
@@ -95,26 +120,26 @@ fn a_scroll_prefetches_one_item_ahead_and_keeps_none_behind() {
     // At rest, nothing: Compose prefetches on scrolls.
     assert!(!ui.host().has_prefetch_work());
     assert_eq!(live_items(), (0..5).collect::<Vec<_>>());
-    // 30 px down: rows 1 to 6 show (row 6 from 90 px); the frame composing rows 5 and 6
-    // deactivates row 0 in the same composition.
+    // 30 px down: rows 1 to 6 show (row 6 from 90 px); row 0 stays until the next measurement,
+    // the window's bound being the one before the scroll, as `keepAroundItems` (D894).
     scroll(&mut ui, *state, 30.0);
-    assert_eq!(live_items(), (1..7).collect::<Vec<_>>(), "row 0 deactivated in the frame");
+    assert_eq!(live_items(), (0..7).collect::<Vec<_>>(), "row 0 until the next measurement");
     assert!(ui.host().has_prefetch_work());
     assert!(!ui.host().prefetch(later()));
-    assert_eq!(live_items(), (1..8).collect::<Vec<_>>(), "row 7, and only it");
+    assert_eq!(live_items(), (0..8).collect::<Vec<_>>(), "row 7, and only it");
     assert_eq!(compositions(7), 1);
     // Composed and measured, not placed.
     let dump = ui.dump_tree();
     let line = dump.lines().find(|line| line.contains("\"row 7\"")).expect("row 7 in the tree");
     assert!(line.contains("100x20"), "measured: {line}");
     assert_eq!(state.first_visible_item_index(), 1);
-    // The frame showing it composes nothing: row 1, unplaced, is deactivated by the next idle
-    // time's composition, which prefetches row 8 (D575).
+    // The frame showing it composes nothing: row 0, unplaced, is deactivated by the next idle
+    // time's composition, which prefetches row 8 (D575); row 1 left in this measurement.
     let composed: usize = COMPOSED.with(|composed| composed.borrow().values().sum());
     scroll(&mut ui, *state, 20.0);
     assert_eq!(COMPOSED.with(|composed| composed.borrow().values().sum::<usize>()), composed);
     assert!(!ui.host().prefetch(later()));
-    assert_eq!(live_items(), (2..9).collect::<Vec<_>>());
+    assert_eq!(live_items(), (1..9).collect::<Vec<_>>());
 }
 
 #[test]
@@ -122,7 +147,7 @@ fn prefetch_two_ahead_prefetches_two_items() {
     let (mut ui, state) = list(with(Optimization::PREFETCH_TWO_AHEAD));
     scroll(&mut ui, *state, 30.0);
     assert!(!ui.host().prefetch(later()));
-    assert_eq!(live_items(), (1..9).collect::<Vec<_>>(), "rows 7 and 8");
+    assert_eq!(live_items(), (0..9).collect::<Vec<_>>(), "rows 7 and 8");
 }
 
 #[test]
@@ -134,7 +159,11 @@ fn keep_items_behind_keeps_two_behind_the_scroll() {
         scroll(&mut ui, *state, 30.0);
         ui.host().prefetch(later());
     }
-    // Rows 7 to 12 show (from 150 px); two behind them stay.
+    // Rows 7 to 12 show (from 150 px); two behind them stay, once a measurement lets go what the
+    // last scroll left behind.
+    state.force_remeasure();
+    ui.wait_for_idle();
+    while ui.host().prefetch(later()) {}
     let first = state.first_visible_item_index();
     let live = live_items();
     assert!(live.contains(&(first - 1)) && live.contains(&(first - 2)), "{live:?}");
@@ -145,6 +174,9 @@ fn keep_items_behind_keeps_two_behind_the_scroll() {
         scroll(&mut ui, *state, 30.0);
         ui.host().prefetch(later());
     }
+    state.force_remeasure();
+    ui.wait_for_idle();
+    while ui.host().prefetch(later()) {}
     let first = state.first_visible_item_index();
     assert_eq!(live_items()[0], first, "none behind: {:?}", live_items());
 }
@@ -181,6 +213,10 @@ fn a_request_for_an_item_no_longer_next_is_cancelled() {
     scroll(&mut ui, *state, 60.0);
     assert_eq!(state.first_visible_item_index(), 3);
     assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (0..10).collect::<Vec<_>>());
+    state.force_remeasure();
+    ui.wait_for_idle();
+    assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (3..10).collect::<Vec<_>>());
 }
 
@@ -200,23 +236,111 @@ fn scroll_until_requested(
     assert_eq!((*at as usize + 99) / 20 + 1, row, "row {row} is the next");
 }
 
-/// A composition (a row's whole, 25 ms) doesn't start with less time left than its average, but
-/// for an urgent request (`prefetch_pausable` has the gate's details).
+/// The window's one request is for row `row`, with the urgency `urgent`.
+fn assert_requested(state: LazyListState, row: usize, urgent: bool) {
+    assert_eq!(state.prefetch_requests(), [(row, urgent)]);
+}
+
+/// A composition's first stretch (a row's whole, 25 ms) doesn't start with less time left than a
+/// stretch and a pause on average for its content type, but for an urgent request (the gate's
+/// `available > 0`, `prefetch_pausable` has the rest of it).
 #[test]
 fn an_urgent_request_composes_with_any_time_left() {
     let (mut ui, state) = list(Optimizations::NONE);
     SLOW_EVEN.set(Duration::from_millis(25));
     SLOW_ODD.set(Duration::from_millis(25));
-    // 5 px down: row 6 requested, not urgent (row 5 ends 15 px past the viewport, more than
-    // 5 px); its composition's first sample is taken as is: about 25 ms.
-    scroll(&mut ui, *state, 5.0);
+    // Rows 6 and 7 asked for slowly: not urgent, each type has a sample of about 25 ms.
+    let mut at = 0;
+    scroll_until_requested(&mut ui, *state, &mut at, 6);
+    assert_requested(*state, 6, false);
     assert!(!ui.host().prefetch(later()));
-    assert_eq!(compositions(6), 1);
-    // 30 px more: rows 1 to 6 show, row 6 ending 5 px past the viewport: the same scroll again
-    // reaches row 7, so its request is urgent, and composes with 5 ms left.
-    scroll(&mut ui, *state, 30.0);
-    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)), "measuring is left");
-    assert_eq!(compositions(7), 1);
+    scroll_until_requested(&mut ui, *state, &mut at, 7);
+    assert_requested(*state, 7, false);
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!((compositions(6), compositions(7)), (1, 1));
+    // Row 8, not urgent: 2 ms is less than its type's stretch.
+    scroll_until_requested(&mut ui, *state, &mut at, 8);
+    assert_requested(*state, 8, false);
+    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(2)));
+    assert_eq!(compositions(8), 0);
+    // A scroll that would reach it if it came again: urgent now, and 2 ms is enough to start.
+    let overflow = 20 * 8 - (at + 100);
+    scroll(&mut ui, *state, overflow as f32);
+    assert_requested(*state, 8, true);
+    ui.host().prefetch(Instant::now() + Duration::from_millis(2));
+    assert_eq!(compositions(8), 1);
+}
+
+/// Each content type has its own averages of a stretch and a pause: a slow type's don't hold back
+/// a fast one's item, `getAverage(contentType)`.
+#[test]
+fn each_content_type_has_its_own_averages() {
+    let (mut ui, state) = list(Optimizations::NONE);
+    // Even rows take 60 ms to compose, odd ones no time. Rows 6 (even) and 7 (odd) prefetched:
+    // each type has a sample.
+    SLOW_EVEN.set(Duration::from_millis(60));
+    let mut at = 0;
+    scroll_until_requested(&mut ui, *state, &mut at, 6);
+    assert!(!ui.host().prefetch(later()));
+    scroll_until_requested(&mut ui, *state, &mut at, 7);
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!((compositions(6), compositions(7)), (1, 1));
+    // Row 8 (even): 2 ms is less than its type's stretch.
+    scroll_until_requested(&mut ui, *state, &mut at, 8);
+    assert_requested(*state, 8, false);
+    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(2)));
+    assert_eq!(compositions(8), 0);
+    assert!(!ui.host().prefetch(later()));
+    // Row 9 (odd): its type's stretch is far less than 5 ms, right after row 8's, which isn't: it
+    // doesn't pause at its pause points by those.
+    scroll_until_requested(&mut ui, *state, &mut at, 9);
+    assert_requested(*state, 9, false);
+    assert!(!ui.host().prefetch(Instant::now() + Duration::from_millis(5)));
+    assert_eq!(compositions(9), 1);
+}
+
+/// The last stretch of a composition, which no pause point ends, is a sample too.
+#[test]
+fn a_compositions_last_stretch_is_a_sample() {
+    let (mut ui, state) = list(Optimizations::NONE);
+    SLOW_EVEN.set(Duration::from_millis(40));
+    SLOW_PARTS.set(1);
+    let mut at = 0;
+    scroll_until_requested(&mut ui, *state, &mut at, 6);
+    assert!(!ui.host().prefetch(later()));
+    scroll_until_requested(&mut ui, *state, &mut at, 7);
+    assert!(!ui.host().prefetch(later()));
+    scroll_until_requested(&mut ui, *state, &mut at, 8);
+    assert_requested(*state, 8, false);
+    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(2)));
+    assert_eq!(compositions(8), 0);
+    SLOW_PARTS.set(4);
+}
+
+/// So does the measure step: a slow type's measurement waits, a fast type's goes.
+#[test]
+fn each_content_type_has_its_own_measure_average() {
+    let (mut ui, state) = list(Optimizations::NONE);
+    MEASURED.with(|measured| measured.borrow_mut().clear());
+    SLOW_MEASURE_EVEN.set(Duration::from_millis(25));
+    let mut at = 0;
+    scroll_until_requested(&mut ui, *state, &mut at, 6);
+    assert!(!ui.host().prefetch(later()));
+    scroll_until_requested(&mut ui, *state, &mut at, 7);
+    assert!(!ui.host().prefetch(later()));
+    let measured = |row: usize| MEASURED.with(|it| it.borrow().get(&row).copied().unwrap_or(0));
+    assert_eq!((measured(6), measured(7)), (1, 1));
+    // Row 8 (even): composed in 5 ms, not measured.
+    scroll_until_requested(&mut ui, *state, &mut at, 8);
+    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)));
+    assert_eq!((compositions(8), measured(8)), (1, 0));
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(measured(8), 1);
+    // Row 9 (odd): measured with what's left.
+    scroll_until_requested(&mut ui, *state, &mut at, 9);
+    assert!(!ui.host().prefetch(Instant::now() + Duration::from_millis(5)));
+    assert_eq!(measured(9), 1);
+    SLOW_MEASURE_EVEN.set(Duration::ZERO);
 }
 
 #[test]
@@ -356,10 +480,15 @@ fn a_grid_prefetches_the_next_line_and_composes_the_lines_in_view() {
     let live = live_items();
     assert!((0..15).all(|item| live.contains(&item)) && live.len() <= 18, "{live:?}");
     assert!(!ui.host().has_prefetch_work());
-    // 30 px down: lines 1 to 6 show; line 7 (items 21 to 23) prefetched, line 0 gone.
+    // 30 px down: lines 1 to 6 show; line 7 (items 21 to 23) prefetched; line 0 gone with the next
+    // measurement.
     state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
-    assert_eq!(live_items(), (3..21).collect::<Vec<_>>());
+    assert_eq!(live_items(), (0..21).collect::<Vec<_>>());
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (0..24).collect::<Vec<_>>());
+    state.force_remeasure();
+    ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (3..24).collect::<Vec<_>>());
     // Two lines beyond each side with `GRID_LINES_BEYOND`.
@@ -408,7 +537,11 @@ fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
     // 70 px down: row 3 first visible, 10 px into it, row 2 under the start padding at the top,
     // rows 2 to 6 shown; row 7 prefetched.
     scroll(&mut ui, *state, 70.0);
-    assert_eq!(live_items(), (2..7).collect::<Vec<_>>());
+    assert_eq!(live_items(), (0..7).collect::<Vec<_>>());
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (0..8).collect::<Vec<_>>());
+    state.force_remeasure();
+    ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (2..8).collect::<Vec<_>>());
     // 5 px back: row 3 still first visible, rows 2 (at 5 px) and 1 (at -15 px) under the start

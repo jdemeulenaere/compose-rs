@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 import unittest.mock
@@ -444,9 +445,23 @@ class OptimizationsTest(unittest.TestCase):
         # The real table: every name, the hint session's among them.
         with open(measure.OPTIMIZATIONS_SOURCE) as file:
             names = measure.optimization_names(file.read())
-        self.assertIn("performance_hint", names)
-        self.assertIn("prefetch_two_ahead", names)
-        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(names, [
+            "single_drawing_fade", "performance_hint", "reuse_paragraph_at_same_layout_width",
+            "prefetch_two_ahead", "prefetch_budget_recent_maximum", "prefetch_at_rest",
+            "keep_items_behind", "draw_prefetched_ahead", "grid_lines_beyond",
+            "flush_layers_before_dropped_paths", "paragraph_render_nodes"])
+
+    def test_kotlins_constants_are_rusts_flags(self):
+        """Each flag's name and bit in ComposeRsOptimizations.kt, as in Rust's table."""
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            table = [(name, bit) for name, bit, _ in measure.optimization_table(file.read())]
+        kotlin = os.path.join(os.path.dirname(measure.ANDROID_DIR), "android", "compose-rs", "src",
+                              "main", "java", "rs", "compose", "android",
+                              "ComposeRsOptimizations.kt")
+        with open(kotlin) as file:
+            constants = re.findall(r"const val ([A-Z_]+) = 1L shl (\d+)", file.read())
+        self.assertEqual(sorted((name.lower(), int(bit)) for name, bit in constants),
+                         sorted(table))
 
     def test_parity_by_default_runs_bench_rs_with_none(self):
         for text in (None, "", "parity"):

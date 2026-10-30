@@ -329,6 +329,14 @@ impl CacheWindowLogic {
         self.handles.iter().flat_map(|(_, handles)| handles)
     }
 
+    /// The units with requests, done or not.
+    pub(super) fn units_held(&self) -> impl Iterator<Item = usize> + '_ {
+        self.handles
+            .iter()
+            .filter(|(_, handles)| handles.iter().all(|it| !it.done_or_over()))
+            .map(|(unit, _)| *unit as usize)
+    }
+
     /// The window's first and last units, if it has bounds (lane 0: lists and grids have one).
     pub(super) fn bounds(&mut self) -> Option<(i32, i32)> {
         self.has_valid_bounds().then(|| (self.start_index[0], self.end_index[0]))
@@ -750,6 +758,13 @@ impl CacheWindowLogic {
     ) {
         self.cache_prefetched(scope, lane, item, size);
         self.schedule_next_item_if_needed(scope);
+    }
+
+    /// Whether `handle` is one of `item`'s requests still.
+    pub(super) fn holds(&self, item: i32, handle: &Handle) -> bool {
+        self.handles.iter().any(|(unit, handles)| {
+            *unit == item && handles.iter().any(|held| std::ptr::eq(Rc::as_ptr(held), handle))
+        })
     }
 
     /// A request ended without its unit: forgotten, the next scroll asks again.

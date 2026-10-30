@@ -17,8 +17,10 @@
 //!   as is): a stretch and a pause; applying, measuring, their own; any time left for an urgent
 //!   request; a step that doesn't fit leaves the request queued, to go on after the next frame.
 //!
-//! The composed items are those in view and those in the window: a frame's layout deactivates the
-//! others (kept for reuse), as Compose's measurement does. An item whose paused composition isn't
+//! The composed items are those in view and those in the window, by its bounds as a measurement
+//! reads them between what's in view and the scroll, as `keepAroundItems`: what a scroll leaves
+//! behind stays until the next measurement (D896), and the others are deactivated (kept for reuse).
+//! An item whose paused composition isn't
 //! applied yet (or was cancelled, its content removed) is one the layout lacks: wanted, the frame
 //! composes it (completing the paused composition first), as Compose's measurement completes a
 //! precomposed item's paused composition.
@@ -103,8 +105,11 @@ pub(super) struct Prefetch {
     /// The last scroll went towards the end (as if, before any): the side `KEEP_ITEMS_BEHIND`
     /// keeps, and the way `PREFETCH_AT_REST` prefetches.
     pub(super) forward: Cell<bool>,
-    /// Scrolled since the last layout that settled, in Compose's sign: negative towards the end.
+    /// Scrolled and not told the window yet, in Compose's sign: negative towards the end.
     pub(super) delta: Cell<f32>,
+    /// A scroll asked for the next layout, within what's in view perhaps: Compose measures for
+    /// none of those, so `kept` stays.
+    pub(super) scroll_asked: Cell<bool>,
     /// The items composed may span, set by each layout: the wanted items, those in the window,
     /// and those requests composed next to them.
     pub(super) limits: Cell<(usize, usize)>,
@@ -122,9 +127,24 @@ pub(super) struct Prefetch {
     pub(super) visible: Cell<usize>,
     /// The window's logic, and what the last layout that settled showed it.
     window: RefCell<Option<CacheWindowLogic>>,
+    /// The list's composition the logic is for, as Compose's `remember(state, cacheWindow)`.
+    window_owner: RefCell<Option<Rc<()>>>,
     laid: RefCell<Shown>,
-    /// A buffer for the units in view's sizes.
-    pub(super) sizes: RefCell<Vec<i32>>,
+    /// The window's bounds as Compose's `keepAroundItems` reads them: after what's in view is told
+    /// and before the scroll is, so an item the scroll leaves behind stays until the next
+    /// measurement (D894).
+    kept: Cell<Option<(usize, usize)>>,
+    /// A request's composition asked for the next layout, which Compose's precomposition doesn't:
+    /// it's no measurement to it, and leaves `kept` alone.
+    measure_by_request: Cell<bool>,
+    /// Items composed apart from the composed range: those before a sticky header sticking away
+    /// from it, which requests composed or the window keeps (Compose's window starts from the
+    /// header, D895). A list's items in no slot's order.
+    pub(super) detached: RefCell<Vec<usize>>,
+    /// Some of `detached` went: the next composition lets them go.
+    pub(super) detached_dirty: Cell<bool>,
+    /// A buffer for the units in view, with their sizes.
+    pub(super) sizes: RefCell<Vec<(usize, i32)>>,
     /// A grid's lines, for the window's requests between frames; a list's units are its items.
     pub(super) units: RefCell<Option<Rc<dyn Units>>>,
     /// Compose's `PrefetchMetrics`: the steps' averages by content type.
@@ -173,6 +193,7 @@ impl Prefetch {
             wanted: Cell::new((0, 0)),
             forward: Cell::new(true),
             delta: Cell::new(0.0),
+            scroll_asked: Cell::new(false),
             limits: Cell::new((0, 0)),
             constraints_of: RefCell::new(None),
             policy: Cell::new(Policy::COMPOSE),
@@ -180,7 +201,12 @@ impl Prefetch {
             vertical: Cell::new(true),
             visible: Cell::new(0),
             window: RefCell::new(None),
+            window_owner: RefCell::new(None),
             laid: RefCell::default(),
+            kept: Cell::new(None),
+            measure_by_request: Cell::new(false),
+            detached: RefCell::default(),
+            detached_dirty: Cell::new(false),
             sizes: RefCell::default(),
             units: RefCell::new(None),
             metrics: RefCell::default(),
@@ -221,8 +247,9 @@ impl Units for ItemUnits {
     }
 }
 
-/// What a layout that settled shows, for the window: the first and last units in view, how far the
-/// first starts before the viewport and the last ends, with its spacing, past it (or short of it).
+/// What a layout that settled shows, for the window: the first and last units in view, as Compose's
+/// `visibleItemsInfo` (a sticking header first, D895), how far the first starts before the
+/// viewport and the last ends, with its spacing, past it (or short of it).
 pub(super) struct Laid {
     pub(super) first: usize,
     pub(super) last: usize,
@@ -242,7 +269,8 @@ struct Shown {
     viewport: i32,
     density: Density,
     count: i32,
-    visible: Vec<(i32, u64)>,
+    /// The units in view, by index: index, size and key (a sticking header's index is apart).
+    visible: Vec<(i32, i32, u64)>,
     average: i32,
 }
 
@@ -339,15 +367,15 @@ impl CacheWindowScope for WindowScope<'_> {
     }
 
     fn visible_item_size(&self, position: i32) -> i32 {
-        self.shown.visible[position as usize].0
+        self.shown.visible[position as usize].1
     }
 
     fn visible_item_index(&self, position: i32) -> i32 {
-        self.shown.first + position
+        self.shown.visible[position as usize].0
     }
 
     fn visible_item_key(&self, position: i32) -> u64 {
-        self.shown.visible[position as usize].1
+        self.shown.visible[position as usize].2
     }
 
     fn visible_item_lane(&self, _: i32) -> i32 {
@@ -371,12 +399,14 @@ impl CacheWindowScope for WindowScope<'_> {
 
 impl Prefetch {
     /// The list's composition: `window` is its cache window from now on (`None`: the default, as
-    /// `LazyListDefaults.cacheWindow(state)`). Another one starts over, as Compose's
-    /// `remember(state, cacheWindow)` makes another strategy.
+    /// `LazyListDefaults.cacheWindow(state)`). Another one, or another list's composition (`owner`,
+    /// remembered there), starts over, as Compose's `remember(state, cacheWindow)` makes another
+    /// strategy.
     pub(super) fn use_window(
         &self,
         state: &Rc<LazyListInner>,
         window: Option<Rc<dyn LazyLayoutCacheWindow>>,
+        owner: &Rc<()>,
     ) {
         let window = window.unwrap_or_else(|| {
             let default = Rc::as_ptr(state) as usize;
@@ -389,13 +419,24 @@ impl Prefetch {
             }
         });
         let mut current = self.window.borrow_mut();
-        if current.as_ref().is_some_and(|logic| same_window(&logic.cache_window, &window)) {
+        let mut current_owner = self.window_owner.borrow_mut();
+        if current_owner.as_ref().is_some_and(|kept| Rc::ptr_eq(kept, owner))
+            && current.as_ref().is_some_and(|logic| same_window(&logic.cache_window, &window))
+        {
             return;
         }
+        *current_owner = Some(owner.clone());
         if let Some(old) = current.as_mut() {
             old.reset_strategy();
         }
         *current = Some(CacheWindowLogic::new(window, || 1));
+        *self.laid.borrow_mut() = Shown::default();
+        self.kept.set(None);
+        let mut detached = self.detached.borrow_mut();
+        if !detached.is_empty() {
+            detached.clear();
+            self.detached_dirty.set(true);
+        }
     }
 
     /// The cache window in use.
@@ -408,13 +449,6 @@ impl Prefetch {
         self.laid.borrow().average
     }
 
-    fn window_behind_is_empty(&self) -> bool {
-        let shown = self.laid.borrow();
-        self.window.borrow().as_ref().is_none_or(|logic| {
-            logic.cache_window.calculate_behind_window(shown.density, shown.viewport) == 0
-        })
-    }
-
     /// The position changed by a jump: requests are cancelled and the next scroll refills the
     /// window, as `snapToItemIndexInternal`.
     pub(super) fn reset_window(&self) {
@@ -423,18 +457,100 @@ impl Prefetch {
         {
             logic.reset_strategy();
         }
+        self.kept.set(None);
     }
 
-    /// The window's first and last units, if it has bounds.
+    /// The window's first and last units as the last measurement read them (`kept`).
     pub(super) fn window_bounds(&self) -> Option<(usize, usize)> {
-        let (start, end) = self.window.borrow_mut().as_mut()?.bounds()?;
-        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
+        self.kept.get()
+    }
+
+    fn keep_bounds(&self, logic: &mut CacheWindowLogic) {
+        self.kept.set(logic.bounds().and_then(|(start, end)| {
+            Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
+        }));
+    }
+
+    /// A focus search ended: what it laid out goes by the window as it is now, as a search's jump
+    /// to what it found is here no scroll over items the window ever held (D482).
+    pub(super) fn search_ended(&self) {
+        if let Some(logic) = self.window.borrow_mut().as_mut() {
+            self.keep_bounds(logic);
+        }
+    }
+
+    /// The next layout is a measurement to the window, as Compose's `Remeasurement`.
+    pub(super) fn measurement_forced(&self) {
+        self.measure_by_request.set(false);
+        self.scroll_asked.set(false);
+    }
+
+    /// The requests under way: their items, and whether they are urgent.
+    pub(super) fn requests(&self) -> Vec<(usize, bool)> {
+        let window = self.window.borrow();
+        let Some(logic) = window.as_ref() else { return Vec::new() };
+        let live = logic.handles().filter(|handle| !handle.canceled.get() && !handle.done.get());
+        let mut requests: Vec<_> = live.map(|handle| (handle.item, handle.urgent.get())).collect();
+        requests.sort_unstable();
+        requests
+    }
+
+    /// The units with requests held, whatever they request.
+    pub(super) fn units_held(&self) -> Vec<usize> {
+        let window = self.window.borrow();
+        let Some(logic) = window.as_ref() else { return Vec::new() };
+        logic.units_held().collect()
+    }
+
+    /// The items composed apart from the range after a layout: those before what's shown first,
+    /// in the window, or that a request holds; `apart`: the range starts past a sticking header,
+    /// so what the range held before it comes here, as Compose keeps by index. The others go with
+    /// the next composition.
+    pub(super) fn settle_detached(
+        &self,
+        first_shown: usize,
+        composed: (usize, usize),
+        limits: (usize, usize),
+        apart: bool,
+    ) {
+        let window = self.kept.get();
+        let mut detached = self.detached.borrow_mut();
+        if !detached.is_empty() {
+            let logic = self.window.borrow();
+            let holds = |item: usize| {
+                logic.as_ref().is_some_and(|logic| {
+                    logic.handles().any(|handle| handle.item == item && !handle.canceled.get())
+                })
+            };
+            let dirty = &self.detached_dirty;
+            detached.retain(|&item| {
+                let in_range = (limits.0..limits.1).contains(&item);
+                let stays = !in_range
+                    && (window.is_some_and(|(first, _)| (first..first_shown).contains(&item))
+                        || holds(item));
+                if !stays && !in_range {
+                    dirty.set(true);
+                }
+                stays
+            });
+        }
+        if apart && let Some((first, _)) = window {
+            for item in composed.0.max(first)..composed.1.min(first_shown) {
+                if !(limits.0..limits.1).contains(&item) && !detached.contains(&item) {
+                    detached.push(item);
+                }
+            }
+        }
     }
 
     /// The window after a layout that settled (no items missing): its `onVisibleItemsUpdated`, if
     /// what's in view changed, as Compose's small scrolls don't call it, then its `onScroll` with
-    /// the scrolling since the last such layout. `sizes` are the units in view's main-axis sizes,
-    /// `key_of` gives a unit's key; `keys_changed`: the same units may have other keys.
+    /// the scrolling since the last such layout, once past half a pixel and rounded, as Compose
+    /// holds smaller scrolls back (`scrollToBeConsumed`). The window's bounds are read between the
+    /// two, as `keepAroundItems`, by a layout Compose would measure too: not one only a scroll
+    /// within what's in view or a request's composition asked for. `visible` are the units in view
+    /// with their main-axis sizes, `key_of` gives a unit's key; `keys_changed`: the same units may
+    /// have other keys.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn after_layout(
         &self,
@@ -444,26 +560,37 @@ impl Prefetch {
         count: usize,
         keys_changed: bool,
         units: Option<&dyn Units>,
-        sizes: &[i32],
+        visible: &[(usize, i32)],
         key_of: &mut dyn FnMut(usize) -> u64,
     ) {
-        let delta = self.delta.replace(0.0);
-        if let Some(scheduler) = scheduler
-            && self.scheduler.borrow().is_none()
-        {
+        let scrolled = self.delta.get();
+        let delta = if scrolled.abs() > 0.5 { scrolled.round() } else { 0.0 };
+        self.delta.set(scrolled - delta);
+        if let Some(scheduler) = scheduler {
             *self.scheduler.borrow_mut() = Some(scheduler.clone());
         }
+        if keys_changed {
+            let mut detached = self.detached.borrow_mut();
+            if !detached.is_empty() {
+                detached.clear();
+                self.detached_dirty.set(true);
+            }
+        }
+        let scroll_asked = self.scroll_asked.replace(false);
+        let by_request = self.measure_by_request.replace(false);
         let changed = {
             let mut shown = self.laid.borrow_mut();
             let count = count as i32;
             let same = match laid {
-                Some(laid) => {
-                    shown.first == laid.first as i32
-                        && shown.last == laid.last as i32
-                        && shown.count == count
+                Some(_) => {
+                    shown.count == count
                         && !keys_changed
-                        && shown.visible.len() == sizes.len()
-                        && shown.visible.iter().zip(sizes).all(|((size, _), new)| size == new)
+                        && shown.visible.len() == visible.len()
+                        && shown
+                            .visible
+                            .iter()
+                            .zip(visible)
+                            .all(|(old, new)| old.0 == new.0 as i32 && old.1 == new.1)
                 }
                 None => shown.visible.is_empty() && shown.count == count,
             };
@@ -480,12 +607,12 @@ impl Prefetch {
                     shown.viewport = laid.viewport;
                     shown.density = laid.density;
                     if !same {
-                        for (position, size) in sizes.iter().enumerate() {
-                            shown.visible.push((*size, key_of(laid.first + position)));
+                        for &(unit, size) in visible {
+                            shown.visible.push((unit as i32, size, key_of(unit)));
                         }
                     }
-                    let sum: i32 = sizes.iter().sum();
-                    shown.average = sum / sizes.len().max(1) as i32 + laid.spacing;
+                    let sum: i32 = visible.iter().map(|(_, size)| *size).sum();
+                    shown.average = sum / visible.len().max(1) as i32 + laid.spacing;
                 }
                 None => {
                     shown.visible.clear();
@@ -494,9 +621,6 @@ impl Prefetch {
             }
             !same
         };
-        if !changed && delta == 0.0 {
-            return;
-        }
         let items = ItemUnits(count);
         let units = units.unwrap_or(&items);
         let shown = self.laid.borrow();
@@ -506,13 +630,16 @@ impl Prefetch {
         if changed {
             logic.on_visible_items_updated(&scope);
         }
+        if changed || (!scroll_asked && !by_request) {
+            self.keep_bounds(logic);
+        }
         if delta != 0.0 {
             logic.on_scroll(&scope, delta);
         }
         // D341's requests short of time wait for the next scroll (or, at rest, layout).
         let policy = self.policy.get();
         if policy.recent_maximum
-            && (delta != 0.0 || policy.at_rest)
+            && (delta != 0.0 || (changed && policy.at_rest))
             && let Some(scheduler) = scheduler
         {
             for handle in logic.handles() {
@@ -530,16 +657,25 @@ impl Prefetch {
         let Ok(mut window) = self.window.try_borrow_mut() else { return };
         let Some(logic) = window.as_mut() else { return };
         let unit = handle.unit as i32;
+        // Its unit asked again since, or let it go: not this request's to speak for.
+        if !logic.holds(unit, handle) {
+            return;
+        }
         if handle.canceled.get() {
             logic.forget(unit);
             return;
         }
+        // A line's size is its last item's, as Compose's `maxOf(getMainAxisSize(it))` (D899).
         let mut size = None;
+        let mut last_item = 0;
         for other in logic.handles().filter(|other| other.unit == handle.unit) {
             if !other.done.get() {
                 return;
             }
-            size = Some(size.unwrap_or(0).max(other.size.get()));
+            if size.is_none() || other.item >= last_item {
+                last_item = other.item;
+                size = Some(other.size.get());
+            }
         }
         let Some(size) = size else { return };
         let scheduler = self.scheduler.borrow();
@@ -577,16 +713,8 @@ impl Prefetch {
         let (mut start, mut end) = wanted;
         if composed.0 <= end && composed.1 >= start {
             if let Some(window) = window {
-                // With no window behind the scroll, nothing there stays: the window learns of a
-                // scroll after the layout that shows it (`after_layout`), and this composition
-                // deactivating what's behind saves one between frames for it (D575).
-                let behind = self.window_behind_is_empty();
-                if !(behind && self.forward.get()) {
-                    start = start.min(composed.0.max(window.0));
-                }
-                if !(behind && !self.forward.get()) {
-                    end = end.max(composed.1.min(window.1));
-                }
+                start = start.min(composed.0.max(window.0));
+                end = end.max(composed.1.min(window.1));
             }
             if let Some(next) = next {
                 if self.forward.get() {
@@ -630,7 +758,7 @@ impl Prefetch {
         composed: (usize, usize),
     ) {
         let (low, high) = self.limits.get();
-        if composed.0 >= low && composed.1 <= high {
+        if composed.0 >= low && composed.1 <= high && !self.detached_dirty.get() {
             return;
         }
         let Some(scheduler) = scheduler else { return };
@@ -834,12 +962,13 @@ impl Prefetch {
         scope: &mut PrefetchRequestScope<'_>,
     ) -> Option<Composed> {
         let (start, end) = state.composed.get();
-        if (start..end).contains(&item) {
+        if (start..end).contains(&item) || state.children.borrow().contains(&item) {
             // Composed already, unless a cancelled request's content was removed: composed
             // again then (its item composes it).
             if self.content_ready(key) {
                 return Some(Composed::Already);
             }
+            self.measure_by_request.set(true);
             state.compose((start, end));
             return Some(self.composed_by(scope, item_target(state, key)));
         }
@@ -848,6 +977,10 @@ impl Prefetch {
             (start.max(low).min(item), item + 1)
         } else if item + 1 == start {
             (item, end.min(high).max(item + 1))
+        } else if state.sticky_written.get().is_some_and(|header| item < header) {
+            // Before a sticking header, away from the range (D895).
+            self.detached.borrow_mut().push(item);
+            (start, end)
         } else {
             return None;
         };
@@ -860,7 +993,10 @@ impl Prefetch {
             precomposed.push(key);
         }
         // What it composes is within the limits until the next layout sets them.
-        self.limits.set((low.min(item), high.max(item + 1)));
+        if range != (start, end) {
+            self.limits.set((low.min(item), high.max(item + 1)));
+        }
+        self.measure_by_request.set(true);
         state.compose(range);
         Some(self.composed_by(scope, item_target(state, key)))
     }
@@ -969,8 +1105,11 @@ pub(super) struct Handle {
     /// Its main-axis size, once measured.
     size: Cell<i32>,
     /// The item's key when requested (`keyUsedForComposition`): another item there ends it.
-    key: u64,
-    content_type: Option<u64>,
+    /// The item's key: as of its last run until composed (`keyUsedForComposition`), then the one
+    /// composed.
+    key: Cell<u64>,
+    key_composed: Cell<bool>,
+    content_type: Cell<Option<u64>>,
     /// Measured after composing (a list's item); a nested list's are only composed
     /// (`schedulePrecomposition`).
     premeasure: bool,
@@ -1016,8 +1155,9 @@ impl Handle {
             unit,
             lane,
             size: Cell::new(0),
-            key: items.key(item),
-            content_type: items.content_type(item),
+            key: Cell::new(items.key(item)),
+            key_composed: Cell::new(false),
+            content_type: Cell::new(items.content_type(item)),
             premeasure,
             urgent: Cell::new(false),
             canceled: Cell::new(false),
@@ -1041,6 +1181,11 @@ impl Handle {
         }
     }
 
+    /// It has no more to do.
+    pub(super) fn done_or_over(&self) -> bool {
+        self.done.get() || self.canceled.get()
+    }
+
     /// As its handle's `markAsUrgent`.
     pub(super) fn mark_as_urgent(&self) {
         self.urgent.set(true);
@@ -1051,18 +1196,26 @@ impl Handle {
     fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
         let Some(state) = self.state.upgrade() else { return false };
         let prefetch = &state.prefetch;
-        let exists = prefetch
-            .items
-            .borrow()
-            .upgrade()
-            .is_some_and(|items| self.item < items.count && items.key(self.item) == self.key);
-        if self.canceled.get() || !exists {
+        // The item's key and type now, as `executeRequest`: only a key composed binds the request.
+        let current = prefetch.items.borrow().upgrade().and_then(|items| {
+            (self.item < items.count).then(|| (items.key(self.item), items.content_type(self.item)))
+        });
+        let valid = current.is_some_and(|(key, content_type)| {
+            if self.key_composed.get() {
+                key == self.key.get()
+            } else {
+                self.key.set(key);
+                self.content_type.set(content_type);
+                true
+            }
+        });
+        if self.canceled.get() || !valid {
             self.canceled.set(true);
             self.clean_up(prefetch);
             return false;
         }
         let urgent = self.urgent.get();
-        let averages = prefetch.averages(self.content_type);
+        let averages = prefetch.averages(self.content_type.get());
         // Compose's `resetAvailableTimeTo`: the steps' times count from here.
         let mark = Instant::now();
         // A paused composition a frame completed (the frame wanted its item): composed.
@@ -1099,10 +1252,9 @@ impl Handle {
             }
             // Another item there now (the items changed while composing): done, as Compose's
             // check of the key it composed.
-            let same =
-                prefetch.items.borrow().upgrade().is_some_and(|items| {
-                    self.item < items.count && items.key(self.item) == self.key
-                });
+            let same = prefetch.items.borrow().upgrade().is_some_and(|items| {
+                self.item < items.count && items.key(self.item) == self.key.get()
+            });
             if !same {
                 self.canceled.set(true);
                 self.clean_up(prefetch);
@@ -1133,7 +1285,7 @@ impl Handle {
                 prefetch.timed(
                     scope,
                     Step::Apply,
-                    self.content_type,
+                    self.content_type.get(),
                     began.elapsed().as_nanos() as u64,
                 );
                 prefetch.stepped(scope);
@@ -1147,7 +1299,8 @@ impl Handle {
             if scope.available_time_nanos() == 0 {
                 return true;
             }
-            *self.nested.borrow_mut() = Some(NestedPrefetch::of(prefetch.nested_lists(self.key)));
+            *self.nested.borrow_mut() =
+                Some(NestedPrefetch::of(prefetch.nested_lists(self.key.get())));
         }
         let nested_count = averages.nested_count.unwrap_or(INITIAL_NESTED_PREFETCH_COUNT);
         if self.execute_nested(scope, nested_count, urgent) {
@@ -1184,13 +1337,13 @@ impl Handle {
                 prefetch.timed(
                     scope,
                     Step::Measure,
-                    self.content_type,
+                    self.content_type.get(),
                     start.elapsed().as_nanos() as u64,
                 );
             }
             prefetch.stepped(scope);
             self.measured.set(true);
-            prefetch.measured(self.key);
+            prefetch.measured(self.key.get());
             // The nested lists measured: how many items the smallest shows, for the next item of
             // this type; a measurement that composed more of them than were prefetched isn't one
             // to go by (`clearMeasureTime`).
@@ -1205,7 +1358,7 @@ impl Handle {
                     .map(|requests| requests.as_ref().map_or(0, Vec::len))
                     .min()
                     .unwrap_or(0);
-                prefetch.update_averages(self.content_type, |averages| {
+                prefetch.update_averages(self.content_type.get(), |averages| {
                     averages.nested_count = Some(running_count(averages.nested_count, ideal));
                     if prefetched < ideal {
                         averages.measure = 0;
@@ -1234,18 +1387,21 @@ impl Handle {
         let existing = self.paused.borrow().clone();
         let paused = match existing {
             Some(paused) => paused,
-            None => match prefetch.compose_item(state, self.item, self.key, scope) {
+            None => match prefetch.compose_item(state, self.item, self.key.get(), scope) {
                 None => {
                     self.canceled.set(true);
                     return false;
                 }
                 Some(Composed::Paused(paused)) => {
-                    *prefetch.pending.borrow_mut() = Some((self.key, Rc::downgrade(&paused)));
-                    *prefetch.unready.borrow_mut() = Some((self.key, paused.watch()));
+                    self.key_composed.set(true);
+                    let key = self.key.get();
+                    *prefetch.pending.borrow_mut() = Some((key, Rc::downgrade(&paused)));
+                    *prefetch.unready.borrow_mut() = Some((key, paused.watch()));
                     *self.paused.borrow_mut() = Some(paused.clone());
                     paused
                 }
                 Some(Composed::Already) => {
+                    self.key_composed.set(true);
                     self.composed.set(true);
                     return true;
                 }
@@ -1259,7 +1415,7 @@ impl Handle {
         }
         let timing = Rc::new(PauseTiming {
             state: Rc::downgrade(state),
-            content_type: self.content_type,
+            content_type: self.content_type.get(),
             urgent,
             deadline: scope.deadline(),
             idle_time: scope.idle_time(),
@@ -1267,7 +1423,7 @@ impl Handle {
             requested: Cell::new(false),
         });
         // The lists composing in the item note themselves under its key.
-        let composing = prefetch.composing_item.replace(Some(self.key));
+        let composing = prefetch.composing_item.replace(Some(self.key.get()));
         while !paused.is_complete() && !paused.is_cancelled() && !timing.requested.get() {
             let asked = timing.clone();
             let mark = timing.mark.get();
@@ -1281,7 +1437,7 @@ impl Handle {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(timing.mark.get()).as_nanos() as u64;
         let step = if timing.requested.get() { Step::Pause } else { Step::Resume };
-        prefetch.timed(scope, step, self.content_type, elapsed);
+        prefetch.timed(scope, step, self.content_type.get(), elapsed);
         prefetch.stepped(scope);
         let complete = paused.is_complete();
         self.composed.set(complete);
@@ -1460,7 +1616,7 @@ impl PrefetchRequest for TrimRequest {
             return false;
         }
         let range = (start.max(low), end.min(high));
-        if range == (start, end) || range.0 >= range.1 {
+        if (range == (start, end) && !prefetch.detached_dirty.get()) || range.0 >= range.1 {
             return false;
         }
         // Compose deactivates in its measurement, so any time left goes; D341's budget times it
@@ -1475,6 +1631,7 @@ impl PrefetchRequest for TrimRequest {
             return !recent_maximum;
         }
         let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
+        prefetch.measure_by_request.set(true);
         state.compose(range);
         scope.recompose();
         prefetch.stepped(scope);

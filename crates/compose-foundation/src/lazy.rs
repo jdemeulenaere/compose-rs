@@ -391,6 +391,28 @@ impl LazyListState {
         self.inner()?.prefetch.cache_window()
     }
 
+    /// Measures the list again, as Compose's `Remeasurement.forceRemeasure`, for tests: what the
+    /// window let go since the last measurement goes.
+    #[doc(hidden)]
+    pub fn force_remeasure(&self) {
+        if let Some(inner) = self.inner() {
+            inner.prefetch.measurement_forced();
+            inner.request_remeasure();
+        }
+    }
+
+    /// The window's units with requests under way, for tests, whatever they request.
+    #[doc(hidden)]
+    pub fn prefetch_units_held(&self) -> Vec<usize> {
+        self.inner().map_or_else(Vec::new, |inner| inner.prefetch.units_held())
+    }
+
+    /// The window's requests under way, for tests: their items, and whether they are urgent.
+    #[doc(hidden)]
+    pub fn prefetch_requests(&self) -> Vec<(usize, bool)> {
+        self.inner().map_or_else(Vec::new, |inner| inner.prefetch.requests())
+    }
+
     /// The first item in view, as `firstVisibleItemIndex` (a state read).
     pub fn first_visible_item_index(&self) -> usize {
         self.inner().map_or(0, |inner| inner.first_index.get())
@@ -423,6 +445,7 @@ impl LazyListState {
         if inner.published.get() != (index, scroll_offset) {
             inner.prefetch.reset_window();
         }
+        inner.prefetch.delta.set(0.0);
         inner.position.set((index, scroll_offset as f32));
         inner.first_key.set(None);
         inner.pending.set(0.0);
@@ -535,8 +558,13 @@ impl LazyListState {
             inner.pending.set(inner.pending.get() + used);
             // Prefetch goes the way the list was scrolled (not the way a layout steps back),
             // as Compose's strategy hears of each scroll's delta (negative towards the end).
-            inner.prefetch.forward.set(used > 0.0);
-            inner.prefetch.delta.set(inner.prefetch.delta.get() - used);
+            inner.prefetch.scroll_asked.set(true);
+            let scrolled = inner.prefetch.delta.get() - used;
+            inner.prefetch.delta.set(scrolled);
+            // Less than half a pixel is no scroll to prefetch yet, as Compose's `onScroll`.
+            if scrolled.abs() > 0.5 {
+                inner.prefetch.forward.set(scrolled < 0.0);
+            }
             inner.request_remeasure();
         }
         used
@@ -1835,7 +1863,8 @@ fn LazyList(
     content: impl Fn(LazyListScope) + 'static,
 ) {
     let inner = state.inner_or_detached();
-    inner.prefetch.use_window(&inner, cache_window);
+    let owner = compose_runtime::remember(|| Rc::new(()));
+    inner.prefetch.use_window(&inner, cache_window, &owner);
     // In an item a request composes, the list is one to prefetch the first items of (Compose's
     // nested prefetch).
     prefetch::note_nested(&inner);
@@ -1955,6 +1984,13 @@ fn LazyItems(
         && !indices.contains(&header)
     {
         indices.push(header);
+    }
+    // Those composed apart from the range: before a sticking header (D895).
+    inner.prefetch.detached_dirty.set(false);
+    for &item in inner.prefetch.detached.borrow().iter() {
+        if item < count && !indices.contains(&item) {
+            indices.push(item);
+        }
     }
     #[cfg(debug_assertions)]
     items.0.check_keys(&indices);
@@ -2297,6 +2333,17 @@ impl MeasurePolicy for LazyListLayout {
             } else {
                 state.pending.set(state.pending.get() + offset - state.position.get().1);
             }
+            // Nothing visible: the window starts over.
+            state.prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                None,
+                0,
+                false,
+                None,
+                &[],
+                &mut |_| 0,
+            );
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
             state.room_forward.set(0.0);
@@ -2593,14 +2640,28 @@ impl MeasurePolicy for LazyListLayout {
         prefetch.policy.set(policy);
         prefetch.vertical.set(info.vertical);
         prefetch.visible.set(end_index - lead);
+        // The header sticking over the first item in view, if it's composed: its index, size and
+        // where it sticks, as below. Compose's `visibleItemsInfo` holds it, by index (D895).
+        let headers = info.items.headers_around(lead);
+        let sticking = headers.and_then(|(header, next)| {
+            let placeable = measure(header, &mut sizes)?;
+            let main_at = |item: usize| {
+                item.checked_sub(lead).and_then(|position| placed.get(position)).map(|(_, m)| *m)
+            };
+            let mut at = main_at(header).map_or(0, |main| main.max(0));
+            if let Some(next_main) = next.and_then(main_at) {
+                at = at.min(next_main - main_of(&placeable) - spacing);
+            }
+            Some((header, placeable, at))
+        });
         // The cache window, once the layout settled (nothing missing, nothing waiting to be composed
-        // before): what it shows, and the scrolling since.
-        if !missing && wanted_before == 0 {
+        // before, its header too): what it shows, and the scrolling since.
+        if !missing && wanted_before == 0 && (headers.is_none() || sticking.is_some()) {
             let laid = match (placed.first(), placed.last()) {
                 (Some((_, first_main)), Some((last, last_main))) => Some(Laid {
-                    first: lead,
+                    first: sticking.map_or(lead, |(header, _, _)| header),
                     last: end_index - 1,
-                    start_overflow: (-first_main).max(0),
+                    start_overflow: (-sticking.map_or(*first_main, |(_, _, at)| at)).max(0),
                     end_overflow: (last_main + main_of(last) + spacing - main_max).abs(),
                     viewport: main_max,
                     spacing,
@@ -2609,9 +2670,16 @@ impl MeasurePolicy for LazyListLayout {
                 _ => None,
             };
             let items = &info.items;
-            let mut sizes = prefetch.sizes.borrow_mut();
-            sizes.clear();
-            sizes.extend(placed.iter().map(|(placeable, _)| main_of(placeable)));
+            let mut visible = prefetch.sizes.borrow_mut();
+            visible.clear();
+            if let Some((header, placeable, _)) = sticking {
+                visible.push((header, main_of(&placeable)));
+            }
+            let in_view = placed
+                .iter()
+                .enumerate()
+                .map(|(position, (placeable, _))| (lead + position, main_of(placeable)));
+            visible.extend(in_view.filter(|(item, _)| Some(*item) != headers.map(|(it, _)| it)));
             prefetch.after_layout(
                 state,
                 self.scheduler.as_ref(),
@@ -2619,7 +2687,7 @@ impl MeasurePolicy for LazyListLayout {
                 count,
                 state.laid_items_changed(&info.items),
                 None,
-                &sizes,
+                &visible,
                 &mut |unit| items.key(unit),
             );
         }
@@ -2627,6 +2695,11 @@ impl MeasurePolicy for LazyListLayout {
         // composed next to them.
         // A focus search that laid items out beyond the bounds is over.
         let beyond_ended = state.beyond_ended.take();
+        if beyond_ended {
+            prefetch.search_ended();
+        }
+        let header_apart =
+            headers.map(|(header, _)| header).filter(|header| *header < wanted_start);
         let limits = {
             let next = if prefetch.forward.get() {
                 wanted_end + 1
@@ -2634,6 +2707,10 @@ impl MeasurePolicy for LazyListLayout {
                 wanted_start.saturating_sub(1)
             };
             let window = prefetch.window_bounds().map(|(first, last)| (first, last + 1));
+            // A header sticking away from the range: the window is its, what's between goes (D895).
+            let window = window.map(|(first, last)| {
+                (if header_apart.is_some() { first.max(wanted_start) } else { first }, last)
+            });
             prefetch.target(
                 (wanted_start, wanted_end),
                 (composed_start, composed_end),
@@ -2641,6 +2718,12 @@ impl MeasurePolicy for LazyListLayout {
                 (!beyond_ended).then_some(next),
             )
         };
+        prefetch.settle_detached(
+            header_apart.unwrap_or(lead),
+            (composed_start, composed_end),
+            limits,
+            header_apart.is_some(),
+        );
         // After a focus search that laid items out beyond the bounds, those it composed go
         // too, but the ones next to those wanted, as after a scroll (D482).
         let past_limits = composed_start < limits.0 || composed_end > limits.1;
@@ -2771,14 +2854,13 @@ impl MeasurePolicy for LazyListLayout {
                 ..Default::default()
             });
         }
-        let headers = info.items.headers_around(lead);
         let header = headers.map(|(header, _)| header);
         if state.sticky_written.replace(header) != header {
             state.sticky.set(header);
         }
         let mut sticky = None;
         if let Some((header, next)) = headers
-            && let Some(placeable) = measure(header, &mut sizes)
+            && let Some((_, placeable, _)) = sticking
         {
             let natural =
                 ahead.iter().chain(&placed).chain(&beyond).find(|(other, _)| *other == placeable);
@@ -2806,6 +2888,7 @@ impl MeasurePolicy for LazyListLayout {
         for &pinned in &children {
             if (pinned < composed_start || pinned >= composed_end)
                 && Some(pinned) != header
+                && !prefetch.detached.borrow().contains(&pinned)
                 && let Some(placeable) = measure(pinned, &mut sizes)
             {
                 let at =

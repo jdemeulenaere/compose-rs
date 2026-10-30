@@ -296,12 +296,8 @@ fn a_scroll_forward_keeps_the_items_in_the_window() {
             compose_list(ListArgs { first: 3, ..ListArgs::new(vertical, viewport_window()) });
         list.scroll_by(ITEM * 2.5);
         assert_eq!(list.state.first_visible_item_index(), 5);
-        // As after Compose's next measurement; here it has gone with the prefetching: item
-        // 5's half out leaves the 1.5 items' window room for item 4 only. Compose's item 3 stays
-        // until then, as the window it composes by is the one before the scroll (`keepAroundItems`),
-        // and its test ends there; its backward one forces that measurement (D892).
-        assert!(!list.seen.exists(3), "{:?}", list.seen.live);
-        assert!(list.seen.exists(4), "{:?}", list.seen.live);
+        assert!(!list.seen.exists(2), "{:?}", list.seen.live);
+        assert!(list.seen.exists(3) && list.seen.exists(4), "{:?}", list.seen.live);
         assert!(list.displayed(5) && list.displayed(6));
         assert!(list.seen.exists(7) && list.seen.exists(8), "{:?}", list.seen.live);
         assert!(!list.seen.exists(9), "{:?}", list.seen.live);
@@ -321,7 +317,10 @@ fn a_scroll_backward_keeps_the_items_in_the_window() {
         assert!(list.seen.exists(7) && list.seen.exists(8), "{:?}", list.seen.live);
         list.scroll_by(-ITEM * 2.5);
         assert_eq!(list.state.first_visible_item_index(), 3);
-        // What's left of the window is 1.5 items each way, item 4's half out of it.
+        // The window's 1.5 items each way, item 4's half out of it; the next measurement lets go
+        // what the scroll left behind.
+        list.state.force_remeasure();
+        idle(&mut list.ui);
         assert!(!list.seen.exists(0), "{:?}", list.seen.live);
         assert!(list.seen.exists(1) && list.seen.exists(2), "{:?}", list.seen.live);
         assert!(list.displayed(3) && list.displayed(4));
@@ -654,52 +653,54 @@ fn a_grid_uses_the_window_given() {
 
 // ---- The default window ---------------------------------------------------------------------------
 
-// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutCacheWindow.kt, DynamicLazyLayoutCacheWindow: the items' average size and spacing, in 10 to 50 % of the viewport, nothing behind, no filling at rest
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutCacheWindow.kt, DynamicLazyLayoutCacheWindow: the items' average size and spacing, in 10 to 50 % of the viewport
 #[test]
-fn the_default_window_follows_the_items_size() {
-    for (item, count_ahead, spacing) in
-        [(10.0, 3, 0.0), (30.0, 1, 0.0), (45.0, 1, 5.0), (150.0, 1, 0.0)]
-    {
+fn the_default_lists_window_is_the_items_average_in_a_range() {
+    // (item, spacing, the window): under the floor, in the range with the spacing, over the ceiling.
+    for (item, spacing, ahead) in [(5.0, 0.0, 10), (30.0, 5.0, 35), (150.0, 0.0, 50)] {
         use_optimizations(Optimizations::NONE);
         let state = LazyListState::new(0, 0);
         let given = *state;
-        let live: Rc<RefCell<BTreeSet<usize>>> = Rc::default();
-        let seen = live.clone();
-        let mut ui = ComposeTestRule::sized(IntSize::new(100, 300), move || {
-            let seen = seen.clone();
+        let _ui = ComposeTestRule::sized(IntSize::new(100, 300), move || {
             LazyColumn!(
                 modifier = Modifier.size((100.dp(), 100.dp())),
                 state = given,
                 vertical_arrangement = Arrangement::spaced_by(Dp(spacing)),
                 move |scope: LazyListScope| {
-                    let seen = seen.clone();
-                    scope.items(100, move |index| {
-                        let seen = seen.clone();
-                        DisposableEffect(index, move |scope| {
-                            seen.borrow_mut().insert(index);
-                            let seen = seen.clone();
-                            scope.on_dispose(move || {
-                                seen.borrow_mut().remove(&index);
-                            })
-                        });
-                        Spacer(Modifier.size((100.dp(), Dp(item))));
-                    });
+                    scope.items(100, move |_| Spacer(Modifier.size((100.dp(), Dp(item)))));
                 }
             );
         });
-        idle(&mut ui);
-        let at_rest = live.borrow().clone();
-        // Far enough that the last item's overflow leaves the window room, whatever the item.
-        let period = item + spacing;
-        let delta = (period - (100.0 % period)).max(1.0) + 1.0;
-        given.dispatch_raw_delta(delta);
-        idle(&mut ui);
-        let scrolled = live.borrow().clone();
-        let first = given.first_visible_item_index();
-        let in_view = ((100.0 + delta) / period).ceil() as usize;
-        let ahead = scrolled.last().copied().unwrap_or(0) + 1 - in_view.max(first);
-        assert!(!at_rest.is_empty());
-        assert!(ahead <= count_ahead + 1, "{item}: {ahead} ahead, {scrolled:?}");
+        let window = LazyListDefaults::cache_window(given);
+        let density = Density::new(1.0);
+        assert_eq!(window.calculate_ahead_window(density, 100), ahead, "{item}");
+        assert_eq!(window.calculate_behind_window(density, 100), 0, "{item}");
+        assert!(!window.is_non_scroll_caching_enabled());
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridDefaults.kt, cacheWindow: a line's average size and spacing, in 10 to 50 % of the viewport
+#[test]
+fn the_default_grids_window_is_the_lines_average_in_a_range() {
+    for (line, spacing, ahead) in [(5.0, 0.0, 10), (30.0, 5.0, 35), (150.0, 0.0, 50)] {
+        use_optimizations(Optimizations::NONE);
+        let state = LazyGridState::new(0, 0);
+        let given = *state;
+        let _ui = ComposeTestRule::sized(IntSize::new(100, 300), move || {
+            LazyVerticalGrid!(
+                GridCells::Fixed(2),
+                modifier = Modifier.size((100.dp(), 100.dp())),
+                state = given,
+                vertical_arrangement = Arrangement::spaced_by(Dp(spacing)),
+                move |scope: LazyGridScope| {
+                    scope.items(100, move |_| Spacer(Modifier.size((50.dp(), Dp(line)))));
+                }
+            );
+        });
+        let window = LazyGridDefaults::cache_window(given);
+        let density = Density::new(1.0);
+        assert_eq!(window.calculate_ahead_window(density, 100), ahead, "{line}");
+        assert_eq!(window.calculate_behind_window(density, 100), 0, "{line}");
     }
 }
 
@@ -1103,9 +1104,8 @@ fn a_scroll_forward_keeps_a_grids_items_in_the_window() {
             compose_grid(GridArgs { first: 6, ..GridArgs::new(vertical, viewport_window()) });
         grid.scroll_by(ITEM * 2.5);
         assert_eq!(grid.state.first_visible_item_index(), 10);
-        // As after Compose's next measurement (see the list's).
-        assert!(grid.none_exist(6..8), "{:?}", grid.seen.live);
-        assert!(grid.all_exist(8..10), "{:?}", grid.seen.live);
+        assert!(grid.none_exist(4..6), "{:?}", grid.seen.live);
+        assert!(grid.all_exist(6..10), "{:?}", grid.seen.live);
         assert!((10..14).all(|item| grid.displayed(item)));
         assert!(grid.all_exist(14..18), "{:?}", grid.seen.live);
         assert!(grid.none_exist(18..20), "{:?}", grid.seen.live);
@@ -1125,6 +1125,8 @@ fn a_scroll_backward_keeps_a_grids_items_in_the_window() {
         assert!(grid.all_exist(14..16), "{:?}", grid.seen.live);
         grid.scroll_by(-ITEM * 2.5);
         assert_eq!(grid.state.first_visible_item_index(), 6);
+        grid.state.force_remeasure();
+        idle(&mut grid.ui);
         assert!(grid.none_exist(0..2), "{:?}", grid.seen.live);
         assert!(grid.all_exist(2..6), "{:?}", grid.seen.live);
         assert!((6..10).all(|item| grid.displayed(item)));
@@ -1364,5 +1366,689 @@ fn grid_parity_scrolling_by_the_size_cancels_what_was_scheduled() {
         idle(&mut grid.ui);
         grid.scroll_by(ITEM * 100.0);
         assert!(!grid.seen.exists(6), "{:?}", grid.seen.live);
+    }
+}
+
+// ---- The requests ---------------------------------------------------------------------------------
+
+/// A window of 45 px each way that fills on scrolls only, and the items of `ListArgs`' list.
+fn on_scrolls() -> Rc<dyn LazyLayoutCacheWindow> {
+    lazy_layout_cache_window_fraction_with(1.0, 1.0, false)
+}
+
+fn requested(state: LazyListState) -> Vec<usize> {
+    state.prefetch_requests().into_iter().map(|(item, _)| item).collect()
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onPrefetchForward: `isUrgent`, the same delta again would need the next item
+#[test]
+fn the_next_unit_is_urgent_if_the_same_scroll_would_reach_it() {
+    for vertical in ORIENTATIONS {
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        // Item 1 ends 15 px past the viewport: 14 px don't cover what's left of it, 1 px.
+        state.dispatch_raw_delta(14.0);
+        list.ui.wait_for_idle();
+        assert_eq!(state.prefetch_requests(), [(2, true)], "14 px leave 1 px: it would reach");
+        idle(&mut list.ui);
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        state.dispatch_raw_delta(2.0);
+        list.ui.wait_for_idle();
+        assert_eq!(state.prefetch_requests(), [(2, false)], "2 px leave 13 px: it wouldn't");
+        // Back, as far: the item before the first, urgent by what the first has left out of view.
+        let mut list =
+            compose_list(ListArgs { first: 5, offset: 3, ..ListArgs::new(vertical, on_scrolls()) });
+        let state = *list.state;
+        state.dispatch_raw_delta(-1.0);
+        list.ui.wait_for_idle();
+        assert_eq!(state.prefetch_requests(), [(4, false)], "1 px against 2 px left");
+        idle(&mut list.ui);
+        let mut list =
+            compose_list(ListArgs { first: 5, offset: 3, ..ListArgs::new(vertical, on_scrolls()) });
+        let state = *list.state;
+        state.dispatch_raw_delta(-2.0);
+        list.ui.wait_for_idle();
+        assert_eq!(state.prefetch_requests(), [(4, true)], "2 px against 1 px left");
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onPrefetchForward: `perLaneCacheWindowStartIndex[lane] <= 0`
+#[test]
+fn a_scroll_back_near_the_top_stops_at_the_first_item() {
+    let mut list =
+        compose_list(ListArgs { first: 0, offset: 5, ..ListArgs::new(true, on_scrolls()) });
+    let state = *list.state;
+    state.dispatch_raw_delta(-2.0);
+    list.ui.wait_for_idle();
+    assert_eq!(state.prefetch_units_held(), Vec::<usize>::new());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, onScroll: `copyWithScrollDeltaWithoutRemeasure` measures nothing, so the bounds stay
+#[test]
+fn a_scroll_within_whats_in_view_is_no_measurement() {
+    let window = lazy_layout_cache_window_fraction(0.5, 0.5);
+    let mut list = compose_list(ListArgs { first: 3, ..ListArgs::new(true, window) });
+    // Item 5 from -10 px, item 6 to 50 px; the window behind, 22 px less those, holds item 4 only.
+    list.scroll_by(70.0);
+    assert!(list.seen.exists(3), "{:?}", list.seen.live);
+    // Items 5 and 6 still show, and nothing new: Compose doesn't measure.
+    for _ in 0..2 {
+        list.scroll_by(1.0);
+        assert_eq!(list.state.first_visible_item_index(), 5);
+        assert!(list.seen.exists(3), "{:?}", list.seen.live);
+    }
+    // A measurement.
+    list.state.force_remeasure();
+    idle(&mut list.ui);
+    assert!(!list.seen.exists(3) && list.seen.exists(4), "{:?}", list.seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt, a precomposition measures nothing: the layout a request's composition asks for here keeps the bounds
+#[test]
+fn a_frame_after_a_request_is_no_measurement() {
+    let mut list = compose_list(ListArgs { first: 3, ..ListArgs::new(true, viewport_window()) });
+    list.scroll_by(ITEM * 2.5);
+    assert!(list.seen.exists(3) && list.seen.exists(8), "{:?}", list.seen.live);
+    list.ui.host().frame();
+    idle(&mut list.ui);
+    assert!(list.seen.exists(3), "{:?}", list.seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, onScroll: less than half a pixel measures nothing, and the way doesn't turn: the item past the next one the estimate composed stays where it is
+#[test]
+fn a_jitter_keeps_what_the_way_it_went_kept() {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(1, 5);
+    let given = *state;
+    let live: Rc<RefCell<BTreeSet<usize>>> = Rc::default();
+    let seen = live.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 300), move || {
+        let seen = seen.clone();
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            move |scope: LazyListScope| {
+                let seen = seen.clone();
+                scope.items(100, move |index| {
+                    let seen = seen.clone();
+                    DisposableEffect(index, move |scope| {
+                        seen.borrow_mut().insert(index);
+                        let seen = seen.clone();
+                        scope.on_dispose(move || {
+                            seen.borrow_mut().remove(&index);
+                        })
+                    });
+                    Spacer(Modifier.size((100.dp(), Dp(if index < 6 { 10.0 } else { 60.0 }))));
+                });
+            }
+        );
+    });
+    idle(&mut ui);
+    let before = live.borrow().clone();
+    assert!(before.iter().next_back().is_some());
+    given.dispatch_raw_delta(-0.3);
+    ui.wait_for_idle();
+    given.force_remeasure();
+    idle(&mut ui);
+    assert_eq!(*live.borrow(), before);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onPrefetchForward: backward, the window's room from the first visible item
+#[test]
+fn a_scroll_back_fills_what_the_window_holds_and_stops() {
+    for vertical in ORIENTATIONS {
+        let mut list =
+            compose_list(ListArgs { first: 10, ..ListArgs::new(vertical, on_scrolls()) });
+        let state = *list.state;
+        state.dispatch_raw_delta(-5.0);
+        list.ui.wait_for_idle();
+        // The first (item 9) is 25 px out of view: 20 px of the window are left, one item.
+        assert_eq!(requested(state), [8]);
+        idle(&mut list.ui);
+        assert!(list.seen.exists(8), "{:?}", list.seen.live);
+        assert!(!list.seen.exists(7), "{:?}", list.seen.live);
+        assert!(requested(state).is_empty());
+        // The room grows with the scroll: 5 px more, and item 8's size is more than was left.
+        state.dispatch_raw_delta(-5.0);
+        list.ui.wait_for_idle();
+        assert!(requested(state).is_empty(), "{:?}", requested(state));
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, snapToItemIndexInternal: `resetStrategy`
+#[test]
+fn a_jump_starts_the_window_over() {
+    for vertical in ORIENTATIONS {
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        state.dispatch_raw_delta(5.0);
+        list.ui.wait_for_idle();
+        assert_eq!(requested(state), [2]);
+        state.request_scroll_to_item(50, 0);
+        assert!(requested(state).is_empty(), "cancelled at once");
+        idle(&mut list.ui);
+        assert!(!list.seen.activated.borrow().contains_key(&2));
+        // Nothing is known of the items near the first position either: back there, they're asked
+        // for again.
+        state.request_scroll_to_item(0, 0);
+        idle(&mut list.ui);
+        state.dispatch_raw_delta(5.0);
+        list.ui.wait_for_idle();
+        assert_eq!(requested(state), [2]);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, snapToItemIndexInternal: a jump forgets the scroll not told yet
+#[test]
+fn a_jump_forgets_the_scroll_it_interrupted() {
+    let mut list = compose_list(ListArgs::new(true, on_scrolls()));
+    let state = *list.state;
+    state.dispatch_raw_delta(10.0);
+    state.request_scroll_to_item(50, 0);
+    list.ui.wait_for_idle();
+    assert!(requested(state).is_empty(), "{:?}", requested(state));
+}
+
+/// `count` items of keys from `keys` and sizes from `sizes`, in a list of 1.5 items' viewport.
+fn keyed_sized_list(
+    window: Rc<dyn LazyLayoutCacheWindow>,
+    keys: MutableState<Vec<u64>>,
+    size_of_1: MutableState<f32>,
+) -> (ComposeTestRule, Owned<LazyListState>, Seen) {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let seen = Seen::default();
+    let items_seen = Rc::new(seen.clone());
+    let ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let keys = keys.get();
+        let items_seen = items_seen.clone();
+        let window = window.clone();
+        LazyColumn!(
+            modifier = main_axis(true, ITEM * 1.5),
+            state = given,
+            cache_window = Some(window),
+            move |scope: LazyListScope| {
+                let (keys, items_seen) = (keys.clone(), items_seen.clone());
+                scope.items_keyed(
+                    keys.len(),
+                    move |index| keys[index],
+                    move |index| {
+                        Item(index, items_seen.clone(), true);
+                        if index == 1 {
+                            Spacer(Modifier.size((30.dp(), Dp(size_of_1.get()))));
+                        }
+                    },
+                );
+            }
+        );
+    });
+    (ui, state, seen)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onVisibleItemsUpdated: another key at a visible index resets the bounds of a window not caching at rest
+#[test]
+fn another_key_in_view_resets_the_window_ahead() {
+    let keys = mutable_state_of((0..100u64).collect::<Vec<_>>());
+    let size = mutable_state_of(0.0f32);
+    let (mut ui, state, seen) = keyed_sized_list(on_scrolls(), keys.handle(), size.handle());
+    state.dispatch_raw_delta(5.0);
+    idle(&mut ui);
+    assert!(seen.exists(2) && seen.exists(3), "{:?}", seen.live);
+    let mut other: Vec<u64> = (0..100).collect();
+    other[1] = 1000;
+    keys.set(other);
+    ui.wait_for_idle();
+    state.force_remeasure();
+    idle(&mut ui);
+    assert!(!seen.exists(3), "{:?}", seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onVisibleItemsUpdated: another size at a visible index resets the bounds of a window not caching at rest
+#[test]
+fn another_size_in_view_resets_the_window_ahead() {
+    let keys = mutable_state_of((0..100u64).collect::<Vec<_>>());
+    let size = mutable_state_of(0.0f32);
+    let (mut ui, state, seen) = keyed_sized_list(on_scrolls(), keys.handle(), size.handle());
+    state.dispatch_raw_delta(5.0);
+    idle(&mut ui);
+    assert!(seen.exists(2) && seen.exists(3), "{:?}", seen.live);
+    size.set(1.0);
+    ui.wait_for_idle();
+    state.force_remeasure();
+    idle(&mut ui);
+    assert!(!seen.exists(3), "{:?}", seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, resetAheadWindowBounds: scrolling back, the room is the whole window again, less the overflow
+#[test]
+fn a_reset_leaves_the_whole_window_to_the_next_scroll_back() {
+    let count = mutable_state_of(100usize);
+    let mut list = compose_list(ListArgs {
+        first: 10,
+        count: Some(count.handle()),
+        ..ListArgs::new(true, on_scrolls())
+    });
+    let state = *list.state;
+    state.dispatch_raw_delta(-5.0);
+    idle(&mut list.ui);
+    count.set(101);
+    list.ui.wait_for_idle();
+    state.force_remeasure();
+    idle(&mut list.ui);
+    // 1 px back: the room's 21 px of the window's 45 px, the first being 24 px out of view. Item 8,
+    // forgotten, is asked for again, and takes 30 px of it.
+    state.dispatch_raw_delta(-1.0);
+    list.ui.wait_for_idle();
+    assert_eq!(requested(state), [8]);
+    idle(&mut list.ui);
+    // 10 px more, and there's room again: it would be 19 px short from a room of nothing.
+    state.dispatch_raw_delta(-10.0);
+    list.ui.wait_for_idle();
+    assert_eq!(requested(state), [7]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, resetAheadWindowBounds: the room is the whole window again, less the overflow
+#[test]
+fn a_reset_leaves_the_whole_window_to_the_next_scroll() {
+    let count = mutable_state_of(100usize);
+    let mut list =
+        compose_list(ListArgs { count: Some(count.handle()), ..ListArgs::new(true, on_scrolls()) });
+    let state = *list.state;
+    state.dispatch_raw_delta(5.0);
+    idle(&mut list.ui);
+    count.set(101);
+    list.ui.wait_for_idle();
+    state.force_remeasure();
+    idle(&mut list.ui);
+    assert!(!list.seen.exists(3), "{:?}", list.seen.live);
+    // 1 px on, and both fit: the room is 36 px, more than 1 px.
+    state.dispatch_raw_delta(1.0);
+    idle(&mut list.ui);
+    assert!(list.seen.exists(2) && list.seen.exists(3), "{:?}", list.seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onVisibleItemsUpdated: nothing visible resets the window
+#[test]
+fn an_emptied_list_starts_its_window_over() {
+    for vertical in ORIENTATIONS {
+        let count = mutable_state_of(100usize);
+        let mut list = compose_list(ListArgs {
+            count: Some(count.handle()),
+            ..ListArgs::new(vertical, viewport_window())
+        });
+        assert!(list.seen.exists(2));
+        count.set(0);
+        idle(&mut list.ui);
+        assert!(!list.seen.exists(2));
+        count.set(100);
+        list.ui.wait_for_idle();
+        // Nothing is remembered of item 2: it's asked for again.
+        assert_eq!(requested(*list.state), [2]);
+        idle(&mut list.ui);
+        assert!(list.seen.exists(2), "{:?}", list.seen.live);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, removeOutOfBoundsItems and prefetchWindowHandles: a request cancelled still queued doesn't speak for the one made after it
+#[test]
+fn a_cancelled_request_doesnt_forget_the_one_after_it() {
+    for vertical in ORIENTATIONS {
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        for delta in [5.0, -2.0, 3.0] {
+            state.dispatch_raw_delta(delta);
+            list.ui.wait_for_idle();
+        }
+        assert_eq!(requested(state), [2]);
+        idle(&mut list.ui);
+        assert!(list.seen.exists(2) && list.seen.exists(3), "{:?}", list.seen.live);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, onScroll: `scrollToBeConsumed` holds back less than half a pixel
+#[test]
+fn scrolls_under_half_a_pixel_add_up() {
+    for vertical in ORIENTATIONS {
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        for _ in 0..30 {
+            state.dispatch_raw_delta(0.4);
+            list.ui.wait_for_idle();
+            idle(&mut list.ui);
+        }
+        assert!(list.seen.exists(2) && list.seen.exists(3), "{:?}", list.seen.live);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListState.kt, onScroll: less than half a pixel is no scroll for the window
+#[test]
+fn a_jitter_under_half_a_pixel_is_no_turn() {
+    for vertical in ORIENTATIONS {
+        let mut list = compose_list(ListArgs::new(vertical, on_scrolls()));
+        let state = *list.state;
+        state.dispatch_raw_delta(5.0);
+        list.ui.wait_for_idle();
+        assert_eq!(requested(state), [2]);
+        state.dispatch_raw_delta(-0.3);
+        list.ui.wait_for_idle();
+        assert_eq!(requested(state), [2], "still the way it went");
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyList.kt, remember(state, cacheWindow): another list's composition has its own strategy
+#[test]
+fn a_state_moved_to_another_list_starts_its_window_over() {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let first = mutable_state_of(true);
+    let shows_first = first.handle();
+    let window = viewport_window();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let window = Some(window.clone());
+        if shows_first.get() {
+            LazyColumn!(
+                modifier = main_axis(true, ITEM * 1.5),
+                state = given,
+                cache_window = window,
+                |scope: LazyListScope| {
+                    scope.items(100, |_| Spacer(main_axis(true, ITEM)));
+                }
+            );
+        } else {
+            Box!({
+                LazyColumn!(
+                    modifier = main_axis(true, ITEM * 1.5),
+                    state = given,
+                    cache_window = window.clone(),
+                    |scope: LazyListScope| {
+                        scope.items(100, |_| Spacer(main_axis(true, ITEM)));
+                    }
+                );
+            });
+        }
+    });
+    idle(&mut ui);
+    assert!(requested(*state).is_empty());
+    first.set(false);
+    ui.wait_for_idle();
+    assert_eq!(requested(*state), [2], "filling as a first layout does");
+    idle(&mut ui);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt, executeRequest: only a key composed binds a request
+#[test]
+fn a_request_composes_the_item_there_when_it_runs() {
+    let keys = mutable_state_of((0..100u64).collect::<Vec<_>>());
+    let size = mutable_state_of(0.0f32);
+    let (mut ui, state, seen) = keyed_sized_list(on_scrolls(), keys.handle(), size.handle());
+    state.dispatch_raw_delta(5.0);
+    ui.wait_for_idle();
+    assert_eq!(requested(*state), [2]);
+    let mut other: Vec<u64> = (0..100).collect();
+    other[2] = 1000;
+    keys.set(other);
+    ui.wait_for_idle();
+    assert!(!ui.host().prefetch(later()) || ui.host().has_prefetch_work());
+    idle(&mut ui);
+    assert!(seen.exists(2), "{:?}", seen.live);
+}
+
+// ---- Sticky headers: Compose's `visibleItemsInfo` holds the sticking ones, by index ------------------
+
+/// Sections of a header and 20 items of `ITEM` px: headers at 0, 21, 42, … in a viewport of
+/// `in_view` items; the items (and the headers, by their indices) note themselves.
+fn sectioned(
+    first: usize,
+    offset: i32,
+    in_view: f32,
+    header_size: f32,
+    window: Option<Rc<dyn LazyLayoutCacheWindow>>,
+) -> (ComposeTestRule, Owned<LazyListState>, Seen) {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(first, offset);
+    let given = *state;
+    let seen = Seen::default();
+    let items_seen = Rc::new(seen.clone());
+    let ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let items_seen = items_seen.clone();
+        let window = window.clone();
+        LazyColumn!(
+            modifier = main_axis(true, ITEM * in_view),
+            state = given,
+            cache_window = window,
+            move |scope: LazyListScope| {
+                for section in 0..10usize {
+                    let at = section * 21;
+                    let header_seen = items_seen.clone();
+                    scope.sticky_header(move |_| {
+                        Noted2(at, header_seen.clone());
+                        Spacer(main_axis(true, header_size).test_tag(format!("{at}")));
+                    });
+                    let item_seen = items_seen.clone();
+                    scope.items(20, move |index| {
+                        Item(at + 1 + index, item_seen.clone(), true);
+                    });
+                }
+            }
+        );
+    });
+    (ui, state, seen)
+}
+
+#[composable]
+fn Noted2(index: usize, seen: Rc<Seen>) {
+    let (live, activated) = (seen.live.clone(), seen.activated.clone());
+    DisposableEffect(index, move |scope| {
+        live.borrow_mut().insert(index);
+        *activated.borrow_mut().entry(index).or_default() += 1;
+        let live = live.clone();
+        scope.on_dispose(move || {
+            live.borrow_mut().remove(&index);
+        })
+    });
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onPrefetchForward; lazy/LazyListCacheWindowStrategy.kt, `firstVisibleItemIndex` is `visibleItemsInfo.first().index`, the sticking header's; urgent, as it has nothing out of view
+#[test]
+fn scrolling_back_under_a_sticky_header_requests_the_item_before_the_header() {
+    let (mut ui, state, seen) = sectioned(30, 0, 3.0, ITEM, None);
+    let state = *state;
+    state.dispatch_raw_delta(-5.0);
+    ui.wait_for_idle();
+    assert_eq!(state.prefetch_requests(), [(20, true)]);
+    idle(&mut ui);
+    // It's composed apart from what's in view: the items between the header and those aren't.
+    assert!(seen.exists(20) && seen.exists(21), "{:?}", seen.live);
+    assert!((22..28).all(|item| !seen.exists(item)), "{:?}", seen.live);
+    assert!(ui.on_node_with_tag("21").is_displayed());
+    // The room grows with each scroll, the first in view staying the header: on to the next.
+    state.dispatch_raw_delta(-5.0);
+    ui.wait_for_idle();
+    assert_eq!(requested(state), [19]);
+    assert!(seen.exists(20), "{:?}", seen.live);
+    assert_eq!(ui.count_nodes(&has_test_tag("20")), 0, "composed, not placed");
+    // Nothing composes in the frames for those: what's coming into view does, as Compose's.
+    idle(&mut ui);
+    assert!(seen.exists(19) && seen.exists(20), "{:?}", seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onPrefetchForward: `perLaneCacheWindowStartIndex[lane] <= 0`
+#[test]
+fn scrolling_back_under_the_first_sticky_header_requests_nothing() {
+    let (mut ui, state, _seen) = sectioned(10, 0, 3.0, ITEM, None);
+    let state = *state;
+    state.dispatch_raw_delta(-5.0);
+    ui.wait_for_idle();
+    assert!(state.prefetch_requests().is_empty(), "{:?}", state.prefetch_requests());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListLayoutInfo.kt, visibleItemsAverageSize: the sticking header counts
+#[test]
+fn the_default_windows_average_counts_the_sticking_header() {
+    // In view: a 62 px header and 3 of 30 px, with 1 more in part (90 px viewport): 5 items, 28 px
+    // short of the header's weight alone.
+    let (mut ui, state, _seen) = sectioned(30, 0, 3.0, 62.0, None);
+    idle(&mut ui);
+    let window = LazyListDefaults::cache_window(*state);
+    // A 62 px header and rows 30 to 32: (62 + 90) / 4.
+    assert_eq!(window.calculate_ahead_window(Density::new(1.0), 90), 38);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyList.kt, keepAroundItems: from the window's start up to `visibleItemsList.first().index`, the header's
+#[test]
+fn a_behind_window_keeps_before_the_sticky_header_not_after_it() {
+    let window = lazy_layout_cache_window(0.dp(), 100.dp());
+    let (mut ui, state, seen) = sectioned(23, 0, 3.0, ITEM, Some(window));
+    let state = *state;
+    idle(&mut ui);
+    assert!(seen.exists(21) && seen.exists(23), "{:?}", seen.live);
+    state.dispatch_raw_delta(ITEM + 1.0);
+    ui.wait_for_idle();
+    state.force_remeasure();
+    idle(&mut ui);
+    // Item 23 scrolled under the header: it isn't the window's, whatever its room.
+    assert!(!seen.exists(23) && !seen.exists(22), "{:?}", seen.live);
+    assert!(seen.exists(21) && seen.exists(24), "{:?}", seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListCacheWindowStrategy.kt, updatePerLaneMainAxisExtraStartSpace: of the first of `visibleItemsInfo`, the header being pushed out
+#[test]
+fn a_header_being_pushed_out_counts_what_it_has_out_of_view() {
+    // Item 41 from -20 px, header 42 from 10 px: header 21, 60 px tall, is pushed out to -50 px. In
+    // view: 21 (60), 41 (30), 42 (60), 43 (30): an average of 45 px, less than header's 49 px out of
+    // view after this scroll. No room: nothing's requested. By item 41's 19 px, there would be.
+    let (mut ui, state, _seen) = sectioned(41, 20, 3.0, 60.0, None);
+    let state = *state;
+    idle(&mut ui);
+    state.dispatch_raw_delta(-1.0);
+    ui.wait_for_idle();
+    assert!(requested(state).is_empty(), "{:?}", requested(state));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutMeasuredItem.kt, updatedVisibleItems: a header that's the first in view is in the list once
+#[test]
+fn a_header_first_in_view_counts_once() {
+    let (mut ui, state, _seen) = sectioned(21, 5, 3.0, 62.0, None);
+    idle(&mut ui);
+    let window = LazyListDefaults::cache_window(*state);
+    // From -5 px: 21 (62), 22 (30), 23 (30).
+    assert_eq!(window.calculate_ahead_window(Density::new(1.0), 90), 40);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyList.kt, LazyLayoutPrefetchState's scheduler: `prefetchStrategy.prefetchScheduler`, the composition's, not the first's
+#[test]
+fn a_window_requests_through_the_scheduler_of_its_last_layout() {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let elsewhere = mutable_state_of(true);
+    let is_elsewhere = elsewhere.handle();
+    let seen = Seen::default();
+    let items_seen = Rc::new(seen.clone());
+    let other = compose_ui::PrefetchScheduler::default();
+    let window = on_scrolls();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let items_seen = items_seen.clone();
+        let window = Some(window.clone());
+        let list = move || {
+            let items_seen = items_seen.clone();
+            let window = window.clone();
+            LazyColumn!(
+                modifier = main_axis(true, ITEM * 1.5),
+                state = given,
+                cache_window = window,
+                move |scope: LazyListScope| {
+                    let items_seen = items_seen.clone();
+                    scope.items(100, move |index| Item(index, items_seen.clone(), true));
+                }
+            );
+        };
+        // A scheduler of its own first, then the host's.
+        if is_elsewhere.get() {
+            let other = other.clone();
+            CompositionLocalProvider(
+                compose_ui::LOCAL_PREFETCH_SCHEDULER.provides(Some(other)),
+                list,
+            );
+        } else {
+            list();
+        }
+    });
+    elsewhere.set(false);
+    ui.wait_for_idle();
+    given.dispatch_raw_delta(5.0);
+    idle(&mut ui);
+    assert!(seen.exists(2) && seen.exists(3), "{:?}", seen.live);
+}
+
+// ---- A grid's lines ----------------------------------------------------------------------------------
+
+/// A grid of 2 cells a line in a viewport of 100 px, the first cell of a line `first` px tall and
+/// the second `second`.
+fn lopsided_grid(
+    first: f32,
+    second: f32,
+    count: usize,
+    window: Rc<dyn LazyLayoutCacheWindow>,
+) -> (ComposeTestRule, Owned<LazyGridState>, Seen) {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyGridState::new(0, 0);
+    let given = *state;
+    let seen = Seen::default();
+    let items_seen = Rc::new(seen.clone());
+    let ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let items_seen = items_seen.clone();
+        let window = Some(window.clone());
+        LazyVerticalGrid!(
+            GridCells::Fixed(2),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            cache_window = window,
+            move |scope: LazyGridScope| {
+                let items_seen = items_seen.clone();
+                scope.items(count, move |index| {
+                    Noted2(index, items_seen.clone());
+                    let size = if index.is_multiple_of(2) { first } else { second };
+                    Spacer(Modifier.size((50.dp(), Dp(size))));
+                });
+            }
+        );
+    });
+    (ui, state, seen)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowStrategy.kt, schedulePrefetch: `tallestElement = maxOf(getMainAxisSize(it))`, the last item's size
+#[test]
+fn a_prefetched_lines_size_is_its_last_items() {
+    let window = lazy_layout_cache_window_with(50.dp(), 0.dp(), false);
+    let (mut ui, state, seen) = lopsided_grid(40.0, 10.0, 100, window);
+    let state = *state;
+    idle(&mut ui);
+    // Lines of 40 px: 3 show, to 120 px; line 2's last item ends at 90 px, 10 px short.
+    state.dispatch_raw_delta(1.0);
+    idle(&mut ui);
+    // Room: 50 less the 11 px its end is short now: 39 px, at 10 px a line: 4 lines. By the tallest,
+    // 1.
+    let lines: Vec<usize> = (3..12).filter(|line| seen.exists(line * 2)).collect();
+    assert_eq!(lines, [3, 4, 5, 6], "{:?}", seen.live);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowStrategy.kt, lastItemIndexInLine: the last line ends the window, whole or not
+#[test]
+fn a_grids_window_ends_with_its_last_line() {
+    for count in [5usize, 6] {
+        let window = lazy_layout_cache_window_with(500.dp(), 0.dp(), false);
+        let (mut ui, state, seen) = lopsided_grid(40.0, 40.0, count, window);
+        let state = *state;
+        idle(&mut ui);
+        state.dispatch_raw_delta(1.0);
+        idle(&mut ui);
+        assert!((0..count).all(|item| seen.exists(item)), "{:?}", seen.live);
+        // Nothing asked past it, not even a request for no items.
+        assert_eq!(state.prefetch_units_held(), Vec::<usize>::new());
+        assert!(!ui.host().has_prefetch_work());
     }
 }

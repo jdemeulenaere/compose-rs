@@ -20,7 +20,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 117 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 251 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
-| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 85 |
+| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 90 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 30 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
@@ -366,7 +366,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D556 | [text](decisions/text.md#d556) | revised by [D1200](decisions/ui-and-layout.md#d1200), [D1201](decisions/ui-and-layout.md#d1201) |
 | D560 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d560) | revised by [D575](decisions/lazy-and-prefetch.md#d575), [D595](decisions/lazy-and-prefetch.md#d595), [D892](decisions/lazy-and-prefetch.md#d892) |
 | D561 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d561) | current |
-| D562 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d562) | revised by [D893](decisions/lazy-and-prefetch.md#d893) |
+| D562 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d562) | revised by [D893](decisions/lazy-and-prefetch.md#d893), [D899](decisions/lazy-and-prefetch.md#d899) |
 | D563 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d563) | revised by [D893](decisions/lazy-and-prefetch.md#d893) |
 | D564 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d564) | current |
 | D565 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d565) | revised by [D893](decisions/lazy-and-prefetch.md#d893) |
@@ -379,7 +379,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D572 | [ui-and-layout](decisions/ui-and-layout.md#d572) | revised by [D1003](decisions/ui-and-layout.md#d1003) |
 | D573 | [ui-and-layout](decisions/ui-and-layout.md#d573) | current |
 | D574 | [benchmarks](decisions/benchmarks.md#d574) | revised by [D579](decisions/benchmarks.md#d579) |
-| D575 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d575) | revised by [D578](decisions/lazy-and-prefetch.md#d578), [D894](decisions/lazy-and-prefetch.md#d894) |
+| D575 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d575) | revised by [D578](decisions/lazy-and-prefetch.md#d578), [D896](decisions/lazy-and-prefetch.md#d896) |
 | D576 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d576) | current |
 | D577 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d577) | current |
 | D578 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d578) | current |
@@ -527,9 +527,14 @@ The log is split by area into the files below, one table each, rows in number or
 | D889 | [ui-and-layout](decisions/ui-and-layout.md#d889) | revised by [D891](decisions/ui-and-layout.md#d891) |
 | D890 | [ui-and-layout](decisions/ui-and-layout.md#d890) | current |
 | D891 | [ui-and-layout](decisions/ui-and-layout.md#d891) | current |
-| D892 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d892) | current |
-| D893 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d893) | current |
-| D894 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d894) | current |
+| D892 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d892) | revised by [D895](decisions/lazy-and-prefetch.md#d895) |
+| D893 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d893) | revised by [D899](decisions/lazy-and-prefetch.md#d899) |
+| D894 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d894) | revised by [D896](decisions/lazy-and-prefetch.md#d896) |
+| D895 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d895) | current |
+| D896 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d896) | current |
+| D897 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d897) | current |
+| D898 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d898) | current |
+| D899 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d899) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

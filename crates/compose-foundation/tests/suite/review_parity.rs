@@ -13,7 +13,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::platform::{Optimization, Optimizations};
+use compose_ui::platform::Optimizations;
 use compose_ui::{Constraints, IntSize, UnitExt};
 
 thread_local! {
@@ -151,10 +151,9 @@ fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
         in_frames.push(total() - before);
         ui.host().prefetch(later());
     }
-    // The turn's frame composes the one row that comes into view, as Compose's measurement
-    // does, not two (the estimate's extra one); none after.
-    assert_eq!(in_frames[0], 1, "{in_frames:?}");
-    assert!(in_frames[1..].iter().all(|composed| *composed == 0), "{in_frames:?}");
+    // The turn's frame finds what the last scroll left behind composed, as Compose's measurement
+    // keeps it (D894): nothing composes in the frames.
+    assert!(in_frames.iter().all(|composed| *composed == 0), "{in_frames:?}");
 }
 
 #[test]
@@ -162,8 +161,10 @@ fn a_grid_scrolled_back_composes_only_the_line_that_comes_into_view() {
     let (mut ui, state) = grid();
     state.dispatch_raw_delta(400.0);
     ui.wait_for_idle();
-    // The idle time after deactivates the lines the frame passed (Compose's measurement
-    // composes them to step over, and deactivates them).
+    // The lines the frame passed go with the next measurement (Compose's composes them to step
+    // over, and keeps them by the window's bound before the scroll).
+    state.force_remeasure();
+    ui.wait_for_idle();
     ui.host().prefetch(later());
     // The frame scrolled back 7 px composes line 19, three items, not two lines.
     let before = total();
@@ -186,8 +187,14 @@ fn a_frame_where_an_item_only_leaves_runs_no_composition() {
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "a composition round for row 1 leaving");
     ui.wait_for_idle();
-    // Not shown, and deactivated by the next idle time's work.
+    // Row 0, let go by the last measurement, goes with the next idle time's work; row 1 with the
+    // next measurement, the window's bound being the one before this scroll (D894).
     assert!(ui.host().has_prefetch_work());
+    ui.host().prefetch(later());
+    assert!(!live_items().contains(&0), "{:?}", live_items());
+    assert!(live_items().contains(&1), "{:?}", live_items());
+    state.force_remeasure();
+    ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(!live_items().contains(&1), "{:?}", live_items());
 }
@@ -310,12 +317,15 @@ fn Carousel(row: usize) {
     );
 }
 
-/// A request for an item already composed (kept behind, `KEEP_ITEMS_BEHIND`) still prefetches
-/// its nested lists and learns their count, as Compose's request does for its precomposed item.
+/// A request for an item already composed (left behind by a scroll, the window's bound before it
+/// keeping it, D894) still prefetches its nested lists and learns their count, as Compose's request
+/// does for its precomposed item. This test passed by accident on the first window: the row it
+/// measured was composed in a frame, which composes all its carousel shows, and no request learned
+/// anything (an item the window still knows is no request at all, `size_or_prefetch`).
 #[test]
 fn a_request_for_an_item_already_composed_learns_its_nested_lists_count() {
     reset();
-    use_optimizations(Optimizations::NONE.with(Optimization::KEEP_ITEMS_BEHIND, true));
+    use_optimizations(Optimizations::NONE);
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
@@ -327,20 +337,25 @@ fn a_request_for_an_item_already_composed_learns_its_nested_lists_count() {
             }
         );
     });
-    // 60 px down (rows 1 and 2 kept behind), no prefetch; then 5 px back: row 2, composed, is
-    // requested, and its carousel shows 4 cells.
-    state.dispatch_raw_delta(60.0);
+    // 65 px down: rows 3 to 8 show, rows 0 to 2 stay until the next measurement.
+    state.dispatch_raw_delta(65.0);
     ui.wait_for_idle();
-    state.dispatch_raw_delta(-5.0);
+    assert_eq!(state.first_visible_item_index(), 3);
+    // 2 px back, row 3 still first: row 2, composed, is requested, and its carousel shows 4 cells.
+    state.dispatch_raw_delta(-2.0);
     ui.wait_for_idle();
+    assert_eq!(state.prefetch_requests().iter().map(|(item, _)| *item).collect::<Vec<_>>(), [2]);
+    let cells = CELLS.with(|cells| cells.borrow().get(&2).copied());
     assert!(!ui.host().prefetch(later()));
-    // Forward again: a row never composed is requested; its carousel's 4 cells (the count
-    // learned) are composed before it's measured, not 2.
+    assert_eq!(CELLS.with(|cells| cells.borrow().get(&2).copied()), cells, "composed already");
+    // Forward again: rows 4 to 9 show; row 10, never composed, is requested; its carousel's 4 cells
+    // (the count learned) are composed before it's measured, not 2.
     state.dispatch_raw_delta(25.0);
     ui.wait_for_idle();
+    assert_eq!(state.prefetch_requests().iter().map(|(item, _)| *item).collect::<Vec<_>>(), [10]);
     assert!(!ui.host().prefetch(later()));
     let at = |row: usize| CELLS_AT_MEASURE.with(|at| at.borrow().get(&row).copied());
-    assert_eq!(at(9), Some(4));
+    assert_eq!(at(10), Some(4));
 }
 
 /// A nested `LazyRow` remembered scrolled to its 5th cell: nested prefetch composes from its

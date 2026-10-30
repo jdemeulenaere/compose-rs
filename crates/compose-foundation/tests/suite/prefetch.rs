@@ -146,6 +146,9 @@ fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 5);
+    state.force_remeasure();
+    ui.wait_for_idle();
+    while ui.host().prefetch(later()) {}
     let first = live_items()[0];
     // Back up two rows in one frame: the list wants the two items before the first it wanted,
     // which it kept composed (and measured), as it keeps those prefetched ahead.
@@ -177,8 +180,12 @@ fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
     state.dispatch_raw_delta(100.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 105);
-    // Those behind the window go between frames, as the window learns of a scroll after the layout
-    // showing it (D892); then the window ahead fills, with two items.
+    // Those the scroll passed stay until the next measurement, the window's bound being the one
+    // before the scroll, as Compose's `keepAroundItems` (D894); the window ahead fills, with two.
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (100..112).collect::<Vec<_>>());
+    state.force_remeasure();
+    ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (103..112).collect::<Vec<_>>());
 }
@@ -189,8 +196,11 @@ fn items_kept_behind_are_two_at_most() {
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 20);
     // In view 130 to 134: prefetching adds two ahead (135, 136), and two behind are kept (128,
-    // 129).
+    // 129), once a measurement lets go what the last scroll left behind.
     assert_eq!(state.first_visible_item_index(), 130);
+    state.force_remeasure();
+    ui.wait_for_idle();
+    while ui.host().prefetch(later()) {}
     assert_eq!(live_items(), (128..137).collect::<Vec<_>>());
 }
 
@@ -268,6 +278,8 @@ fn prefetched_items_left_far_behind_are_disposed() {
     state.dispatch_raw_delta(-240.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 89);
+    state.force_remeasure();
+    ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(!live(last + 1) && !live(last + 2), "{:?}", LIVE.with(|live| live.borrow().clone()));
 }
@@ -735,6 +747,8 @@ fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
     let (mut ui, state, last_drawn) = prefetched_painted_list();
     // Back up far: the items prefetched below are disposed before any is drawn ahead.
     state.dispatch_raw_delta(-30.0);
+    ui.wait_for_idle();
+    state.force_remeasure();
     ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(!ui.host().has_draw_ahead_work(), "disposed");

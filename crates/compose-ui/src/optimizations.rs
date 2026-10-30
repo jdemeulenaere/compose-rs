@@ -101,10 +101,11 @@ impl Optimization {
         summary: "budget prefetch steps by their recent maximum with a margin, on the vsync's phase",
     };
 
-    /// The default cache window of lazy lists also fills at rest, after a first layout or a jump,
-    /// towards the last scroll direction (the end before any), so a fling's first frames find the
-    /// next items composed (D470, D893): its `is_non_scroll_caching_enabled`. Compose's default
-    /// window fills only on scrolls (D562). A window the app gives isn't touched.
+    /// The default cache window of lazy lists also fills at rest, after a first layout, or another
+    /// item count or visible item, so a fling's first frames find the next items composed (D470,
+    /// D893): its `is_non_scroll_caching_enabled`. A jump resets the window, and the next scroll
+    /// fills it (D899). Compose's default window fills only on scrolls (D562). A window the app
+    /// gives isn't touched.
     pub const PREFETCH_AT_REST: Optimization = Optimization {
         bit: 5,
         name: "prefetch_at_rest",
@@ -116,8 +117,8 @@ impl Optimization {
     /// The default cache window of lazy lists keeps two items' worth behind the scroll, so a fling
     /// reversing finds the first items it wants composed (D375, D893); a frame lists the kept
     /// items' groups, so Android keeps their recordings (D380), for any window keeping items
-    /// behind. Compose's default window keeps none behind, and deactivates an item in the
-    /// measurement after the one it leaves (D563).
+    /// behind. Compose's default window keeps none behind, and lets an item go in the measurement
+    /// after the one it leaves (D563, D896).
     pub const KEEP_ITEMS_BEHIND: Optimization = Optimization {
         bit: 6,
         name: "keep_items_behind",

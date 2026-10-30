@@ -1345,10 +1345,9 @@ fn a_kept_item_that_changes_is_no_longer_kept() {
 fn count_kept(serialized: &mut Serialized) {
     let listed = kept_keys(&serialized.out.bytes).len();
     assert!(listed > 0, "items kept");
-    // The window hears of a scroll after the layout showing it: the prefetch after that frame may
-    // have let one go (D892).
+    // The idle time after that frame may have let go one that the frame's bound still kept (D894).
     let kept = serialized.host.with_tree(|tree| tree.kept_count());
-    assert!((1..=listed).contains(&kept), "{kept} kept, {listed} listed");
+    assert!((listed - 1..=listed).contains(&kept), "{kept} kept, {listed} listed");
 }
 
 /// A kept item whose nested graphics layer reads state written while it isn't placed is no

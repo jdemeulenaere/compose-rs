@@ -36,7 +36,10 @@ object ComposeRsOptimizations {
      */
     const val REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH = 1L shl 2
 
-    /** Lazy lists prefetch two items ahead of the scroll, where Compose prefetches one (D156, D560). */
+    /**
+     * The default cache window of lazy lists holds another item's worth ahead of the scroll; a
+     * window the app gives isn't touched (D156, D560, D893).
+     */
     const val PREFETCH_TWO_AHEAD = 1L shl 3
 
     /**
@@ -48,10 +51,17 @@ object ComposeRsOptimizations {
      */
     const val PREFETCH_BUDGET_RECENT_MAXIMUM = 1L shl 4
 
-    /** Lazy lists prefetch after a layout at rest too, not only on scrolls (D470, D562). */
+    /**
+     * The default cache window of lazy lists fills after a first layout too, not only on scrolls; a
+     * window the app gives isn't touched (D470, D562, D893).
+     */
     const val PREFETCH_AT_REST = 1L shl 5
 
-    /** Lazy lists keep two items behind the scroll composed, and their recordings (D375, D380, D563). */
+    /**
+     * The default cache window of lazy lists keeps two items' worth behind the scroll, and the
+     * unplaced items' recordings are kept; a window the app gives isn't touched, but for the
+     * recordings (D375, D380, D563, D893).
+     */
     const val KEEP_ITEMS_BEHIND = 1L shl 6
 
     /**

@@ -184,6 +184,9 @@ fn review2_a_paused_reused_items_requesters_attach_at_apply() {
     // 25 px down: row 1 leaves, rows 7 and 8 next.
     given.dispatch_raw_delta(25.0);
     ui.wait_for_idle();
+    // The window's bound before the scroll kept it: the next measurement lets it go.
+    given.force_remeasure();
+    ui.wait_for_idle();
     ROW_PART_TIME.set(Duration::from_millis(4));
     // The trim lets row 1 go (to the pool), the next request reuses its slot and pauses.
     let mut paused_row = None;

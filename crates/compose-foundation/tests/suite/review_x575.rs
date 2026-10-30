@@ -102,8 +102,9 @@ fn idle(ui: &mut ComposeTestRule) {
     }
 }
 
-/// After a forward scroll and all the idle time it wants, nothing before the first visible item
-/// stays composed at parity.
+/// After a forward scroll, a measurement (what the window's bound before the scroll kept goes with
+/// it, D894) and all the idle time they want, nothing before the first visible item stays composed
+/// at parity.
 #[test]
 fn x_items_that_left_are_deactivated_once_idle() {
     let mut failures = Vec::new();
@@ -112,6 +113,9 @@ fn x_items_that_left_are_deactivated_once_idle() {
             let (mut ui, state) = list(pattern);
             for frame in 0..40 {
                 state.dispatch_raw_delta(step);
+                ui.wait_for_idle();
+                idle(&mut ui);
+                state.force_remeasure();
                 ui.wait_for_idle();
                 idle(&mut ui);
                 let first = state.first_visible_item_index();
@@ -186,6 +190,14 @@ fn x_an_infinite_animation_in_a_row_that_left_runs_forever() {
     }
     idle(&mut ui);
     assert!(state.first_visible_item_index() > 0);
+    // The window's bound before the scroll kept row 0: it stays, as Compose's `keepAroundItems`,
+    // until the list is measured again (D894). Then it goes, and its animation stops.
+    assert!(live_items().contains(&0));
+    state.force_remeasure();
+    for _ in 0..3 {
+        ui.host().frame();
+    }
+    idle(&mut ui);
     ANIMATE.set(true);
     for _ in 0..200 {
         ui.host().frame();
@@ -291,6 +303,9 @@ fn x_grid_items_that_left_are_deactivated_once_idle() {
             });
             for frame in 0..40 {
                 state.dispatch_raw_delta(step);
+                ui.wait_for_idle();
+                idle(&mut ui);
+                state.force_remeasure();
                 ui.wait_for_idle();
                 idle(&mut ui);
                 let first = state.first_visible_item_index();
@@ -465,6 +480,9 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
                 ui.wait_for_idle();
                 idle(&mut ui);
             }
+            state.force_remeasure();
+            ui.wait_for_idle();
+            idle(&mut ui);
             let first = state.first_visible_item_index();
             let offset = state.first_visible_item_scroll_offset() as f32;
             let last = last_visible(first, offset, |index| height(pattern, index));
@@ -498,6 +516,9 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
                 ui.wait_for_idle();
                 idle(&mut ui);
             }
+            state.force_remeasure();
+            ui.wait_for_idle();
+            idle(&mut ui);
             let first_line = state.first_visible_item_index() / 3;
             let offset = state.first_visible_item_scroll_offset() as f32;
             let last_line = last_visible(first_line, offset, |line| height(pattern, line));

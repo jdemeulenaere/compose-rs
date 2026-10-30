@@ -188,6 +188,9 @@ fn items_leaving_go_while_a_request_is_paused() {
     assert!(live(1));
     // 15 px more: row 1 leaves the view, row 7 not in it yet.
     scroll(&mut ui, *state, 15.0);
+    assert!(live(1), "by the window's bound before the scroll (D894)");
+    state.force_remeasure();
+    ui.wait_for_idle();
     assert!(live(1), "kept until the next idle time (D575)");
     ui.host().prefetch(within(1));
     assert!(!live(1), "let go in the idle time");
