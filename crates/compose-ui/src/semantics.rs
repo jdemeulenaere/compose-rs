@@ -221,9 +221,6 @@ impl UiTree {
             return Some(cached.clone());
         }
         let observed = value.kinds.any(NodeKinds::OBSERVED);
-        // Invalidations of its semantics asked while they're computed don't count, as
-        // Compose's (`isCurrentlyCalculatingSemanticsConfiguration`).
-        let queued = self.focus_requests.node_invalidations.borrow().len();
         let computed = match self.observer.clone().filter(|_| observed) {
             Some(observer) => observer
                 .observe(observation_key(node, Observation::Semantics), || {
@@ -231,24 +228,31 @@ impl UiTree {
                 }),
             None => self.compute_own_semantics(node),
         };
-        {
-            let mut pending = self.focus_requests.node_invalidations.borrow_mut();
-            let mut index = 0;
-            pending.retain(|&(asking, _, what)| {
-                index += 1;
-                index <= queued
-                    || asking != node
-                    || what != crate::node_context::Invalidation::Semantics
-            });
-        }
         let computed = Rc::new(computed);
         self.node_mut(node).semantics = Some(computed.clone());
         Some(computed)
     }
 
-    /// `own_semantics` computed: each semantics modifier's `apply_semantics`, tail to head, as
-    /// Compose's `calculateSemanticsConfiguration`.
+    /// `own_semantics` computed, as Compose's `calculateSemanticsConfiguration`. Invalidations of
+    /// its semantics asked while they're computed don't count, as Compose's
+    /// (`isCurrentlyCalculatingSemanticsConfiguration`), whoever computes them (D1261).
     fn compute_own_semantics(&mut self, node: NodeId) -> OwnSemantics {
+        let queued = self.focus_requests.node_invalidations.borrow().len();
+        let computed = self.apply_own_semantics(node);
+        let mut pending = self.focus_requests.node_invalidations.borrow_mut();
+        let mut index = 0;
+        pending.retain(|&(asking, _, what)| {
+            index += 1;
+            index <= queued
+                || asking != node
+                || what != crate::node_context::Invalidation::Semantics
+        });
+        drop(pending);
+        computed
+    }
+
+    /// Each semantics modifier's `apply_semantics`, tail to head.
+    fn apply_own_semantics(&mut self, node: NodeId) -> OwnSemantics {
         let value = self.node_mut(node);
         let mut config = SemanticsConfiguration::default();
         let mut layers: SmallVec<[usize; 8]> = SmallVec::new();
@@ -341,6 +345,8 @@ impl UiTree {
     /// with what its parts set (`PART_OF_PARENT`, a text field's inner field), found below it
     /// without building the tree. `None` if the unmerged tree leaves it out.
     pub fn unmerged_semantics_config(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
+        // Gone: no answer, not a panic (a bridge's call comes across JNI).
+        self.get(node)?;
         if self.left_out(node) || self.get(node).is_some_and(|value| value.deactivated) {
             return None;
         }

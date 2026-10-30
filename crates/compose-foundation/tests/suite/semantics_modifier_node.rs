@@ -297,8 +297,10 @@ fn invalidating_while_computing_does_not_count() {
     slot.borrow_mut().take();
 }
 
-/// compose-test's rules check the kept configurations at each tree: a missed invalidation (a
-/// node changing what its semantics read without saying so) fails the test, naming the node.
+/// compose-test's rules check the kept configurations at each tree in debug builds (D1261): a
+/// missed invalidation (a node changing what its semantics read without saying so) fails the
+/// test, naming the node.
+#[cfg(debug_assertions)]
 #[test]
 fn a_rule_finds_a_stale_configuration() {
     let tag = Rc::new(RefCell::new("tag1"));

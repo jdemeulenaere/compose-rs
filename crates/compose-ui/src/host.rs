@@ -191,7 +191,7 @@ impl UiHost {
     /// After dispatch: wakes the platform if the tree changed (focus, a modifier node's state).
     fn wake_if_dirty(&self) {
         self.handle_focus_requests();
-        if self.with_tree(|tree| tree.needs_draw) {
+        if self.with_tree(|tree| tree.needs_draw || tree.semantics_changed) {
             self.wake();
         }
     }
@@ -352,7 +352,8 @@ impl UiHost {
         self.frame_requested.get()
             || self.pending_content.borrow().is_some()
             || self.composition.has_invalidations()
-            || self.with_tree(|tree| tree.needs_draw)
+            // A frame tells a change of the semantics, drawn or not (D1263, D1266).
+            || self.with_tree(|tree| tree.needs_draw || tree.semantics_changed)
             || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
             || self.with_tree(|tree| tree.has_node_requests() || !tree.side_effects.is_empty())

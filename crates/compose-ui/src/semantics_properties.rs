@@ -1046,7 +1046,7 @@ impl SemanticsConfiguration {
     /// Whether both set the same keys to the same values, actions compared by their labels and
     /// whether they have a function (not by identity: a configuration computed again builds
     /// its closures again).
-    pub fn same_ignoring_functions(&self, other: &SemanticsConfiguration) -> bool {
+    pub(crate) fn same_ignoring_functions(&self, other: &SemanticsConfiguration) -> bool {
         fn function_free(slot: &ValueSlot) -> String {
             // Actions print their label and whether they're set, not their function.
             format!("{slot:?}")

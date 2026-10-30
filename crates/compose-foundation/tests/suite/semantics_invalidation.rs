@@ -665,12 +665,14 @@ fn a_write_during_a_prefetch_only_semantics_read_asks_for_a_frame() {
 
 /// An action reads the same answer the tree would give: none for a node the tree leaves out
 /// (under a parent not placed, under a clearing one, itself gone), though its own configuration
-/// is kept.
+/// is kept. Gone, it answers rather than panics: a panic across JNI aborts the app.
 #[test]
 fn a_node_out_of_the_tree_offers_no_action() {
     let placed = mutable_state_of(true);
     let cleared = mutable_state_of(false);
-    let (placed_handle, cleared_handle) = (placed.handle(), cleared.handle());
+    let present = mutable_state_of(true);
+    let (placed_handle, cleared_handle, present_handle) =
+        (placed.handle(), cleared.handle(), present.handle());
     let mut host = host(move || {
         let (placed, cleared) = (placed_handle.get(), cleared_handle.get());
         Layout!(
@@ -688,7 +690,9 @@ fn a_node_out_of_the_tree_offers_no_action() {
                 let clearing =
                     if cleared { Modifier.clear_and_set_semantics(|_| {}) } else { Modifier };
                 Box!(modifier = clearing.size(50.dp()), {
-                    Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("inner"));
+                    if present_handle.get() {
+                        Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("inner"));
+                    }
                 });
             }
         );
@@ -706,4 +710,155 @@ fn a_node_out_of_the_tree_offers_no_action() {
     host.settle(10);
     assert!(find_by_tag(&host.semantics_tree(false), "inner").is_none());
     assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_none(), "cleared");
+    cleared.set(false);
+    host.settle(10);
+    assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_some());
+    present.set(false);
+    host.settle(10);
+    assert!(find_by_tag(&host.semantics_tree(false), "inner").is_none());
+    assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_none(), "gone");
+    assert!(!host.perform_semantics_action(inner, &SemanticsActions::ON_CLICK), "gone");
+}
+
+/// A focus target whose change draws nothing but says it in its semantics: the frame telling
+/// that is asked for, as D1263 says a frame tells a semantics change (D1266).
+#[test]
+fn a_focus_change_drawing_nothing_asks_for_a_frame() {
+    let mut host = host(|| {
+        Box!(modifier = Modifier.size(10.dp()).then_custom(FocusWithoutDrawing).test_tag("target"));
+    });
+    let wakes = Rc::new(Cell::new(0));
+    let counter = wakes.clone();
+    host.set_frame_waker(move || counter.set(counter.get() + 1));
+    let tree = host.semantics_tree(true);
+    let target = find_by_tag(&tree, "target").expect("the target");
+    assert_eq!(target.config.get(&SemanticsProperties::FOCUSED), Some(&false));
+    let target = target.id;
+    assert!(!host.needs_frame());
+    host.request_focus(target);
+    assert!(host.needs_frame(), "a frame tells it");
+    assert!(wakes.get() > 0, "the platform is asked for that frame");
+    assert!(host.frame().semantics_changed);
+    let tree = host.semantics_tree(true);
+    let target = find_by_tag(&tree, "target").expect("the target");
+    assert_eq!(target.config.get(&SemanticsProperties::FOCUSED), Some(&true));
+    assert!(!host.needs_frame());
+}
+
+#[derive(Clone, Copy)]
+struct FocusWithoutDrawing;
+
+impl ModifierNodeElement for FocusWithoutDrawing {
+    type Node = FocusWithoutDrawingNode;
+    fn create(&self) -> FocusWithoutDrawingNode {
+        FocusWithoutDrawingNode(false)
+    }
+    fn update(&self, _node: &mut FocusWithoutDrawingNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+struct FocusWithoutDrawingNode(bool);
+
+impl ModifierNode for FocusWithoutDrawingNode {
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(self)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        Some(self)
+    }
+}
+
+impl SemanticsModifierNode for FocusWithoutDrawingNode {
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.set_focused(self.0);
+    }
+}
+
+impl FocusTargetModifierNode for FocusWithoutDrawingNode {
+    fn on_focus_changed(&mut self, focused: bool, _context: &mut EventContext<'_>) {
+        self.0 = focused;
+    }
+}
+
+/// A node whose `apply_semantics` invalidates itself behaves the same under a rule's check as on
+/// a host: an invalidation asked while computing doesn't count, so the frame after a read has no
+/// change to tell (D1261).
+#[test]
+fn the_rules_check_doesnt_count_invalidations_while_computing() {
+    let slot: Rc<Cell<Option<NodeHandle>>> = Rc::default();
+    let inside = slot.clone();
+    let mut ui = compose_test(move || {
+        Box!(modifier = Modifier.size(10.dp()).then_custom(InvalidatesItself(inside.clone())));
+    });
+    ui.on_node_with_tag("itself").assert_exists();
+    assert!(slot.get().is_some());
+    // The check runs at this read: the kept configuration is compared with one computed again.
+    ui.host().semantics_tree(true);
+    assert!(!ui.host().frame().semantics_changed, "the check's computing counted");
+}
+
+#[derive(Clone)]
+struct InvalidatesItself(Rc<Cell<Option<NodeHandle>>>);
+
+impl ModifierNodeElement for InvalidatesItself {
+    type Node = InvalidatesItselfNode;
+    fn create(&self) -> InvalidatesItselfNode {
+        InvalidatesItselfNode(self.0.clone())
+    }
+    fn update(&self, node: &mut InvalidatesItselfNode) {
+        node.0 = self.0.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+struct InvalidatesItselfNode(Rc<Cell<Option<NodeHandle>>>);
+
+impl ModifierNode for InvalidatesItselfNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(Some(context.handle()));
+    }
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(self)
+    }
+}
+
+impl SemanticsModifierNode for InvalidatesItselfNode {
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.set_test_tag("itself");
+        if let Some(handle) = self.0.get() {
+            handle.invalidate_semantics();
+        }
+    }
+}
+
+/// A deactivated node's semantics read (`assert_is_deactivated`'s tree computes them), what they
+/// read changed, then the node reused with its element unchanged: attaching forgets what the read
+/// kept, as no update does.
+#[test]
+fn attaching_forgets_what_a_read_of_a_deactivated_node_kept() {
+    let tag = Rc::new(Cell::new("tag1"));
+    let handle = Rc::new(Cell::new(None));
+    let active = mutable_state_of(true);
+    let active_handle = active.handle();
+    let (read, given) = (tag.clone(), handle.clone());
+    let mut ui = compose_test(move || {
+        let (read, given) = (read.clone(), given.clone());
+        ReusableContentHost(active_handle.get(), move || {
+            Box!(
+                modifier =
+                    Modifier.size(10.dp()).then_custom(ReadsCell(read.clone(), given.clone()))
+            );
+        });
+    });
+    ui.on_node_with_tag("tag1").assert_exists();
+    active.set(false);
+    ui.on_node_with_tag("tag1").assert_is_deactivated();
+    tag.set("tag2");
+    active.set(true);
+    ui.on_node_with_tag("tag2").assert_exists();
+    ui.on_node_with_tag("tag1").assert_does_not_exist();
 }

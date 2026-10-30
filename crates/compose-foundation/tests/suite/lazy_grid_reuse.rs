@@ -667,3 +667,29 @@ fn the_list_and_indexed_forms_take_keys_spans_and_content_types() {
     assert_eq!(top_left(&mut ui, 2004), (0.0, 160.0, 100.0));
     assert_eq!(top_left(&mut ui, 3000), (100.0, 160.0, 100.0));
 }
+
+/// A grid showing one item at a time, jumped to another: as a list's (D1264), the item's slot is
+/// reused for the new one after the measurement found it not composed, and the grid places it.
+#[test]
+fn a_one_item_viewports_item_reused_after_a_jump_is_placed() {
+    let state = LazyGridState::new(0, 0);
+    let grid = *state;
+    let mut ui = compose_test(move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(1),
+            modifier = Modifier.size((50.dp(), 20.dp())),
+            state = grid,
+            |scope: LazyGridScope| {
+                scope.items(100, |index| {
+                    Box!(modifier = Modifier.size((50.dp(), 20.dp())).test_tag(format!("{index}")));
+                });
+            }
+        );
+    });
+    for index in 1..6 {
+        state.scroll_to_item(index, 0);
+        ui.on_node_with_tag(&format!("{index}"))
+            .assert_is_displayed()
+            .assert_top_position_in_root_is_equal_to(0.dp());
+    }
+}

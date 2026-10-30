@@ -467,6 +467,30 @@ fn prefetch_asks_for_no_frame() {
     assert!(!ui.host().needs_frame(), "prefetch left work for a frame");
 }
 
+/// A prefetch composing into slots kept in use but not placed (`keep_items_behind`, and every
+/// optimization on): those aren't in the semantics, so it's still quiet (D1265).
+#[test]
+fn prefetch_into_slots_kept_behind_asks_for_no_frame() {
+    use compose_ui::platform::{Optimization, Optimizations};
+    for optimizations in
+        [Optimizations::NONE.with(Optimization::KEEP_ITEMS_BEHIND, true), Optimizations::all()]
+    {
+        compose_test::use_optimizations(optimizations);
+        let (mut ui, state) = list(0);
+        let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = wakes.clone();
+        ui.host().set_frame_waker(move || counter.set(counter.get() + 1));
+        for step in 0..40 {
+            state.scroll_by(30.0);
+            ui.wait_for_idle();
+            let before = wakes.get();
+            while ui.host().prefetch(later()) {}
+            assert_eq!(wakes.get(), before, "step {step}: prefetch woke the platform");
+            assert!(!ui.host().needs_frame(), "step {step}: prefetch left work for a frame");
+        }
+    }
+}
+
 thread_local! {
     /// How many times each painted row's draw code ran.
     static DRAWN: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());

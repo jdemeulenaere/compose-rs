@@ -919,11 +919,12 @@ impl UiTree {
         } else if kinds.any(NodeKinds::DRAW | NodeKinds::GRAPHICS_LAYER) {
             self.invalidate_draw_of(node);
         }
-        // Only for content in use: a prefetched item, not placed, isn't in the semantics yet.
         let shown = self.get(node).is_some_and(|value| value.attached && !value.deactivated);
         if kinds.any(NodeKinds::SEMANTICS) {
             self.forget_semantics(node);
-            if shown {
+            // Only for what the tree shows: a prefetched item, or a slot kept in use but not
+            // placed, isn't in the semantics (D1265).
+            if shown && self.is_placed_in_root(node) {
                 self.semantics_changed = true;
             }
         }
@@ -1289,7 +1290,8 @@ impl UiTree {
         } else {
             // In use but not placed: its parent's last measurement left it out (a lazy list's
             // slot, the item it wants not composed then). Its parent places the new content
-            // (D1264). A prefetch's content waits for the frame wanting it.
+            // (D1264). Not a paused composition's: applied later, its content waits for the frame
+            // wanting it; a prefetch composing whole (no pausable composition) asks here too.
             if !value.placed
                 && !paused
                 && let Some(parent) = self.parent_of(node)
