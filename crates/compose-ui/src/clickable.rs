@@ -2,7 +2,7 @@
 //! `CombinedClickableNode`: `clickable`, `toggleable`, `tri_state_toggleable`, `selectable` and
 //! `combined_clickable`. It recognizes clicks (and long and double clicks), emits its presses,
 //! hover and focus into its interaction source (its own, made when first needed, if none is
-//! given), and hosts its indication's node.
+//! given), and delegates to its indication's node.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use compose_runtime::{Callback, CoroutineScope, Job};
 use smallvec::SmallVec;
 
-use crate::draw::DrawScope;
+use crate::delegation::Delegates;
 use crate::indication::IndicationNodeFactory;
 use crate::input::{
     EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass, PointerEventType,
@@ -22,9 +22,10 @@ use crate::interaction::{
     Press, PressInteraction,
 };
 use crate::modifier::{
-    DrawModifierNode, FocusTargetModifierNode, KeyInputModifierNode, ModifierNode,
-    ModifierNodeElement, PointerInputModifierNode, SemanticsModifierNode,
+    FocusTargetModifierNode, KeyInputModifierNode, ModifierNode, ModifierNodeElement,
+    PointerInputModifierNode, SemanticsModifierNode,
 };
+use crate::node_chain::EntryId;
 use crate::semantics::{Role, SemanticsConfiguration, ToggleableState};
 use crate::text::SharedString;
 use crate::unit::{IntSize, Offset};
@@ -166,7 +167,7 @@ struct Shared {
     source: Option<MutableInteractionSource>,
     /// Its emissions, in order (D1057).
     emitter: Emitter,
-    /// The node's handle while it's attached, for its coroutine scope and `run_lifecycle`.
+    /// The node's handle while it's attached, for its coroutine scope.
     handle: Option<crate::node_context::NodeHandle>,
     /// The node's coroutine scope, once asked for, while it's attached: its timers' and
     /// emissions' tasks, cancelled when it's detached.
@@ -175,9 +176,6 @@ struct Shared {
     press: Option<Press>,
     /// A press waiting `TAP_INDICATION_DELAY` to be emitted.
     delay_job: Option<Job>,
-    /// A task runs `run_lifecycle` soon. Here for the task to say it's done even if the tree
-    /// was busy and the node out of reach.
-    lifecycle_scheduled: std::cell::Cell<bool>,
     /// The click callback, for a click a timer makes (a double click's wait).
     action: Option<ClickAction>,
     on_long_click: Option<Callback<dyn Fn()>>,
@@ -245,21 +243,13 @@ pub(crate) struct ClickableNode {
     /// Its semantics' click, built once per update (D1258).
     click_action: RefCell<Option<Rc<crate::semantics::ActionFn>>>,
     shared: Rc<RefCell<Shared>>,
+    /// What it delegates to: its indication's node.
+    delegates: Delegates,
     /// The indication's node, made when first needed (with its own source) or as the node is
-    /// attached (with a source given), as Compose's; attached with it, as Compose's delegate.
-    indication: Option<Box<dyn ModifierNode>>,
-    indication_draws_content: bool,
+    /// attached (with a source given), as Compose's `indicationNode`.
+    indication: Option<EntryId>,
     /// `LOCAL_INDICATION`'s factory where the node is, as `localIndicationNodeFactory`.
     local_indication: Option<Rc<dyn IndicationNodeFactory>>,
-    /// It turned to the local indication in an update, which has no context: read at the next
-    /// `run_lifecycle`, or the event that makes it.
-    local_indication_unread: bool,
-    /// Whether `indication` is attached: one made or replaced where the node has no context
-    /// (an event, an update) is attached by `run_lifecycle`, from a task.
-    indication_attached: bool,
-    /// Indication nodes replaced or forgotten while attached, detached and released by
-    /// `run_lifecycle`.
-    retired: Vec<Box<dyn ModifierNode>>,
     down: Option<Down>,
     hover: Option<HoverEnter>,
     /// The keys held, each with its press.
@@ -288,12 +278,9 @@ impl ClickableNode {
             combined,
             click_action: RefCell::default(),
             shared: Rc::new(RefCell::new(shared)),
+            delegates: Delegates::new(),
             indication: None,
-            indication_draws_content: false,
             local_indication: None,
-            local_indication_unread: false,
-            indication_attached: false,
-            retired: Vec::new(),
             down: None,
             hover: None,
             key_presses: SmallVec::new(),
@@ -368,35 +355,48 @@ impl ClickableNode {
             self.recreate_indication();
         }
         if turned_local {
-            self.local_indication_unread = true;
-            self.schedule_lifecycle();
+            self.delegates.ask_for_context();
         }
     }
 
     /// Makes the indication's node (and, without a source given, the node's own source) if
     /// there's an indication and it isn't made yet, as `initializeIndicationAndInteractionSource
     /// IfNeeded`. Returns whether it made it.
-    fn initialize_indication(&mut self) -> bool {
+    fn indication_to_make(&mut self) -> Option<Box<dyn ModifierNode>> {
         if self.indication.is_some() {
-            return false;
+            return None;
         }
-        let Some(factory) = self.spec.indication.clone() else { return false };
+        let factory = self.spec.indication.clone()?;
         let source = {
             let mut shared = self.shared.borrow_mut();
             shared.source.get_or_insert_with(MutableInteractionSource::new).clone()
         };
-        let mut node = factory.create(source.as_source().clone());
-        self.indication_draws_content = node.as_draw().is_some_and(|draw| draw.draws_content());
-        self.indication = Some(node);
-        self.indication_attached = false;
-        self.schedule_lifecycle();
-        true
+        Some(factory.create(source.as_source().clone()))
+    }
+
+    /// Makes the indication's node where there's no context (an update): attached once that
+    /// code returns.
+    fn initialize_indication(&mut self) {
+        if let Some(node) = self.indication_to_make() {
+            self.indication = Some(self.delegates.delegate_boxed(node));
+        }
+    }
+
+    /// Makes the indication's node, attached now if it can be.
+    fn initialize_indication_in(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        if let Some(node) = self.indication_to_make() {
+            self.indication = Some(self.delegates.delegate_boxed_attached(node, context));
+        }
     }
 
     /// Reads `LOCAL_INDICATION` where the node is, if it uses it, observing it, as
-    /// `onObservedReadsChanged`; a new one makes its node again.
-    fn read_local_indication(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        let unread = std::mem::take(&mut self.local_indication_unread);
+    /// `onObservedReadsChanged`; a new one makes its node again if it was made (or is made
+    /// eagerly). `turned_local`: it just turned to it, nothing having been read.
+    fn read_local_indication(
+        &mut self,
+        context: &mut crate::node_context::NodeContext<'_>,
+        turned_local: bool,
+    ) {
         if !self.spec.use_local_indication {
             return;
         }
@@ -410,11 +410,12 @@ impl ClickableNode {
         self.local_indication = factory.clone();
         self.spec.indication = factory;
         if had {
-            self.recreate_indication();
-            context.invalidate_draw();
-        } else if unread && self.spec.interaction_source.is_some() && self.initialize_indication() {
-            // Turned to it, with a source given: it's made at once.
-            context.invalidate_draw();
+            let made = self.forget_indication();
+            if made || self.spec.interaction_source.is_some() {
+                self.initialize_indication_in(context);
+            }
+        } else if turned_local && self.spec.interaction_source.is_some() {
+            self.initialize_indication_in(context);
         }
     }
 
@@ -426,61 +427,11 @@ impl ClickableNode {
         }
     }
 
-    /// The indication's node forgotten, as Compose's `undelegate`: detached soon if it was
-    /// attached (`run_lifecycle`). Whether there was one.
+    /// The indication's node forgotten, as Compose's `undelegate`. Whether there was one.
     fn forget_indication(&mut self) -> bool {
-        let Some(node) = self.indication.take() else { return false };
-        if std::mem::take(&mut self.indication_attached) {
-            self.retired.push(node);
-            self.schedule_lifecycle();
-        }
+        let Some(id) = self.indication.take() else { return false };
+        self.delegates.undelegate_boxed(id);
         true
-    }
-
-    /// Asks a task to run `run_lifecycle` with the node's context, where it has none (an
-    /// event, an element's update): the tree is free then (MN-5's delegates will make it at
-    /// once).
-    fn schedule_lifecycle(&mut self) {
-        let shared = self.shared.borrow();
-        let (Some(handle), Some(scope)) = (shared.handle, shared.scope()) else { return };
-        if shared.lifecycle_scheduled.replace(true) {
-            return;
-        }
-        let weak = Rc::downgrade(&self.shared);
-        scope.launch(async move {
-            if let Some(shared) = weak.upgrade() {
-                shared.borrow().lifecycle_scheduled.set(false);
-            }
-            handle.with_node(|node: &mut ClickableNode, context| node.run_lifecycle(context));
-        });
-    }
-
-    /// Detaches the indication nodes forgotten, and attaches the one made, as Compose's
-    /// `undelegate` and `delegate` while the node is attached.
-    fn run_lifecycle(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        for node in self.retired.drain(..) {
-            crate::indication::detach_and_release(node, context);
-        }
-        if self.local_indication_unread && context.is_attached() {
-            self.read_local_indication(context);
-        }
-        if context.is_attached()
-            && !self.indication_attached
-            && let Some(node) = &mut self.indication
-        {
-            node.on_attach(context);
-            self.indication_attached = true;
-        }
-    }
-
-    /// Makes the indication if needed; if it was just made, the node draws again to show it.
-    fn initialize_indication_in(&mut self, context: &mut EventContext<'_>) {
-        if self.local_indication_unread {
-            self.read_local_indication(context);
-        }
-        if self.initialize_indication() {
-            context.invalidate_draw();
-        }
     }
 
     /// Ends the interactions under way, as Compose's `disposeInteractions`: the presses
@@ -729,57 +680,50 @@ fn event_nanos(event: &PointerEvent) -> u64 {
 impl ModifierNode for ClickableNode {
     /// Attached, with a source given, its indication is made at once, as `onAttach`.
     fn on_attach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.read_local_indication(context);
+        self.read_local_indication(context, false);
         if self.spec.interaction_source.is_some() {
-            self.initialize_indication();
+            self.initialize_indication_in(context);
         }
-        self.run_lifecycle(context);
         self.shared.borrow_mut().handle = Some(context.handle());
+    }
+
+    /// `update` turned it to the local indication, as `updateCommon`'s `onObservedReadsChanged`.
+    fn on_update_with_context(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        self.read_local_indication(context, true);
+    }
+
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
     }
 
     /// Leaving ends its interactions, and forgets its own source and its indication (made
     /// again if it comes back), as `onDetach`; what it queued to emit is dropped but its
     /// fallbacks, as its scope's coroutines are cancelled (D1057).
-    fn on_detach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+    fn on_detach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.shared.borrow_mut().leave();
         self.dispose_interactions();
         self.dispose_focus();
         self.cancel_input();
         self.reset_key_state();
         self.focused = false;
-        self.detach_indication(context);
+        self.forget_indication();
         if self.spec.interaction_source.is_none() {
             self.shared.borrow_mut().source = None;
         }
-        // Its task goes with its coroutine scope.
-        self.shared.borrow().lifecycle_scheduled.set(false);
     }
 
-    /// Reused or deactivated: its interactions are over, and its indication's node is reset if
-    /// it's attached, as `DelegatingNode.reset`; it's all detached next, the indication's node
-    /// going (`onDetach`'s `undelegate`), and the clickable attached again when reused.
-    fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+    /// Reused or deactivated: its interactions are over; its indication's node is reset after it,
+    /// as `DelegatingNode.reset`; it's all detached next, the indication's node going (`onDetach`'s
+    /// `undelegate`), and the clickable attached again when reused.
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.shared.borrow_mut().leave();
         self.dispose_interactions();
         self.dispose_focus();
         self.cancel_input();
         self.reset_key_state();
         self.focused = false;
-        if self.indication_attached
-            && let Some(node) = &mut self.indication
-        {
-            node.on_reset(context);
-        }
         if self.spec.interaction_source.is_none() {
             self.shared.borrow_mut().source = None;
-        }
-    }
-
-    /// Dropped for good: what's still hosted (never attached, or the clickable never detached)
-    /// gives back what it holds.
-    fn on_release(&mut self, context: &mut crate::modifier::ReleaseContext<'_>) {
-        for node in self.retired.iter_mut().chain(self.indication.as_mut()) {
-            node.on_release(context);
         }
     }
 
@@ -795,9 +739,6 @@ impl ModifierNode for ClickableNode {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)
     }
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
     /// Its indication draws what its listener writes (whatever indication an update gives it:
     /// kinds are asked once).
     fn observes_reads(&self) -> bool {
@@ -806,65 +747,16 @@ impl ModifierNode for ClickableNode {
     fn is_composition_local_consumer(&self) -> bool {
         true
     }
-    fn on_composition_locals_changed(
-        &mut self,
-        context: &mut crate::node_context::NodeContext<'_>,
-    ) {
-        // What it reads where it is, as a delegate's would be told. `LOCAL_INDICATION` it reads
-        // again only through its observation, as Compose's `onObservedReadsChanged` (D1184).
-        if let Some(indication) = &mut self.indication {
-            indication.on_composition_locals_changed(context);
-        }
-    }
     fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {
         Some(self)
     }
 }
 
 impl crate::observer_node::ObserverModifierNode for ClickableNode {
-    /// `LOCAL_INDICATION` changed where it is, as `onObservedReadsChanged`.
+    /// `LOCAL_INDICATION` changed where it is, as `onObservedReadsChanged`. Only this and an
+    /// update turning to it read it again, as Compose's (D1184).
     fn on_observed_reads_changed(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.read_local_indication(context);
-        self.run_lifecycle(context);
-    }
-}
-
-impl ClickableNode {
-    /// Detaches the indication's node (and those forgotten) now, with the node's context, and
-    /// releases them: a new one is made when needed, as `onDetach`'s `undelegate`.
-    fn detach_indication(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        if let Some(mut node) = self.indication.take() {
-            if std::mem::take(&mut self.indication_attached) {
-                crate::indication::detach_and_release(node, context);
-            } else {
-                node.on_release(&mut context.release_context());
-            }
-        }
-        for node in self.retired.drain(..) {
-            crate::indication::detach_and_release(node, context);
-        }
-    }
-}
-
-/// Draws its indication, as the node it delegates to.
-impl DrawModifierNode for ClickableNode {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        if let Some(draw) = self.indication.as_mut().and_then(|node| node.as_draw()) {
-            draw.draw(scope);
-        }
-    }
-    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
-        if let Some(draw) = self.indication.as_mut().and_then(|node| node.as_draw()) {
-            draw.draw_after(scope);
-        }
-    }
-    fn draws_content(&self) -> bool {
-        self.indication.is_some() && self.indication_draws_content
-    }
-    fn draw_with_content(&mut self, scope: &mut crate::draw_modifiers::ContentDrawScope<'_, '_>) {
-        if let Some(draw) = self.indication.as_mut().and_then(|node| node.as_draw()) {
-            draw.draw_with_content(scope);
-        }
+        self.read_local_indication(context, false);
     }
 }
 
@@ -1189,7 +1081,7 @@ impl ClickableNode {
 mod tests {
     use super::*;
     use crate::host::UiHost;
-    use crate::modifier::{ClickableOptions, Modifier};
+    use crate::modifier::{ClickableOptions, DrawModifierNode, Modifier};
     use crate::tree::{NodeId, UiTree};
 
     /// The first layout node with a clickable, and its entry.
@@ -1272,39 +1164,32 @@ mod tests {
         });
     }
 
-    /// A hosted node made and not yet attached is reset by nothing, as `DelegatingNode.reset`
-    /// resets what's attached: it's released alone.
-    // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/Modifier.kt, reset
+    /// It's a draw node once its indication is made, as Compose's, whose delegate brings the kind.
     #[test]
-    fn a_hosted_node_not_attached_is_released_without_a_reset() {
+    fn a_clickable_is_a_draw_node_once_its_indication_is_made() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let mut host = lazily_hosting(&log);
         host.frame();
-        let at = Offset::new(5.0, 5.0);
-        host.send_pointer(crate::input::PointerEvent::press(at));
-        assert_eq!(*log.borrow(), ["create"], "made by the event, its attachment from a task");
-        with_clickable(&host, |clickable, context| {
-            clickable.on_reset(context);
-            clickable.on_detach(context);
-        });
-        assert_eq!(*log.borrow(), ["create", "release"]);
+        let draws = |host: &UiHost| {
+            host.with_tree(|tree| {
+                let (node, index) = clickable_entry(tree);
+                tree.node(node).chain[index].kinds.any(crate::node_chain::NodeKinds::DRAW)
+            })
+        };
+        assert!(!draws(&host));
+        host.send_pointer(crate::input::PointerEvent::press(Offset::new(5.0, 5.0)));
+        assert!(draws(&host));
     }
 
-    /// The task attaching a hosted node says it's done though the tree was busy and the node out
-    /// of reach, so the next one is made and attaches it.
+    /// Made by the event that needs it, it's attached when the dispatch ends, as a delegate.
+    // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, initializeIndicationAndInteractionSourceIfNeeded
     #[test]
-    fn a_lifecycle_task_finding_the_tree_busy_lets_the_next_one_run() {
+    fn an_indication_made_by_an_event_is_attached_with_it() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let mut host = lazily_hosting(&log);
         host.frame();
         let at = Offset::new(5.0, 5.0);
         host.send_pointer(crate::input::PointerEvent::press(at));
-        host.with_tree(|_| {
-            compose_runtime::platform::run_ready();
-        });
-        assert_eq!(*log.borrow(), ["create"], "the tree was busy");
-        with_clickable(&host, |clickable, _| clickable.schedule_lifecycle());
-        compose_runtime::platform::run_ready();
         assert_eq!(*log.borrow(), ["create", "attach"]);
     }
 

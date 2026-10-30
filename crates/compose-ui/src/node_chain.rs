@@ -45,6 +45,8 @@ impl NodeKinds {
     pub const ON_PLACED: NodeKinds = NodeKinds(1 << 20);
     pub const BEYOND_BOUNDS_LAYOUT: NodeKinds = NodeKinds(1 << 21);
     // compose-rs's own: what were capability bits or chain scans by downcast.
+    /// A node with delegates, which a hit test asks for clips though it draws nothing itself.
+    pub const DELEGATING: NodeKinds = NodeKinds(1 << 22);
     /// A user-defined element's node: its measuring and drawing are observed for state reads.
     pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
     /// A graphics layer (`graphics_layer`, `clip`, `alpha`, …).
@@ -78,7 +80,9 @@ impl NodeKinds {
             | NodeKinds::KEY_INPUT.0
             | NodeKinds::TRAVERSABLE.0
             | NodeKinds::COMPOSITION_LOCAL_CONSUMER.0
-            | NodeKinds::LOCALS.0,
+            | NodeKinds::LOCALS.0
+            | NodeKinds::REPAINT_BOUNDARY.0
+            | NodeKinds::BEYOND_BOUNDS_LAYOUT.0,
     );
 
     /// Whether it has any of `other`'s kinds.
@@ -281,7 +285,7 @@ impl ChainEntry {
         fixed: Option<NodeKinds>,
         id: EntryId,
     ) -> ChainEntry {
-        let own = match fixed {
+        let mut own = match fixed {
             Some(kinds) => {
                 debug_assert_eq!(
                     kinds,
@@ -298,7 +302,8 @@ impl ChainEntry {
         if own.any(NodeKinds::OBSERVED)
             && let Some(delegates) = node.delegates()
         {
-            kinds |= delegates.refresh_kinds(own);
+            kinds |= delegates.refresh_kinds(own) | NodeKinds::DELEGATING;
+            own |= NodeKinds::DELEGATING;
             state = entry_state::DELEGATING;
         }
         ChainEntry { node, kinds, aggregate: kinds, id, state, own }
@@ -318,6 +323,39 @@ impl ChainEntry {
     ) -> Option<&mut dyn crate::modifier::FocusTargetModifierNode> {
         crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)?
             .as_focus_target()
+    }
+
+    /// Its node's clip for hit testing, or a delegate's.
+    #[inline]
+    pub(crate) fn hit_clip_at(
+        &mut self,
+        size: crate::unit::Size,
+        density: crate::unit::Density,
+    ) -> Option<crate::graphics::Shape> {
+        if self.state & entry_state::DELEGATING != 0 {
+            crate::delegation::hit_clip_of(&mut *self.node, size, density)
+        } else {
+            self.node.hit_clip_at(size, density)
+        }
+    }
+
+    /// Its node or delegate answering `bring_into_view`.
+    pub(crate) fn bring_into_view(
+        &mut self,
+        rect: crate::unit::Rect,
+        viewport: crate::unit::IntSize,
+    ) -> Option<crate::unit::Rect> {
+        crate::delegation::bring_into_view_of(&mut *self.node, rect, viewport)
+    }
+
+    /// Its selectable: its node's, or a delegate's.
+    pub(crate) fn selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {
+        crate::delegation::selectable_of(&mut *self.node)
+    }
+
+    /// Its beyond-bounds layout: its node, or its first delegate that is one.
+    pub(crate) fn beyond_bounds(&mut self) -> Option<&mut (dyn ModifierNode + 'static)> {
+        crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::BEYOND_BOUNDS_LAYOUT)
     }
 
     /// The name of its focus target: `NO_DELEGATE` for its node, else a delegate's.

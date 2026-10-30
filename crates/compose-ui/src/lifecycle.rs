@@ -584,7 +584,8 @@ impl UiTree {
                                         modifier_node,
                                         own,
                                         NodeKinds::COMPOSITION_LOCAL_CONSUMER,
-                                        false,
+                                        // Each, as `autoInvalidateNodeIncludingDelegates`.
+                                        true,
                                         context,
                                         &mut |modifier_node, context| {
                                             modifier_node.on_composition_locals_changed(context);

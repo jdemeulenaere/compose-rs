@@ -113,7 +113,7 @@ impl UiTree {
                 );
                 let is_layout = self.node(id).chain[index].kinds.any(NodeKinds::LAYOUT);
                 if let Some(value) = self.get_mut(id)
-                    && let Some(moved) = value.chain[index].node.bring_into_view(local, viewport)
+                    && let Some(moved) = value.chain[index].bring_into_view(local, viewport)
                 {
                     rect = Rect::new(
                         moved.left + origin.x,
@@ -463,14 +463,17 @@ impl UiTree {
             self.beyond_search.container = None;
             if let Some(value) = self.get_mut(active.0)
                 && active.1 < value.chain.len()
+                && let Some(layout) = value.chain[active.1].beyond_bounds()
             {
-                value.chain[active.1].node.end_beyond_bounds();
+                layout.end_beyond_bounds();
             }
         }
         let layout_direction = self.node(container).layout_direction;
         let more = self.get_mut(container).is_some_and(|value| {
             index < value.chain.len()
-                && value.chain[index].node.lay_out_beyond_bounds(direction, layout_direction)
+                && value.chain[index]
+                    .beyond_bounds()
+                    .is_some_and(|layout| layout.lay_out_beyond_bounds(direction, layout_direction))
         });
         if !more {
             self.beyond_search.exhausted.push((container, index));
@@ -537,7 +540,7 @@ impl UiTree {
     /// Whether Tab may stop at `node` coming from `focused`: it's within the bounds of each of
     /// its ancestors that clip their content, or the ancestors it's outside of (a list it's
     /// scrolled out of) hold the focus too.
-    fn reachable_from(&self, node: NodeId, focused: Option<NodeId>) -> bool {
+    fn reachable_from(&mut self, node: NodeId, focused: Option<NodeId>) -> bool {
         let bounds = self.bounds_in_root(node);
         let mut ancestor = self.parent_of(node);
         while let Some(container) = ancestor {
@@ -545,12 +548,11 @@ impl UiTree {
                 break;
             }
             // Only a container clipping its content (a scroll's viewport, `clip`) hides it.
-            let value = self.node(container);
+            let value = self.node_mut(container);
             let size = value.layers[0].measured.into();
-            let clips = value
-                .chain
-                .iter()
-                .any(|entry| entry.node.hit_clip_at(size, value.density).is_some());
+            let density = value.density;
+            let clips =
+                value.chain.iter_mut().any(|entry| entry.hit_clip_at(size, density).is_some());
             let outer = self.bounds_in_root(container);
             let outside = clips
                 && (bounds.right <= outer.left

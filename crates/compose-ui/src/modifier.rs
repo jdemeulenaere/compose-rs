@@ -848,7 +848,6 @@ impl Element {
             Element::Clickable(_) => ANY
                 .with(NodeKinds::OBSERVED)
                 .with(NodeKinds::COMPOSITION_LOCAL_CONSUMER)
-                .with(NodeKinds::DRAW)
                 .with(NodeKinds::POINTER_INPUT)
                 .with(NodeKinds::SEMANTICS)
                 .with(NodeKinds::FOCUS_TARGET)
@@ -1128,13 +1127,17 @@ pub trait ModifierNode: Any {
     /// that kind, in the order they were delegated to, and each delegate has its own lifecycle
     /// (`on_attach`, `on_detach`, `on_reset`, `on_release`) and context.
     ///
-    /// compose-rs's own extras that aren't kinds (`hit_clip`, `bring_into_view`,
-    /// `is_repaint_boundary`, `is_beyond_bounds_layout`, `as_selectable`) are the node's: it
-    /// forwards them to a delegate if it wants to. `is_pointer_observer` is each pointer input
+    /// compose-rs's own extras go to its delegates too: a delegate may be a repaint boundary or
+    /// a beyond-bounds layout (kinds), and `hit_clip`, `bring_into_view` and `as_selectable` are
+    /// asked of the node, then of its delegates. `is_pointer_observer` is each pointer input
     /// node's, a delegate's too.
     fn delegates(&mut self) -> Option<&mut crate::delegation::Delegates> {
         None
     }
+    /// What it asked for with `Delegates::ask_for_context` in an element's `update`: runs with
+    /// its context when that code has returned, if it's attached. Told before what it delegated
+    /// or undelegated there is attached or detached.
+    fn on_update_with_context(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {}
     /// A text a `SelectionContainer` selects in.
     fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {
         None

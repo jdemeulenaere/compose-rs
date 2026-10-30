@@ -92,12 +92,12 @@ impl UiTree {
         };
         let mut origin = Offset::ZERO;
         let mut layer = 0usize;
-        if value.kinds.any(NodeKinds::POINTER_INPUT | NodeKinds::DRAW) {
+        if value.kinds.any(NodeKinds::POINTER_INPUT | NodeKinds::DRAW | NodeKinds::DELEGATING) {
             for index in 0..value.chain.len() {
                 let bits = value.chain[index].kinds;
                 let size = value.layers[layer].measured.into();
-                if bits.any(NodeKinds::DRAW)
-                    && let Some(clip) = value.chain[index].node.hit_clip_at(size, density)
+                if bits.any(NodeKinds::DRAW | NodeKinds::DELEGATING)
+                    && let Some(clip) = value.chain[index].hit_clip_at(size, density)
                     && !clip
                         .outline_in(size, &density, value.layout_direction)
                         .contains(local - origin)

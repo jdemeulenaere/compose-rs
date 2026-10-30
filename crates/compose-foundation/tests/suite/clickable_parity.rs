@@ -1023,6 +1023,52 @@ fn a_new_computed_local_indication_doesn_t_reach_a_kept_clickable() {
     assert_eq!(seen_kinds(&first_seen), ["Press", "Release", "Press"]);
 }
 
+/// Its node is a delegate of the clickable: its own observation, its own handle, told when what
+/// it reads changes.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, initializeIndicationAndInteractionSourceIfNeeded
+#[test]
+fn an_indication_s_node_is_a_delegate_with_its_own_observation() {
+    struct Observes(Rc<Cell<u32>>, MutableState<i32>);
+    impl ModifierNode for Observes {
+        fn as_observer(&mut self) -> Option<&mut dyn compose_ui::ObserverModifierNode> {
+            Some(self)
+        }
+        fn on_attach(&mut self, context: &mut compose_ui::NodeContext<'_>) {
+            let read = self.1;
+            context.observe_reads(move || read.get());
+        }
+    }
+    impl compose_ui::ObserverModifierNode for Observes {
+        fn on_observed_reads_changed(&mut self, _: &mut compose_ui::NodeContext<'_>) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    struct Factory(Rc<Cell<u32>>, MutableState<i32>);
+    impl IndicationNodeFactory for Factory {
+        fn create(&self, _: InteractionSource) -> Box<dyn ModifierNode> {
+            Box::new(Observes(self.0.clone(), self.1))
+        }
+        fn same(&self, _: &dyn IndicationNodeFactory) -> bool {
+            true
+        }
+    }
+    let told = Rc::new(Cell::new(0));
+    let state = mutable_state_of(0);
+    let source = MutableInteractionSource::new();
+    let (t, s) = (told.clone(), state.handle());
+    let mut ui = compose_test(move || {
+        let options = ClickableOptions {
+            indication: Indication::new(Factory(t.clone(), s)),
+            interaction_source: Some(source.clone()),
+            ..ClickableOptions::DEFAULT
+        };
+        Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+    });
+    state.set(1);
+    ui.wait_for_idle();
+    assert_eq!(told.get(), 1);
+}
+
 /// A clickable modifier made outside the provider (outside composition, or before the
 /// provider in it) and used inside it shows the provider's indication: the local is read where
 /// the clickable's node is, as Compose's node reads `LocalIndication` (`useLocalIndication`,
