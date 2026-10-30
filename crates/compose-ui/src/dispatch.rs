@@ -266,8 +266,10 @@ impl UiTree {
                     .and_then(|node| node.as_pointer_input())
             {
                 handler.on_cancel_pointer_input();
+                self.note_delegates_changed(entry.node, entry.index as usize);
             }
         }
+        self.sync_noted_delegates();
     }
 
     /// For each entry of `path`, whether an entry before it (around it) waits for a gesture
@@ -304,33 +306,67 @@ impl UiTree {
             return;
         }
         let origin = self.layer_origin(entry.node, entry.layer as usize);
-        let density = self.density;
-        let view_configuration = self.view_configuration();
-        let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(entry.node) else {
-            return;
-        };
-        let bounds = value.layers[entry.layer as usize].measured;
+        let bounds = self.node(entry.node).layers[entry.layer as usize].measured;
         event.position = position - origin;
-        let mut context = EventContext {
-            node: entry.node,
+        self.with_event_context(
+            entry.node,
+            entry.index as usize,
+            entry.delegate,
             actions,
             requests,
-            text_measurer,
-            clipboard,
-            pointer_position: Some(position),
-            density,
-            view_configuration,
-            layout_direction: value.layout_direction,
+            Some(position),
             waiting_parent,
-        };
-        if let Some(handler) = value.chain[entry.index as usize]
-            .resolve(entry.delegate)
-            .and_then(|node| node.as_pointer_input())
-        {
-            handler.on_pointer_event(event, pass, bounds, &mut context);
-        }
+            |modifier_node, context| {
+                if let Some(handler) = modifier_node.as_pointer_input() {
+                    handler.on_pointer_event(event, pass, bounds, context);
+                }
+            },
+        );
         event.position = position;
-        self.note_delegates_changed(entry.node, entry.index as usize);
+    }
+
+    /// Runs `f` with entry `index` of `node` (or its delegate `delegate`) and an `EventContext`:
+    /// a handler's, with the node's own context in it, so it's out of its chain meanwhile, and
+    /// what it delegates or undelegates is seen when it returns. `None` if it's not there.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_event_context<R>(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        delegate: EntryId,
+        actions: &mut Vec<Action>,
+        requests: &mut Requests,
+        pointer_position: Option<Offset>,
+        waiting_parent: bool,
+        f: impl FnOnce(&mut dyn crate::modifier::ModifierNode, &mut EventContext<'_>) -> R,
+    ) -> Option<R> {
+        if self.get(node).is_none_or(|value| index >= value.chain.len()) {
+            return None;
+        }
+        let view_configuration = self.view_configuration();
+        self.with_entry(node, index, |root, context| {
+            let run = |modifier_node: &mut dyn crate::modifier::ModifierNode,
+                       context: &mut crate::node_context::NodeContext<'_>| {
+                let mut event_context = EventContext {
+                    context: context.reborrow(),
+                    actions,
+                    requests,
+                    pointer_position,
+                    view_configuration,
+                    waiting_parent,
+                };
+                let result = f(modifier_node, &mut event_context);
+                let state = event_context.context.out_state;
+                context.out_state = state;
+                result
+            };
+            if delegate == EntryId::NO_DELEGATE {
+                Some(run(root, context))
+            } else {
+                let entry = crate::delegation::find_delegate(root, delegate)?;
+                Some(context.with_delegate(entry, run))
+            }
+        })
     }
 
     /// Moves the mouse's hover to the entries of `now`: `Exit` to those it left, `Enter` to
@@ -439,11 +475,13 @@ impl UiTree {
                         .and_then(|node| node.as_pointer_input())
                 {
                     handler.on_cancel_pointer_input();
+                    self.note_delegates_changed(entry.node, entry.index as usize);
                     // A gesture's drawing (a press, a drag) ends without a context to say so.
                     self.invalidate_draw_of(entry.node);
                 }
             }
         }
+        self.sync_noted_delegates();
     }
 
     pub(crate) fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {
@@ -525,30 +563,22 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index, delegate) in self.key_path() {
-            let density = self.density;
-            let view_configuration = self.view_configuration();
-            let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
-                continue;
-            };
-            let mut context = EventContext {
-                node,
-                actions: &mut actions,
-                requests: &mut requests,
-                text_measurer,
-                clipboard,
-                pointer_position: None,
-                density,
-                view_configuration,
-                layout_direction: value.layout_direction,
-                waiting_parent: false,
-            };
-            if let Some(handler) =
-                value.chain[index].resolve(delegate).and_then(|node| node.as_key_input())
-                && handler.on_key_event(&event, &mut context)
-            {
-                consumed = true;
-            }
-            self.note_delegates_changed(node, index);
+            consumed = self
+                .with_event_context(
+                    node,
+                    index,
+                    delegate,
+                    &mut actions,
+                    &mut requests,
+                    None,
+                    false,
+                    |modifier_node, context| {
+                        modifier_node
+                            .as_key_input()
+                            .is_some_and(|handler| handler.on_key_event(&event, context))
+                    },
+                )
+                .unwrap_or(false);
             if consumed {
                 break;
             }
@@ -676,30 +706,20 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index, delegate) in self.key_path() {
-            let density = self.density;
-            let view_configuration = self.view_configuration();
-            let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
-                continue;
-            };
-            let mut context = EventContext {
-                node,
-                actions: &mut actions,
-                requests: &mut requests,
-                text_measurer,
-                clipboard,
-                pointer_position: None,
-                density,
-                view_configuration,
-                layout_direction: value.layout_direction,
-                waiting_parent: false,
-            };
-            if let Some(handler) =
-                value.chain[index].resolve(delegate).and_then(|node| node.as_key_input())
-                && send(handler, &mut context)
-            {
-                consumed = true;
-            }
-            self.note_delegates_changed(node, index);
+            consumed = self
+                .with_event_context(
+                    node,
+                    index,
+                    delegate,
+                    &mut actions,
+                    &mut requests,
+                    None,
+                    false,
+                    |modifier_node, context| {
+                        modifier_node.as_key_input().is_some_and(|handler| send(handler, context))
+                    },
+                )
+                .unwrap_or(false);
             if consumed {
                 break;
             }

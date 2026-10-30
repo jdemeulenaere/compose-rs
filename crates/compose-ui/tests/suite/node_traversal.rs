@@ -1624,3 +1624,135 @@ fn a_traversal_passes_over_content_kept_for_reuse() {
     host.frame();
     assert_eq!(descendants(), NONE);
 }
+
+// ---- A review's scenarios ---------------------------------------------------------------------
+
+/// A layout node, to measure what a traversal asked from under it.
+struct LayoutTracked(&'static str);
+struct LayoutTrackedNode(&'static str);
+
+impl ModifierNodeElement for LayoutTracked {
+    type Node = LayoutTrackedNode;
+    fn create(&self) -> LayoutTrackedNode {
+        LayoutTrackedNode(self.0)
+    }
+    fn update(&self, _: &mut LayoutTrackedNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for LayoutTrackedNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        remember_handle(self.0, context);
+    }
+}
+
+impl LayoutModifierNode for LayoutTrackedNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        log(format!("measure {}", self.0));
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/LayoutModifierNode.kt, remeasureSync
+#[test]
+fn remeasure_sync_of_a_node_a_traversal_found_measures_once_every_node_is_back() {
+    // The found node is before the caller in its chain, so measuring them is measuring the
+    // caller, a layout node, whose code is still running.
+    let _host = show(|| {
+        Leaf(Modifier.then_custom(ClassOne("above")).then_custom(LayoutTracked("from")));
+    });
+    take_log();
+    at::<LayoutTrackedNode, _>("from", |context| {
+        context.traverse_ancestors_with_key(&SHARED, |_, context| {
+            context.remeasure_sync();
+            true
+        });
+        log("the traversal ended");
+    });
+    assert_eq!(take_log(), ["the traversal ended", "measure from"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/TraversableNode.kt, findNearestAncestor
+// Keys compare by identity: two of one name are two keys.
+#[test]
+fn two_keys_of_one_name_are_two_keys() {
+    static FIRST: TraverseKey = TraverseKey::new("one name");
+    static SECOND: TraverseKey = TraverseKey::new("one name");
+    assert_ne!(&FIRST, &SECOND);
+    assert_eq!(&FIRST, &FIRST);
+    assert_eq!(FIRST.name(), SECOND.name());
+    let _host = show(|| {
+        Stack!(modifier = Modifier.then_custom(Keyed("above", &FIRST)), {
+            Leaf(Modifier.then_custom(Keyed("from", &SECOND)));
+        });
+    });
+    let found = at::<KeyedNode, _>("from", |context| {
+        context.find_nearest_ancestor_with_key(&SECOND).map(|found| found.traverse_key().name())
+    });
+    assert_eq!(found, None);
+    let found = at::<KeyedNode, _>("from", |context| {
+        context.find_nearest_ancestor_with_key(&FIRST).map(|found| found.traverse_key().name())
+    });
+    assert_eq!(found, Some("one name"));
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/window/AndroidPopup.android.kt, Popup
+// A popup is a separate root: traversals stop at it, both ways.
+#[test]
+fn traversals_stop_at_a_popup() {
+    let _host = show(|| {
+        Stack!(modifier = nodes(&["above"]), {
+            Leaf(nodes(&["sibling"]));
+            Stack!(
+                modifier = Modifier.overlay(Rc::new(WindowPosition), false).then(nodes(&["popup"])),
+                {
+                    Leaf(nodes(&["in_popup"]));
+                }
+            );
+        });
+    });
+    assert_eq!(visit_ancestors("in_popup", NodeKinds::ANY, false), ["popup"]);
+    assert_eq!(visit_ancestors("popup", NodeKinds::ANY, false), NONE);
+    assert_eq!(visit_subtree("above", NodeKinds::ANY, false, |_| true), ["sibling"]);
+    assert_eq!(visit_children("above", NodeKinds::ANY, false), ["sibling"]);
+    assert_eq!(visit_children("above", NodeKinds::ANY, true), ["sibling"]);
+    assert_eq!(visit_subtree("popup", NodeKinds::ANY, false, |_| true), ["in_popup"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatableNode.kt, visitAncestors
+// Compose's throws for a detached caller; compose-rs's returns quietly (D1178).
+#[test]
+fn a_detached_node_s_traversal_finds_what_it_can_and_doesn_t_panic() {
+    let active = mutable_state_of(true);
+    let a = active.handle();
+    let mut host = show(move || {
+        Stack!(modifier = nodes(&["above"]), {
+            ReusableContentHost(a.get(), move || {
+                ReusableContent(0, move || Leaf(nodes(&["kept"])));
+            });
+        });
+    });
+    active.set(false);
+    host.frame();
+    let mut children = 0;
+    from("kept", |context| {
+        assert!(!context.is_attached());
+        context.visit_children(NodeKinds::ANY, false, &mut |_, _| {
+            children += 1;
+            ControlFlow::Continue(())
+        });
+    });
+    assert_eq!(children, 0);
+}

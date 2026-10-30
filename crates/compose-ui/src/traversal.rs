@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::ops::ControlFlow;
+use std::sync::atomic::AtomicBool;
 
 use smallvec::SmallVec;
 
@@ -17,13 +18,30 @@ use crate::tree::{NodeId, UiTree};
 
 /// A key shared by the nodes a traversal looks for, as `TraversableNode.traverseKey`. Compared
 /// by address, so declare one as a `static` (a `const` would be a new one at each use).
+///
+/// ```compile_fail
+/// use compose_ui::{ModifierNode, TraversableNode, TraverseKey};
+/// const KEY: TraverseKey = TraverseKey::new("a key");
+/// struct Node;
+/// impl ModifierNode for Node {}
+/// impl TraversableNode for Node {
+///     fn traverse_key(&self) -> &'static TraverseKey {
+///         &KEY // a `const`'s copy isn't `'static`: two uses would be two keys
+///     }
+/// }
+/// ```
 pub struct TraverseKey {
     name: &'static str,
+    /// Keeps each key's address its own, as `SemanticsPropertyKey`'s: a type with interior
+    /// mutability isn't `Freeze`, so a static holding it goes to writable data, where statics of
+    /// equal contents aren't folded into one address, and `&KEY` is never promoted to a
+    /// constant's copy.
+    _identity: AtomicBool,
 }
 
 impl TraverseKey {
     pub const fn new(name: &'static str) -> TraverseKey {
-        TraverseKey { name }
+        TraverseKey { name, _identity: AtomicBool::new(false) }
     }
 
     /// Its name, for debugging.
@@ -85,15 +103,27 @@ type Visitor<'f> = dyn FnMut(&mut dyn ModifierNode, &mut NodeContext<'_>) -> Con
 type Branches = SmallVec<[(NodeId, usize); 8]>;
 
 /// `node`'s children as branches from their chains' heads, the first visited on top: in draw
-/// order (`z_order`), else in child order.
+/// order (`z_order`), else in child order. Not its overlays: a popup is a root of its own, as
+/// Compose's popup is a separate composition's.
 fn push_children(tree: &UiTree, node: NodeId, z_order: bool, branches: &mut Branches) {
     let at = branches.len();
+    let children = &tree.node(node).children;
+    let in_tree = |child: NodeId| !tree.node(child).overlay;
     match if z_order { tree.placement_order(node) } else { None } {
-        Some(order) => {
-            let children = &tree.node(node).children;
-            branches.extend(order.iter().map(|&index| (children[index as usize].node, 0)));
-        }
-        None => branches.extend(tree.node(node).children.iter().map(|child| (child.node, 0))),
+        Some(order) => branches.extend(
+            order
+                .iter()
+                .map(|&index| children[index as usize].node)
+                .filter(|&child| in_tree(child))
+                .map(|child| (child, 0)),
+        ),
+        None => branches.extend(
+            children
+                .iter()
+                .map(|child| child.node)
+                .filter(|&child| in_tree(child))
+                .map(|child| (child, 0)),
+        ),
     }
     branches[at..].reverse();
 }
@@ -140,10 +170,15 @@ impl NodeContext<'_> {
         while let Some(node) = layout {
             let Some(value) = self.tree.get(node) else { return };
             let end = before.take().unwrap_or(value.chain.len());
-            layout = value.parent.or_else(|| {
-                let mut removed = self.tree.removed_parents.iter();
-                removed.rfind(|(child, _)| *child == node).map(|(_, parent)| *parent)
-            });
+            // A popup is a root of its own, as Compose's.
+            layout = if value.overlay {
+                None
+            } else {
+                value.parent.or_else(|| {
+                    let mut removed = self.tree.removed_parents.iter();
+                    removed.rfind(|(child, _)| *child == node).map(|(_, parent)| *parent)
+                })
+            };
             if !value.kinds.any(kinds) {
                 continue;
             }
@@ -328,6 +363,13 @@ impl NodeContext<'_> {
             ControlFlow::Break(())
         });
         let (node, index, delegate) = found?;
+        // The caller may delegate or undelegate on what it's given: looked at when the outermost
+        // node's code returns.
+        let entry = self.tree.get(node)?.chain.get(index)?;
+        if entry.state & entry_state::DELEGATING != 0 {
+            let id = entry.id;
+            self.tree.delegates_noted.push((node, id));
+        }
         self.tree.get_mut(node)?.chain.get_mut(index)?.resolve(delegate)
     }
 

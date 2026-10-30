@@ -30,6 +30,8 @@ pub(crate) struct FocusRequests {
     /// Layout nodes a `Remeasurement` asked to measure while their tree was busy: measured in
     /// the next layout.
     pub(crate) measure_requests: RefCell<Vec<NodeId>>,
+    /// The reads modifier nodes observe, here so handles reach them with the tree busy.
+    pub(crate) observations: RefCell<crate::observer_node::NodeObservations>,
     /// The entries handles were made for that are attached, by `EntryId`: what
     /// `NodeHandle::is_attached` answers without the tree.
     /// FNV-hashed: asked for each request a handle makes.

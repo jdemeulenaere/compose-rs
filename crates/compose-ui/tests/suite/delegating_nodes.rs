@@ -4,7 +4,7 @@
 use crate::support;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use compose_runtime::*;
@@ -35,11 +35,23 @@ struct Mod {
     layout: bool,
     semantics: bool,
     delegates: Delegates,
+    /// What `wrapping` delegated to.
+    delegated_to: Option<Delegate<Mod>>,
+    /// As a layout node: how far it moves its content.
+    inset: i32,
 }
 
 impl Mod {
     fn plain(label: &'static str) -> Mod {
-        Mod { label, draw: false, layout: false, semantics: false, delegates: Delegates::new() }
+        Mod {
+            label,
+            draw: false,
+            layout: false,
+            semantics: false,
+            delegates: Delegates::new(),
+            delegated_to: None,
+            inset: 0,
+        }
     }
 
     fn draw(label: &'static str) -> Mod {
@@ -57,7 +69,7 @@ impl Mod {
     /// As `DelegatedWrapper`: delegating to `wrapped`.
     fn wrapping(label: &'static str, wrapped: Mod) -> Mod {
         let mut node = Mod::plain(label);
-        node.delegates.delegate(wrapped);
+        node.delegated_to = Some(node.delegates.delegate(wrapped));
         node
     }
 
@@ -113,7 +125,7 @@ impl LayoutModifierNode for Mod {
     ) -> MeasureResult {
         log(format!("measure {}", self.label));
         let placeable = scope.measure(content, constraints);
-        scope.place(&placeable, 0, 0);
+        scope.place(&placeable, self.inset, self.inset);
         scope.layout(placeable.width, placeable.height)
     }
 }
@@ -192,21 +204,10 @@ fn dispatch_order(node: &mut Mod, kind: NodeKinds) -> Vec<&'static str> {
     order
 }
 
-/// As the test's `asKind(Nodes.Draw)`: the node if it draws, else the first of its delegates that
-/// does, breadth first, the newest first (Compose's list of delegates has the newest at its head).
+/// The library's `asKind(Nodes.Draw)`.
 fn as_draw_kind(node: &mut Mod) -> Option<&'static str> {
-    let mut queue: VecDeque<&mut Mod> = VecDeque::new();
-    queue.push_back(node);
-    while let Some(next) = queue.pop_front() {
-        if next.draw {
-            return Some(next.label);
-        }
-        let mut delegates: Vec<&mut Mod> =
-            next.delegates.nodes().filter_map(|node| node.downcast_mut::<Mod>()).collect();
-        delegates.reverse();
-        queue.extend(delegates);
-    }
-    None
+    let found = first_of_kind_of(node, NodeKinds::DRAW)?;
+    Some(found.downcast_ref::<Mod>().expect("a test node").label)
 }
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/DelegatingNodeTest.kt, testKindSetIncludesDelegates
@@ -757,6 +758,15 @@ fn delegates_attach_and_detach_with_their_owner() {
     active.set(true);
     host.frame();
     assert!(a.is_attached() && b.is_attached() && c.is_attached());
+
+    // Undelegated, innermost first, they're no longer attached, and the owner stays.
+    let delegate_c = on("b", |b| b.delegated_to.expect("the wrapped node"));
+    let delegate_b = on("a", |a| a.delegated_to.expect("the wrapped node"));
+    on("b", |b| b.delegates.undelegate(delegate_c));
+    on("a", |a| a.delegates.undelegate(delegate_b));
+    assert!(a.is_attached());
+    assert!(!b.is_attached());
+    assert!(!c.is_attached());
 }
 
 /// Delegates `b` in its `on_attach`, undelegates it in its `on_detach` if `undelegates`.
@@ -1103,11 +1113,11 @@ fn a_gesture_in_progress_goes_on_for_the_delegates_that_remain() {
 }
 
 #[test]
-fn the_focus_goes_to_the_first_focus_target_delegate_and_keys_to_each_key_delegate() {
+fn the_focus_goes_to_the_newest_focus_target_delegate_and_keys_to_each_key_delegate() {
     let mut host = two_interactive();
     let leaf = host.with_tree(|tree| tree.children_of(tree.root_id()).next().expect("the leaf"));
     host.with_tree(|tree| tree.request_focus(leaf));
-    assert_eq!(take_log(), ["focus first true"]);
+    assert_eq!(take_log(), ["focus second true"]);
     host.send_key(KeyEvent::down(Key::Enter));
     assert_eq!(take_log(), ["key first", "key second"]);
 }
@@ -1525,4 +1535,1123 @@ fn a_layout_modifier_s_content_stays_the_same_measurable_across_measurements() {
     host.frame();
     let second = captured.borrow_mut().take().expect("measured again");
     assert_eq!(first, second);
+}
+
+// ---- A review's scenarios ---------------------------------------------------------------------
+
+/// Delegates to `Mod`s, and undelegates them in its `on_detach`, as Compose's
+/// `AbstractClickableNode.onDetach`.
+struct UndelegatesInDetach {
+    delegates: Delegates,
+    delegate: Option<Delegate<Mod>>,
+}
+
+struct UndelegatesInDetachElement;
+
+impl ModifierNodeElement for UndelegatesInDetachElement {
+    type Node = UndelegatesInDetach;
+    fn create(&self) -> UndelegatesInDetach {
+        let mut delegates = Delegates::new();
+        let delegate = Some(delegates.delegate(Mod::plain("delegate")));
+        UndelegatesInDetach { delegates, delegate }
+    }
+    fn update(&self, _: &mut UndelegatesInDetach) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for UndelegatesInDetach {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn on_detach(&mut self, _: &mut NodeContext<'_>) {
+        if let Some(delegate) = self.delegate.take() {
+            self.delegates.undelegate(delegate);
+        }
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, AbstractClickableNode.onDetach
+#[test]
+fn undelegating_in_on_detach_of_a_node_leaving_its_chain_detaches_the_delegate() {
+    fresh();
+    let with_node = mutable_state_of(true);
+    let w = with_node.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let modifier =
+            if w.get() { Modifier.then_custom(UndelegatesInDetachElement) } else { Modifier };
+        Leaf(modifier);
+    });
+    host.frame();
+    let delegate = handle("delegate");
+    let scope = delegate.with_node(|_: &mut Mod, context| context.coroutine_scope()).unwrap();
+    let job = scope.launch(std::future::pending::<()>());
+    take_log();
+    with_node.set(false);
+    host.frame();
+    assert_eq!(take_log(), ["detach delegate", "release delegate"]);
+    assert!(!delegate.is_attached());
+    assert!(!job.is_active(), "its scope is cancelled");
+}
+
+/// Undelegates by its element's `delegating`, as `Conditional`, with a `Mod` to tell.
+struct UndelegatedInUpdate {
+    keep: bool,
+}
+
+struct UndelegatedInUpdateNode {
+    delegates: Delegates,
+    delegate: Option<Delegate<Mod>>,
+}
+
+impl ModifierNodeElement for UndelegatedInUpdate {
+    type Node = UndelegatedInUpdateNode;
+    fn create(&self) -> UndelegatedInUpdateNode {
+        let mut delegates = Delegates::new();
+        let delegate = Some(delegates.delegate(Mod::plain("delegate")));
+        UndelegatedInUpdateNode { delegates, delegate }
+    }
+    fn update(&self, node: &mut UndelegatedInUpdateNode) {
+        if !self.keep
+            && let Some(delegate) = node.delegate.take()
+        {
+            node.delegates.undelegate(delegate);
+        }
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.keep == other.keep
+    }
+}
+
+impl ModifierNode for UndelegatedInUpdateNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+}
+
+/// An element's update, then the node leaving its chain, in one pass (two chain changes applied
+/// by the tree directly: a composition makes one per pass, but a paused one's resumes add up).
+/// Compose detaches what's undelegated in `update` at once.
+#[test]
+fn a_delegate_undelegated_in_an_update_detaches_when_its_owner_leaves_in_the_same_pass() {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || Leaf(Modifier.then_custom(UndelegatedInUpdate { keep: true })));
+    host.frame();
+    let delegate = handle("delegate");
+    take_log();
+    let leaf = host.with_tree(|tree| tree.children_of(tree.root_id()).next().expect("the leaf"));
+    host.with_tree(|tree| {
+        // One pass's two chain changes: an update undelegating, then the node removed.
+        tree.set_modifier(leaf, Modifier.then_custom(UndelegatedInUpdate { keep: false }));
+        tree.set_modifier(leaf, Modifier);
+        compose_runtime::platform::Applier::on_end_changes(tree);
+    });
+    assert_eq!(take_log(), ["detach delegate", "release delegate"]);
+    assert!(!delegate.is_attached());
+}
+
+/// Delegates to a layout node while its element says so; takes pointer input through a sibling.
+struct LayoutDelegateFlag(bool);
+
+struct LayoutDelegateFlagNode {
+    delegates: Delegates,
+    delegate: Option<Delegate<Mod>>,
+}
+
+impl LayoutDelegateFlagNode {
+    fn set(&mut self, on: bool) {
+        match (on, self.delegate) {
+            (true, None) => {
+                let padding = Mod { inset: 10, ..Mod::layout("padding") };
+                self.delegate = Some(self.delegates.delegate(padding));
+            }
+            (false, Some(delegate)) => {
+                self.delegates.undelegate(delegate);
+                self.delegate = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl ModifierNodeElement for LayoutDelegateFlag {
+    type Node = LayoutDelegateFlagNode;
+    fn create(&self) -> LayoutDelegateFlagNode {
+        let mut node = LayoutDelegateFlagNode { delegates: Delegates::new(), delegate: None };
+        node.set(self.0);
+        node
+    }
+    fn update(&self, node: &mut LayoutDelegateFlagNode) {
+        node.set(self.0);
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl ModifierNode for LayoutDelegateFlagNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+}
+
+/// Logs each pointer event it hears, kind and pass (the main one).
+struct PointerLog;
+struct PointerLogNode;
+
+impl ModifierNodeElement for PointerLog {
+    type Node = PointerLogNode;
+    fn create(&self) -> PointerLogNode {
+        PointerLogNode
+    }
+    fn update(&self, _: &mut PointerLogNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for PointerLogNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for PointerLogNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        _: IntSize,
+        _: &mut EventContext<'_>,
+    ) {
+        if pass == PointerEventPass::Main {
+            log(format!("{:?}", event.kind));
+            log(format!("position {} {}", event.position.x, event.position.y));
+        }
+    }
+}
+
+fn layout_delegate_host(on: &OwnedState<bool>) -> UiHost {
+    fresh();
+    let o = on.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        // The pointer node in the last layer, which a dropped layer takes away.
+        Leaf(
+            Modifier.size(50.dp()).then_custom(LayoutDelegateFlag(o.get())).then_custom(PointerLog),
+        );
+    });
+    host.frame();
+    host
+}
+
+/// The pointer events the log has: what the node heard, not the lifecycle around it.
+fn pointer_log() -> Vec<String> {
+    take_log()
+        .into_iter()
+        .filter(|line| {
+            ["Press", "Release", "Exit"].contains(&&**line) || line.starts_with("position")
+        })
+        .skip_while(|line| line.starts_with("position"))
+        .collect()
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, undelegate (syncCoordinators)
+#[test]
+fn a_layout_delegate_dropped_in_an_update_during_a_gesture_keeps_the_gesture() {
+    let on = mutable_state_of(true);
+    let mut host = layout_delegate_host(&on);
+    host.send_pointer(PointerEvent::press(Offset::new(20.0, 20.0)));
+    assert_eq!(pointer_log(), ["Press", "position 10 10"]);
+    on.set(false);
+    host.frame();
+    host.send_pointer(PointerEvent::release(Offset::new(20.0, 20.0)));
+    // Its layer now has no inset before it.
+    assert_eq!(pointer_log(), ["Release", "position 20 20"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, delegate (syncCoordinators)
+#[test]
+fn a_layout_delegate_gained_in_an_update_during_a_gesture_keeps_the_gesture() {
+    let on = mutable_state_of(false);
+    let mut host = layout_delegate_host(&on);
+    host.send_pointer(PointerEvent::press(Offset::new(20.0, 20.0)));
+    assert_eq!(pointer_log(), ["Press", "position 20 20"]);
+    on.set(true);
+    host.frame();
+    host.send_pointer(PointerEvent::release(Offset::new(20.0, 20.0)));
+    // Its layer has the inset before it now.
+    assert_eq!(pointer_log(), ["Release", "position 10 10"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, undelegate (syncCoordinators)
+#[test]
+fn a_layout_delegate_dropped_in_an_update_keeps_a_resting_hover() {
+    let on = mutable_state_of(true);
+    let mut host = layout_delegate_host(&on);
+    let mut moved = PointerEvent::moved(Offset::new(20.0, 20.0), false);
+    moved.pointer_type = PointerType::Mouse;
+    host.send_pointer(moved);
+    take_log();
+    on.set(false);
+    host.frame();
+    take_log();
+    // The mouse leaves: the node it rested on hears it, in its new layer.
+    host.send_pointer_left();
+    let log = pointer_log();
+    assert_eq!(log[0], "Exit");
+}
+
+/// Delegates when it gets the focus, as Compose's clickable's `onFocusChange` makes its
+/// indication; and when its gesture is cancelled, and when it's positioned.
+struct DelegatesOnEvents {
+    delegates: Delegates,
+    label: &'static str,
+}
+
+impl DelegatesOnEvents {
+    fn new(label: &'static str) -> DelegatesOnEvents {
+        DelegatesOnEvents { delegates: Delegates::new(), label }
+    }
+    fn add(&mut self) {
+        self.delegates.delegate(Mod::draw(self.label));
+    }
+}
+
+impl ModifierNode for DelegatesOnEvents {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        Some(self)
+    }
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+    fn as_global_position_aware(&mut self) -> Option<&mut dyn GlobalPositionAwareModifierNode> {
+        Some(self)
+    }
+}
+
+impl FocusTargetModifierNode for DelegatesOnEvents {
+    fn on_focus_changed(&mut self, focused: bool, _: &mut EventContext<'_>) {
+        if focused && self.label == "focus" {
+            self.add();
+        }
+    }
+    fn on_focus_tap(&mut self, _: Offset, _: &mut EventContext<'_>) {
+        if self.label == "tap" {
+            self.add();
+        }
+    }
+}
+
+impl PointerInputModifierNode for DelegatesOnEvents {
+    fn on_pointer_event(
+        &mut self,
+        _: &mut PointerEvent,
+        _: PointerEventPass,
+        _: IntSize,
+        _: &mut EventContext<'_>,
+    ) {
+    }
+    fn on_cancel_pointer_input(&mut self) {
+        if self.label == "cancel" {
+            self.add();
+        }
+    }
+}
+
+impl GlobalPositionAwareModifierNode for DelegatesOnEvents {
+    fn on_globally_positioned(&mut self, _: LayoutCoordinates) -> Option<Action> {
+        if self.label == "positioned" && self.delegates.nodes().next().is_none() {
+            self.add();
+        }
+        None
+    }
+}
+
+struct DelegatesOnEventsElement(&'static str);
+
+impl ModifierNodeElement for DelegatesOnEventsElement {
+    type Node = DelegatesOnEvents;
+    fn create(&self) -> DelegatesOnEvents {
+        DelegatesOnEvents::new(self.0)
+    }
+    fn update(&self, _: &mut DelegatesOnEvents) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn delegates_on_events(label: &'static str) -> (UiHost, NodeId) {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.size(50.dp()).then_custom(DelegatesOnEventsElement(label)))
+    });
+    host.frame();
+    let leaf = host.with_tree(|tree| tree.children_of(tree.root_id()).next().expect("the leaf"));
+    (host, leaf)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onFocusChange
+#[test]
+fn delegating_from_a_focus_callback_attaches_the_delegate() {
+    let (host, leaf) = delegates_on_events("focus");
+    assert_eq!(take_log(), Vec::<String>::new());
+    host.with_tree(|tree| tree.request_focus(leaf));
+    assert_eq!(take_log(), ["attach focus"]);
+}
+
+#[test]
+fn delegating_when_a_gesture_is_cancelled_attaches_the_delegate() {
+    let (mut host, _) = delegates_on_events("cancel");
+    host.send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    host.with_tree(|tree| tree.cancel_pointers());
+    assert_eq!(take_log(), ["attach cancel"]);
+}
+
+#[test]
+fn delegating_when_positioned_attaches_the_delegate() {
+    let (_host, _) = delegates_on_events("positioned");
+    assert!(take_log().contains(&"attach positioned".to_string()));
+}
+
+/// Finds an owner through `find_nearest_ancestor`, then delegates on it.
+#[test]
+fn delegating_on_a_node_a_traversal_found_attaches_the_delegate() {
+    static KEY: TraverseKey = TraverseKey::new("owner");
+    struct Owner(Delegates);
+    struct OwnerElement;
+    impl ModifierNodeElement for OwnerElement {
+        type Node = Owner;
+        fn create(&self) -> Owner {
+            Owner(Delegates::new())
+        }
+        fn update(&self, _: &mut Owner) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    impl ModifierNode for Owner {
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+        fn as_traversable(&mut self) -> Option<&mut dyn TraversableNode> {
+            Some(self)
+        }
+    }
+    impl TraversableNode for Owner {
+        fn traverse_key(&self) -> &'static TraverseKey {
+            &KEY
+        }
+    }
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(|| {
+        Leaf(Modifier.then_custom(OwnerElement).then_custom(element(|| Mod::plain("below"))));
+    });
+    host.frame();
+    take_log();
+    handle("below")
+        .with_node(|_: &mut Mod, context| {
+            let owner = context.find_nearest_ancestor_with_key(&KEY).expect("the owner");
+            let owner = owner.downcast_mut::<Owner>().expect("of its type");
+            owner.0.delegate(Mod::draw("found"));
+        })
+        .expect("the tree is free");
+    assert_eq!(take_log(), ["attach found"]);
+    assert!(handle("found").is_attached());
+}
+
+// ---- `delegate_attached`, as Compose's `delegate()` in a callback ----------------------------
+
+struct DelegatesInItsAttach {
+    delegates: Delegates,
+    delegate_kind: NodeKinds,
+}
+
+struct DelegatesInItsAttachElement;
+
+impl ModifierNodeElement for DelegatesInItsAttachElement {
+    type Node = DelegatesInItsAttach;
+    fn create(&self) -> DelegatesInItsAttach {
+        DelegatesInItsAttach { delegates: Delegates::new(), delegate_kind: NodeKinds::NONE }
+    }
+    fn update(&self, _: &mut DelegatesInItsAttach) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for DelegatesInItsAttach {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        log("begin");
+        self.delegates.delegate_attached(Mod::draw("d"), context);
+        // Its kinds are the owner's already, and it's attached.
+        self.delegate_kind = NodeKinds::DRAW;
+        log("end");
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, delegate
+#[test]
+fn delegating_attached_attaches_inside_the_call() {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(|| Leaf(Modifier.then_custom(DelegatesInItsAttachElement)));
+    host.frame();
+    let lifecycle: Vec<String> =
+        take_log().into_iter().filter(|line| !line.starts_with("draw")).collect();
+    assert_eq!(lifecycle, ["begin", "attach d", "end"]);
+    assert!(handle("d").is_attached());
+}
+
+/// Reads its owner's kinds from inside its `on_attach`, through a handle made there.
+struct ReadsKindsInAttach(Rc<Cell<bool>>);
+
+impl ModifierNode for ReadsKindsInAttach {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(context.chain_kinds_for_test().any(NodeKinds::DRAW));
+    }
+}
+
+impl DrawModifierNode for ReadsKindsInAttach {}
+
+struct KindsFirstElement(Rc<Cell<bool>>);
+struct KindsFirstNode(Delegates, Rc<Cell<bool>>);
+
+impl ModifierNodeElement for KindsFirstElement {
+    type Node = KindsFirstNode;
+    fn create(&self) -> KindsFirstNode {
+        KindsFirstNode(Delegates::new(), self.0.clone())
+    }
+    fn update(&self, _: &mut KindsFirstNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for KindsFirstNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.0)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.delegate_attached(ReadsKindsInAttach(self.1.clone()), context);
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, delegate (updateNodeKindSet)
+#[test]
+fn delegating_attached_gives_the_owner_its_kinds_before_the_on_attach() {
+    fresh();
+    let seen = Rc::new(Cell::new(false));
+    let s = seen.clone();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || Leaf(Modifier.then_custom(KindsFirstElement(s.clone()))));
+    host.frame();
+    assert!(seen.get());
+}
+
+// ---- Delegating in `on_detach` ----------------------------------------------------------------
+
+struct DelegatesInDetach(Delegates);
+struct DelegatesInDetachElement;
+
+impl ModifierNodeElement for DelegatesInDetachElement {
+    type Node = DelegatesInDetach;
+    fn create(&self) -> DelegatesInDetach {
+        DelegatesInDetach(Delegates::new())
+    }
+    fn update(&self, _: &mut DelegatesInDetach) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for DelegatesInDetach {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.0)
+    }
+    fn on_detach(&mut self, _: &mut NodeContext<'_>) {
+        self.0.delegate(Mod::plain("late"));
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, runDetachLifecycle
+#[test]
+fn a_delegate_attached_in_an_on_detach_hears_its_on_detach() {
+    fresh();
+    let with_node = mutable_state_of(true);
+    let w = with_node.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(if w.get() { Modifier.then_custom(DelegatesInDetachElement) } else { Modifier });
+    });
+    host.frame();
+    take_log();
+    with_node.set(false);
+    host.frame();
+    assert_eq!(take_log(), ["attach late", "detach late", "release late"]);
+}
+
+#[test]
+fn a_delegate_attached_in_a_kept_node_s_on_detach_hears_its_on_detach() {
+    fresh();
+    let active = mutable_state_of(true);
+    let a = active.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        ReusableContentHost(a.get(), move || {
+            ReusableContent(0, move || Leaf(Modifier.then_custom(DelegatesInDetachElement)));
+        });
+    });
+    host.frame();
+    take_log();
+    active.set(false);
+    host.frame();
+    assert_eq!(take_log(), ["attach late", "detach late"]);
+}
+
+// ---- What the tree only asks a chain's node ---------------------------------------------------
+
+struct Boundary;
+
+impl ModifierNode for Boundary {
+    fn is_repaint_boundary(&self) -> bool {
+        true
+    }
+}
+
+struct BeyondBounds;
+
+impl ModifierNode for BeyondBounds {
+    fn is_beyond_bounds_layout(&self) -> bool {
+        true
+    }
+}
+
+struct Clips;
+
+impl ModifierNode for Clips {
+    fn hit_clip(&self) -> Option<Shape> {
+        Some(RECTANGLE_SHAPE)
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeKind.kt, Nodes
+#[test]
+#[should_panic(expected = "is a repaint boundary")]
+fn delegating_to_a_repaint_boundary_panics_in_debug() {
+    Delegates::new().delegate(Boundary);
+}
+
+#[test]
+#[should_panic(expected = "lays out beyond its bounds")]
+fn delegating_to_a_beyond_bounds_layout_panics_in_debug() {
+    Delegates::new().delegate(BeyondBounds);
+}
+
+#[test]
+#[should_panic(expected = "clips hits")]
+fn delegating_to_a_hit_clip_panics_in_debug() {
+    Delegates::new().delegate(Clips);
+}
+
+// ---- `invalidate_layer` -----------------------------------------------------------------------
+
+struct InvalidatesLayer;
+struct InvalidatesLayerNode;
+
+impl ModifierNodeElement for InvalidatesLayer {
+    type Node = InvalidatesLayerNode;
+    fn create(&self) -> InvalidatesLayerNode {
+        InvalidatesLayerNode
+    }
+    fn update(&self, _: &mut InvalidatesLayerNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for InvalidatesLayerNode {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        let handle = context.handle();
+        HANDLES.with(|handles| handles.borrow_mut().insert("invalidates", handle));
+    }
+}
+
+impl DrawModifierNode for InvalidatesLayerNode {
+    fn draw(&mut self, _: &mut DrawScope<'_>) {
+        log("drawn");
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, invalidateLayer
+#[test]
+fn invalidating_the_layer_of_a_node_with_none_goes_up_to_the_one_around_it() {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(|| {
+        Stack!(modifier = Modifier.graphics_layer(|_| {}), {
+            Leaf(Modifier.size(10.dp()).then_custom(InvalidatesLayer));
+        });
+    });
+    host.frame();
+    take_log();
+    assert!(!host.frame().drew, "nothing changed");
+    handle("invalidates").invalidate_layer();
+    assert!(host.needs_frame());
+    let stats = host.frame();
+    assert!(stats.drew);
+    assert_eq!(take_log(), ["drawn"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, invalidateLayer
+#[test]
+fn invalidating_the_layer_a_node_is_in_records_its_content_again() {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(|| {
+        Leaf(Modifier.graphics_layer(|_| {}).size(10.dp()).then_custom(InvalidatesLayer));
+    });
+    host.frame();
+    take_log();
+    handle("invalidates").invalidate_layer();
+    let stats = host.frame();
+    assert!(stats.drew);
+    assert_eq!(take_log(), ["drawn"]);
+}
+
+// ---- `invalidate_subtree` and semantics -------------------------------------------------------
+
+struct Tagged(Rc<RefCell<&'static str>>);
+struct TaggedNode(Rc<RefCell<&'static str>>);
+
+impl ModifierNodeElement for Tagged {
+    type Node = TaggedNode;
+    fn create(&self) -> TaggedNode {
+        TaggedNode(self.0.clone())
+    }
+    fn update(&self, _: &mut TaggedNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for TaggedNode {
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        let handle = context.handle();
+        HANDLES.with(|handles| handles.borrow_mut().insert("tagged", handle));
+    }
+}
+
+impl SemanticsModifierNode for TaggedNode {
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.set_test_tag(*self.0.borrow());
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/LayoutNode.kt, invalidateSubtree
+#[test]
+fn invalidating_a_subtree_computes_its_semantics_again() {
+    fresh();
+    let tag = Rc::new(RefCell::new("before"));
+    let t = tag.clone();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let t = t.clone();
+        Stack!({
+            Leaf(Modifier.then_custom(Tagged(t.clone())));
+        });
+    });
+    host.frame();
+    fn find(node: &SemanticsNode, tag: &str) -> bool {
+        node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| &**found == tag)
+            || node.children.iter().any(|child| find(child, tag))
+    }
+    assert!(find(&host.semantics_tree(false), "before"));
+    *tag.borrow_mut() = "after";
+    handle("tagged").invalidate_subtree();
+    let stats = host.frame();
+    assert!(stats.semantics_changed);
+    assert!(find(&host.semantics_tree(false), "after"));
+}
+
+// ---- Handlers' contexts, and observing from measuring and drawing -----------------------------
+
+struct ObservesEverywhere {
+    read: MutableState<i32>,
+    handle: Option<NodeHandle>,
+    in_measure: bool,
+}
+
+struct ObservesEverywhereElement {
+    read: MutableState<i32>,
+    in_measure: bool,
+}
+
+impl ModifierNodeElement for ObservesEverywhereElement {
+    type Node = ObservesEverywhere;
+    fn create(&self) -> ObservesEverywhere {
+        ObservesEverywhere { read: self.read, handle: None, in_measure: self.in_measure }
+    }
+    fn update(&self, _: &mut ObservesEverywhere) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for ObservesEverywhere {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+    fn as_observer(&mut self) -> Option<&mut dyn ObserverModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.handle = Some(context.handle());
+        context.invalidate_measurement();
+    }
+}
+
+impl ObserverModifierNode for ObservesEverywhere {
+    fn on_observed_reads_changed(&mut self, _: &mut NodeContext<'_>) {
+        log("told");
+    }
+}
+
+impl LayoutModifierNode for ObservesEverywhere {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        if self.in_measure
+            && let Some(handle) = self.handle
+        {
+            let read = self.read;
+            handle.observe_reads(|| read.get());
+        }
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
+impl DrawModifierNode for ObservesEverywhere {
+    fn draw(&mut self, _: &mut DrawScope<'_>) {
+        if !self.in_measure
+            && let Some(handle) = self.handle
+        {
+            let read = self.read;
+            handle.observe_reads(|| read.get());
+        }
+    }
+}
+
+fn observing_host(in_measure: bool, value: &OwnedState<i32>) -> UiHost {
+    fresh();
+    let read = value.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.then_custom(ObservesEverywhereElement { read, in_measure }).size(10.dp()));
+    });
+    host.frame();
+    host.frame();
+    take_log();
+    host
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Background.kt, getOutline
+#[test]
+fn a_node_observes_reads_while_it_draws() {
+    let value = mutable_state_of(0);
+    let mut host = observing_host(false, &value);
+    value.set(1);
+    host.frame();
+    assert_eq!(take_log(), ["told"]);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/ObserverModifierNode.kt, observeReads
+#[test]
+fn a_node_observes_reads_while_it_measures() {
+    let value = mutable_state_of(0);
+    let mut host = observing_host(true, &value);
+    value.set(1);
+    let stats = host.frame();
+    assert_eq!(take_log(), ["told"]);
+    // Nested: the read is the observation's, not the measurement's around it.
+    assert!(!stats.measured);
+}
+
+struct UsesItsContextNode {
+    observed: MutableState<i32>,
+}
+
+struct UsesItsContextElement(MutableState<i32>);
+
+impl ModifierNodeElement for UsesItsContextElement {
+    type Node = UsesItsContextNode;
+    fn create(&self) -> UsesItsContextNode {
+        UsesItsContextNode { observed: self.0 }
+    }
+    fn update(&self, _: &mut UsesItsContextNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for UsesItsContextNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+    fn as_observer(&mut self) -> Option<&mut dyn ObserverModifierNode> {
+        Some(self)
+    }
+}
+
+impl ObserverModifierNode for UsesItsContextNode {
+    fn on_observed_reads_changed(&mut self, _: &mut NodeContext<'_>) {
+        log("told");
+    }
+}
+
+impl PointerInputModifierNode for UsesItsContextNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        _: IntSize,
+        context: &mut EventContext<'_>,
+    ) {
+        if pass == PointerEventPass::Main && event.kind == PointerEventType::Press {
+            let observed = self.observed;
+            context.observe_reads(|| observed.get());
+            let handle = context.handle();
+            log(format!("attached {}", handle.is_attached()));
+            let mut above = 0;
+            context.visit_ancestors(NodeKinds::ANY, false, &mut |_, _| {
+                above += 1;
+                std::ops::ControlFlow::Continue(())
+            });
+            log(format!("above {}", above > 0));
+        }
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onPointerEvent
+#[test]
+fn a_handler_s_context_observes_gets_a_handle_and_traverses() {
+    fresh();
+    let value = mutable_state_of(0);
+    let read = value.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(nodes_before().size(50.dp()).then_custom(UsesItsContextElement(read)));
+    });
+    host.frame();
+    take_log();
+    host.send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    assert_eq!(take_log(), ["attached true", "above true"]);
+    value.set(1);
+    host.frame();
+    assert_eq!(take_log(), ["told"]);
+}
+
+fn nodes_before() -> Modifier {
+    Modifier.then_custom(element(|| Mod::plain("before")))
+}
+
+// ---- Built-in elements' nodes ----------------------------------------------------------------
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, delegate
+// A built-in element's node with a lifecycle (`observes_reads`) may delegate, as the clickable
+// will.
+#[test]
+fn a_node_with_a_lifecycle_delegates_without_a_user_defined_element() {
+    struct Builtin(Delegates);
+    impl ModifierNode for Builtin {
+        fn observes_reads(&self) -> bool {
+            true
+        }
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+    }
+    let mut delegates = Delegates::new();
+    delegates.delegate(Mod::draw("delegate"));
+    let mut node = Builtin(delegates);
+    // The kinds a chain would take it with, unobserved as a built-in element's.
+    assert!(chain_entry_kinds_for_test(&mut node, false).any(NodeKinds::DRAW));
+    struct Plain(Delegates);
+    impl ModifierNode for Plain {
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+    }
+    let mut plain = Plain(Delegates::new());
+    plain.0.delegate(Mod::draw("delegate"));
+    assert!(!chain_entry_kinds_for_test(&mut plain, false).any(NodeKinds::DRAW));
+}
+
+// ---- Forgetting ------------------------------------------------------------------------------
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/ObserverModifierNode.kt, ObserverNodeOwnerScope
+#[test]
+fn a_released_node_and_a_released_delegate_leave_no_observation() {
+    fresh();
+    let value = mutable_state_of(0);
+    let shown = mutable_state_of(true);
+    let s = shown.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        if s.get() {
+            Leaf(Modifier.then_custom(element(|| Mod::wrapping("owner", Mod::plain("delegate")))));
+        }
+    });
+    host.frame();
+    let read = value.handle();
+    for label in ["owner", "delegate"] {
+        handle(label)
+            .with_node(|_: &mut Mod, context| context.observe_reads(|| read.get()))
+            .expect("the tree is free");
+    }
+    assert_eq!(host.with_tree(|tree| tree.observing_nodes_for_test()), 2);
+    shown.set(false);
+    host.frame();
+    assert_eq!(host.with_tree(|tree| tree.observing_nodes_for_test()), 0);
+}
+
+#[test]
+fn a_handle_s_observation_is_forgotten_with_its_node() {
+    fresh();
+    let value = mutable_state_of(0);
+    let shown = mutable_state_of(true);
+    let s = shown.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        if s.get() {
+            Leaf(Modifier.then_custom(element(|| Mod::plain("node"))));
+        }
+    });
+    host.frame();
+    let read = value.handle();
+    handle("node").observe_reads(|| read.get());
+    assert_eq!(host.with_tree(|tree| tree.observing_nodes_for_test()), 1);
+    shown.set(false);
+    host.frame();
+    assert_eq!(host.with_tree(|tree| tree.observing_nodes_for_test()), 0);
+}
+
+// ---- Reaching the delegator (docs/parity/design/modifier-nodes.md §3.7) ------------------------
+
+#[derive(Default)]
+struct SharedWithOwner {
+    owner: Cell<Option<NodeHandle>>,
+    pressed: Cell<bool>,
+}
+
+struct Pressable(Rc<SharedWithOwner>);
+
+impl ModifierNode for Pressable {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for Pressable {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        _: IntSize,
+        context: &mut EventContext<'_>,
+    ) {
+        if pass == PointerEventPass::Main && event.kind == PointerEventType::Press {
+            self.0.pressed.set(true);
+            let owner = self.0.owner.get().expect("the owner attached");
+            owner.invalidate_draw();
+            // Its code, once the tree is free.
+            context.side_effect(move || {
+                let told = owner.with_node(|owner: &mut PressableOwner, _| {
+                    log(format!("told pressed {}", owner.shared.pressed.get()));
+                });
+                assert!(told.is_some(), "the tree is free in a side effect");
+            });
+        }
+    }
+}
+
+struct PressableOwner {
+    shared: Rc<SharedWithOwner>,
+    delegates: Delegates,
+}
+
+struct PressableElement;
+
+impl ModifierNodeElement for PressableElement {
+    type Node = PressableOwner;
+    fn create(&self) -> PressableOwner {
+        let shared = Rc::new(SharedWithOwner::default());
+        let mut delegates = Delegates::new();
+        delegates.delegate(Pressable(shared.clone()));
+        PressableOwner { shared, delegates }
+    }
+    fn update(&self, _: &mut PressableOwner) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for PressableOwner {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.shared.owner.set(Some(context.handle()));
+    }
+}
+
+impl DrawModifierNode for PressableOwner {
+    fn draw(&mut self, _: &mut DrawScope<'_>) {
+        log(format!("drawn pressed {}", self.shared.pressed.get()));
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, AbstractClickableNode
+#[test]
+fn a_delegate_reaches_its_owner_through_what_they_share_and_a_handle() {
+    fresh();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(|| Leaf(Modifier.size(50.dp()).then_custom(PressableElement)));
+    host.frame();
+    assert_eq!(take_log(), ["drawn pressed false"]);
+    host.send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    assert!(host.needs_frame());
+    host.frame();
+    assert_eq!(take_log(), ["told pressed true", "drawn pressed true"]);
 }

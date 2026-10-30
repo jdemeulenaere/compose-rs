@@ -229,18 +229,18 @@ Each Compose invalidation maps onto an existing tree operation, scoped to the en
 | `DrawModifierNode.invalidateDraw` (`requireCoordinator(Any).invalidateLayer()`) | Draw again the group the entry draws in: the inner layer of the nearest graphics-layer entry before it, if that is an inner layer (`tree.rs:579-590`), else what draws the node before its inner layers (`invalidate_draw_before_inner_layers`, `tree.rs:602-604`). A new `invalidate_draw_of_entry(node, entry)`. |
 | `LayoutModifierNode.invalidateMeasurement`, `invalidateMeasurements` | `invalidate_layout_of(node)` (`tree.rs:519-521`); inside a lookahead scope, the lookahead measurement too (placement doc §7.6). |
 | `invalidatePlacement`, `requestRelayout` | Placement doc §3.4 (`needs_placement`). Until the placement pass lands: `invalidate_layout_of`, documented as the fused pass's cost. |
-| `invalidateLayer` | The graphics layer's properties only: `retained.layer_dirty` (`tree.rs:697-704`). |
+| `invalidateLayer` | The graphics layer at or before the entry records its content and properties again (`OwnedLayer.invalidate`); with none, what draws the node draws it again, as `wrappedBy`'s (`NodeCoordinator.kt:1475-1481`, D1180). |
 | `remeasureSync` / `Remeasurement.forceRemeasure` | `UiTree::remeasure_now(node)`: `measure_node(node, last constraints)` and its placement, synchronously. Allowed from a `NodeContext` outside a measure or draw pass (an event, a task); a debug assertion inside a pass. Ledger 3.12. |
 | `requestRemeasure` (internal) | `invalidate_measure(node)`. |
 | `invalidateSemantics` | The node's cached configuration dirty (focus-and-semantics doc §B.4). |
 | `invalidateParentData` | Recompute the node's parent data (§3.10); if it changed, `invalidate_measure(parent)` (today's rule, `tree.rs:758-760`). |
-| `invalidateSubtree` | For the node and every descendant: `needs_measure`, every boundary and inner layer dirty, semantics dirty, parent data recomputed. |
+| `invalidateSubtree` | For the node and every descendant: `needs_measure`, every boundary and inner layer dirty, semantics dirty (`LayoutNode.kt:1342`, D1180). |
 | `invalidateMeasurementForSubtree` | `needs_measure` on every node of the subtree, `subtree_needs_measure` up the ancestors. |
 | `invalidateDrawForSubtree` | Every retained drawing and inner layer of the subtree dirty (the subtree part of `invalidate_draw`, `tree.rs:565-577`). |
 | `DrawModifierNode.onMeasureResultChanged` | Called on the draw node when the measured size of its layer changes (in `measure_layer`, `crates/compose-ui/src/measure.rs:339-350`); the default does nothing, since a remeasured node already draws again there (`measure.rs:183-186`). |
 | `ParentDataModifierNode`, `GlobalPositionAware`, `OnPlaced`, `FocusProperties`, `FocusEvent` | Their own docs (§3.10, placement doc, focus doc). |
 
-All of them are no-ops on a detached entry, as Compose's (`if (node.isAttached)`).
+All of them are no-ops on a detached entry: as Compose's `invalidateDraw` and the three `…ForSubtree` ones (`if (node.isAttached)`), where its `invalidateMeasurement`, `invalidatePlacement`, `invalidateLayer` and `invalidateSemantics` fail without a coordinator (D1178).
 
 ### 3.5 The lifecycle in compose-rs's passes
 
@@ -285,7 +285,20 @@ impl<E: ModifierNodeElement> AnyModifierNodeElement for E { /* downcasts once, h
 
 ### 3.7 Delegation
 
-As built (D1169, D1170): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes), and compose-rs's own extras that aren't Compose kinds stay the chain's node's. The rest is as below.
+As built (D1169, D1170, D1173, D1179): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes); `delegate_attached(node, context)` attaches inside the call from a callback, `delegate` once the code returns; compose-rs's extras stay the chain's node's. The rest is as below.
+
+**Reaching the delegator.** Compose's delegate calls its `node`, or a sibling, through a field. Here a delegate can't reach its owner while either runs: the owner is out of its chain, its delegates inside it, and the borrow is the owner's. So what they share goes in an `Rc` they both hold (a `Cell` or `RefCell` of the clickable's interaction state), made in `create` before the delegate is, and what a delegate asks *of* its owner goes through a deferred handle:
+
+```rust
+struct Shared { owner: Cell<Option<NodeHandle>>, pressed: Cell<bool> }
+
+// The owner, in `create`: `self.delegates.delegate(Gesture { shared: shared.clone() })`.
+// The owner, in `on_attach`: `self.shared.owner.set(Some(context.handle()));`, so what its
+// delegates run after it has it; a delegate's `on_attach` runs first, so it doesn't count on it.
+// A delegate: `self.shared.pressed.set(true); if let Some(owner) = self.shared.owner.get() { owner.invalidate_draw(); }`
+```
+
+A handle's invalidations are queued, so they work with the tree busy; running the owner's code (`with_node`) doesn't (it answers `None` until the tree is free), so a delegate asks with `NodeContext::side_effect(move || { owner.with_node(…); })`.
 
 A delegating node owns a `Delegates` container and returns it from `ModifierNode::delegates`:
 
@@ -318,7 +331,9 @@ impl Delegates {
 
 ### 3.8 Traversal
 
-As built (D1171, D1172): the visitors are on `NodeContext`, the caller's own place being theirs to start from, and each traversal callback also gets the visited node's context, as Compose's visited node is a whole `DelegatableNode`. The rest is as below.
+As built (D1171, D1172, D1177): the visitors are on `NodeContext`, the caller's own place being theirs to start from, and each traversal callback also gets the visited node's context, as Compose's visited node is a whole `DelegatableNode`. Traversals stop at overlays. The rest is as below.
+
+**`Taken` ancestors.** A node whose code is running is out of its chain, with a `Taken` in its place: its kinds stay, its node doesn't answer. So a traversal from inside a callback finds neither its caller nor any node up the stack (a traversal's callback's own traversal doesn't find the node that started it, where Compose's would): keep what they need in the callback's closure.
 
 Internal visitors on `UiTree`, as Compose's, walking chain entries and the layout tree, pruning by `aggregate` kinds:
 
@@ -337,7 +352,7 @@ impl UiTree {
 }
 ```
 
-- "Ancestors" are the entries before `from` in its chain (and its delegator), then the chains of its layout ancestors from their tail; "children" the first matching entry down each branch, the layout children taken in z order (`placement_order`, `tree.rs:387-409`) when asked, else in child order. Deactivated nodes are skipped, as Compose's attached check skips them. Overlays are visited where they sit in the layout tree (their parent is the host), as Compose's popups are separate roots: this is an open point for the focus doc (§A.5).
+- "Ancestors" are the entries before `from` in its chain (and its delegator), then the chains of its layout ancestors from their tail; "children" the first matching entry down each branch, the layout children taken in z order (`placement_order`, `tree.rs:387-409`) when asked, else in child order. Deactivated nodes are skipped, as Compose's attached check skips them. Overlays are separate roots, as Compose's popups: walks up stop at one, walks down skip them (D1177).
 - `f` gets the visited node, never the tree, so the loop re-borrows the tree per step and allocates nothing (`visit_children`' branch stack is a `SmallVec`).
 - The `ModifierNodeVisit*` tests drive these internal visitors from test code, outside callbacks, through test hooks in `compose::ui::platform` (as the ledger proposes, D260's rule for internals).
 

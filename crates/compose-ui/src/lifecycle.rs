@@ -8,7 +8,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use smallvec::SmallVec;
 
-use crate::delegation;
+use crate::delegation::{self, detach_with_delegates};
 use crate::modifier::{ModifierNode, ReleaseContext};
 use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state, traverse_key_of};
 use crate::node_context::{Invalidation, NodeContext};
@@ -59,12 +59,6 @@ pub(crate) enum Lifecycle {
     Density,
 }
 
-/// A node's `on_detach`, then its delegates', as `DelegatingNode.runDetachLifecycle`.
-fn detach_with_delegates(node: &mut dyn ModifierNode, context: &mut NodeContext<'_>) {
-    node.on_detach(context);
-    delegation::run_on_delegates(node, context, |node, context| node.on_detach(context));
-}
-
 impl UiTree {
     /// Runs `f` with entry `index` of `node`'s chain and its context, the entry out of its chain
     /// meanwhile (so its code may reach the rest of the tree, never itself); put back even if
@@ -75,27 +69,32 @@ impl UiTree {
         index: usize,
         f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
     ) -> R {
-        let result = self.with_entry_raw(node, index, f);
+        let (result, delegating) = self.run_entry(node, index, f);
         // What it delegated or undelegated.
-        if self
-            .get(node)
-            .and_then(|value| value.chain.get(index))
-            .is_some_and(|entry| entry.state & entry_state::DELEGATING != 0)
-        {
+        if delegating {
             if self.delegates_wait {
                 self.note_delegates_changed(node, index);
             } else {
                 self.sync_delegates(node, index);
             }
         }
-        // What its `remeasure_sync` asked (where measuring is allowed: no entry is out of its
-        // chain but this one), now that it's back in it.
-        if !self.remeasure_after.is_empty() {
+        // What's waited for every node to be back in its chain.
+        if self.entries_running == 0 && !self.delegates_wait && !self.delegates_noted.is_empty() {
+            self.sync_noted_delegates();
+        }
+        self.drain_remeasures();
+        result
+    }
+
+    /// Measures what `remeasure_sync` asked, if no node's code is running any more: measuring
+    /// one may run any node of its chain, so all must be back in their chains (a traversal runs
+    /// the nodes it finds inside the code of the one that asked).
+    pub(crate) fn drain_remeasures(&mut self) {
+        if self.entries_running == 0 && !self.remeasure_after.is_empty() {
             for node in mem::take(&mut self.remeasure_after) {
                 self.remeasure_now(node);
             }
         }
-        result
     }
 
     /// `with_entry` without what follows a node's code.
@@ -105,11 +104,26 @@ impl UiTree {
         index: usize,
         f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
     ) -> R {
+        self.run_entry(node, index, f).0
+    }
+
+    /// Runs `f` as `with_entry_raw`, and says whether the entry may have delegates. Each event's
+    /// handlers come through here (a dozen calls for a pointer event, in `scroll a pixel`'s
+    /// frames): it looks its node up as few times as it can.
+    #[inline]
+    fn run_entry<R>(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
+    ) -> (R, bool) {
         let entry = &mut self.node_mut(node).chain[index];
         let id = entry.id;
         let own = entry.own;
+        let delegating = entry.state & entry_state::DELEGATING != 0;
         let mut taken = mem::replace(&mut entry.node, Box::new(Taken));
         let traverse_key = traverse_key_of(&mut *taken, own);
+        self.entries_running += 1;
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let mut context = NodeContext {
                 tree: &mut *self,
@@ -123,12 +137,17 @@ impl UiTree {
             };
             f(&mut *taken, &mut context)
         }));
+        self.entries_running -= 1;
         if let Some(value) = self.get_mut(node)
             && let Some(entry) = value.chain.get_mut(index)
         {
-            entry.node = taken;
+            // `Taken` has no size and nothing to drop.
+            mem::forget(mem::replace(&mut entry.node, taken));
         }
-        result.unwrap_or_else(|panic| panic::resume_unwind(panic))
+        match result {
+            Ok(result) => (result, delegating),
+            Err(panic) => panic::resume_unwind(panic),
+        }
     }
 
     /// `with_entry` for the entry or delegate `id` that `entry_index` found at `index`.
@@ -607,6 +626,7 @@ impl UiTree {
             Invalidation::Subtree => {
                 for each in self.subtree(node) {
                     self.invalidate_drawing_of_node(each);
+                    self.invalidate_semantics_of(each);
                     let value = self.node_mut(each);
                     value.needs_measure = true;
                     value.subtree_needs_measure = true;
@@ -689,7 +709,11 @@ impl UiTree {
         let layer = value.chain[..=index]
             .iter()
             .rposition(|entry| entry.kinds.any(NodeKinds::GRAPHICS_LAYER));
-        let Some(layer) = layer else { return };
+        // None: the layer around it, as `wrappedBy`'s: what draws the node draws it again.
+        let Some(layer) = layer else {
+            self.invalidate_draw_before_inner_layers(node);
+            return;
+        };
         if value
             .retained
             .as_ref()
@@ -697,6 +721,8 @@ impl UiTree {
         {
             let value = self.node_mut(node);
             if let Some(retained) = value.retained.as_mut() {
+                // A layer invalidated records its content again, as `OwnedLayer.invalidate`.
+                retained.dirty = true;
                 retained.layer_dirty = true;
             }
             self.needs_draw = true;

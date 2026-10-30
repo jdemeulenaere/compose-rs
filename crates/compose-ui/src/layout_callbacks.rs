@@ -219,6 +219,7 @@ impl UiTree {
             let mut positioned = std::mem::take(&mut self.positioned);
             positioned.retain(|&node| self.notify_positioned(node));
             self.positioned = positioned;
+            self.sync_noted_delegates();
         }
         std::mem::take(&mut self.layout_callbacks)
     }
@@ -259,6 +260,7 @@ impl UiTree {
                 },
             );
             self.layout_callbacks.extend(actions);
+            self.note_delegates_changed(node, index);
         }
         any
     }

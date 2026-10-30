@@ -78,6 +78,21 @@ impl NodeContext<'_> {
         }
     }
 
+    /// This context again, for as long as the borrow: what wraps it (`EventContext`) owns one.
+    /// Its `out_state` is copied back by who asks.
+    pub(crate) fn reborrow(&mut self) -> NodeContext<'_> {
+        NodeContext {
+            tree: &mut *self.tree,
+            node: self.node,
+            index: self.index,
+            entry: self.entry,
+            out_state: self.out_state,
+            delegated: self.delegated,
+            place: self.place,
+            traverse_key: self.traverse_key,
+        }
+    }
+
     /// Runs `f` with the delegate `entry` and its context: this context's place in the tree (a
     /// delegate draws and measures where its owner does, as Compose's coordinator), its own
     /// lifecycle flags and identity.
@@ -101,6 +116,15 @@ impl NodeContext<'_> {
         let state = context.out_state;
         entry.set_state(state);
         result
+    }
+
+    /// Its chain entry's kinds as they are now. For tests.
+    #[doc(hidden)]
+    pub fn chain_kinds_for_test(&self) -> crate::node_chain::NodeKinds {
+        match self.index {
+            Some(index) => self.tree.node(self.node).chain[index].kinds,
+            None => crate::node_chain::NodeKinds::NONE,
+        }
     }
 
     /// A handle naming this node from outside its callbacks.
@@ -180,7 +204,8 @@ impl NodeContext<'_> {
     }
 
     fn invalidate(&mut self, what: Invalidation) {
-        // As Compose's: a detached node's invalidations do nothing.
+        // A detached node's invalidations do nothing. Compose's `invalidateDraw` and the
+        // `…ForSubtree` ones too; its others fail for want of a coordinator (D1178).
         if !self.is_attached() {
             return;
         }
@@ -270,7 +295,8 @@ impl NodeContext<'_> {
     /// Works detached too: the call comes if the node is attached when the write is told.
     pub fn observe_reads<R>(&mut self, block: impl FnOnce() -> R) -> R {
         *self.state_mut() |= entry_state::OBSERVES;
-        self.tree.observe_entry_reads(self.node, self.entry, block)
+        let requests = self.tree.focus_requests.clone();
+        requests.observe_entry_reads(self.node, self.entry, block)
     }
 
     /// The layout node's `Remeasurement`, as `RemeasurementModifier.onRemeasurementAvailable`
@@ -376,11 +402,24 @@ impl NodeHandle {
     fn request(&self, what: Invalidation) {
         let Some(requests) = requests_of(self.tree) else { return };
         if !requests.attached_entries.borrow().contains(&self.entry.0) {
-            // Detached, as Compose's invalidations of a detached node: nothing.
+            // Detached: nothing, for every invalidation (some of Compose's fail, D1178).
             return;
         }
         requests.node_invalidations.borrow_mut().push((self.node, self.entry, what));
         requests.wake();
+    }
+
+    /// Runs `block`, observing the state it reads, as `observeReads` from where a node has no
+    /// context (its measuring, its drawing; as Compose's `BackgroundNode` and appearance nodes
+    /// do): a node keeps the handle `NodeContext::handle` gave it in its `on_attach`. As
+    /// `NodeContext::observe_reads`: once a write changes one of those reads the node's
+    /// `on_observed_reads_changed` is called, once. Its reads count for this observation alone,
+    /// not the measurement or drawing around it, as nested `observeReads`.
+    pub fn observe_reads<R>(&self, block: impl FnOnce() -> R) -> R {
+        match requests_of(self.tree) {
+            Some(requests) => requests.observe_entry_reads(self.node, self.entry, block),
+            None => block(),
+        }
     }
 
     /// As `DrawModifierNode.invalidateDraw`.

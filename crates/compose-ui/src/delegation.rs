@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::modifier::{ModifierNode, ReleaseContext};
 use crate::node_chain::{EntryId, NodeKinds, entry_state};
-use crate::node_context::NodeContext;
+use crate::node_context::{Invalidation, NodeContext};
 use crate::tree::{NodeId, UiTree};
 
 thread_local! {
@@ -24,8 +24,6 @@ const DELEGATE_ID: u64 = 1 << 63;
 /// One delegate of a node.
 pub(crate) struct DelegateEntry {
     node: Box<dyn ModifierNode>,
-    /// Its type's name, for the error of a node with two layout delegates.
-    name: &'static str,
     /// What it implements itself.
     own: NodeKinds,
     /// That and its own delegates' kinds.
@@ -62,18 +60,22 @@ impl DelegateEntry {
 }
 
 /// A node's delegates, as `DelegatingNode.delegate` keeps them: a node owning one returns it from
-/// `ModifierNode::delegates`, and delegates from anywhere its code runs (its element's `create`
-/// or `update`, a callback). Once that code returns, the tree attaches what was delegated (if
-/// the node is attached) and detaches and releases what was undelegated, and invalidates by their
-/// kinds. Delegated or undelegated from a node's measuring or drawing, that waits for the next
-/// frame's start.
+/// `ModifierNode::delegates`, and delegates from anywhere its code runs. `delegate` is for an
+/// element's `create` and `update`, which have no context: the tree attaches what it delegated
+/// (if the node is attached) and detaches and releases what was undelegated, and invalidates by
+/// their kinds, once that code returns. From a callback, `delegate_attached` does it inside the
+/// call, as Compose's `delegate()`. Delegated or undelegated from a node's measuring or drawing,
+/// that waits for the next layout round or frame.
 #[derive(Default)]
 pub struct Delegates {
     entries: SmallVec<[DelegateEntry; 2]>,
     /// Undelegated since the tree last looked: detached and released then.
-    removed: SmallVec<[DelegateEntry; 1]>,
+    removed: Vec<DelegateEntry>,
     /// Delegated or undelegated since the tree last looked.
     changed: bool,
+    /// The kinds of what was attached, detached or released since the tree last brought the
+    /// chain up to date: what it invalidates then, and its kinds again.
+    pending: NodeKinds,
 }
 
 /// A typed reference to a delegate, as the node Compose's `delegate()` returns: what `Delegates`
@@ -102,7 +104,15 @@ impl Delegates {
     ///
     /// A node may have at most one delegate of the layout kind unless it implements
     /// `as_layout` itself, as Compose's rule: the tree panics when it looks otherwise.
+    ///
+    /// compose-rs's own extras aren't dispatched to delegates (`ModifierNode::delegates`): in
+    /// debug builds, a delegate that is a repaint boundary, a beyond-bounds layout, a selectable
+    /// or clips hits panics here. `bring_into_view` can't be asked without its effects, so it
+    /// isn't checked: the node owning a scrolling delegate forwards it.
     pub fn delegate<N: ModifierNode>(&mut self, mut node: N) -> Delegate<N> {
+        if cfg!(debug_assertions) {
+            check_not_an_extra(&mut node);
+        }
         let own = NodeKinds::of_delegate(&mut node);
         let kinds = match node.delegates() {
             Some(delegates) => own | delegates.refresh_kinds(own),
@@ -112,10 +122,35 @@ impl Delegates {
             next.set(next.get() + 1);
             EntryId(DELEGATE_ID | next.get())
         });
-        let name = std::any::type_name::<N>();
-        self.entries.push(DelegateEntry { node: Box::new(node), name, own, kinds, id, state: 0 });
+        self.entries.push(DelegateEntry { node: Box::new(node), own, kinds, id, state: 0 });
         self.changed = true;
         Delegate { id, _node: PhantomData }
+    }
+
+    /// Makes `node` a delegate from a callback, attaching it inside this call if the owner is
+    /// attached, as Compose's `delegate()`: the owner's kinds are brought up to date first, then
+    /// its `on_attach` runs. `context` is the owner's. Inside a measurement it waits, as
+    /// `delegate`: the layers can't change under it.
+    pub fn delegate_attached<N: ModifierNode>(
+        &mut self,
+        node: N,
+        context: &mut NodeContext<'_>,
+    ) -> Delegate<N> {
+        let changed = self.changed;
+        let delegate = self.delegate(node);
+        if context.tree.delegates_wait {
+            return delegate;
+        }
+        self.changed = changed;
+        let entry = self.entries.last_mut().expect("just delegated to");
+        self.pending |= entry.kinds;
+        context.tree.add_entry_kinds(context.node, context.index, entry.kinds);
+        if context.is_attached() {
+            let requests = context.tree.focus_requests.clone();
+            mark_delegate_attached(entry, &requests);
+            run_delegate_attach(entry, context);
+        }
+        delegate
     }
 
     /// Stops delegating to `delegate`, as `DelegatingNode.undelegate`: once the owner's code
@@ -154,12 +189,32 @@ impl Delegates {
     }
 
     /// Whether anything was delegated or undelegated here or below since the tree last looked.
-    pub(crate) fn needs_sync(&mut self) -> bool {
+    pub(crate) fn has_changed(&mut self) -> bool {
         self.changed
+            || self.entries.iter_mut().any(|entry| {
+                entry.node.delegates().is_some_and(|delegates| delegates.has_changed())
+            })
+    }
+
+    /// Whether the tree has anything to do here: `has_changed`, or a chain to bring up to date.
+    pub(crate) fn needs_sync(&mut self) -> bool {
+        !self.pending.is_empty()
+            || self.changed
             || self
                 .entries
                 .iter_mut()
                 .any(|entry| entry.node.delegates().is_some_and(|delegates| delegates.needs_sync()))
+    }
+
+    /// The kinds attached, detached or released here and below since the last call.
+    fn take_pending(&mut self) -> NodeKinds {
+        let mut pending = mem::take(&mut self.pending);
+        for entry in &mut self.entries {
+            if let Some(delegates) = entry.node.delegates() {
+                pending |= delegates.take_pending();
+            }
+        }
+        pending
     }
 
     /// The union of its delegates' kinds, theirs brought up to date first; `owner` is what the
@@ -167,25 +222,33 @@ impl Delegates {
     /// isn't a layout node itself, as Compose's `validateDelegateKindSet`.
     pub(crate) fn refresh_kinds(&mut self, owner: NodeKinds) -> NodeKinds {
         let mut union = NodeKinds::NONE;
-        let mut layout: Option<&'static str> = None;
+        let mut layouts = 0;
         for entry in &mut self.entries {
             if let Some(delegates) = entry.node.delegates() {
                 entry.kinds = entry.own | delegates.refresh_kinds(entry.own);
             }
             union |= entry.kinds;
-            if entry.kinds.any(NodeKinds::LAYOUT) && !owner.any(NodeKinds::LAYOUT) {
-                if let Some(first) = layout {
-                    panic!(
-                        "compose-ui: delegating to several layout nodes ({first}, {}) without the \
-                         delegating node being one itself (`as_layout`) isn't allowed",
-                        entry.name
-                    );
-                }
-                layout = Some(entry.name);
-            }
+            layouts += usize::from(entry.kinds.any(NodeKinds::LAYOUT));
         }
+        assert!(
+            layouts < 2 || owner.any(NodeKinds::LAYOUT),
+            "compose-ui: delegating to several layout nodes without the delegating node being \
+             one itself (`as_layout`) isn't allowed"
+        );
         union
     }
+}
+
+/// Debug builds: panics for a delegate answering what the tree only asks a chain's node.
+fn check_not_an_extra(node: &mut dyn ModifierNode) {
+    let name = "compose-ui: a delegate that";
+    let what = "isn't told: the tree asks only a chain's node (`ModifierNode::delegates`)";
+    assert!(!node.is_repaint_boundary(), "{name} is a repaint boundary {what}");
+    assert!(!node.is_beyond_bounds_layout(), "{name} lays out beyond its bounds {what}");
+    assert!(node.as_selectable().is_none(), "{name} is selectable {what}");
+    let size = crate::unit::Size::new(1.0, 1.0);
+    let density = crate::unit::Density::new(1.0);
+    assert!(node.hit_clip_at(size, density).is_none(), "{name} clips hits {what}");
 }
 
 /// Calls `f` for `node`, whose own kinds are `own`, if it's of `kind`, else for each of its
@@ -251,8 +314,9 @@ pub(crate) fn dispatch_with_context(
     ControlFlow::Continue(())
 }
 
-/// `node`, whose own kinds are `own`, if it's of `kind`, else its first delegate that is (down
-/// their own delegates). For the kinds a node has one of (Compose's `asLayoutModifierNode`).
+/// `node`, whose own kinds are `own`, if it's of `kind`, else the first delegate that is,
+/// breadth first, the newest first, as Compose's `asKind` and `asLayoutModifierNode`, its list of
+/// delegates having the newest at its head. For the kinds a node has one of.
 #[inline]
 pub(crate) fn first_of_kind<'a>(
     node: &'a mut (dyn ModifierNode + 'static),
@@ -267,12 +331,68 @@ fn first_delegate_of_kind<'a>(
     node: &'a mut (dyn ModifierNode + 'static),
     kind: NodeKinds,
 ) -> Option<&'a mut (dyn ModifierNode + 'static)> {
-    for entry in &mut node.delegates()?.entries {
-        if entry.kinds.any(kind) {
-            return first_of_kind(&mut *entry.node, entry.own, kind);
+    let id = first_delegate_id(node, kind)?;
+    find_delegate(node, id).map(|found| &mut *found.node)
+}
+
+/// `first_of_kind`'s node as a name: `NO_DELEGATE` for `node` itself.
+pub(crate) fn first_id_of_kind(
+    node: &mut dyn ModifierNode,
+    own: NodeKinds,
+    kind: NodeKinds,
+) -> Option<EntryId> {
+    if own.any(kind) { Some(EntryId::NO_DELEGATE) } else { first_delegate_id(node, kind) }
+}
+
+/// The first delegate of `kind` below `node`, a level at a time.
+fn first_delegate_id(node: &mut dyn ModifierNode, kind: NodeKinds) -> Option<EntryId> {
+    let mut depth = 0;
+    loop {
+        let (found, deeper) = delegate_at_depth(node, kind, depth);
+        if found.is_some() || !deeper {
+            return found;
+        }
+        depth += 1;
+    }
+}
+
+/// The first delegate of `kind` `depth` levels below `node`, and whether there are levels below.
+fn delegate_at_depth(
+    node: &mut dyn ModifierNode,
+    kind: NodeKinds,
+    depth: usize,
+) -> (Option<EntryId>, bool) {
+    let Some(delegates) = node.delegates() else { return (None, false) };
+    let mut deeper = false;
+    for entry in delegates.entries.iter_mut().rev() {
+        if !entry.kinds.any(kind) {
+            continue;
+        }
+        if depth == 0 {
+            if entry.own.any(kind) {
+                return (Some(entry.id), false);
+            }
+            deeper = true;
+        } else {
+            let (found, below) = delegate_at_depth(&mut *entry.node, kind, depth - 1);
+            if found.is_some() {
+                return (found, false);
+            }
+            deeper |= below;
         }
     }
-    None
+    (None, deeper)
+}
+
+/// `first_of_kind` for a node out of a tree, its own kinds probed: what tests of `asKind` use.
+/// Not for apps.
+#[doc(hidden)]
+pub fn first_of_kind_of<'a>(
+    node: &'a mut (dyn ModifierNode + 'static),
+    kind: NodeKinds,
+) -> Option<&'a mut (dyn ModifierNode + 'static)> {
+    let own = NodeKinds::of_delegate(node);
+    first_of_kind(node, own, kind)
 }
 
 /// What updating `node`, whose own kinds are `own`, auto-invalidates of `remaining`, as Compose's
@@ -352,8 +472,8 @@ fn run_delegate_attach(entry: &mut DelegateEntry, context: &mut NodeContext<'_>)
     entry.state |= entry_state::ATTACH_RAN;
 }
 
-/// Runs `callback` on the delegates of `node` whose attach ran, as `runDetachLifecycle` and
-/// `reset`: the newest delegate first, each before its own delegates.
+/// Runs `callback` on the delegates of `node` whose attach ran, as `DelegatingNode.reset`: the
+/// newest delegate first, each before its own delegates.
 pub(crate) fn run_on_delegates(
     node: &mut dyn ModifierNode,
     context: &mut NodeContext<'_>,
@@ -368,6 +488,28 @@ pub(crate) fn run_on_delegates(
             });
         }
     }
+}
+
+/// `node`'s `on_detach` and its delegates', as `DelegatingNode.runDetachLifecycle`: the node, then
+/// the newest delegate first, each before its own. What each delegates or undelegates there is
+/// attached or detached before going on, as Compose's `delegate` and `undelegate` do at once, so
+/// a delegate attached in an `on_detach` hears its own `on_detach`, and one undelegated hears it
+/// even if its owner is leaving its chain. Each `on_detach` follows one `on_attach`.
+pub(crate) fn detach_with_delegates(node: &mut dyn ModifierNode, context: &mut NodeContext<'_>) {
+    node.on_detach(context);
+    sync_node(node, context.is_attached(), context);
+    let Some(delegates) = node.delegates() else { return };
+    for entry in delegates.entries.iter_mut().rev() {
+        detach_delegate(entry, context);
+    }
+}
+
+fn detach_delegate(entry: &mut DelegateEntry, context: &mut NodeContext<'_>) {
+    if entry.state & entry_state::ATTACH_RAN == 0 {
+        return;
+    }
+    context.with_delegate(entry, detach_with_delegates);
+    entry.state &= !entry_state::ATTACH_RAN;
 }
 
 impl UiTree {
@@ -440,81 +582,94 @@ impl UiTree {
     /// chain (`refresh_chain`), which makes or drops a layer for a layout delegate (Compose's
     /// `syncCoordinators`).
     pub(crate) fn sync_delegates(&mut self, node: NodeId, index: usize) {
-        let mut changes = NodeKinds::NONE;
-        let mut any = false;
+        let Some(entry) = self.get_mut(node).and_then(|value| value.chain.get_mut(index)) else {
+            return;
+        };
+        if !entry.node.delegates().is_some_and(|delegates| delegates.needs_sync()) {
+            return;
+        }
         // Until nothing changes: the callbacks may delegate too.
         loop {
             let Some(entry) = self.get_mut(node).and_then(|value| value.chain.get_mut(index))
             else {
                 return;
             };
-            let Some(delegates) = entry.node.delegates() else { return };
-            if !delegates.needs_sync() {
+            if !entry.node.delegates().is_some_and(|delegates| delegates.has_changed()) {
                 break;
             }
-            any = true;
-            let own = entry.own;
             let attached = entry.state & entry_state::ATTACHED != 0;
             self.with_entry_raw(node, index, |modifier_node, context| {
-                sync_node(modifier_node, attached, context, &mut changes);
-                if let Some(delegates) = modifier_node.delegates() {
-                    delegates.refresh_kinds(own);
-                }
+                sync_node(modifier_node, attached, context);
             });
         }
-        if !any {
-            return;
-        }
-        let value = self.node_mut(node);
-        let entry = &mut value.chain[index];
-        let before = entry.kinds;
-        let own = entry.own;
-        let kinds = match entry.node.delegates() {
-            Some(delegates) => own | delegates.refresh_kinds(own),
-            None => own,
+        let entry = &mut self.node_mut(node).chain[index];
+        let (id, own, before) = (entry.id, entry.own, entry.kinds);
+        let (kinds, changes) = match entry.node.delegates() {
+            Some(delegates) => (own | delegates.refresh_kinds(own), delegates.take_pending()),
+            None => (own, NodeKinds::NONE),
         };
         entry.kinds = kinds;
-        let mut parent_data_changed = false;
-        if kinds != before {
-            let layers_changed = before.any(NodeKinds::LAYOUT) != kinds.any(NodeKinds::LAYOUT);
-            if layers_changed {
-                value.chain_version = value.chain_version.wrapping_add(1);
-            }
-            parent_data_changed = self.refresh_chain(node);
-            if layers_changed {
-                // The same nodes in the same places, but in other layers.
-                let same: SmallVec<[Option<usize>; 8]> =
-                    (0..self.node(node).chain.len()).map(Some).collect();
-                self.remap_captures(node, &same);
-            }
-        }
+        let parent_data_changed = kinds != before && self.entry_kinds_changed(node, before, kinds);
         if changes.any(NodeKinds::PARENT_DATA) {
-            parent_data_changed |= self.refresh_custom_parent_data(node);
+            // The fold asks every node of the chain, and one may be running: where the tree
+            // applies its nodes' requests, as a node's own `invalidate_parent_data`.
+            let requests = &self.focus_requests;
+            requests.node_invalidations.borrow_mut().push((node, id, Invalidation::ParentData));
+            requests.wake();
         }
         if changes.any(NodeKinds::FOCUS_TARGET) {
             self.revalidate_focus(node, None);
         }
         self.auto_invalidate(node, changes, changes, parent_data_changed);
+        self.drain_remeasures();
+    }
+
+    /// Entry `index` of `node` took on `kinds` (a delegate attached at once): its chain knows.
+    pub(crate) fn add_entry_kinds(&mut self, node: NodeId, index: Option<usize>, kinds: NodeKinds) {
+        let Some(index) = index else { return };
+        let entry = &mut self.node_mut(node).chain[index];
+        let before = entry.kinds;
+        if !before.all(kinds) {
+            entry.kinds |= kinds;
+            let after = entry.kinds;
+            self.entry_kinds_changed(node, before, after);
+        }
+    }
+
+    /// `node`'s chain after an entry's kinds went from `before` to `after`: its aggregates and
+    /// layers, and what holds its layers (`remap_captures`). Returns whether its parent data
+    /// changed.
+    fn entry_kinds_changed(&mut self, node: NodeId, before: NodeKinds, after: NodeKinds) -> bool {
+        let layers_changed = before.any(NodeKinds::LAYOUT) != after.any(NodeKinds::LAYOUT);
+        if layers_changed {
+            let value = self.node_mut(node);
+            value.chain_version = value.chain_version.wrapping_add(1);
+        }
+        let parent_data_changed = self.refresh_chain(node);
+        if layers_changed {
+            self.remap_same_entries(node);
+        }
+        parent_data_changed
+    }
+
+    /// The same nodes in the same places of `node`'s chain, but in other layers: what holds them
+    /// (a gesture, the hover) follows.
+    pub(crate) fn remap_same_entries(&mut self, node: NodeId) {
+        let same: SmallVec<[Option<usize>; 8]> =
+            (0..self.node(node).chain.len()).map(Some).collect();
+        self.remap_captures(node, &same);
     }
 }
 
-/// The delegates of `node` synced: `context` is its own, `attached` whether it's attached.
-fn sync_node(
-    node: &mut dyn ModifierNode,
-    attached: bool,
-    context: &mut NodeContext<'_>,
-    changes: &mut NodeKinds,
-) {
+/// The delegates of `node` synced, `context` being its own: what was undelegated is detached and
+/// released, what was delegated attached if the owner is (`attached`), and so on below. What the
+/// chain must do of it is left in `pending`, for `sync_delegates`.
+fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeContext<'_>) {
     let Some(delegates) = node.delegates() else { return };
     delegates.changed = false;
     for mut gone in mem::take(&mut delegates.removed) {
-        *changes |= gone.kinds;
-        if gone.state & entry_state::ATTACH_RAN != 0 {
-            context.with_delegate(&mut gone, |node, context| {
-                node.on_detach(context);
-                run_on_delegates(node, context, |node, context| node.on_detach(context));
-            });
-        }
+        delegates.pending |= gone.kinds;
+        detach_delegate(&mut gone, context);
         context.tree.mark_delegate_detached(&mut gone);
         context.tree.release_delegate(gone);
     }
@@ -523,11 +678,11 @@ fn sync_node(
         if attached && entry.state & entry_state::ATTACHED == 0 {
             mark_delegate_attached(entry, &requests);
             run_delegate_attach(entry, context);
-            *changes |= entry.kinds;
+            delegates.pending |= entry.kinds;
         } else {
             let attached = entry.state & entry_state::ATTACHED != 0;
             context.with_delegate(entry, |node, context| {
-                sync_node(node, attached, context, changes);
+                sync_node(node, attached, context);
             });
         }
     }

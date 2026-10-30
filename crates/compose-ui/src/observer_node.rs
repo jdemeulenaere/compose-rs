@@ -32,46 +32,52 @@ pub(crate) struct NodeObservations {
     next_key: u64,
 }
 
-impl UiTree {
+impl crate::focus_requester::FocusRequests {
     /// Runs `block` for `entry` of `node`, observing what it reads in place of what its last
-    /// observation read.
+    /// observation read. On the requests, so a handle may too, inside a measurement or a drawing.
     pub(crate) fn observe_entry_reads<R>(
-        &mut self,
+        self: &Rc<Self>,
         node: NodeId,
         entry: EntryId,
         block: impl FnOnce() -> R,
     ) -> R {
-        let requests = Rc::downgrade(&self.focus_requests);
-        let observations = &mut self.observations;
-        let observer = observations
-            .observer
-            .get_or_insert_with(|| {
-                let requests: Weak<crate::focus_requester::FocusRequests> = requests;
-                // A write asks for a frame, whose start tells the nodes.
-                Rc::new(ReadObserver::new(move || {
-                    if let Some(requests) = requests.upgrade() {
-                        requests.wake();
-                    }
-                }))
-            })
-            .clone();
-        if let Some(previous) = observations.current.remove(&entry) {
-            observations.entries.remove(&previous);
-            observer.forget(previous);
-        }
-        observations.next_key += 1;
-        let key = observations.next_key;
-        observations.entries.insert(key, (node, entry));
-        observations.current.insert(entry, key);
+        let (observer, key) = {
+            let requests = Rc::downgrade(self);
+            let observations = &mut *self.observations.borrow_mut();
+            let observer = observations
+                .observer
+                .get_or_insert_with(|| {
+                    let requests: Weak<crate::focus_requester::FocusRequests> = requests;
+                    // A write asks for a frame, whose start tells the nodes.
+                    Rc::new(ReadObserver::new(move || {
+                        if let Some(requests) = requests.upgrade() {
+                            requests.wake();
+                        }
+                    }))
+                })
+                .clone();
+            if let Some(previous) = observations.current.remove(&entry) {
+                observations.entries.remove(&previous);
+                observer.forget(previous);
+            }
+            observations.next_key += 1;
+            let key = observations.next_key;
+            observations.entries.insert(key, (node, entry));
+            observations.current.insert(entry, key);
+            (observer, key)
+        };
         observer.observe(key, block)
     }
+}
 
+impl UiTree {
     /// Forgets what `entry` observed: it's dropped.
     pub(crate) fn forget_entry_reads(&mut self, entry: EntryId, state: u8) {
-        if state & entry_state::OBSERVES == 0 {
+        // A handle may have observed without its flag.
+        if state & (entry_state::OBSERVES | entry_state::HAS_HANDLE) == 0 {
             return;
         }
-        let observations = &mut self.observations;
+        let observations = &mut *self.focus_requests.observations.borrow_mut();
         if let Some(key) = observations.current.remove(&entry) {
             observations.entries.remove(&key);
             if let Some(observer) = &observations.observer {
@@ -80,19 +86,29 @@ impl UiTree {
         }
     }
 
+    /// How many entries observe reads now. For tests.
+    #[doc(hidden)]
+    pub fn observing_nodes_for_test(&self) -> usize {
+        self.focus_requests.observations.borrow().current.len()
+    }
+
     /// Tells the nodes whose observed reads a write changed, once each: those still attached,
     /// through `ObserverModifierNode::on_observed_reads_changed`. Each observation fired is
     /// forgotten, as Compose's. What the callbacks' own writes change is told the next time
     /// (the next layout round or frame, which they ask for).
     pub(crate) fn notify_observer_nodes(&mut self) {
-        let Some(observer) = self.observations.observer.clone() else { return };
+        let requests = self.focus_requests.clone();
+        let Some(observer) = requests.observations.borrow().observer.clone() else { return };
         let mut fired: SmallVec<[(u64, NodeId, EntryId); 4]> = SmallVec::new();
-        observer.drain_invalidated(|key| {
-            if let Some((node, entry)) = self.observations.entries.remove(&key) {
-                self.observations.current.remove(&entry);
-                fired.push((key, node, entry));
-            }
-        });
+        {
+            let observations = &mut *requests.observations.borrow_mut();
+            observer.drain_invalidated(|key| {
+                if let Some((node, entry)) = observations.entries.remove(&key) {
+                    observations.current.remove(&entry);
+                    fired.push((key, node, entry));
+                }
+            });
+        }
         for (key, node, entry) in fired {
             // Forgotten: a later write tells nothing until it observes again.
             observer.forget(key);

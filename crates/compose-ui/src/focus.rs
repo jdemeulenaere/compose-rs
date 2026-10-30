@@ -6,7 +6,7 @@
 use crate::focus_manager::FocusDirection;
 use smallvec::SmallVec;
 
-use crate::input::{Action, EventContext, Requests};
+use crate::input::{Action, Requests};
 use crate::node_chain::NodeKinds;
 use crate::nodes::OnFocusChangedNode;
 use crate::tree::{NodeId, UiTree};
@@ -145,24 +145,25 @@ impl UiTree {
         actions: &mut Vec<Action>,
     ) {
         let mut requests = Requests::default();
-        let density = self.density;
-        let view_configuration = self.view_configuration();
-        if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node)
-            && let Some(target) = value.chain.get_mut(index).and_then(|entry| entry.focus_target())
-        {
-            let mut context = EventContext {
+        let target = self
+            .get_mut(node)
+            .and_then(|value| value.chain.get_mut(index))
+            .and_then(|entry| entry.focus_target_id());
+        if let Some(target) = target {
+            self.with_event_context(
                 node,
+                index,
+                target,
                 actions,
-                requests: &mut requests,
-                text_measurer,
-                clipboard,
-                pointer_position: None,
-                density,
-                view_configuration,
-                layout_direction: value.layout_direction,
-                waiting_parent: false,
-            };
-            target.on_focus_changed(focused, &mut context);
+                &mut requests,
+                None,
+                false,
+                |modifier_node, context| {
+                    if let Some(target) = modifier_node.as_focus_target() {
+                        target.on_focus_changed(focused, context);
+                    }
+                },
+            );
         }
         // Its semantics say whether it's focused (D1257).
         self.invalidate_semantics_of(node);
@@ -191,25 +192,26 @@ impl UiTree {
         };
         let origin = self.layer_origin(focus.node, layer);
         let mut requests = Requests::default();
-        let density = self.density;
-        let view_configuration = self.view_configuration();
-        if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(focus.node)
-            && let Some(target) =
-                value.chain.get_mut(focus.index as usize).and_then(|entry| entry.focus_target())
-        {
-            let mut context = EventContext {
-                node: focus.node,
+        let index = focus.index as usize;
+        let target = self
+            .get_mut(focus.node)
+            .and_then(|value| value.chain.get_mut(index))
+            .and_then(|entry| entry.focus_target_id());
+        if let Some(target) = target {
+            self.with_event_context(
+                focus.node,
+                index,
+                target,
                 actions,
-                requests: &mut requests,
-                text_measurer,
-                clipboard,
-                pointer_position: Some(tap),
-                density,
-                view_configuration,
-                layout_direction: value.layout_direction,
-                waiting_parent: false,
-            };
-            target.on_focus_tap(tap - origin, &mut context);
+                &mut requests,
+                Some(tap),
+                false,
+                |modifier_node, context| {
+                    if let Some(target) = modifier_node.as_focus_target() {
+                        target.on_focus_tap(tap - origin, context);
+                    }
+                },
+            );
         }
         for node in requests.draw {
             self.invalidate_draw_of(node);

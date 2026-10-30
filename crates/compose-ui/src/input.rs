@@ -226,25 +226,36 @@ impl Action {
 
 /// What an event handler can do: queue actions, ask for focus, invalidate drawing or layout.
 pub struct EventContext<'a> {
-    pub(crate) node: NodeId,
+    /// The handling node's own, as design §3.3: through it a handler traverses, gets a handle,
+    /// observes reads (`Deref`).
+    pub(crate) context: crate::node_context::NodeContext<'a>,
     pub(crate) actions: &'a mut Vec<Action>,
     pub(crate) requests: &'a mut Requests,
-    pub(crate) text_measurer: &'a mut dyn crate::text::TextMeasurer,
-    pub(crate) clipboard: &'a dyn crate::clipboard::ClipboardManager,
     /// The pointer's position in the root, while handling a pointer event.
     pub(crate) pointer_position: Option<Offset>,
-    pub(crate) density: crate::unit::Density,
     pub(crate) view_configuration: crate::view_configuration::ViewConfiguration,
-    pub(crate) layout_direction: crate::alignment::LayoutDirection,
     /// Whether something around the handling node (a scrollable) waits for a gesture past a
     /// press, while handling a press, as Compose's `hasWaitingParent`.
     pub(crate) waiting_parent: bool,
 }
 
+impl<'a> std::ops::Deref for EventContext<'a> {
+    type Target = crate::node_context::NodeContext<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+
+impl std::ops::DerefMut for EventContext<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.context
+    }
+}
+
 impl EventContext<'_> {
     /// The density, to turn dp distances (a touch slop) into pixels.
     pub fn density(&self) -> crate::unit::Density {
-        self.density
+        self.context.tree.density
     }
 
     /// The host's gesture timeouts and distances, as a node's `currentValueOf(
@@ -256,7 +267,7 @@ impl EventContext<'_> {
     /// The handling node's layout direction: a horizontal scroll goes the other way in a
     /// right-to-left layout.
     pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {
-        self.layout_direction
+        self.context.require_layout_direction()
     }
 
     /// Whether something around the handling node waits for a gesture past the press being
@@ -315,14 +326,14 @@ impl EventContext<'_> {
 
     /// Moves focus to this node's focus target, as `FocusRequester.requestFocus`.
     pub fn request_focus(&mut self) {
-        self.requests.focus = Some(self.node);
+        self.requests.focus = Some(self.context.node);
     }
 
     /// Moves focus as `request_focus`, telling the focus target where the pointer was
     /// (`FocusTargetModifierNode::on_focus_tap`): a text field's decoration focuses the field and
     /// puts its cursor nearest the tap.
     pub fn request_focus_at_pointer(&mut self) {
-        self.requests.focus = Some(self.node);
+        self.requests.focus = Some(self.context.node);
         self.requests.focus_tap = self.pointer_position;
     }
 
@@ -350,26 +361,26 @@ impl EventContext<'_> {
 
     /// The node's drawing changed: what it draws in (its repaint boundary) draws again.
     pub fn invalidate_draw(&mut self) {
-        self.requests.draw.push(self.node);
+        self.requests.draw.push(self.context.node);
     }
 
     /// The node's measurement changed.
     pub fn invalidate_measure(&mut self) {
-        self.requests.measure.push(self.node);
+        self.requests.measure.push(self.context.node);
     }
 
     /// The text measurer, for handlers that hit-test their paragraphs (a text field's tap).
     pub fn text_measurer(&mut self) -> &mut dyn crate::text::TextMeasurer {
-        &mut *self.text_measurer
+        self.context.tree.text_measurer()
     }
 
     /// The clipboard, for copy and paste.
     pub fn clipboard(&self) -> &dyn crate::clipboard::ClipboardManager {
-        self.clipboard
+        &*self.context.tree.clipboard
     }
 
     /// The layout node the handler belongs to.
     pub fn node(&self) -> NodeId {
-        self.node
+        self.context.node
     }
 }

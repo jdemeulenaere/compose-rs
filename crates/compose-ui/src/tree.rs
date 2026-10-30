@@ -353,8 +353,9 @@ pub struct UiTree {
     pub(crate) delegates_noted: Vec<(NodeId, crate::node_chain::EntryId)>,
     /// Inside a measurement: what a node's code delegated waits (`delegates_noted`).
     pub(crate) delegates_wait: bool,
-    /// The reads modifier nodes observe (`NodeContext::observe_reads`).
-    pub(crate) observations: crate::observer_node::NodeObservations,
+    /// How many nodes' code is running (`UiTree::with_entry_raw`), one inside another through a
+    /// traversal: what needs every node in its chain waits for the outermost to return.
+    pub(crate) entries_running: u32,
 }
 
 impl Drop for UiTree {
@@ -424,7 +425,7 @@ impl UiTree {
             removed_parents: Vec::new(),
             delegates_noted: Vec::new(),
             delegates_wait: false,
-            observations: Default::default(),
+            entries_running: 0,
         }
     }
 
@@ -831,25 +832,34 @@ impl UiTree {
         // What the updated, inserted and removed nodes' kinds say to invalidate, as Compose's
         // `autoInvalidateUpdatedNode`, `…InsertedNode` and `…RemovedNode` (NodeKind.kt).
         let mut invalidated = NodeKinds::NONE;
-        // The entries whose updates delegated or undelegated.
+        // The entries whose updates delegated or undelegated, and whether a layer came or went.
         let mut delegated: SmallVec<[EntryId; 1]> = SmallVec::new();
+        let mut layers_changed = false;
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
                 if !old.same(new) {
                     let entry = &mut value.chain[index];
                     nodes::update(new, &mut *entry.node);
-                    if entry.after_update() {
+                    let updated = entry.after_update();
+                    if updated.delegated {
                         delegated.push(entry.id);
                     }
+                    layers_changed |= updated.layers;
                     invalidated |= entry.updated_kinds();
                 }
             }
             let previous = std::mem::replace(&mut value.modifier, modifier);
+            if layers_changed {
+                value.chain_version = value.chain_version.wrapping_add(1);
+            }
             for &entry in &delegated {
                 self.queue_lifecycle(crate::lifecycle::Lifecycle::SyncDelegates(node, entry));
             }
             let mut parent_data_changed = self.refresh_chain(node);
+            if layers_changed {
+                self.remap_same_entries(node);
+            }
             // Updated parent data nodes tell the parent, as Compose's `invalidateParentData`.
             if invalidated.any(NodeKinds::PARENT_DATA) {
                 parent_data_changed |= self.refresh_custom_parent_data(node);
@@ -876,9 +886,11 @@ impl UiTree {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
                         nodes::update(element, &mut *entry.node);
-                        if entry.after_update() {
+                        let updated = entry.after_update();
+                        if updated.delegated {
                             delegated.push(entry.id);
                         }
+                        layers_changed |= updated.layers;
                         invalidated |= entry.updated_kinds();
                     }
                     chain.push(entry);
@@ -903,7 +915,7 @@ impl UiTree {
             invalidated |= removed.kinds;
             structural |= removed.kinds;
         }
-        let changed = reused != old.len() || reused != new.len();
+        let changed = reused != old.len() || reused != new.len() || layers_changed;
         if changed {
             value.chain_version = value.chain_version.wrapping_add(1);
             // Which layer bounds its semantics follows the chain's layout nodes.

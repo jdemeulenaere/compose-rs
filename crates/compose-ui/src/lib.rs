@@ -94,7 +94,7 @@ pub mod platform {
     /// Node kinds and how a node's dispatch by kind goes, for tests of the visitors
     /// (`NodeContext::visit_ancestors`, …), as Compose's internal `Nodes`: not for apps.
     #[doc(hidden)]
-    pub use crate::delegation::dispatch_for_kind_of;
+    pub use crate::delegation::{dispatch_for_kind_of, first_of_kind_of};
     pub use crate::display_list::{
         Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer, fits_in,
         single_drawing, single_drawing_extent,
@@ -110,7 +110,7 @@ pub mod platform {
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     #[doc(hidden)]
-    pub use crate::node_chain::NodeKinds;
+    pub use crate::node_chain::{NodeKinds, chain_entry_kinds_for_test};
     pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::paragraph::{
         CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,

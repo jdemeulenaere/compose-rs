@@ -105,8 +105,8 @@ impl NodeKinds {
     /// The kinds of `node`, which an element of a user-defined type made if `observed`: what
     /// it answers to, asked once.
     pub(crate) fn of(node: &mut dyn ModifierNode, observed: bool) -> NodeKinds {
-        let mut kinds =
-            if observed || node.observes_reads() { NodeKinds::OBSERVED } else { NodeKinds::NONE };
+        let observed_or_lifecycle = observed || node.observes_reads();
+        let mut kinds = if observed_or_lifecycle { NodeKinds::OBSERVED } else { NodeKinds::NONE };
         kinds |= NodeKinds::ANY;
         let mut add = |has: bool, kind: NodeKinds| {
             if has {
@@ -138,8 +138,8 @@ impl NodeKinds {
             node.downcast_ref::<crate::focus_requester::FocusRequesterNode>().is_some(),
             NodeKinds::FOCUS_REQUESTER,
         );
-        // Only a user-defined element's node may be one.
-        if observed {
+        // Only a node with a lifecycle may be one.
+        if observed_or_lifecycle {
             add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
         }
         kinds
@@ -210,6 +210,28 @@ pub(crate) fn traverse_key_of(
     node.as_traversable().map(|node| node.traverse_key())
 }
 
+/// The kinds a chain would take `node` with, which an element of a user-defined type made if
+/// `observed`: what tests of `ChainEntry::new` read. Not for apps.
+#[doc(hidden)]
+pub fn chain_entry_kinds_for_test(node: &mut dyn ModifierNode, observed: bool) -> NodeKinds {
+    let own = NodeKinds::of(node, observed);
+    if own.any(NodeKinds::OBSERVED)
+        && let Some(delegates) = node.delegates()
+    {
+        return own | delegates.refresh_kinds(own);
+    }
+    own
+}
+
+/// What an element's update did to its node's delegates (`ChainEntry::after_update`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct DelegatesUpdated {
+    /// It delegated or undelegated: the tree looks at the pass's end.
+    pub(crate) delegated: bool,
+    /// A layout delegate came or went: the node has a layer more or less.
+    pub(crate) layers: bool,
+}
+
 /// One modifier node of a layout node's chain.
 pub(crate) struct ChainEntry {
     pub(crate) node: Box<dyn ModifierNode>,
@@ -231,8 +253,10 @@ impl ChainEntry {
         let own = NodeKinds::of(&mut *node, observed);
         let mut kinds = own;
         let mut state = 0;
-        // Only a user-defined element's node may delegate.
-        if observed && let Some(delegates) = node.delegates() {
+        // A user-defined element's node, or a built-in one with a lifecycle (`observes_reads`).
+        if own.any(NodeKinds::OBSERVED)
+            && let Some(delegates) = node.delegates()
+        {
             kinds |= delegates.refresh_kinds(own);
             state = entry_state::DELEGATING;
         }
@@ -255,6 +279,11 @@ impl ChainEntry {
             .as_focus_target()
     }
 
+    /// The name of its focus target: `NO_DELEGATE` for its node, else a delegate's.
+    pub(crate) fn focus_target_id(&mut self) -> Option<EntryId> {
+        crate::delegation::first_id_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)
+    }
+
     /// What an update of its node auto-invalidates: its kinds, unless it says not to, as Compose's
     /// `autoInvalidateUpdatedNode`, which asks the node and each delegate apart.
     pub(crate) fn updated_kinds(&mut self) -> NodeKinds {
@@ -268,18 +297,22 @@ impl ChainEntry {
     }
 
     /// After its element updated its node: its kinds again if the update delegated or
-    /// undelegated, and whether it did (what's left of that runs when the pass ends).
-    pub(crate) fn after_update(&mut self) -> bool {
+    /// undelegated. Says if it did (what's left of that runs when the pass ends), and if a layer
+    /// came or went with it.
+    pub(crate) fn after_update(&mut self) -> DelegatesUpdated {
+        let mut updated = DelegatesUpdated::default();
         if self.state & entry_state::DELEGATING == 0 {
-            return false;
+            return updated;
         }
         let own = self.own;
-        let Some(delegates) = self.node.delegates() else { return false };
-        if !delegates.needs_sync() {
-            return false;
+        let Some(delegates) = self.node.delegates() else { return updated };
+        if delegates.needs_sync() {
+            let kinds = own | delegates.refresh_kinds(own);
+            updated.delegated = true;
+            updated.layers = kinds.any(NodeKinds::LAYOUT) != self.kinds.any(NodeKinds::LAYOUT);
+            self.kinds = kinds;
         }
-        self.kinds = own | delegates.refresh_kinds(own);
-        true
+        updated
     }
 }
 

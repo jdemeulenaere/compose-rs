@@ -17,10 +17,10 @@ What of Jetpack Compose's ui core compose-rs has, which of Compose's tests its o
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 3 | 11 |
-| `ported` | 5 | 86 |
-| `port` | 13 | 118 |
-| `partial` | 52 | 1,061 |
-| `feature:<name>` | 105 | 1,632 |
+| `ported` | 20 | 227 |
+| `port` | 12 | 114 |
+| `partial` | 55 | 1,082 |
+| `feature:<name>` | 88 | 1,474 |
 | `n/a` | 57 | 257 |
 
 By module: `ui` 147 files (125 device, 22 host), `ui-graphics` 64, `ui-geometry` 7, `ui-unit` 14, `ui-util` 3.
