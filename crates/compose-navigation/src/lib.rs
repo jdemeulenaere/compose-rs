@@ -17,6 +17,8 @@ pub use runtime::*;
 pub use ui::*;
 
 #[doc(hidden)]
+pub use compose_lifecycle::local_view_model_store_owner;
+#[doc(hidden)]
 pub use compose_runtime::remember_saveable_state_holder;
 #[doc(hidden)]
 pub use compose_ui::{Alignment, Modifier};

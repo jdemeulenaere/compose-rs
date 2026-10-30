@@ -30,7 +30,7 @@ use super::state::{
     EqualList, ExcludedEntries, LOCAL_ENTRIES_TO_EXCLUDE, SceneState, remember_scene_state,
 };
 use crate::runtime::{
-    ContentKey, NavEntry, NavEntryDecorator, NavList, NavMetadata, NavMetadataKey,
+    ContentKey, NavEntry, NavEntryDecorator, NavList, NavListArg, NavMetadata, NavMetadataKey,
     remember_decorated_nav_entries,
 };
 
@@ -162,21 +162,22 @@ pub fn default_predictive_pop_transition_spec<T: Clone + PartialEq + 'static>()
 /// Shows the entries of `back_stack`, as `NavDisplay(backStack, …)`: its scenes, made by
 /// `scene_strategies` or else a single pane, animating into one another. `on_back` is what a back
 /// gesture calls, by default taking the last key off a stack that can. A scene's entry is shown once,
-/// in the topmost scene it's in. What's read of a stack recomposes what calls this, its parameter
-/// being a list rather than a kept handle. Compose's `sharedTransitionScope` comes with shared
-/// elements.
-#[composable(non_restartable)]
+/// in the topmost scene it's in. Compose's `sharedTransitionScope` comes with shared elements.
+#[composable]
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn NavDisplay<T: Clone + PartialEq + 'static>(
-    back_stack: impl NavList<T> + Clone + 'static,
+    back_stack: impl Into<NavListArg<T>>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
     #[default(None)] on_back: Option<impl Fn() + 'static>,
     #[default(vec![crate::remember_saveable_state_holder_nav_entry_decorator!()])]
-    entry_decorators: impl NavList<NavEntryDecorator<T>>,
-    #[default(vec![crate::scene_strategy(crate::SinglePaneSceneStrategy)])]
-    scene_strategies: impl NavList<SceneStrategyRef<T>>,
-    #[default(Vec::new())] scene_decorator_strategies: impl NavList<SceneDecoratorStrategyRef<T>>,
+    entry_decorators: impl Into<NavListArg<NavEntryDecorator<T>>>,
+    #[default(vec![crate::scene_strategy(crate::SinglePaneSceneStrategy)])] scene_strategies: impl Into<
+        NavListArg<SceneStrategyRef<T>>,
+    >,
+    #[default(Vec::new())] scene_decorator_strategies: impl Into<
+        NavListArg<SceneDecoratorStrategyRef<T>>,
+    >,
     #[default(None)] size_transform: Option<SizeTransform>,
     #[default(crate::default_transition_spec())] transition_spec: impl Fn(Scope<T>) -> ContentTransform
     + 'static,
@@ -200,7 +201,7 @@ pub fn NavDisplay<T: Clone + PartialEq + 'static>(
         None => callback(move || back_stack.remove_last()),
     };
     NavDisplayOfEntries(
-        entries,
+        entries.into(),
         modifier,
         content_alignment,
         scene_strategies,
@@ -215,15 +216,18 @@ pub fn NavDisplay<T: Clone + PartialEq + 'static>(
 
 /// Shows `entries`, decorated already, as `NavDisplay(entries, …)`: for switching between back
 /// stacks with their own decorators' state, or concatenating them.
-#[composable(non_restartable)]
+#[composable]
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn NavDisplayOfEntries<T: Clone + PartialEq + 'static>(
-    entries: impl NavList<NavEntry<T>>,
+    entries: impl Into<NavListArg<NavEntry<T>>>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
-    #[default(vec![crate::scene_strategy(crate::SinglePaneSceneStrategy)])]
-    scene_strategies: impl NavList<SceneStrategyRef<T>>,
-    #[default(Vec::new())] scene_decorator_strategies: impl NavList<SceneDecoratorStrategyRef<T>>,
+    #[default(vec![crate::scene_strategy(crate::SinglePaneSceneStrategy)])] scene_strategies: impl Into<
+        NavListArg<SceneStrategyRef<T>>,
+    >,
+    #[default(Vec::new())] scene_decorator_strategies: impl Into<
+        NavListArg<SceneDecoratorStrategyRef<T>>,
+    >,
     #[default(None)] size_transform: Option<SizeTransform>,
     #[default(crate::default_transition_spec())] transition_spec: impl Fn(Scope<T>) -> ContentTransform
     + 'static,
@@ -359,7 +363,8 @@ pub fn NavDisplayOfState<T: Clone + PartialEq + 'static>(
     let initial_z = *z_indices.borrow_mut().entry(initial_key.clone()).or_insert(0.0);
     let known_target = z_indices.borrow().get(&target_key).copied();
     let target_z = match known_target {
-        // A content on screen keeps its z-index, whatever's asked: this tracks what's running.
+        // A content on screen keeps its z-index, whatever's asked: this tracks what's running. Dead,
+        // as upstream's: `animate_to` above has updated the transition's target already.
         Some(z) if !predictive && *transition.target_state() != *scene => z,
         _ if initial_key == target_key => initial_z,
         _ if popping || predictive => initial_z - 1.0,

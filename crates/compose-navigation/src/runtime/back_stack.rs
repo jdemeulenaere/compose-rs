@@ -63,6 +63,78 @@ impl<T: Clone + 'static> NavList<T> for NavBackStack<T> {
     }
 }
 
+/// A list a restartable composable is given, as Kotlin's `List<T>`: a state list by its handle, read
+/// in the composable and so restarting it alone, or a list by identity. Made by `Into` from a
+/// [`NavBackStack`], a [`SnapshotStateList`], a `Vec` or an array, as call macros do.
+pub enum NavListArg<T: 'static> {
+    State(SnapshotStateList<T>),
+    List(ImmutableList<T>),
+}
+
+impl<T> Clone for NavListArg<T> {
+    fn clone(&self) -> Self {
+        match self {
+            NavListArg::State(list) => NavListArg::State(*list),
+            NavListArg::List(list) => NavListArg::List(list.clone()),
+        }
+    }
+}
+
+impl<T> ComposeArg for NavListArg<T> {
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NavListArg::State(a), NavListArg::State(b)) => a.same(b),
+            (NavListArg::List(a), NavListArg::List(b)) => a.same(b),
+            _ => false,
+        }
+    }
+}
+
+impl<T: Clone + 'static> NavList<T> for NavListArg<T> {
+    fn to_nav_list(&self) -> Vec<T> {
+        match self {
+            NavListArg::State(list) => list.to_nav_list(),
+            NavListArg::List(list) => list.to_nav_list(),
+        }
+    }
+
+    fn remove_last(&self) {
+        if let NavListArg::State(list) = self {
+            NavList::remove_last(list);
+        }
+    }
+}
+
+impl<T> From<SnapshotStateList<T>> for NavListArg<T> {
+    fn from(list: SnapshotStateList<T>) -> Self {
+        NavListArg::State(list)
+    }
+}
+
+impl<T> From<NavBackStack<T>> for NavListArg<T> {
+    fn from(stack: NavBackStack<T>) -> Self {
+        NavListArg::State(stack.base)
+    }
+}
+
+impl<T> From<Vec<T>> for NavListArg<T> {
+    fn from(list: Vec<T>) -> Self {
+        NavListArg::List(list.into())
+    }
+}
+
+impl<T, const N: usize> From<[T; N]> for NavListArg<T> {
+    fn from(list: [T; N]) -> Self {
+        NavListArg::List(Vec::from(list).into())
+    }
+}
+
+impl<T> From<ImmutableList<T>> for NavListArg<T> {
+    fn from(list: ImmutableList<T>) -> Self {
+        NavListArg::List(list)
+    }
+}
+
 /// What can be a key of a saved back stack, as `NavKey`: `Saveable` for Kotlin's `@Serializable`,
 /// with what entries read of a key. An enum of the app's screens is the usual one: Kotlin's sealed
 /// classes and open polymorphism need no registering of subclasses.

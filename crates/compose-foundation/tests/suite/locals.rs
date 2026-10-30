@@ -37,10 +37,7 @@ fn provided(content: impl Fn(MutableState<u32>) + 'static) -> ComposeTestRule {
         LABEL.set(Some(label));
         TICKS.set(Some(tick));
         CompositionLocalProvider(LOCAL_LABEL.provides(label.get()), || {
-            CompositionLocalProvider(
-                compose_ui::LOCAL_BACK_HANDLERS_ENABLED.provides(true),
-                || content(tick),
-            );
+            content(tick);
         });
     })
 }

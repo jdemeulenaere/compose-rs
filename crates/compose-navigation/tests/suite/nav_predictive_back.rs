@@ -312,3 +312,166 @@ fn a_gesture_completed_hands_its_scenes_to_the_pop_where_they_are() {
     ui.set_auto_advance(true);
     ui.wait_for_idle();
 }
+
+type Scope = AnimatedContentTransitionScope<SceneRef<&'static str>>;
+
+fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
+    let mut alphas: Vec<f32> = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::SaveLayerAlpha { alpha, .. } => Some(*alpha),
+            _ => None,
+        })
+        .collect();
+    alphas.sort_by(f32::total_cmp);
+    alphas
+}
+
+fn scales(ui: &mut ComposeTestRule) -> Vec<f32> {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::Transform { scale, .. } => Some(scale.0),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An entry's own predictive transition goes before the display's.
+#[test]
+fn an_entry_s_predictive_transition_goes_first() {
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            predictive_pop_transition_spec = |_: Scope, _: i32| {
+                EnterTransition::NONE.together_with(slide_out_horizontally_with(
+                    tween(100).easing(LINEAR_EASING),
+                    |width| -width / 2,
+                ))
+            },
+            entry_provider = |key: &'static str| {
+                let entry = filling_entry(key);
+                if key == SECOND {
+                    entry.with_metadata(NavDisplay::predictive_pop_transition_spec(
+                        |_: Scope, edge: i32| {
+                            let sign = if edge == NavigationEvent::EDGE_LEFT { 1 } else { -1 };
+                            Some(EnterTransition::NONE.together_with(slide_out_horizontally_with(
+                                tween(100).easing(LINEAR_EASING),
+                                move |width| sign * width / 2,
+                            )))
+                        },
+                    ))
+                } else {
+                    entry
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    ui.host().on_back_started(event(0.5));
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+    assert_eq!(left(&mut ui, SECOND), width / 4.0, "the entry's, by the edge");
+}
+
+/// The display's own default: the entering scene fades along a spring, read linearly, and the
+/// leaving one scales to 0.7, by progress.
+#[test]
+fn a_gesture_fades_and_scales_by_default() {
+    let (mut ui, _stack) = {
+        let owner = mutable_state_list_from([FIRST, SECOND]);
+        let stack = owner.handle();
+        (compose_test(move || NavDisplay!(stack, entry_provider = filling_entry)), owner)
+    };
+    ui.wait_for_idle();
+    ui.host().on_back_started(event(0.5));
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+    assert_eq!(alphas(&mut ui), [0.5], "only what enters fades, linearly");
+    assert_eq!(scales(&mut ui), [0.85], "halfway to 0.7");
+}
+
+/// A spec that isn't a spring is read along its easing.
+#[test]
+fn a_gesture_follows_its_spec_s_easing() {
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            predictive_pop_transition_spec = |_: Scope, _: i32| {
+                slide_in_horizontally_with(tween(100), |width| -width)
+                    .together_with(ExitTransition::NONE)
+            },
+            entry_provider = filling_entry
+        );
+    });
+    ui.wait_for_idle();
+    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    ui.host().on_back_started(event(0.5));
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+    let eased = FAST_OUT_SLOW_IN_EASING.transform(0.5);
+    assert_eq!(left(&mut ui, FIRST), (-width * (1.0 - eased)).round());
+}
+
+/// A fade in and out, a scale in: each goes the way it goes, from the start to the end.
+#[test]
+fn a_gesture_moves_each_part_of_its_transform_its_way() {
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            predictive_pop_transition_spec = |_: Scope, _: i32| {
+                let linear = || tween(100).easing(LINEAR_EASING);
+                (fade_in_with(linear(), 0.0)
+                    + scale_in_with(linear(), 0.5, TransformOrigin::CENTER))
+                .together_with(fade_out_with(linear(), 0.0))
+            },
+            entry_provider = filling_entry
+        );
+    });
+    ui.wait_for_idle();
+    ui.host().on_back_started(event(0.25));
+    ui.host().on_back_progressed(event(0.25));
+    ui.wait_for_idle();
+    assert_eq!(alphas(&mut ui), [0.25, 0.75]);
+    assert_eq!(scales(&mut ui), [0.625], "a quarter of the way from 0.5 to 1");
+}
+
+/// During a gesture, what's going back to is under what's there: a click takes the current one.
+#[test]
+fn a_gesture_keeps_what_s_there_on_top() {
+    let (clicks_first, clicks_second) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let (first, second) = (clicks_first.clone(), clicks_second.clone());
+    let mut ui = compose_test(move || {
+        let (first, second) = (first.clone(), second.clone());
+        NavDisplay!(
+            stack,
+            predictive_pop_transition_spec =
+                |_: Scope, _: i32| { EnterTransition::NONE.together_with(ExitTransition::NONE) },
+            entry_provider = move |key: &'static str| {
+                let clicks = if key == FIRST { first.clone() } else { second.clone() };
+                NavEntry::new(key, move |key| Clickable!(key, clicks.clone()))
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.host().on_back_started(event(0.5));
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+    ui.on_node_with_text(SECOND).perform_click();
+    assert_eq!(clicks_first.get(), 0);
+    assert_eq!(clicks_second.get(), 1);
+}

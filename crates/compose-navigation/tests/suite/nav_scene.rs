@@ -673,20 +673,20 @@ fn an_overlay_over_another_doesn_t_show_it_again() {
     let counted = renders.clone();
     let owner = mutable_state_list_from([FIRST]);
     let stack = owner.handle();
-    // Kept: another closure's content is other content, shown again.
-    let provider = entry_provider(move |scope: &mut EntryProviderScope<&'static str>| {
-        scope.entry(FIRST, |key| Shown!(key));
-        scope.entry(SECOND, move |key| {
-            counted.set(counted.get() + 1);
-            Shown!(key);
-        });
-        scope.entry(THIRD, |key| Shown!(key));
-    });
     let mut ui = compose_test(move || {
+        let counted = counted.clone();
         NavDisplay!(
             stack,
             scene_strategies = vec![slow_overlay_strategy()],
-            entry_provider = provider.clone()
+            entry_provider = move |key: &'static str| {
+                let counted = counted.clone();
+                NavEntry::new(key, move |key| {
+                    if key == SECOND {
+                        counted.set(counted.get() + 1);
+                    }
+                    Shown!(key);
+                })
+            }
         );
     });
     ui.wait_for_idle();
@@ -713,4 +713,103 @@ fn an_overlay_over_another_doesn_t_show_it_again() {
     ui.on_node_with_text(SECOND).assert_is_displayed();
     ui.on_node_with_text(THIRD).assert_does_not_exist();
     assert_eq!(renders.get(), 1);
+}
+
+/// A scene of its fields, as a data class.
+#[derive(Clone)]
+struct Fields {
+    key: &'static str,
+    entries: Vec<NavEntry<&'static str>>,
+    previous: Vec<NavEntry<&'static str>>,
+}
+
+impl Scene<&'static str> for Fields {
+    fn key(&self) -> ContentKey {
+        ContentKey::new(self.key)
+    }
+    fn entries(&self) -> &[NavEntry<&'static str>] {
+        &self.entries
+    }
+    fn previous_entries(&self) -> &[NavEntry<&'static str>] {
+        &self.previous
+    }
+    fn content(&self) {}
+}
+
+/// The same fields, of another type.
+struct OtherFields(Fields);
+
+impl Scene<&'static str> for OtherFields {
+    fn key(&self) -> ContentKey {
+        self.0.key()
+    }
+    fn entries(&self) -> &[NavEntry<&'static str>] {
+        self.0.entries()
+    }
+    fn previous_entries(&self) -> &[NavEntry<&'static str>] {
+        self.0.previous_entries()
+    }
+    fn content(&self) {}
+}
+
+/// Scenes are equal as data classes: all their fields, and their type.
+#[test]
+fn scenes_are_equal_by_their_fields_and_type() {
+    let (one, two) = (text_entry(FIRST), text_entry(SECOND));
+    let scene = Fields { key: "key", entries: vec![one.clone()], previous: vec![two.clone()] };
+    let handle = |scene: Fields| Rc::new(scene) as SceneRef<&'static str>;
+    assert!(*handle(scene.clone()) == *handle(scene.clone()));
+    assert!(*handle(scene.clone()) != *handle(Fields { key: "other", ..scene.clone() }));
+    assert!(*handle(scene.clone()) != *handle(Fields { entries: vec![two], ..scene.clone() }));
+    assert!(*handle(scene.clone()) != *handle(Fields { previous: Vec::new(), ..scene.clone() }));
+    let other = Rc::new(OtherFields(scene.clone())) as SceneRef<&'static str>;
+    assert!(*handle(scene) != *other);
+}
+
+/// A scene that shows a text and has one key, of a type by the stack's size.
+struct Constant<const SIDE: u8>(&'static str);
+
+impl<const SIDE: u8> Scene<&'static str> for Constant<SIDE> {
+    fn key(&self) -> ContentKey {
+        ContentKey::new("the key")
+    }
+    fn entries(&self) -> &[NavEntry<&'static str>] {
+        &[]
+    }
+    fn previous_entries(&self) -> &[NavEntry<&'static str>] {
+        &[]
+    }
+    fn content(&self) {
+        Shown!(self.0);
+    }
+}
+
+/// Scenes of other types with one key are other scenes, and animate into one another.
+#[test]
+fn scenes_of_other_types_animate_even_with_one_key() {
+    let strategy = scene_strategy(
+        |_: &SceneStrategyScope<&'static str>, entries: &[NavEntry<&'static str>]| {
+            let scene: SceneRef<&'static str> = if entries.len() == 1 {
+                Rc::new(Constant::<0>("one"))
+            } else {
+                Rc::new(Constant::<1>("other"))
+            };
+            Some(scene)
+        },
+    );
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(stack, scene_strategies = vec![strategy.clone()], entry_provider = text_entry);
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_text("one").assert_exists();
+    ui.set_auto_advance(false);
+    stack.push(SECOND);
+    ui.advance_time_by(std::time::Duration::from_millis(100));
+    ui.on_node_with_text("one").assert_exists();
+    ui.on_node_with_text("other").assert_exists();
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    ui.on_node_with_text("one").assert_does_not_exist();
 }

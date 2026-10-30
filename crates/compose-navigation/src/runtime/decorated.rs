@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use compose_runtime::{
-    ComposeArg, DisposableEffect, OwnedState, composable, key, mutable_state_of_with,
+    Callback, ComposeArg, DisposableEffect, OwnedState, composable, key, mutable_state_of_with,
     referential_equality_policy, remember, remember_keyed,
 };
 
@@ -72,6 +72,12 @@ impl<T: PartialEq + 'static> ComposeArg for Keys<T> {
     }
 }
 
+/// The provider last used, and the entries it made, by key.
+struct Provided<T: 'static> {
+    provider: Callback<dyn Fn(T) -> NavEntry<T>>,
+    entries: Vec<(T, NavEntry<T>)>,
+}
+
 /// What the effects of a call share, as its `keysInBackstack`, `keysInComposition` and its updated
 /// states.
 struct Tracking<T: 'static> {
@@ -92,9 +98,11 @@ impl<T> Tracking<T> {
 }
 
 /// The entries of `back_stack`, made by `entry_provider` while it holds the same keys and decorated
-/// with `entry_decorators`, the first going outermost, as `rememberDecoratedNavEntries`. Hoist the
-/// back stack and the decorators' state: what's returned survives recompositions only. Make one
-/// call for each back stack, whose results can be concatenated.
+/// with `entry_decorators`, the first going outermost, as `rememberDecoratedNavEntries`. A key that
+/// stays keeps its entry while the provider's the same, as Kotlin's closures being stable keep
+/// what's shown from showing again. Hoist the back stack and the decorators' state: what's returned
+/// survives recompositions only. Make one call for each back stack, whose results can be
+/// concatenated.
 #[composable(non_restartable)]
 pub fn remember_decorated_nav_entries<T: Clone + PartialEq + 'static>(
     back_stack: impl NavList<T>,
@@ -103,8 +111,25 @@ pub fn remember_decorated_nav_entries<T: Clone + PartialEq + 'static>(
 ) -> Vec<NavEntry<T>> {
     let keys = back_stack.to_nav_list();
     let made = keys.clone();
+    let kept: Rc<RefCell<Option<Provided<T>>>> = remember(Rc::default);
     let entries: Rc<Vec<NavEntry<T>>> = remember_keyed(Keys(keys), move || {
-        Rc::new(made.into_iter().map(|key| entry_provider(key)).collect())
+        let mut kept = kept.borrow_mut();
+        let reusable = kept
+            .as_ref()
+            .filter(|provided| provided.provider.same(&entry_provider))
+            .map(|provided| &provided.entries);
+        let entries: Vec<(T, NavEntry<T>)> = made
+            .into_iter()
+            .map(|key| {
+                let entry = reusable
+                    .and_then(|entries| entries.iter().find(|(old, _)| *old == key))
+                    .map_or_else(|| entry_provider(key.clone()), |(_, entry)| entry.clone());
+                (key, entry)
+            })
+            .collect();
+        let shown = entries.iter().map(|(_, entry)| entry.clone()).collect();
+        *kept = Some(Provided { provider: entry_provider, entries });
+        Rc::new(shown)
     });
     remember_decorated_nav_entries_from(entries.to_vec(), entry_decorators)
 }
@@ -126,11 +151,18 @@ pub fn remember_decorated_nav_entries_from<T: Clone + PartialEq + 'static>(
         })
     });
     *tracking.latest_decorators.borrow_mut() = decorators.clone();
-    let decorated: Vec<NavEntry<T>> = entries
-        .to_nav_list()
-        .iter()
-        .map(|entry| decorate_entry(entry, &decorators, &tracking))
-        .collect();
+    let entries = entries.to_nav_list();
+    let content_keys = std::cell::OnceCell::new();
+    for decorator in decorators.iter() {
+        if decorator.waits_for_first_pass() {
+            let keys = content_keys.get_or_init(|| {
+                entries.iter().map(|entry| entry.content_key().clone()).collect::<Vec<_>>()
+            });
+            decorator.first_pass(keys);
+        }
+    }
+    let decorated: Vec<NavEntry<T>> =
+        entries.iter().map(|entry| decorate_entry(entry, &decorators, &tracking)).collect();
     prepare_back_stack(&decorated, &tracking);
     decorated
 }

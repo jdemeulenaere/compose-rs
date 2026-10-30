@@ -34,8 +34,8 @@ The inventory of Compose's animation and navigation tests and public API against
 |---|---|---|
 | `covered` | 0 | 0 |
 | `ported` | 62 | 565 |
-| `port` | 1 | 22 |
-| `partial` | 8 | 94 |
+| `port` | 0 | 0 |
+| `partial` | 9 | 116 |
 | `feature:<name>` | 23 | 384 |
 | `n/a` | 14 | 154 |
 
@@ -48,7 +48,7 @@ By module:
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 12 / 89 | 0 | 0 | 8 / 211 | 1 / 7 |
-| navigation3-ui | 15 | 121 | 0 | 9 / 53 | 1 / 22 | 1 / 26 | 4 / 20 | 0 |
+| navigation3-ui | 15 | 121 | 0 | 9 / 53 | 0 | 2 / 48 | 4 / 20 | 0 |
 | navigationevent, activity-compose's back | 13 | 198 | 0 | 8 / 163 | 0 | 1 / 9 | 0 | 4 / 26 |
 
 `@Test` methods by missing feature (a file counts under its main blocker; the notes name the others):
@@ -67,7 +67,7 @@ By module:
 Four parts:
 
 - **Animation** (50 files, 472 tests): 33 files `ported` (260 tests), 6 `partial` (59), 11 waiting on features (153), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the ui path iterator (path-easing), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
-- **Navigation 3** (36 files, 428 tests): 21 files `ported` (142 tests), 1 `port` (22), 1 `partial` (26), 12 waiting on features (231: deep links, movable content, shared elements), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3.
+- **Navigation 3** (36 files, 428 tests): 21 files `ported` (142 tests), 2 `partial` (48), 12 waiting on features (231: deep links, movable content, shared elements), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3.
 - **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
@@ -135,7 +135,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 48 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorTest.kt` | 10 | object animators, keyframes, sets, path data morphing, delays, repeats | `feature:animated-image-vector` |  |
 | 49 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/compat/XmlAnimatedVectorParserTest.kt` | 1 | parsing an animated-vector XML | `feature:animated-image-vector` | needs an XML parser; compose-rs parses no vector XML today |
 | 50 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/compat/XmlAnimatorParserTest.kt` | 4 | parsing objectAnimator/set/propertyValuesHolder XML | `feature:animated-image-vector` |  |
-| 51 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/ComposeNavigatorTest.kt` | 1 | navigating and popping updates the navigator's back stack | n/a: replaced by Navigation 3 (D704) | `navigation.rs` still checks the same stack changes of the model that stays until it's replaced |
+| 51 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/ComposeNavigatorTest.kt` | 1 | navigating and popping updates the navigator's back stack | n/a: replaced by Navigation 3 (D704) | `nav_back_stack.rs` and `nav_stack_state.rs` check the same stack changes |
 | 52 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/DialogNavigatorTest.kt` | 10 | dialog destinations: shown, dismissed on pop, nested NavHost, transition completion order | n/a: replaced by Navigation 3 (D704) | `NavDisplayTest` (dialogs), the scene tests and `NavDisplayLifecycleTest` take over |
 | 53 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavBackStackEntryProviderTest.kt` | 5 | an entry provides ViewModelStore/Lifecycle/SavedStateRegistry owners; saveable values saved, plain ones not | n/a: replaced by Navigation 3 (D704) | the entry decorators of nav3-runtime (`DecoratedNavEntriesTest`, per `contentKey`), with `lifecycle-viewmodel-navigation3` |
 | 54 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavGraphBuilderTest.kt` | 33 | graph builder: composable/dialog/navigation with routes, KClass and objects, nested graphs, default args, deep links | n/a: replaced by Navigation 3 (D704) | no graphs in Navigation 3: the back stack is the app's list of keys, `entryProvider` maps them |
@@ -177,7 +177,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 90 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/AnimatedTest.kt` | 26 | NavDisplay transitions: navigate/pop/interrupted, custom specs, centre pops, duplicates, shared elements, lifecycle | partial | `nav_animated.rs`, 24 of 26: `testSharedElement` waits for shared elements, and `testNestedPredictiveBackAnimations` for its `CardStackSceneStrategy` |
 | 91 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayLifecycleTest.kt` | 8 | entry lifecycle order across navigation, panes, dialogs, overlays | ported | `nav_lifecycle.rs` |
 | 92 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayPredictiveBackTest.kt` | 5 | state restored after predictive back, z-index, back during forward animation, hand-off | ported | `nav_predictive_back.rs` |
-| 93 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt` | 22 | z-order and frames of predictive back, pops, duplicates, scenes (screenshots) | `port` | through the display list |
+| 93 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt` | 22 | z-order and frames of predictive back, pops, duplicates, scenes (screenshots) | partial | `nav_z_index.rs`, 13 of 22: the 9 z-index tests by clicks on the overlap, and 4 of scenes and a swapped stack by bounds (D1410); the default fade and scale by the display list, in `nav_predictive_back.rs` and there, not by pixels. The other 9 to come |
 | 94 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayTest.kt` | 21 | NavDisplay: content, dialogs, back, saved state per entry, back stack swaps, duplicates, multi-pane | ported | `nav_display.rs` |
 | 95 | `navigation3/navigation3-ui/src/commonTest/kotlin/androidx/navigation3/scene/SceneInfoTest.kt` | 4 | `SceneInfo` title/url metadata | ported | `nav_scene.rs` |
 | 96 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventDispatcherTest.kt` | 102 | the dispatcher: gestures, priorities, trees, fallbacks, disposal, transition state and history | ported | `dispatcher.rs` of `compose-navigation-event`'s suite |
@@ -351,7 +351,7 @@ What compose-rs is to model (D704): a list of typed keys the app owns, mapped to
 
 | API | Feature |
 |---|---|
-| `NavDisplay(backStack, modifier, contentAlignment, onBack, entryDecorators, sceneStrategies, sceneDecoratorStrategies, sharedTransitionScope, sizeTransform, transitionSpec, popTransitionSpec, predictivePopTransitionSpec, entryProvider)`, `NavDisplay(entries, …)`, `NavDisplay(sceneState, navigationEventState, …)` | present: `NavDisplay`, `NavDisplayOfEntries`, `NavDisplayOfState`; `sharedTransitionScope` with shared elements (D1405) |
+| `NavDisplay(backStack, modifier, contentAlignment, onBack, entryDecorators, sceneStrategies, sceneDecoratorStrategies, sharedTransitionScope, sizeTransform, transitionSpec, popTransitionSpec, predictivePopTransitionSpec, entryProvider)`, `NavDisplay(entries, …)`, `NavDisplay(sceneState, navigationEventState, …)` | present: `NavDisplay`, `NavDisplayOfEntries`, `NavDisplayOfState`, restartable, their lists `NavListArg`s (D1408); `sharedTransitionScope` with shared elements (D1405) |
 | `NavDisplay.transitionSpec/popTransitionSpec/predictivePopTransitionSpec` metadata (`TransitionKey`, `PopTransitionKey`, `PredictivePopTransitionKey`), `defaultTransitionSpec`, `defaultPopTransitionSpec`, `defaultPredictivePopTransitionSpec`, `LocalNavAnimatedContentScope` | present: `TransitionKey`, `PopTransitionKey`, `PredictivePopTransitionKey`, `LOCAL_NAV_ANIMATED_CONTENT_SCOPE` (D1405) |
 | `Scene` (`key`, `entries`, `previousEntries`, `content`, `metadata`), `OverlayScene` (`overlaidEntries`, `onRemove`), `SceneStrategy`, `SceneStrategyScope` (`onBack`), `SinglePaneSceneStrategy`, `DialogSceneStrategy` (+`dialog(properties)`, `DialogKey`), `SceneDecoratorStrategy`, `SceneDecoratorStrategyScope`, `SceneState` (`currentScene`, `previousScenes`, `overlayScenes`, `entries`), `rememberSceneState`, `SceneInfo` (`title`, `url`), `TitleMetadataKey`, `UrlMetadataKey` | present (D1405) |
 | `NavigationBackHandler(sceneState, state, onBackCancelled, onBackCompleted)`, `rememberNavigationEventState(sceneState)` | present: `SceneNavigationBackHandler`, `remember_scene_navigation_event_state` (D1405) |
@@ -643,7 +643,7 @@ nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and 
 
 - **nav3-runtime (L): done (D1400).** `NavEntry`, `entryProvider`, decorators and `rememberDecoratedNavEntries`, the saveable-state decorator, `NavKey`/`NavBackStack`/`rememberNavBackStack` over `Saveable`, metadata keys.
   - Tests: 8 runtime files (79 tests), `ported` but for the 4 of serializer configuration, which have no analogue.
-- **nav3-ui (L): done but what follows (D1405).** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`. Left: `NavDisplayScreenshotTest` (22) to port, through the display list; `testNestedPredictiveBackAnimations`, for its `CardStackSceneStrategy`.
+- **nav3-ui (L): done but what follows (D1405).** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`. Left: 9 of `NavDisplayScreenshotTest` (22), through the display list; `testNestedPredictiveBackAnimations`, for its `CardStackSceneStrategy`.
   - Tests: 15 ui files (121 tests), and `ResultEventBusNavEntryDecoratorTest` (5).
   - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (2 tests), the entry decorators over `compose-lifecycle` (lifecycle test), and movable content (`SceneSetupNavEntryDecorator`'s `movableContentOf`).
   - Without movable content (D1404): single-pane scenes, dialogs and overlays ship first, the decorator keeping its shape. An entry moving between panes waits for it, from the composition context work, with the tests of `ListDetailSceneTest`, `HierarchicalSceneTest`, `BottomNavSceneDecoratorTest`'s list-detail, and the two-pane cases of `SceneStateTest`, `NavDisplayTest`, `NavDisplayLifecycleTest` and `NavDisplayScreenshotTest`.

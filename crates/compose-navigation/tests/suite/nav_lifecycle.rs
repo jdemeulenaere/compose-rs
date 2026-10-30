@@ -352,3 +352,40 @@ fn an_entry_leaving_is_capped_at_created() {
         assert_eq!(states.last(), Some(&("A", LifecycleState::Resumed)));
     });
 }
+
+/// A `match` provider, an entry with a transition of its own: a first dialog resumes again once a
+/// second is popped, the overlays being equal for what's on the stack.
+#[test]
+fn a_dialog_resumes_when_the_one_over_it_is_popped() {
+    let events = Events::default();
+    let logged = logging(&events);
+    let owner = mutable_state_list_from(["A", "D1"]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let logged = logged.clone();
+        NavDisplay!(
+            stack,
+            on_back = Some(|| {}),
+            scene_strategies = vec![scene_strategy(DialogSceneStrategy)],
+            entry_provider = move |key: &'static str| {
+                let entry = logged(key);
+                if key == "A" {
+                    entry.with_metadata(NavDisplay::transition_spec(
+                        |_: compose_animation::AnimatedContentTransitionScope<
+                            SceneRef<&'static str>,
+                        >| { None },
+                    ))
+                } else {
+                    entry.with_metadata(DialogSceneStrategy::dialog(DialogProperties::default()))
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    stack.push("D2");
+    ui.wait_for_idle();
+    events.borrow_mut().clear();
+    stack.remove(2);
+    ui.wait_for_idle();
+    assert_eq!(events.borrow().last(), Some(&("D1", "ON_RESUME")), "{:?}", events.borrow());
+}

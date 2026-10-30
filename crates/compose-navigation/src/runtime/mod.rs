@@ -9,8 +9,11 @@ mod entry;
 mod metadata;
 mod provider;
 mod result;
+mod view_model;
 
-pub use back_stack::{NavBackStack, NavKey, NavList, OwnedNavBackStack, remember_nav_back_stack};
+pub use back_stack::{
+    NavBackStack, NavKey, NavList, NavListArg, OwnedNavBackStack, remember_nav_back_stack,
+};
 pub use content_key::{ContentKey, IntoContentKey};
 pub use decorated::{remember_decorated_nav_entries, remember_decorated_nav_entries_from};
 pub use decorator::{
@@ -26,4 +29,8 @@ pub use provider::{
 pub use result::{
     LocalResultEventBus, ResultEffect, ResultEventBus, ResultEventBusNavEntryDecorator,
     remember_result_event_bus, remember_result_event_bus_nav_entry_decorator,
+};
+pub use view_model::{
+    ViewModelStoreNavEntryDecorator, remember_view_model_store_nav_entry_decorator,
+    remember_view_model_store_nav_entry_decorator_of,
 };

@@ -400,7 +400,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 - **APIs:** see the API table (`runtime-retain`, stable in Compose).
 - **Does:** `retain { … }` keeps a value while its content leaves the composition temporarily (a screen in the back stack, an activity recreation), as long as the enclosing `RetainedValuesStore` retains exited values; `RetainObserver` gets retained/entered/exited/retired/unused callbacks; `RetainedEffect` is a `DisposableEffect` whose cleanup runs when the value is retired, not when its content exits.
 - **Tests:** `RetainTests` (33), `RetainedEffectTest` (4).
-- **Depends on:** local-variants (the store is a local; nothing beyond today's locals strictly), movable-content (2 tests), pausable composition (exists). Navigation (`NavHost` retaining entries) is its main client.
+- **Depends on:** local-variants (the store is a local; nothing beyond today's locals strictly), movable-content (2 tests), pausable composition (exists). Navigation 3 doesn't retain its entries, a `SaveableStateHolder` keeping what's saved: its users are the apps'.
 
 ### snapshot-isolation (XL): done but composition in a snapshot and tooling (step S5 of docs/parity/design/snapshots.md, D769-D790)
 - **APIs:** see the API table: snapshots, mutable snapshots, apply and merge, state records, `SnapshotContextElement`, snapshot tooling observers *(exp)*.

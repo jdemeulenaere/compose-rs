@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use compose_animation::SizeTransform;
 use compose_foundation::layout::*;
 use compose_foundation::{LazyColumn, LazyListScope};
 use compose_navigation::*;
@@ -14,7 +15,7 @@ use compose_navigation_event::{
 use compose_runtime::snapshots::{OwnedStateList, mutable_state_list_from};
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{BackHandler, DialogProperties, Modifier, UnitExt};
+use compose_ui::{Alignment, BackHandler, DialogProperties, Modifier, UnitExt};
 
 use crate::nav_support::*;
 
@@ -144,13 +145,13 @@ fn what_a_popped_entry_saved_is_forgotten() {
 }
 
 thread_local! {
-    static REGISTRIES: RefCell<Vec<(&'static str, usize)>> = const { RefCell::new(Vec::new()) };
+    static REGISTRIES: RefCell<Vec<(&'static str, SaveableStateRegistry)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 fn note_registry(name: &'static str) {
-    let registry = LOCAL_SAVEABLE_STATE_REGISTRY.current();
-    let address = registry.as_ref().map_or(0, |registry| std::ptr::from_ref(registry) as usize);
-    REGISTRIES.with_borrow_mut(|registries| registries.push((name, address)));
+    let registry = LOCAL_SAVEABLE_STATE_REGISTRY.current().expect("a registry");
+    REGISTRIES.with_borrow_mut(|registries| registries.push((name, registry)));
 }
 
 // Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayTest.kt, testIndividualSavedStateRegistries
@@ -167,10 +168,13 @@ fn each_entry_has_a_registry_of_its_own() {
     stack.push(SECOND);
     ui.wait_for_idle();
     let of = |name: &str| {
-        REGISTRIES.with_borrow(|all| all.iter().find(|(n, _)| *n == name).map(|(_, a)| *a).unwrap())
+        REGISTRIES.with_borrow(|all| {
+            all.iter().find(|(n, _)| *n == name).map(|(_, registry)| registry.clone()).unwrap()
+        })
     };
-    assert_ne!(of("main"), of(FIRST));
-    assert_ne!(of(SECOND), of(FIRST));
+    assert!(!of("main").same(&of(FIRST)));
+    assert!(!of(SECOND).same(&of(FIRST)));
+    assert!(of(FIRST).same(&of(FIRST)));
 }
 
 // Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayTest.kt, swappingOutMultipleBackStacks
@@ -669,4 +673,236 @@ fn displays_in_a_list_in_a_display() {
     ui.wait_for_idle();
     ui.on_node_with_text("inner one").assert_is_displayed();
     ui.on_node_with_text("inner two").assert_is_displayed();
+}
+
+/// The guide's shape: a stack in what calls the display, a provider of a stack's handle. A push
+/// shows what's on the stack once, whatever's under it.
+#[composable]
+fn GuideShape(renders: Rc<Cell<u32>>) {
+    let back_stack = remember_nav_back_stack(["first".to_string()]);
+    STACK.set(Some(back_stack));
+    let renders = renders.clone();
+    NavDisplay!(
+        back_stack,
+        entry_provider = move |key: String| {
+            let renders = renders.clone();
+            NavEntry::new(key, move |key: String| {
+                if key == "first" {
+                    renders.set(renders.get() + 1);
+                }
+                let shown = key.clone();
+                compose_foundation::BasicText!("{shown}");
+            })
+        }
+    );
+}
+
+thread_local! {
+    static STACK: Cell<Option<NavBackStack<String>>> = const { Cell::new(None) };
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/AnimateOverlaySceneTest.kt, testNestedBottomSheet
+#[test]
+fn a_push_doesn_t_show_again_what_s_on_the_stack() {
+    let renders = Rc::new(Cell::new(0));
+    let given = renders.clone();
+    let mut ui = compose_test(move || GuideShape!(given.clone()));
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+    STACK.get().unwrap().push("second".to_string());
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+    STACK.get().unwrap().push("third".to_string());
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+    STACK.get().unwrap().remove(2);
+    STACK.get().unwrap().remove(1);
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 2, "shown again, having left");
+}
+
+/// A screen under a dialog isn't shown again by what comes and goes over it.
+#[test]
+fn what_s_under_a_dialog_isn_t_shown_again() {
+    let renders = Rc::new(Cell::new(0));
+    let counted = renders.clone();
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let counted = counted.clone();
+        NavDisplay!(
+            stack,
+            scene_strategies = vec![scene_strategy(DialogSceneStrategy)],
+            entry_provider = move |key: &'static str| {
+                let counted = counted.clone();
+                let entry = NavEntry::new(key, move |key| {
+                    if key == FIRST {
+                        counted.set(counted.get() + 1);
+                    }
+                    Shown!(key);
+                });
+                if key == FIRST {
+                    entry
+                } else {
+                    entry.with_metadata(DialogSceneStrategy::dialog(DialogProperties::default()))
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+    stack.push(SECOND);
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+    stack.remove(1);
+    ui.wait_for_idle();
+    assert_eq!(renders.get(), 1);
+}
+
+/// An entry pushing as it composes pushes once: nothing shows it again.
+#[test]
+fn an_entry_pushing_in_composition_pushes_once() {
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            entry_provider = move |key: &'static str| {
+                NavEntry::new(key, move |key| {
+                    if key == FIRST {
+                        stack.push(SECOND);
+                    }
+                    Shown!(key);
+                })
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(stack.len(), 2);
+    ui.on_node_with_text(SECOND).assert_is_displayed();
+}
+
+/// A dialog's properties come from its entry's metadata: one that doesn't dismiss on back keeps it.
+#[test]
+fn a_dialog_s_properties_are_its_metadata_s() {
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            scene_strategies = vec![scene_strategy(DialogSceneStrategy)],
+            entry_provider = |key: &'static str| {
+                let entry = text_entry(key);
+                if key == SECOND {
+                    entry.with_metadata(DialogSceneStrategy::dialog(DialogProperties {
+                        dismiss_on_back_press: false,
+                        ..DialogProperties::default()
+                    }))
+                } else {
+                    entry
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.host().on_back_pressed();
+    ui.wait_for_idle();
+    assert_eq!(stack.len(), 2);
+    ui.on_node_with_text(SECOND).assert_is_displayed();
+}
+
+#[composable]
+fn Sized(side: i32) {
+    Box!(modifier = Modifier.size(side.dp()));
+}
+
+/// `content_alignment` places what's smaller than the largest shown.
+#[test]
+fn a_display_aligns_its_content() {
+    let owner = mutable_state_list_from([150]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            modifier = Modifier.test_tag("display"),
+            content_alignment = Alignment::CENTER,
+            entry_provider = |side: i32| NavEntry::new(side, move |_| Tagged!(side))
+        );
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    stack.push(50);
+    ui.advance_time_by(Duration::from_millis(100));
+    let bounds = ui.on_node_with_tag("50").fetch_semantics_node().bounds;
+    assert_eq!((bounds.left, bounds.top), (50.0, 50.0));
+}
+
+#[composable]
+fn Tagged(side: i32) {
+    Box!(modifier = Modifier.size(side.dp()).test_tag(format!("{side}")));
+}
+
+/// `size_transform`: with one, the display's size animates; without, it's the largest at once.
+#[test]
+fn a_display_s_size_follows_its_size_transform() {
+    fn size_during(transform: Option<SizeTransform>) -> f32 {
+        let owner = mutable_state_list_from([50]);
+        let stack = owner.handle();
+        let held = transform;
+        let mut ui = compose_test(move || {
+            NavDisplay!(
+                stack,
+                modifier = Modifier.test_tag("display"),
+                size_transform = held.clone(),
+                entry_provider = |side: i32| NavEntry::new(side, move |_| Sized!(side))
+            );
+        });
+        ui.wait_for_idle();
+        ui.set_auto_advance(false);
+        stack.push(150);
+        ui.advance_time_by(Duration::from_millis(100));
+        ui.on_node_with_tag("display").fetch_semantics_node().bounds.width()
+    }
+    assert_eq!(size_during(None), 150.0);
+    let animated = size_during(Some(compose_animation::size_transform(false, |_, _| {
+        compose_animation::tween(1000).into()
+    })));
+    assert!(animated > 50.0 && animated < 150.0, "{animated}");
+}
+
+#[composable]
+fn Labelled(
+    stack: compose_runtime::snapshots::SnapshotStateList<&'static str>,
+    label: MutableState<&'static str>,
+) {
+    let label = label.get();
+    NavDisplay!(
+        stack,
+        entry_provider = move |key: &'static str| {
+            NavEntry::new(key, move |key| {
+                compose_foundation::BasicText!("{key} {label}");
+            })
+        }
+    );
+}
+
+/// Another provider's entries are its own: keys that stay keep theirs only under the same provider.
+/// As in Kotlin, it's asked when the keys change.
+#[test]
+fn a_new_provider_makes_the_entries_of_the_next_keys() {
+    let owner = mutable_state_list_from([FIRST]);
+    let (stack, label) = (owner.handle(), mutable_state_of("old"));
+    let read = label.handle();
+    let mut ui = compose_test(move || Labelled!(stack, read));
+    ui.wait_for_idle();
+    ui.on_node_with_text("first old").assert_exists();
+    label.set("new");
+    ui.wait_for_idle();
+    ui.on_node_with_text("first old").assert_exists();
+    stack.push(SECOND);
+    ui.wait_for_idle();
+    ui.on_node_with_text("second new").assert_exists();
+    stack.remove(1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("first new").assert_exists();
 }

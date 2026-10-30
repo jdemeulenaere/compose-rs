@@ -151,6 +151,25 @@ impl SaveableStateHolder {
         }
     }
 
+    /// The number `key` is kept under, what [`remove_state_of_key`](Self::remove_state_of_key)
+    /// takes, for who saves which keys it has state for.
+    #[doc(hidden)]
+    pub fn state_key(&self, key: impl Hash) -> u64 {
+        hash_key(&key)
+    }
+
+    /// [`remove_state`](Self::remove_state), by its number.
+    #[doc(hidden)]
+    pub fn remove_state_of_key(&self, key: u64) {
+        let Some(holder) = self.object.get() else { return };
+        match holder.active.borrow().get(&key) {
+            Some(active) => active.should_save.set(false),
+            None => {
+                holder.saved_states.borrow_mut().remove(&key);
+            }
+        }
+    }
+
     /// Saves what the holder keeps, with the state of its content in the composition, as
     /// Compose's `SaveableStateHolderImpl.Saver`: a list of each key and its state.
     pub fn saver() -> impl Saver<Owned<SaveableStateHolder>> {

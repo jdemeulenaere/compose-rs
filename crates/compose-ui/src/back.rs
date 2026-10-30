@@ -105,12 +105,6 @@ impl OnBackPressedDispatcher {
 pub static LOCAL_ON_BACK_PRESSED_DISPATCHER: CompositionLocal<Option<OnBackPressedDispatcher>> =
     CompositionLocal::new("LocalOnBackPressedDispatcher", || None);
 
-/// Whether the `BackHandler`s of the content may take back: `false` disables them all. A container
-/// providing it provides `false` inside content already disabled. An entry leaving a `NavDisplay`
-/// disables its own through its lifecycle.
-pub static LOCAL_BACK_HANDLERS_ENABLED: CompositionLocal<bool> =
-    CompositionLocal::new("LocalBackHandlersEnabled", || true);
-
 /// What a handler tells of itself, as AndroidX's `BackHandlerInfo`: its place.
 #[derive(PartialEq, Debug)]
 struct BackHandlerInfo(u64);
@@ -154,13 +148,11 @@ impl NavigationEventCallbacks for BackCallbacks {
 /// Calls `on_back` when the user goes back (Android's back gesture or button, Escape on
 /// desktop) while `enabled`, as AndroidX's `BackHandler`: the innermost enabled handler gets
 /// it (those in dialogs and focusable popups first, then the one composed last). While any is
-/// enabled, back doesn't leave the app. It's disabled while its lifecycle isn't started, and where
-/// [`LOCAL_BACK_HANDLERS_ENABLED`] is `false`.
+/// enabled, back doesn't leave the app. It's disabled while its lifecycle isn't started.
 #[composable]
 #[allow(non_snake_case)]
 pub fn BackHandler(#[default(true)] enabled: bool, on_back: impl Fn() + 'static) {
     let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
-    let enabled = enabled && LOCAL_BACK_HANDLERS_ENABLED.current();
     let key = current_composite_key_hash();
     let (handler, current) = {
         let on_back = on_back.clone();
@@ -407,7 +399,6 @@ pub fn PredictiveBackHandler<F: Future<Output = ()> + 'static>(
     on_back: impl Fn(BackProgress) -> F + 'static,
 ) {
     let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
-    let enabled = enabled && LOCAL_BACK_HANDLERS_ENABLED.current();
     let on_back: OnBack = Rc::new(move |progress| Box::pin(on_back(progress)));
     let key = current_composite_key_hash();
     let (handler, state) = {

@@ -5,7 +5,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 ## Scope
 
 - **Reference:** the androidx checkout, under `frameworks/support/lifecycle` (its tip). Every path below is relative to it.
-- **Modules:** `lifecycle-common`, `lifecycle-runtime`, `lifecycle-runtime-compose`, `lifecycle-runtime-testing`, `lifecycle-viewmodel`, `lifecycle-viewmodel-compose`, later `lifecycle-viewmodel-navigation3`. `lifecycle-viewmodel-savedstate`: its `ViewModelStoreProvider` is ported (D838); `SavedStateHandle` and the saved-state parameters with the saved-state work.
+- **Modules:** `lifecycle-common`, `lifecycle-runtime`, `lifecycle-runtime-compose`, `lifecycle-runtime-testing`, `lifecycle-viewmodel`, `lifecycle-viewmodel-compose`, `lifecycle-viewmodel-navigation3` (in `compose-navigation`, D1409). `lifecycle-viewmodel-savedstate`: its `ViewModelStoreProvider` is ported (D838); `SavedStateHandle` and the saved-state parameters with the saved-state work.
 - **Left out, n/a:** LiveData, `lifecycle-service`, `lifecycle-process`, the reflective and generated observers (`lifecycle-compiler`, annotations: deprecated in AndroidX too), the lint modules, `ViewTree*` (Android's view tree: `ComposeRsView` reads it in Kotlin).
 
 **Rust-shaped** (D837): an owner is the `Lifecycle` handle itself, so `LOCAL_LIFECYCLE_OWNER` and the effects take a `Lifecycle`, and `LifecycleOwner` says how to get one. No flows exist in compose-rs, so `currentStateFlow` and `currentStateAsState()` are `Lifecycle::as_state`; `eventFlow`, `flowWithLifecycle` and `collectAsStateWithLifecycle` wait for flows.
@@ -48,6 +48,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/RememberViewModelStoreOwnerTest.android.kt` | 8 | partial | 6 ported, `view_model_compose.rs`, the configuration change with a store kept across two hosts; 2: `feature:saved-state` |
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/SavedStateHandleSaverTest.android.kt` | 9 | `feature:saved-state` | |
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/ViewModelInComponentActivityTest.android.kt`, `ViewModelInAppCompatActivityTest.android.kt`, `ViewModelInFragmentTest.android.kt` | 5 | n/a | a device's activities and fragments; `ComposeRsView`'s side is D838, checked on the Pixel with a probe (D840) |
+| `lifecycle-viewmodel-navigation3/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/navigation3/ViewModelStoreNavEntryDecoratorTest.kt` | 7 | partial | 6 ported, `compose-navigation/tests/suite/nav_view_model.rs`; `testViewModelSavedStateHandle`: `feature:saved-state` |
 
 ## Public API
 
@@ -65,6 +66,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `ViewModelStore`, `ViewModelStoreOwner`, `HasDefaultViewModelProviderFactory` (its methods are the owner's, by default the same) | present | D838 |
 | `ViewModelProvider` (`create`, `get`, keyed), `.Factory`, `viewModelFactory`, `initializer`, `CreationExtras`, `MutableCreationExtras` (one type), `VIEW_MODEL_KEY` | present | D838 |
 | `LocalViewModelStoreOwner`, `viewModel` (`ViewModelArgs`, `view_model_with`), `rememberViewModelStoreOwner`, `rememberViewModelStoreProvider`, `ViewModelStoreProvider` | present, without the saved-state parameters | D838 |
+| `ViewModelStoreNavEntryDecorator`, `rememberViewModelStoreNavEntryDecorator` | present, in `compose-navigation`: `remember_view_model_store_nav_entry_decorator`, and `_of` a provider | D1409 |
 | `SavedStateHandle`, `SavedStateViewModelFactory`, `savedStateHandle`, `saved` | missing | feature:saved-state |
 | `AndroidViewModel`, `NewInstanceFactory`, `AndroidViewModelFactory`, `viewModels()` delegates, `ViewTreeViewModelStoreOwner` | n/a | D838: no reflection, nor an `Application`; Kotlin reads the view tree |
 
