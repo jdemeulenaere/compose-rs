@@ -13,7 +13,9 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Dp, IntSize, Offset, PointerEvent, UnitExt, WheelStep};
+use compose_ui::{
+    Dp, IntSize, Offset, PointerEvent, PointerEventPass, PointerEventType, UnitExt, WheelStep,
+};
 
 use crate::scroll_support::launch;
 
@@ -725,4 +727,69 @@ fn a_step_is_the_scrollables_the_turn_reaches() {
     });
     turn_in(&mut ui, -1.0, WheelStep::SquareRootOfHeight { scroll_amount: 1.0 });
     assert_eq!((inner_total.get(), outer_total.get()), (10.0, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollingEvent: `with(density) { calculateMouseWheelScroll(...) }`, a dp step at the host's density
+#[test]
+fn a_step_in_dp_counts_the_density() {
+    let (state, total) = total_state();
+    let mut ui = compose_test_with(
+        IntSize::new(300, 300),
+        compose_ui::Density::new(2.0),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+        move || {
+            Box!(
+                modifier = Modifier.size(100.dp()).scrollable(state.clone(), Orientation::Vertical)
+            );
+        },
+    );
+    ui.set_auto_advance(false);
+    ui.wait_for_idle();
+    turn_in(&mut ui, -1.0, WheelStep::Dp(10.0));
+    assert_eq!(total.get(), 20.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollingEvent: `canConsumeDelta(scrollDelta.toScrollValue())`, of the pixels worked out: a turn worth none starts no scroll
+#[test]
+fn a_turn_worth_nothing_here_starts_no_scroll() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state.clone());
+    turn_in(&mut ui, -1.0, WheelStep::Dp(0.0));
+    assert!(!state.is_scroll_in_progress());
+    assert_eq!(total.get(), 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollable.kt: canConsumeDelta
+#[test]
+fn a_turn_worth_nothing_here_goes_on_to_the_parents() {
+    let (state, _total) = total_state();
+    let seen: Rc<Cell<Option<bool>>> = Rc::default();
+    let noted = seen.clone();
+    let mut ui = sized(move || {
+        let noted = noted.clone();
+        let state = state.clone();
+        Box!(
+            modifier = Modifier.pointer_input((), move |scope| {
+                let noted = noted.clone();
+                async move {
+                    loop {
+                        let change = scope.await_pointer_event(PointerEventPass::Main).await;
+                        if change.kind == PointerEventType::Scroll {
+                            noted.set(Some(change.is_consumed()));
+                        }
+                    }
+                }
+            }),
+            {
+                Box!(
+                    modifier =
+                        Modifier.size(100.dp()).scrollable(state.clone(), Orientation::Vertical)
+                );
+            }
+        );
+    });
+    turn_in(&mut ui, -1.0, WheelStep::Dp(0.0));
+    assert_eq!(seen.get(), Some(false), "not consumed");
+    turn_in(&mut ui, -1.0, WheelStep::Dp(1.0));
+    assert_eq!(seen.get(), Some(true), "consumed");
 }

@@ -879,7 +879,8 @@ class ComposeRsView @JvmOverloads constructor(
                 host,
                 event.x,
                 event.y,
-                -event.getAxisValue(MotionEvent.AXIS_HSCROLL) *
+                // Compose's (-H h, +V v) is in drag-like coordinates; these are positive forward.
+                event.getAxisValue(MotionEvent.AXIS_HSCROLL) *
                     configuration.scaledHorizontalScrollFactor,
                 -event.getAxisValue(MotionEvent.AXIS_VSCROLL) *
                     configuration.scaledVerticalScrollFactor,

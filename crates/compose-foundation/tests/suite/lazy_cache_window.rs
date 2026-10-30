@@ -1885,6 +1885,23 @@ fn scrolling_back_under_the_first_sticky_header_requests_nothing() {
     assert!(state.prefetch_requests().is_empty(), "{:?}", state.prefetch_requests());
 }
 
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutStickyItems.kt, applyStickyItems composes the header in the measurement: here a frame's first layout may lack it, and tells the window nothing until it's there
+#[test]
+fn a_scroll_back_into_a_section_requests_from_its_header_once_composed() {
+    let (mut ui, state, _seen) = sectioned(40, 0, 3.0, ITEM, None);
+    let state = *state;
+    idle(&mut ui);
+    // Past the next header at 42: it sticks, header 21 goes; item 41 stays by the window's bound.
+    state.dispatch_raw_delta(ITEM * 3.0);
+    ui.wait_for_idle();
+    idle(&mut ui);
+    // Back into the section of header 21.
+    state.dispatch_raw_delta(-ITEM * 2.0);
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 41);
+    assert_eq!(requested(state), [20]);
+}
+
 // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListLayoutInfo.kt, visibleItemsAverageSize: the sticking header counts
 #[test]
 fn the_default_windows_average_counts_the_sticking_header() {

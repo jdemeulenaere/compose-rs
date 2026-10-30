@@ -18,12 +18,9 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 126 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 269 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 254 |
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 117 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 252 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 270 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
-| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 91 |
+| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 97 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
@@ -723,3 +720,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D1404 | [api-and-tooling](decisions/api-and-tooling.md#d1404) | current |
 | D1450 | [ui-and-layout](decisions/ui-and-layout.md#d1450) | current |
 | D1451 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1451) | current |
+| D1452 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1452) | current |
+| D1453 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1453) | current |
+| D1454 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1454) | current |
+| D1455 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1455) | current |
+| D1456 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1456) | current |
+| D1457 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d1457) | current |

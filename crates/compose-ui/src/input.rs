@@ -55,6 +55,8 @@ impl compose_runtime::ComposeArg for PointerIcon {
 
 /// What a unit of a `Scroll` event's delta is worth in the scrollable it reaches, as Compose's
 /// `ScrollConfig`: a host's wheel has its platform's step (D1450).
+/// The desktop variants are **unverified** against Compose Desktop, whose source isn't in
+/// androidx-main.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum WheelStep {
     /// The delta is in pixels: a trackpad's, or a platform that scaled it (Android's view).

@@ -1,6 +1,6 @@
 //! Grids at large, as Compose's `LazyGridTest`, in both orientations. Density 1, so its dps are
 //! pixels. Left: the lookahead tests (no lookahead), `customOverscroll` (feature:overscroll),
-//! `zIndexOnItemAffectsDrawingOrder` (a test of pixels), `onlyOneInitialMeasurePass` (composing for
+//! `onlyOneInitialMeasurePass` (composing for
 //! a measurement takes rounds here, D125), `passingNegativeItemsCountIsNotAllowed` (a count is a
 //! `usize`) and `recomposingWithNewComposedModifierObjectIsNotCausingRemeasure`: a grid recomposed
 //! at its call site has new items (a closure can't be compared as Compose compares its content
@@ -694,6 +694,8 @@ fn a_grids_cells_can_be_your_own() {
         assert_eq!((lazy.cross_start(&mut ui, "1"), lazy.cross_size(&mut ui, "1")), (0.0, 100.0));
         assert_eq!((lazy.cross_start(&mut ui, "2"), lazy.cross_size(&mut ui, "2")), (100.0, 200.0));
         ui.on_node_with_tag("3").assert_does_not_exist();
+        ui.on_node_with_tag("4").assert_does_not_exist();
+        ui.on_node_with_tag("5").assert_does_not_exist();
     }
 }
 
@@ -1267,6 +1269,8 @@ fn a_scroll_doesnt_recompose_an_item_for_the_cells() {
     assert_eq!(seen.borrow()[&0], 2);
     let composed = first_composed.get();
     let _ = run(&mut ui, async move { handle.scroll_by(10.0).await });
+    let info = handle.layout_info();
+    assert!(info.visible_items_info.iter().any(|item| item.index == 0), "item 0 still shows");
     assert_eq!(first_composed.get(), composed);
     let _ = run(&mut ui, async move { handle.scroll_by(60.0).await });
     assert_eq!((seen.borrow()[&4], seen.borrow()[&5]), (2, 2));
@@ -1341,4 +1345,597 @@ fn spans_of_many_intervals_can_be_walked_to_the_end() {
     });
     let total = state.layout_info().total_items_count;
     let _ = run(&mut ui, async move { handle.scroll_to_item(total - 1, 0).await });
+}
+
+/// An item drawing a square far larger than it, `color`, in a node at `z`.
+fn painting(color: compose_ui::Color, z: f32, lazy: Lazy) {
+    let size = axis_size(lazy, 6.0, 2.0);
+    Box!(
+        modifier = size.z_index(z).draw_behind(move |scope| {
+            scope.draw_rect(
+                compose_ui::Rect::new(-10.0, -10.0, 10.0, 10.0),
+                compose_ui::Paint::fill(color),
+            );
+        }),
+        {}
+    );
+}
+
+/// The colors drawn, in order, walking into items' recordings.
+fn colors_in_order(display: &str) -> Vec<&'static str> {
+    let mut found = Vec::new();
+    for line in display.lines() {
+        for (name, code) in [("blue", "#FF0000FF"), ("green", "#FF00FF00"), ("red", "#FFFF0000")] {
+            if line.contains(code) {
+                found.push(name);
+            }
+        }
+    }
+    found
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridTest.kt, zIndexOnItemAffectsDrawingOrder
+#[test]
+fn a_grid_items_z_index_orders_it_among_the_items() {
+    use compose_ui::Color;
+    for lazy in Lazy::grids() {
+        let ui = rule(move || {
+            Grid(Args::new(lazy, fixed(1), Modifier.size(6.dp())), move |scope| {
+                scope.items(3, move |index| {
+                    let (color, z) = match index {
+                        0 => (Color::BLUE, 0.0),
+                        1 => (Color::GREEN, 1.0),
+                        _ => (Color::RED, 0.0),
+                    };
+                    painting(color, z, lazy);
+                });
+            });
+        });
+        assert_eq!(colors_in_order(&ui.dump_display_list()), ["blue", "red", "green"], "{lazy:?}");
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListTest.kt, zIndexOnItemAffectsDrawingOrder
+#[test]
+fn a_list_items_z_index_orders_it_among_the_items() {
+    use compose_ui::Color;
+    for lazy in Lazy::grids() {
+        let ui = rule(move || {
+            crate::lazy_support::LazyColumnOrRow(
+                lazy,
+                Modifier.size(6.dp()),
+                remember_lazy_list_state(0, 0),
+                no_padding(),
+                move |scope: LazyListScope| {
+                    scope.items(3, move |index| {
+                        let (color, z) = match index {
+                            0 => (Color::BLUE, 0.0),
+                            1 => (Color::GREEN, 1.0),
+                            _ => (Color::RED, 0.0),
+                        };
+                        painting(color, z, lazy);
+                    });
+                },
+            );
+        });
+        assert_eq!(colors_in_order(&ui.dump_display_list()), ["blue", "red", "green"], "{lazy:?}");
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridTest.kt, zIndexOnItemAffectsDrawingOrder: the order follows a z that changes
+#[test]
+fn an_items_z_index_can_change() {
+    use compose_ui::Color;
+    let lazy = Lazy::column();
+    let raised = mutable_state_of(0.0f32);
+    let read = raised.handle();
+    let mut ui = rule(move || {
+        Grid(Args::new(lazy, fixed(1), Modifier.size(6.dp())), move |scope| {
+            scope.items(2, move |index| {
+                let (color, z) =
+                    if index == 0 { (Color::BLUE, read.get()) } else { (Color::RED, 0.0) };
+                painting(color, z, lazy);
+            });
+        });
+    });
+    assert_eq!(colors_in_order(&ui.dump_display_list()), ["blue", "red"]);
+    raised.set(1.0);
+    ui.wait_for_idle();
+    assert_eq!(colors_in_order(&ui.dump_display_list()), ["red", "blue"]);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt, crossAxisCellCount_availableInItemScope_adaptiveGrid
+#[test]
+fn an_item_knows_the_cells_of_an_adaptive_grid_through_its_padding() {
+    let padding = mutable_state_of(0.0f32);
+    let read = padding.handle();
+    let reported = Rc::new(Cell::new(0));
+    let noted = reported.clone();
+    let mut ui = rule(move || {
+        let noted = noted.clone();
+        LazyVerticalGrid!(
+            GridCells::Adaptive(100.dp()),
+            modifier = Modifier.size((350.dp(), 200.dp())),
+            content_padding = PaddingValues::symmetric(Dp(read.get()), 0.dp()),
+            horizontal_arrangement = Arrangement::spaced_by(10.dp()),
+            move |scope: LazyGridScope| {
+                let (noted, items) = (noted.clone(), scope.item_scope());
+                scope.item(move || {
+                    noted.set(items.cross_axis_cell_count());
+                    Box!(modifier = Modifier.size(10.dp()), {});
+                });
+            }
+        );
+    });
+    assert_eq!(reported.get(), 3);
+    padding.set(20.0);
+    ui.wait_for_idle();
+    assert_eq!(reported.get(), 2);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt, crossAxisCellCount_recomposesWhenFixedCellsCountChanges
+#[test]
+fn an_item_follows_a_fixed_grids_cells() {
+    let columns = mutable_state_of(1usize);
+    let read = columns.handle();
+    let reported = Rc::new(Cell::new(0));
+    let noted = reported.clone();
+    let mut ui = rule(move || {
+        let noted = noted.clone();
+        LazyVerticalGrid!(
+            fixed(read.get()),
+            modifier = Modifier.size(200.dp()),
+            move |scope: LazyGridScope| {
+                let (noted, items) = (noted.clone(), scope.item_scope());
+                scope.item(move || {
+                    noted.set(items.cross_axis_cell_count());
+                    Box!(modifier = Modifier.size(10.dp()), {});
+                });
+            }
+        );
+    });
+    assert_eq!(reported.get(), 1);
+    for count in [3, 1] {
+        columns.set(count);
+        ui.wait_for_idle();
+        assert_eq!(reported.get(), count);
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt, crossAxisCellCount_recomposesWhenRowCountChanges_horizontalGrid
+#[test]
+fn an_item_follows_a_horizontal_adaptive_grids_rows() {
+    let height = mutable_state_of(220i32);
+    let read = height.handle();
+    let reported = Rc::new(Cell::new(0));
+    let composed = Rc::new(Cell::new(0));
+    let (noted, counted) = (reported.clone(), composed.clone());
+    let mut ui = rule(move || {
+        let (noted, counted) = (noted.clone(), counted.clone());
+        LazyHorizontalGrid!(
+            GridCells::Adaptive(100.dp()),
+            modifier = Modifier.layout(move |scope, measurable, _: Constraints| {
+                let placeable = scope.measure(measurable, Constraints::fixed(200, read.get()));
+                scope.place(&placeable, 0, 0);
+                scope.layout(placeable.width, placeable.height)
+            }),
+            move |scope: LazyGridScope| {
+                let (noted, counted, items) = (noted.clone(), counted.clone(), scope.item_scope());
+                scope.item(move || {
+                    counted.set(counted.get() + 1);
+                    noted.set(items.cross_axis_cell_count());
+                    Box!(modifier = Modifier.size(10.dp()), {});
+                });
+            }
+        );
+    });
+    assert_eq!(reported.get(), 2);
+    let first = composed.get();
+    height.set(350);
+    ui.wait_for_idle();
+    assert_eq!((reported.get(), composed.get()), (3, first + 1));
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt, crossAxisCellCount_preservedWhenItemsUpdate
+#[test]
+fn an_item_keeps_the_cells_through_new_items() {
+    let count = mutable_state_of(2usize);
+    let columns = mutable_state_of(3usize);
+    let (read_count, read_columns) = (count.handle(), columns.handle());
+    let seen: Rc<RefCell<std::collections::BTreeMap<usize, usize>>> = Rc::default();
+    let first_item: Rc<RefCell<Vec<usize>>> = Rc::default();
+    let (noted, observed) = (seen.clone(), first_item.clone());
+    let mut ui = rule(move || {
+        let (noted, observed) = (noted.clone(), observed.clone());
+        let items_count = read_count.get();
+        LazyVerticalGrid!(
+            fixed(read_columns.get()),
+            modifier = Modifier.size(200.dp()),
+            move |scope: LazyGridScope| {
+                let (noted, observed, items) =
+                    (noted.clone(), observed.clone(), scope.item_scope());
+                scope.items_keyed(
+                    items_count,
+                    |index| index,
+                    move |index| {
+                        let cells = items.cross_axis_cell_count();
+                        if index == 0 && observed.borrow().last() != Some(&cells) {
+                            observed.borrow_mut().push(cells);
+                        }
+                        noted.borrow_mut().insert(index, cells);
+                        Box!(modifier = Modifier.size(10.dp()), {});
+                    },
+                );
+            }
+        );
+    });
+    assert_eq!(*first_item.borrow().last().unwrap(), 3);
+    count.set(4);
+    ui.wait_for_idle();
+    assert!(first_item.borrow().iter().skip(1).all(|cells| *cells == 3), "never reset");
+    assert!(seen.borrow().values().all(|cells| *cells == 3), "{:?}", seen.borrow());
+    assert_eq!(seen.borrow().len(), 4);
+    columns.set(5);
+    ui.wait_for_idle();
+    assert!(seen.borrow().values().all(|cells| *cells == 5), "{:?}", seen.borrow());
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemScopeImpl.kt, crossAxisCellCount: at least 1, so what divides by it can
+#[test]
+fn an_items_first_composition_can_divide_by_the_cells() {
+    let reported = Rc::new(Cell::new(usize::MAX));
+    let noted = reported.clone();
+    let _ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        let noted = noted.clone();
+        LazyVerticalGrid!(
+            GridCells::Adaptive(10.dp()),
+            modifier = Modifier.size(100.dp()),
+            move |scope: LazyGridScope| {
+                let (noted, items) = (noted.clone(), scope.item_scope());
+                scope.item(move || {
+                    let cells = items.cross_axis_cell_count();
+                    noted.set(noted.get().min(cells));
+                    let width = 100 / cells;
+                    Box!(modifier = Modifier.width(Dp(width as f32)), {});
+                });
+            }
+        );
+    });
+    assert!(reported.get() >= 1);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGrid.kt, `remember(columns, arrangement)`, GridSlotCache: the cells aren't asked for again with the same way to work them out
+#[test]
+fn stable_cells_of_your_own_are_asked_once() {
+    struct Counted(Rc<Cell<usize>>);
+    impl CrossAxisCells for Counted {
+        fn calculate_cross_axis_cell_sizes(
+            &self,
+            _: compose_ui::Density,
+            available: i32,
+            _: i32,
+        ) -> Vec<i32> {
+            self.0.set(self.0.get() + 1);
+            vec![available]
+        }
+    }
+    let asked = Rc::new(Cell::new(0));
+    let cells = GridCells::Custom(Rc::new(Counted(asked.clone())));
+    let tick = mutable_state_of(0);
+    let read = tick.handle();
+    let mut ui = rule(move || {
+        read.get();
+        LazyVerticalGrid!(
+            cells.clone(),
+            modifier = Modifier.size(100.dp()),
+            |scope: LazyGridScope| {
+                scope.items(3, |_| Spacer(Modifier.height(10.dp())));
+            }
+        );
+    });
+    assert_eq!(asked.get(), 1);
+    for value in 1..4 {
+        tick.set(value);
+        ui.wait_for_idle();
+    }
+    assert_eq!(asked.get(), 1, "a caller's recomposition asks nothing");
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridDsl.kt, `GridCells`: at least one cell
+#[test]
+#[should_panic(expected = "at least one cell")]
+fn cells_of_your_own_are_at_least_one() {
+    struct Nothing;
+    impl CrossAxisCells for Nothing {
+        fn calculate_cross_axis_cell_sizes(
+            &self,
+            _: compose_ui::Density,
+            _: i32,
+            _: i32,
+        ) -> Vec<i32> {
+            Vec::new()
+        }
+    }
+    let _ui = rule(|| {
+        LazyVerticalGrid!(
+            GridCells::Custom(Rc::new(Nothing)),
+            modifier = Modifier.size(100.dp()),
+            |scope: LazyGridScope| scope.item(|| {})
+        );
+    });
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridDsl.kt, GridCells.FixedSize: `requirePrecondition(size > 0.dp)`
+#[test]
+#[should_panic(expected = "Provided size should be larger than zero.")]
+fn a_fixed_size_cell_of_nothing_panics() {
+    let _ui = rule(|| {
+        LazyVerticalGrid!(
+            GridCells::FixedSize(0.dp()),
+            modifier = Modifier.size(100.dp()),
+            |scope: LazyGridScope| scope.item(|| {})
+        );
+    });
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridDsl.kt, GridCells.FixedSize: as many as fit with the spacing between them
+#[test]
+fn fixed_size_cells_count_the_spacing_between_them() {
+    for (room, expected) in [(305, 2), (320, 3)] {
+        let reported = Rc::new(Cell::new(0));
+        let noted = reported.clone();
+        let _ui = rule(move || {
+            let noted = noted.clone();
+            LazyVerticalGrid!(
+                GridCells::FixedSize(100.dp()),
+                modifier = Modifier.size((Dp(room as f32), 200.dp())),
+                horizontal_arrangement = Arrangement::spaced_by(10.dp()),
+                move |scope: LazyGridScope| {
+                    let (noted, items) = (noted.clone(), scope.item_scope());
+                    scope.item(move || noted.set(items.cross_axis_cell_count()));
+                }
+            );
+        });
+        assert_eq!(reported.get(), expected, "in {room}");
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGrid.kt, `rememberLazyGridSlots`: `slots.sizes` and `positions` at least 0 for a cell across nothing
+#[test]
+fn an_item_across_cells_arranged_over_themselves_is_at_least_nothing() {
+    let mut ui = rule(|| {
+        LazyVerticalGrid!(
+            fixed(2),
+            modifier = Modifier.size((10.dp(), 50.dp())),
+            horizontal_arrangement = Arrangement::spaced_by(30.dp()),
+            |scope: LazyGridScope| {
+                scope.items_with_span(
+                    2,
+                    |line, _| GridItemSpan(line.max_line_span()),
+                    |_| 0,
+                    |index| {
+                        Spacer(Modifier.fill_max_width().height(5.dp()).test_tag(index.to_string()))
+                    },
+                );
+            }
+        );
+    });
+    assert!(bounds(&mut ui, "0").width() >= 0.0);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, the reversed configurations with no items
+#[test]
+fn an_empty_reversed_grid_says_it_is() {
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    let _ui = rule(move || {
+        LazyVerticalGrid!(
+            fixed(2),
+            modifier = Modifier.size(100.dp()),
+            state = handle,
+            reverse_layout = true,
+            |_: LazyGridScope| {}
+        );
+    });
+    assert!(state.layout_info().reverse_layout);
+}
+
+/// `Fixed(1)` lines at a spacing of -50: even ones of 100 px, advancing 50; odd ones of 10 px, smaller
+/// than the spacing, advancing nothing (`mainAxisSizeWithSpacings`, at least 0).
+fn overlapping_grid(
+    first: usize,
+    offset: i32,
+    before: f32,
+    height: f32,
+    beyond: bool,
+) -> (ComposeTestRule, Owned<LazyGridState>) {
+    use compose_ui::platform::Optimization;
+    use_optimizations(Optimizations::NONE.with(Optimization::GRID_LINES_BEYOND, beyond));
+    let state = LazyGridState::new(first, offset);
+    let handle = *state;
+    let ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        LazyVerticalGrid!(
+            fixed(1),
+            modifier = Modifier.required_size((50.dp(), Dp(height))),
+            state = handle,
+            content_padding = PaddingValues { top: Dp(before), ..PaddingValues::ZERO },
+            vertical_arrangement = Arrangement::spaced_by(-50.dp()),
+            |scope: LazyGridScope| {
+                scope.items(40, |index| {
+                    let main = if index.is_multiple_of(2) { 100.dp() } else { 10.dp() };
+                    Box!(modifier = Modifier.size((50.dp(), main)).test_tag(index.to_string()), {});
+                });
+            }
+        );
+    });
+    (ui, state)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridMeasuredLine.kt, mainAxisSizeWithSpacings: `coerceAtLeast(0)`, stepping back in LazyGridMeasure.kt
+#[test]
+fn stepping_back_over_a_line_smaller_than_the_spacing_takes_nothing() {
+    let (mut ui, state) = overlapping_grid(6, -10, 0.0, 150.0, false);
+    ui.wait_for_idle();
+    // Line 5, 10 px, takes none of the 10 px; line 4, 100 px, has 50 with the spacing: 40 px into it.
+    assert_eq!(
+        (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
+        (4, 40)
+    );
+    assert_eq!(Lazy::column().main_start(&mut ui, "4"), -40.0);
+}
+
+// Compose: the same, laying lines out one after the other
+#[test]
+fn lines_smaller_than_the_spacing_advance_nothing() {
+    let (mut ui, _state) = overlapping_grid(0, 0, 0.0, 150.0, false);
+    let lazy = Lazy::column();
+    for (index, at) in [(0, 0.0), (1, 50.0), (2, 50.0), (3, 100.0), (4, 100.0)] {
+        assert_eq!(lazy.main_start(&mut ui, &index.to_string()), at, "{index}");
+    }
+}
+
+// Compose: the same, for lines laid out beyond those in view
+#[test]
+fn lines_beyond_those_in_view_smaller_than_the_spacing_advance_nothing() {
+    let (mut ui, _state) = overlapping_grid(0, 0, 0.0, 150.0, true);
+    let lazy = Lazy::column();
+    // Line 4 starts at 100 and ends the view at 150; beyond it, 5 at 150 and 6 with it.
+    assert_eq!(lazy.main_start(&mut ui, "5"), 150.0);
+    assert_eq!(lazy.main_start(&mut ui, "6"), 150.0);
+}
+
+// Compose: the same, for lines laid out beyond those before the view
+#[test]
+fn lines_before_those_in_view_smaller_than_the_spacing_advance_nothing() {
+    let (mut ui, _state) = overlapping_grid(6, 0, 0.0, 150.0, true);
+    let lazy = Lazy::column();
+    // Line 4 walks back to -50 (its 50 with the spacing): beyond it, 3 at -50 and 2 at -100.
+    assert_eq!(lazy.main_start(&mut ui, "4"), -50.0);
+    assert_eq!(lazy.main_start(&mut ui, "3"), -50.0);
+    assert_eq!(lazy.main_start(&mut ui, "2"), -100.0);
+}
+
+// Compose: the same, for the lines beyond the last in view: padding before larger than the view
+#[test]
+fn lines_after_the_last_in_view_count_their_size_with_the_spacing() {
+    let (mut ui, _state) = overlapping_grid(1, 0, 200.0, 150.0, true);
+    let lazy = Lazy::column();
+    // Item 1, 10 px, at the padding's end: at 0 with the spacing, so the walk goes on to item 2.
+    assert_eq!(lazy.main_start(&mut ui, "1"), 200.0);
+    assert_eq!(lazy.main_start(&mut ui, "2"), 200.0);
+    // Past those in view, the same rule: 100 px is 50 more, 10 px is none.
+    assert_eq!(lazy.main_start(&mut ui, "3"), 250.0);
+    assert_eq!(lazy.main_start(&mut ui, "4"), 250.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemScopeImpl.kt, crossAxisCellCount: at least 1 with cells of your own too, which nothing estimates here
+#[test]
+fn an_item_can_divide_by_cells_of_your_own() {
+    struct Two;
+    impl CrossAxisCells for Two {
+        fn calculate_cross_axis_cell_sizes(
+            &self,
+            _: compose_ui::Density,
+            room: i32,
+            _: i32,
+        ) -> Vec<i32> {
+            vec![room / 2, room / 2]
+        }
+    }
+    let reported = Rc::new(Cell::new(0));
+    let noted = reported.clone();
+    let _ui = rule(move || {
+        let noted = noted.clone();
+        LazyVerticalGrid!(
+            GridCells::Custom(Rc::new(Two)),
+            modifier = Modifier.size(100.dp()),
+            move |scope: LazyGridScope| {
+                let (noted, items) = (noted.clone(), scope.item_scope());
+                scope.item(move || {
+                    let cells = items.cross_axis_cell_count();
+                    noted.set(cells);
+                    Box!(modifier = Modifier.width(Dp((100 / cells) as f32)), {});
+                });
+            }
+        );
+    });
+    assert_eq!(reported.get(), 2);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt, crossAxisCellCount_recomposesWhenColumnCountChanges: `compositionCount` of 1, in a grid filling the room around, where the estimate is right
+#[test]
+fn an_item_in_a_grid_filling_the_room_knows_the_cells_at_once() {
+    let composed = Rc::new(Cell::new(0));
+    let reported = Rc::new(Cell::new(0));
+    let (counted, noted) = (composed.clone(), reported.clone());
+    let _ui = ComposeTestRule::sized(IntSize::new(400, 200), move || {
+        let (counted, noted) = (counted.clone(), noted.clone());
+        LazyVerticalGrid!(
+            GridCells::Adaptive(100.dp()),
+            modifier = Modifier.fill_max_size(),
+            move |scope: LazyGridScope| {
+                let (counted, noted, items) = (counted.clone(), noted.clone(), scope.item_scope());
+                scope.item(move || {
+                    counted.set(counted.get() + 1);
+                    noted.set(items.cross_axis_cell_count());
+                    Box!(modifier = Modifier.size(10.dp()), {});
+                });
+            }
+        );
+    });
+    assert_eq!((reported.get(), composed.get()), (4, 1));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGrid.kt, `measuredLineProvider.childConstraints`: with new items a prefetched item's measured in the cells as they are
+#[test]
+fn an_item_prefetched_after_new_spans_is_measured_in_its_new_cell() {
+    let wide = mutable_state_of(false);
+    let read = wide.handle();
+    let widths: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let noted = widths.clone();
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    let mut ui = rule(move || {
+        let noted = noted.clone();
+        let wide = read.get();
+        LazyVerticalGrid!(
+            fixed(2),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = handle,
+            move |scope: LazyGridScope| {
+                let noted = noted.clone();
+                scope.items_with_span(
+                    40,
+                    move |span, index| {
+                        GridItemSpan(if wide && index == 10 { span.max_line_span() } else { 1 })
+                    },
+                    |_| 0,
+                    move |index| {
+                        let noted = noted.clone();
+                        let sized =
+                            Modifier.layout(move |scope, measurable, constraints: Constraints| {
+                                if index == 10 {
+                                    noted.borrow_mut().push(constraints.max_width);
+                                }
+                                let placeable = scope.measure(measurable, constraints);
+                                scope.place(&placeable, 0, 0);
+                                scope.layout(placeable.width, placeable.height)
+                            });
+                        Spacer(sized.height(50.dp()));
+                    },
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    // New spans, then a scroll to 140: lines 2 to 4 in view, item 10 on line 5 only a request.
+    wide.set(true);
+    ui.wait_for_idle();
+    let later = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let _ = run(&mut ui, async move { handle.scroll_by(140.0).await });
+    assert_eq!(handle.layout_info().visible_items_info.last().unwrap().index, 9);
+    while ui.host().prefetch(later) {
+        ui.wait_for_idle();
+    }
+    assert_eq!(*widths.borrow(), vec![100], "item 10 once, across the line it fills");
 }

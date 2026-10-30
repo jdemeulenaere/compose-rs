@@ -127,6 +127,15 @@ What to read first in the next round, not yet measured:
 
 A frame pays for the window: told what's in view, keeping around, its room (Compose's work too, in `CacheWindowLogic`, where the old strategy held one request). One `sample` of the feed's 200 px frames (12 s, 7,981 samples in `UiHost::frame`) confirms that as about half of the difference: prefetch.rs's functions take 142 samples, 1.8 % of the frame, `after_layout` 82 of them (1.0 %) with `CacheWindowLogic` 68 inside it (0.85 %), `target` 7, the trim 4. The rest of +3.5 % isn't in the window's code by this profile: the load's noise, which moves the same frames by about 2 % between rounds, or layout's other work. A window's cost on the largest list is about a microsecond. These benches run no idle time, so requests the window makes wait in the queue. Prefetching costs what it did per item. The 8 µs bench's two modes were the bench's: a request whose stretch didn't fit its idle times waited up to its cap of 100,000 of them (seen 27 to 90 times a run, with 1.4 to 4.6 ms an item). It now has what Compose's scheduler gives after two intervals without a frame, no limit for the first request, on both sides. The bench's `whole` budget went with whole compositions.
 
+**Grids with headers, far from the start (D1451, D1454, D1455).** `benchmarks/benches/lazy.rs`, parity flags, 3 rounds on the same loaded Mac, fastest of each: a grid of 100,000 items in 3 columns, 100 items from its end, with a header every 20 or none. Not measured against Compose.
+
+| Frame | Headers | No headers |
+|---|---|---|
+| A caller recomposing it (new items, spans walked again) | 1.42 ms | 35 µs |
+| A scroll (the window notes every line before the sticking header, at size 0) | 0.37 ms | 15 µs |
+
+Both grow with how far the grid is from its start. The scroll's is Compose's walk, ported literally; the recomposition's is also Compose's, whose new interval content starts its span provider's buckets empty. Before D1455 both took 600 ms to 1 s a frame here, the window's units being a list searched from its start. Next to main the review's other changes are level (4 interleaved rounds, fastest of each, every frame within about 5 % either way, composing the same items in the same frames): the feed 300 items in 779 frames, the stress list 303 in 341, the grid 300 in 195.
+
 ## Compose's defaults (version 1.12.1)
 
 What the Kotlin app gets by default, read from the sources jars of Compose BOM 2026.09.00 (foundation, ui, ui-graphics 1.12.1; material3 1.4.0), since D540. Compose 1.12's AARs require `compileSdk` 37, so the Kotlin apps compile against API 37 and keep `targetSdk` 36 (no runtime behaviour opted in); the compose-rs library and bench-rs stay on 36. File names are under `androidx/compose/…` in each jar, `commonMain` unless marked `android`. Everything in (a), (b) and (f) is the same in 1.11.4 (rounds 1 to 13), whose prefetch files differ only in the Robolectric check; in (c) and (d), 1.12 adds layer outsets, which nothing here uses.

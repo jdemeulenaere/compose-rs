@@ -14,7 +14,8 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Constraints, IntSize, Measurable, MeasurePolicy, MeasureResult, MeasureScope, UnitExt,
+    Constraints, IntSize, Measurable, MeasurePolicy, MeasureResult, MeasureScope, PrefetchClock,
+    UnitExt, prefetch_now,
 };
 
 thread_local! {
@@ -47,7 +48,14 @@ fn last_composed() -> usize {
 }
 
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+    prefetch_now() + Duration::from_secs(60)
+}
+
+/// An item taking `millis` to compose: by the clock a test holds, so its timed tests read no real
+/// time and a loaded machine can't change what they see.
+fn spend(millis: u64) {
+    assert!(PrefetchClock::held(), "a timed test holds the clock");
+    PrefetchClock::advance(Duration::from_millis(millis));
 }
 
 /// A 100 x 20 leaf counting its measurements.
@@ -70,11 +78,11 @@ fn Item(index: usize) {
     COMPOSED.with(|map| *map.borrow_mut().entry(index).or_insert(0) += 1);
     if SLOW.with(|slow| slow.get()) == Some(index) {
         SLOW.with(|slow| slow.set(None));
-        std::thread::sleep(Duration::from_millis(40));
+        spend(40);
     }
     let millis = ITEM_MILLIS.with(|millis| millis.get());
     if millis > 0 {
-        std::thread::sleep(Duration::from_millis(millis));
+        spend(millis);
     }
     let policy = remember(|| Rc::new(Counting(index)) as Rc<dyn MeasurePolicy>);
     compose_ui::Layout(
@@ -157,6 +165,7 @@ fn prefetch_waits_for_a_pending_scroll() {
 /// never prefetches again; every later item is composed in the frame that scrolls it in.
 #[test]
 fn one_slow_item_does_not_disable_prefetch_for_good() {
+    let _clock = PrefetchClock::hold();
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.dispatch_raw_delta(30.0);
@@ -170,7 +179,7 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
         state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
         let before = total_compositions();
-        ui.host().prefetch(Instant::now() + Duration::from_millis(16));
+        ui.host().prefetch(prefetch_now() + Duration::from_millis(16));
         prefetched += total_compositions() - before;
     }
     assert!(prefetched > 0, "nothing prefetched in 10 idle times after one slow item");
@@ -186,6 +195,7 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
 /// left alone while the recent maximum (decaying) doesn't fit (D341).
 #[test]
 fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
+    let _clock = PrefetchClock::hold();
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.dispatch_raw_delta(30.0);
@@ -200,7 +210,7 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
     state.dispatch_raw_delta(20.0);
     ui.wait_for_idle();
     let before = total_compositions();
-    ui.host().prefetch(Instant::now() + Duration::from_millis(20));
+    ui.host().prefetch(prefetch_now() + Duration::from_millis(20));
     assert_eq!(total_compositions(), before, "an item started in 20 ms after one took 40");
 }
 
@@ -214,6 +224,7 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
 /// it (an outlier's fades fast: `one_slow_item_does_not_disable_prefetch_for_good`) (D341).
 #[test]
 fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
+    let _clock = PrefetchClock::hold();
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     ITEM_MILLIS.with(|millis| millis.set(20));
@@ -227,7 +238,7 @@ fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
         state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
         let before = total_compositions();
-        ui.host().prefetch(Instant::now() + Duration::from_millis(millis));
+        ui.host().prefetch(prefetch_now() + Duration::from_millis(millis));
         assert_eq!(total_compositions(), before, "a 20 ms item started in {millis} ms");
     }
 }
@@ -239,12 +250,13 @@ fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
 /// with a safety margin (0.5 ms) to spare (D341).
 #[test]
 fn an_idle_time_within_the_safety_margin_is_left_alone() {
+    let _clock = PrefetchClock::hold();
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = total_compositions();
-    ui.host().prefetch(Instant::now() + Duration::from_micros(200));
+    ui.host().prefetch(prefetch_now() + Duration::from_micros(200));
     assert_eq!(total_compositions(), before);
     // Given up until the next scroll, whose idle time does it.
     state.dispatch_raw_delta(1.0);

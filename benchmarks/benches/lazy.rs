@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use compose::foundation::layout::*;
 use compose::foundation::*;
-use compose::runtime::{composable, mutable_state_of, platform, remember};
+use compose::runtime::{MutableState, composable, mutable_state_of, platform, remember};
 use compose::ui::platform::{FixedTextMeasurer, UiHost};
 use compose::ui::{Color, Density, IntSize, Modifier, Offset, PointerEvent, UnitExt};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -112,6 +112,94 @@ fn Tile(index: usize) {
             BasicText!("{} likes", index % 97 + usize::from(liked.get()));
         }
     );
+}
+
+/// The items of the grids a caller recomposes, far into which they're scrolled.
+const LONG_GRID: usize = 100_000;
+/// Items between two headers of those grids.
+const SECTION: usize = 20;
+
+thread_local! {
+    /// What the composable of `recompose_a_long_grid` reads at the grid's call site.
+    static TICK: std::cell::Cell<Option<MutableState<u64>>> = const { std::cell::Cell::new(None) };
+}
+
+/// A grid of `LONG_GRID` items, near the last of them, whose content is new with each recomposition
+/// of its caller, as a closure capturing anything is: with headers, a span per item to walk again.
+#[composable]
+fn LongGrid(headers: bool) {
+    let tick = remember(|| mutable_state_of(0u64));
+    TICK.with(|cell| cell.set(Some(tick)));
+    let tick = tick.get();
+    let state = remember_lazy_grid_state(LONG_GRID - 100, 0);
+    LazyVerticalGrid!(
+        GridCells::Fixed(3),
+        modifier = Modifier.fill_max_size(),
+        state = state,
+        move |scope: LazyGridScope| {
+            if headers {
+                for _ in 0..LONG_GRID / SECTION {
+                    scope.sticky_header(|_| Spacer(Modifier.height(20.dp())));
+                    scope.items(SECTION - 1, move |_| {
+                        let _ = tick;
+                        Spacer(Modifier.height(100.dp()));
+                    });
+                }
+            } else {
+                scope.items(LONG_GRID, move |_| {
+                    let _ = tick;
+                    Spacer(Modifier.height(100.dp()));
+                });
+            }
+        }
+    );
+}
+
+#[composable]
+fn LongGridWithHeaders() {
+    LongGrid(true);
+}
+
+#[composable]
+fn LongGridOfItems() {
+    LongGrid(false);
+}
+
+/// A caller recomposing a long grid far from its start: the spans walked again, the items in view
+/// composed anew (D1454). The grid without headers has no spans to walk: the difference is the walk.
+fn recompose_a_long_grid(criterion: &mut Criterion) {
+    let screens: [(&str, fn()); 2] =
+        [("headers", LongGridWithHeaders), ("no headers", LongGridOfItems)];
+    for (name, content) in screens {
+        let mut host = host(content);
+        let tick = TICK.with(|cell| cell.get()).expect("composed");
+        criterion.bench_function(&format!("recompose a long grid, {name}, frame"), |bench| {
+            bench.iter_custom(|iterations| {
+                (0..iterations)
+                    .map(|_| {
+                        platform::advance_clock(Duration::from_millis(16));
+                        tick.update(|value| value + 1);
+                        let start = Instant::now();
+                        host.frame();
+                        start.elapsed()
+                    })
+                    .sum()
+            })
+        });
+        // A scroll there, a header sticking: a window's walk over the lines before it (D1451).
+        let mut frame = 0u64;
+        criterion.bench_function(&format!("scroll a long grid, {name}, frame"), |bench| {
+            bench.iter_custom(|iterations| {
+                (0..iterations)
+                    .map(|_| {
+                        frame += 1;
+                        let way = if frame % 80 < 40 { 1.0 } else { -1.0 };
+                        scroll_frame(&mut host, way * STEP)
+                    })
+                    .sum()
+            })
+        });
+    }
 }
 
 fn scroll_through(criterion: &mut Criterion) {
@@ -252,5 +340,5 @@ fn prefetch_in_pauses(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, scroll_through, prefetch_in_pauses);
+criterion_group!(benches, scroll_through, prefetch_in_pauses, recompose_a_long_grid);
 criterion_main!(benches);

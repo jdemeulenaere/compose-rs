@@ -188,9 +188,15 @@ struct LazyListInner {
     /// than kept for reuse (no scroll brought them, D482).
     beyond_ended: Cell<bool>,
     dispose_leaving: Cell<bool>,
+    /// The sticking header's size, as last measured: what a focused item is scrolled out from under.
+    sticking_size: Cell<i32>,
+    /// The largest size across of the items last laid out (a list's).
+    cross_size: Cell<i32>,
     /// The cells across a grid, as last measured: what its items' scope says.
     cross_cells: OwnedState<usize>,
     cross_cells_written: Cell<usize>,
+    /// Whether the composition seeded it, for what's composed before the first measurement.
+    cross_cells_seeded: Cell<bool>,
     /// The sticky header to keep composed (over the first visible item), as last laid out.
     sticky: OwnedState<Option<usize>>,
     /// What was last written to `sticky`, read without observing it.
@@ -302,8 +308,11 @@ impl LazyListInner {
             overshoot: RefCell::new(None),
             prefetch: Prefetch::new(),
             parent_size: Rc::default(),
-            cross_cells: mutable_state_of(0),
-            cross_cells_written: Cell::new(0),
+            sticking_size: Cell::new(0),
+            cross_size: Cell::new(0),
+            cross_cells: mutable_state_of(1),
+            cross_cells_written: Cell::new(1),
+            cross_cells_seeded: Cell::new(false),
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
             beyond_bounds: mutable_state_of((0, 0)),
@@ -1346,6 +1355,9 @@ struct Items {
     intervals: Vec<Interval>,
     /// Each interval's first item: a binary search finds an item's interval.
     starts: Vec<usize>,
+    /// The interval found last, looked at first, as `MutableIntervalList.lastInterval`: a walk
+    /// over the items, as a grid's spans, stays in it for a while.
+    last_found: Cell<usize>,
     count: usize,
     /// The sticky headers' indices, in order.
     headers: Vec<usize>,
@@ -1378,7 +1390,15 @@ impl Items {
         let keyed = intervals.iter().any(|interval| interval.key.is_some());
         let cached = if keyed { count.min(KEY_CACHE) } else { 0 };
         let keys = (0..cached).map(|_| Cell::new((usize::MAX, 0))).collect();
-        Items { intervals, starts, count, headers, has_custom_spans, keys }
+        Items {
+            intervals,
+            starts,
+            last_found: Cell::new(0),
+            count,
+            headers,
+            has_custom_spans,
+            keys,
+        }
     }
 
     /// The interval holding item `index`, and the item's index in it.
@@ -1386,7 +1406,12 @@ impl Items {
         if index >= self.count {
             return None;
         }
-        let interval = self.starts.partition_point(|start| *start <= index) - 1;
+        let last = self.last_found.get();
+        let in_last = self.starts[last] <= index
+            && self.starts.get(last + 1).is_none_or(|next| index < *next);
+        let interval =
+            if in_last { last } else { self.starts.partition_point(|start| *start <= index) - 1 };
+        self.last_found.set(interval);
         Some((&self.intervals[interval], index - self.starts[interval]))
     }
 
@@ -2082,7 +2107,7 @@ fn LazyItem(
     let target = prefetch::item_target(&inner, item_key);
     let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
-    let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
+    let modifier = Modifier.lazy_item_boundary().on_focus_changed(move |focused: bool| {
         if focused {
             if let Some(inner) = near.inner() {
                 inner.pinned_near.set(index);
@@ -2347,7 +2372,7 @@ impl MeasurePolicy for LazyListLayout {
                 false,
                 None,
                 &[],
-                &mut |_| 0,
+                &mut |_| None,
             );
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
@@ -2669,7 +2694,14 @@ impl MeasurePolicy for LazyListLayout {
                     start_overflow: (-sticking.map_or(*first_main, |(_, _, at)| at)).max(0),
                     end_overflow: (last_main + main_of(last) + spacing - main_max).abs(),
                     viewport: main_max,
-                    spacing,
+                    average: {
+                        // `visibleItemsInfo`'s: the sticking header once, itself or apart.
+                        let apart = sticking.filter(|(header, _, _)| *header < lead);
+                        let of_header = apart.map_or(0, |(_, placeable, _)| main_of(&placeable));
+                        let in_view: i32 = placed.iter().map(|(it, _)| main_of(it)).sum();
+                        let count = placed.len() + usize::from(apart.is_some());
+                        (of_header + in_view) / count.max(1) as i32 + spacing
+                    },
                     density,
                 }),
                 _ => None,
@@ -2693,7 +2725,7 @@ impl MeasurePolicy for LazyListLayout {
                 state.laid_items_changed(&info.items),
                 None,
                 &visible,
-                &mut |unit| items.key(unit),
+                &mut |unit| Some(items.key(unit)),
             );
         }
         // The items that may stay composed: those wanted, those in the window, and those requests
@@ -2863,6 +2895,7 @@ impl MeasurePolicy for LazyListLayout {
         if state.sticky_written.replace(header) != header {
             state.sticky.set(header);
         }
+        state.sticking_size.set(sticking.map_or(0, |(_, placeable, _)| main_of(&placeable)));
         let mut sticky = None;
         if let Some((header, next)) = headers
             && let Some((_, placeable, _)) = sticking
@@ -2912,6 +2945,12 @@ impl MeasurePolicy for LazyListLayout {
             .map(|(placeable, _)| if vertical { placeable.width } else { placeable.height })
             .max()
             .unwrap_or(0);
+        // Short of items, the composition's to follow before anything's drawn: the size across stays
+        // what it was. Compose's items compose in its measurement, so a parent never sees less: a
+        // jump there has nothing laid out yet, and a list around this one would take an item of no
+        // size for one scrolled past (D1456).
+        let cross_size = if missing { cross_size.max(state.cross_size.get()) } else { cross_size };
+        state.cross_size.set(cross_size);
         let (width, height) = if vertical {
             (constraints.constrain_width(cross_size + cross_before + cross_after), main_total)
         } else {
@@ -3287,9 +3326,15 @@ impl ModifierNode for LazyScrollNode {
         let mirrored = self.mirrored(inner.rtl.get());
         let (start, end, length) =
             crate::scroll::scroll_axis(rect, viewport, self.vertical, mirrored);
-        // Where it will be once the scrolling asked for (not yet laid out) is.
+        // Where it will be once the scrolling asked for (not yet laid out) is, out from under a
+        // sticking header at the list's start, as Compose's `StickyHeaderBringIntoViewSpec`.
         let pending = inner.pending.get();
-        let delta = bring_into_view_delta(start - pending, end - pending, length);
+        let sticking = inner.sticking_size.get() as f32;
+        let delta = bring_into_view_delta(
+            start - pending - sticking,
+            end - pending - sticking,
+            length - sticking,
+        );
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta, None) };
         Some(crate::scroll::scrolled_rect(rect, used, self.vertical, mirrored))
     }

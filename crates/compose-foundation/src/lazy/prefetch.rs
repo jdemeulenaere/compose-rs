@@ -257,7 +257,9 @@ pub(super) struct Laid {
     pub(super) start_overflow: i32,
     pub(super) end_overflow: i32,
     pub(super) viewport: i32,
-    pub(super) spacing: i32,
+    /// The items in view's average size with the spacing (`visibleItemsAverageSize`), a grid's lines
+    /// (`visibleLinesAverageMainAxisSize`).
+    pub(super) average: i32,
     pub(super) density: Density,
 }
 
@@ -270,8 +272,9 @@ struct Shown {
     viewport: i32,
     density: Density,
     count: i32,
-    /// The units in view, by index: index, size and key (a sticking header's index is apart).
-    visible: Vec<(i32, i32, u64)>,
+    /// The units in view, by index: index, size and key (a sticking header's index is apart; a
+    /// grid's lines before a header sticking have size 0 and no key, Compose's `NoKey`, D1451).
+    visible: Vec<(i32, i32, Option<u64>)>,
     average: i32,
 }
 
@@ -375,7 +378,7 @@ impl CacheWindowScope for WindowScope<'_> {
         self.shown.visible[position as usize].0
     }
 
-    fn visible_item_key(&self, position: i32) -> u64 {
+    fn visible_item_key(&self, position: i32) -> Option<u64> {
         self.shown.visible[position as usize].2
     }
 
@@ -467,8 +470,9 @@ impl Prefetch {
     }
 
     fn keep_bounds(&self, logic: &mut CacheWindowLogic) {
+        // A grid's start is -1 while its header sticks (D1451): none, its end still one.
         self.kept.set(logic.bounds().and_then(|(start, end)| {
-            Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
+            Some((usize::try_from(start.max(0)).ok()?, usize::try_from(end).ok()?))
         }));
     }
 
@@ -562,7 +566,7 @@ impl Prefetch {
         keys_changed: bool,
         units: Option<&dyn Units>,
         visible: &[(usize, i32)],
-        key_of: &mut dyn FnMut(usize) -> u64,
+        key_of: &mut dyn FnMut(usize) -> Option<u64>,
     ) {
         let scrolled = self.delta.get();
         let delta = if scrolled.abs() > 0.5 { scrolled.round() } else { 0.0 };
@@ -612,8 +616,7 @@ impl Prefetch {
                             shown.visible.push((unit as i32, size, key_of(unit)));
                         }
                     }
-                    let sum: i32 = visible.iter().map(|(_, size)| *size).sum();
-                    shown.average = sum / visible.len().max(1) as i32 + laid.spacing;
+                    shown.average = laid.average;
                 }
                 None => {
                     shown.visible.clear();
@@ -1218,7 +1221,7 @@ impl Handle {
         let urgent = self.urgent.get();
         let averages = prefetch.averages(self.content_type.get());
         // Compose's `resetAvailableTimeTo`: the steps' times count from here.
-        let mark = Instant::now();
+        let mark = compose_ui::prefetch_now();
         // A paused composition a frame completed (the frame wanted its item): composed.
         if !self.composed.get()
             && self.paused.borrow().as_ref().is_some_and(|paused| paused.is_complete())
@@ -1281,13 +1284,13 @@ impl Handle {
                     return self.short_of_time(&state);
                 }
                 let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch apply");
-                let began = Instant::now();
+                let began = compose_ui::prefetch_now();
                 paused.apply();
                 prefetch.timed(
                     scope,
                     Step::Apply,
                     self.content_type.get(),
-                    began.elapsed().as_nanos() as u64,
+                    compose_ui::prefetch_now().saturating_duration_since(began).as_nanos() as u64,
                 );
                 prefetch.stepped(scope);
             }
@@ -1312,7 +1315,7 @@ impl Handle {
                 return self.short_of_time(&state);
             }
             let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch measure");
-            let start = Instant::now();
+            let start = compose_ui::prefetch_now();
             let child = state.children.borrow().iter().position(|composed| *composed == self.item);
             let constraints_of = prefetch.constraints_of.borrow().clone();
             let constraints = match constraints_of {
@@ -1339,7 +1342,7 @@ impl Handle {
                     scope,
                     Step::Measure,
                     self.content_type.get(),
-                    start.elapsed().as_nanos() as u64,
+                    compose_ui::prefetch_now().saturating_duration_since(start).as_nanos() as u64,
                 );
             }
             prefetch.stepped(scope);
@@ -1435,7 +1438,7 @@ impl Handle {
             }
         }
         prefetch.composing_item.set(composing);
-        let now = Instant::now();
+        let now = compose_ui::prefetch_now();
         let elapsed = now.saturating_duration_since(timing.mark.get()).as_nanos() as u64;
         let step = if timing.requested.get() { Step::Pause } else { Step::Resume };
         prefetch.timed(scope, step, self.content_type.get(), elapsed);
@@ -1569,7 +1572,7 @@ impl PauseTiming {
         }
         let Some(state) = self.state.upgrade() else { return true };
         let prefetch = &state.prefetch;
-        let now = Instant::now();
+        let now = compose_ui::prefetch_now();
         let elapsed = now.saturating_duration_since(self.mark.get()).as_nanos() as u64;
         self.mark.set(now);
         prefetch.timed_in(self.idle_time, Step::Resume, self.content_type, elapsed);

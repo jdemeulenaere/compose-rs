@@ -239,7 +239,8 @@ pub use pointer_input::{
     AwaitPointerEvent, Axis, DragGestures, PointerInputChange, PointerInputScope, TapGestures,
 };
 pub use prefetch::{
-    LOCAL_PREFETCH_SCHEDULER, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler,
+    LOCAL_PREFETCH_SCHEDULER, PrefetchClock, PrefetchRequest, PrefetchRequestScope,
+    PrefetchScheduler, prefetch_now,
 };
 pub use remeasurement::{Remeasurement, RemeasurementModifier};
 pub use semantics::{

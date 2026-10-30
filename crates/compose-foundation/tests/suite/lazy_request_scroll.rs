@@ -11,7 +11,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Dp, IntSize};
+use compose_ui::{Constraints, Dp, IntSize, UnitExt};
 
 use crate::lazy_support::{Lazy, LazyColumnOrRow, LazyGrid, no_padding, px};
 use crate::scroll_support::{launch, run};
@@ -618,4 +618,117 @@ fn a_request_with_a_negative_offset_shows_the_start_of_a_grids_new_first_item() 
         assert_eq!(state.first_visible_item_index(), 0);
         assert_eq!(state.first_visible_item_scroll_offset(), ITEM - list_size);
     }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, restoringItemsInNestedLazyList's first step
+#[test]
+fn a_position_asked_of_a_row_in_a_column_moves_the_row_alone() {
+    let column = LazyListState::new(0, 0);
+    let first_row = LazyListState::new(0, 0);
+    let (column_handle, row_handle) = (*column, *first_row);
+    let heights: Rc<std::cell::RefCell<Vec<i32>>> = Rc::default();
+    let noted = heights.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let noted = noted.clone();
+        LazyColumn!(
+            modifier = Modifier.size(100.dp()),
+            state = column_handle,
+            move |scope: LazyListScope| {
+                let noted = noted.clone();
+                scope.items(20, move |row| {
+                    let noted = noted.clone();
+                    let own = remember_lazy_list_state(0, 0);
+                    let told =
+                        Modifier.layout(move |scope, measurable, constraints: Constraints| {
+                            let placeable = scope.measure(measurable, constraints);
+                            if row == 0 {
+                                noted.borrow_mut().push(placeable.height);
+                            }
+                            scope.place(&placeable, 0, 0);
+                            scope.layout(placeable.width, placeable.height)
+                        });
+                    LazyRow!(
+                        modifier = told,
+                        state = if row == 0 { row_handle } else { own },
+                        |scope: LazyListScope| {
+                            scope.items(20, |_| Box!(modifier = Modifier.size(10.dp())));
+                        }
+                    );
+                });
+            }
+        );
+    });
+    ui.wait_for_idle();
+    heights.borrow_mut().clear();
+    row_handle.request_scroll_to_item(19, 0);
+    ui.wait_for_idle();
+    assert_eq!(row_handle.first_visible_item_index(), 10, "as far as the row's last item");
+    assert_eq!(
+        (
+            column_handle.first_visible_item_index(),
+            column_handle.first_visible_item_scroll_offset()
+        ),
+        (0, 0)
+    );
+    assert!(heights.borrow().iter().all(|height| *height == 10), "{:?}", heights.borrow());
+}
+
+// Compose: the same, the other way round
+#[test]
+fn a_position_asked_of_a_column_in_a_row_moves_the_column_alone() {
+    let row = LazyListState::new(0, 0);
+    let first_column = LazyListState::new(0, 0);
+    let (row_handle, column_handle) = (*row, *first_column);
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        LazyRow!(
+            modifier = Modifier.size(100.dp()),
+            state = row_handle,
+            move |scope: LazyListScope| {
+                scope.items(20, move |index| {
+                    let own = remember_lazy_list_state(0, 0);
+                    LazyColumn!(
+                        state = if index == 0 { column_handle } else { own },
+                        |scope: LazyListScope| {
+                            scope.items(20, |_| Box!(modifier = Modifier.size(10.dp())));
+                        }
+                    );
+                });
+            }
+        );
+    });
+    ui.wait_for_idle();
+    column_handle.request_scroll_to_item(19, 0);
+    ui.wait_for_idle();
+    assert_eq!(column_handle.first_visible_item_index(), 10);
+    assert_eq!(
+        (row_handle.first_visible_item_index(), row_handle.first_visible_item_scroll_offset()),
+        (0, 0)
+    );
+}
+
+// Compose: a row that shrinks for good still gives its size up
+#[test]
+fn a_row_whose_items_are_smaller_after_a_jump_is_smaller() {
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let height = std::rc::Rc::new(Cell::new(0));
+    let noted = height.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let noted = noted.clone();
+        LazyRow!(
+            modifier = Modifier.on_size_changed(move |size: IntSize| noted.set(size.height)),
+            state = handle,
+            |scope: LazyListScope| {
+                scope.items(40, |index| {
+                    let tall = if index < 30 { 50.dp() } else { 10.dp() };
+                    Box!(modifier = Modifier.size((50.dp(), tall)));
+                });
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(height.get(), 50);
+    handle.request_scroll_to_item(35, 0);
+    ui.wait_for_idle();
+    assert_eq!(height.get(), 10);
 }

@@ -33,6 +33,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         | Element::Align(_)
         | Element::FillCrossAxis(_)
         | Element::ZIndex(_) => Box::new(Inert),
+        Element::LazyItemBoundary => Box::new(crate::graphics_layer::RepaintBoundaryNode),
         Element::Background(color, shape) => Box::new(BackgroundNode(*color, shape.clone())),
         Element::Border(width, color, shape) => Box::new(crate::border::BorderNode {
             width: *width,
@@ -86,7 +87,8 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::Weight(..)
         | Element::Align(_)
         | Element::FillCrossAxis(_)
-        | Element::ZIndex(_) => {}
+        | Element::ZIndex(_)
+        | Element::LazyItemBoundary => {}
         Element::Background(color, shape) => {
             set!(BackgroundNode, BackgroundNode(*color, shape.clone()))
         }

@@ -65,11 +65,11 @@ fn is_precise_wheel(delta: &MouseScrollDelta) -> bool {
     }
 }
 
-/// A wheel's step on this platform, as Compose Desktop's `ScrollConfig`s (the JetBrains fork's
-/// `DesktopScrollable.desktop.kt`, not in androidx-main; D1450): macOS's lines are 10 dp (its
-/// driver accelerates them); Windows's the scrollable's height over 20 and Linux's the root of its
-/// height, each times AWT's `scrollAmount`, the system's lines per notch: 3 by default on both
-/// (Windows's setting isn't read here).
+/// A wheel's step on this platform, as Compose Desktop's `ScrollConfig`s, **unverified**: the
+/// JetBrains fork's `DesktopScrollable.desktop.kt` isn't in androidx-main, so these are from memory
+/// (D1450). macOS's lines are 10 dp (its driver accelerates them); Windows's the scrollable's height
+/// over 20 and Linux's the root of its height, each times AWT's `scrollAmount`, the system's lines
+/// per notch: 3 by default on both (Windows's setting isn't read here).
 fn wheel_step() -> WheelStep {
     if cfg!(target_os = "macos") {
         WheelStep::Dp(10.0)
@@ -207,6 +207,8 @@ mod wheel_tests {
         assert!(!is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, -2.0)));
     }
 
+    // The step's numbers are unverified, from the JetBrains fork's source by memory (D1450): this
+    // pins what's here, not what Compose Desktop does.
     #[test]
     fn a_line_is_the_platforms_step_and_pixels_are_pixels() {
         let bounds = IntSize::new(100, 400);
@@ -220,6 +222,12 @@ mod wheel_tests {
             &MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -3.0)),
         );
         assert_eq!(pixels.wheel_pixels(2.0, bounds), Offset::new(0.0, 3.0));
+    }
+
+    #[test]
+    fn a_lines_delta_runs_the_other_way_on_each_axis() {
+        let event = wheel_event(Offset::ZERO, &MouseScrollDelta::LineDelta(2.0, -3.0));
+        assert_eq!(event.scroll_delta, Offset::new(-2.0, 3.0));
     }
 
     #[test]

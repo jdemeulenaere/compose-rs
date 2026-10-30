@@ -45,7 +45,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## Lazy lists
 
 - No `animateItem` (placement and fade animations). `contentType` is given with the `_with` forms (`items_keyed_with(count, key, content_type, content)`, D432), and items reuse the composition and nodes of those that left as in Compose (D430), and a reused node's modifier nodes are reset, detached and attached again as Compose's (`on_reset`, `on_detach`, `on_attach`), after the pass's element updates rather than before them (D434): a custom node keeps its resources while its item is kept for reuse, giving them back in `on_release` once dropped (D1153).
-- `LazyVerticalGrid` and `LazyHorizontalGrid` have no `reverse_layout` and no sticky headers. Their items are composed one by one and keep their state by key, as in Compose (D450); the content of the `items` forms gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`), and the forms taking a span are named apart (`_with_span`, D454).
+- `LazyVerticalGrid` and `LazyHorizontalGrid` have no `overscroll_effect` and no `animate_item`. Their items are composed one by one and keep their state by key, as in Compose (D450); the content of the `items` forms gets no item scope (`cross_axis_cell_count` is on `scope.item_scope()`, D1451, as a list's forms without one), and the forms taking a span are named apart (`_with_span`, D454). A grid recomposed at its call site gets new items, a closure not comparing as Compose compares its content lambda, so it measures again and walks its spans again.
 - A lazy list places only the items in view, as Compose (D470); a focus search leaving it lays out the next items beyond its bounds one at a time, as Compose's, but over frames: the moves wait for the next layout (D477). A popup in an item laid out beyond the bounds for a search shows where the item is placed while it is (D136).
 
 ## Drawing and graphics
@@ -94,4 +94,4 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **A `SeekableTransitionState` call can end a frame before Compose's**, as a task waiting for a frame resumes before that frame's composition (D821, D817; a runtime parity item). One interrupted by another cancels its task, as Compose's `CancellationException` does (D823).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
-- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`), no `GridCells.FixedSize`.
+- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`).
