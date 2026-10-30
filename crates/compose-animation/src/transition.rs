@@ -130,7 +130,118 @@ impl<S: Clone + PartialEq + 'static> MutableTransitionState<S> {
     }
 }
 
-/// What a transition follows, as Compose's `TransitionState`: a [`MutableTransitionState`] or a
+/// A transition's state with a phase before its animation starts, as Compose's
+/// `DeferredTransitionState`: [`defer`](Self::defer) makes a target pending, the transition staying
+/// where it is (or going on to where it was going) while its content is prepared and previewed;
+/// [`animate_to`](Self::animate_to) ends the wait and starts the animation.
+pub struct DeferredTransitionState<S: 'static> {
+    state: MutableTransitionState<S>,
+    pending: Rc<OwnedState<Option<S>>>,
+}
+
+impl<S: 'static> Clone for DeferredTransitionState<S> {
+    fn clone(&self) -> Self {
+        DeferredTransitionState { state: self.state.clone(), pending: self.pending.clone() }
+    }
+}
+
+impl<S: 'static> ComposeArg for DeferredTransitionState<S> {
+    fn same(&self, other: &Self) -> bool {
+        self.state.same(&other.state)
+    }
+}
+
+/// The same state holder, as Compose's object identity.
+impl<S: 'static> PartialEq for DeferredTransitionState<S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state == other.state
+    }
+}
+
+impl<S: 'static> std::fmt::Debug for DeferredTransitionState<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DeferredTransitionState")
+    }
+}
+
+impl<S: Clone + PartialEq + 'static> DeferredTransitionState<S> {
+    /// A state at `initial_state`, as `DeferredTransitionState(initialState)`.
+    #[track_caller]
+    pub fn new(initial_state: S) -> DeferredTransitionState<S> {
+        DeferredTransitionState {
+            state: MutableTransitionState::new(initial_state),
+            pending: Rc::new(mutable_state_of(None)),
+        }
+    }
+
+    /// Where the transition is, as `currentState` (a state read).
+    pub fn current_state(&self) -> S {
+        self.state.current_state()
+    }
+
+    /// Where it goes, as `targetState` (a state read).
+    pub fn target_state(&self) -> S {
+        self.state.target_state()
+    }
+
+    /// The target it waits to animate to, set by [`defer`](Self::defer) and cleared by
+    /// [`animate_to`](Self::animate_to), as `pendingTargetState` (a state read).
+    pub fn pending_target_state(&self) -> Option<S> {
+        self.pending.get()
+    }
+
+    /// Makes `target_state` pending, the deferred phase, as `defer`: the target doesn't change
+    /// and an animation running goes on. The transition's target itself: nothing is pending.
+    pub fn defer(&self, target_state: S) {
+        let pending = (self.state.target_state() != target_state).then_some(target_state);
+        self.pending.set(pending);
+    }
+
+    /// Ends the deferred phase, as `animateTo`: nothing is pending and `target_state` (the pending
+    /// target or any other) is the target, the transition animating to it.
+    pub fn animate_to(&self, target_state: S) {
+        self.pending.set(None);
+        self.state.set_target_state(target_state);
+    }
+}
+
+/// A transition with a deferred phase, as Compose's `DeferredTransition`: a [`Transition`] (it
+/// derefs to one) made by [`remember_deferred_transition`], with what its content can do during
+/// that phase (`DeferredAnimatedVisibility`, `DeferredAnimatedContent`).
+pub struct DeferredTransition<S: 'static> {
+    pub(crate) transition: Transition<S>,
+}
+
+impl<S: 'static> Clone for DeferredTransition<S> {
+    fn clone(&self) -> Self {
+        DeferredTransition { transition: self.transition.clone() }
+    }
+}
+
+impl<S: 'static> ComposeArg for DeferredTransition<S> {
+    fn same(&self, other: &Self) -> bool {
+        self.transition.same(&other.transition)
+    }
+}
+
+impl<S: 'static> std::ops::Deref for DeferredTransition<S> {
+    type Target = Transition<S>;
+    fn deref(&self) -> &Transition<S> {
+        &self.transition
+    }
+}
+
+/// A transition following a [`DeferredTransitionState`], as
+/// `rememberDeferredTransition(transitionState, label)`.
+pub fn remember_deferred_transition<S: Clone + PartialEq + 'static>(
+    transition_state: &DeferredTransitionState<S>,
+    label: impl Into<Option<&'static str>>,
+) -> DeferredTransition<S> {
+    DeferredTransition { transition: transition_state.remember_transition(label.into()) }
+}
+
+/// What a transition follows, as Compose's `TransitionState`: a [`MutableTransitionState`] (a
+/// [`DeferredTransitionState`]'s is one) or a
 /// [`SeekableTransitionState`](crate::SeekableTransitionState).
 pub(crate) enum StateHolder<S: 'static> {
     Mutable(MutableTransitionState<S>),
@@ -194,6 +305,9 @@ pub(crate) struct TransitionInner<S: 'static> {
     target: OwnedState<S>,
     /// A plain copy of `target`, read without observing it.
     target_untracked: RefCell<S>,
+    /// The target it waits for, as `pendingTargetState`: only a deferred transition and its
+    /// children have one, so the others pay nothing.
+    pending: Option<PendingTarget<S>>,
     segment: OwnedState<Segment<S>>,
     /// The frame time it started at, as `startTimeNanos`: `UNSPECIFIED_TIME` when not running.
     start_time_nanos: OwnedState<i64>,
@@ -219,6 +333,13 @@ pub(crate) struct TransitionInner<S: 'static> {
     durations_count: Cell<u32>,
     /// Its task, waiting for something to animate.
     idle: RefCell<Option<Waker>>,
+}
+
+/// A deferred transition's pending target.
+struct PendingTarget<S: 'static> {
+    state: OwnedState<Option<S>>,
+    /// A plain copy of `state`, read without observing it.
+    untracked: RefCell<Option<S>>,
 }
 
 /// A transition, its state type erased: what a parent drives and a value asks.
@@ -510,6 +631,33 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
         TransitionNode::total_duration_nanos(self)
     }
 
+    /// A new pending target, as `updatePendingTarget`. Cleared with the target unchanged at rest
+    /// (a deferred phase ended by `animate_to` the original state), the transition plays from the
+    /// target that was pending back to where it is, so its values take up where the manual
+    /// transforms left them.
+    pub(crate) fn update_pending_target(&self, value: Option<S>) {
+        let Some(pending) = &self.pending else { return };
+        let previous = pending.untracked.borrow().clone();
+        if previous == value {
+            return;
+        }
+        *pending.untracked.borrow_mut() = value.clone();
+        pending.state.set(value.clone());
+        let target = self.target_untracked();
+        if let (Some(previous), None, true) = (previous, value, target == self.current_untracked())
+        {
+            self.segment.set(Segment { initial_state: previous.clone(), target_state: target });
+            self.state.set_current(previous);
+            if !self.is_running_untracked() {
+                self.update_children_needed.set(true);
+            }
+            for animation in self.animations.borrow().clone() {
+                animation.reset_animation();
+            }
+            self.wake();
+        }
+    }
+
     /// A new target, as `updateTarget`: from where it was heading, every value updated.
     pub(crate) fn update_target(&self, target_state: S) {
         let current_target = self.target_untracked();
@@ -727,6 +875,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         state: StateHolder<S>,
         parent: Option<Weak<dyn TransitionNode>>,
         label: Option<&'static str>,
+        deferred: bool,
     ) -> Transition<S> {
         let current = state.current_untracked();
         Transition {
@@ -735,6 +884,10 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                 parent,
                 target: mutable_state_of(current.clone()),
                 target_untracked: RefCell::new(current.clone()),
+                pending: deferred.then(|| PendingTarget {
+                    state: mutable_state_of(None),
+                    untracked: RefCell::new(None),
+                }),
                 segment: mutable_state_of(Segment {
                     initial_state: current.clone(),
                     target_state: current,
@@ -770,6 +923,17 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// Where it goes, as `targetState` (a state read).
     pub fn target_state(&self) -> S {
         self.inner.target.get()
+    }
+
+    /// The target it waits to animate to, as `pendingTargetState` (a state read): none but in a
+    /// deferred transition's deferred phase.
+    pub fn pending_target_state(&self) -> Option<S> {
+        self.inner.pending.as_ref().and_then(|pending| pending.state.get())
+    }
+
+    /// Whether it is a deferred transition or a child of one.
+    pub(crate) fn is_deferred(&self) -> bool {
+        self.inner.pending.is_some()
     }
 
     /// The change it plays, as `segment` (a state read): from the state it was at, or heading
@@ -846,9 +1010,10 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let target_state = transform(&self.target_state());
         let parent = self.node();
         let label = label.into().unwrap_or("ChildTransition");
+        let deferred = self.is_deferred();
         let child = remember_keyed(self.clone(), move || {
             let state = StateHolder::Mutable(MutableTransitionState::new(initial_state));
-            Transition::new(state, Some(parent), Some(label))
+            Transition::new(state, Some(parent), Some(label), deferred)
         });
         let (parent, added) = (self.inner.clone(), child.inner.clone());
         DisposableEffect(child.clone(), move |scope| {
@@ -861,6 +1026,12 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
             })
         });
         child.inner.update_target(target_state);
+        if deferred {
+            // `transform` may remember: called with or without a pending target, in the same order.
+            let pending = self.pending_target_state();
+            let mapped = transform(pending.as_ref().unwrap_or(&self.target_state()));
+            child.inner.update_pending_target(pending.map(|_| mapped));
+        }
         child
     }
 
@@ -904,7 +1075,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let animation = remember_keyed(self.clone(), move || {
             Rc::new(TransitionAnimationState::new(initial_value, node, label.to_string()))
         });
-        animation.update_target_value(target_value, spec);
+        animation.update_target_value(target_value, spec, None, None);
         let (inner, added) = (self.inner.clone(), animation.clone());
         DisposableEffect(animation.clone(), move |scope| {
             let entry: Rc<dyn AnimationEntry> = added;
@@ -1155,16 +1326,25 @@ pub(crate) struct DeferredData<S: 'static, T: Animate> {
 }
 
 impl<S: Clone + PartialEq + 'static, T: Animate> DeferredData<S, T> {
-    fn update_animation_states(&self) {
+    fn update_animation_states(
+        &self,
+        forced_initial_value: Option<T>,
+        forced_initial_velocity: Option<AnimationVector>,
+    ) {
         let segment = self.transition.segment.get();
         let target = (self.target_value_by_state.borrow())(&segment.target_state);
         let spec = (self.transition_spec.borrow())(&segment);
-        self.animation.update_target_value(target, spec);
+        self.animation.update_target_value(
+            target,
+            spec,
+            forced_initial_value,
+            forced_initial_velocity,
+        );
     }
 
     /// The value, its target brought up to date first (a state read, as `value`).
     pub fn value(&self) -> T {
-        self.update_animation_states();
+        self.update_animation_states(None, None);
         self.animation.value.get()
     }
 }
@@ -1195,6 +1375,18 @@ impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec + 'static,
         target_value_by_state: impl Fn(&S) -> T + 'static,
     ) -> Rc<DeferredData<S, T>> {
+        self.animate_forced(transition_spec, None, None, target_value_by_state)
+    }
+
+    /// The same starting from a forced value and velocity, a hand-off from a manual phase to the
+    /// animation, as `animate(transitionSpec, forcedInitialValue, forcedInitialVelocity, …)`.
+    pub(crate) fn animate_forced(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec + 'static,
+        forced_initial_value: Option<T>,
+        forced_initial_velocity: Option<AnimationVector>,
+        target_value_by_state: impl Fn(&S) -> T + 'static,
+    ) -> Rc<DeferredData<S, T>> {
         let existing = self.inner.data.borrow().clone();
         let data = match existing {
             Some(data) => {
@@ -1222,7 +1414,7 @@ impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
                 data
             }
         };
-        data.update_animation_states();
+        data.update_animation_states(forced_initial_value, forced_initial_velocity);
         data
     }
 }
@@ -1236,7 +1428,8 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
     let initial = target_state.clone();
     let label = label.into();
     let transition = remember(move || {
-        Transition::new(StateHolder::Mutable(MutableTransitionState::new(initial)), None, label)
+        let state = StateHolder::Mutable(MutableTransitionState::new(initial));
+        Transition::new(state, None, label, false)
     });
     transition.animate_to(target_state);
     on_disposed(&transition);
@@ -1244,7 +1437,7 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
 }
 
 /// What a transition is remembered with ([`remember_transition`]), as Compose's sealed
-/// `TransitionState`: a [`MutableTransitionState`] or a
+/// `TransitionState`: a [`MutableTransitionState`], a [`DeferredTransitionState`] or a
 /// [`SeekableTransitionState`](crate::SeekableTransitionState).
 pub trait TransitionState<S: Clone + PartialEq + 'static> {
     #[doc(hidden)]
@@ -1255,9 +1448,22 @@ impl<S: Clone + PartialEq + 'static> TransitionState<S> for MutableTransitionSta
     fn remember_transition(&self, label: Option<&'static str>) -> Transition<S> {
         let state = self.clone();
         let transition = remember_keyed(self.clone(), move || {
-            Transition::new(StateHolder::Mutable(state), None, label)
+            Transition::new(StateHolder::Mutable(state), None, label, false)
         });
         transition.animate_to(self.target_state());
+        on_disposed(&transition);
+        transition
+    }
+}
+
+impl<S: Clone + PartialEq + 'static> TransitionState<S> for DeferredTransitionState<S> {
+    fn remember_transition(&self, label: Option<&'static str>) -> Transition<S> {
+        let state = self.state.clone();
+        let transition = remember_keyed(self.clone(), move || {
+            Transition::new(StateHolder::Mutable(state), None, label, true)
+        });
+        transition.animate_to(self.target_state());
+        transition.inner.update_pending_target(self.pending_target_state());
         on_disposed(&transition);
         transition
     }
@@ -1269,7 +1475,7 @@ impl<S: Clone + PartialEq + 'static> TransitionState<S>
     fn remember_transition(&self, label: Option<&'static str>) -> Transition<S> {
         let state = self.clone();
         let transition = remember_keyed(self.clone(), move || {
-            Transition::new(StateHolder::Seekable(state), None, label)
+            Transition::new(StateHolder::Seekable(state), None, label, false)
         });
         // No frame loop: the state's `seek_to`, `animate_to` and `snap_to` drive it.
         self.composed(&transition);
@@ -1448,8 +1654,15 @@ impl<T: Animate> TransitionAnimationState<T> {
         }
     }
 
-    /// A target and spec for this pass, as `updateTargetValue`.
-    fn update_target_value(&self, target_value: T, animation_spec: AnimationSpec) {
+    /// A target and spec for this pass, as `updateTargetValue`: a forced value (and velocity)
+    /// starts it from there, a hand-off, not an interruption.
+    fn update_target_value(
+        &self,
+        target_value: T,
+        animation_spec: AnimationSpec,
+        forced_initial_value: Option<T>,
+        forced_initial_velocity: Option<AnimationVector>,
+    ) {
         if self.use_only_initial_value.get() {
             let initial_target = self
                 .initial_value_animation
@@ -1463,18 +1676,28 @@ impl<T: Animate> TransitionAnimationState<T> {
         }
         if self.target_value.borrow().same_value(&target_value)
             && self.reset_snap_value.get() == NO_RESET
+            && forced_initial_value
+                .as_ref()
+                .is_none_or(|forced| forced.same_value(&self.animation.borrow().initial_value()))
         {
             return;
         }
         *self.target_value.borrow_mut() = target_value.clone();
         *self.animation_spec.borrow_mut() = animation_spec;
         let reset = self.reset_snap_value.get();
-        let initial_value = if reset == RESET_ANIMATION_SNAP {
+        let forced = forced_initial_value.is_some();
+        let initial_value = if let Some(forced) = forced_initial_value {
+            self.set_value(forced.clone());
+            if let Some(velocity) = forced_initial_velocity {
+                self.velocity.set(velocity);
+            }
+            forced
+        } else if reset == RESET_ANIMATION_SNAP {
             target_value.clone()
         } else {
             self.value_untracked.borrow().clone()
         };
-        let interrupted = !self.is_finished.get();
+        let interrupted = !self.is_finished.get() && !forced;
         self.update_animation(initial_value, interrupted);
         self.is_finished.set(reset == RESET_ANIMATION_SNAP);
         // A target changed during a seekable change: at the fraction it was seeked to.

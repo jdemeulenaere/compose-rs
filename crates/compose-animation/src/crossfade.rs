@@ -181,7 +181,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let spec = animation_spec.into();
         let visible = remember_keyed(transition.clone(), || {
             let current = transition.current_state();
-            let mut visible = Visible { states: Vec::new(), next_id: 0 };
+            let mut visible = Visible::new();
             let id = visible.new_id(&content_key, &current);
             visible.states.push((id, current));
             Rc::new(RefCell::new(visible))

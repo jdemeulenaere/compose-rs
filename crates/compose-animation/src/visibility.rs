@@ -12,7 +12,9 @@ use std::cell::{Cell, RefCell};
 use std::ops::Add;
 use std::rc::Rc;
 
-use compose_runtime::{ComposeArg, State, composable, mutable_state_of, remember, remember_keyed};
+use compose_runtime::{
+    ComposeArg, LaunchedEffect, State, composable, mutable_state_of, remember, remember_keyed,
+};
 use compose_ui::{
     Alignment, Color, ColumnScope, Constraints, DrawModifierNode, DrawScope, HorizontalAlignment,
     IntOffset, IntSize, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
@@ -20,10 +22,11 @@ use compose_ui::{
     RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin, VerticalAlignment,
 };
 
+use crate::deferred::{MutableTransform, SharedMutableTransformState};
 use crate::spec::{AnimationSpec, Spring, spring, spring_with};
 use crate::transition::{
-    DeferredAnimation, MutableTransitionState, Segment, Transition, remember_transition,
-    update_transition,
+    DeferredAnimation, DeferredTransition, MutableTransitionState, Segment, Transition,
+    remember_transition, update_transition,
 };
 use crate::vector::{Animate, AnimationVector, VisibilityThreshold};
 
@@ -239,17 +242,17 @@ fn default_spring() -> crate::spec::SpringSpec {
 }
 
 /// The default spec of a fade, as `fadeIn()`'s.
-fn default_alpha_spec() -> AnimationSpec {
+pub(crate) fn default_alpha_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring())
 }
 
 /// The default spec of a scale, as Compose's `DefaultScaleSpring` (threshold 0.002).
-fn default_scale_spec() -> AnimationSpec {
+pub(crate) fn default_scale_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring().visibility_threshold(0.002f32))
 }
 
 /// The default spec of a slide, a pixel's threshold.
-fn default_offset_spec() -> AnimationSpec {
+pub(crate) fn default_offset_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring().visibility_threshold(IntOffset::VISIBILITY_THRESHOLD))
 }
 
@@ -259,7 +262,7 @@ fn default_size_spec() -> AnimationSpec {
 }
 
 /// The default spec and color of a veil, as `unveilIn()`'s and `veilOut()`'s.
-fn default_veil_spec() -> AnimationSpec {
+pub(crate) fn default_veil_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring())
 }
 
@@ -664,9 +667,9 @@ impl AnimatedVisibilityScope {
     ) -> Modifier {
         let enter = enter.into().unwrap_or_else(fade_in);
         let exit = exit.into().unwrap_or_else(fade_out);
-        let (active_enter, active_exit) =
-            update_enter_exit_modifier_state(&self.transition, enter, exit);
-        create_enter_exit_modifier(&self.transition, active_enter, active_exit, label)
+        let (active_enter, active_exit, _) =
+            update_enter_exit_modifier_state(&self.transition, enter, exit, None);
+        create_enter_exit_modifier(&self.transition, active_enter, active_exit, None, label)
     }
 }
 
@@ -776,6 +779,8 @@ pub fn AnimatedVisibility<V: AnimatedVisibilityState>(
         Rc::new(|current, target| {
             current == EnterExitState::PostExit && target == EnterExitState::PostExit
         }),
+        None,
+        false,
         compose_runtime::callback(content),
     );
 }
@@ -806,6 +811,44 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
             Rc::new(|current, target| {
                 current == EnterExitState::PostExit && target == EnterExitState::PostExit
             }),
+            None,
+            false,
+            compose_runtime::callback(content),
+        );
+    }
+}
+
+impl<S: Clone + PartialEq + 'static> DeferredTransition<S> {
+    /// `AnimatedVisibility` of this transition's states with a deferred phase, as Compose's
+    /// `DeferredTransition.DeferredAnimatedVisibility(visible, modifier, enter, exit,
+    /// mutableTransform, content)`: while a pending target waits, the content is composed (at its
+    /// `enter`'s start) or stays, moved by `mutable_transform` (`None`: not moved). When the
+    /// phase ends, its enter or exit takes up from where the transform left it. `enter` and `exit`
+    /// default (`None`) to Compose's `fadeIn() + expandIn()` and `shrinkOut() + fadeOut()`. A
+    /// method, so every parameter is given.
+    #[allow(non_snake_case)]
+    pub fn DeferredAnimatedVisibility(
+        &self,
+        visible: impl Fn(&S) -> bool + 'static,
+        modifier: Modifier,
+        enter: impl Into<Option<EnterTransition>>,
+        exit: impl Into<Option<ExitTransition>>,
+        mutable_transform: impl Into<Option<MutableTransform>>,
+        content: impl Fn(AnimatedVisibilityScope) + 'static,
+    ) {
+        let enter = enter.into().unwrap_or_else(|| fade_in() + expand_in());
+        let exit = exit.into().unwrap_or_else(|| shrink_out() + fade_out());
+        AnimatedEnterExit(
+            self.transition.clone(),
+            Rc::new(visible),
+            modifier,
+            enter,
+            exit,
+            Rc::new(|current, target| {
+                current == EnterExitState::PostExit && target == EnterExitState::PostExit
+            }),
+            mutable_transform.into(),
+            false,
             compose_runtime::callback(content),
         );
     }
@@ -847,12 +890,16 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
     enter: EnterTransition,
     exit: ExitTransition,
     should_dispose: ShouldDispose,
+    mutable_transform: Option<MutableTransform>,
+    force_visible: bool,
     content: compose_runtime::Callback<dyn Fn(AnimatedVisibilityScope)>,
 ) {
     // As Compose's: also while values go on from an interrupted seek (the content seeked from
-    // stays while they do). `pendingTargetState` waits for deferred transitions.
-    if visible(&transition.target_state())
+    // stays while they do), and for a pending target (composed early, to be prepared).
+    if force_visible
+        || visible(&transition.target_state())
         || visible(&transition.current_state())
+        || transition.pending_target_state().is_some_and(|pending| visible(&pending))
         || transition.has_initial_value_animations()
     {
         let child = {
@@ -861,7 +908,10 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
                 target_enter_exit(&parent, &visible, state)
             })
         };
-        let (active_enter, active_exit) = update_enter_exit_modifier_state(&child, enter, exit);
+        // Above the layout, so it lives through the layout's going when an exit ends: a later
+        // interruption finds the exit it was on (Compose's hoisted tracking).
+        let (active_enter, active_exit, transform_state) =
+            update_enter_exit_modifier_state(&child, enter, exit, mutable_transform);
         let current = child.current_state();
         let target = child.target_state();
         let exit_finished =
@@ -872,8 +922,13 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
                 transition: child.clone(),
                 target_size: target_size.as_state(),
             };
-            let enter_exit =
-                create_enter_exit_modifier(&child, active_enter, active_exit, "Built-in");
+            let enter_exit = create_enter_exit_modifier(
+                &child,
+                active_enter,
+                active_exit,
+                transform_state,
+                "Built-in",
+            );
             let policy = remember(move || {
                 Rc::new(EnterExitMeasurePolicy { target_size }) as Rc<dyn MeasurePolicy>
             });
@@ -918,22 +973,73 @@ impl MeasurePolicy for EnterExitMeasurePolicy {
 
 /// The enter and exit animating now, as Compose's `EnterExitTransitionTracker`: once visible
 /// and at rest, none; an enter adds to the enter animating (its parts over the old ones); an
-/// exit adds to the exit animating, whose other parts go back to their visible values.
+/// exit adds to the exit animating, whose other parts go back to their visible values. Of a
+/// deferred transition's content (a `transform_state`), also the phase of the manual changes and
+/// what keeps them at their hand-off.
 struct Tracker {
     enter: RefCell<Option<EnterTransition>>,
     exit: RefCell<Option<ExitTransition>>,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
+    was_mutating: Cell<bool>,
+    last_target: Cell<Option<EnterExitState>>,
+    start_catch_up: Cell<bool>,
+}
+
+impl Tracker {
+    /// As `trackActiveMutableState`.
+    fn track_mutable_state(
+        &self,
+        state: &SharedMutableTransformState,
+        mutable_transform: Option<MutableTransform>,
+        pending: Option<EnterExitState>,
+        current: EnterExitState,
+        target: EnterExitState,
+    ) {
+        state.set_mutable_data(mutable_transform);
+        let is_mutating = pending.is_some() && state.has_mutable_data();
+        let is_settled = current == target;
+        state.update_mutation_state(is_mutating, is_settled);
+        let was_mutating = self.was_mutating.get();
+        let should_clean_up = self.last_target.get().is_some_and(|last| {
+            (is_settled && !is_mutating) || (last != target && !is_mutating && !was_mutating)
+        });
+        if should_clean_up {
+            state.clear();
+        }
+        if !is_mutating {
+            self.start_catch_up.set(false);
+        } else if !was_mutating {
+            self.start_catch_up.set(!is_settled);
+        }
+        self.last_target.set(Some(target));
+        self.was_mutating.set(is_mutating);
+    }
 }
 
 fn update_enter_exit_modifier_state(
     transition: &Transition<EnterExitState>,
     enter: EnterTransition,
     exit: ExitTransition,
-) -> (EnterTransition, ExitTransition) {
+    mutable_transform: Option<MutableTransform>,
+) -> (EnterTransition, ExitTransition, Option<Rc<SharedMutableTransformState>>) {
+    let deferred = transition.is_deferred();
     let tracker = remember_keyed(transition.clone(), || {
-        Rc::new(Tracker { enter: RefCell::new(None), exit: RefCell::new(None) })
+        Rc::new(Tracker {
+            enter: RefCell::new(None),
+            exit: RefCell::new(None),
+            transform_state: deferred.then(|| Rc::new(SharedMutableTransformState::new())),
+            was_mutating: Cell::new(false),
+            last_target: Cell::new(None),
+            start_catch_up: Cell::new(false),
+        })
     });
     let current = transition.current_state();
     let target = transition.target_state();
+    let transform_state = tracker.transform_state.clone();
+    if let Some(state) = &transform_state {
+        let pending = transition.pending_target_state();
+        tracker.track_mutable_state(state, mutable_transform, pending, current, target);
+    }
     let at_rest_visible = current == target && current == EnterExitState::Visible;
     let active_enter = {
         let mut active = tracker.enter.borrow_mut();
@@ -941,7 +1047,12 @@ fn update_enter_exit_modifier_state(
         let next = if at_rest_visible {
             EnterTransition::NONE
         } else if target != EnterExitState::PostExit {
-            previous + enter
+            // What the deferred phase moved stays tracked even if `enter` leaves it out, so an
+            // interruption doesn't snap it; `enter`'s parts go over those.
+            let handoff = transform_state
+                .as_ref()
+                .map_or(EnterTransition::NONE, |state| state.handoff_enter());
+            previous + (handoff + enter)
         } else {
             previous
         };
@@ -954,14 +1065,31 @@ fn update_enter_exit_modifier_state(
         let next = if at_rest_visible {
             ExitTransition::NONE
         } else if target != EnterExitState::Visible {
-            neutralized(&previous) + exit
+            // During a deferred phase, the manual values go on top of the running animations:
+            // those aren't neutralized.
+            let neutral = if transform_state.as_ref().is_some_and(|state| state.is_mutating()) {
+                previous
+            } else {
+                neutralized(&previous)
+            };
+            let handoff =
+                transform_state.as_ref().map_or(ExitTransition::NONE, |state| state.handoff_exit());
+            neutral + handoff + exit
         } else {
             previous
         };
         *active = Some(next.clone());
         next
     };
-    (active_enter, active_exit)
+    if let Some(state) = &transform_state {
+        let (state, start) = (state.clone(), tracker.start_catch_up.get());
+        LaunchedEffect(start, async move {
+            if start {
+                state.start_catch_up().await;
+            }
+        });
+    }
+    (active_enter, active_exit, transform_state)
 }
 
 /// An exit's parts at their visible values (alpha and scale 1, no offset, the full size), so a
@@ -1000,24 +1128,41 @@ fn create_enter_exit_modifier(
     transition: &Transition<EnterExitState>,
     enter: EnterTransition,
     exit: ExitTransition,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
     label: &'static str,
 ) -> Modifier {
     let parts = EnterExit { enter: Rc::new(enter), exit: Rc::new(exit) };
-    let animate_slide = parts.enter.config.slide.is_some() || parts.exit.config.slide.is_some();
+    let manual = transform_state.as_deref();
+    let animate_slide = parts.enter.config.slide.is_some()
+        || parts.exit.config.slide.is_some()
+        || manual.is_some_and(|state| state.slide_requires_animation());
     let animate_size =
         parts.enter.config.change_size.is_some() || parts.exit.config.change_size.is_some();
-    let animate_alpha = parts.enter.config.fade.is_some() || parts.exit.config.fade.is_some();
-    let animate_scale = parts.enter.config.scale.is_some() || parts.exit.config.scale.is_some();
-    let animate_veil = parts.enter.config.veil.is_some() || parts.exit.config.veil.is_some();
-    let veil = deferred_if(transition, animate_veil, label, " veil")
-        .map(|animation| Modifier.then_custom(VeilElement { animation, parts: parts.clone() }));
+    let animate_alpha = parts.enter.config.fade.is_some()
+        || parts.exit.config.fade.is_some()
+        || manual.is_some_and(|state| state.alpha_requires_animation());
+    let animate_scale = parts.enter.config.scale.is_some()
+        || parts.exit.config.scale.is_some()
+        || manual.is_some_and(|state| state.scale_requires_animation());
+    let animate_veil = parts.enter.config.veil.is_some()
+        || parts.exit.config.veil.is_some()
+        || manual.is_some_and(|state| state.veil_requires_animation());
+    let veil = deferred_if(transition, animate_veil, label, " veil").map(|animation| {
+        Modifier.then_custom(VeilElement {
+            animation,
+            parts: parts.clone(),
+            transform_state: transform_state.clone(),
+        })
+    });
     let veil_over_parent = parts
         .enter
         .config
         .veil
         .as_ref()
         .or(parts.exit.config.veil.as_ref())
-        .is_some_and(|veil| veil.match_parent_size);
+        .map(|veil| veil.match_parent_size)
+        .or_else(|| manual.and_then(|state| state.veil_match_parent_size()))
+        .unwrap_or(false);
     let animations = Animations {
         slide: deferred_if(transition, animate_slide, label, " slide"),
         size: deferred_if(transition, animate_size, label, " shrink/expand"),
@@ -1034,7 +1179,7 @@ fn create_enter_exit_modifier(
     let no_clip = parts.enter.config.change_size.as_ref().is_some_and(|change| !change.clip)
         || parts.exit.config.change_size.as_ref().is_some_and(|change| !change.clip)
         || !animate_size;
-    let layer = graphics_layer_block(&animations, &parts);
+    let layer = graphics_layer_block(&animations, &parts, transform_state.clone());
     let clip = if no_clip { Modifier } else { Modifier.clip(RECTANGLE_SHAPE) };
     // Over the parent: before the other parts (not transformed by them); else after them.
     let (before, after) = match veil {
@@ -1044,7 +1189,12 @@ fn create_enter_exit_modifier(
     };
     before
         .then(clip)
-        .then_custom(EnterExitElement { transition: transition.clone(), parts, animations })
+        .then_custom(EnterExitElement {
+            transition: transition.clone(),
+            parts,
+            animations,
+            transform_state,
+        })
         .then(layer)
         .then(after)
 }
@@ -1054,28 +1204,36 @@ fn create_enter_exit_modifier(
 struct VeilElement {
     animation: DeferredAnimation<EnterExitState, Color>,
     parts: EnterExit,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
 }
 
 struct VeilNode {
     animation: DeferredAnimation<EnterExitState, Color>,
     parts: EnterExit,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
 }
 
 impl ModifierNodeElement for VeilElement {
     type Node = VeilNode;
     fn create(&self) -> VeilNode {
-        VeilNode { animation: self.animation.clone(), parts: self.parts.clone() }
+        VeilNode {
+            animation: self.animation.clone(),
+            parts: self.parts.clone(),
+            transform_state: self.transform_state.clone(),
+        }
     }
 
     fn update(&self, node: &mut VeilNode) {
         node.animation = self.animation.clone();
         node.parts = self.parts.clone();
+        node.transform_state = self.transform_state.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
         other.animation.same(&self.animation)
             && *other.parts.enter == *self.parts.enter
             && *other.parts.exit == *self.parts.exit
+            && same_state(&other.transform_state, &self.transform_state)
     }
 
     fn name(&self) -> &'static str {
@@ -1097,8 +1255,12 @@ impl DrawModifierNode for VeilNode {
             enter.as_ref().map(|veil| veil.animation_spec.clone()),
             exit.as_ref().map(|veil| veil.animation_spec.clone()),
         );
-        let color = self.animation.animate(
+        let manual = self.transform_state.clone();
+        let handoff = manual.as_ref().and_then(|state| state.veil_handoff_value());
+        let color = self.animation.animate_forced(
             move |segment| part_spec(segment, &specs.0, &specs.1, default_veil_spec()),
+            handoff,
+            None,
             move |state| match state {
                 EnterExitState::Visible => enter
                     .as_ref()
@@ -1114,6 +1276,7 @@ impl DrawModifierNode for VeilNode {
             },
         );
         let color = color.value();
+        let color = manual.map_or(color, |state| state.combined_veil(color));
         if color.alpha() != 0 {
             let bounds = scope.bounds();
             scope.draw_rect(bounds, Paint::fill(color));
@@ -1192,13 +1355,20 @@ fn part_spec(
 }
 
 /// The graphics layer animating the alpha, the scale and its origin, as Compose's
-/// `createGraphicsLayerBlock`: read while drawing.
-fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier {
-    if animations.alpha.is_none() && animations.scale.is_none() {
+/// `createGraphicsLayerBlock`: read while drawing. A deferred transition's content has one always
+/// (its transform can set them any time), showing the manual values over the animated ones.
+fn graphics_layer_block(
+    animations: &Animations,
+    parts: &EnterExit,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
+) -> Modifier {
+    if animations.alpha.is_none() && animations.scale.is_none() && transform_state.is_none() {
         return Modifier;
     }
     let (animations, parts) = (animations.clone(), parts.clone());
     Modifier.graphics_layer(move |layer| {
+        let manual = transform_state.as_deref();
+        let mut alpha_value = None;
         if let Some(alpha) = &animations.alpha {
             let fade_specs = (
                 parts.enter.config.fade.as_ref().map(|fade| fade.animation_spec.clone()),
@@ -1208,18 +1378,21 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
                 parts.enter.config.fade.as_ref().map(|fade| fade.alpha),
                 parts.exit.config.fade.as_ref().map(|fade| fade.alpha),
             );
-            let value = alpha.animate(
+            let value = alpha.animate_forced(
                 move |segment| {
                     part_spec(segment, &fade_specs.0, &fade_specs.1, default_alpha_spec())
                 },
+                manual.and_then(|state| state.alpha_handoff_value()),
+                None,
                 move |state| match state {
                     EnterExitState::Visible => 1.0,
                     EnterExitState::PreEnter => alphas.0.unwrap_or(1.0),
                     EnterExitState::PostExit => alphas.1.unwrap_or(1.0),
                 },
             );
-            layer.alpha = value.value();
+            alpha_value = Some(value.value());
         }
+        let mut scale_value = None;
         if let Some(scale) = &animations.scale {
             let scale_specs = (
                 parts.enter.config.scale.as_ref().map(|scale| scale.animation_spec.clone()),
@@ -1229,20 +1402,21 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
                 parts.enter.config.scale.as_ref().map(|scale| scale.scale),
                 parts.exit.config.scale.as_ref().map(|scale| scale.scale),
             );
-            let value = scale.animate(
+            let value = scale.animate_forced(
                 move |segment| {
                     part_spec(segment, &scale_specs.0, &scale_specs.1, default_scale_spec())
                 },
+                manual.and_then(|state| state.scale_handoff_value()),
+                manual.and_then(|state| state.scale_handoff_velocity()),
                 move |state| match state {
                     EnterExitState::Visible => 1.0,
                     EnterExitState::PreEnter => scales.0.unwrap_or(1.0),
                     EnterExitState::PostExit => scales.1.unwrap_or(1.0),
                 },
             );
-            let scale = value.value();
-            layer.scale_x = scale;
-            layer.scale_y = scale;
+            scale_value = Some(value.value());
         }
+        let mut origin_value = None;
         if let Some(origin) = &animations.transform_origin {
             let enter_origin =
                 parts.enter.config.scale.as_ref().map(|scale| scale.transform_origin);
@@ -1253,8 +1427,10 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
             } else {
                 exit_origin.or(enter_origin)
             };
-            let value = origin.animate(
+            let value = origin.animate_forced(
                 |_| AnimationSpec::Spring(spring()),
+                manual.and_then(|state| state.transform_origin_handoff_value()),
+                None,
                 move |state| {
                     match state {
                         EnterExitState::Visible => when_visible,
@@ -1264,9 +1440,43 @@ fn graphics_layer_block(animations: &Animations, parts: &EnterExit) -> Modifier 
                     .unwrap_or(TransformOrigin::CENTER)
                 },
             );
-            layer.transform_origin = value.value();
+            origin_value = Some(value.value());
+        }
+        match manual {
+            Some(state) => {
+                layer.alpha = state.combined_alpha(alpha_value.unwrap_or(1.0));
+                let scale = state.combined_scale(scale_value.unwrap_or(1.0));
+                layer.scale_x = scale;
+                layer.scale_y = scale;
+                layer.transform_origin = state
+                    .combined_transform_origin(origin_value.unwrap_or(TransformOrigin::CENTER));
+            }
+            None => {
+                if let Some(alpha) = alpha_value {
+                    layer.alpha = alpha;
+                }
+                if let Some(scale) = scale_value {
+                    layer.scale_x = scale;
+                    layer.scale_y = scale;
+                }
+                if let Some(origin) = origin_value {
+                    layer.transform_origin = origin;
+                }
+            }
         }
     })
+}
+
+/// The same deferred state, or none.
+fn same_state(
+    a: &Option<Rc<SharedMutableTransformState>>,
+    b: &Option<Rc<SharedMutableTransformState>>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 impl Animations {
@@ -1281,12 +1491,14 @@ struct EnterExitElement {
     transition: Transition<EnterExitState>,
     parts: EnterExit,
     animations: Animations,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
 }
 
 struct EnterExitNode {
     transition: Transition<EnterExitState>,
     parts: EnterExit,
     animations: Animations,
+    transform_state: Option<Rc<SharedMutableTransformState>>,
     /// The side that stays, latched at the start of a change, as `currentAlignment`.
     current_alignment: Option<Alignment>,
 }
@@ -1298,6 +1510,7 @@ impl ModifierNodeElement for EnterExitElement {
             transition: self.transition.clone(),
             parts: self.parts.clone(),
             animations: self.animations.clone(),
+            transform_state: self.transform_state.clone(),
             current_alignment: None,
         }
     }
@@ -1306,12 +1519,14 @@ impl ModifierNodeElement for EnterExitElement {
         node.transition = self.transition.clone();
         node.parts = self.parts.clone();
         node.animations = self.animations.clone();
+        node.transform_state = self.transform_state.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
         other.transition.same(&self.transition)
             && *other.parts.enter == *self.parts.enter
             && *other.parts.exit == *self.parts.exit
+            && same_state(&other.transform_state, &self.transform_state)
     }
 
     fn name(&self) -> &'static str {
@@ -1413,8 +1628,11 @@ impl LayoutModifierNode for EnterExitNode {
                     enter.as_ref().map(|slide| slide.animation_spec.clone()),
                     exit.as_ref().map(|slide| slide.animation_spec.clone()),
                 );
-                let animated = slide.animate(
+                let manual = self.transform_state.as_deref();
+                let animated = slide.animate_forced(
                     move |segment| part_spec(segment, &specs.0, &specs.1, default_offset_spec()),
+                    manual.and_then(|state| state.slide_handoff_value()),
+                    manual.and_then(|state| state.slide_handoff_velocity()),
                     move |state| match state {
                         EnterExitState::Visible => IntOffset::ZERO,
                         EnterExitState::PreEnter => enter
@@ -1428,6 +1646,10 @@ impl LayoutModifierNode for EnterExitNode {
                 animated.value()
             }
             None => IntOffset::ZERO,
+        };
+        let slide = match &self.transform_state {
+            Some(state) => state.combined_slide(slide, target),
+            None => slide,
         };
         // The content at its full size, the side that stays at its edge, slid, as Compose's
         // (left to right whatever the direction).

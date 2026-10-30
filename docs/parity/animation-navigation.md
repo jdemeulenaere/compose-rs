@@ -32,18 +32,18 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 25 | 174 |
+| `ported` | 29 | 236 |
 | `port` | 0 | 0 |
 | `partial` | 9 | 127 |
-| `feature:<name>` | 58 | 710 |
+| `feature:<name>` | 54 | 648 |
 | `n/a` | 2 | 9 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 21 / 149 | 0 | 3 / 19 | 6 / 44 | 0 |
-| animation | 15 | 238 | 0 | 4 / 25 | 0 | 3 / 40 | 8 / 173 | 0 |
+| animation-core | 30 | 212 | 0 | 22 / 157 | 0 | 3 / 19 | 5 / 36 | 0 |
+| animation | 15 | 238 | 0 | 7 / 79 | 0 | 3 / 40 | 5 / 119 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -57,7 +57,6 @@ By module:
 | nav3-ui | 15 | 121 |
 | shared-transition | 2 | 86 |
 | nav3-runtime | 8 | 79 |
-| deferred-transition | 4 | 62 |
 | nav-graphs | 1 | 33 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
@@ -113,7 +112,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | ported | `suspend_animation.rs` (16 ms frames, not 50) |
 | 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | ported | `easing.rs` (the custom easing an `Easing::Function`) |
 | 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | ported | `converters.rs`, with fractions: Compose's `Int` converter truncates, as compose-rs's now does |
-| 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | `feature:deferred-transition` | new at the tip, not experimental |
+| 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | ported | `deferred_transition.rs` (the 2 child tests in one; D828) |
 | 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | ported | `duration_scale.rs`, the rule's `set_motion_duration_scale` for `effectContext` (D827) |
 | 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | ported | `easing.rs`: the evaluation against the curve sampled by its parameter, not bitmaps |
 | 24 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/InfiniteTransitionTest.kt` | 1 | `rememberInfiniteTransition`: keyframes Reverse float and tween color, frame by frame | ported | `infinite_transition.rs`, through 2.1 s of frames (Compose's loop compares nanoseconds with 2100: it checks one frame) |
@@ -129,15 +128,15 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | ported | `crossfade_ported.rs` (`crossfadeTest_contentKey` with a wait one frame later, D817) |
-| 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | `feature:deferred-transition` |  |
-| 38 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedVisibilityTest.kt` | 21 | `DeferredAnimatedVisibility`: enter/exit gates, preview scale/offset, hand-off, interruption | `feature:deferred-transition` |  |
-| 39 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredSharedElementTest.kt` | 15 | shared elements under deferred transitions: previews, hand-off, cancellation | `feature:shared-transition` | also deferred-transition |
+| 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | ported | `deferred_content.rs` (`immediateExitTest` and `verifyExitAnimationAfterGateOpens` in one; widths read from the tree, not `onGloballyPositioned`; the veil's pixel from the display list; D828) |
+| 38 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedVisibilityTest.kt` | 21 | `DeferredAnimatedVisibility`: enter/exit gates, preview scale/offset, hand-off, interruption | ported | `deferred_visibility.rs` (widths read from the tree, not `onGloballyPositioned`; D828) |
+| 39 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredSharedElementTest.kt` | 15 | shared elements under deferred transitions: previews, hand-off, cancellation | `feature:shared-transition` | deferred-transition is done (D828) |
 | 40 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/LookaheadAnimationVisualDebugHelperTest.kt` | 16 | debug overlays for shared elements and animateBounds | `feature:lookahead-visual-debug` | experimental (`@ExperimentalLookaheadAnimationVisualDebugApi`) |
 | 41 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/SharedTransitionTest.kt` | 71 | `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, overlay, clip, placeholder size, scale-to-bounds, lazy lists, isTransitionActive, velocity | `feature:shared-transition` | needs ui lookahead |
 | 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | ported | `spline_decay.rs`, with flings checked against values computed in Kotlin's numeric semantics |
 | 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | ported | `converters.rs` (the color clamp included: compose-rs clamps in Oklab first, as Compose's) |
 | 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | ported | `enter_exit_config.rs` (the offset and size functions checked by what they give) |
-| 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | `feature:deferred-transition` | internal; port with the feature |
+| 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | ported | `deferred.rs`'s unit tests (D828) |
 | 46 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/res/AnimatedVectorPainterResourcesTest.kt` | 2 | `rememberAnimatedVectorPainter` from an AVD resource: config, duplicate targets | `feature:animated-image-vector` | resources become bundled bytes in compose-rs |
 | 47 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorAnimationSpecsTest.kt` | 5 | reversed and combined specs used by vector animators | `feature:animated-image-vector` | internal specs |
 | 48 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorTest.kt` | 10 | object animators, keyframes, sets, path data morphing, delays, repeats | `feature:animated-image-vector` |  |
@@ -264,12 +263,12 @@ Deprecated and left out:
 | `Easing` as a `fun interface` (any object, capturing lambdas) | present: `Easing::custom(closure)` (D816) | easing-functions |
 | `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | present (D808) | easing-functions |
 | `PathEasing(path)` | missing | path-easing |
-| `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`TransitionState` a trait of `MutableTransitionState` and `SeekableTransitionState`, D821; `DeferredTransitionState` waits for deferred-transition) | transition-state |
-| `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813) but `pendingTargetState` | transition-state |
+| `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`TransitionState` a trait of `MutableTransitionState` and `SeekableTransitionState`, D821; `DeferredTransitionState` too, D828) | transition-state |
+| `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813; `pending_target_state`, D828) | transition-state |
 | `Transition.createChildTransition(label, transform)` | present | transition-state |
 | `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present (the labels in `_with` forms, D818) | transition-state, more-converters |
 | `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | present (an interrupted call cancels its task, as Compose's `CancellationException`, D823) | seekable-transition |
-| `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | missing (new at this tip) | deferred-transition |
+| `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | present (D828) | deferred-transition |
 | `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
 | `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | present (`animations()`, `label()`, `animate_*_with(…, label)`, D818) | transition-state |
 | `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult, D901); `MotionDurationScale` honoured by `Animatable`, `animate`, transitions and infinite transitions | present (`motion_duration_scale`, `with_motion_duration_scale`, `set_motion_duration_scale`, D827) | motion-duration-scale |
@@ -295,7 +294,7 @@ Deprecated and left out:
 | `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | present (`transition.Crossfade(…)`, D817) | crossfade-extras |
 | `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
 | `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
-| `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | missing (new at this tip) | deferred-transition |
+| `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | present: methods of `DeferredTransition`; `TransformScope`'s setters `set_alpha` and the like (D828) | deferred-transition |
 | `SharedTransitionLayout`, `SharedTransitionScope(content)`, the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
 | `Modifier.animateBounds(lookaheadScope, modifier, boundsTransform, animateMotionFrameOfReference)` | missing | animate-bounds |
 | `LookaheadAnimationVisualDebugging(…)`, `CustomizedLookaheadAnimationVisualDebugging(…)` (experimental) | missing | lookahead-visual-debug |
@@ -489,7 +488,7 @@ One entry per feature. Sizes:
 
 #### transition-state (M–L, not exp.): done (D803, D813, D818)
 
-- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`; the tooling getters `animations`, `transitions` (`TransitionAnimation`, `AnyTransition`, D813). `InfiniteTransition`'s tooling getters and the `animate_*` calls' labels (D818). Left: `pending_target_state` (deferred-transition).
+- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`; the tooling getters `animations`, `transitions` (`TransitionAnimation`, `AnyTransition`, D813). `InfiniteTransition`'s tooling getters and the `animate_*` calls' labels (D818). `pending_target_state` (D828).
 
 - **API:**
   - the states: `TransitionState`, `MutableTransitionState` (`is_idle`), `remember_transition(state, label)`;
@@ -516,7 +515,9 @@ One entry per feature. Sizes:
 - **Tests:** `DeferredTargetAnimationTest`.
 - **Dependencies:** none.
 
-#### deferred-transition (XL, not exp., new at this tip)
+#### deferred-transition (XL, not exp., new at this tip): done (D828)
+
+- **Done:** all of it but what shared elements take from it (`SharedMutableTransformState`'s modifier local, `parentLayoutCoordinates`), which comes with shared-transition. The hand-off's velocities come from a least-squares line, not Compose's `VelocityTracker` (velocity-tracker in ui).
 
 - **API:**
   - the states: `DeferredTransitionState` (`defer`, `animate_to`, `pending_target_state`), `DeferredTransition`, `remember_deferred_transition`;

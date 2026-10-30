@@ -18,6 +18,7 @@ mod content;
 mod content_size;
 mod crossfade;
 mod decay;
+mod deferred;
 mod deferred_target;
 mod easing;
 mod infinite;
@@ -59,6 +60,7 @@ pub use decay::{
     VectorizedDecayAnimationSpec, exponential_decay, float_decay_animation,
     generate_decay_animation_spec,
 };
+pub use deferred::{MutableContentTransform, MutableTransform, TransformScope};
 pub use deferred_target::DeferredTargetAnimation;
 pub use easing::{
     CubicBezierEasing, EASE, EASE_IN, EASE_IN_BACK, EASE_IN_BOUNCE, EASE_IN_CIRC, EASE_IN_CUBIC,
@@ -94,8 +96,9 @@ pub use spring::{
 };
 pub use suspend::{AnimationScope, AnimationState, animate, animate_decay, animate_value};
 pub use transition::{
-    AnyTransition, MutableTransitionState, Segment, Transition, TransitionAnimation,
-    TransitionState, remember_transition, update_transition,
+    AnyTransition, DeferredTransition, DeferredTransitionState, MutableTransitionState, Segment,
+    Transition, TransitionAnimation, TransitionState, remember_deferred_transition,
+    remember_transition, update_transition,
 };
 #[doc(hidden)]
 pub use vector::default_spring;

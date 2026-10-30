@@ -6,12 +6,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use compose_animation::*;
 use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{IntOffset, IntSize, LayoutDirection, Rect, UnitExt};
+use compose_ui::{IntOffset, IntSize, LayoutDirection, Modifier, Rect, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
     ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
@@ -322,4 +323,43 @@ fn a_recreated_transitions_content_animates_its_size_without_jumps() {
             ui.advance_time_by_frame();
         }
     }
+}
+
+/// The content entering keeps its composition when a recomposition finds the old content's exit
+/// over (a short exit, a long enter): Compose's `key(contentKey(it))` keeps it (D828).
+#[test]
+fn the_entering_content_stays_composed_when_the_old_one_has_left_first() {
+    let target = mutable_state_of(0);
+    let unrelated = mutable_state_of(0);
+    let created = Rc::new(Cell::new(0));
+    let (read, read_unrelated, count) = (target.handle(), unrelated.handle(), created.clone());
+    let mut ui = compose_test(move || {
+        // Reads the state: every change recomposes the `AnimatedContent` call.
+        let _ = read_unrelated.get();
+        let count = count.clone();
+        AnimatedContent!(
+            read.get(),
+            transition_spec = |_| fade_in_with(tween(10_000), 0.0)
+                .together_with(fade_out_with(tween(32), 0.0))
+                .using(None),
+            content = move |_, state: i32| {
+                let count = count.clone();
+                let _ = remember(move || {
+                    if state == 1 {
+                        count.set(count.get() + 1);
+                    }
+                    Rc::new(())
+                });
+                Box!(modifier = Modifier.size(10.dp()));
+            }
+        );
+    });
+    ui.set_auto_advance(false);
+    target.set(1);
+    ui.advance_time_by(Duration::from_millis(200));
+    assert_eq!(created.get(), 1);
+    unrelated.set(1);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(created.get(), 1, "not composed again");
 }

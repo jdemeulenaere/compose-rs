@@ -11,8 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_runtime::{
-    ComposeArg, DisposableEffect, State, composable, key, mutable_state_of, remember,
-    remember_keyed,
+    ComposeArg, DisposableEffect, State, composable, key, mutable_state_of, remember_keyed,
 };
 use std::hash::{Hash, Hasher};
 
@@ -22,8 +21,11 @@ use compose_ui::{
     ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
 };
 
+use crate::deferred::MutableContentTransform;
 use crate::spec::{AnimationSpec, Spring, spring, spring_with, tween};
-use crate::transition::{DeferredAnimation, Segment, Transition, update_transition};
+use crate::transition::{
+    DeferredAnimation, DeferredTransition, Segment, Transition, update_transition,
+};
 use crate::vector::VisibilityThreshold;
 use crate::visibility::{
     AnimatedEnterExit, AnimatedVisibilityScope, EnterExitState, EnterTransition, ExitTransition,
@@ -356,9 +358,31 @@ impl ComposeArg for AnimatedContentScope {
 pub(crate) struct Visible<T> {
     pub(crate) states: Vec<(u64, T)>,
     pub(crate) next_id: u64,
+    /// The ids given by state while the transition runs: a state dropped from `states` and added
+    /// back in one change keeps its content, as Compose's `key(contentKey(it))`.
+    pub(crate) ids: Vec<(T, u64)>,
 }
 
-impl<T: PartialEq> Visible<T> {
+impl<T> Visible<T> {
+    pub(crate) fn new() -> Visible<T> {
+        Visible { states: Vec::new(), next_id: 0, ids: Vec::new() }
+    }
+}
+
+impl<T: 'static> ContentKey<T> {
+    /// Whether the two states have the same key (with the default key: are equal).
+    fn is_same(&self, a: &T, b: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        match &self.key {
+            None => a == b,
+            Some(key) => key(a) == key(b),
+        }
+    }
+}
+
+impl<T: PartialEq + Clone> Visible<T> {
     /// Where `state`'s content is: the state's, or one of the same key.
     pub(crate) fn position(&self, key: &ContentKey<T>, state: &T) -> Option<usize> {
         match &key.key {
@@ -374,7 +398,11 @@ impl<T: PartialEq> Visible<T> {
     pub(crate) fn new_id(&mut self, key: &ContentKey<T>, state: &T) -> u64 {
         match &key.key {
             None => {
+                if let Some((_, id)) = self.ids.iter().find(|(known, _)| known == state) {
+                    return *id;
+                }
                 self.next_id += 1;
+                self.ids.push((state.clone(), self.next_id - 1));
                 self.next_id - 1
             }
             Some(key) => key(state),
@@ -450,8 +478,43 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
         transition_spec,
         content_alignment,
         content_key,
+        None,
         compose_runtime::callback(content),
     );
+}
+
+impl<S: Clone + PartialEq + 'static> DeferredTransition<S> {
+    /// `AnimatedContent` of this transition's states with a deferred phase, as Compose's
+    /// `DeferredTransition.DeferredAnimatedContent(modifier, transitionSpec, contentAlignment,
+    /// contentKey, mutableTransformSpec, content)`: a pending target's content is composed early,
+    /// and both contents can be moved by what `mutable_transform_spec` gives for the change (its
+    /// scope's states the transition's target and the pending one; `None`: not moved); when the
+    /// phase ends, their enter and exit take up from there. A method, so every parameter is given:
+    /// `|_| default_content_transform()` for Compose's default spec, `Alignment::TOP_START` its
+    /// default alignment, `ContentKey::state()` its default key.
+    #[allow(non_snake_case)]
+    pub fn DeferredAnimatedContent(
+        &self,
+        modifier: Modifier,
+        transition_spec: impl Fn(AnimatedContentTransitionScope<S>) -> ContentTransform + 'static,
+        content_alignment: Alignment,
+        content_key: ContentKey<S>,
+        mutable_transform_spec: impl Fn(
+            AnimatedContentTransitionScope<S>,
+        ) -> Option<MutableContentTransform>
+        + 'static,
+        content: impl Fn(AnimatedContentScope, S) + 'static,
+    ) {
+        AnimatedContentOf(
+            self.transition.clone(),
+            modifier,
+            compose_runtime::callback(transition_spec),
+            content_alignment,
+            content_key,
+            Some(compose_runtime::callback(mutable_transform_spec)),
+            compose_runtime::callback(content),
+        );
+    }
 }
 
 impl<S: Clone + PartialEq + 'static> Transition<S> {
@@ -477,10 +540,19 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
             compose_runtime::callback(transition_spec),
             content_alignment,
             content_key,
+            None,
             compose_runtime::callback(content),
         );
     }
 }
+
+/// How many of the most recent states a deferred transition's `AnimatedContent` keeps while
+/// interrupted, as Compose's `MaxInterruptionRetention`.
+const MAX_INTERRUPTION_RETENTION: usize = 3;
+
+type MutableSpec<T> = compose_runtime::Callback<
+    dyn Fn(AnimatedContentTransitionScope<T>) -> Option<MutableContentTransform>,
+>;
 
 type Spec<T> =
     compose_runtime::Callback<dyn Fn(AnimatedContentTransitionScope<T>) -> ContentTransform>;
@@ -495,6 +567,7 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     transition_spec: Spec<T>,
     content_alignment: Alignment,
     content_key: ContentKey<T>,
+    mutable_transform_spec: Option<MutableSpec<T>>,
     content: Content<T>,
 ) {
     let layout_direction = LOCAL_LAYOUT_DIRECTION.current();
@@ -510,7 +583,7 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     });
     let visible = remember_keyed(transition.clone(), || {
         let current = transition.current_state();
-        let mut visible = Visible { states: Vec::new(), next_id: 0 };
+        let mut visible = Visible::new();
         let id = visible.new_id(&content_key, &current);
         visible.states.push((id, current));
         Rc::new(RefCell::new(visible))
@@ -519,13 +592,14 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     let removed = remember_keyed(transition.clone(), || mutable_state_of(0u64));
     let current = transition.current_state();
     let target = transition.target_state();
+    let pending = transition.pending_target_state();
     {
         let mut shown = visible.borrow_mut();
         if !shown.states.iter().any(|(_, state)| *state == current) {
             let id = shown.new_id(&content_key, &current);
             shown.states = vec![(id, current.clone())];
         }
-        if current == target {
+        if current == target && pending.is_none() {
             // At rest: the current state's content only.
             if shown.states.len() != 1 || shown.states[0].1 != current {
                 let kept = shown.position(&ContentKey::state(), &current);
@@ -535,9 +609,26 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
                 };
                 shown.states = vec![(id, current.clone())];
             }
+            shown.ids.retain(|(state, _)| *state == current);
             root.content_alignment.set(content_alignment);
             root.layout_direction.set(layout_direction);
-        } else {
+        }
+        // A pending target's content, composed early, replacing one of the same key.
+        if let Some(pending) = pending.as_ref().filter(|pending| **pending != current)
+            && !content_key.is_same(pending, &target)
+        {
+            match shown.position(&content_key, pending) {
+                None => {
+                    let id = shown.new_id(&content_key, pending);
+                    shown.states.push((id, pending.clone()));
+                }
+                Some(index) if shown.states[index].1 != *pending => {
+                    shown.states[index].1 = pending.clone();
+                }
+                Some(_) => {}
+            }
+        }
+        if current != target {
             match shown.position(&content_key, &target) {
                 None => {
                     let id = shown.new_id(&content_key, &target);
@@ -556,38 +647,84 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
         }
     }
     let segment = transition.segment();
+    // The change a deferred phase previews, from the transition's target to the pending one, as
+    // `PendingAnimatedContentTransitionScope`: what's given for it stays while it's pending.
+    let pending_change = {
+        let (pending, target) = (pending.clone(), target.clone());
+        remember_keyed(StateKey(pending.clone()), move || pending.map(|pending| (target, pending)))
+    };
+    let mutable_content_transform = mutable_transform_spec.and_then(|spec| {
+        let (change, root, key) = (pending_change.clone(), root.clone(), content_key.clone());
+        remember_keyed(StateKey(pending.clone()), move || {
+            let (initial_state, target_state) = change?;
+            if key.is_same(&initial_state, &target_state) {
+                Some(MutableContentTransform::new())
+            } else {
+                spec(AnimatedContentTransitionScope { initial_state, target_state, root })
+            }
+        })
+    });
     let content_transform = {
         let spec = transition_spec.clone();
-        let scope = AnimatedContentTransitionScope {
-            initial_state: segment.initial_state.clone(),
-            target_state: segment.target_state.clone(),
-            root: root.clone(),
-        };
-        remember_keyed(SegmentKey(segment.clone()), move || spec(scope))
+        let (initial_state, target_state) = pending_change
+            .clone()
+            .unwrap_or((segment.initial_state.clone(), segment.target_state.clone()));
+        let scope =
+            AnimatedContentTransitionScope { initial_state, target_state, root: root.clone() };
+        let key = (SegmentKey(segment.clone()), StateKey(pending.clone()));
+        remember_keyed(key, move || spec(scope))
     };
     let size_modifier =
         size_animation_modifier(&transition, &root, content_transform.size_transform.clone());
     let states: Vec<(u64, T)> = visible.borrow().states.clone();
-    let target_index = states.iter().position(|(_, state)| *state == target);
     let policy = {
-        let root = root.clone();
+        let (root, visible) = (root.clone(), visible.clone());
         remember_keyed(transition.clone(), move || {
-            Rc::new(ContentMeasurePolicy { root, target: Cell::new(None) })
+            Rc::new(ContentMeasurePolicy {
+                root,
+                visible,
+                target: RefCell::new(None),
+                pending_target: RefCell::new(None),
+            })
         })
     };
-    policy.target.set(target_index);
+    *policy.target.borrow_mut() = Some(target.clone());
+    // A pending content doesn't count in the container's size, unless it's the same as one that
+    // does.
+    *policy.pending_target.borrow_mut() = pending
+        .clone()
+        .filter(|pending| {
+            !content_key.is_same(pending, &target) && !content_key.is_same(pending, &current)
+        })
+        .map(|pending| (pending, content_key.clone()));
     let erased = policy.clone() as Rc<dyn MeasurePolicy>;
+    let deferred = transition.is_deferred();
     compose_ui::Layout(
         modifier.then(size_modifier),
         erased,
         compose_runtime::callback(move || {
             removed.get();
-            for (id, state) in &states {
+            let count = states.len();
+            for (index, (id, state)) in states.iter().enumerate() {
                 let (transition, spec, content) =
                     (transition.clone(), transition_spec.clone(), content.clone());
                 let (root, visible, state) = (root.clone(), visible.clone(), state.clone());
+                let (pending_change, transform) =
+                    (pending_change.clone(), mutable_content_transform.clone());
+                let force_visible = deferred && index + MAX_INTERRUPTION_RETENTION >= count;
                 key(*id, move || {
-                    ContentOfState(transition, spec, root, visible, removed, state, content);
+                    ContentOfState(
+                        transition,
+                        spec,
+                        root,
+                        visible,
+                        removed,
+                        state,
+                        pending_change,
+                        transform,
+                        force_visible,
+                        content,
+                    );
                 });
             }
         }),
@@ -614,9 +751,14 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
     visible: Rc<RefCell<Visible<T>>>,
     removed: compose_runtime::MutableState<u64>,
     state: T,
+    pending_change: Option<(T, T)>,
+    mutable_content_transform: Option<MutableContentTransform>,
+    force_visible: bool,
     content: Content<T>,
 ) {
     let segment = transition.segment();
+    let target = transition.target_state();
+    let is_pending = pending_change.as_ref().is_some_and(|(_, pending)| *pending == state);
     let scope_of = {
         let root = root.clone();
         move |initial_state: T, target_state: T| AnimatedContentTransitionScope {
@@ -628,9 +770,11 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
     // The enter it was given when it became the target.
     let spec_on_enter = {
         let (spec, segment, state) = (transition_spec.clone(), segment.clone(), state.clone());
-        let scope_of = scope_of.clone();
-        remember(move || {
-            if state != segment.initial_state && state != segment.target_state {
+        let (scope_of, change) = (scope_of.clone(), pending_change.clone());
+        remember_keyed(is_pending, move || {
+            if let Some((initial, pending)) = change.filter(|_| is_pending) {
+                spec(scope_of(initial, pending))
+            } else if state != segment.initial_state && state != segment.target_state {
                 spec(scope_of(segment.initial_state, state))
             } else {
                 spec(scope_of(segment.initial_state, segment.target_state))
@@ -641,8 +785,8 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
     let exit = {
         let (spec, segment, state) = (transition_spec.clone(), segment.clone(), state.clone());
         let is_target = segment.target_state == state;
-        remember_keyed(is_target, move || {
-            if is_target {
+        remember_keyed((is_target, is_pending), move || {
+            if is_target || is_pending {
                 ExitTransition::NONE
             } else if state != segment.initial_state && state != segment.target_state {
                 spec(scope_of(state, segment.initial_state)).initial_content_exit
@@ -653,6 +797,15 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
     };
     let hold = exit.config().hold;
     let shown = state.clone();
+    let mutable_transform = mutable_content_transform.and_then(|transform| {
+        if is_pending {
+            Some(transform.target_transform().clone())
+        } else if state == target {
+            Some(transform.initial_transform().clone())
+        } else {
+            None
+        }
+    });
     AnimatedEnterExit(
         transition,
         Rc::new(move |current: &T| *current == shown),
@@ -662,6 +815,8 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
         Rc::new(move |current, target| {
             current == EnterExitState::PostExit && target == EnterExitState::PostExit && !hold
         }),
+        mutable_transform,
+        force_visible,
         compose_runtime::callback(move |scope: AnimatedVisibilityScope| {
             let (root, visible, state) = (root.clone(), visible.clone(), state.clone());
             {
@@ -698,22 +853,42 @@ impl<T: PartialEq + 'static> ComposeArg for StateKey<T> {
 }
 
 /// The contents stacked, each measured with the container's constraints, as large as the
-/// largest, each aligned in it (left to right, as Compose's).
+/// largest but a pending content, each aligned in it (left to right, as Compose's).
 struct ContentMeasurePolicy<T> {
     root: Rc<Root<T>>,
-    /// The target's content, by its index among the children: measured first, as Compose's.
-    target: Cell<Option<usize>>,
+    /// The states shown: at measuring, one to a child, those whose contents left being gone.
+    visible: Rc<RefCell<Visible<T>>>,
+    /// The target's state: its content is measured first, as Compose's.
+    target: RefCell<Option<T>>,
+    /// The state of a content not counting in the size, as `isPendingTarget`, and what tells it.
+    pending_target: RefCell<Option<(T, ContentKey<T>)>>,
 }
 
-impl<T: 'static> MeasurePolicy for ContentMeasurePolicy<T> {
+impl<T: PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
     fn measure(
         &self,
         scope: &mut MeasureScope<'_>,
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
+        let (target, pending) = {
+            let visible = self.visible.borrow();
+            let target = self.target.borrow();
+            let pending = self.pending_target.borrow();
+            let in_step = visible.states.len() == measurables.len();
+            let position = |wanted: &T| visible.states.iter().position(|(_, s)| s == wanted);
+            (
+                target.as_ref().and_then(position).filter(|_| in_step),
+                pending
+                    .as_ref()
+                    .and_then(|(wanted, key)| {
+                        visible.states.iter().position(|(_, s)| key.is_same(s, wanted))
+                    })
+                    .filter(|_| in_step),
+            )
+        };
         let mut placeables: Vec<Option<compose_ui::Placeable>> = vec![None; measurables.len()];
-        if let Some(target) = self.target.get().filter(|target| *target < measurables.len()) {
+        if let Some(target) = target {
             placeables[target] = Some(scope.measure(measurables[target], constraints));
         }
         for (index, measurable) in measurables.iter().enumerate() {
@@ -722,9 +897,15 @@ impl<T: 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             }
         }
         let placeables: Vec<_> = placeables.into_iter().flatten().collect();
-        let size = placeables.iter().fold(IntSize::ZERO, |size, placeable| {
-            IntSize::new(size.width.max(placeable.width), size.height.max(placeable.height))
-        });
+        let mut size = IntSize::ZERO;
+        for (index, placeable) in placeables.iter().enumerate() {
+            if pending != Some(index) {
+                size = IntSize::new(
+                    size.width.max(placeable.width),
+                    size.height.max(placeable.height),
+                );
+            }
+        }
         let alignment = self.root.content_alignment.get();
         for placeable in &placeables {
             let at = alignment.align(placeable.size(), size, LayoutDirection::Ltr);
