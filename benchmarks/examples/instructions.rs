@@ -319,6 +319,33 @@ fn Fields() {
 }
 
 /// `n` selections, each until idle, among `count` items.
+/// A sheet open, a drag moving it (D1466): the anchored state, the sheet's relayout.
+#[composable]
+fn OpenSheet() {
+    compose::material3::MaterialTheme!({
+        compose::material3::ModalBottomSheet!(|| {}, {
+            Box!(modifier = Modifier.fill_max_width().height(300.dp()));
+        });
+    });
+}
+
+fn sheet_drag(n: usize) {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 800), OpenSheet);
+    ui.wait_for_idle();
+    let finger = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
+    ui.host().send_pointer(finger(PointerEvent::press(Offset::new(200.0, 700.0))));
+    ui.advance_time_by(Duration::from_millis(16));
+    let (mut y, mut way) = (700.0, 8.0);
+    for step in 0..n {
+        if step % 20 == 0 {
+            way = -way;
+        }
+        y += way;
+        ui.host().send_pointer(finger(PointerEvent::moved(Offset::new(200.0, y), true)));
+        ui.advance_time_by(Duration::from_millis(16));
+    }
+}
+
 fn selections(content: fn(), count: usize, n: usize) {
     let mut ui = compose_test(content);
     let picked = PICKED.with(|it| it.handle());
@@ -446,6 +473,7 @@ fn main() {
         "feed_animated" => frames(compose_rs_feed::FeedAnimated, n),
         "stress_animation" => frames(compose_rs_feed::stress::StressAnimation, n),
         "cells_animated" => frames(AnimatedCells, n),
+        "sheet_drag" => sheet_drag(n),
         "cells_animated_positioned" => {
             POSITIONED.set(true);
             frames(AnimatedCells, n);

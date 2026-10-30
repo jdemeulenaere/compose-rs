@@ -441,23 +441,84 @@ fn a_page_fills_or_is_of_the_size_asked() {
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageSizeTest.kt, pageSize_0dp_doesNotMoveOnScroll
 #[test]
-fn pages_of_no_size_dont_move() {
-    let mut pager =
-        Setup { page_size: PageSize::Fixed(Dp(0.0)), count: 1, ..Setup::default() }.rule();
-    pager.swipe(-100.0, 0.0);
-    assert_eq!(pager.page(), 0);
+fn a_pager_of_no_size_animates_from_a_page_without_harm() {
+    for vertical in [false, true] {
+        let owned = PagerState::new(5, 0.0, || COUNT);
+        let state = *owned;
+        std::mem::forget(owned);
+        let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+            let page = |_: PagerScope, _: usize| {
+                Box!(modifier = Modifier.fill_max_size());
+            };
+            if vertical {
+                VerticalPager!(
+                    state,
+                    modifier = Modifier.fill_max_width().height(0.dp()),
+                    page_content = page
+                );
+            } else {
+                HorizontalPager!(
+                    state,
+                    modifier = Modifier.fill_max_height().width(0.dp()),
+                    page_content = page
+                );
+            }
+            LaunchedEffect((), async move {
+                let _ = state.animate_scroll_to_page(0, 0.0).await;
+            });
+        });
+        ui.wait_for_idle();
+        assert_eq!(state.current_page_offset_fraction(), 0.0);
+    }
 }
 
-// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSwipeEdgeTest.kt, swipePageTowardsEdge_shouldNotMove, scrollForwardAtTheLastPage_withSpacing_shouldNotMovePage, scrollForwardAtTheLastPage_withSpacing_pageSettlesCorrectly
+/// Each axis, way and direction, as those files' parameters, with the pointer's way forward.
+fn each_way(check: impl Fn(Setup, f32)) {
+    for vertical in [false, true] {
+        for reverse in [false, true] {
+            for rtl in [false, true] {
+                let setup = Setup { vertical, reverse, rtl, ..Setup::default() };
+                let flipped = reverse != (rtl && !vertical);
+                check(setup, if flipped { 1.0 } else { -1.0 });
+            }
+        }
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSwipeEdgeTest.kt, swipePageTowardsEdge_shouldNotMove
 #[test]
-fn a_swipe_at_an_edge_doesnt_move() {
-    let mut pager = Setup { count: 3, spacing: 10.0, ..Setup::default() }.rule();
-    pager.swipe(160.0, 600.0);
-    pager.assert_at(0);
-    pager.scroll_to(2, 0.0);
-    pager.swipe(-160.0, 600.0);
-    pager.assert_at(2);
-    assert_eq!(pager.pages(), [(2, 0)]);
+fn a_swipe_past_the_first_page_doesnt_move_and_one_forward_turns_a_page() {
+    each_way(|setup, forward| {
+        let mut pager = setup.rule();
+        pager.swipe(-forward * SIZE * 0.4, MIN_FLING * 1.5);
+        pager.assert_at(0);
+        pager.swipe(forward * SIZE * 0.4, MIN_FLING * 1.5);
+        pager.assert_at(1);
+    });
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSwipeEdgeTest.kt, scrollForwardAtTheLastPage_withSpacing_shouldNotMovePage, scrollForwardAtTheLastPage_withSpacing_pageSettlesCorrectly
+#[test]
+fn a_finger_held_past_the_last_page_doesnt_move_it() {
+    for spacing in [8.0, 40.0] {
+        each_way(|setup, forward| {
+            let vertical = setup.vertical;
+            let mut pager = Setup { spacing, page: COUNT - 1, ..setup }.rule();
+            pager.ui.set_auto_advance(false);
+            let center = pager.at(200.0);
+            let delta = forward * SIZE * 0.4;
+            let moved = if vertical { Offset::new(0.0, delta) } else { Offset::new(delta, 0.0) };
+            pager.ui.on_root().perform_touch_input(|touch| {
+                touch.down(center);
+                touch.move_by(moved);
+            });
+            for _ in 0..5 {
+                pager.ui.advance_time_by_frame();
+                assert_eq!(pager.fraction(), 0.0, "spacing {spacing}");
+            }
+            pager.ui.on_root().perform_touch_input(|touch| touch.up());
+        });
+    }
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerGestureTest.kt, swipePagerWithSmallContent_shouldNotCrash
@@ -698,30 +759,52 @@ fn a_request_stops_a_scroll_going_on() {
     pager.assert_at(3);
 }
 
-// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSnapPositionTest.kt, snapPosition_shouldNotInfluenceMaxScroll, pagerAtBounds_flingTowardsBound_doesNotMove
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSnapPositionTest.kt, snapPosition_shouldNotInfluenceMaxScroll
 #[test]
-fn a_snap_position_keeps_the_ends_of_the_scroll() {
-    for snap_position in [SnapPosition::Start, SnapPosition::Center, SnapPosition::End] {
-        let mut pager = Setup {
-            page_size: PageSize::Fixed(Dp(100.0)),
-            count: 10,
-            snap_position,
-            ..Setup::default()
+fn a_snap_position_doesnt_change_where_the_scroll_ends() {
+    for vertical in [false, true] {
+        for snap_position in [SnapPosition::Start, SnapPosition::Center, SnapPosition::End] {
+            let page_size = PageSize::Custom(Rc::new(|_, room, spacing| (room + spacing) / 2));
+            let mut pager =
+                Setup { vertical, page: COUNT - 2, page_size, snap_position, ..Setup::default() }
+                    .rule();
+            pager.swipe(-200.0, MIN_FLING * 2.0);
+            assert!(!pager.state.can_scroll_forward());
         }
-        .rule();
-        let state = pager.state;
-        run(&mut pager.ui, async move {
-            state.scroll_by(100000.0).await.expect("free");
-        });
-        assert!(!state.can_scroll_forward());
-        let last = *pager.pages().last().expect("laid out");
-        assert_eq!(last, (9, 300));
-        pager.swipe(-100.0, MIN_FLING * 2.0);
-        assert_eq!(*pager.pages().last().expect("laid out"), (9, 300));
     }
 }
 
-// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt, snapPositionChanges_shouldReLayoutPages
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSnapPositionTest.kt, pagerAtBounds_flingTowardsBound_doesNotMove
+#[test]
+fn a_fling_towards_the_end_it_is_at_doesnt_move() {
+    for vertical in [false, true] {
+        for snap_position in [SnapPosition::Start, SnapPosition::Center, SnapPosition::End] {
+            let page_size = PageSize::Custom(Rc::new(|_, room, spacing| {
+                ((room - 2 * spacing) as f32 / 2.5).round() as i32
+            }));
+            let mut pager = Setup { vertical, page_size, snap_position, ..Setup::default() }.rule();
+            let state = pager.state;
+            assert!(state.can_scroll_forward());
+            assert!(!state.can_scroll_backward());
+            let at = (pager.page(), pager.fraction());
+            let half = state.layout_info().page_size as f32 / 2.0;
+            pager.swipe(half, MIN_FLING * 0.3);
+            assert_eq!((pager.page(), pager.fraction()), at);
+            assert!(state.can_scroll_forward());
+            assert!(!state.can_scroll_backward());
+            pager.scroll_to(COUNT - 1, 0.0);
+            assert!(!state.can_scroll_forward());
+            assert!(state.can_scroll_backward());
+            let at = (pager.page(), pager.fraction());
+            pager.swipe(-half, MIN_FLING * 0.3);
+            assert_eq!((pager.page(), pager.fraction()), at);
+            assert!(!state.can_scroll_forward());
+            assert!(state.can_scroll_backward());
+        }
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerScrollingTest.kt, swipeWithHighVelocity_defaultVelocityThreshold_shouldGoToNextPage, at a snap position
 #[test]
 fn a_page_lands_at_its_snap_position() {
     let mut pager = Setup {
@@ -741,24 +824,36 @@ fn a_page_lands_at_its_snap_position() {
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCrossAxisTest.kt, pagerOnInfiniteCrossAxisLayout_shouldWrapContentSize
 #[test]
 fn a_pager_with_room_across_wraps_its_pages() {
-    let kept: Rc<Cell<Option<PagerState>>> = Rc::default();
-    let noted = kept.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
         let state = remember_pager_state!(0, 0.0, || 3);
-        noted.set(Some(state));
         Column!(modifier = Modifier.vertical_scroll(remember_scroll_state(0)), {
             HorizontalPager!(
                 state,
                 modifier = Modifier.test_tag("pager"),
                 page_content = |_, _| {
-                    Box!(modifier = Modifier.height(100.dp()).fill_max_width());
+                    Box!(modifier = Modifier.height(200.dp()).fill_max_width());
                 }
             );
         });
     });
     ui.wait_for_idle();
     let bounds = ui.on_node_with_tag("pager").fetch_semantics_snapshot().bounds;
-    assert_eq!(bounds.bottom - bounds.top, 100.0);
+    assert_eq!((bounds.right - bounds.left, bounds.bottom - bounds.top), (400.0, 200.0));
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
+        let state = remember_pager_state!(0, 0.0, || 3);
+        Row!(modifier = Modifier.horizontal_scroll(remember_scroll_state(0)), {
+            VerticalPager!(
+                state,
+                modifier = Modifier.test_tag("pager"),
+                page_content = |_, _| {
+                    Box!(modifier = Modifier.width(200.dp()).fill_max_height());
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let bounds = ui.on_node_with_tag("pager").fetch_semantics_snapshot().bounds;
+    assert_eq!((bounds.right - bounds.left, bounds.bottom - bounds.top), (200.0, 400.0));
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerStateNonGestureScrollingTest.kt, testStateRestoration
@@ -1344,13 +1439,22 @@ fn a_wheel_past_the_end_of_a_list_in_a_page_doesnt_move_the_pager() {
     assert_eq!(state.current_page_offset_fraction(), 0.0);
 }
 
-/// A pager of `page_size` in `window` flinging by `fling`.
+/// A pager of `page_size` in `window` flinging by `fling`, from page 5.
 fn with_fling(
     window: i32,
     page_size: PageSize,
     fling: impl Fn(PagerState) -> Rc<dyn compose_foundation::gestures::TargetedFlingBehavior> + 'static,
 ) -> (ComposeTestRule, PagerState) {
-    let owned = PagerState::new(5, 0.0, || 200);
+    with_fling_at(5, window, page_size, fling)
+}
+
+fn with_fling_at(
+    page: usize,
+    window: i32,
+    page_size: PageSize,
+    fling: impl Fn(PagerState) -> Rc<dyn compose_foundation::gestures::TargetedFlingBehavior> + 'static,
+) -> (ComposeTestRule, PagerState) {
+    let owned = PagerState::new(page, 0.0, || 200);
     let state = *owned;
     std::mem::forget(owned);
     let behavior = fling(state);
@@ -1600,4 +1704,802 @@ fn a_frames_scroll_past_all_the_pages_laid_out_lands_on_a_page() {
     });
     assert!(state.current_page() >= 54, "{}", state.current_page());
     assert_eq!(state.current_page_offset_fraction(), 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerState.kt, awaitScrollDependencies
+#[test]
+fn an_animation_waits_for_the_first_layout_however_long_it_takes() {
+    let owned = PagerState::new(0, 0.0, || COUNT);
+    let state = *owned;
+    std::mem::forget(owned);
+    let shown = mutable_state_of(false);
+    let read = shown.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        if read.get() {
+            HorizontalPager!(
+                state,
+                modifier = Modifier.fill_max_size(),
+                page_content = |_, _| {
+                    Box!(modifier = Modifier.fill_max_size());
+                }
+            );
+        }
+    });
+    ui.wait_for_idle();
+    let job = launch(async move {
+        let _ = state.animate_scroll_to_page(3, 0.0).await;
+    });
+    for _ in 0..30 {
+        ui.advance_time_by_frame();
+    }
+    assert!(job.is_active(), "still waiting");
+    shown.set(true);
+    ui.wait_for_idle();
+    assert!(!job.is_active());
+    assert_eq!((state.current_page(), state.current_page_offset_fraction()), (3, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerState.kt, scroll: programmaticScrollTargetPage reset by the scroll going on
+#[test]
+fn a_scroll_taking_over_keeps_its_target() {
+    let mut pager = Setup::default().rule();
+    let state = pager.state;
+    pager.ui.set_auto_advance(false);
+    launch(async move {
+        let _ = state.animate_scroll_to_page(10, 0.0).await;
+    });
+    pager.ui.advance_time_by_frame();
+    pager.ui.advance_time_by_frame();
+    assert_eq!(state.target_page(), 10);
+    launch(async move {
+        let _ = state.animate_scroll_to_page(2, 0.0).await;
+    });
+    pager.ui.advance_time_by_frame();
+    pager.ui.advance_time_by_frame();
+    assert_eq!(state.target_page(), 2);
+    pager.ui.set_auto_advance(true);
+    pager.ui.wait_for_idle();
+    pager.assert_at(2);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLazyLayoutScrollScopeTest.kt, calculateDistanceTo; PagerScrollScope.kt, calculateDistanceTo: coerceIn(minScrollOffset, maxScrollOffset)
+#[test]
+fn an_animation_past_the_end_of_the_scroll_stops_there() {
+    let mut pager = Setup { page_size: PageSize::Fixed(Dp(100.0)), ..Setup::default() }.rule();
+    let state = pager.state;
+    let target = compose_animation::tween(320);
+    run(&mut pager.ui, async move {
+        state.animate_scroll_to_page_with(COUNT - 1, 0.0, target).await.expect("free");
+    });
+    assert!(!state.can_scroll_forward());
+    pager.ui.set_auto_advance(false);
+    let done = launch(async move {
+        let _ = state.animate_scroll_to_page_with(0, 0.0, compose_animation::tween(320)).await;
+    });
+    let mut frames = 0;
+    while done.is_active() {
+        pager.ui.advance_time_by_frame();
+        frames += 1;
+        assert!(frames < 200);
+    }
+    assert!(frames <= 22, "its 320 ms, no dead frames: {frames}");
+    // Forward again: the frames after the end would be dead ones.
+    let done = launch(async move {
+        let _ =
+            state.animate_scroll_to_page_with(COUNT - 1, 0.0, compose_animation::tween(320)).await;
+    });
+    let (mut moved_last, mut frame) = (0, 0);
+    let mut previous = state.current_page_offset_fraction() + state.current_page() as f32;
+    while done.is_active() {
+        pager.ui.advance_time_by_frame();
+        frame += 1;
+        let at = state.current_page_offset_fraction() + state.current_page() as f32;
+        if at != previous {
+            moved_last = frame;
+        }
+        previous = at;
+    }
+    assert!(frame - moved_last <= 2, "ended {} frames after it stopped moving", frame - moved_last);
+}
+
+/// A pager of pages holding `content`, in 400 by 400.
+fn content_pager(
+    vertical: bool,
+    rtl: bool,
+    reverse: bool,
+    content: impl Fn() + Clone + 'static,
+) -> ComposeTestRule {
+    let owned = PagerState::new(0, 0.0, || 3);
+    let state = *owned;
+    std::mem::forget(owned);
+    let direction = if rtl { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let content = content.clone();
+        CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(direction), move || {
+            let content = content.clone();
+            let page = move |_: PagerScope, index: usize| {
+                if index == 0 {
+                    content();
+                }
+            };
+            if vertical {
+                VerticalPager!(
+                    state,
+                    modifier = Modifier.fill_max_size(),
+                    reverse_layout = reverse,
+                    page_content = page
+                );
+            } else {
+                HorizontalPager!(
+                    state,
+                    modifier = Modifier.fill_max_size(),
+                    reverse_layout = reverse,
+                    page_content = page
+                );
+            }
+        });
+    });
+    ui.wait_for_idle();
+    ui
+}
+
+fn placed(ui: &mut ComposeTestRule, tag: &str) -> (f32, f32) {
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
+    (bounds.left, bounds.top)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/MeasuredPage.kt, position, place
+#[test]
+fn content_smaller_than_its_page_is_placed_from_the_pages_start() {
+    let content = || Box!(modifier = Modifier.size(100.dp()).test_tag("it"));
+    let mut ui = content_pager(false, false, false, content);
+    assert_eq!(placed(&mut ui, "it"), (0.0, 150.0));
+    let mut ui = content_pager(false, true, false, content);
+    assert_eq!(placed(&mut ui, "it"), (300.0, 150.0), "right to left");
+    let mut ui = content_pager(false, false, true, content);
+    assert_eq!(placed(&mut ui, "it"), (300.0, 150.0), "reversed");
+    let mut ui = content_pager(true, false, true, content);
+    assert_eq!(placed(&mut ui, "it"), (150.0, 300.0), "reversed, vertical");
+    let mut ui = content_pager(true, false, false, content);
+    assert_eq!(placed(&mut ui, "it"), (150.0, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/MeasuredPage.kt, position: the children one after the other, each aligned across on its own
+#[test]
+fn a_pages_children_follow_each_other_each_aligned_across() {
+    let content = || {
+        Box!(modifier = Modifier.size((50.dp(), 100.dp())).test_tag("first"));
+        Box!(modifier = Modifier.size((50.dp(), 200.dp())).test_tag("second"));
+    };
+    let mut ui = content_pager(false, false, false, content);
+    assert_eq!(placed(&mut ui, "first"), (0.0, 150.0));
+    assert_eq!(placed(&mut ui, "second"), (50.0, 100.0));
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt, pageSizeChanges_shouldReLayoutPagesAccordingToSnapPosition
+#[test]
+fn a_new_page_size_a_new_spacing_or_a_new_snap_position_keeps_the_page_at_its_place() {
+    let owned = PagerState::new(5, 0.0, || COUNT);
+    let state = *owned;
+    std::mem::forget(owned);
+    let snap = mutable_state_of(0u8);
+    let spacing = mutable_state_of(0.0f32);
+    let size = mutable_state_of(100.0f32);
+    let (read_snap, read_spacing, read_size) = (snap.handle(), spacing.handle(), size.handle());
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let snap_position = match read_snap.get() {
+            0 => SnapPosition::Start,
+            1 => SnapPosition::Center,
+            _ => SnapPosition::End,
+        };
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            page_size = PageSize::Fixed(Dp(read_size.get())),
+            page_spacing = Dp(read_spacing.get()),
+            snap_position = snap_position,
+            page_content = |_, _| {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let at = move || {
+        state.layout_info().visible_pages_info.iter().find(|it| it.index == 5).map(|it| it.offset)
+    };
+    assert_eq!(at(), Some(0));
+    snap.set(1);
+    ui.wait_for_idle();
+    assert_eq!(state.current_page(), 5);
+    assert_eq!(at(), Some(150));
+    spacing.set(20.0);
+    ui.wait_for_idle();
+    assert_eq!(state.current_page(), 5);
+    assert_eq!(at(), Some(150), "the spacing doesn't move it");
+    size.set(200.0);
+    ui.wait_for_idle();
+    assert_eq!(state.current_page(), 5);
+    assert_eq!(at(), Some(100));
+    snap.set(2);
+    ui.wait_for_idle();
+    assert_eq!(at(), Some(200));
+    assert_eq!(state.current_page_offset_fraction(), 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerState.kt, updateCurrentPage then a scroll: the delta applied after it
+#[test]
+fn a_scroll_after_a_new_current_page_in_a_frame_counts() {
+    let mut pager = Setup::default().rule();
+    let state = pager.state;
+    run(&mut pager.ui, async move {
+        state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                state.update_current_page(5, 0.0);
+                scope.scroll_by(40.0);
+            })
+            .await
+            .expect("free");
+    });
+    assert_eq!(state.current_page(), 5);
+    assert!(
+        (state.current_page_offset_fraction() - 0.1).abs() < 0.01,
+        "{}",
+        state.current_page_offset_fraction()
+    );
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerScrollPosition.kt, updateFromMeasureResult: currentPage?.index ?: 0
+#[test]
+fn a_pager_emptied_is_at_its_first_page() {
+    let count = mutable_state_of(10usize);
+    let read = count.handle();
+    let kept: Rc<Cell<Option<PagerState>>> = Rc::default();
+    let noted = kept.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let state = remember_pager_state!(0, 0.0, move || read.get());
+        noted.set(Some(state));
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            page_content = |_, _| {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let state = kept.get().expect("composed");
+    run(&mut ui, async move {
+        state.scroll_to_page(5, 0.0).await.expect("free");
+    });
+    assert_eq!(state.current_page(), 5);
+    count.set(0);
+    ui.wait_for_idle();
+    assert_eq!(state.current_page(), 0);
+    assert_eq!(state.current_page_offset_fraction(), 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerScrollPosition.kt, matchPageWithKey
+#[test]
+fn keys_follow_the_current_page_not_the_first_visible_one() {
+    let list = mutable_state_of((0..20).collect::<Vec<u64>>());
+    let read = list.handle();
+    let kept: Rc<Cell<Option<PagerState>>> = Rc::default();
+    let noted = kept.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let items = read.get();
+        let count = items.len();
+        let state = remember_pager_state!(0, 0.0, move || count);
+        noted.set(Some(state));
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            page_size = PageSize::Fixed(Dp(100.0)),
+            snap_position = SnapPosition::Center,
+            key = Some(pager_key(move |page| items[page])),
+            page_content = |_, _| {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let state = kept.get().expect("composed");
+    run(&mut ui, async move {
+        state.scroll_to_page(5, 0.0).await.expect("free");
+    });
+    assert_eq!(state.current_page(), 5);
+    let first = state.layout_info().visible_pages_info[0].index;
+    assert!(first < 5);
+    // The current one moves to the end; the first visible stays where it is.
+    let moved: Vec<u64> = (0..5).chain(6..16).chain([5]).chain(16..20).collect();
+    list.set(moved);
+    ui.wait_for_idle();
+    assert_eq!(state.current_page(), 15);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt, beyondViewportPageCount_canBeMaxInt, pageCount_canBeMaxInt
+#[test]
+fn as_many_pages_beyond_as_there_can_be_are_as_many_as_there_are() {
+    let pager = Setup { count: 5, beyond: usize::MAX, ..Setup::default() }.rule();
+    assert_eq!(pager.state.layout_info().beyond_viewport_page_count, 5);
+    let mut composed = pager.composed.borrow().clone();
+    composed.sort();
+    assert_eq!(composed, [0, 1, 2, 3, 4]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PageInfo.kt, key
+#[test]
+fn a_page_info_tells_its_key() {
+    let owned = PagerState::new(0, 0.0, || 3);
+    let state = *owned;
+    std::mem::forget(owned);
+    let given = pager_key(|page| page * 10);
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            key = Some(given.clone()),
+            page_content = |_, _| {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let first = state.layout_info().visible_pages_info[0].key;
+    run(&mut ui, async move {
+        state.scroll_to_page(1, 0.0).await.expect("free");
+    });
+    assert_ne!(state.layout_info().visible_pages_info[0].key, first);
+    run(&mut ui, async move {
+        state.scroll_to_page(0, 0.0).await.expect("free");
+    });
+    assert_eq!(state.layout_info().visible_pages_info[0].key, first);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerState.kt, performScroll: the fraction told at once
+#[test]
+fn a_raw_delta_is_told_in_the_page_and_fraction_at_once() {
+    let mut pager = Setup::default().rule();
+    let state = pager.state;
+    pager.ui.set_auto_advance(false);
+    state.dispatch_raw_delta(50.0);
+    assert_eq!(state.current_page_offset_fraction(), 0.125);
+    state.dispatch_raw_delta(180.0);
+    assert_eq!(state.current_page(), 1);
+    assert!((state.current_page_offset_fraction() + 0.425).abs() < 0.001);
+    pager.ui.advance_time_by_frame();
+    assert_eq!(state.current_page(), 1);
+    assert!((state.current_page_offset_fraction() + 0.425).abs() < 0.001);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt, snapPositionChanges_shouldReLayoutPages
+#[test]
+fn a_new_snap_position_lays_the_pages_out_again() {
+    for vertical in [false, true] {
+        let owned = PagerState::new(5, 0.0, || 40);
+        let state = *owned;
+        std::mem::forget(owned);
+        let snap = mutable_state_of(false);
+        let read = snap.handle();
+        let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+            let snap_position = if read.get() { SnapPosition::End } else { SnapPosition::Start };
+            let page = |_: PagerScope, _: usize| {
+                Box!(modifier = Modifier.fill_max_size());
+            };
+            if vertical {
+                VerticalPager!(
+                    state,
+                    modifier = Modifier.fill_max_size(),
+                    page_size = PageSize::Fixed(Dp(250.0)),
+                    snap_position = snap_position,
+                    page_content = page
+                );
+            } else {
+                HorizontalPager!(
+                    state,
+                    modifier = Modifier.fill_max_size(),
+                    page_size = PageSize::Fixed(Dp(250.0)),
+                    snap_position = snap_position,
+                    page_content = page
+                );
+            }
+        });
+        ui.wait_for_idle();
+        assert_eq!(state.current_page(), 5);
+        let first = state.layout_info().visible_pages_info[0];
+        assert_eq!((first.index, first.offset), (5, 0));
+        snap.set(true);
+        ui.wait_for_idle();
+        assert_eq!(state.current_page(), 5);
+        let info = state.layout_info();
+        let last = info.visible_pages_info.last().expect("laid out");
+        assert_eq!((last.index, last.offset), (5, 400 - 250));
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLayoutInfoTest.kt, visiblePagesAreCorrectWithSpacing
+#[test]
+fn the_layout_info_tells_the_spacing() {
+    let pager =
+        Setup { page_size: PageSize::Fixed(Dp(100.0)), spacing: 10.0, ..Setup::default() }.rule();
+    assert_eq!(pager.state.layout_info().page_spacing, 10);
+    assert_eq!(pager.state.layout_info().page_size, 100);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/PagerSnapLayoutInfoProvider.kt, calculateSnapOffset, with a frame for the layout: pages at most 10 on, 14 in all
+#[test]
+fn a_fling_past_all_the_pages_laid_out_waits_for_them_and_lands_as_far_as_it_may() {
+    let (mut ui, state) =
+        with_fling_at(5, 100, PageSize::Fixed(Dp(20.0)), |state| fling_of(state, 10));
+    let fling = fling_of(state, 10);
+    run(&mut ui, async move {
+        state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                fling.perform_fling(scope, 30000.0).await;
+            })
+            .await
+            .expect("free");
+    });
+    assert_eq!(state.current_page_offset_fraction(), 0.0);
+    assert_eq!(state.current_page(), 14);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerScrollingTest.kt, swipeWithLowVelocity_positionalThresholdOverDefaultThreshold_shouldGoToNextPage, right to left
+#[test]
+fn right_to_left_a_slow_swipe_past_half_goes_on() {
+    let mut pager = Setup { page: 5, rtl: true, ..Setup::default() }.rule();
+    pager.swipe(SIZE * 0.6, 0.0);
+    pager.assert_at(6);
+    pager.swipe(-SIZE * 0.6, 0.0);
+    pager.assert_at(5);
+    // Under half, past the threshold: back.
+    pager.swipe(SIZE * 0.3, 0.0);
+    pager.assert_at(5);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/Pager.kt, DefaultPagerNestedScrollConnection.onPreScroll: right to left
+#[test]
+fn right_to_left_a_page_off_its_place_takes_a_drag_first() {
+    let inner = LazyListState::new(3, 0);
+    let list = *inner;
+    std::mem::forget(inner);
+    let owned = PagerState::new(0, 0.0, || COUNT);
+    let state = *owned;
+    std::mem::forget(owned);
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        CompositionLocalProvider(
+            LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl),
+            move || {
+                HorizontalPager!(
+                    state,
+                    modifier = Modifier.fill_max_size(),
+                    page_content = move |_, page: usize| {
+                        let items = |scope: lazy::LazyListScope| {
+                            scope.items(10, |_| Box!(modifier = Modifier.size(100.dp())));
+                        };
+                        if page == 0 {
+                            LazyRow!(
+                                modifier = Modifier.fill_max_size(),
+                                state = list,
+                                content = items
+                            );
+                        } else {
+                            Box!(modifier = Modifier.fill_max_size());
+                        }
+                    }
+                );
+            },
+        );
+    });
+    ui.wait_for_idle();
+    run(&mut ui, async move {
+        state.scroll_by(80.0).await.expect("free");
+    });
+    let (index, offset) =
+        (list.first_visible_item_index(), list.first_visible_item_scroll_offset());
+    // Right to left the page's back is to the left.
+    ui.on_root().perform_touch_input(|touch| {
+        touch.down(Offset::new(300.0, 200.0));
+        touch.move_by(Offset::new(-68.0, 0.0));
+    });
+    ui.wait_for_idle();
+    let list_at = (list.first_visible_item_index(), list.first_visible_item_scroll_offset());
+    assert_eq!(list_at, (index, offset));
+    let fraction = state.current_page_offset_fraction();
+    assert!((fraction - 0.05).abs() < 0.01, "{fraction}");
+    ui.on_root().perform_touch_input(|touch| {
+        touch.advance_event_time(3000);
+        touch.up();
+    });
+    ui.wait_for_idle();
+}
+
+/// A fling leaving the pager a hair off a page.
+struct AlmostThere(PagerState);
+
+impl FlingBehavior for AlmostThere {
+    fn perform_fling<'a>(
+        &'a self,
+        _: ScrollScope,
+        _: f32,
+    ) -> compose_foundation::gestures::LocalBoxFuture<'a, f32> {
+        Box::pin(async { 0.0 })
+    }
+}
+
+impl TargetedFlingBehavior for AlmostThere {
+    fn perform_targeted_fling<'a>(
+        &'a self,
+        scope: ScrollScope,
+        _: f32,
+        on_remaining: Rc<dyn Fn(f32)>,
+    ) -> compose_foundation::gestures::LocalBoxFuture<'a, f32> {
+        Box::pin(async move {
+            on_remaining(1200.0);
+            let off = self.0.current_page_offset_fraction() * 400.0;
+            scope.scroll_by(-off + 0.2);
+            0.0
+        })
+    }
+}
+
+/// A pager at page 0 flinging by `AlmostThere`.
+fn almost_there() -> (ComposeTestRule, PagerState) {
+    with_fling_at(0, 400, PageSize::Fill, |state| Rc::new(AlmostThere(state)))
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/LazyLayoutPager.kt, PagerWrapperFlingBehavior: fling finished, correct snapping for rounding
+#[test]
+fn a_fling_ending_a_hair_off_a_page_is_put_on_it() {
+    let (mut ui, state) = almost_there();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.swipe_with_velocity(
+            Offset::new(390.0, 200.0),
+            Offset::new(300.0, 200.0),
+            2000.0,
+            None,
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.current_page_offset_fraction(), 0.0);
+    // No part of a pixel left in the position: 0.4 more is still under half a pixel.
+    run(&mut ui, async move {
+        state.scroll_by(0.4).await.expect("free");
+    });
+    assert_eq!(state.layout_info().visible_pages_info[0].offset, 0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/pager/PagerState.kt, scroll: programmaticScrollTargetPage reset at its end
+#[test]
+fn a_flings_target_goes_with_it() {
+    let (mut ui, state) = almost_there();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.swipe_with_velocity(
+            Offset::new(390.0, 200.0),
+            Offset::new(300.0, 200.0),
+            2000.0,
+            None,
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_root().perform_touch_input(|touch| {
+        touch.down(Offset::new(300.0, 200.0));
+        touch.move_by(Offset::new(-20.0, 0.0));
+    });
+    ui.wait_for_idle();
+    assert!(state.is_scroll_in_progress());
+    assert_eq!(state.target_page(), 0, "the fling's 3 isn't kept");
+    ui.on_root().perform_touch_input(|touch| {
+        touch.advance_event_time(3000);
+        touch.up();
+    });
+    ui.wait_for_idle();
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerAccessibilityTest.kt, scrollBySemantics_shouldScrollCorrectly
+#[test]
+fn the_scroll_by_action_scrolls_it() {
+    let mut pager = Setup { page: 5, ..Setup::default() }.rule();
+    pager.ui.on_node_with_tag("pager").perform_semantics_action_with(
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |action| {
+            action(100.0, 0.0);
+        },
+    );
+    pager.ui.wait_for_idle();
+    assert!((pager.fraction() - 0.25).abs() < 0.001, "{}", pager.fraction());
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerAccessibilityTest.kt, accessibilityScroll_scrollToPage, accessibilityPaging_animateScrollToPage
+#[test]
+fn a_service_goes_to_a_page_and_pages_up_and_down() {
+    for vertical in [false, true] {
+        let mut pager = Setup { vertical, beyond: 1, ..Setup::default() }.rule();
+        pager.ui.on_node_with_tag("1").perform_scroll_to();
+        pager.ui.wait_for_idle();
+        pager.assert_at(1);
+        let mut pager = Setup { vertical, page: 5, ..Setup::default() }.rule();
+        let (back, on) = if vertical {
+            (&compose_ui::SemanticsActions::PAGE_UP, &compose_ui::SemanticsActions::PAGE_DOWN)
+        } else {
+            (&compose_ui::SemanticsActions::PAGE_LEFT, &compose_ui::SemanticsActions::PAGE_RIGHT)
+        };
+        pager.ui.on_node_with_tag("pager").perform_semantics_action(back);
+        pager.ui.wait_for_idle();
+        pager.assert_at(4);
+        pager.ui.on_node_with_tag("pager").perform_semantics_action(on);
+        pager.ui.wait_for_idle();
+        pager.assert_at(5);
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerAccessibilityTest.kt, userScrollEnabledIsOff_shouldNotAllowPageAccessibilityActions
+#[test]
+fn scrolling_off_offers_no_paging() {
+    let mut pager = Setup { user_scroll: false, ..Setup::default() }.rule();
+    let node = pager.ui.on_node_with_tag("pager").fetch_semantics_snapshot();
+    for key in [
+        &compose_ui::SemanticsActions::PAGE_UP,
+        &compose_ui::SemanticsActions::PAGE_DOWN,
+        &compose_ui::SemanticsActions::PAGE_LEFT,
+        &compose_ui::SemanticsActions::PAGE_RIGHT,
+    ] {
+        assert!(node.config.get(key).is_none());
+    }
+    assert!(node.config.get(&compose_ui::SemanticsActions::SCROLL_TO_INDEX).is_none());
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerAccessibilityTest.kt, scrollBySemantics_onNestedScrollable_shouldNotDragPager
+#[test]
+fn a_service_scrolling_a_list_in_a_page_doesnt_move_the_pager() {
+    let inner = LazyListState::new(8, 0);
+    let list = *inner;
+    std::mem::forget(inner);
+    let owned = PagerState::new(0, 0.0, || COUNT);
+    let state = *owned;
+    std::mem::forget(owned);
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            page_content = move |_, page: usize| {
+                let items = |scope: lazy::LazyListScope| {
+                    scope.items(10, |_| Box!(modifier = Modifier.size(100.dp())));
+                };
+                if page == 0 {
+                    LazyRow!(
+                        modifier = Modifier.fill_max_size().test_tag("child"),
+                        state = list,
+                        content = items
+                    );
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let node = ui.on_node_with_tag("child").fetch_semantics_snapshot();
+    let action = node.config.get(&compose_ui::SemanticsActions::SCROLL_BY_OFFSET).expect("offered");
+    let future = (action.0)(Offset::new(800.0, 0.0));
+    launch(async move {
+        future.await;
+    });
+    ui.wait_for_idle();
+    assert_eq!((state.current_page(), state.current_page_offset_fraction()), (0, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutSemantics.kt, collectionInfo, scrollToIndex
+#[test]
+fn lazy_layouts_tell_their_collection_and_go_to_an_index() {
+    use compose_ui::{CollectionInfo, SemanticsActions, SemanticsProperties};
+    for (vertical, info) in [
+        (true, CollectionInfo { row_count: COUNT as i32, column_count: 1 }),
+        (false, CollectionInfo { row_count: 1, column_count: COUNT as i32 }),
+    ] {
+        let mut pager = Setup { vertical, ..Setup::default() }.rule();
+        let node = pager.ui.on_node_with_tag("pager").fetch_semantics_snapshot();
+        assert_eq!(node.config.get(&SemanticsProperties::COLLECTION_INFO), Some(&info));
+        pager.ui.on_node_with_tag("pager").perform_semantics_action_with(
+            &SemanticsActions::SCROLL_TO_INDEX,
+            |action| {
+                action(7);
+            },
+        );
+        pager.ui.wait_for_idle();
+        pager.assert_at(7);
+    }
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        LazyColumn!(
+            modifier = Modifier.fill_max_size().test_tag("list"),
+            state = handle,
+            content = |scope: lazy::LazyListScope| {
+                scope.items(50, |_| Box!(modifier = Modifier.size(100.dp())));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let node = ui.on_node_with_tag("list").fetch_semantics_snapshot();
+    assert_eq!(
+        node.config.get(&SemanticsProperties::COLLECTION_INFO),
+        Some(&CollectionInfo { row_count: -1, column_count: 1 })
+    );
+    ui.on_node_with_tag("list").perform_semantics_action_with(
+        &SemanticsActions::SCROLL_TO_INDEX,
+        |action| {
+            action(20);
+        },
+    );
+    ui.wait_for_idle();
+    assert_eq!(handle.first_visible_item_index(), 20);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCustomKeyTest.kt, keysLambdaIsCalledOnlyOnce
+#[test]
+fn a_pages_key_is_asked_once() {
+    let calls = Rc::new(Cell::new(0));
+    let noted = calls.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let noted = noted.clone();
+        let state = remember_pager_state!(0, 0.0, || 1);
+        let key: Rc<dyn Fn(usize) -> u64> = Rc::new(move |_| {
+            noted.set(noted.get() + 1);
+            0
+        });
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            key = Some(key),
+            page_content = |_, _| {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(calls.get(), 1);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLazyLayoutScrollScopeTest.kt, calculateDistance_shouldNotReturnMoreThanMaxScrollOffset
+#[test]
+fn the_distance_to_a_page_stays_within_the_scroll() {
+    let page_size = PageSize::Custom(Rc::new(|_, room, _| (room as f32 * 0.75).round() as i32));
+    let mut pager = Setup { page_size, ..Setup::default() }.rule();
+    let state = pager.state;
+    let distance = run(&mut pager.ui, async move {
+        let found = Rc::new(Cell::new(0));
+        let given = found.clone();
+        state
+            .scroll(MutatePriority::Default, move |scope| async move {
+                let scope = state.lazy_layout_scroll_scope(scope);
+                given.set(scope.calculate_distance_to(COUNT - 1, 0));
+            })
+            .await
+            .expect("free");
+        found.get()
+    });
+    // 20 pages of 300 in 400: the last is 5700 - 100 away.
+    assert_eq!(distance, 5600);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCacheWindowTest.kt, updateItemCount_shouldUpdateKeepAroundCorrectly
+#[test]
+fn fewer_pages_keep_those_left() {
+    let count = mutable_state_of(3usize);
+    let read = count.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let state = remember_pager_state!(0, 0.0, move || read.get());
+        HorizontalPager!(
+            state,
+            modifier = Modifier.fill_max_size(),
+            beyond_viewport_page_count = 2,
+            page_content = |_, index: usize| {
+                Box!(modifier = Modifier.fill_max_size().test_tag(index.to_string()));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    count.set(2);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("0").assert_exists();
+    ui.on_node_with_tag("1").assert_exists();
+    ui.on_node_with_tag("2").assert_does_not_exist();
 }

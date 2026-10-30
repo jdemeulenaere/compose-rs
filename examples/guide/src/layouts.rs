@@ -196,6 +196,33 @@ pub fn Albums(albums: ImmutableList<Album>) {
 }
 // ANCHOR_END: grid
 
+// ANCHOR: pager
+#[composable]
+pub fn Pictures(titles: ImmutableList<SharedString>) {
+    let count = titles.len();
+    let state = remember_pager_state!(0, 0.0, move || count);
+    let scope = remember_coroutine_scope();
+    Column!(|column| {
+        HorizontalPager!(
+            state,
+            modifier = Modifier.weight(column, 1.0).fill_max_width(),
+            page_spacing = 8.dp(),
+            page_content = move |_scope, page| Text!(titles[page].clone()),
+        );
+        Text!(format!("Page {} of {count}", state.current_page() + 1));
+        TextButton!(
+            on_click = move || {
+                let next = (state.current_page() + 1).min(count - 1);
+                scope.launch(async move {
+                    let _ = state.animate_scroll_to_page(next, 0.0).await;
+                });
+            },
+            |_row| Text!("Next"),
+        );
+    });
+}
+// ANCHOR_END: pager
+
 // ANCHOR: custom_layout
 /// Its children left to right, wrapping to a new line when one doesn't fit: a minimal FlowRow.
 #[composable]

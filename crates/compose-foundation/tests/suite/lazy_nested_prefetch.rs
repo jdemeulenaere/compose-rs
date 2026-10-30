@@ -485,3 +485,90 @@ fn a_nested_grid_prefetches_as_many_as_the_last_one_showed() {
         ]
     );
 }
+
+/// A column of pagers, as `composeListOfPagers`: 45 px of 30 px rows, each a pager of 30 px pages in
+/// 45 across.
+fn nested_pagers(state: LazyListState, first_nested: usize, track: Rc<Track>) -> ComposeTestRule {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let track = track.clone();
+        let content = move |scope: LazyListScope| {
+            let track = track.clone();
+            scope.items(100, move |index| {
+                let track = track.clone();
+                Tracked(track.clone(), index, None);
+                let owned = remember(move || PagerState::new(first_nested, 0.0, || 100));
+                let modifier =
+                    sized(true, ITEM, ITEM * 1.5).then(measured(track.clone(), index, None));
+                let page = move |_: PagerScope, page: usize| {
+                    Tracked(track.clone(), index, Some(page));
+                    Spacer(sized(false, ITEM, ITEM).then(measured(
+                        track.clone(),
+                        index,
+                        Some(page),
+                    )));
+                };
+                HorizontalPager!(
+                    owned,
+                    modifier = modifier,
+                    page_size = PageSize::Fixed(Dp(ITEM)),
+                    page_content = page
+                );
+            });
+        };
+        LazyColumn!(modifier = sized(true, ITEM * 1.5, 100.0), state = state, content = content);
+    });
+    ui.wait_for_idle();
+    ui
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerNestedPrefetchingTest.kt, nestedPrefetchingForwardAfterSmallScroll, nestedPrefetchStartsFromFirstVisiblePageIndex
+#[test]
+fn a_nested_pagers_pages_are_prefetched_from_its_first_visible_one() {
+    let _clock = compose_ui::PrefetchClock::hold();
+    for first in [0, 4] {
+        let track: Rc<Track> = Rc::default();
+        let state = LazyListState::new(0, 0);
+        let handle = *state;
+        let mut ui = nested_pagers(handle, first, track.clone());
+        prefetch(&mut ui);
+        let actions = track.while_doing(&mut ui, |ui| {
+            scrolled_list(handle, ui, 5.0);
+            prefetch(ui);
+        });
+        assert_eq!(
+            actions[..6],
+            [
+                Compose(2, None),
+                Compose(2, Some(first)),
+                Compose(2, Some(first + 1)),
+                Measure(2, None),
+                Measure(2, Some(first)),
+                Measure(2, Some(first + 1)),
+            ],
+            "{actions:?}"
+        );
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerNestedPrefetchingTest.kt, cancelingPrefetchCancelsItsNestedPrefetches
+#[test]
+fn a_cancelled_prefetch_of_a_pager_lets_go_of_its_pages() {
+    let _clock = compose_ui::PrefetchClock::hold();
+    let track: Rc<Track> = Rc::default();
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = nested_pagers(handle, 0, track.clone());
+    scrolled_list(handle, &mut ui, ITEM * 3.0);
+    prefetch(&mut ui);
+    assert!(track.active.borrow().contains(&(5, Some(0))), "{:?}", track.active);
+    scrolled_list(handle, &mut ui, ITEM * 3.0);
+    scrolled_list(handle, &mut ui, ITEM);
+    prefetch(&mut ui);
+    scrolled_list(handle, &mut ui, ITEM * 20.0);
+    // The window lets go of what the long scroll passed at the scrolls after it.
+    scrolled_list(handle, &mut ui, ITEM);
+    scrolled_list(handle, &mut ui, ITEM);
+    let active = track.active.borrow();
+    assert!(!active.contains(&(5, None)), "{active:?}");
+    assert!(!active.contains(&(5, Some(0))), "{active:?}");
+}

@@ -1145,6 +1145,7 @@ fn LazyGrid(
     // The list state its position is in (detached once the grid state's owner went, D240).
     let list = state.list;
     let inner = list.inner_or_detached();
+    inner.is_grid.set(true);
     let scope = LazyGridScope {
         intervals: Rc::default(),
         count: Rc::default(),
@@ -2252,14 +2253,14 @@ impl MeasurePolicy for LazyGridLayout {
         };
         let (mut placed_start, mut placed_end) =
             (composed_lines.0.max(wanted_start), composed_lines.1.min(wanted_end));
-        if let Some(key) = state.pinned.get()
-            && let Some(pinned) = info.items.index_of(key, state.pinned_near.get())
-        {
-            let line = m.lines.line_of(pinned);
-            if (placed_end..composed_lines.1).contains(&line) {
-                placed_end = line + 1;
-            } else if (composed_lines.0..placed_start).contains(&line) {
-                placed_start = line;
+        for key in state.pinned.get() {
+            if let Some(pinned) = info.items.index_of(key, state.pinned_near.get()) {
+                let line = m.lines.line_of(pinned);
+                if (placed_end..composed_lines.1).contains(&line) {
+                    placed_end = line + 1;
+                } else if (composed_lines.0..placed_start).contains(&line) {
+                    placed_start = line;
+                }
             }
         }
         let mut beyond_lines: Vec<(usize, i32)> = Vec::new();

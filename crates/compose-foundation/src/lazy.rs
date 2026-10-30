@@ -125,7 +125,7 @@ struct LazyListInner {
     compose_again: OwnedState<u64>,
     /// The focused item's key, kept composed and placed while it scrolls away, as Compose pins
     /// it, and the index it was last at.
-    pinned: OwnedState<Option<u64>>,
+    pinned: OwnedState<Vec<u64>>,
     pinned_near: Cell<usize>,
     /// The list has had items: an empty layout before that keeps the initial position.
     had_items: Cell<bool>,
@@ -187,6 +187,8 @@ struct LazyListInner {
     /// Items composed and placed beyond those in view at all times, a pager's
     /// `beyondViewportPageCount`.
     beyond_viewport: Cell<usize>,
+    /// A grid's: its semantics tell no counts.
+    is_grid: Cell<bool>,
     /// Told of each measurement: a pager (D1467).
     observer: RefCell<Option<Rc<dyn ListObserver>>>,
     beyond_more: Cell<(bool, bool)>,
@@ -229,9 +231,11 @@ type Outer = (compose_ui::platform::NestedScrollChain, bool, bool, compose_ui::N
 /// What's told of a list's measurements: a pager, whose pages and position depend on its size.
 trait ListObserver {
     /// With the sizes known, before the position is read.
+    #[allow(clippy::too_many_arguments)]
     fn before_measure(
         &self,
         list: &LazyListInner,
+        items: &Items,
         density: compose_ui::Density,
         viewport: i32,
         before: i32,
@@ -240,13 +244,18 @@ trait ListObserver {
     );
     /// With what's laid out known.
     fn after_measure(&self);
+    /// `used` pixels were asked of the list, for the next measurement.
+    fn after_dispatch(&self, used: f32);
+    /// What semantics tell of it, as `LazyLayoutSemanticState.collectionInfo`.
+    fn collection_info(&self) -> compose_ui::CollectionInfo;
+    /// Scrolls to `index` for a service, as `LazyLayoutSemanticState.scrollToItem`.
+    fn scroll_to_index(&self, index: usize);
 }
 
 impl LazyListInner {
     /// Goes to `index`, `offset` pixels past its start, in this measurement.
     fn jump_to(&self, index: usize, offset: f32) {
         self.position.set((index, offset));
-        self.pending.set(0.0);
         self.first_key.set(None);
     }
 
@@ -310,7 +319,7 @@ impl LazyListInner {
             composed: mutable_state_of((first_visible_item_index, first_visible_item_index + 1)),
             composed_read: Cell::new((first_visible_item_index, first_visible_item_index + 1)),
             compose_again: mutable_state_of(0),
-            pinned: mutable_state_of(None),
+            pinned: mutable_state_of(Vec::new()),
             pinned_near: Cell::new(0),
             had_items: Cell::new(false),
             composed_more: Cell::new(false),
@@ -347,6 +356,7 @@ impl LazyListInner {
             sticky_written: Cell::new(None),
             beyond_bounds: mutable_state_of((0, 0)),
             beyond_viewport: Cell::new(0),
+            is_grid: Cell::new(false),
             observer: RefCell::new(None),
             beyond_more: Cell::new((false, false)),
             beyond_ended: Cell::new(false),
@@ -501,6 +511,18 @@ impl LazyListState {
             && inner.beyond_viewport.replace(count) != count
         {
             inner.request_remeasure();
+        }
+    }
+
+    fn set_scroll_allowed(&self, allowed: Rc<dyn Fn(f32) -> bool>) {
+        if let Some(inner) = self.inner() {
+            *inner.prefetch.scroll_allowed.borrow_mut() = Some(allowed);
+        }
+    }
+
+    fn clear_pending(&self) {
+        if let Some(inner) = self.inner() {
+            inner.pending.set(0.0);
         }
     }
 
@@ -674,6 +696,9 @@ impl LazyListState {
                 inner.prefetch.forward.set(scrolled < 0.0);
             }
             inner.request_remeasure();
+            if let Some(observer) = inner.observer.borrow().clone() {
+                observer.after_dispatch(used);
+            }
         }
         used
     }
@@ -2107,12 +2132,12 @@ fn LazyItems(
     }
     let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
     // The focused item, by key (gone with its item).
-    if let Some(pinned) = inner.pinned.get()
-        && let Some(index) = items.0.index_of(pinned, inner.pinned_near.get())
-    {
-        inner.pinned_near.set(index);
-        if !indices.contains(&index) {
-            indices.push(index);
+    for pinned in inner.pinned.get() {
+        if let Some(index) = items.0.index_of(pinned, inner.pinned_near.get()) {
+            inner.pinned_near.set(index);
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
         }
     }
     // The sticky header over the first visible item, wherever it is.
@@ -2213,16 +2238,20 @@ fn LazyItem(
     let target = prefetch::item_target(&inner, item_key);
     // What's in it pins it while it has the focus, as `LazyLayoutPinnableItem`.
     let parent = compose_ui::LOCAL_PINNABLE_CONTAINER.current();
-    let pin = compose_runtime::remember_keyed(item_key, || {
-        Rc::new(ItemPin {
+    let pin = compose_runtime::remember_keyed((item_key, state), || {
+        Rc::new_cyclic(|this| ItemPin {
+            this: this.clone(),
             key: item_key,
             near: Cell::new(index),
             pinned: inner.pinned.handle(),
             state,
-            parent: parent.clone(),
+            parent: RefCell::new(None),
+            parent_handle: RefCell::new(None),
+            count: Cell::new(0),
         })
     });
     pin.near.set(index);
+    pin.set_parent(parent);
     let container: Rc<dyn compose_ui::PinnableContainer> = pin.clone();
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
     let modifier = Modifier.lazy_item_boundary();
@@ -2246,29 +2275,89 @@ fn LazyItem(
 }
 
 /// A lazy item as a pinnable container, as `LazyLayoutPinnableItem`: pinned, its list keeps it
-/// composed and placed, and the list's own item around it too.
+/// composed and placed, and the list's own item around it too. It lets go when it leaves the
+/// composition, as `onDisposed`.
 struct ItemPin {
+    /// For its handles, which do nothing once it has left.
+    this: std::rc::Weak<ItemPin>,
     key: u64,
     near: Cell<usize>,
-    pinned: compose_runtime::MutableState<Option<u64>>,
+    pinned: compose_runtime::MutableState<Vec<u64>>,
     state: LazyListState,
-    parent: Option<Rc<dyn compose_ui::PinnableContainer>>,
+    parent: RefCell<Option<Rc<dyn compose_ui::PinnableContainer>>>,
+    parent_handle: RefCell<Option<compose_ui::PinnedHandle>>,
+    /// As `pinsCount`.
+    count: Cell<u32>,
+}
+
+impl ItemPin {
+    /// As `parentPinnableContainer`'s setter: a new parent takes over the pin.
+    fn set_parent(&self, parent: Option<Rc<dyn compose_ui::PinnableContainer>>) {
+        let same = match (&*self.parent.borrow(), &parent) {
+            (None, None) => true,
+            (Some(one), Some(other)) => Rc::ptr_eq(one, other),
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        if self.count.get() > 0 {
+            let handle = self.parent_handle.borrow_mut().take();
+            if let Some(handle) = handle {
+                handle.release();
+            }
+            *self.parent_handle.borrow_mut() = parent.as_ref().map(|parent| parent.pin());
+        }
+        *self.parent.borrow_mut() = parent;
+    }
+
+    fn release_one(&self) {
+        let count = self.count.get();
+        if count == 0 {
+            return;
+        }
+        self.count.set(count - 1);
+        if count == 1 {
+            let (key, pinned) = (self.key, self.pinned);
+            if let Some(mut keys) = pinned.try_get() {
+                keys.retain(|it| *it != key);
+                let _ = pinned.try_set(keys);
+            }
+            let handle = self.parent_handle.borrow_mut().take();
+            if let Some(handle) = handle {
+                handle.release();
+            }
+        }
+    }
+}
+
+impl Drop for ItemPin {
+    fn drop(&mut self) {
+        while self.count.get() > 0 {
+            self.release_one();
+        }
+    }
 }
 
 impl compose_ui::PinnableContainer for ItemPin {
     fn pin(&self) -> compose_ui::PinnedHandle {
-        if let Some(inner) = self.state.inner() {
-            inner.pinned_near.set(self.near.get());
-        }
-        self.pinned.set(Some(self.key));
-        let (pinned, key) = (self.pinned, self.key);
-        let parent = self.parent.as_ref().map(|parent| parent.pin());
-        compose_ui::PinnedHandle::new(move || {
-            if pinned.get() == Some(key) {
-                pinned.set(None);
+        if self.count.get() == 0 {
+            if let Some(inner) = self.state.inner() {
+                inner.pinned_near.set(self.near.get());
             }
-            if let Some(parent) = parent {
-                parent.release();
+            let mut keys = self.pinned.get();
+            if !keys.contains(&self.key) {
+                keys.push(self.key);
+                self.pinned.set(keys);
+            }
+            let parent = self.parent.borrow().as_ref().map(|parent| parent.pin());
+            *self.parent_handle.borrow_mut() = parent;
+        }
+        self.count.set(self.count.get() + 1);
+        let this = self.this.clone();
+        compose_ui::PinnedHandle::new(move || {
+            if let Some(this) = this.upgrade() {
+                this.release_one();
             }
         })
     }
@@ -2483,7 +2572,15 @@ impl MeasurePolicy for LazyListLayout {
         // its key if items came or went before it.
         if let Some(observer) = state.observer.borrow().clone() {
             compose_runtime::snapshots::Snapshot::without_read_observation(|| {
-                observer.before_measure(state, density, main_max, before, after, spacing);
+                observer.before_measure(
+                    state,
+                    &info.items,
+                    density,
+                    main_max,
+                    before,
+                    after,
+                    spacing,
+                );
             });
         }
         let (mut index, offset) = state.position.get();
@@ -2526,6 +2623,11 @@ impl MeasurePolicy for LazyListLayout {
             state.publish_can_scroll();
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
+            if let Some(observer) = state.observer.borrow().clone() {
+                compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                    observer.after_measure();
+                });
+            }
             // As large as its padding, as Compose's (its measurement's size excludes it).
             let (main_padding, cross_padding) = (before + after, cross_before + cross_after);
             let size = if vertical {
@@ -2839,8 +2941,13 @@ impl MeasurePolicy for LazyListLayout {
         if !missing && wanted_before == 0 && (headers.is_none() || sticking.is_some()) {
             let laid = match (placed.first(), placed.last()) {
                 (Some((_, first_main)), Some((last, last_main))) => Some(Laid {
-                    first: sticking.map_or(lead, |(header, _, _)| header) as i32,
-                    last: end_index - 1,
+                    // A pager's pages beyond the viewport are composed: the window starts past
+                    // them, as `PagerCacheWindowScope`.
+                    first: sticking
+                        .map_or(lead, |(header, _, _)| header)
+                        .saturating_sub(state.beyond_viewport.get())
+                        as i32,
+                    last: (end_index - 1 + state.beyond_viewport.get()).min(count - 1),
                     start_overflow: (-sticking.map_or(*first_main, |(_, _, at)| at)).max(0),
                     end_overflow: (last_main + main_of(last) + spacing - main_max).abs(),
                     viewport: main_max,
@@ -2960,13 +3067,13 @@ impl MeasurePolicy for LazyListLayout {
         // scrolls it in.
         let (mut placed_start, mut placed_end) =
             (composed_start.max(wanted_start), composed_end.min(wanted_end));
-        if let Some(key) = state.pinned.get()
-            && let Some(pinned) = info.items.index_of(key, state.pinned_near.get())
-        {
-            if (placed_end..composed_end).contains(&pinned) {
-                placed_end = pinned + 1;
-            } else if (composed_start..placed_start).contains(&pinned) {
-                placed_start = pinned;
+        for key in state.pinned.get() {
+            if let Some(pinned) = info.items.index_of(key, state.pinned_near.get()) {
+                if (placed_end..composed_end).contains(&pinned) {
+                    placed_end = pinned + 1;
+                } else if (composed_start..placed_start).contains(&pinned) {
+                    placed_start = pinned;
+                }
             }
         }
         let mut beyond: Vec<(Placeable, i32)> = Vec::new();
@@ -3398,11 +3505,69 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
+        // As `LazyLayoutSemanticState`: a list's count isn't told, a grid's neither.
+        let observer = inner.observer.borrow().clone();
+        config.set_is_traversal_group(true);
+        config.set_collection_info(match &observer {
+            Some(observer) => observer.collection_info(),
+            None if inner.is_grid.get() => {
+                compose_ui::CollectionInfo { row_count: -1, column_count: -1 }
+            }
+            None if self.vertical => compose_ui::CollectionInfo { row_count: -1, column_count: 1 },
+            None => compose_ui::CollectionInfo { row_count: 1, column_count: -1 },
+        });
         // Not offered with user scrolling off, as Compose's (the range stays).
         if !self.enabled {
             return;
         }
         let (state, vertical) = (self.state, self.vertical);
+        config.scroll_to_index(None, move |index| {
+            let count = state.inner().map_or(0, |inner| inner.layout_info.get().0);
+            assert!(
+                index >= 0 && (index as usize) < count,
+                "Can't scroll to index {index}, it is out of bounds [0, {count})"
+            );
+            let observer = state.inner().and_then(|inner| inner.observer.borrow().clone());
+            match observer {
+                Some(observer) => observer.scroll_to_index(index as usize),
+                None => {
+                    CoroutineScope::new().launch(async move {
+                        let _ = state.scroll_to_item(index as usize, 0).await;
+                    });
+                }
+            }
+            true
+        });
+        // As a scrollable's `scrollByOffset`: animated, along the axis, what it used returned.
+        config.scroll_by_offset(move |offset| {
+            Box::pin(async move {
+                let delta = if vertical { offset.y } else { offset.x };
+                let used = Rc::new(Cell::new(0.0f32));
+                let total = used.clone();
+                let _ = state
+                    .scroll(MutatePriority::Default, move |scope| async move {
+                        let last = Cell::new(0.0f32);
+                        compose_animation::animate(
+                            0.0,
+                            delta,
+                            0.0,
+                            compose_animation::spring(),
+                            |value, _| {
+                                let consumed = scope.scroll_by(value - last.get());
+                                last.set(last.get() + consumed);
+                                total.set(last.get());
+                            },
+                        )
+                        .await;
+                    })
+                    .await;
+                if vertical {
+                    compose_ui::Offset::new(0.0, used.get())
+                } else {
+                    compose_ui::Offset::new(used.get(), 0.0)
+                }
+            })
+        });
         config.scroll_by(None, move |x, y| {
             // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491); handled
             // even where the list can't move that way, as Compose's (its action always returns

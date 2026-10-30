@@ -11,6 +11,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::task::{Poll, Waker};
 
 use compose_animation::{
     AnimationSpec, DecayAnimationSpec, Spring, animate, spline_based_decay, spring_with,
@@ -20,18 +21,21 @@ use compose_runtime::{
     derived_state_of, mutable_state_of,
 };
 use compose_ui::{
-    Alignment, Constraints, Density, Dp, Measurable, MeasureResult, MeasureScope, Modifier,
-    ModifierNode, ModifierNodeElement, NestedScrollConnection, NestedScrollSource, Offset,
-    PointerEventPass, PointerEventType,
+    Alignment, Constraints, Density, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
+    MeasureScope, Modifier, NestedScrollConnection, NestedScrollSource, Offset, PointerEventPass,
+    PointerEventType,
 };
 
-use super::{LazyLayoutCacheWindow, LazyList, LazyListLayoutInfo, LazyListScope, LazyListState};
+use super::{
+    LazyLayoutCacheWindow, LazyLayoutScrollScope, LazyList, LazyListLayoutInfo, LazyListScope,
+    LazyListState,
+};
 use crate::gestures::{
     FinalSnappingItem, FlingBehavior, LocalBoxFuture, Orientation, ScrollBlock, ScrollScope,
     ScrollableState, ScrollableStateExt, SnapLayoutInfoProvider, SnapPosition,
     TargetedFlingBehavior, distance_to_snap_position, final_snapping_item, snap_fling_behavior,
 };
-use crate::layout::{Arrangement, Box, PaddingValues};
+use crate::layout::{Arrangement, PaddingValues};
 use crate::{MutatePriority, MutationInterrupted, OverscrollEffect};
 
 /// As `DefaultPositionThreshold`: how far a page moves before a slow drag targets the next.
@@ -111,6 +115,8 @@ pub struct PageInfo {
     pub index: usize,
     /// From the start of the content, its start padding left out, as `offset`.
     pub offset: i32,
+    /// Its identity, as `key`: from `pager_key`'s hash, or from its index without one.
+    pub key: u64,
 }
 
 /// What a pager laid out last, as `PagerLayoutInfo`.
@@ -146,11 +152,22 @@ struct PagerInner {
     requested: Cell<Option<(usize, f32)>>,
     page_size: OwnedState<i32>,
     page_spacing: Cell<i32>,
-    /// What the last measurement worked with, to keep the page when it changes.
-    laid: Cell<(i32, i32, i32, i32)>,
+    /// What the last measurement worked with, to keep the page when it changes: the viewport, the
+    /// paddings, the page's size and the spacing.
+    laid: Cell<(i32, i32, i32, i32, i32)>,
+    /// A new snap position or page size was given since: the page stays where the new one says.
+    relayout: Cell<bool>,
+    /// Laid out once, as `pagerLayoutInfoState !== EmptyLayoutInfo`, and what waits for it.
+    had_layout: Cell<bool>,
+    layout_waiters: RefCell<Vec<Waker>>,
+    /// Of the scroll or fling going on: only the latest lets go of the programmatic target.
+    scroll_generation: Cell<u64>,
+    /// The current page's key, as `lastKnownCurrentPageKey`.
+    current_key: Cell<Option<u64>>,
     snap_position: RefCell<SnapPosition>,
     size_of_page: RefCell<PageSize>,
     beyond_viewport: Cell<usize>,
+    vertical: Cell<bool>,
     density: Cell<Density>,
     programmatic_target: OwnedState<i32>,
     settled_page: OwnedState<usize>,
@@ -190,6 +207,7 @@ impl super::ListObserver for Observer {
     fn before_measure(
         &self,
         list: &super::LazyListInner,
+        items: &super::Items,
         density: Density,
         viewport: i32,
         before: i32,
@@ -197,7 +215,13 @@ impl super::ListObserver for Observer {
         spacing: i32,
     ) {
         if let Some(inner) = self.0.inner() {
-            inner.before_measure(list, density, viewport, before, after, spacing);
+            inner.before_measure(list, items, density, viewport, before, after, spacing);
+        }
+    }
+
+    fn after_dispatch(&self, used: f32) {
+        if let Some(inner) = self.0.inner() {
+            inner.after_dispatch(used);
         }
     }
 
@@ -206,12 +230,31 @@ impl super::ListObserver for Observer {
             inner.after_measure();
         }
     }
+
+    fn collection_info(&self) -> compose_ui::CollectionInfo {
+        let count = self.0.page_count() as i32;
+        let vertical = self.0.inner().is_some_and(|inner| inner.vertical.get());
+        if vertical {
+            compose_ui::CollectionInfo { row_count: count, column_count: 1 }
+        } else {
+            compose_ui::CollectionInfo { row_count: 1, column_count: count }
+        }
+    }
+
+    fn scroll_to_index(&self, index: usize) {
+        let state = self.0;
+        CoroutineScope::new().launch(async move {
+            let _ = state.scroll_to_page(index, 0.0).await;
+        });
+    }
 }
 
 impl PagerInner {
+    #[allow(clippy::too_many_arguments)]
     fn before_measure(
         &self,
         list: &super::LazyListInner,
+        items: &super::Items,
         density: Density,
         viewport: i32,
         before: i32,
@@ -227,13 +270,24 @@ impl PagerInner {
         if peek(&self.page_size) != size {
             self.page_size.set(size);
         }
-        let laid = (viewport, before, after, size);
-        let changed = self.laid.replace(laid) != laid;
+        let laid = (viewport, before, after, size, spacing);
+        let changed = self.laid.replace(laid) != laid || self.relayout.replace(false);
+        // The position is the page's, whatever else goes on: not the first visible item's.
+        list.first_key.set(None);
+        // As `matchPageWithKey`: the current page's key may have moved.
+        let moved = self.current_key.get().and_then(|key| {
+            let current = peek(&self.current_page);
+            let found = items.index_of(key, current)?;
+            (found != current).then_some(found)
+        });
+        if let Some(found) = moved {
+            self.current_page.set(found);
+        }
         // A new size keeps the page and the fraction, as Compose's position is kept in those.
-        let asked = self
-            .requested
-            .take()
-            .or_else(|| changed.then(|| (peek(&self.current_page), peek(&self.current_fraction))));
+        let asked = self.requested.take().or_else(|| {
+            (changed || moved.is_some())
+                .then(|| (peek(&self.current_page), peek(&self.current_fraction)))
+        });
         let Some((page, fraction)) = asked else { return };
         let with_spacing = (size + spacing).max(0);
         let count = (self.page_count.borrow())();
@@ -241,11 +295,40 @@ impl PagerInner {
         // As `currentPageOffset`, then as the measurement's first visible page.
         let mut offset = (snap as f32 - fraction * with_spacing as f32).round() as i32;
         let mut first = page;
-        while first > 0 && offset > 0 {
+        while first > 0 && offset > 0 && with_spacing > 0 {
             first -= 1;
             offset -= with_spacing;
         }
         list.jump_to(first, (-offset).max(0) as f32);
+    }
+
+    /// A scroll, in the page and fraction at once, as `performScroll`'s fraction: all pages are one
+    /// size. The measurement corrects what this rounds differently.
+    fn after_dispatch(&self, used: f32) {
+        let with_spacing = peek(&self.page_size) + self.page_spacing.get();
+        if with_spacing <= 0 || used == 0.0 {
+            return;
+        }
+        let mut page = peek(&self.current_page) as i64;
+        let mut fraction = peek(&self.current_fraction) + used / with_spacing as f32;
+        while fraction > 0.5 {
+            page += 1;
+            fraction -= 1.0;
+        }
+        while fraction < -0.5 {
+            page -= 1;
+            fraction += 1.0;
+        }
+        let count = (self.page_count.borrow())() as i64;
+        let page = page.clamp(0, (count - 1).max(0)) as usize;
+        if peek(&self.current_page) != page {
+            self.current_page.set(page);
+            // The key known is another page's until the measurement.
+            self.current_key.set(None);
+        }
+        if peek(&self.current_fraction) != fraction {
+            self.current_fraction.set(fraction);
+        }
     }
 
     /// The closest page to the snap position, and how far it is from it, as the measurement's end.
@@ -258,6 +341,15 @@ impl PagerInner {
         let count = (self.page_count.borrow())();
         let snap_position = self.snap_position.borrow();
         let viewport = main_size(&info);
+        self.had_layout.set(true);
+        for waker in self.layout_waiters.borrow_mut().drain(..) {
+            waker.wake();
+        }
+        // Pages still of the old size (their measurement saw it): the next pass, which this
+        // size's write brings, tells where they are.
+        if info.visible_items_info.iter().any(|page| page.size != size) {
+            return;
+        }
         let closest =
             info.visible_items_info
                 .iter()
@@ -295,15 +387,26 @@ impl PagerInner {
             } else {
                 ((snap - page.offset) as f32 / with_spacing as f32).clamp(-0.5, 0.5)
             };
-            if peek(&self.current_page) != page.index {
+            self.current_key.set(Some(page.key));
+            // What's told at each scroll stays when it's this within a pixel: a second write per
+            // frame for what reads it, otherwise.
+            let told = peek(&self.current_fraction);
+            let same_page = peek(&self.current_page) == page.index;
+            let close = with_spacing != 0 && (told - fraction).abs() * with_spacing as f32 <= 1.0;
+            if !same_page {
                 self.current_page.set(page.index);
             }
-            if peek(&self.current_fraction) != fraction {
+            if told != fraction && !(same_page && close && fraction != 0.0) {
                 self.current_fraction.set(fraction);
             }
-        } else if count == 0 && peek(&self.current_page) != 0 {
-            self.current_page.set(0);
-            self.current_fraction.set(0.0);
+        } else if count == 0 {
+            self.current_key.set(None);
+            if peek(&self.current_page) != 0 {
+                self.current_page.set(0);
+            }
+            if peek(&self.current_fraction) != 0.0 {
+                self.current_fraction.set(0.0);
+            }
         }
         if !list.is_scroll_in_progress_untracked() {
             let current = peek(&self.current_page);
@@ -345,10 +448,16 @@ impl PagerState {
                 requested: Cell::new(Some((current_page, current_page_offset_fraction))),
                 page_size: mutable_state_of(0),
                 page_spacing: Cell::new(0),
-                laid: Cell::new((-1, 0, 0, 0)),
+                laid: Cell::new((-1, 0, 0, 0, 0)),
+                relayout: Cell::new(false),
+                had_layout: Cell::new(false),
+                layout_waiters: RefCell::default(),
+                scroll_generation: Cell::new(0),
+                current_key: Cell::new(None),
                 snap_position: RefCell::new(SnapPosition::Start),
                 size_of_page: RefCell::new(PageSize::Fill),
                 beyond_viewport: Cell::new(0),
+                vertical: Cell::new(false),
                 density: Cell::new(Density::new(1.0)),
                 programmatic_target: mutable_state_of(-1),
                 settled_page: mutable_state_of(current_page),
@@ -362,6 +471,18 @@ impl PagerState {
         let state = *owned;
         if let Some(inner) = state.inner() {
             inner.list.set_observer(Rc::new(Observer(state)));
+            // As `isGestureActionMatchesScroll`: a page bouncing back prefetches nothing.
+            inner.list.set_scroll_allowed(Rc::new(move |delta| {
+                let Some(inner) = state.inner() else { return true };
+                let up_down = inner.up_down.get();
+                if up_down.x as i32 == 0 && up_down.y as i32 == 0 {
+                    return true;
+                }
+                let vertical =
+                    inner.list.layout_info_untracked().orientation == Orientation::Vertical;
+                let gesture = if vertical { up_down.y } else { up_down.x };
+                delta.signum() == (-gesture).signum()
+            }));
             *inner.target_page.borrow_mut() =
                 Some(derived_state_of(move || state.compute_target()));
             *inner.settled_derived.borrow_mut() = Some(derived_state_of(move || {
@@ -490,7 +611,7 @@ impl PagerState {
             visible_pages_info: info
                 .visible_items_info
                 .iter()
-                .map(|page| PageInfo { index: page.index, offset: page.offset })
+                .map(|page| PageInfo { index: page.index, offset: page.offset, key: page.key })
                 .collect(),
             page_size: inner.page_size.get(),
             page_spacing: info.main_axis_item_spacing,
@@ -501,7 +622,7 @@ impl PagerState {
             viewport_size: info.viewport_size,
             orientation: info.orientation,
             reverse_layout: info.reverse_layout,
-            beyond_viewport_page_count: inner.beyond_viewport.get(),
+            beyond_viewport_page_count: inner.beyond_viewport.get().min(self.page_count()),
             snap_position: inner.snap_position.borrow().clone(),
         }
     }
@@ -517,7 +638,10 @@ impl PagerState {
         inner.requested.set(Some((page, fraction)));
         inner.current_page.set(page);
         inner.current_fraction.set(fraction);
+        inner.current_key.set(None);
         inner.list.clear_scroll_position_key();
+        // What was scrolled up to here is over; a scroll after this counts from here.
+        inner.list.clear_pending();
         inner.list.force_remeasure();
     }
 
@@ -595,13 +719,9 @@ impl PagerState {
         let state = *self;
         self.scroll(MutatePriority::Default, move |scope| async move {
             let Some(inner) = state.inner() else { return };
-            let list = *inner.list;
             state.update_target_page(target);
-            let info = list.layout_info_untracked();
-            let (first, last) = (
-                info.visible_items_info.first().map_or(0, |it| it.index),
-                info.visible_items_info.last().map_or(0, |it| it.index),
-            );
+            let scope = state.lazy_layout_scroll_scope(scope);
+            let (first, last) = (scope.first_visible_item_index(), scope.last_visible_item_index());
             let forward = target > first;
             let visible = last + 1 - first;
             if ((forward && target > last) || (!forward && target < first))
@@ -612,14 +732,13 @@ impl PagerState {
                 } else {
                     (target + visible).min(first)
                 };
-                state.snap_to_page(pre_jump, 0.0);
+                scope.snap_to_item(pre_jump, 0);
                 compose_runtime::with_frame_nanos(|_| ()).await;
             }
             let size = peek(&inner.page_size) + inner.page_spacing.get();
-            let current = peek(&inner.current_page);
-            let at = peek(&inner.current_fraction);
+            let to_snapped = page_offset_fraction * size as f32;
             let displacement =
-                (target as f32 - current as f32 - at + page_offset_fraction) * size as f32;
+                scope.calculate_distance_to(target, to_snapped.round() as i32) as f32;
             let previous = Cell::new(0.0f32);
             animate(0.0, displacement, 0.0, spec, |value, _| {
                 let delta = value - previous.get();
@@ -631,6 +750,38 @@ impl PagerState {
         .await
     }
 
+    /// A lazy layout scroll scope over this pager and a scroll's `scroll_scope`, as
+    /// `LazyLayoutScrollScope(state, scrollScope)`.
+    pub fn lazy_layout_scroll_scope(
+        &self,
+        scroll_scope: ScrollScope,
+    ) -> impl LazyLayoutScrollScope {
+        PagerScrollScope { state: *self, scope: scroll_scope }
+    }
+
+    /// As `currentAbsoluteScrollOffset`.
+    fn current_absolute_scroll_offset(&self) -> i64 {
+        let Some(inner) = self.inner() else { return 0 };
+        let with_spacing = (peek(&inner.page_size) + inner.page_spacing.get()) as i64;
+        peek(&inner.current_page) as i64 * with_spacing
+            + (peek(&inner.current_fraction) * with_spacing as f32).round() as i64
+    }
+
+    /// As `minScrollOffset` and `maxScrollOffset`: `calculateNewMinScrollOffset` and
+    /// `calculateNewMaxScrollOffset`.
+    fn scroll_bounds(&self) -> (i64, i64) {
+        let Some(inner) = self.inner() else { return (0, 0) };
+        let (layout, before, after, size, spacing) = inner.laid.get();
+        let count = self.page_count_untracked();
+        let snap = inner.snap_position.borrow();
+        let position = |page: usize| {
+            snap.position(layout, size, before, after, page, count).clamp(0, layout.max(0)) as i64
+        };
+        let most = (count as i64 * (size + spacing) as i64 + (before + after - spacing) as i64
+            - (layout as i64 - position(count.saturating_sub(1))))
+        .max(0);
+        (position(0).min(most), most)
+    }
     /// What drags and flings snap by: the pixels from the first page's start, as `firstVisiblePage`
     /// and its offset with what's scrolled since the layout.
     fn first_visible_page_now(&self) -> usize {
@@ -665,17 +816,27 @@ impl ScrollableState for PagerState {
             let Some(inner) = self.inner() else { return Ok(()) };
             let list = *inner.list;
             // As `awaitScrollDependencies`: its first layout tells it the page's size.
-            for _ in 0..8 {
-                if inner.laid.get().0 >= 0 {
-                    break;
+            std::future::poll_fn(|context| {
+                if inner.had_layout.get() {
+                    return Poll::Ready(());
                 }
-                compose_runtime::with_frame_nanos(|_| ()).await;
-            }
+                let mut waiters = inner.layout_waiters.borrow_mut();
+                if !waiters.iter().any(|waker| waker.will_wake(context.waker())) {
+                    waiters.push(context.waker().clone());
+                }
+                Poll::Pending
+            })
+            .await;
             if !list.is_scroll_in_progress_untracked() {
                 inner.settled_page.set(peek(&inner.current_page));
             }
+            let mine = inner.scroll_generation.get().wrapping_add(1);
+            inner.scroll_generation.set(mine);
             let result = list.scroll_owned(priority, block).await;
-            inner.programmatic_target.set(-1);
+            // A scroll that took over has a target of its own.
+            if inner.scroll_generation.get() == mine {
+                inner.programmatic_target.set(-1);
+            }
             result
         })
     }
@@ -1033,12 +1194,15 @@ struct PagerWrapperFlingBehavior {
     state: PagerState,
 }
 
-/// Lets go of the target however the fling ends: a drag taking over has no target of its own.
-struct ClearTarget(PagerState);
+/// Lets go of the target however the fling ends, unless a scroll took over: a drag has no target
+/// of its own, an animation has.
+struct ClearTarget(PagerState, u64);
 
 impl Drop for ClearTarget {
     fn drop(&mut self) {
-        if let Some(inner) = self.0.inner() {
+        if let Some(inner) = self.0.inner()
+            && inner.scroll_generation.get() == self.1
+        {
             inner.programmatic_target.set(-1);
         }
     }
@@ -1052,7 +1216,12 @@ impl FlingBehavior for PagerWrapperFlingBehavior {
     ) -> LocalBoxFuture<'a, f32> {
         Box::pin(async move {
             let state = self.state;
-            let _clear = ClearTarget(state);
+            let generation = state.inner().map_or(0, |inner| {
+                let mine = inner.scroll_generation.get().wrapping_add(1);
+                inner.scroll_generation.set(mine);
+                mine
+            });
+            let _clear = ClearTarget(state, generation);
             let on_remaining: Rc<dyn Fn(f32)> = Rc::new(move |remaining| {
                 let Some(inner) = state.inner() else { return };
                 let with_spacing = peek(&inner.page_size) + inner.page_spacing.get();
@@ -1072,46 +1241,21 @@ impl FlingBehavior for PagerWrapperFlingBehavior {
     }
 }
 
-/// A page's room: at most the page's size along the axis, and that wide whatever it holds, as
-/// `childConstraints` and `MeasuredPage`.
-#[derive(Clone)]
-struct PageElement {
+/// A page, as `MeasuredPage`: its slot is the page's size along the axis; its children measured to
+/// at most that, one after the other from its start (its end, reversed), each aligned across on its
+/// own.
+struct PageLayout {
     state: PagerState,
     vertical: bool,
+    reverse: bool,
+    alignment: Alignment,
 }
 
-impl ModifierNodeElement for PageElement {
-    type Node = PageElement;
-
-    fn create(&self) -> PageElement {
-        self.clone()
-    }
-
-    fn update(&self, node: &mut PageElement) {
-        node.state = self.state;
-        node.vertical = self.vertical;
-    }
-
-    fn same(&self, other: &Self) -> bool {
-        self.state == other.state && self.vertical == other.vertical
-    }
-
-    fn name(&self) -> &'static str {
-        "page"
-    }
-}
-
-impl ModifierNode for PageElement {
-    fn as_layout(&mut self) -> Option<&mut dyn compose_ui::LayoutModifierNode> {
-        Some(self)
-    }
-}
-
-impl compose_ui::LayoutModifierNode for PageElement {
+impl MeasurePolicy for PageLayout {
     fn measure(
-        &mut self,
+        &self,
         scope: &mut MeasureScope<'_>,
-        content: Measurable,
+        measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
         // Observed: a new page size measures the page again.
@@ -1121,13 +1265,91 @@ impl compose_ui::LayoutModifierNode for PageElement {
         } else {
             Constraints::new(0, size, 0, constraints.max_height)
         };
-        let placeable = scope.measure(content, child);
-        scope.place(&placeable, 0, 0);
-        if self.vertical {
-            scope.layout(placeable.width, size)
-        } else {
-            scope.layout(size, placeable.height)
+        let placeables: Vec<_> =
+            measurables.iter().map(|measurable| scope.measure(*measurable, child)).collect();
+        let cross = placeables
+            .iter()
+            .map(|it| if self.vertical { it.width } else { it.height })
+            .max()
+            .unwrap_or(0);
+        let direction = scope.layout_direction();
+        let mut main = 0;
+        for placeable in &placeables {
+            let along = if self.vertical { placeable.height } else { placeable.width };
+            let at = if self.reverse { size - main - along } else { main };
+            if self.vertical {
+                let room = compose_ui::IntSize::new(cross, placeable.height);
+                let x = self.alignment.align(placeable.size(), room, direction).x;
+                scope.place(placeable, x, at);
+            } else {
+                let room = compose_ui::IntSize::new(placeable.width, cross);
+                let y = self
+                    .alignment
+                    .align(placeable.size(), room, compose_ui::LayoutDirection::Ltr)
+                    .y;
+                scope.place_relative(placeable, at, y);
+            }
+            main += along;
         }
+        if self.vertical { scope.layout(cross, size) } else { scope.layout(size, cross) }
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "Page"
+    }
+}
+
+/// `LazyLayoutScrollScope(state, scrollScope)`.
+struct PagerScrollScope {
+    state: PagerState,
+    scope: ScrollScope,
+}
+
+impl LazyLayoutScrollScope for PagerScrollScope {
+    fn scroll_scope(&self) -> &ScrollScope {
+        &self.scope
+    }
+
+    fn first_visible_item_index(&self) -> usize {
+        self.state.first_visible_page_now()
+    }
+
+    fn first_visible_item_scroll_offset(&self) -> i32 {
+        let Some(list) = self.state.list() else { return 0 };
+        let Some(inner) = self.state.inner() else { return 0 };
+        let with_spacing = (peek(&inner.page_size) + inner.page_spacing.get()).max(1) as f32;
+        let (_, offset) = list.position_untracked();
+        (offset + list.pending_scroll()).rem_euclid(with_spacing).round() as i32
+    }
+
+    fn last_visible_item_index(&self) -> usize {
+        let Some(list) = self.state.list() else { return 0 };
+        let info = list.layout_info_untracked();
+        info.visible_items_info.last().map_or(0, |it| it.index)
+    }
+
+    fn item_count(&self) -> usize {
+        self.state.page_count_untracked()
+    }
+
+    fn snap_to_item(&self, index: usize, offset: i32) {
+        let Some(inner) = self.state.inner() else { return };
+        let with_spacing = (peek(&inner.page_size) + inner.page_spacing.get()) as f32;
+        let fraction = if with_spacing == 0.0 { 0.0 } else { offset as f32 / with_spacing };
+        self.state.snap_to_page(index, fraction);
+    }
+
+    fn calculate_distance_to(&self, target_index: usize, target_offset: i32) -> i32 {
+        let Some(inner) = self.state.inner() else { return 0 };
+        let with_spacing = peek(&inner.page_size) + inner.page_spacing.get();
+        let displacement = ((target_index as f32 - peek(&inner.current_page) as f32)
+            * with_spacing as f32
+            - peek(&inner.current_fraction) * with_spacing as f32
+            + target_offset as f32)
+            .round() as i64;
+        let (min, max) = self.state.scroll_bounds();
+        let current = self.state.current_absolute_scroll_offset();
+        ((current + displacement).clamp(min, max) - current) as i32
     }
 }
 
@@ -1167,11 +1389,24 @@ fn Pager(
     page_content: compose_runtime::Callback<dyn Fn(PagerScope, usize)>,
 ) {
     let Some(inner) = state.inner() else { return };
+    let list = *inner.list;
+    // A new one lays the pages out again, with the page where it says.
+    let size_same = match (&*inner.size_of_page.borrow(), &page_size) {
+        (PageSize::Fill, PageSize::Fill) => true,
+        (PageSize::Fixed(one), PageSize::Fixed(other)) => one == other,
+        (PageSize::Custom(one), PageSize::Custom(other)) => Rc::ptr_eq(one, other),
+        _ => false,
+    };
+    let snap_same = same_snap_position(&inner.snap_position.borrow(), &snap_position);
     *inner.size_of_page.borrow_mut() = page_size;
     *inner.snap_position.borrow_mut() = snap_position;
+    if !size_same || !snap_same {
+        inner.relayout.set(true);
+        list.force_remeasure();
+    }
+    inner.vertical.set(vertical);
     inner.beyond_viewport.set(beyond_viewport_page_count);
-    let list = *inner.list;
-    list.set_beyond_viewport(beyond_viewport_page_count);
+    list.set_beyond_viewport(beyond_viewport_page_count.min(state.page_count()));
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == compose_ui::LayoutDirection::Rtl;
     let orientation = if vertical { Orientation::Vertical } else { Orientation::Horizontal };
     let fling = fling_behavior.unwrap_or_else(|| remember_pager_fling_behavior(state));
@@ -1191,7 +1426,19 @@ fn Pager(
         Rc::new(PagerCacheWindow(state)) as Rc<dyn LazyLayoutCacheWindow>
     });
     let count = state.page_count();
-    let page = PageElement { state, vertical };
+    let policy = compose_runtime::remember_keyed(
+        (
+            state,
+            vertical,
+            reverse_layout,
+            alignment.horizontal_bias.to_bits(),
+            alignment.vertical_bias.to_bits(),
+        ),
+        move || {
+            Rc::new(PageLayout { state, vertical, reverse: reverse_layout, alignment })
+                as Rc<dyn MeasurePolicy>
+        },
+    );
     LazyList(
         modifier.then(semantics_modifier),
         list,
@@ -1207,15 +1454,24 @@ fn Pager(
         inner_modifier,
         compose_runtime::callback(move |scope: LazyListScope| {
             let content = page_content.clone();
-            let page = page.clone();
+            let policy = policy.clone();
             let item = move |index: usize| {
-                let (content, modifier) = (content.clone(), Modifier.then_custom(page.clone()));
-                Box!(modifier = modifier, { content(PagerScope, index) });
+                let content = content.clone();
+                Layout(
+                    Modifier,
+                    policy.clone(),
+                    compose_runtime::callback(move || content(PagerScope, index)),
+                );
             };
             match &key {
                 Some(key) => {
+                    // Each page's key asked once, as `NearestRangeKeyIndexMap` keeps them.
                     let key = key.clone();
-                    scope.items_keyed(count, move |index| key(index), item);
+                    let known = RefCell::new(std::collections::HashMap::new());
+                    let keyed = move |index: usize| {
+                        *known.borrow_mut().entry(index).or_insert_with(|| key(index))
+                    };
+                    scope.items_keyed(count, keyed, item);
                 }
                 None => scope.items(count, item),
             }
@@ -1226,6 +1482,16 @@ fn Pager(
 /// A targeted fling as a key, by identity.
 #[derive(Clone)]
 struct TargetedKey(Rc<dyn TargetedFlingBehavior>);
+
+fn same_snap_position(one: &SnapPosition, other: &SnapPosition) -> bool {
+    match (one, other) {
+        (SnapPosition::Start, SnapPosition::Start)
+        | (SnapPosition::Center, SnapPosition::Center)
+        | (SnapPosition::End, SnapPosition::End) => true,
+        (SnapPosition::Custom(one), SnapPosition::Custom(other)) => Rc::ptr_eq(one, other),
+        _ => false,
+    }
+}
 
 impl ComposeArg for TargetedKey {
     fn same(&self, other: &Self) -> bool {

@@ -93,4 +93,5 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **A `SeekableTransitionState` call can end a frame before Compose's**, as a task waiting for a frame resumes before that frame's composition (D821, D817; a runtime parity item). One interrupted by another cancels its task, as Compose's `CancellationException` does (D823).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
-- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`).
+- **Missing foundation pieces**: no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`).
+- **Pagers** don't settle a page that focus brings into view (`PagerDefaults.bringIntoViewSpec` isn't ported), and have no `scrollIndicatorState` (D1467).

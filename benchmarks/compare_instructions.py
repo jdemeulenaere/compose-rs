@@ -57,6 +57,7 @@ SCENARIOS = {
     "list_selection": 100,
     "field_focus": 300,
     "field_keystroke": 3000,
+    "sheet_drag": 2000,
 }
 DUMPS = ["feed", "big", "feed_animated", "stress", "stress_animation", "grid", "cells"]
 

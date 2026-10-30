@@ -135,9 +135,9 @@ impl SheetState {
     /// A state resting at `initial_value`, settling only at `enabled_values` (which must hold
     /// `Expanded` and `initial_value`), as `SheetState(enabledValues, positionalThreshold,
     /// velocityThreshold, initialValue, confirmValueChange)`: partially expanded at half its
-    /// content's height (at most half the window's); drags settle past `positional_threshold`
-    /// pixels or faster than `velocity_threshold` pixels a second; `confirm_value_change` can
-    /// refuse a value.
+    /// content's height (at most half the window's); a release slower than the fling velocity
+    /// settles past `positional_threshold` pixels; `velocity_threshold` is unused, as Compose's
+    /// outside its `Saver` (D1466); `confirm_value_change` can refuse a value.
     #[track_caller]
     pub fn new(
         enabled_values: &[SheetValue],

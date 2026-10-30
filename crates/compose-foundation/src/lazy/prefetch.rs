@@ -96,8 +96,13 @@ impl Policy {
 /// An item's constraints by its index (`None`: no such item).
 pub(super) type ItemConstraints = Rc<dyn Fn(usize) -> Option<Constraints>>;
 
+/// Whether a scroll of this many pixels towards the end prefetches.
+type ScrollAllowed = Rc<dyn Fn(f32) -> bool>;
+
 /// What prefetching works from, as last laid out, and what it learned.
 pub(super) struct Prefetch {
+    /// Whether a scroll of this many pixels towards the end prefetches: a pager's.
+    pub(super) scroll_allowed: RefCell<Option<ScrollAllowed>>,
     /// The list's node, its item count and the items its layout wants composed.
     pub(super) node: Cell<Option<NodeId>>,
     pub(super) count: Cell<usize>,
@@ -188,6 +193,7 @@ pub(super) struct Prefetch {
 impl Prefetch {
     pub(super) fn new() -> Prefetch {
         Prefetch {
+            scroll_allowed: RefCell::new(None),
             node: Cell::new(None),
             count: Cell::new(0),
             wanted: Cell::new((0, 0)),
@@ -637,7 +643,9 @@ impl Prefetch {
         if changed || (!scroll_asked && !by_request) {
             self.keep_bounds(logic);
         }
-        if delta != 0.0 {
+        // A pager prefetches only the way its gesture goes (`isGestureActionMatchesScroll`).
+        let matches = self.scroll_allowed.borrow().as_ref().is_none_or(|allowed| allowed(-delta));
+        if delta != 0.0 && matches {
             logic.on_scroll(&scope, delta);
         }
         // D341's requests short of time wait for the next scroll (or, at rest, layout).

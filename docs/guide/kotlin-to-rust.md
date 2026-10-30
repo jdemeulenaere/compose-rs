@@ -909,6 +909,54 @@ pub fn Albums(albums: ImmutableList<Album>) {
 
 `LazyVerticalGrid` and `LazyHorizontalGrid` take a `LazyGridScope` with the list's forms (`item`, `items`, `items_keyed`, `items_list`, `items_indexed`, …), whose `_with` forms take Compose's `contentType` after the key, as a list's (`items_keyed_with(count, key, content_type, content)`), and whose `_with_span` forms take Compose's `span` and `contentType`, in Compose's order (`items_keyed_with_span(count, key, span, content_type, content)`, D454). A span is a closure returning a `GridItemSpan` from the `LazyGridItemSpanScope` (`max_line_span()`, `max_current_line_span()`) and the item: `|_, _| GridItemSpan(1)` is Compose's default. Give spans only where items take more than a cell: with spans, which items a line holds is found by asking the spans from the first item, again each time the grid's content changes. The content gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`). Each item is composed on its own and reused by content type, as in a lazy list (D450).
 
+### Pagers
+
+```kotlin
+val state = rememberPagerState { titles.size }
+val scope = rememberCoroutineScope()
+Column {
+    HorizontalPager(state, Modifier.weight(1f).fillMaxWidth(), pageSpacing = 8.dp) { page ->
+        Text(titles[page])
+    }
+    Text("Page ${state.currentPage + 1} of ${titles.size}")
+    TextButton(onClick = {
+        scope.launch { state.animateScrollToPage(state.currentPage + 1) }
+    }) { Text("Next") }
+}
+```
+
+<!-- snippet: src/layouts.rs#pager -->
+```rust
+#[composable]
+pub fn Pictures(titles: ImmutableList<SharedString>) {
+    let count = titles.len();
+    let state = remember_pager_state!(0, 0.0, move || count);
+    let scope = remember_coroutine_scope();
+    Column!(|column| {
+        HorizontalPager!(
+            state,
+            modifier = Modifier.weight(column, 1.0).fill_max_width(),
+            page_spacing = 8.dp(),
+            page_content = move |_scope, page| Text!(titles[page].clone()),
+        );
+        Text!(format!("Page {} of {count}", state.current_page() + 1));
+        TextButton!(
+            on_click = move || {
+                let next = (state.current_page() + 1).min(count - 1);
+                scope.launch(async move {
+                    let _ = state.animate_scroll_to_page(next, 0.0).await;
+                });
+            },
+            |_row| Text!("Next"),
+        );
+    });
+}
+```
+
+`HorizontalPager` and `VerticalPager` take Compose's parameters. `remember_pager_state!(initial_page, initial_fraction, page_count)` is a macro, for its closure, and the state is `Copy`: `current_page`, `current_page_offset_fraction`, `target_page` and `settled_page` are state reads, as Compose's. A page's `key` is a `u64`: `pager_key` hashes any value. The content takes a `PagerScope` first and the page, and `animate_scroll_to_page` and `scroll_to_page` take the fraction, without a default. A pager is a lazy list underneath, so its pages are composed, reused and prefetched as a list's items are (D1467, D1468).
+
+What's different: a focus moving between pages brings the page into view as any scroller does, and doesn't settle it on the snap position (`PagerDefaults.bringIntoViewSpec` isn't ported); `scrollIndicatorState` isn't there; `PagerState` is a struct, so a subclass of Compose's abstract class has no equivalent.
+
 ### Custom layouts
 
 ```kotlin

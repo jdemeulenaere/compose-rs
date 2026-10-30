@@ -58,6 +58,7 @@ mod mutator_mutex;
 mod nested_fling;
 mod overscroll;
 mod pager;
+mod pager_prefetch;
 mod platform;
 mod platform_services;
 mod pointer_input;
