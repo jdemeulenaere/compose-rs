@@ -1054,10 +1054,14 @@ impl UiTree {
                     if entry.kinds.any(NodeKinds::FOCUS_PROPERTIES)
                         && entry.state & entry_state::ATTACHED != 0
                     {
-                        let entry = &mut self.node_mut(id).chain[each];
+                        let own = self.node(id).chain[each].own;
+                        // Out of its chain, as what it runs may ask where something is.
+                        let mut out = self.entry_out(id, each);
+                        let crate::lifecycle::EntryOut { access, entry, .. } = &mut out;
+                        let _open = access.open();
                         crate::delegation::dispatch_for_kind(
-                            &mut *entry.node,
-                            entry.own,
+                            &mut **entry,
+                            own,
                             NodeKinds::FOCUS_PROPERTIES,
                             EntryId::NO_DELEGATE,
                             &mut |node, _| {

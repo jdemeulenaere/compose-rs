@@ -107,6 +107,12 @@ impl NodeKinds {
         NodeKinds(self.0 | other.0)
     }
 
+    /// These kinds and `other`, or without `other`.
+    #[inline]
+    pub(crate) const fn set(self, other: NodeKinds, on: bool) -> NodeKinds {
+        NodeKinds(if on { self.0 | other.0 } else { self.0 & !other.0 })
+    }
+
     /// Whether it has every one of `other`'s kinds.
     #[inline]
     pub const fn all(self, other: NodeKinds) -> bool {
@@ -344,6 +350,34 @@ impl ChainEntry {
         viewport: crate::unit::IntSize,
     ) -> Option<crate::unit::Rect> {
         crate::delegation::bring_into_view_of(&mut *self.node, rect, viewport)
+    }
+
+    /// What hit testing is clipped by here. A graphics layer's is what its last block drew: a press
+    /// runs no block and no shape, as Compose's `isInLayer`.
+    pub(crate) fn hit_outline(
+        &mut self,
+        size: crate::unit::Size,
+        density: crate::unit::Density,
+        direction: crate::alignment::LayoutDirection,
+    ) -> Option<crate::graphics::Outline> {
+        if self.kinds.any(NodeKinds::GRAPHICS_LAYER)
+            && let Some(graphics) =
+                self.node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
+        {
+            return graphics.hit_outline(size, density, direction);
+        }
+        self.hit_clip_at(size, density).map(|clip| clip.outline_in(size, &density, direction))
+    }
+
+    /// Asks the node, or its delegates, again whether it clips: an update may change that.
+    pub(crate) fn refresh_hit_clip(&mut self) {
+        let clips = crate::delegation::hit_clip_of(
+            &mut *self.node,
+            crate::unit::Size::ZERO,
+            crate::unit::Density::default(),
+        )
+        .is_some();
+        self.kinds = self.kinds.set(NodeKinds::HIT_CLIP, clips);
     }
 
     /// Whether it clips, as a query asks: running no block and no node's code.

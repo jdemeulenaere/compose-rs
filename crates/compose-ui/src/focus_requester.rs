@@ -29,6 +29,8 @@ pub(crate) struct FocusRequests {
     pub(crate) container_size: Cell<crate::unit::IntSize>,
     /// What a pass opens for queries on coordinates (D1211).
     pub(crate) window: crate::tree_access::TreeWindow,
+    /// A `LayoutCoordinates` was made: something may ask where it is any time.
+    pub(crate) coordinates_given: Cell<bool>,
     pub(crate) pending: RefCell<Vec<FocusRequest>>,
     /// The tree's key in the thread's registry, for what holds only this.
     pub(crate) tree_key: Cell<u32>,

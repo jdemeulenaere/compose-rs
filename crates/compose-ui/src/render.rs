@@ -15,9 +15,9 @@ use crate::delegation::dispatch_for_kind;
 use crate::display_list::{Boundary, DisplayList, DrawGroup, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
+use crate::lifecycle::EntryOut;
 use crate::node_chain::{EntryId, NodeKinds, entry_state};
 use crate::tree::{NodeId, Observation, UiTree, observation_key};
-use crate::tree_access::TreeAccess;
 use crate::unit::Offset;
 
 /// The most repaint boundaries composed and not placed whose groups the frames keep listing
@@ -76,6 +76,10 @@ pub(crate) struct InnerLayer {
     pub(crate) dirty: bool,
     /// Its group drew something when last listed (not `empty`).
     draws: bool,
+    /// Its properties, computed ahead of the drawing for what asks where it is before it, as a
+    /// group's layer's `layer_ahead`: the block runs once for an update.
+    pub(crate) ahead:
+        Option<(LayerProperties, crate::unit::Density, crate::alignment::LayoutDirection)>,
 }
 
 impl InnerLayer {
@@ -89,6 +93,7 @@ impl InnerLayer {
             drawn: false,
             dirty: true,
             draws: false,
+            ahead: None,
         }
     }
 }
@@ -685,13 +690,24 @@ impl UiTree {
             // Its block and what it holds run under an observation of their own: a change to
             // what they read draws them again, not what's around them.
             let record = |tree: &mut UiTree| {
+                let ahead = tree.node_mut(node).inner_layers[slot].ahead.take();
                 let value = tree.node(node);
-                let size = value.layers[layer].measured.into();
+                let size: crate::unit::Size = value.layers[layer].measured.into();
                 let direction = value.layout_direction;
                 let graphics =
                     value.chain[entry].node.downcast_ref::<GraphicsLayerNode>().expect("a layer");
+                let bounds = crate::unit::Rect::from_offset_size(origins[layer], size);
                 let open = tree.focus_requests.window.open_to_read(tree);
-                let properties = graphics.properties(density, direction, origins[layer], size);
+                let properties = match ahead {
+                    Some((properties, was_density, was_direction))
+                        if properties.bounds == bounds
+                            && was_density == density
+                            && was_direction == direction =>
+                    {
+                        properties
+                    }
+                    _ => graphics.properties(density, direction, origins[layer], size),
+                };
                 let transparency_changed = graphics.note_transparency(&properties);
                 drop(open);
                 let inner = &mut tree.node_mut(node).inner_layers[slot];
@@ -822,13 +838,9 @@ impl UiTree {
                         value.chain[index].node.as_draw().is_some_and(|draw| draw.draws_content());
                     let size = value.layers[layer].measured.into();
                     let layout_direction = value.layout_direction;
-                    if draws_content {
-                        // Out of the chain while it draws the rest of its node.
-                        let mut entry = mem::replace(
-                            &mut value.chain[index].node,
-                            Box::new(crate::nodes::Taken),
-                        );
-                        let next_layer = layer + usize::from(bits.any(NodeKinds::LAYOUT));
+                    // A built-in one (a background, a border) runs no application code but what a
+                    // shape does, which finds the tree busy: most of what's drawn, it stays put.
+                    if !bits.any(NodeKinds::OBSERVED) && !draws_content {
                         let mut scope = DrawScope {
                             list,
                             origin: origins[layer],
@@ -837,8 +849,29 @@ impl UiTree {
                             layout_direction,
                             locals,
                         };
-                        let mut access = TreeAccess::new(&mut *self);
-                        let open = access.open();
+                        if let Some(draw) = value.chain[index].node.as_draw() {
+                            draw.draw(&mut scope);
+                        }
+                        after.push((index as u16, layer as u16));
+                        if bits.any(NodeKinds::LAYOUT) {
+                            layer += 1;
+                        }
+                        continue;
+                    }
+                    let next_layer = layer + usize::from(bits.any(NodeKinds::LAYOUT));
+                    // Out of the chain while it draws, what asks where it is reading the rest.
+                    let mut out = self.entry_out(node, index);
+                    let EntryOut { access, entry, .. } = &mut out;
+                    let open = access.open();
+                    let mut scope = DrawScope {
+                        list,
+                        origin: origins[layer],
+                        size,
+                        density,
+                        layout_direction,
+                        locals,
+                    };
+                    if draws_content {
                         let mut content = |list: &mut DisplayList| {
                             access.enter().draw_chain(
                                 node,
@@ -857,28 +890,15 @@ impl UiTree {
                             draw.draw_with_content(&mut content_scope);
                         }
                         drop(open);
-                        self.node_mut(node).chain[index].node = entry;
+                        drop(out);
                         self.draw_afters(node, &after, origins, list);
                         return;
                     }
-                    let mut scope = DrawScope {
-                        list,
-                        origin: origins[layer],
-                        size,
-                        density,
-                        layout_direction,
-                        locals,
-                    };
-                    // Out of the chain while it draws, what asks where it is reading the rest.
-                    let mut entry =
-                        mem::replace(&mut value.chain[index].node, Box::new(crate::nodes::Taken));
                     if let Some(draw) = entry.as_draw() {
-                        let access = TreeAccess::new(&mut *self);
-                        let _open = access.open();
                         draw.draw(&mut scope);
                     }
-                    // `Taken` has no size and nothing to drop.
-                    mem::forget(mem::replace(&mut self.node_mut(node).chain[index].node, entry));
+                    drop(open);
+                    drop(out);
                     after.push((index as u16, layer as u16));
                 }
                 if bits.any(NodeKinds::LAYOUT) {
@@ -925,11 +945,11 @@ impl UiTree {
         let size = value.layers[layer].measured.into();
         let layout_direction = value.layout_direction;
         // Out of the chain while it draws the rest of its node.
-        let mut entry = mem::replace(&mut value.chain[index].node, Box::new(crate::nodes::Taken));
-        let mut access = TreeAccess::new(&mut *self);
+        let mut out = self.entry_out(node, index);
+        let EntryOut { access, entry, .. } = &mut out;
         let open = access.open();
         dispatch_for_kind(
-            &mut *entry,
+            &mut **entry,
             own,
             NodeKinds::DRAW,
             EntryId::NO_DELEGATE,
@@ -960,7 +980,7 @@ impl UiTree {
             },
         );
         drop(open);
-        self.node_mut(node).chain[index].node = entry;
+        drop(out);
         self.note_delegates_changed(node, index);
     }
 
@@ -983,14 +1003,18 @@ impl UiTree {
                 locals: value.locals,
             };
             // As in `draw_chain`.
-            let mut entry =
-                mem::replace(&mut value.chain[index as usize].node, Box::new(crate::nodes::Taken));
+            if !value.chain[index as usize].kinds.any(NodeKinds::OBSERVED) {
+                if let Some(draw) = value.chain[index as usize].node.as_draw() {
+                    draw.draw_after(&mut scope);
+                }
+                continue;
+            }
+            let mut out = self.entry_out(node, index as usize);
+            let EntryOut { access, entry, .. } = &mut out;
+            let _open = access.open();
             if let Some(draw) = entry.as_draw() {
-                let access = TreeAccess::new(&mut *self);
-                let _open = access.open();
                 draw.draw_after(&mut scope);
             }
-            mem::forget(mem::replace(&mut self.node_mut(node).chain[index as usize].node, entry));
         }
     }
 }

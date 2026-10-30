@@ -1411,6 +1411,66 @@ fn a_clip_on_the_way_down_clips() {
     assert_eq!(inner.local_bounding_box_of(&outer, false), Rect::new(-10.0, 0.0, 20.0, 30.0));
 }
 
+/// A clip inside a node, on the way from a coordinator outside it to one inside it.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, localBoundingBoxOf
+#[test]
+fn a_clip_inside_a_node_between_a_source_outside_and_an_asker_inside() {
+    let (outer, inner) = (told(), told());
+    let (o, i) = (outer.clone(), inner.clone());
+    let _host = host(move || {
+        let wider = Modifier.layout(|scope, measurable, _| {
+            let placeable = scope.measure(measurable, Constraints::fixed(10, 10));
+            scope.place(&placeable, 0, 0);
+            scope.layout(20, 10)
+        });
+        Leaf(keep(&o).then(wider).clip_to_bounds().then(keep(&i)).then(sized(10)));
+    });
+    let (outer, inner) = (of(&outer), of(&inner));
+    assert_eq!(inner.local_bounding_box_of(&outer, false), Rect::new(0.0, 0.0, 20.0, 10.0));
+    assert_eq!(inner.local_bounding_box_of(&outer, true), Rect::new(0.0, 0.0, 10.0, 10.0));
+}
+
+/// `hit_clip` changing with an update changes what coordinates are clipped by, both ways.
+#[test]
+fn a_hit_clip_changing_by_an_update_changes_bounds() {
+    struct Clipping(bool);
+    impl ModifierNode for Clipping {
+        fn hit_clip(&self) -> Option<Shape> {
+            self.0.then_some(Shape::Rectangle)
+        }
+    }
+    struct ClippingElement(bool);
+    impl ModifierNodeElement for ClippingElement {
+        type Node = Clipping;
+        fn create(&self) -> Clipping {
+            Clipping(self.0)
+        }
+        fn update(&self, node: &mut Clipping) {
+            node.0 = self.0;
+        }
+        fn same(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    let clip = mutable_state_of(false);
+    let child = told();
+    let (c, k) = (clip.handle(), child.clone());
+    let mut host = host(move || {
+        let k = k.clone();
+        Stack!(modifier = sized(10).then_custom(ClippingElement(c.get())), {
+            Leaf(moved(8, 0).then(keep(&k)).then(sized(5)));
+        });
+    });
+    let child = of(&child);
+    assert_eq!(child.bounds_in_root().right, 13.0);
+    clip.set(true);
+    host.frame();
+    assert_eq!(child.bounds_in_root().right, 10.0);
+    clip.set(false);
+    host.frame();
+    assert_eq!(child.bounds_in_root().right, 13.0);
+}
+
 // ---- Matrices and what can't be undone --------------------------------------------------------------
 
 // Compose: compose/ui/ui-graphics/src/commonMain/kotlin/androidx/compose/ui/graphics/Matrix.kt, invert

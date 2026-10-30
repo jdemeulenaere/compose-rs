@@ -257,6 +257,9 @@ impl Delegates {
         let mut union = NodeKinds::NONE;
         let mut layouts = 0;
         for entry in &mut self.entries {
+            // An update may change it (`ChainEntry::refresh_hit_clip`).
+            entry.own = entry.own.set(NodeKinds::HIT_CLIP, entry.node.hit_clip().is_some());
+            entry.kinds = entry.kinds.set(NodeKinds::HIT_CLIP, entry.own.any(NodeKinds::HIT_CLIP));
             if let Some(delegates) = entry.node.delegates() {
                 entry.kinds = entry.own | delegates.refresh_kinds(entry.own);
             }

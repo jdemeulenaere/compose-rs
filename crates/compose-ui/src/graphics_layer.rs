@@ -143,6 +143,8 @@ pub(crate) struct GraphicsLayerNode {
     ran: Cell<Option<LayerRun>>,
     /// The shape its block last gave with a clip.
     ran_shape: std::cell::RefCell<Shape>,
+    /// The outline it last drew with, in its own coordinates: what a press tests against.
+    last_outline: std::cell::RefCell<Option<Outline>>,
 }
 
 /// What moves or clips what's in a layer, as a layer's block last gave it.
@@ -186,6 +188,7 @@ pub(crate) struct LayerMap {
     scale: (f32, f32),
     rotation: f32,
     translation: Offset,
+    clip: bool,
 }
 
 impl LayerMap {
@@ -243,6 +246,8 @@ struct LayerTransform {
     scale: (f32, f32),
     rotation: f32,
     translation: Offset,
+    /// Not a move, but what's under it is clipped otherwise: its bounds change.
+    clip: bool,
 }
 
 impl LayerTransform {
@@ -256,6 +261,7 @@ impl LayerTransform {
             scale: properties.scale,
             rotation: properties.rotation,
             translation: properties.translation,
+            clip: properties.clip,
         }
     }
 }
@@ -283,6 +289,7 @@ impl GraphicsLayerNode {
             transparent: Cell::new(false),
             ran: Cell::new(None),
             ran_shape: std::cell::RefCell::new(Shape::Rectangle),
+            last_outline: Default::default(),
         }
     }
 
@@ -320,6 +327,37 @@ impl GraphicsLayerNode {
         self.transparent.replace(transparent) != transparent
     }
 
+    /// A block no frame drew runs for a press, once: queries find the tree busy there.
+    fn run_if_never_ran(&self, size: Size, density: Density) {
+        if self.ran.get().is_none() {
+            let _ = self.scope(density, size);
+        }
+    }
+
+    /// What a press is clipped by here: the outline it last drew with.
+    pub(crate) fn hit_outline(
+        &self,
+        size: Size,
+        density: Density,
+        direction: LayoutDirection,
+    ) -> Option<Outline> {
+        if let Layer::Block(_) = &self.layer {
+            self.run_if_never_ran(size, density);
+        }
+        if !self.clips() {
+            return None;
+        }
+        if let Some(outline) = &*self.last_outline.borrow() {
+            return Some(outline.clone());
+        }
+        let shape = match &self.layer {
+            Layer::Fixed(layer) => layer.shape.clone(),
+            Layer::Block(_) => self.ran_shape.borrow().clone(),
+            Layer::Shadow(shadow) => shadow.shape.clone(),
+        };
+        Some(shape.outline_in(size, &density, direction))
+    }
+
     /// Whether it has a block: application code, that only passes that draw or look ahead run.
     pub(crate) fn has_block(&self) -> bool {
         matches!(self.layer, Layer::Block(_))
@@ -347,6 +385,7 @@ impl GraphicsLayerNode {
             scale: run.scale,
             rotation: run.rotation,
             translation: run.translation,
+            clip: run.clip,
         }
     }
 
@@ -362,6 +401,7 @@ impl GraphicsLayerNode {
             scale: map.scale,
             rotation: map.rotation,
             translation: map.translation,
+            clip: map.clip,
         };
         self.positional.set(Some((listeners, transform)));
     }
@@ -396,6 +436,7 @@ impl GraphicsLayerNode {
                 && cached.direction == direction
                 && cached.density == layer.density
             {
+                self.last_outline.replace(Some(cached.outline.clone()));
                 return cached.outline.clone();
             }
             let outline = layer.shape.outline_in(size, &layer.density, direction);
@@ -411,6 +452,7 @@ impl GraphicsLayerNode {
                 density: layer.density,
                 outline: outline.clone(),
             });
+            self.last_outline.replace(Some(outline.clone()));
             outline
         })
     }
@@ -566,6 +608,7 @@ impl ModifierNodeElement for GraphicsLayerElement {
             transparent: Cell::new(false),
             ran: Cell::new(None),
             ran_shape: std::cell::RefCell::new(Shape::Rectangle),
+            last_outline: Default::default(),
         }
     }
 
@@ -596,11 +639,14 @@ impl ModifierNode for GraphicsLayerNode {
     }
     /// Its clip, for hit testing, as Compose's layer's `isInLayer`: what's outside its shape
     /// isn't hit (its block run for the layer's size and density).
-    /// As a query's: its last block's, which a press doesn't run.
-    fn hit_clip_at(&self, _size: Size, _density: Density) -> Option<Shape> {
+    /// As a query's: its last block's, which a press doesn't run. One no frame drew runs now.
+    fn hit_clip_at(&self, size: Size, density: Density) -> Option<Shape> {
         match &self.layer {
             Layer::Fixed(layer) => layer.clip.then(|| layer.shape.clone()),
-            Layer::Block(_) => self.clips().then(|| self.ran_shape.borrow().clone()),
+            Layer::Block(_) => {
+                self.run_if_never_ran(size, density);
+                self.clips().then(|| self.ran_shape.borrow().clone())
+            }
             Layer::Shadow(shadow) => shadow.clip.then(|| shadow.shape.clone()),
         }
     }

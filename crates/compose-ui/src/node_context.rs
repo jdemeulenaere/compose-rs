@@ -3,7 +3,7 @@
 //! task, a callback, a stored closure). docs/parity/design/modifier-nodes.md §3.3, docs/06-ui.md
 //! "Modifiers".
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::marker::PhantomData;
@@ -397,15 +397,13 @@ thread_local! {
     // interaction), by a counter no one chooses.
     static TREES: RefCell<HashMap<u32, Registration, BuildHasherDefault<compose_runtime::KeyHasher>>> =
         RefCell::new(HashMap::default());
-    static NEXT_TREE: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Registers a new tree, whose requests are `requests`: its key.
 pub(crate) fn register_tree(requests: &Rc<FocusRequests>) -> u32 {
-    let key = NEXT_TREE.with(|next| {
-        next.set(next.get() + 1);
-        next.get()
-    });
+    // Across threads: a handle read on another thread names no tree there.
+    static NEXT_TREE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let key = NEXT_TREE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     requests.tree_key.set(key);
     let registration = Registration { requests: Rc::downgrade(requests), borrow: None, peek: None };
     TREES.with(|trees| trees.borrow_mut().insert(key, registration));
@@ -429,7 +427,8 @@ pub(crate) fn set_tree_borrow(key: u32, borrow: Rc<TreeBorrow>, peek: Rc<TreeBor
 }
 
 pub(crate) fn requests_of(key: u32) -> Option<Rc<FocusRequests>> {
-    TREES.with(|trees| trees.borrow().get(&key)?.requests.upgrade())
+    // None once the thread's registry is gone (a query in a `Drop` as the thread exits).
+    TREES.try_with(|trees| trees.borrow().get(&key)?.requests.upgrade()).ok().flatten()
 }
 
 thread_local! {
@@ -498,16 +497,20 @@ pub(crate) fn with_free_tree(key: u32, f: &mut dyn FnMut(&mut UiTree)) -> bool {
 /// Runs `read` with the tree of `key` to read it, if nothing borrows it: set aside for a block,
 /// or free, a composition under way or not. Returns whether it ran.
 pub(crate) fn peek_tree(key: u32, read: &mut dyn FnMut(&mut UiTree)) -> bool {
-    let set_aside = TREE_SET_ASIDE.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.last().is_some_and(|tree| tree.key == key) { slot.pop() } else { None }
-    });
+    let set_aside = TREE_SET_ASIDE
+        .try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.last().is_some_and(|tree| tree.key == key) { slot.pop() } else { None }
+        })
+        .ok()
+        .flatten();
     if let Some(mut tree) = set_aside {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(&mut tree)));
         TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(tree));
         return result.map(|_| true).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
-    let Some(peek) = TREES.with(|trees| trees.borrow().get(&key)?.peek.clone()) else {
+    let Some(peek) = TREES.try_with(|trees| trees.borrow().get(&key)?.peek.clone()).ok().flatten()
+    else {
         return false;
     };
     peek(read)

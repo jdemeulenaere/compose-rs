@@ -17,6 +17,11 @@ impl UiTree {
     /// Measures and places the tree in a root of `size` pixels. Does nothing when nothing
     /// changed since the last call with this size.
     pub fn layout(&mut self, size: IntSize) -> bool {
+        // As Compose's as a write applies: what's about to ask reads what they give. With nothing
+        // handed out, nothing can ask before the draw.
+        if !self.new_layers.is_empty() && self.focus_requests.coordinates_given.get() {
+            self.run_new_layers();
+        }
         if self.window != size {
             // Popups are measured with the window's size, whatever their host's constraints.
             for index in 0..self.overlays.len() {

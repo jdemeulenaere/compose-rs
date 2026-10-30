@@ -182,8 +182,9 @@ impl Drop for Entered<'_> {
     }
 }
 
-/// Something in the tree a node has in hand (an ancestor it found, the text measurer): what asks
-/// where something is meanwhile finds the tree busy, as this has part of it.
+/// Something in the tree a node has in hand (an ancestor it found): what asks where something is
+/// meanwhile finds the tree busy, as this has part of it. To ask, copy the handle out, drop this,
+/// then ask.
 pub struct TreeRef<'s, T: ?Sized> {
     value: &'s mut T,
     _entered: Entered<'s>,
@@ -422,5 +423,89 @@ mod tests {
         assert!(result.is_err());
         // A kept pointer would answer from a frame long gone.
         host.with_tree(|tree| assert!(tree.focus_requests.window.read(|_| ()).is_none()));
+    }
+
+    /// A measurer's `&mut self`, a query inside its `layout`, the concrete one's: what's asked
+    /// reads no part of the measurer, as it's behind its own cell.
+    #[test]
+    fn a_query_inside_a_measurer_s_layout() {
+        use crate::fixed_text::FixedTextMeasurer;
+        use crate::text::{ParagraphHandle, ParagraphMetrics, TextMeasurer, TextPosition};
+        struct Asking(FixedTextMeasurer, Kept, Rc<Cell<Offset>>, u32);
+        impl TextMeasurer for Asking {
+            fn layout(
+                &mut self,
+                text: &str,
+                style: &crate::TextStyle,
+                options: crate::text::TextLayoutOptions,
+                constraints: crate::constraints::Constraints,
+                density: &crate::unit::Density,
+            ) -> ParagraphHandle {
+                self.3 += 1;
+                if let Some(coordinates) = self.1.get() {
+                    self.2.set(coordinates.position_in_root());
+                }
+                self.0.layout(text, style, options, constraints, density)
+            }
+            fn layout_annotated(
+                &mut self,
+                text: &crate::annotated::AnnotatedString,
+                style: &crate::TextStyle,
+                options: crate::text::TextLayoutOptions,
+                constraints: crate::constraints::Constraints,
+                density: &crate::unit::Density,
+            ) -> ParagraphHandle {
+                self.0.layout_annotated(text, style, options, constraints, density)
+            }
+            fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
+                self.0.metrics(paragraph)
+            }
+            fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
+                self.0.hit_test(paragraph, position)
+            }
+            fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> crate::unit::Rect {
+                self.0.cursor_rect(paragraph, offset)
+            }
+            fn text(&self, paragraph: ParagraphHandle) -> &str {
+                self.0.text(paragraph)
+            }
+            fn release(&mut self, paragraph: ParagraphHandle) {
+                self.0.release(paragraph)
+            }
+        }
+        let kept: Kept = Rc::default();
+        let again = mutable_state_of(0);
+        let seen = Rc::new(Cell::new(Offset::ZERO));
+        let (k, a) = (kept.clone(), again.handle());
+        let measurer = Asking(FixedTextMeasurer::new(), kept.clone(), seen.clone(), 0);
+        let mut host = UiHost::new(
+            crate::unit::IntSize::new(100, 100),
+            crate::unit::Density::new(1.0),
+            Box::new(measurer),
+        );
+        host.set_content(move || {
+            let k = k.clone();
+            Layout(
+                at(3, 4).then(keep(&k)),
+                measure_policy(move |scope, _, _| {
+                    let text = crate::TextStyle::default();
+                    let round = a.get() as f32;
+                    let paragraph = scope.text_measurer().layout(
+                        "text",
+                        &text,
+                        Default::default(),
+                        crate::constraints::Constraints::fixed(50 + round as i32, 50),
+                        &crate::unit::Density::new(1.0),
+                    );
+                    scope.text_measurer().release(paragraph);
+                    scope.layout(5, 5)
+                }),
+                compose_runtime::callback(|| {}),
+            );
+        });
+        host.frame();
+        again.set(1);
+        host.frame();
+        assert_eq!(seen.get(), Offset::new(3.0, 4.0));
     }
 }

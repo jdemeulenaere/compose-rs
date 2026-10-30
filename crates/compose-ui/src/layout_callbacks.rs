@@ -343,6 +343,11 @@ impl UiTree {
         let observer = self.observer.clone();
         for node in std::mem::take(&mut self.new_layers) {
             let Some(value) = self.get(node).filter(|value| !value.deactivated) else { continue };
+            // Not measured yet: its size is for a later run, this layout's.
+            if value.constraints.is_none() {
+                self.new_layers.push(node);
+                continue;
+            }
             let group_layer = value.retained.as_ref().and_then(|retained| retained.layer_entry);
             for index in 0..value.chain.len() {
                 let value = self.node(node);
@@ -353,18 +358,35 @@ impl UiTree {
                 if !graphics.has_block() {
                     continue;
                 }
+                let (density, direction) = (value.density, value.layout_direction);
                 if group_layer == Some(index as u16) {
+                    if value.retained.as_ref().is_some_and(|it| it.layer_ahead.is_some()) {
+                        continue;
+                    }
                     let Some(properties) = self.layer_properties(node, observer.as_deref()) else {
                         continue;
                     };
-                    let value = self.node_mut(node);
-                    let (density, direction) = (value.density, value.layout_direction);
-                    let retained = value.retained.as_mut().expect("its group");
+                    let retained = self.node_mut(node).retained.as_mut().expect("its group");
                     retained.layer_ahead = Some((properties, density, direction));
-                } else {
-                    compose_runtime::snapshots::Snapshot::without_read_observation(|| {
-                        self.properties_of_layer(node, index, graphics);
-                    });
+                    continue;
+                }
+                let slot = value.inner_layers.iter().position(|it| it.entry as usize == index);
+                if slot.is_some_and(|slot| value.inner_layers[slot].ahead.is_some()) {
+                    continue;
+                }
+                // Observed apart from what the layer's recording reads: the drawing takes this
+                // run, its observation being of the content then.
+                let key =
+                    crate::tree::observation_key(node, crate::tree::Observation::InnerLayerBlock);
+                let properties = match &observer {
+                    Some(observer) => {
+                        observer.observe(key, || self.properties_of_layer(node, index, graphics))
+                    }
+                    None => self.properties_of_layer(node, index, graphics),
+                };
+                if let Some(slot) = slot {
+                    self.node_mut(node).inner_layers[slot].ahead =
+                        Some((properties, density, direction));
                 }
             }
         }
@@ -414,6 +436,9 @@ impl UiTree {
         let value = self.node_mut(node);
         if let Some(retained) = value.retained.as_mut() {
             retained.layer_ahead = None;
+        }
+        for inner in &mut value.inner_layers {
+            inner.ahead = None;
         }
         if value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
             self.new_layers.push(node);

@@ -102,6 +102,7 @@ impl LayoutCoordinates {
     /// Runs `read` with the tree: in a pass, through its window, else through the registry. It
     /// runs no application code: a graphics layer's answers are its last run's. `None` if the tree
     /// is gone or busy.
+    #[track_caller]
     fn read<R>(&self, read: impl FnOnce(&UiTree) -> R) -> Option<R> {
         let requests = requests_of(self.tree)?;
         let mut read = Some(read);
@@ -114,11 +115,15 @@ impl LayoutCoordinates {
                 result = Some(read(tree));
             }
         });
+        if result.is_none() {
+            warn_busy_once();
+        }
         result
     }
 
     /// A read of where it is, which a placement block's run keeps for its node (as Compose's
     /// `onCoordinatesUsed`).
+    #[track_caller]
     fn read_position<R>(&self, read: impl FnOnce(&UiTree, Place) -> R) -> Option<R> {
         self.read(|tree| {
             note_position_read(self.node);
@@ -150,12 +155,22 @@ impl LayoutCoordinates {
         Some((place.node, place.before))
     }
 
+    /// Whether its tree can't answer now: asked where application code runs with part of the
+    /// tree in hand (docs/06-ui.md, "Coordinates in a pass"), where it answers zeros and
+    /// `is_attached() == false`. Not when it's gone.
+    pub fn is_busy(&self) -> bool {
+        let Some(requests) = requests_of(self.tree) else { return false };
+        requests.window.read(|_| ()).is_none() && !peek_tree(self.tree, &mut |_| ())
+    }
+
     /// Whether what it names is in the tree, as `isAttached`.
+    #[track_caller]
     pub fn is_attached(&self) -> bool {
         self.read(|tree| tree.find_place(self).is_some()).unwrap_or(false)
     }
 
     /// Its size, as `LayoutCoordinates.size`: what it was measured at.
+    #[track_caller]
     pub fn size(&self) -> IntSize {
         self.read(|tree| {
             let place = tree.find_place(self)?;
@@ -167,6 +182,7 @@ impl LayoutCoordinates {
 
     /// The coordinates outside it, as `parentCoordinates`: of the same node, or of its parent's
     /// content.
+    #[track_caller]
     pub fn parent_coordinates(&self) -> Option<LayoutCoordinates> {
         self.read_position(|tree, place| {
             let value = tree.node(place.node);
@@ -183,6 +199,7 @@ impl LayoutCoordinates {
 
     /// The coordinates of the parent's content, as `parentLayoutCoordinates`: `None` at the root
     /// (a popup's content is a root).
+    #[track_caller]
     pub fn parent_layout_coordinates(&self) -> Option<LayoutCoordinates> {
         self.read_position(|tree, place| self.parent_layout_of(tree.node(place.node))).flatten()
     }
@@ -194,6 +211,7 @@ impl LayoutCoordinates {
 
     /// `local` in the root, as `localToRoot`: a popup's content's own, whose root it's placed
     /// from in the window.
+    #[track_caller]
     pub fn local_to_root(&self, local: Offset) -> Offset {
         self.read_position(|tree, place| {
             let at = tree.map_to_root(place.node, place.layer, Some(place.before), local);
@@ -204,6 +222,7 @@ impl LayoutCoordinates {
     }
 
     /// `local` in the window, as `localToWindow`: the root fills it, and a popup's is placed in it.
+    #[track_caller]
     pub fn local_to_window(&self, local: Offset) -> Offset {
         self.read_position(|tree, place| {
             tree.map_to_root(place.node, place.layer, Some(place.before), local)
@@ -212,12 +231,14 @@ impl LayoutCoordinates {
     }
 
     /// `window` here, as `windowToLocal`.
+    #[track_caller]
     pub fn window_to_local(&self, window: Offset) -> Offset {
         self.read_position(|tree, place| tree.root_to_place(place, window)).unwrap_or(Offset::ZERO)
     }
 
     /// `local` on the screen, as `localToScreen`: from the origin the host gives
     /// (`UiHost::set_window_origin`).
+    #[track_caller]
     pub fn local_to_screen(&self, local: Offset) -> Offset {
         self.read_position(|tree, place| {
             tree.map_to_root(place.node, place.layer, Some(place.before), local)
@@ -227,6 +248,7 @@ impl LayoutCoordinates {
     }
 
     /// `screen` here, as `screenToLocal`.
+    #[track_caller]
     pub fn screen_to_local(&self, screen: Offset) -> Offset {
         self.read_position(|tree, place| {
             let origin = tree.window_origin;
@@ -247,6 +269,7 @@ impl LayoutCoordinates {
     /// `local_position_of`, leaving out what's placed under a motion frame of reference on the
     /// way if `include_motion_frame_of_reference` is false (a list's scroll, for what animates
     /// bounds through it).
+    #[track_caller]
     pub fn local_position_of_with(
         &self,
         source: &LayoutCoordinates,
@@ -267,6 +290,7 @@ impl LayoutCoordinates {
 
     /// The bounding box here of `source`, as `localBoundingBoxOf`: clipped by the clips on the way
     /// with `clip_bounds`, `Rect` of zeros if that leaves nothing.
+    #[track_caller]
     pub fn local_bounding_box_of(&self, source: &LayoutCoordinates, clip_bounds: bool) -> Rect {
         self.read(|tree| {
             note_position_read(self.node);
@@ -279,6 +303,7 @@ impl LayoutCoordinates {
     }
 
     /// Sets `matrix` to what takes `source`'s coordinates here, as `transformFrom`.
+    #[track_caller]
     pub fn transform_from(&self, source: &LayoutCoordinates, matrix: &mut Matrix) {
         *matrix = Matrix::new();
         self.read_position(|tree, place| {
@@ -289,6 +314,7 @@ impl LayoutCoordinates {
     }
 
     /// Sets `matrix` to what takes these coordinates to the screen, as `transformToScreen`.
+    #[track_caller]
     pub fn transform_to_screen(&self, matrix: &mut Matrix) {
         *matrix = Matrix::new();
         self.read_position(|tree, place| {
@@ -299,6 +325,7 @@ impl LayoutCoordinates {
     }
 
     /// Whether a motion frame of reference placed it, as `introducesMotionFrameOfReference`.
+    #[track_caller]
     pub fn introduces_motion_frame_of_reference(&self) -> bool {
         self.read(|tree| {
             let place = tree.find_place(self)?;
@@ -398,6 +425,24 @@ impl LayoutCoordinates {
 /// What ends a coordinator: a layout modifier, and a graphics layer (Compose's is one).
 const COORDINATOR_ENDS: NodeKinds = NodeKinds::LAYOUT.with(NodeKinds::GRAPHICS_LAYER);
 
+/// A query found its tree busy, in a debug build: says so once, naming where it asked.
+#[track_caller]
+fn warn_busy_once() {
+    #[cfg(debug_assertions)]
+    {
+        thread_local! {
+            static WARNED: Cell<bool> = const { Cell::new(false) };
+        }
+        if !WARNED.replace(true) {
+            log::warn!(
+                "compose-ui: coordinates asked at {} where their tree is busy, answered with \
+                 zeros: docs/06-ui.md, \"Coordinates in a pass\"",
+                std::panic::Location::caller()
+            );
+        }
+    }
+}
+
 fn bounding_box_of(points: &[Offset]) -> Rect {
     let min = |pick: fn(&Offset) -> f32| points.iter().map(pick).fold(f32::INFINITY, f32::min);
     let max = |pick: fn(&Offset) -> f32| points.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
@@ -407,6 +452,7 @@ fn bounding_box_of(points: &[Offset]) -> Rect {
 impl UiTree {
     /// The coordinates entry `index` of `node` is in: the next one ending a coordinator.
     pub(crate) fn coordinates_at(&self, node: NodeId, index: usize) -> LayoutCoordinates {
+        self.focus_requests.coordinates_given.set(true);
         let Some(value) = self.get(node) else {
             return LayoutCoordinates::new(self.key, node, None);
         };
@@ -418,6 +464,7 @@ impl UiTree {
 
     /// The coordinates a layer's measurement places in.
     pub(crate) fn coordinates_of_layer(&self, node: NodeId, layer: usize) -> LayoutCoordinates {
+        self.focus_requests.coordinates_given.set(true);
         let value = self.node(node);
         let end = value.layout_indices.get(layer).map(|&index| value.chain[index as usize].id);
         LayoutCoordinates::new(self.key, node, end)

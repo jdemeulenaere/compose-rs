@@ -66,6 +66,26 @@ pub(crate) enum Lifecycle {
     CompositionLocals(NodeId),
 }
 
+/// A chain entry's node out of its chain, its window yet to open: goes back when dropped.
+pub(crate) struct EntryOut<'a> {
+    pub(crate) access: TreeAccess<'a>,
+    node: NodeId,
+    index: usize,
+    pub(crate) entry: Box<dyn crate::modifier::ModifierNode>,
+}
+
+impl Drop for EntryOut<'_> {
+    fn drop(&mut self) {
+        let entry = mem::replace(&mut self.entry, Box::new(Taken));
+        let (node, index) = (self.node, self.index);
+        let mut tree = self.access.enter();
+        if let Some(slot) = tree.get_mut(node).and_then(|value| value.chain.get_mut(index)) {
+            // `Taken` has no size and nothing to drop.
+            mem::forget(mem::replace(&mut slot.node, entry));
+        }
+    }
+}
+
 impl UiTree {
     /// Runs `f` with entry `index` of `node`'s chain and its context, the entry out of its chain
     /// meanwhile (so its code may reach the rest of the tree, never itself); put back even if
@@ -486,6 +506,14 @@ impl UiTree {
             self.release_delegates(&mut *entry.node);
             self.release_node(entry.node);
         }
+    }
+
+    /// Takes entry `index` of `node` out of its chain, for application code that the rest of the
+    /// tree may be read under, until what it returns is dropped, a panic included.
+    pub(crate) fn entry_out(&mut self, node: NodeId, index: usize) -> EntryOut<'_> {
+        let slot = &mut self.node_mut(node).chain[index].node;
+        let entry = mem::replace(slot, Box::new(Taken));
+        EntryOut { access: TreeAccess::new(&mut *self), node, index, entry }
     }
 
     /// Tells `node`, out of the tree, it's released, and drops it: what it runs may ask where

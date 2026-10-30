@@ -34,6 +34,9 @@ pub(crate) enum Observation {
     FocusProperties = 5,
     /// Its placement blocks (`MeasureScope::layout_with`): they run again, it isn't measured.
     Placement = 6,
+    /// An inner layer's block run ahead of its drawing (`run_new_layers`), apart from what its
+    /// recording reads, the drawing taking that run.
+    InnerLayerBlock = 7,
 }
 
 /// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
@@ -51,7 +54,8 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
         3 => Observation::InnerLayers,
         4 => Observation::Semantics,
         5 => Observation::FocusProperties,
-        _ => Observation::Placement,
+        6 => Observation::Placement,
+        _ => Observation::InnerLayerBlock,
     };
     (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
 }
@@ -1011,15 +1015,20 @@ impl UiTree {
                     self.invalidate_draw_before_inner_layers(node)
                 }
                 Observation::Draw => {}
-                Observation::InnerLayers => {
-                    if self.get(node).is_some_and(|value| !value.deactivated) {
+                Observation::InnerLayers | Observation::InnerLayerBlock => {
+                    if let Some(value) = self.get_mut(node).filter(|value| !value.deactivated) {
+                        for inner in &mut value.inner_layers {
+                            inner.ahead = None;
+                        }
                         self.invalidate_inner_layers(node);
                         self.note_layer_change(node, false);
+                        self.new_layers.push(node);
                     }
                 }
                 Observation::Layer => {
                     // Its layer's properties only: its content and version stay.
                     self.needs_draw = true;
+                    self.new_layers.push(node);
                     let value = self.get_mut(node);
                     if let Some(retained) = value.and_then(|value| value.retained.as_mut()) {
                         retained.layer_dirty = true;
@@ -1101,6 +1110,7 @@ impl UiTree {
                 if !old.same(new) {
                     let entry = &mut value.chain[index];
                     nodes::update(new, &mut *entry.node);
+                    entry.refresh_hit_clip();
                     if let Some(flip) = entry.focus_target_flip() {
                         target_flips.push(flip);
                     }
@@ -1167,6 +1177,7 @@ impl UiTree {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
                         nodes::update(element, &mut *entry.node);
+                        entry.refresh_hit_clip();
                         if let Some(flip) = entry.focus_target_flip() {
                             target_flips.push(flip);
                         }
@@ -1729,6 +1740,9 @@ impl UiTree {
                 observer.forget(observation_key(id, Observation::FocusProperties));
                 if value.placements.is_some() {
                     observer.forget(observation_key(id, Observation::Placement));
+                }
+                if !value.inner_layers.is_empty() {
+                    observer.forget(observation_key(id, Observation::InnerLayerBlock));
                 }
             }
             for layer in &value.inner_layers {

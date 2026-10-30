@@ -63,15 +63,17 @@ MIRIFLAGS=-Zmiri-ignore-leaks cargo +nightly miri test -p compose-ui --lib tree_
 MIRIFLAGS=-Zmiri-ignore-leaks cargo +nightly miri test -p compose-ui --test suite -- \
     coordinates_in_passes layout_coordinates delegating_nodes \
     focus_tests::attaching focus_tests::manager focus_tests::modal focus_tests::nodes \
-    focus_tests::owner focus_tests::requesting focus_tests::restoring focus_tests::states
+    focus_tests::ordered focus_tests::owner focus_tests::properties focus_tests::directional \
+    focus_tests::requesting focus_tests::restoring focus_tests::states
 MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-tree-borrows" cargo +nightly miri test -p compose-ui --lib tree_access
 MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-tree-borrows" cargo +nightly miri test -p compose-ui --test suite -- \
     coordinates_in_passes layout_coordinates delegating_nodes \
     focus_tests::attaching focus_tests::manager focus_tests::modal focus_tests::nodes \
-    focus_tests::owner focus_tests::requesting focus_tests::restoring focus_tests::states
+    focus_tests::ordered focus_tests::owner focus_tests::properties focus_tests::directional \
+    focus_tests::requesting focus_tests::restoring focus_tests::states
 ```
 
-`-Zmiri-ignore-leaks` because of a leak that's deliberate and harmless: `compose_runtime`'s `EXECUTOR` is a `ManuallyDrop<Executor>` in a thread-local (`executor.rs`), so dropping tasks at a thread's exit can't run their drops after the runtime they use is gone: 3 allocations per test thread. Isolation doesn't need disabling. `focus_tests::candidates`, `directional`, `properties` and `ordered` are left out: they ran past 7 minutes under Miri without finishing (`ordered` under Tree Borrows alone), the first two's tables building a host per row. The rest takes some minutes. `only_unsafe_module` in the suite fails if `unsafe` appears anywhere else in the crate.
+`-Zmiri-ignore-leaks` because of a leak that's deliberate and harmless: `compose_runtime`'s `EXECUTOR` is a `ManuallyDrop<Executor>` in a thread-local (`executor.rs`), so dropping tasks at a thread's exit can't run their drops after the runtime they use is gone: 3 allocations per test thread. Isolation doesn't need disabling. `focus_tests::candidates` is left out: its tables build a host per row, past what's useful here. `properties`, `ordered` and `directional` take about 10 minutes each under Stacked Borrows. `only_unsafe_module` in the suite fails if `unsafe` appears anywhere else in the crate.
 
 ## Android
 

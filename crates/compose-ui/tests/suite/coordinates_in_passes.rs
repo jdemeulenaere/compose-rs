@@ -297,35 +297,39 @@ fn a_delegate_undelegated_asking_as_it_goes_is_sound() {
     }
 }
 
-/// B6: what an earlier measurement's block captured, dropped as the next one replaces it.
+/// B6: what an earlier block captured, dropped as a later one replaces it: asked with nothing of
+/// the tree in hand, so it answers.
 #[test]
-fn an_earlier_block_s_capture_asking_as_it_drops_is_sound() {
-    struct AskingCapture(Kept);
+fn an_earlier_block_s_capture_asking_as_it_drops_answers() {
+    struct AskingCapture(Kept, Rc<Cell<Offset>>);
     impl Drop for AskingCapture {
         fn drop(&mut self) {
-            let _ = ask(&self.0);
+            self.1.set(ask(&self.0));
         }
     }
     let kept: Kept = Rc::default();
-    let size = mutable_state_of(5);
-    let (k, s) = (kept.clone(), size.handle());
+    let seen = Rc::new(Cell::new(Offset::new(-1.0, -1.0)));
+    let again = mutable_state_of(0);
+    let (k, s, a) = (kept.clone(), seen.clone(), again.handle());
     let mut host = host(move || {
-        let k2 = k.clone();
+        let (k2, s2) = (k.clone(), s.clone());
         Layout(
-            keep(&k),
+            moved(3, 4).then(keep(&k)),
             measure_policy(move |scope, _, _| {
-                let capture = AskingCapture(k2.clone());
-                scope.layout_with(s.get(), 5, move |_| {
+                a.get();
+                let capture = AskingCapture(k2.clone(), s2.clone());
+                let _ = scope.layout_with(5, 5, move |_| {
                     let _ = &capture;
-                })
+                });
+                // The second replaces the first in this one measurement.
+                scope.layout_with(5, 5, |_| {})
             }),
             callback(|| {}),
         );
     });
-    size.set(6);
+    again.set(1);
     host.frame();
-    size.set(7);
-    host.frame();
+    assert_eq!(seen.get(), Offset::new(3.0, 4.0));
 }
 
 thread_local! {
@@ -476,4 +480,465 @@ fn an_update_a_parent_data_and_a_semantics_block_ask_without_a_panic() {
     again.set(1);
     host.frame();
     let _ = host.semantics_tree(true);
+}
+
+// ---- A panic, and what's in the chain ---------------------------------------------------------------
+
+/// F1: a draw node's panic leaves it in its chain: it draws again, and its end comes.
+#[test]
+fn a_draw_node_that_panicked_is_still_there() {
+    struct Drawing(Rc<std::cell::RefCell<Vec<&'static str>>>, MutableState<bool>);
+    impl ModifierNode for Drawing {
+        fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+            Some(self)
+        }
+        fn on_detach(&mut self, _: &mut NodeContext<'_>) {
+            self.0.borrow_mut().push("on_detach");
+        }
+        fn on_release(&mut self, _: &mut ReleaseContext<'_>) {
+            self.0.borrow_mut().push("on_release");
+        }
+    }
+    impl DrawModifierNode for Drawing {
+        fn draw(&mut self, _: &mut DrawScope<'_>) {
+            self.0.borrow_mut().push("draw");
+            assert!(!self.1.get(), "asked to");
+        }
+    }
+    impl Drop for Drawing {
+        fn drop(&mut self) {
+            self.0.borrow_mut().push("drop");
+        }
+    }
+    struct DrawingElement(Rc<std::cell::RefCell<Vec<&'static str>>>, MutableState<bool>);
+    impl ModifierNodeElement for DrawingElement {
+        type Node = Drawing;
+        fn create(&self) -> Drawing {
+            Drawing(self.0.clone(), self.1)
+        }
+        fn update(&self, _: &mut Drawing) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    let log: Rc<std::cell::RefCell<Vec<&'static str>>> = Rc::default();
+    let (panics, shown, redraw) =
+        (mutable_state_of(false), mutable_state_of(true), mutable_state_of(0));
+    let (l, p, s, r) = (log.clone(), panics.handle(), shown.handle(), redraw.handle());
+    let mut host = host(move || {
+        let modifier = Modifier.draw_behind(move |_| {
+            r.get();
+        });
+        if s.get() {
+            leaf(modifier.then_custom(DrawingElement(l.clone(), p)));
+        }
+    });
+    log.borrow_mut().clear();
+    panics.set(true);
+    redraw.set(1);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.frame();
+    }));
+    assert!(result.is_err());
+    assert_eq!(*log.borrow(), ["draw"]);
+    log.borrow_mut().clear();
+    panics.set(false);
+    redraw.set(2);
+    host.frame();
+    assert_eq!(*log.borrow(), ["draw"], "it draws again");
+    log.borrow_mut().clear();
+    shown.set(false);
+    host.frame();
+    assert_eq!(*log.borrow(), ["on_detach", "on_release", "drop"]);
+}
+
+// ---- A layer's last run ------------------------------------------------------------------------------
+
+struct Holding(Kept);
+impl ModifierNode for Holding {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(Some(context.require_layout_coordinates()));
+    }
+}
+struct HoldingElement(Kept);
+impl ModifierNodeElement for HoldingElement {
+    type Node = Holding;
+    fn create(&self) -> Holding {
+        Holding(self.0.clone())
+    }
+    fn update(&self, _: &mut Holding) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// F2: a block's first run in a frame that changed a layer around it sees the layer's new value,
+/// as Compose's runs as the write applies.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, onCommitAffectingLayerParams
+#[test]
+fn a_first_block_sees_a_layer_changed_in_its_frame() {
+    let (translation, show) = (mutable_state_of(0.0f32), mutable_state_of(false));
+    let kept: Kept = Rc::default();
+    let seen = Rc::new(Cell::new(Offset::new(-1.0, -1.0)));
+    let (t, sh, k, se) = (translation.handle(), show.handle(), kept.clone(), seen.clone());
+    let mut host = host(move || {
+        let (k, se) = (k.clone(), se.clone());
+        let (k2, se2) = (k.clone(), se.clone());
+        Layout(
+            Modifier
+                .graphics_layer(move |layer| layer.translation_x = t.get())
+                .then_custom(HoldingElement(k)),
+            measure_policy(move |scope, _, _| {
+                if sh.get() {
+                    let (k, se) = (k2.clone(), se2.clone());
+                    scope.layout_with(5, 5, move |_| se.set(ask(&k)))
+                } else {
+                    scope.layout(5, 5)
+                }
+            }),
+            callback(|| {}),
+        );
+    });
+    translation.set(9.0);
+    show.set(true);
+    host.frame();
+    host.frame();
+    host.frame();
+    assert_eq!(seen.get(), Offset::new(9.0, 0.0));
+}
+
+/// F3: a clipped layer's block no frame drew: a press asks it, once.
+#[test]
+fn a_layer_never_drawn_clips_a_press() {
+    struct RightHalf;
+    impl CustomShape for RightHalf {
+        fn create_outline(&self, size: Size, _: LayoutDirection, _: &Density) -> Outline {
+            Outline::Rectangle(Rect::new(size.width / 2.0, 0.0, size.width, size.height))
+        }
+        fn same(&self, _: &dyn CustomShape) -> bool {
+            true
+        }
+    }
+    let clicks = Rc::new(Cell::new(0));
+    let c = clicks.clone();
+    let mut host = host(move || {
+        let c = c.clone();
+        Stack!(modifier = Modifier.draw_with_content(|_| {}), {
+            let c = c.clone();
+            Leaf(
+                Modifier
+                    .size(10.dp())
+                    .graphics_layer(|layer| {
+                        layer.clip = true;
+                        layer.shape = Shape::custom(RightHalf);
+                    })
+                    .clickable(move || c.set(c.get() + 1)),
+            );
+        });
+    });
+    click(&mut host, 2.0, 5.0);
+    assert_eq!(clicks.get(), 0, "outside its shape");
+    click(&mut host, 8.0, 5.0);
+    assert_eq!(clicks.get(), 1, "inside it");
+}
+
+/// A press tests against the shape a block last gave, running neither it nor the shape's code.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/OwnedLayer.kt, isInLayer
+#[test]
+fn a_press_is_clipped_by_the_last_shape_a_block_gave() {
+    struct Half(bool, Rc<Cell<u32>>);
+    impl CustomShape for Half {
+        fn create_outline(&self, size: Size, _: LayoutDirection, _: &Density) -> Outline {
+            self.1.set(self.1.get() + 1);
+            let middle = size.width / 2.0;
+            Outline::Rectangle(if self.0 {
+                Rect::new(0.0, 0.0, middle, size.height)
+            } else {
+                Rect::new(middle, 0.0, size.width, size.height)
+            })
+        }
+        fn same(&self, _: &dyn CustomShape) -> bool {
+            false
+        }
+    }
+    let left = mutable_state_of(true);
+    let (clicks, outlines) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (c, o, l) = (clicks.clone(), outlines.clone(), left.handle());
+    let mut host = host(move || {
+        let (c, o) = (c.clone(), o.clone());
+        Leaf(
+            Modifier
+                .size(10.dp())
+                .graphics_layer(move |layer| {
+                    layer.clip = true;
+                    layer.shape = Shape::custom(Half(l.get(), o.clone()));
+                })
+                .clickable(move || c.set(c.get() + 1)),
+        );
+    });
+    let press = |host: &mut compose_ui::platform::UiHost, x: f32| {
+        host.send_pointer(PointerEvent::press(Offset::new(x, 5.0)));
+        host.send_pointer(PointerEvent::release(Offset::new(x, 5.0)));
+    };
+    let before = outlines.get();
+    press(&mut host, 2.0);
+    assert_eq!(clicks.get(), 1, "in the left half");
+    press(&mut host, 8.0);
+    assert_eq!(clicks.get(), 1, "not in the right");
+    assert_eq!(outlines.get(), before, "a press runs no shape");
+    host.frame();
+    left.set(false);
+    host.frame();
+    press(&mut host, 2.0);
+    assert_eq!(clicks.get(), 1, "not in the left now");
+    press(&mut host, 8.0);
+    assert_eq!(clicks.get(), 2, "in the right");
+}
+
+/// F5: a block's clip flipping tells who listens: its bounds changed, not its transform.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, onCommitAffectingLayerParams
+#[test]
+fn a_layer_s_clip_flipping_tells_a_position_listener() {
+    let clip = mutable_state_of(false);
+    let bounds = Rc::new(Cell::new(Rect::new(0.0, 0.0, 0.0, 0.0)));
+    let (c, b) = (clip.handle(), bounds.clone());
+    let mut host = host(move || {
+        let b = b.clone();
+        Layout(
+            sized_px(10).graphics_layer(move |layer| layer.clip = c.get()),
+            measure_policy(|scope, measurables, constraints| {
+                let placeable = scope.measure(measurables[0], constraints.loosen());
+                scope.place(&placeable, 8, 0);
+                scope.layout(10, 10)
+            }),
+            callback(move || {
+                let b = b.clone();
+                leaf(Modifier.on_globally_positioned(move |coordinates: LayoutCoordinates| {
+                    b.set(coordinates.bounds_in_window());
+                }));
+            }),
+        );
+    });
+    assert_eq!(bounds.get().right, 13.0);
+    clip.set(true);
+    host.frame();
+    assert_eq!(bounds.get().right, 10.0);
+    clip.set(false);
+    host.frame();
+    assert_eq!(bounds.get().right, 13.0);
+}
+
+fn sized_px(size: i32) -> Modifier {
+    Modifier.size((size as f32).dp())
+}
+
+/// F7: an inner layer's block runs once for an update, a listener anywhere or not: a recomposition
+/// giving it a new one, and a write to what it reads.
+#[test]
+fn an_inner_layer_runs_once_per_update_with_a_listener() {
+    let (composed, value) = (mutable_state_of(0.0f32), mutable_state_of(0.0f32));
+    let runs = Rc::new(Cell::new(0));
+    let (c, v, r) = (composed.handle(), value.handle(), runs.clone());
+    let mut host = host(move || {
+        let r = r.clone();
+        let translation = c.get();
+        leaf(Modifier.on_globally_positioned(|_: LayoutCoordinates| {}));
+        leaf(
+            // A drawing before it makes the layer an inner one.
+            Modifier.draw_behind(|_| {}).graphics_layer(move |layer| {
+                r.set(r.get() + 1);
+                layer.translation_x = translation + v.get();
+            }),
+        );
+    });
+    runs.set(0);
+    composed.set(3.0);
+    host.frame();
+    assert_eq!(runs.get(), 1, "a new block");
+    runs.set(0);
+    value.set(4.0);
+    host.frame();
+    assert_eq!(runs.get(), 1, "a write");
+    // It still hears the next, its reads kept from the run ahead.
+    runs.set(0);
+    value.set(5.0);
+    host.frame();
+    assert_eq!(runs.get(), 1, "another");
+    runs.set(0);
+    host.frame();
+    assert_eq!(runs.get(), 0, "at rest");
+}
+
+// ---- Busy, and other threads ---------------------------------------------------------------------
+
+#[test]
+fn busy_says_not_attached() {
+    let kept: Kept = Rc::default();
+    let k = kept.clone();
+    let host = host(move || leaf(keep(&k)));
+    let coordinates = kept.get().expect("positioned");
+    assert!(coordinates.is_attached());
+    assert!(!coordinates.is_busy());
+    host.with_tree(|_| {
+        assert!(!coordinates.is_attached());
+        assert!(coordinates.is_busy());
+    });
+    assert!(coordinates.is_attached());
+}
+
+/// F6: a semantics node and a focus properties block have a window: what they ask they're told.
+#[test]
+fn a_semantics_node_and_a_focus_properties_block_ask_and_are_told() {
+    struct Asking(Kept, Rc<Cell<Offset>>, MutableState<i32>);
+    impl ModifierNode for Asking {
+        fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+            Some(self)
+        }
+    }
+    impl SemanticsModifierNode for Asking {
+        fn apply_semantics(&self, _: &mut SemanticsConfiguration) {
+            self.2.get();
+            self.1.set(ask(&self.0));
+        }
+    }
+    struct AskingElement(Kept, Rc<Cell<Offset>>, MutableState<i32>);
+    impl ModifierNodeElement for AskingElement {
+        type Node = Asking;
+        fn create(&self) -> Asking {
+            Asking(self.0.clone(), self.1.clone(), self.2)
+        }
+        fn update(&self, _: &mut Asking) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    let kept: Kept = Rc::default();
+    let (semantics, properties) =
+        (Rc::new(Cell::new(Offset::ZERO)), Rc::new(Cell::new(Offset::ZERO)));
+    let (k, s, p) = (kept.clone(), semantics.clone(), properties.clone());
+    let requester = FocusRequester::new();
+    let again = mutable_state_of(0);
+    let a = again.handle();
+    let mut host = host(move || {
+        let (k2, p) = (k.clone(), p.clone());
+        leaf(
+            moved(3, 4)
+                .then(keep(&k))
+                .then_custom(AskingElement(k.clone(), s.clone(), a))
+                .focus_requester(requester)
+                .focus_properties(move |_| p.set(ask(&k2)))
+                .focus_target(),
+        );
+    });
+    let _ = host.semantics_tree(true);
+    // Once what it keeps is known.
+    again.set(1);
+    host.frame();
+    let _ = host.semantics_tree(true);
+    requester.request_focus();
+    host.frame();
+    assert_eq!(semantics.get(), Offset::new(3.0, 4.0));
+    assert_eq!(properties.get(), Offset::new(3.0, 4.0));
+}
+
+thread_local! {
+    static ASKS_FIRST: std::cell::RefCell<Option<AskingAtExit>> =
+        const { std::cell::RefCell::new(None) };
+    static ASKS_LAST: std::cell::RefCell<Option<AskingAtExit>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct AskingAtExit(LayoutCoordinates);
+
+impl Drop for AskingAtExit {
+    fn drop(&mut self) {
+        let _ = self.0.position_in_root();
+        let _ = self.0.is_attached();
+    }
+}
+
+/// F8: a query in a `Drop` as the thread exits, its registry gone or going: no abort. One of the
+/// two goes after the registry, whichever order a platform destroys them in.
+#[test]
+fn a_query_at_thread_exit_does_not_abort() {
+    let thread = std::thread::spawn(|| {
+        ASKS_FIRST.with(|_| {});
+        let kept: Kept = Rc::default();
+        let k = kept.clone();
+        let host = host(move || leaf(keep(&k)));
+        let coordinates = kept.get().expect("positioned");
+        ASKS_FIRST.with(|slot| *slot.borrow_mut() = Some(AskingAtExit(coordinates)));
+        ASKS_LAST.with(|slot| *slot.borrow_mut() = Some(AskingAtExit(coordinates)));
+        std::mem::forget(host);
+    });
+    assert!(thread.join().is_ok());
+}
+
+/// F2 again: a measure policy reading its own state in the frame a layer changed sees it too.
+#[test]
+fn a_measure_policy_sees_a_layer_changed_in_its_frame() {
+    let (translation, again) = (mutable_state_of(0.0f32), mutable_state_of(0));
+    let kept: Kept = Rc::default();
+    let seen = Rc::new(Cell::new(Offset::new(-1.0, -1.0)));
+    let (t, a, k, se) = (translation.handle(), again.handle(), kept.clone(), seen.clone());
+    let mut host = host(move || {
+        let (k2, se) = (k.clone(), se.clone());
+        Layout(
+            Modifier
+                .graphics_layer(move |layer| layer.translation_x = t.get())
+                .then_custom(HoldingElement(k.clone())),
+            measure_policy(move |scope, _, _| {
+                a.get();
+                se.set(ask(&k2));
+                scope.layout(5, 5)
+            }),
+            callback(|| {}),
+        );
+    });
+    translation.set(9.0);
+    again.set(1);
+    host.frame();
+    assert_eq!(seen.get(), Offset::new(9.0, 0.0));
+}
+
+/// A layer a draw ran isn't run again for coordinates first given later.
+#[test]
+fn a_layer_drawn_isn_t_run_again_for_a_later_listener() {
+    let later = mutable_state_of(false);
+    let runs = Rc::new(Cell::new(0));
+    let (l, r) = (later.handle(), runs.clone());
+    let mut host = host(move || {
+        let r = r.clone();
+        leaf(Modifier.graphics_layer(move |_| r.set(r.get() + 1)));
+        // Its own scope: the layer isn't composed again.
+        Stack!({
+            if l.get() {
+                leaf(Modifier.on_globally_positioned(|_: LayoutCoordinates| {}));
+            }
+        });
+    });
+    let before = runs.get();
+    later.set(true);
+    host.frame();
+    assert_eq!(runs.get(), before);
+}
+
+/// F9: a handle's tree is its own, whatever thread asks.
+#[test]
+fn a_handle_read_on_another_thread_names_no_tree_there() {
+    let kept: Kept = Rc::default();
+    let k = kept.clone();
+    let _host = host(move || leaf(keep(&k)));
+    let bits = kept.get().expect("positioned");
+    let thread = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let other: Kept = Rc::default();
+                let o = other.clone();
+                let _host = host(move || leaf(keep(&o)));
+                bits.is_attached()
+            })
+            .join()
+    });
+    assert_eq!(thread.ok(), Some(false));
 }
