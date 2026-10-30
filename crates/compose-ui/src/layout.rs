@@ -586,6 +586,41 @@ impl<'a> MeasureScope<'a> {
         result
     }
 
+    /// `layout_with`, giving `rulers` to what's in it, as `layout(width, height, rulers = …) { … }`:
+    /// worked out each time it's placed, what they read placing it again.
+    pub fn layout_with_rulers(
+        &mut self,
+        width: i32,
+        height: i32,
+        rulers: impl Fn(&mut crate::ruler::RulerScope) + 'static,
+        block: impl Fn(&mut crate::placement::PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            let source = crate::ruler::RulerSource::Block(Rc::new(rulers));
+            self.base.tree.enter().set_rulers(node, layer, source);
+        }
+        self.layout_with(width, height, block)
+    }
+
+    /// `layout_with`, giving rulers one at a time as they're read, as `layout(width, height,
+    /// isRulerProvided = …, rulerProvider = …) { … }`.
+    pub fn layout_with_ruler_provider(
+        &mut self,
+        width: i32,
+        height: i32,
+        is_provided: impl Fn(&crate::ruler::Ruler) -> bool + 'static,
+        provider: impl Fn(&mut crate::ruler::RulerScope, &crate::ruler::Ruler) + 'static,
+        block: impl Fn(&mut crate::placement::PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            let source = crate::ruler::RulerSource::Lazily(Rc::new(is_provided), Rc::new(provider));
+            self.base.tree.enter().set_rulers(node, layer, source);
+        }
+        self.layout_with(width, height, block)
+    }
+
     /// The result of a measurement of `width` by `height`, as `MeasureScope.layout`.
     ///
     /// # Panics

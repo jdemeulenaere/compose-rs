@@ -420,6 +420,9 @@ impl UiTree {
         let earlier = value.placements.as_mut().and_then(|it| it.blocks.get_mut(layer)?.take());
         drop(earlier);
         let value = self.node_mut(node);
+        let earlier_rulers =
+            value.placements.as_mut().and_then(|it| it.rulers.get_mut(layer)?.take());
+        let value = self.node_mut(node);
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
@@ -508,6 +511,10 @@ impl UiTree {
         };
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
+        let value = self.node_mut(node);
+        if value.placements.is_some() {
+            self.rulers_measured(node, layer, earlier_rulers);
+        }
         let value = self.node_mut(node);
         let layout_aware = value.kinds.any(NodeKinds::LAYOUT_AWARE);
         let value = &mut value.layers[layer];

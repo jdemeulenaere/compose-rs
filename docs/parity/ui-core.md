@@ -17,10 +17,10 @@ What of Jetpack Compose's ui core compose-rs has, which of Compose's tests its o
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 3 | 11 |
-| `ported` | 32 | 325 |
+| `ported` | 33 | 328 |
 | `port` | 11 | 112 |
-| `partial` | 58 | 1,124 |
-| `feature:<name>` | 74 | 1,336 |
+| `partial` | 59 | 1,149 |
+| `feature:<name>` | 72 | 1,308 |
 | `n/a` | 57 | 257 |
 
 By module: `ui` 147 files (125 device, 22 host), `ui-graphics` 64, `ui-geometry` 7, `ui-unit` 14, `ui-util` 3.
@@ -100,14 +100,14 @@ Status in bold for the ones that need work now (`port`, `partial`, `covered`); `
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementReusableNodeTest.kt` | 3 | `onPlaced` on reused nodes in a lazy column, interop views | **ported** | `onPlacedCalledOnReuseInsideLazyColumn`: crates/compose-foundation/tests/suite/lazy_reuse.rs (D1186). Interop-view cases n/a. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementScopeMotionFrameOfReferenceTest.kt` | 4 | `withMotionFrameOfReferencePlacement` in lazy list, grid, staggered grid, pager | **partial** | `testLazyList`, `testLazyGrid`, and a scroll: crates/compose-foundation/tests/suite/motion_frame_of_reference.rs (D1213). Staggered grid and pager are foundation gaps. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RectListIntegrationTest.kt` | 34 | The spatial index (`RectList`) kept in sync through moves, padding, translation, rotation, scale, scrolling, lazy columns, gesturable nodes | `feature:layout-rect-callbacks` | Internal index; adapt as checks of `onLayoutRectChanged` bounds if compose-rs keeps another index. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RectRulerTest.kt` | 3 | `RectRulers` default, inner and outer | `feature:rulers` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RectRulerTest.kt` | 3 | `RectRulers` default, inner and outer | **ported** | `crates/compose-ui/tests/suite/rulers.rs` |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasureWithIntrinsicsRealClockTest.kt` | 10 | As RemeasureWithIntrinsicsTest, with the real clock | **ported** | With RemeasureWithIntrinsicsTest's ports, which cite both (`crates/compose-ui/tests/suite/intrinsics.rs`): the clock variant adds nothing in compose-rs (frames are synchronous). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasureWithIntrinsicsTest.kt` | 11 | Remeasuring parents and grandparents that used a child's intrinsics; queries from modifiers; stateful measure blocks | **ported** | `crates/compose-ui/tests/suite/intrinsics.rs`, all 11 (`childWithStatefulMeasureBlock` checks what the layout modifier kept instead of the pixels drawn from it). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasurementModifierTest.kt` | 2 | `RemeasurementModifier.forceRemeasure` remeasures only that node | **ported** | crates/compose-ui/tests/suite/node_invalidation.rs (`force_remeasure_measures_a_clean_node_at_once`, `force_remeasure_measures_no_other_node`, through `Modifier.remeasurement_modifier` and a host where Compose drives a `MeasureAndLayoutDelegate`; also a busy tree's and a new size's cases, D1165). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ResizingComposeViewTest.kt` | 8 | ComposeView measured twice, wrap content, fixed size, intrinsics, `forceRemeasure` | `n/a: Android View measure` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RootNodeLayoutTest.kt` | 4 | The root measures with zero minimums and places at the top left; view wrap/match parent | **port** | First two tests only (docs/06: the root loosens the window's constraints, places at the origin); the View ones n/a. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RtlLayoutTest.kt` | 9 | Absolute vs relative placement in RTL, direction change remeasures, direction in measure and intrinsics scopes, locale direction, padding and minimum touch target | **port** | `place_relative` and per-node direction exist (foundation rtl.rs, review_rtl.rs). `testModifiedLayoutDirection_inIntrinsicsMeasure` is ported (`crates/compose-ui/tests/suite/intrinsics.rs`); locale test n/a. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RulerTest.kt` | 25 | `Ruler`s: values within/outside a layout, RTL, state updates, providers added/removed, derived rulers, side-effect rulers, `invalidateRulers`, lookahead | `feature:rulers` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RulerTest.kt` | 25 | `Ruler`s: values within/outside a layout, RTL, state updates, providers added/removed, derived rulers, side-effect rulers, `invalidateRulers`, lookahead | `partial` | Ported to `crates/compose-ui/tests/suite/rulers.rs`, 23 of 25, each in both ways of providing them where Compose has both, with 11 of our own on what its tests don't pin (who's told, what a measurement takes away). Not yet: `alignmentLinesTest` (**alignment-lines**), `invalidateRulersInLookaheadScope` (**lookahead**). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ShowLayoutBoundsTest.kt` | 3 | Android's "show layout bounds" debug setting | `n/a: Android debug setting` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt` | 108 | `SubcomposeLayout`: slots, recomposition isolation, disposal, draw order, z-index, density, precompose/premeasure/dispose, paused precomposition, slot reuse policy, deactivation, nested, lookahead | `feature:subcompose-layout` | compose-rs's lazy lists and `BoxWithConstraints` stand in with composition between measure rounds (docs/11, "No subcomposition"). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TestRuleExecutesLayoutPassesWhenWaitingForIdleTest.kt` | 9 | `waitForIdle` runs measure/placement passes of animations (also through AndroidView and SubcomposeLayout) | **partial** | compose-test's `wait_for_idle` runs frames until idle (compose-test/src/lib.rs); port the measure/placement animation cases; AndroidView n/a; subcompose variants need feature:subcompose-layout. |
@@ -337,7 +337,7 @@ From each module's `api/current.txt` (public, non-deprecated; experimental inclu
   - `LayoutCoordinates.get(alignmentLine)`: **alignment-lines**.
   - `SubcomposeLayout(modifier, measurePolicy)`, `SubcomposeLayout(state, …)`, `SubcomposeLayoutState` (`precompose`, `createPausedPrecomposition`), `PrecomposedSlotHandle` (`dispose`, `premeasure`, `getSize`, `placeablesCount`, `traverseDescendants`), `PausedPrecomposition`, `SubcomposeMeasureScope.subcompose`, `SubcomposeSlotReusePolicy` (+ `SlotIdsSet`): **subcompose-layout**.
   - `Layout(contents: List<@Composable () -> Unit>, modifier, MultiContentMeasurePolicy)`: **multi-content-layout**.
-  - `Ruler`, `HorizontalRuler`, `VerticalRuler` (`derived`, `minOf`, `maxOf`), `RulerScope` (`provides`, `providesRelative`, `coordinates`), `MeasureScope.layout(…, rulers)`, `MeasureResult.rulers`/`rulerProvider`/`isRulerProvided`, `PlacementScope.current(ruler, default)`, `RectRulers` (`innermostOf`, `outermostOf`), `WindowInsetsRulers` (13 kinds, `current`, `maximum`, `getAnimation`, `innermostOf`, `disable`), `WindowInsetsAnimation`, `getDisplayCutoutBounds`: **rulers**.
+  - `WindowInsetsRulers` (13 kinds, `current`, `maximum`, `getAnimation`, `innermostOf`, `disable`), `WindowInsetsAnimation`, `getDisplayCutoutBounds`: **rulers** (the rest of it is there, D1218). `MeasureResult.rulers`, `rulerProvider`, `isRulerProvided`: `MeasureResult` is a struct holding a size here, what's provided kept by the layout call.
   - `ContentScale` as an interface (`computeScaleFactor`), `FixedScale`, `ScaleFactor` (+ `times`/`div` with `Size`, `lerp`, `isSpecified`, `takeOrElse`), and `ContentScale` in ui rather than foundation: **content-scale**.
   - `Modifier.onLayoutRectChanged(throttleMillis, debounceMillis)`, `registerOnLayoutRectChanged`, `registerOnGlobalLayoutListener`, `Modifier.onVisibilityChanged`, `onVisibilityChangedNode`, `LayoutBoundsHolder`, `Modifier.layoutBounds`: **layout-rect-callbacks**.
   - `BeyondBoundsLayout` (+ `BeyondBoundsScope`, `LayoutDirection`), `BeyondBoundsLayoutProviderModifierNode`: **beyond-bounds-layout** (compose-rs has an internal equivalent, D477).
@@ -523,7 +523,7 @@ One entry per feature, in the suggested order (below, after the entries). Sizes:
 - *Tests:* LookaheadScopeTest, ApproachLayoutTest, TogglePlacementInLookaheadScopeTest, LookaheadDelegatesTest; completes the lookahead cases of PlacedChildTest, PlacementLayoutCoordinatesTest, MeasureInPlacementTest, IntrinsicsMeasurementTest, RulerTest, SubcomposeLayoutTest.
 - *Depends on:* 3.13, 3.14, 3.17; 3.18 and 3.19 for some tests; runtime `movableContentOf` (shared elements); 3.29 for shared elements' overlay rendering. Unblocks animation's `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, `animateBounds`, `skipToLookaheadSize`, lookahead-aware `AnimatedContent`/`AnimatedVisibility`; foundation's `animateItem` in a `LookaheadScope`.
 
-**3.21 `rulers`** — L.
+**3.21 `rulers`** — L. All but `WindowInsetsRulers` done (D1218).
 - *API:* `Ruler`, `HorizontalRuler`, `VerticalRuler`, `RulerScope`, `RectRulers`, `WindowInsetsRulers`, `WindowInsetsAnimation`, `PlacementScope.current`, `invalidateRulers`, `getDisplayCutoutBounds`.
 - *Does:* positions a layout provides to its whole subtree (window insets as rulers), read while placing.
 - *Tests:* RulerTest, RectRulerTest, WindowInsetsRulersTest.

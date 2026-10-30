@@ -12,6 +12,7 @@ use crate::alignment::LayoutDirection;
 use crate::constraints::Constraints;
 use crate::coordinates::{LayoutCoordinates, with_position_reads_of};
 use crate::layout::{Measurable, MeasureScope, Placeable};
+use crate::ruler::{LayerRulers, Ruler, RulerSource};
 use crate::tree::{NodeId, Observation, UiTree, observation_key};
 use crate::unit::{Density, IntOffset, Offset};
 
@@ -43,6 +44,8 @@ pub(crate) struct LayerBlock {
 /// The placement blocks of a node's layers.
 #[derive(Default)]
 pub(crate) struct NodePlacements {
+    /// What each layer provides of rulers (D1218).
+    pub(crate) rulers: SmallVec<[Option<crate::ruler::LayerRulers>; 1]>,
     /// Per layer: the block of its last measurement, if it left its placing to one.
     pub(crate) blocks: SmallVec<[Option<LayerBlock>; 2]>,
 }
@@ -133,6 +136,54 @@ impl PlacementScope<'_> {
         result
     }
 
+    /// `ruler`'s value in these coordinates, as `ruler.current(default)`: its nearest provider's,
+    /// at this layout or around it, else `default`. A change to it places this again; so does its
+    /// reader moving, as it asks where it is.
+    pub fn current(&mut self, ruler: &Ruler, default: f32) -> f32 {
+        if let Some(derivation) = ruler.derivation() {
+            return derivation(self, default);
+        }
+        let node = self.scope.base.node;
+        self.scope.base.tree.enter().note_ruler_reader(ruler, node);
+        let target = self.coordinates().expect("placing");
+        let (mut at, mut layer) = (node, self.scope.layer);
+        loop {
+            let tree = &*self.scope.base.tree;
+            let value = tree.node(at);
+            let provided = value.placements.as_ref().and_then(|placements| {
+                let rulers = placements.rulers.get(layer)?.as_ref()?;
+                match &rulers.source {
+                    RulerSource::Block(_) => {
+                        rulers.values.iter().find(|(it, _)| it == ruler).map(|(_, value)| *value)
+                    }
+                    RulerSource::Lazily(is_provided, provider) => {
+                        let (is_provided, provider) = (is_provided.clone(), provider.clone());
+                        is_provided(ruler).then(|| {
+                            let mut scope = tree.ruler_scope(at, layer);
+                            provider(&mut scope, ruler);
+                            scope.value_of(ruler)
+                        })?
+                    }
+                }
+            });
+            if let Some(provided) = provided.filter(|provided| !provided.is_nan()) {
+                let source = tree.coordinates_of_layer(at, layer);
+                return ruler.in_coordinates(provided, &source, &target);
+            }
+            if layer > 0 {
+                layer -= 1;
+                continue;
+            }
+            match value.parent {
+                Some(parent) if !value.overlay => {
+                    at = parent;
+                    layer = tree.node(parent).layers.len() - 1;
+                }
+                _ => return default,
+            }
+        }
+    }
+
     /// The layout direction where the node is composed.
     pub fn layout_direction(&self) -> LayoutDirection {
         self.scope.layout_direction()
@@ -153,6 +204,15 @@ impl PlacementScope<'_> {
 }
 
 impl UiTree {
+    /// Keeps what the measurement of `layer` of `node` provides of rulers.
+    pub(crate) fn set_rulers(&mut self, node: NodeId, layer: usize, source: RulerSource) {
+        let placements = self.node_mut(node).placements.get_or_insert_with(Default::default);
+        if placements.rulers.len() <= layer {
+            placements.rulers.resize_with(layer + 1, || None);
+        }
+        placements.rulers[layer] = Some(LayerRulers { source, values: Default::default() });
+    }
+
     /// Keeps `block`, what the measurement `run` of `layer` of `node` left its placing to, for the
     /// placement pass. What it replaces is the caller's to drop, its captures being application
     /// code's, outside the tree.
@@ -267,6 +327,7 @@ impl UiTree {
             let mut layer = 0;
             let mut again = false;
             while let Some(found) = self.block_of_layer(node, layer) {
+                self.capture_rulers(node, layer);
                 if let Some((block, measure_run, first)) = found {
                     again |= !first;
                     self.run_placement_block(node, layer, measure_run, first, &block);

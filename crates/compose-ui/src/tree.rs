@@ -410,6 +410,8 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// Who read which ruler, by its id, since its last change (D1218).
+    pub(crate) ruler_readers: std::collections::HashMap<(u64, NodeId), crate::ruler::Ruler>,
     /// The nodes with `UnplacedAwareModifierNode`s, and whether each was placed when last looked
     /// at.
     pub(crate) unplaced_aware: Vec<(NodeId, bool)>,
@@ -540,6 +542,7 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            ruler_readers: Default::default(),
             unplaced_aware: Vec::new(),
             new_layers: Vec::new(),
             window_origin: Offset::ZERO,
@@ -1519,6 +1522,8 @@ impl UiTree {
         // Those of layers gone: the rest measure again, whatever they were.
         if let Some(placements) = &mut value.placements {
             placements.blocks.truncate(value.layers.len());
+            let layers = value.layers.len();
+            self.rulers_of_layers_gone(node, layers);
         }
         self.refresh_parent_data(node)
     }
@@ -1760,6 +1765,9 @@ impl UiTree {
             }
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
+            }
+            if !self.ruler_readers.is_empty() {
+                self.ruler_readers.retain(|(_, reader), _| *reader != id);
             }
             for entry in &mut value.chain {
                 self.forget_entry_reads(entry.id, entry.state);

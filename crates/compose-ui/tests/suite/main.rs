@@ -44,6 +44,7 @@ mod review_d_panic_poisoned;
 mod review_d_support;
 mod review_groups;
 mod review_retained;
+mod rulers;
 mod single_drawing_extent;
 mod span_style;
 #[path = "../support/mod.rs"]

@@ -78,6 +78,7 @@ mod prefetch;
 mod remeasurement;
 mod render;
 pub mod retained_values;
+mod ruler;
 mod semantics;
 mod semantics_node;
 mod semantics_properties;
@@ -290,6 +291,7 @@ pub use prefetch::{
     PrefetchScheduler, prefetch_now,
 };
 pub use remeasurement::{Remeasurement, RemeasurementModifier};
+pub use ruler::{HorizontalRuler, RectRulers, Ruler, RulerScope, VerticalRuler};
 pub use semantics::{
     AccessibilityAction, ActionFn, AnySemanticsPropertyKey, CollectionInfo, CollectionItemInfo,
     ColorProducer, CustomAccessibilityAction, GetScrollViewportLengthFn, GetTextLayoutResultFn,
