@@ -392,7 +392,7 @@ fn back_drawer(initial: DrawerValue, back_pressed: Rc<Cell<bool>>) -> impl Fn() 
         MaterialTheme!({
             ModalNavigationDrawer!(
                 {
-                    ModalDrawerSheet!(|_| {
+                    ModalDrawerSheet!(drawer_state = Some(state), |_| {
                         Button!(
                             move || {
                                 scope.launch(async move { state.close().await });

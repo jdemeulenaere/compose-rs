@@ -90,7 +90,7 @@ fn Home(about: bool, on_open_card: impl Fn(u32) + 'static) {
     });
     ModalNavigationDrawer!(
         {
-            ModalDrawerSheet!({
+            ModalDrawerSheet!(drawer_state = Some(drawer), {
                 Text!(
                     "compose-rs",
                     modifier = Modifier.padding((28.dp(), 24.dp(), 16.dp(), 16.dp())),

@@ -315,7 +315,7 @@ A callback parameter is `impl Fn(A) + 'static`, and arguments are passed by valu
 ```kotlin
 val drawerState = rememberDrawerState(DrawerValue.Closed)
 val scope = rememberCoroutineScope()
-ModalNavigationDrawer(drawerContent = { ModalDrawerSheet { Text("Settings") } }, drawerState = drawerState) {
+ModalNavigationDrawer(drawerContent = { ModalDrawerSheet(drawerState) { Text("Settings") } }, drawerState = drawerState) {
     Button(onClick = { scope.launch { drawerState.open() } }) { Text("Open the menu") }
 }
 ```
@@ -328,7 +328,8 @@ pub fn Menu() {
     let scope = remember_coroutine_scope(); // Copy too
     ModalNavigationDrawer!(
         {
-            ModalDrawerSheet!({
+            // Given the state, the sheet takes back: a Compose rule.
+            ModalDrawerSheet!(drawer_state = Some(drawer), {
                 Text!("Settings", modifier = Modifier.padding(16.dp()));
             });
         },
@@ -346,6 +347,8 @@ pub fn Menu() {
     );
 }
 ```
+
+A `ModalDrawerSheet` closes on back only when it's given its `drawer_state`, as above. It's Compose's rule, not a difference: a plain sheet leaves back alone, a drawer or not.
 
 Outside a composition (a test, an app's model), `DrawerState::new(…)` and the other holders' constructors return the holder's owner, `Owned<DrawerState>`, which frees the holder when dropped. Keep the owner, and copy the handle out of it (`*owner`) for closures.
 

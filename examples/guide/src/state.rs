@@ -83,7 +83,8 @@ pub fn Menu() {
     let scope = remember_coroutine_scope(); // Copy too
     ModalNavigationDrawer!(
         {
-            ModalDrawerSheet!({
+            // Given the state, the sheet takes back: a Compose rule.
+            ModalDrawerSheet!(drawer_state = Some(drawer), {
                 Text!("Settings", modifier = Modifier.padding(16.dp()));
             });
         },

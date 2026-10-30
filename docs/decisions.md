@@ -829,3 +829,4 @@ The log is split by area into the files below, one table each, rows in number or
 | D1465 | [ui-and-layout](decisions/ui-and-layout.md#d1465) | current |
 | D1500 | [runtime](decisions/runtime.md#d1500) | current |
 | D1501 | [runtime](decisions/runtime.md#d1501) | current |
+| D1550 | [ui-and-layout](decisions/ui-and-layout.md#d1550) | current |
