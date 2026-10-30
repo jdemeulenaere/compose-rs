@@ -17,7 +17,7 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 114 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 116 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 228 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 82 |
@@ -440,6 +440,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D753 | [runtime](decisions/runtime.md#d753) | current |
 | D754 | [runtime](decisions/runtime.md#d754) | current |
 | D755 | [runtime](decisions/runtime.md#d755) | current |
+| D756 | [runtime](decisions/runtime.md#d756) | current |
+| D757 | [runtime](decisions/runtime.md#d757) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |

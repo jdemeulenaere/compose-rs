@@ -367,7 +367,7 @@ Each pass composes inside a mutable snapshot, as `Recomposer.composing` (§1.10)
 - The snapshot is applied when **composing ends**, before the end-of-pass work (`Pass::finish`, `composition.rs:368`): releases, forgotten values, `on_remembered` and side effects run in the global snapshot, as Compose applies changes outside the composition snapshots. Its changes reach other compositions through the internal apply observer (§3.7). A failed apply panics with Compose's message; single-threaded, it needs a write to the same state by something running during the pass outside it (no such path exists in compose-rs's own code, so it would be an app bug, as in Compose).
 - A paused composition's resumes each compose in a snapshot of their own (Compose's `recomposePaused`), its `apply` runs in the global one. A subcomposition composing during measurement takes its snapshot from the global one (layout runs there).
 - A pass that panics disposes its snapshot unapplied (its writes are discarded) and poisons the composition, as today.
-- `Snapshot::notify_objects_initialized()` runs at the end of each host frame's recomposition (`Recomposer.kt:787`).
+- `Snapshot::notify_objects_initialized()` runs at the end of each host frame's recomposition (`Recomposer.kt:787`). Until this step, a pass's start only advances the global snapshot (D756), so what it writes of what was made before is a change, and the end of its deferred work and of each turn advance it (D754).
 
 This is step S6, measured on its own (§3.16): it costs a snapshot per pass, and the semantics it adds are visible only to code that reads the global snapshot during composition, writes during composition (D703) or panics mid-pass.
 
