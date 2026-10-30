@@ -75,6 +75,7 @@ mod text_savers;
 mod text_selection;
 mod text_style;
 mod trace;
+mod traversal;
 mod tree;
 mod unit;
 mod velocity_tracker;
@@ -250,6 +251,7 @@ pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType
 pub use text_range::TextRange;
 pub use text_selection::Selectable;
 pub use text_style::TextStyle;
+pub use traversal::{TraversableNode, TraverseDescendantsAction, TraverseKey};
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
     TextUnitType, UnitExt,

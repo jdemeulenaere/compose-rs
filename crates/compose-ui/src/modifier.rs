@@ -1044,6 +1044,10 @@ pub trait ModifierNode: Any {
     fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {
         None
     }
+    /// What traversals find it by, as `TraversableNode`.
+    fn as_traversable(&mut self) -> Option<&mut dyn crate::traversal::TraversableNode> {
+        None
+    }
     /// Its delegates, for a node made of several, as Compose's `DelegatingNode`: a node owning a
     /// [`Delegates`](crate::delegation::Delegates) returns it here, always (it's asked once, when
     /// the node is created). Each kind the node doesn't implement itself goes to its delegates of

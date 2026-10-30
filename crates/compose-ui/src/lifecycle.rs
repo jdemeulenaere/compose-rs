@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 
 use crate::delegation;
 use crate::modifier::{ModifierNode, ReleaseContext};
-use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state};
+use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state, traverse_key_of};
 use crate::node_context::{Invalidation, NodeContext};
 use crate::nodes::Taken;
 use crate::tree::{NodeId, UiTree};
@@ -42,9 +42,9 @@ pub(crate) enum Lifecycle {
     /// A subtree removed in the pass: its nodes' `on_detach`, parents before children, tail to
     /// head in each chain (if it wasn't released first: `UiTree::release` detaches it then).
     Detach(NodeId),
-    /// Entries a chain change removed from a node: `on_detach` (those attached), then
-    /// `on_release`.
-    Removed(NodeId, SmallVec<[ChainEntry; 2]>),
+    /// Entries a chain change removed from a node, each with where it was in the new chain:
+    /// `on_detach` (those attached), then `on_release`.
+    Removed(NodeId, SmallVec<[(ChainEntry, usize); 2]>),
     /// A node reused for other content: its nodes' `on_reset`, `on_detach`, then `on_attach`.
     Reuse(NodeId),
     /// A node a paused composition's resume reused: its nodes' `on_reset` and `on_detach`, at
@@ -107,7 +107,9 @@ impl UiTree {
     ) -> R {
         let entry = &mut self.node_mut(node).chain[index];
         let id = entry.id;
+        let own = entry.own;
         let mut taken = mem::replace(&mut entry.node, Box::new(Taken));
+        let traverse_key = traverse_key_of(&mut *taken, own);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let mut context = NodeContext {
                 tree: &mut *self,
@@ -116,6 +118,8 @@ impl UiTree {
                 entry: id,
                 out_state: 0,
                 delegated: false,
+                place: index,
+                traverse_key,
             };
             f(&mut *taken, &mut context)
         }));
@@ -398,12 +402,13 @@ impl UiTree {
     /// Detaches (if attached) and releases `entries`, which a chain change removed from `node`:
     /// their `on_detach` tail to head, every one still attached, then each marked detached and
     /// released.
-    fn release_removed(&mut self, node: NodeId, mut entries: SmallVec<[ChainEntry; 2]>) {
+    fn release_removed(&mut self, node: NodeId, mut entries: SmallVec<[(ChainEntry, usize); 2]>) {
         // A context reaches its layout node: none without it (released first, which runs these
         // steps itself, `release_removed_in_subtree`; this guards the rest).
         let alive = self.get(node).is_some();
-        for entry in entries.iter_mut().rev() {
+        for (entry, place) in entries.iter_mut().rev() {
             if alive && entry.state & entry_state::ATTACH_RAN != 0 {
+                let traverse_key = traverse_key_of(&mut *entry.node, entry.own);
                 let mut context = NodeContext {
                     tree: &mut *self,
                     node,
@@ -411,12 +416,14 @@ impl UiTree {
                     entry: entry.id,
                     out_state: entry.state,
                     delegated: false,
+                    place: *place,
+                    traverse_key,
                 };
                 detach_with_delegates(&mut *entry.node, &mut context);
                 entry.state = context.out_state;
             }
         }
-        for mut entry in entries {
+        for (mut entry, _) in entries {
             let mut state = entry.state;
             self.mark_delegates_detached(&mut *entry.node);
             self.mark_entry_detached(entry.id, &mut state);
@@ -456,6 +463,11 @@ impl UiTree {
     /// Runs the lifecycle steps queued, in order: at the end of a composition pass
     /// (`on_end_changes`), and wherever the tree applies its nodes' requests.
     pub(crate) fn run_lifecycle(&mut self) {
+        self.run_lifecycle_steps();
+        self.removed_parents.clear();
+    }
+
+    fn run_lifecycle_steps(&mut self) {
         while !self.lifecycle.is_empty() {
             let steps = mem::take(&mut self.lifecycle);
             for step in steps {

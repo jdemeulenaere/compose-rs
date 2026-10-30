@@ -17,6 +17,8 @@ pub struct NodeKinds(u32);
 #[allow(dead_code)]
 impl NodeKinds {
     pub const NONE: NodeKinds = NodeKinds(0);
+    /// Every kind.
+    pub(crate) const ALL: NodeKinds = NodeKinds(u32::MAX);
     /// Every node has it, as Compose's `Nodes.Any`.
     pub const ANY: NodeKinds = NodeKinds(1 << 30);
     // Compose's kinds, in its order.
@@ -83,6 +85,18 @@ impl NodeKinds {
         self.0 & other.0 == other.0
     }
 
+    /// The kinds it has that `other` has too.
+    #[inline]
+    pub(crate) const fn and(self, other: NodeKinds) -> NodeKinds {
+        NodeKinds(self.0 & other.0)
+    }
+
+    /// The kinds it has that `other` hasn't.
+    #[inline]
+    pub(crate) const fn without(self, other: NodeKinds) -> NodeKinds {
+        NodeKinds(self.0 & !other.0)
+    }
+
     #[inline]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
@@ -124,6 +138,10 @@ impl NodeKinds {
             node.downcast_ref::<crate::focus_requester::FocusRequesterNode>().is_some(),
             NodeKinds::FOCUS_REQUESTER,
         );
+        // Only a user-defined element's node may be one.
+        if observed {
+            add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
+        }
         kinds
     }
 
@@ -180,6 +198,18 @@ pub(crate) mod entry_state {
     pub(crate) const DELEGATING: u8 = 32;
 }
 
+/// The key of `node`, whose own kinds are `own`, if it's a `TraversableNode`.
+#[inline]
+pub(crate) fn traverse_key_of(
+    node: &mut dyn ModifierNode,
+    own: NodeKinds,
+) -> Option<&'static crate::traversal::TraverseKey> {
+    if !own.any(NodeKinds::TRAVERSABLE) {
+        return None;
+    }
+    node.as_traversable().map(|node| node.traverse_key())
+}
+
 /// One modifier node of a layout node's chain.
 pub(crate) struct ChainEntry {
     pub(crate) node: Box<dyn ModifierNode>,
@@ -223,6 +253,18 @@ impl ChainEntry {
     ) -> Option<&mut dyn crate::modifier::FocusTargetModifierNode> {
         crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)?
             .as_focus_target()
+    }
+
+    /// What an update of its node auto-invalidates: its kinds, unless it says not to, as Compose's
+    /// `autoInvalidateUpdatedNode`, which asks the node and each delegate apart.
+    pub(crate) fn updated_kinds(&mut self) -> NodeKinds {
+        if self.state & entry_state::DELEGATING != 0 {
+            crate::delegation::updated_kinds(&mut *self.node, self.own, NodeKinds::ALL)
+        } else if self.node.should_auto_invalidate() {
+            self.kinds
+        } else {
+            NodeKinds::NONE
+        }
     }
 
     /// After its element updated its node: its kinds again if the update delegated or

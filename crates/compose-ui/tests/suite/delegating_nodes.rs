@@ -567,6 +567,105 @@ fn a_nested_delegate_s_kinds_alone_are_auto_invalidated() {
     assert!(!stats.semantics_changed);
 }
 
+/// A draw delegate deciding its own auto-invalidation, under an owner deciding its own.
+struct Opinionated {
+    version: u32,
+    owner_invalidates: bool,
+    delegate_invalidates: bool,
+}
+
+struct OpinionatedOwner {
+    invalidates: bool,
+    delegates: Delegates,
+}
+
+struct OpinionatedDelegate(bool);
+
+impl ModifierNodeElement for Opinionated {
+    type Node = OpinionatedOwner;
+    fn create(&self) -> OpinionatedOwner {
+        let mut delegates = Delegates::new();
+        delegates.delegate(OpinionatedDelegate(self.delegate_invalidates));
+        OpinionatedOwner { invalidates: self.owner_invalidates, delegates }
+    }
+    fn update(&self, _: &mut OpinionatedOwner) {}
+    fn same(&self, other: &Self) -> bool {
+        self.version == other.version
+    }
+}
+
+impl ModifierNode for OpinionatedOwner {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn should_auto_invalidate(&self) -> bool {
+        self.invalidates
+    }
+}
+
+impl LayoutModifierNode for OpinionatedOwner {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
+impl ModifierNode for OpinionatedDelegate {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn should_auto_invalidate(&self) -> bool {
+        self.0
+    }
+}
+
+impl DrawModifierNode for OpinionatedDelegate {}
+
+fn updated_frame(owner_invalidates: bool, delegate_invalidates: bool) -> FrameStats {
+    fresh();
+    let version = mutable_state_of(0u32);
+    let v = version.handle();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.then_custom(Opinionated {
+            version: v.get(),
+            owner_invalidates,
+            delegate_invalidates,
+        }))
+    });
+    host.frame();
+    version.set(1);
+    host.frame()
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeKind.kt, autoInvalidateNodeSelf
+#[test]
+fn the_node_and_each_delegate_decide_their_own_auto_invalidation() {
+    let stats = updated_frame(true, true);
+    assert!(stats.measured);
+    assert!(stats.drew);
+    // The owner says no, the delegate yes: drawn, not measured.
+    let stats = updated_frame(false, true);
+    assert!(!stats.measured);
+    assert!(stats.drew);
+    // The owner yes, the delegate no: measured (and so drawn, D1164).
+    let stats = updated_frame(true, false);
+    assert!(stats.measured);
+    // Both no.
+    let stats = updated_frame(false, false);
+    assert!(!stats.measured);
+    assert!(!stats.drew);
+}
+
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/DelegatingNodeTest.kt, testDelegateUndelegateCausesInvalidationsForDelegateKindsOnly
 #[test]
 fn delegating_invalidates_by_the_delegate_s_kinds_only() {

@@ -57,6 +57,10 @@ pub struct NodeContext<'a> {
     pub(crate) out_state: u8,
     /// It's a delegate of entry `index`, named `entry` (its own id), its flags in `out_state`.
     pub(crate) delegated: bool,
+    /// An entry out of its chain: where it was, for the traversals from it.
+    pub(crate) place: usize,
+    /// Its key, if it's a `TraversableNode`: what the typed traversals look for.
+    pub(crate) traverse_key: Option<&'static crate::traversal::TraverseKey>,
 }
 
 impl NodeContext<'_> {
@@ -82,6 +86,7 @@ impl NodeContext<'_> {
         entry: &mut crate::delegation::DelegateEntry,
         f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
     ) -> R {
+        let traverse_key = entry.traverse_key();
         let mut context = NodeContext {
             tree: &mut *self.tree,
             node: self.node,
@@ -89,6 +94,8 @@ impl NodeContext<'_> {
             entry: entry.id(),
             out_state: entry.state(),
             delegated: true,
+            place: self.place,
+            traverse_key,
         };
         let result = f(entry.node_mut(), &mut context);
         let state = context.out_state;

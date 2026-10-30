@@ -344,6 +344,10 @@ pub struct UiTree {
     /// Layout nodes whose modifier nodes asked `remeasure_sync` in a callback: measured once it
     /// returns, the entry back in its chain.
     pub(crate) remeasure_after: Vec<NodeId>,
+    /// The parents of the subtrees removed in the pass under way, as they were: what's above
+    /// them for the traversals of their nodes' `on_detach`, as Compose's `LayoutNode.detach` runs
+    /// before it unlinks a node from its parent.
+    pub(crate) removed_parents: Vec<(NodeId, NodeId)>,
     /// The entries whose delegates changed in a measurement, a drawing or an event's dispatch,
     /// looked at where the tree may change (`UiTree::sync_noted_delegates`).
     pub(crate) delegates_noted: Vec<(NodeId, crate::node_chain::EntryId)>,
@@ -417,6 +421,7 @@ impl UiTree {
             side_effects: Vec::new(),
             remeasure_allowed: false,
             remeasure_after: Vec::new(),
+            removed_parents: Vec::new(),
             delegates_noted: Vec::new(),
             delegates_wait: false,
             observations: Default::default(),
@@ -837,9 +842,7 @@ impl UiTree {
                     if entry.after_update() {
                         delegated.push(entry.id);
                     }
-                    if entry.node.should_auto_invalidate() {
-                        invalidated |= entry.kinds;
-                    }
+                    invalidated |= entry.updated_kinds();
                 }
             }
             let previous = std::mem::replace(&mut value.modifier, modifier);
@@ -876,9 +879,7 @@ impl UiTree {
                         if entry.after_update() {
                             delegated.push(entry.id);
                         }
-                        if entry.node.should_auto_invalidate() {
-                            invalidated |= entry.kinds;
-                        }
+                        invalidated |= entry.updated_kinds();
                     }
                     chain.push(entry);
                     reused += 1;
@@ -929,10 +930,17 @@ impl UiTree {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::AttachEntries(node));
         }
         // The removed nodes: detached when the pass ends (if they were attached), then released.
-        let mut detaching: SmallVec<[ChainEntry; 2]> = SmallVec::new();
-        for mut removed in old_nodes.into_iter().flatten() {
+        let mut detaching: SmallVec<[(ChainEntry, usize); 2]> = SmallVec::new();
+        for (old_index, removed) in old_nodes.into_iter().enumerate() {
+            let Some(mut removed) = removed else { continue };
             if removed.state & entry_state::ATTACH_RAN != 0 {
-                detaching.push(removed);
+                // Its place: before the first node kept that was after it, for what it
+                // traverses in its `on_detach`.
+                let place = matched
+                    .iter()
+                    .position(|kept| kept.is_some_and(|kept| kept > old_index))
+                    .unwrap_or(matched.len());
+                detaching.push((removed, place));
             } else {
                 if removed.state & entry_state::HAS_HANDLE != 0 {
                     self.focus_requests.attached_entries.borrow_mut().remove(&removed.id.0);
@@ -1533,6 +1541,7 @@ impl Applier for UiTree {
                     stack.extend(value.children.iter().map(|child| child.node));
                 }
                 self.queue_lifecycle(crate::lifecycle::Lifecycle::Detach(child.node));
+                self.removed_parents.push((child.node, parent));
             }
         }
         self.invalidate_measure(parent);

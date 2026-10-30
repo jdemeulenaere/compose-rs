@@ -55,6 +55,10 @@ impl DelegateEntry {
     pub(crate) fn id(&self) -> EntryId {
         self.id
     }
+
+    pub(crate) fn traverse_key(&mut self) -> Option<&'static crate::traversal::TraverseKey> {
+        crate::node_chain::traverse_key_of(&mut *self.node, self.own)
+    }
 }
 
 /// A node's delegates, as `DelegatingNode.delegate` keeps them: a node owning one returns it from
@@ -269,6 +273,25 @@ fn first_delegate_of_kind<'a>(
         }
     }
     None
+}
+
+/// What updating `node`, whose own kinds are `own`, auto-invalidates of `remaining`, as Compose's
+/// `autoInvalidateNodeIncludingDelegates`: its own kinds unless it says not to, then what's left
+/// for its delegates, each asked apart.
+pub(crate) fn updated_kinds(
+    node: &mut dyn ModifierNode,
+    own: NodeKinds,
+    remaining: NodeKinds,
+) -> NodeKinds {
+    let mut kinds =
+        if node.should_auto_invalidate() { own.and(remaining) } else { NodeKinds::NONE };
+    if let Some(delegates) = node.delegates() {
+        let remaining = remaining.without(own);
+        for entry in &mut delegates.entries {
+            kinds |= updated_kinds(&mut *entry.node, entry.own, remaining);
+        }
+    }
+    kinds
 }
 
 /// The delegate of `node` (or below its delegates) named `id`.

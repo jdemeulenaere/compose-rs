@@ -13,6 +13,7 @@ mod mutable_paths;
 mod paragraph;
 mod paragraph_style;
 mod node_invalidation;
+mod node_traversal;
 mod observer_nodes;
 mod parent_data;
 mod retained_drawing;

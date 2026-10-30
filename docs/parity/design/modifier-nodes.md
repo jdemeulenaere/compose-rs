@@ -318,6 +318,8 @@ impl Delegates {
 
 ### 3.8 Traversal
 
+As built (D1171, D1172): the visitors are on `NodeContext`, the caller's own place being theirs to start from, and each traversal callback also gets the visited node's context, as Compose's visited node is a whole `DelegatableNode`. The rest is as below.
+
 Internal visitors on `UiTree`, as Compose's, walking chain entries and the layout tree, pruning by `aggregate` kinds:
 
 ```rust
