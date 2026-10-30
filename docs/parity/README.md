@@ -28,7 +28,7 @@ Statuses: `covered` (compose-rs tests exercise it, cited), `port` (the feature e
 
 ## How the work is done
 
-- **Tests are rewritten, not copied.** A Rust test is written from the Compose test's scenario and expected behaviour, with a name of its own in full words, and cites the test it adapts on the line above it: `// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/lazy/list/LazyListTest.kt, itemsAreNotRecomposedWhenScrolled`. One Compose test can give several Rust tests, or several Compose tests one. No Compose code, comments or license headers are copied.
+- **Tests are rewritten, not copied.** A Rust test is written from the Compose test's scenario and expected behaviour, with a name of its own in full words, and cites the test it adapts on the line above it: `// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/lazy/list/LazyListTest.kt, itemsAreNotRecomposedWhenScrolled`. One Compose test can give several Rust tests, or several Compose tests one. No Compose code, comments or license headers are copied, and a script translating Kotlin tests into Rust counts as copying, whatever it leaves out.
 - **A ported test that fails is a bug to fix,** in compose-rs, not a test to bend: the test keeps Compose's expected behaviour. Where compose-rs deliberately differs (a platform with no analogue), the ledger says so and why, and a decision row records it.
 - **Missing features** are implemented with Compose's names, defaults and behaviour, test first, in the dependency order the ledgers give.
 - **Ledgers stay current:** a piece of work updates its rows' statuses and its features' entries in the same commit.
