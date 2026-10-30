@@ -305,14 +305,10 @@ fn Launcher(seed: MutableState<u32>, showing: MutableState<bool>) {
     let visits = seed.get();
     Scaffold!(
         top_bar = {
-            TopAppBar!(
-                {
-                    Text!("Navigation");
-                },
-                window_insets = crate::top_app_bar_window_insets()
-            );
+            TopAppBar!({
+                Text!("Navigation");
+            });
         },
-        content_window_insets = crate::scaffold_content_window_insets(),
         |padding: PaddingValues| {
             Box!(
                 modifier = Modifier.padding(padding).fill_max_size(),
@@ -359,11 +355,9 @@ fn HeavyScreen(seed: u32, showing: MutableState<bool>) {
                     IconButton!(move || showing.set(false), {
                         Icon!(icons::filled::arrow_back(), Some("Back"));
                     });
-                }),
-                window_insets = crate::top_app_bar_window_insets()
+                })
             );
         },
-        content_window_insets = crate::scaffold_content_window_insets(),
         |padding: PaddingValues| {
             let scroll = remember_scroll_state!();
             Column!(

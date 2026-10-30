@@ -5,7 +5,10 @@
 use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
-use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row, RowScope};
+use compose_foundation::layout::{
+    Arrangement, Box, Column, ColumnScope, Row, RowScope, WindowInsets, WindowInsetsModifiers,
+    WindowInsetsSides,
+};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
     Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
@@ -26,6 +29,12 @@ impl NavigationBarDefaults {
     pub fn container_color() -> Color {
         MaterialTheme::color_scheme().surface_container
     }
+
+    /// As `windowInsets`: the system bars and a cutout, at the bottom and the sides.
+    pub fn window_insets() -> WindowInsets {
+        crate::scaffold::system_bars_for_visual_components()
+            .only(WindowInsetsSides::HORIZONTAL + WindowInsetsSides::BOTTOM)
+    }
 }
 
 /// A bar of destinations, as Compose's `NavigationBar`: 80 dp high, its items sharing the
@@ -37,6 +46,7 @@ pub fn NavigationBar(
     #[default(crate::NavigationBarDefaults::container_color())] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
     #[default(crate::NavigationBarDefaults::ELEVATION)] tonal_elevation: Dp,
+    #[default(crate::NavigationBarDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(RowScope) + 'static,
 ) {
     let content_color =
@@ -51,7 +61,10 @@ pub fn NavigationBar(
         None,
         compose_runtime::callback(move || {
             Row(
-                Modifier.fill_max_width().height(80.dp()),
+                Modifier
+                    .fill_max_width()
+                    .window_insets_padding(window_insets.clone())
+                    .height(80.dp()),
                 Arrangement::spaced_by(8.dp()).into(),
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
@@ -305,9 +318,10 @@ impl NavigationRailDefaults {
         MaterialTheme::color_scheme().surface
     }
 
-    /// As `windowInsets`: none until hosts report them.
-    pub fn window_insets() -> compose_ui::PaddingValues {
-        compose_ui::PaddingValues::ZERO
+    /// As `windowInsets`: the system bars and a cutout, at the top, the bottom and the start.
+    pub fn window_insets() -> WindowInsets {
+        crate::scaffold::system_bars_for_visual_components()
+            .only(WindowInsetsSides::VERTICAL + WindowInsetsSides::START)
     }
 }
 
@@ -335,8 +349,7 @@ pub fn NavigationRail(
     #[default(crate::NavigationRailDefaults::container_color())] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
     #[default(None)] header: Option<impl Fn(ColumnScope) + 'static>,
-    #[default(crate::NavigationRailDefaults::window_insets())]
-    window_insets: compose_ui::PaddingValues,
+    #[default(crate::NavigationRailDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     Surface(
@@ -352,7 +365,7 @@ pub fn NavigationRail(
             Column(
                 Modifier
                     .fill_max_height()
-                    .padding(window_insets)
+                    .window_insets_padding(window_insets.clone())
                     .size_in(SizeSpec::bounds(
                         80.dp(),
                         Dp::UNSPECIFIED,

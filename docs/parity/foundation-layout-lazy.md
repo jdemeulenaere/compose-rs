@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 12 | 225 |
-| `port` | 12 | 87 |
-| `partial` | 25 | 866 |
-| `feature:<name>` | 113 | 1,686 |
+| `ported` | 17 | 421 |
+| `port` | 13 | 92 |
+| `partial` | 24 | 834 |
+| `feature:<name>` | 108 | 1,517 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -78,13 +78,13 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SizeTest.kt | 50 | size/width/height/sizeIn/required*/fillMax*/wrapContent*/defaultMinSize; constraints satisfiable or not; intrinsics (20) | partial (most exist; `compose-ui/tests/suite/ui.rs::size_modifiers_follow_compose`, `modifiers_api.rs`. The 19 intrinsics tests and `testModifiers_doNotCauseUnnecessaryRemeasure` are ported in `intrinsics.rs` (with `required_width`/`required_height`, D1203). Missing: `required_size_in/width_in/height_in` (feature:layout-modifiers)) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SpacerTest.kt | 6 | Spacer sized by size/width/height, inside smaller containers | port |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt | 8 | `Modifier.visible(false)`: not drawn, keeps space, not clickable or focusable | feature:layout-modifiers |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsControllerTest.kt | 11 | `imeNestedScroll`: scrolling and flinging the IME open or closed | feature:window-insets (Android IME animation controller) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsDeviceTest.kt | 13 | Insets on a real device: consumption flag on the view, visibility at start, IME padding switching fields | feature:window-insets (an Android-host test in `compose-android`) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsIgnoringVisibilityTest.kt | 11 | `is*Visible`, `*IgnoringVisibility` insets | feature:window-insets |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsListenerUnsetTest.kt | 1 | Insets update after the view's listener is unset during an animation | feature:window-insets (Android host) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsPaddingTest.kt | 50 | `*Padding` modifiers per inset kind, `consumeWindowInsets`, `recalculateWindowInsets`, IME animation | partial (`window_insets_padding` and 6 shorthands exist, `platform.rs`. Missing: other kinds, consumption (D222: compose-rs never consumes), `recalculateWindowInsets`, `cutoutPath`) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsSizeTest.kt | 16 | `windowInsetsTopHeight` / `BottomHeight` / `StartWidth` / `EndWidth` | feature:window-insets |
-| compose/foundation/foundation-layout/src/androidHostTest/kotlin/androidx/compose/foundation/layout/WindowInsetsTest.kt | 32 | Value insets: fixed, `union`, `exclude`, `add`, `only`, `MutableWindowInsets`, `asPaddingValues(density)`, consumption while unattached | partial (`WindowInsets` with `union` and `only` exist; the rest is feature:window-insets) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsControllerTest.kt | 11 | `imeNestedScroll`: scrolling and flinging the IME open or closed | feature:ime-nested-scroll (Android IME animation controller, D1361) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsDeviceTest.kt | 13 | Insets on a real device: consumption flag on the view, visibility at start, IME padding switching fields | port (the listener exists, `ComposeRsInsets`, D1358; these run on a device, an Android-host test in `compose-android`, not run in the window-insets piece: the phone was reserved) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsIgnoringVisibilityTest.kt | 11 | `is*Visible`, `*IgnoringVisibility` insets | ported (`window_insets.rs`, 11 grouped in 2) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsListenerUnsetTest.kt | 1 | Insets update after the view's listener is unset during an animation | port (on a device, as WindowInsetsDeviceTest; `@Ignore`d in Compose) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsPaddingTest.kt | 50 | `*Padding` modifiers per inset kind, `consumeWindowInsets`, `recalculateWindowInsets`, IME animation | partial (`window_insets.rs`: 42 of 50, the host's insets standing for the device's. Not ported: the 6 `animateImeInsets*` and `disableConsuming`, the Android listener's, on a device as WindowInsetsDeviceTest; `consumeWindowInsets_movableContent_updateWhileUnattached`, feature:movable-content in the runtime. `assertIsConsumed` is the view's, not checked here) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsSizeTest.kt | 16 | `windowInsetsTopHeight` / `BottomHeight` / `StartWidth` / `EndWidth` | ported (`window_insets.rs`, 16 grouped in 4) |
+| compose/foundation/foundation-layout/src/androidHostTest/kotlin/androidx/compose/foundation/layout/WindowInsetsTest.kt | 32 | Value insets: fixed, `union`, `exclude`, `add`, `only`, `MutableWindowInsets`, `asPaddingValues(density)`, consumption while unattached | ported (`window_insets.rs` and the unit tests of `layout/window_insets.rs`: 31 of 32; `insetsValues_toString` n/a, the class is internal) |
 
 ### Lazy lists (`integration-tests/lazy-tests`, package `lazy.list`)
 
@@ -339,15 +339,8 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **flexbox:** `FlexBox`, `FlexBoxConfig`/`FlexBoxConfigScope`, `FlexConfig`/`FlexConfigScope`, `FlexBoxScope.flex`, `FlexDirection`, `FlexWrap`, `FlexJustifyContent`, `FlexAlignItems`, `FlexAlignSelf`, `FlexAlignContent`, `FlexBasis`. They are stable at tip, added 2025-12-08, after 1.12.
 - **grid-layout:** `Grid`, `GridConfigurationScope` (`row`/`column` by Dp, % or `Fr`, `gap`s, `area`, `minmax`), `GridScope.gridItem` (index, area, ranges), `GridTrackSize` (Fixed, Flex, MinMax, Percentage, Auto, MinContent, MaxContent), `Fr`, `GridFlow`, `columns`/`rows`. Stable, added 2025-12-09. Don't confuse it with lazy grids.
 - **ruler-fit:** `Modifier.fitInside(RectRulers)`, `fitOutside(RectRulers)`.
-- **window-insets:**
-  - fixed insets: `WindowInsets(left, top, right, bottom)` in Dp and in px;
-  - operations: `exclude`, `add`, `WindowInsetsSides` start/end;
-  - consumption: `consumeWindowInsets` (insets or padding), `onConsumedWindowInsetsChanged`, `recalculateWindowInsets`;
-  - size modifiers: `windowInsetsTopHeight`/`BottomHeight`/`StartWidth`/`EndWidth`;
-  - padding shorthands: `captionBarPadding`, `mandatorySystemGesturesPadding`, `safeContentPadding`, `safeGesturesPadding`, `systemGesturesPadding`, `waterfallPadding`;
-  - kinds: `mandatorySystemGestures`, `systemGestures`, `tappableElement`, `waterfall`, `safeContent`, `safeGestures`, `imeAnimationSource`/`Target`, `*IgnoringVisibility`, `cutoutPath`;
-  - visibility: `is*Visible`/`are*Visible`;
-  - `asPaddingValues(density)`, `MutableWindowInsets` (*exp*), `imeNestedScroll` (*exp*), `AbstractComposeView.consumeWindowInsets` (Android).
+- **window-insets:** done (D1355–D1358, D1361; `window_insets.rs`): fixed insets, `exclude`, `add`, `WindowInsetsSides` start/end, `consumeWindowInsets`, `onConsumedWindowInsetsChanged`, `recalculateWindowInsets`, the size modifiers, every padding shorthand and kind, `cutoutPath`, visibility, `asPaddingValues(density)`, `MutableWindowInsets` (*exp*), `AbstractComposeView.consumeWindowInsets` (`ComposeRsView.consumeWindowInsets`).
+- **ime-nested-scroll:** `imeNestedScroll` (*exp*), `rememberWindowInsetsConnection`: the keyboard moved by a nested scroll through `WindowInsetsAnimationController` (D1361).
 - **mutator-mutex:** `MutatorMutex` (`mutate`, `mutateWith`, `tryMutate`), `MutatePriority` (runtime's enum).
 - **scrollable:**
   - state and modifiers: `ScrollableState` (`scroll(priority) {}`, `dispatchRawDelta`, `isScrollInProgress`, `canScroll*`, `lastScrolled*`, `scrollIndicatorState`), `ScrollableState(consume)`/`rememberScrollableState`, `ScrollScope`, `Modifier.scrollable` (both overloads), `Modifier.scrollableArea`;
@@ -405,7 +398,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **system-gesture-exclusion:** `Modifier.systemGestureExclusion()`, with a rect lambda (Android).
 - **flags:** `ComposeFoundationFlags` (*exp*). compose-rs mirrors only the pausable-prefetch flag, which tip removed.
 
-What compose-rs has in this area: `Box`, `Row`, `Column`, `Spacer`, `BoxWithConstraints`; the arrangements (no `Absolute`); padding, size, fill, wrap, `aspect_ratio`, `default_min_size`, `offset(x, y)`, `weight`, `align`; seven window-insets kinds with `union`/`only` and their paddings; `vertical_scroll`/`horizontal_scroll` with `ScrollState` (value, max, viewport, `scroll_to`); `draggable` (axis, reverse, callbacks); `detect_tap_gestures`, `detect_drag_gestures`, `await_first_down`, `wait_for_up_or_cancellation`, `await_touch_slop_or_cancellation`; nested scroll; `LazyColumn`/`LazyRow` (keys, content types, sticky headers, content padding, reverse layout, `user_scroll_enabled`, `fill_parent_max_*`, saveable item state, reuse, prefetch, beyond-bounds focus search); `LazyVerticalGrid`/`LazyHorizontalGrid` (Fixed/Adaptive, spans, content types, padding); Compose Desktop's scrollbars and tooltips.
+What compose-rs has in this area: `Box`, `Row`, `Column`, `Spacer`, `BoxWithConstraints`; the arrangements (no `Absolute`); padding, size, fill, wrap, `aspect_ratio`, `default_min_size`, `offset(x, y)`, `weight`, `align`; window insets (`window_insets.rs`: every kind, consumption, sizes); `vertical_scroll`/`horizontal_scroll` with `ScrollState` (value, max, viewport, `scroll_to`); `draggable` (axis, reverse, callbacks); `detect_tap_gestures`, `detect_drag_gestures`, `await_first_down`, `wait_for_up_or_cancellation`, `await_touch_slop_or_cancellation`; nested scroll; `LazyColumn`/`LazyRow` (keys, content types, sticky headers, content padding, reverse layout, `user_scroll_enabled`, `fill_parent_max_*`, saveable item state, reuse, prefetch, beyond-bounds focus search); `LazyVerticalGrid`/`LazyHorizontalGrid` (Fixed/Adaptive, spans, content types, padding); Compose Desktop's scrollbars and tooltips.
 
 ## Missing features
 
@@ -556,10 +549,10 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Depends on: lazy-layout-info, lazy-state-api, cache-window (staggered's default), animate-item, pinnable, beyond-bounds-api, ui lookahead.
     - Size: L–XL. Experimental: no.
 28. **window-insets.**
+    Done (D1355–D1358; `crates/compose-foundation/tests/suite/window_insets.rs`, the Android listener in `ComposeRsInsets.kt`).
     - API: the insets API above.
-    - Tests: WindowInsetsTest (rest), WindowInsetsPaddingTest (rest), WindowInsetsSizeTest, WindowInsetsIgnoringVisibilityTest, WindowInsetsDeviceTest, WindowInsetsListenerUnsetTest, WindowInsetsControllerTest.
-    - Depends on: compose-android passing more inset kinds, visibility and IME animation; revisits D222 (consumption).
-    - Size: L. Experimental: partly (`MutableWindowInsets`, `imeNestedScroll`).
+    - Tests: WindowInsetsTest, WindowInsetsPaddingTest (42 of 50), WindowInsetsSizeTest, WindowInsetsIgnoringVisibilityTest. On a device, to run: WindowInsetsDeviceTest, WindowInsetsListenerUnsetTest. `imeNestedScroll` and WindowInsetsControllerTest are **ime-nested-scroll** (D1361).
+    - Size: L. Experimental: partly (`MutableWindowInsets`).
 29. **flexbox.**
     - API: `FlexBox` and its configs.
     - Tests: FlexBoxTest, FlexBoxDirectionTest.
@@ -608,7 +601,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 9. **transformable** (M) and **scrollable2d** (M), after ui's multi-pointer events.
 10. **pinnable** (M), **beyond-bounds-api** (M), **animate-item** (L).
 11. **pager** (XL), then **staggered-grid** (L–XL).
-12. **window-insets** (L), **flexbox** (L), **grid-layout** (L–XL), **ruler-fit** (M), **system-gesture-exclusion** (S).
+12. **window-insets** (L, done), **flexbox** (L), **grid-layout** (L–XL), **ruler-fit** (M), **system-gesture-exclusion** (S).
 13. **lazy-layout-public** (XL), after a design decision on composing during measurement.
 
 ## Notes for the porting agents
@@ -665,7 +658,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 - **Out-of-range grid spans** are clamped where Compose throws (documented in `lazy/grid.rs`). `LazyGridSpanTest` cases that expect an exception should become clamping tests that cite the deviation.
 - **`BoxWithConstraints` composes** first for a hinted constraint, then again if the real one differs. Compose subcomposes once, during measure. Tests counting compositions or steps (`BoxWithConstraintsTest.allTheStepsCalledExactlyOnce`, `withConstraintCallbackIsNotExecutedWithInnerRecompositions`, `updateConstraintsRecomposingWithConstraints`) may see an extra composition when the hint is wrong.
 - **Lazy lists and grids have no intrinsics** and panic when asked, with Compose's `SubcomposeLayout` message (D1204), though compose-rs doesn't subcompose them: the same behaviour, for another reason.
-- **Window insets aren't consumed** (D222): nested paddings of the same insets add up. Caught by `WindowInsetsPaddingTest.consumedInsets`, `consumedPadding` and `withConsumedWindowInsets`.
+- **Window insets aren't consumed** (fixed, D1355): nested paddings of the same insets added up. `WindowInsetsPaddingTest.consumedInsets`, `consumedPadding` and `withConsumedWindowInsets` are ported.
 - **Lazy items are composed in rounds** within a frame, not during measurement. Tests that count recompositions of items or callers (`LazyColumnTest.recompositionOrder`, `LazyListTest` composition-count tests) can see different orders. The count of items composed per frame should match (D487, D492). Compare against `review_lazy.rs::scrolling_one_row_composes_only_the_rows_coming_into_range`.
 - **Lazy lists compose no `beyondBoundsItemCount` items** (Compose's is internal and 0 by default, the same). With compose-rs's recommended optimizations, items are kept behind and two are prefetched ahead. Lazy tests about what's composed must set `Optimizations::NONE` to match Compose.
 - **Grids compose `BEYOND` (2) lines beyond each side** only with the `GRID_LINES_BEYOND` optimization. Compose places none, so set `NONE` for `LazyGridTest`/`LazyGridPrefetcherTest` ports.

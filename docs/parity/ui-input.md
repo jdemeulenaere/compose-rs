@@ -662,7 +662,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Compose API:** the `PopupProperties`/`DialogProperties` fields of section 3, `SecureFlagPolicy`, `DialogWindowProvider`.
 - **What:** the window properties that still mean something for overlays (`usePlatformDefaultWidth`, `decorFitsSystemWindows`/insets, `clippingEnabled`, `excludeFromSystemGesture`, `scrimAlpha`), and a decision for the window-only ones (secure flag on the host window, blur, window type and token, title).
 - **Tests:** DialogSecureFlagTest, PopupSecureFlagTest, DialogWithInsetsTest, DialogWithNoStatusBarTest; parts of DialogTest, PopupTest, PopupLayoutTest.
-- **Depends on:** window insets (present, D222; consumption is the layout area).
+- **Depends on:** window insets (present, D1355).
 - **Experimental:** no.
 
 ### media-query (M)

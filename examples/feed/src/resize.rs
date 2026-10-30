@@ -28,14 +28,10 @@ pub fn ResizeScreen() {
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!(
-                    {
-                        Text!("Resize");
-                    },
-                    window_insets = crate::top_app_bar_window_insets()
-                );
+                TopAppBar!({
+                    Text!("Resize");
+                });
             },
-            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 let transition = remember_infinite_transition("Resize");
                 let fraction = transition.animate_float(

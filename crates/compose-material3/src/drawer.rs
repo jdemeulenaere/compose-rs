@@ -8,7 +8,9 @@ use std::rc::Rc;
 
 use compose_animation::{Animatable, tween};
 use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
-use compose_foundation::layout::{Box, Column, ColumnScope, Row, Spacer};
+use compose_foundation::layout::{
+    Box, Column, ColumnScope, Row, Spacer, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
+};
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, OwnedState, composable, mutable_state_of, remember,
     remember_coroutine_scope,
@@ -268,6 +270,12 @@ pub fn remember_drawer_state(
 pub struct DrawerDefaults;
 
 impl DrawerDefaults {
+    /// As `windowInsets`: the system bars and a cutout, at the top, the bottom and the start.
+    pub fn window_insets() -> WindowInsets {
+        crate::scaffold::system_bars_for_visual_components()
+            .only(WindowInsetsSides::VERTICAL + WindowInsetsSides::START)
+    }
+
     /// A modal drawer sheet's widest, as `MaximumDrawerWidth`.
     pub const MAXIMUM_DRAWER_WIDTH: Dp = Dp(360.0);
     /// Its tonal elevation, as `ModalDrawerElevation`.
@@ -283,12 +291,6 @@ impl DrawerDefaults {
 
     pub fn modal_container_color() -> Color {
         MaterialTheme::color_scheme().surface_container_low
-    }
-
-    /// The insets a sheet's content keeps clear of, as `DrawerDefaults.windowInsets`: none here,
-    /// Material's insets parameters being padding, zero by default (D183, D222).
-    pub fn window_insets() -> compose_ui::PaddingValues {
-        compose_ui::PaddingValues::ZERO
     }
 
     /// The scrim: 32 % of the scheme's scrim color, as `DrawerDefaults.scrimColor`.
@@ -599,7 +601,7 @@ pub fn ModalDrawerSheet(
     #[default(crate::DrawerDefaults::modal_container_color())] drawer_container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
     #[default(crate::DrawerDefaults::MODAL_DRAWER_ELEVATION)] drawer_tonal_elevation: Dp,
-    #[default(crate::DrawerDefaults::window_insets())] window_insets: compose_ui::PaddingValues,
+    #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     let content_color = drawer_content_color
@@ -623,7 +625,7 @@ pub fn ModalDrawerSheet(
         compose_runtime::callback(move || {
             // Its content inside the insets, as Compose's `windowInsetsPadding(windowInsets)`.
             Column(
-                Modifier.fill_max_height().padding(window_insets),
+                Modifier.fill_max_height().window_insets_padding(window_insets.clone()),
                 compose_foundation::layout::Arrangement::TOP,
                 Alignment::START,
                 content.clone(),

@@ -312,7 +312,7 @@ fn icon_buttons_fill_outline_and_toggle() {
 }
 
 #[composable]
-fn ScaffoldWith(position: FabPosition, bottom_bar: bool, insets: PaddingValues) {
+fn ScaffoldWith(position: FabPosition, bottom_bar: bool, insets: WindowInsets) {
     MaterialTheme!({
         Scaffold!(
             bottom_bar = {
@@ -336,8 +336,9 @@ fn ScaffoldWith(position: FabPosition, bottom_bar: bool, insets: PaddingValues) 
 fn the_scaffold_places_its_fab() {
     let size = IntSize::new(400, 600);
     let fab_at = |position: FabPosition, bar: bool| {
-        let mut ui =
-            ComposeTestRule::sized(size, move || ScaffoldWith(position, bar, PaddingValues::ZERO));
+        let mut ui = ComposeTestRule::sized(size, move || {
+            ScaffoldWith(position, bar, WindowInsets::default())
+        });
         bounds(&mut ui, "fab")
     };
     let end = fab_at(FabPosition::End, false);
@@ -351,17 +352,18 @@ fn the_scaffold_places_its_fab() {
 
 #[test]
 fn the_scaffold_pads_its_content_by_the_insets_where_there_is_no_bar() {
-    let insets = PaddingValues::new(10.dp(), 20.dp(), 30.dp(), 40.dp());
+    let insets = WindowInsets::new(10.dp(), 20.dp(), 30.dp(), 40.dp());
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
-        ScaffoldWith(FabPosition::End, false, insets)
+        ScaffoldWith(FabPosition::End, false, insets.clone())
     });
     let content = bounds(&mut ui, "content");
     assert_eq!(
         (content.left, content.top, content.right, content.bottom),
         (10.0, 20.0, 370.0, 560.0)
     );
+    let insets = WindowInsets::new(10.dp(), 20.dp(), 30.dp(), 40.dp());
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
-        ScaffoldWith(FabPosition::End, true, insets)
+        ScaffoldWith(FabPosition::End, true, insets.clone())
     });
     // The bottom bar's height, not the inset.
     assert_eq!(bounds(&mut ui, "content").bottom, 600.0 - 80.0);

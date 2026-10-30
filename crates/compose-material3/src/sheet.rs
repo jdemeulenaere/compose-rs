@@ -8,12 +8,15 @@ use std::rc::Rc;
 
 use compose_animation::{AnimationSpec, FAST_OUT_SLOW_IN_EASING, Spring};
 use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
-use compose_foundation::layout::{Box, Column, ColumnScope};
+use compose_foundation::layout::{
+    Box, Column, ColumnScope, WindowInsets, WindowInsetsModifiers, WindowInsetsProvider,
+    WindowInsetsSides,
+};
 use compose_runtime::{ComposeArg, LaunchedEffect, composable, remember, remember_coroutine_scope};
 use compose_ui::{
     Alignment, Color, Constraints, Dp, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, PaddingValues, PopupPositionProvider,
-    PopupProperties, Rect, Shape, UnitExt,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, PopupPositionProvider, PopupProperties,
+    Rect, Shape, UnitExt,
 };
 use compose_ui::{NestedScrollConnection, NestedScrollSource, Offset};
 
@@ -65,6 +68,39 @@ struct SheetInner {
     /// `showMotionSpec` and `hideMotionSpec`: at once until a sheet sets its motion.
     show_spec: RefCell<AnimationSpec>,
     hide_spec: RefCell<AnimationSpec>,
+}
+
+/// The sheet's offset from the window's top, as Compose's `SheetWindowInsets`: what it consumes
+/// for its content, read as the sheet moves.
+struct SheetWindowInsets(SheetState);
+
+impl WindowInsetsProvider for SheetWindowInsets {
+    fn get_left(&self, _: &compose_ui::Density, _: compose_ui::LayoutDirection) -> i32 {
+        0
+    }
+
+    fn get_top(&self, _: &compose_ui::Density) -> i32 {
+        let offset = self.0.require_offset();
+        if offset.is_nan() { 0 } else { (offset as i32).max(0) }
+    }
+
+    fn get_right(&self, _: &compose_ui::Density, _: compose_ui::LayoutDirection) -> i32 {
+        0
+    }
+
+    fn get_bottom(&self, _: &compose_ui::Density) -> i32 {
+        0
+    }
+
+    fn same(&self, other: &dyn std::any::Any) -> bool {
+        other.downcast_ref::<SheetWindowInsets>().is_some_and(|other| other.0 == self.0)
+    }
+}
+
+impl std::fmt::Display for SheetWindowInsets {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SheetWindowInsets")
+    }
 }
 
 /// A bottom sheet's state, as Compose's `SheetState`: where it rests and where it's going,
@@ -459,9 +495,15 @@ impl BottomSheetDefaults {
         MaterialTheme::color_scheme().scrim.with_alpha(0.32)
     }
 
-    /// As `windowInsets`: none until hosts report them.
-    pub fn window_insets() -> PaddingValues {
-        PaddingValues::ZERO
+    /// As `modalWindowInsets`: what's safe to draw on, at the top and the bottom. The sheet's
+    /// offset from the window's top is consumed, so the top counts only as it nears the window's.
+    pub fn modal_window_insets() -> WindowInsets {
+        WindowInsets::safe_drawing().only(WindowInsetsSides::BOTTOM + WindowInsetsSides::TOP)
+    }
+
+    /// As `standardWindowInsets`: what's safe to draw on, at the bottom.
+    pub fn standard_window_insets() -> WindowInsets {
+        WindowInsets::safe_drawing().only(WindowInsetsSides::BOTTOM)
     }
 
     /// The drag handle, as `DragHandle()`: a 32 by 4 dp pill in the on-surface-variant color
@@ -577,7 +619,8 @@ pub fn ModalBottomSheet(
     #[default(crate::Dp(0.0))] tonal_elevation: Dp,
     #[default(crate::BottomSheetDefaults::scrim_color())] scrim_color: Color,
     #[default(crate::default_drag_handle())] drag_handle: Option<impl Fn() + 'static>,
-    #[default(crate::BottomSheetDefaults::window_insets())] content_window_insets: PaddingValues,
+    #[default(crate::BottomSheetDefaults::modal_window_insets())]
+    content_window_insets: WindowInsets,
     #[default(crate::ModalBottomSheetDefaults::PROPERTIES)] properties: ModalBottomSheetProperties,
     content: impl Fn(ColumnScope) + 'static,
 ) {
@@ -719,17 +762,19 @@ pub fn ModalBottomSheet(
         dismiss_on_click_outside: false,
     };
     // Dragged once shown, and part of its content's scrolls, with its gestures.
-    let sheet_modifier = modifier.draggable(
-        drag,
-        Orientation::Vertical,
-        sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
-        false,
-        |_| {},
-        {
-            let settle = settle.clone();
-            move |velocity| settle(velocity)
-        },
-    );
+    let sheet_modifier = modifier
+        .consume_window_insets(WindowInsets::from_provider(SheetWindowInsets(sheet_state)))
+        .draggable(
+            drag,
+            Orientation::Vertical,
+            sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
+            false,
+            |_| {},
+            {
+                let settle = settle.clone();
+                move |velocity| settle(velocity)
+            },
+        );
     let sheet_modifier = if sheet_gestures_enabled {
         sheet_modifier.nested_scroll(connection)
     } else {
@@ -795,7 +840,9 @@ pub fn ModalBottomSheet(
                                 (drag_handle.clone(), handle_click.clone());
                             let content = content.clone();
                             Column(
-                                Modifier.fill_max_width().padding(content_window_insets),
+                                Modifier
+                                    .fill_max_width()
+                                    .window_insets_padding(content_window_insets.clone()),
                                 compose_foundation::layout::Arrangement::TOP,
                                 Alignment::START,
                                 compose_runtime::callback(move |column: ColumnScope| {

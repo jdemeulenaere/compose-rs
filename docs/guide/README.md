@@ -263,7 +263,7 @@ class MainActivity : Activity() {
 }
 ```
 
-With `targetSdk` 35 and later, the window is edge to edge, so this view draws under the status and navigation bars. The view reports the window's insets to the app: pad its root with `Modifier.safe_drawing_padding()` (as the [interop sample](kotlin-to-rust.md#android-interop) does), or give Material's `Scaffold` its `content_window_insets`.
+With `targetSdk` 35 and later, the window is edge to edge, so this view draws under the status and navigation bars. The view reports the window's insets to the app: pad its root with `Modifier.safe_drawing_padding()` (as the [interop sample](kotlin-to-rust.md#android-interop) does), or use Material's `Scaffold` and bars, which keep clear of the system bars by default, as Compose's.
 
 In a Kotlin Compose screen, through `AndroidView`:
 
@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity() {
 }
 ```
 
-Here Kotlin already keeps the content clear of the bars. The view still gets the whole window's insets, wherever it is, so the Rust app shouldn't pad for them again: the two paddings would add up.
+Here Kotlin already keeps the content clear of the bars. `AndroidView` gives the view the window's insets less its distance from the window's edges, so they're zero inside that padding and the Rust app's Material components and insets paddings don't pad again.
 
 What the view does for its app:
 

@@ -13,7 +13,7 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
     BackHandler, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
-    PaddingValues, PointerEvent, SemanticsActions, UnitExt, platform::FixedTextMeasurer,
+    PointerEvent, SemanticsActions, UnitExt, platform::FixedTextMeasurer,
 };
 
 const DRAWER_TAG: &str = "drawer";
@@ -124,9 +124,12 @@ fn a_sheets_content_keeps_inside_its_insets() {
         MaterialTheme!({
             ModalNavigationDrawer!(
                 {
-                    ModalDrawerSheet!(window_insets = PaddingValues::all(10.dp()), |_| {
-                        Box!(modifier = Modifier.fill_max_size().test_tag("content"));
-                    });
+                    ModalDrawerSheet!(
+                        window_insets = WindowInsets::new(10.dp(), 10.dp(), 10.dp(), 10.dp()),
+                        |_| {
+                            Box!(modifier = Modifier.fill_max_size().test_tag("content"));
+                        }
+                    );
                 },
                 drawer_state = remember_drawer_state!(DrawerValue::Open),
                 {}

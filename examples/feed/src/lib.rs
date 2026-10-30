@@ -119,36 +119,16 @@ pub(crate) fn bench_color_scheme() -> ColorScheme {
     light_color_scheme()
 }
 
-/// What the screens' top app bars keep their content clear of: the system bars' top and sides,
-/// as Compose's default `TopAppBarDefaults.windowInsets`. The app draws edge to edge, as the
-/// Kotlin app's `enableEdgeToEdge()`, and compose-rs's Material insets default to none (D183,
-/// D222), so the screens pass Compose's (D647). Read in composition.
-pub(crate) fn top_app_bar_window_insets() -> PaddingValues {
-    WindowInsets::system_bars()
-        .only(WindowInsetsSides::HORIZONTAL | WindowInsetsSides::TOP)
-        .as_padding_values()
-}
-
-/// What the screens' scaffolds keep their content clear of: the system bars, as Compose's
-/// default `ScaffoldDefaults.contentWindowInsets` (D647). Read in composition.
-pub(crate) fn scaffold_content_window_insets() -> PaddingValues {
-    WindowInsets::system_bars().as_padding_values()
-}
-
 #[composable]
 fn FeedScreen(animated: bool) {
     let color_scheme = bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!(
-                    {
-                        Text!("Feed");
-                    },
-                    window_insets = crate::top_app_bar_window_insets()
-                );
+                TopAppBar!({
+                    Text!("Feed");
+                });
             },
-            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 // The scaffold's padding as the list's content padding, as the Kotlin feed's
                 // `contentPadding = padding` (D649): the list fills the window, its posts
@@ -181,14 +161,10 @@ pub fn BigScreen() {
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!(
-                    {
-                        Text!("Big screen");
-                    },
-                    window_insets = crate::top_app_bar_window_insets()
-                );
+                TopAppBar!({
+                    Text!("Big screen");
+                });
             },
-            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 let scroll = remember_scroll_state!();
                 Column!(

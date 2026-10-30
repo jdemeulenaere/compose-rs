@@ -3,7 +3,9 @@
 use std::rc::Rc;
 
 use compose_foundation::BorderStroke;
-use compose_foundation::layout::{Box, Column, ColumnScope};
+use compose_foundation::layout::{
+    Box, Column, ColumnScope, MutableWindowInsets, WindowInsets, WindowInsetsModifiers,
+};
 use compose_runtime::{
     CompositionLocalProvider, MutableState, composable, mutable_state_of, remember,
 };
@@ -350,12 +352,17 @@ impl compose_runtime::ComposeArg for FabPosition {
 pub struct ScaffoldDefaults;
 
 impl ScaffoldDefaults {
-    /// The insets the content keeps clear of, as `contentWindowInsets` (the system bars'):
-    /// none, until the hosts report the window's insets (`WindowInsets` isn't there yet;
-    /// padding stands in for it).
-    pub fn content_window_insets() -> PaddingValues {
-        PaddingValues::ZERO
+    /// The insets the content keeps clear of, as `contentWindowInsets`: the system bars and a
+    /// cutout.
+    pub fn content_window_insets() -> WindowInsets {
+        system_bars_for_visual_components()
     }
+}
+
+/// What Material's components keep clear of by default, as Compose's internal
+/// `systemBarsForVisualComponents` on Android.
+pub(crate) fn system_bars_for_visual_components() -> WindowInsets {
+    WindowInsets::system_bars().union(WindowInsets::display_cutout())
 }
 
 /// The basic screen layout, as Compose's `Scaffold`: the top bar, the content (given the padding
@@ -377,19 +384,31 @@ pub fn Scaffold(
     #[default(crate::MaterialTheme::color_scheme().background)] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
     #[default(crate::ScaffoldDefaults::content_window_insets())]
-    content_window_insets: PaddingValues,
+    content_window_insets: WindowInsets,
     content: impl Fn(PaddingValues) + 'static,
 ) {
     let content_color =
         content_color.or(MaterialTheme::color_scheme().content_color_for(container_color));
     let padding = remember(|| mutable_state_of(PaddingValues::ZERO));
+    // The insets less what's consumed around it, as Compose's: read while measuring, so a change
+    // measures it again and composes only the content that reads the padding.
+    let (safe_insets, consumed) =
+        compose_runtime::remember_keyed(content_window_insets.clone(), || {
+            let safe_insets = MutableWindowInsets::new(content_window_insets.clone());
+            let (target, insets) = (safe_insets.clone(), content_window_insets.clone());
+            let consumed =
+                Modifier.on_consumed_window_insets_changed(move |consumed: WindowInsets| {
+                    target.set_insets(insets.clone().exclude(consumed));
+                });
+            (safe_insets, consumed)
+        });
     let policy = compose_runtime::remember_keyed(
-        (floating_action_button_position, content_window_insets),
+        (floating_action_button_position, safe_insets.clone()),
         || {
             Rc::new(ScaffoldLayout {
                 padding,
                 fab_position: floating_action_button_position,
-                insets: content_window_insets,
+                insets: safe_insets.as_window_insets(),
             }) as Rc<dyn MeasurePolicy>
         },
     );
@@ -402,7 +421,7 @@ pub fn Scaffold(
             content.clone(),
         );
         Layout(
-            modifier.background(container_color),
+            modifier.then(consumed.clone()).background(container_color),
             policy.clone(),
             compose_runtime::callback(move || {
                 let slot = |content: compose_runtime::Callback| {
@@ -429,7 +448,7 @@ pub fn Scaffold(
 struct ScaffoldLayout {
     padding: MutableState<PaddingValues>,
     fab_position: FabPosition,
-    insets: PaddingValues,
+    insets: WindowInsets,
 }
 
 impl MeasurePolicy for ScaffoldLayout {
@@ -445,15 +464,25 @@ impl MeasurePolicy for ScaffoldLayout {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
         let loose = constraints.loosen();
+        // The snackbar and the button keep clear of the insets, as Compose's.
+        let density = scope.density();
+        let direction = scope.layout_direction();
+        let (left_inset, right_inset) =
+            (self.insets.get_left(&density, direction), self.insets.get_right(&density, direction));
+        let bottom_inset = self.insets.get_bottom(&density);
+        let (start_inset, end_inset) = match direction {
+            compose_ui::LayoutDirection::Ltr => (left_inset, right_inset),
+            compose_ui::LayoutDirection::Rtl => (right_inset, left_inset),
+        };
+        let inside_insets = loose.offset(-left_inset - right_inset, -bottom_inset);
         let top = scope.measure(*top, loose);
         let bottom = scope.measure(*bottom, loose);
-        let fab = scope.measure(*fab, loose);
-        let snackbar = scope.measure(*snackbar, loose);
+        let fab = scope.measure(*fab, inside_insets);
+        let snackbar = scope.measure(*snackbar, inside_insets);
         // The content's padding: the bars' heights, or the insets where there's no bar, as
         // Compose's. Written as state the content reads, which composes it again (within the
         // frame) when they change.
-        let density = scope.density();
-        let insets = self.insets;
+        let insets = self.insets.as_padding_values_with(&density, direction);
         let to_dp = |pixels: i32| Dp(pixels as f32 / density.density);
         let padding = PaddingValues::new(
             insets.start,
@@ -471,14 +500,15 @@ impl MeasurePolicy for ScaffoldLayout {
         // The FAB 16 dp from the edges, above the bottom bar (over it for `EndOverlay`: above
         // the bottom inset then), and the snackbar above both, centered, as Compose's
         // `ScaffoldLayout`.
-        let bottom_inset = density.round_to_px(insets.bottom);
         let mut above = if bottom.height == 0 { bottom_inset } else { bottom.height };
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
             let x = match self.fab_position {
-                FabPosition::Start => margin,
-                FabPosition::Center => (width - fab.width) / 2,
-                FabPosition::End | FabPosition::EndOverlay => width - fab.width - margin,
+                FabPosition::Start => margin + start_inset,
+                FabPosition::Center => (width - fab.width + start_inset - end_inset) / 2,
+                FabPosition::End | FabPosition::EndOverlay => {
+                    width - fab.width - margin - end_inset
+                }
             };
             let from_bottom = if bottom.height == 0 || self.fab_position == FabPosition::EndOverlay
             {
@@ -492,7 +522,7 @@ impl MeasurePolicy for ScaffoldLayout {
         if snackbar.height > 0 {
             scope.place_relative(
                 &snackbar,
-                (width - snackbar.width) / 2,
+                (width - snackbar.width + start_inset - end_inset) / 2,
                 height - above - snackbar.height,
             );
         }

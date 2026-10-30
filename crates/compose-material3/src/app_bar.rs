@@ -6,7 +6,9 @@ use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
 use compose_animation::{Animatable, AnimationSpec, Easing, FAST_OUT_LINEAR_IN_EASING, Spring};
-use compose_foundation::layout::{Arrangement, Box, Column, Row, RowScope};
+use compose_foundation::layout::{
+    Arrangement, Box, Column, Row, RowScope, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
+};
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, CoroutineScope, OwnedState, composable, derived_state_of,
     mutable_state_of, remember, remember_coroutine_scope,
@@ -415,10 +417,11 @@ impl TopAppBarDefaults {
         TopAppBarDefaults::top_app_bar_colors()
     }
 
-    /// The insets a bar keeps its content clear of, as `windowInsets`: none until hosts report
-    /// the window's (padding stands in for `WindowInsets`).
-    pub fn window_insets() -> PaddingValues {
-        PaddingValues::ZERO
+    /// The insets a bar keeps its content clear of, as `windowInsets`: the system bars and a
+    /// cutout, at the top and the sides.
+    pub fn window_insets() -> WindowInsets {
+        crate::scaffold::system_bars_for_visual_components()
+            .only(WindowInsetsSides::HORIZONTAL + WindowInsetsSides::TOP)
     }
 
     /// A pinned behavior with its state remembered here, as `pinnedScrollBehavior()`.
@@ -462,7 +465,7 @@ pub fn TopAppBar(
     #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
     #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
     #[default(crate::TopAppBarDefaults::TOP_APP_BAR_EXPANDED_HEIGHT)] expanded_height: Dp,
-    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: PaddingValues,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
     #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
 ) {
@@ -487,7 +490,7 @@ pub fn CenterAlignedTopAppBar(
     #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
     #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
     #[default(crate::TopAppBarDefaults::TOP_APP_BAR_EXPANDED_HEIGHT)] expanded_height: Dp,
-    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: PaddingValues,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
     #[default(crate::TopAppBarDefaults::center_aligned_top_app_bar_colors())]
     colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
@@ -516,7 +519,7 @@ pub fn MediumTopAppBar(
     #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
     #[default(crate::TopAppBarDefaults::MEDIUM_APP_BAR_COLLAPSED_HEIGHT)] collapsed_height: Dp,
     #[default(crate::TopAppBarDefaults::MEDIUM_APP_BAR_EXPANDED_HEIGHT)] expanded_height: Dp,
-    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: PaddingValues,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
     #[default(crate::TopAppBarDefaults::medium_top_app_bar_colors())] colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
 ) {
@@ -547,7 +550,7 @@ pub fn LargeTopAppBar(
     #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
     #[default(crate::TopAppBarDefaults::LARGE_APP_BAR_COLLAPSED_HEIGHT)] collapsed_height: Dp,
     #[default(crate::TopAppBarDefaults::LARGE_APP_BAR_EXPANDED_HEIGHT)] expanded_height: Dp,
-    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: PaddingValues,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
     #[default(crate::TopAppBarDefaults::large_top_app_bar_colors())] colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
 ) {
@@ -586,7 +589,7 @@ fn single_row_top_app_bar(
     navigation_icon: Option<compose_runtime::Callback>,
     actions: compose_runtime::Callback<dyn Fn(RowScope)>,
     expanded_height: Dp,
-    window_insets: PaddingValues,
+    window_insets: WindowInsets,
     colors: TopAppBarColors,
     scroll_behavior: Option<TopAppBarScrollBehavior>,
     centered: bool,
@@ -640,7 +643,7 @@ fn single_row_top_app_bar(
         None,
         compose_runtime::callback(move || {
             top_app_bar_row(
-                Modifier.padding(window_insets),
+                Modifier.window_insets_padding(window_insets.clone()),
                 policy.clone(),
                 title.clone(),
                 title_style.clone(),
@@ -664,7 +667,7 @@ struct TwoRows {
     actions: compose_runtime::Callback<dyn Fn(RowScope)>,
     collapsed_height: Dp,
     expanded_height: Dp,
-    window_insets: PaddingValues,
+    window_insets: WindowInsets,
     colors: TopAppBarColors,
     scroll_behavior: Option<TopAppBarScrollBehavior>,
 }
@@ -743,13 +746,14 @@ fn two_rows_top_app_bar(bar: TwoRows) {
             let (policies, top_alpha, bottom_alpha) =
                 (policies.clone(), top_alpha.clone(), bottom_alpha.clone());
             let (title_style, small_title_style) = (title_style.clone(), small_title_style.clone());
+            let window_insets = window_insets.clone();
             Column(
                 Modifier,
                 Arrangement::TOP,
                 Alignment::START,
                 compose_runtime::callback(move |_| {
                     top_app_bar_row(
-                        Modifier.padding(window_insets).clip_to_bounds(),
+                        Modifier.window_insets_padding(window_insets.clone()).clip_to_bounds(),
                         policies.0.clone(),
                         title.clone(),
                         small_title_style.clone(),
@@ -761,12 +765,9 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                     );
                     top_app_bar_row(
                         Modifier
-                            .padding(PaddingValues::new(
-                                window_insets.start,
-                                Dp(0.0),
-                                window_insets.end,
-                                Dp(0.0),
-                            ))
+                            .window_insets_padding(
+                                window_insets.clone().only(WindowInsetsSides::HORIZONTAL),
+                            )
                             .clip_to_bounds(),
                         policies.1.clone(),
                         title.clone(),
@@ -990,9 +991,10 @@ impl BottomAppBarDefaults {
         MaterialTheme::color_scheme().secondary_container
     }
 
-    /// As `windowInsets`: none until hosts report them.
-    pub fn window_insets() -> PaddingValues {
-        PaddingValues::ZERO
+    /// As `windowInsets`: the system bars and a cutout, at the bottom and the sides.
+    pub fn window_insets() -> WindowInsets {
+        crate::scaffold::system_bars_for_visual_components()
+            .only(WindowInsetsSides::HORIZONTAL + WindowInsetsSides::BOTTOM)
     }
 }
 
@@ -1007,7 +1009,7 @@ pub fn BottomAppBar(
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
     #[default(crate::BottomAppBarDefaults::CONTAINER_ELEVATION)] tonal_elevation: Dp,
     #[default(crate::BottomAppBarDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
-    #[default(crate::BottomAppBarDefaults::window_insets())] window_insets: PaddingValues,
+    #[default(crate::BottomAppBarDefaults::window_insets())] window_insets: WindowInsets,
 ) {
     crate::components::surface(
         modifier,
@@ -1023,7 +1025,7 @@ pub fn BottomAppBar(
             Row(
                 Modifier
                     .fill_max_width()
-                    .padding(window_insets)
+                    .window_insets_padding(window_insets.clone())
                     .height(80.dp())
                     .padding(content_padding),
                 Arrangement::START,
