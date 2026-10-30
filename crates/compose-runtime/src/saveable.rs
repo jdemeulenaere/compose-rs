@@ -249,6 +249,49 @@ pub fn saver<T: 'static>(
     FunctionSaver { save, restore, marker: PhantomData }
 }
 
+/// A saver going through a list of `S`, as Compose's `listSaver`: `save` gives the list, `restore`
+/// makes the value of it, or `None` to compute it again.
+pub fn list_saver<T: 'static, S: Saveable + 'static>(
+    save: impl Fn(&T) -> Vec<S> + 'static,
+    restore: impl Fn(Vec<S>) -> Option<T> + 'static,
+) -> impl Saver<T> {
+    saver(
+        move |value| Some(SavedValue::List(save(value).iter().map(Saveable::save).collect())),
+        move |saved| {
+            let SavedValue::List(items) = saved else { return None };
+            restore(items.iter().map(S::restore).collect::<Option<Vec<S>>>()?)
+        },
+    )
+}
+
+/// A saver going through a map of names to saved values, as Compose's `mapSaver`: `save` gives the
+/// entries, `restore` makes the value of them, or `None` to compute it again.
+pub fn map_saver<T: 'static>(
+    save: impl Fn(&T) -> Vec<(String, SavedValue)> + 'static,
+    restore: impl Fn(HashMap<String, SavedValue>) -> Option<T> + 'static,
+) -> impl Saver<T> {
+    saver(
+        move |value| {
+            // Alternating, as Compose's: the flat list a `Bundle` holds.
+            let mut flat = Vec::new();
+            for (name, saved) in save(value) {
+                flat.push(SavedValue::Text(name));
+                flat.push(saved);
+            }
+            Some(SavedValue::List(flat))
+        },
+        move |saved| {
+            let SavedValue::List(flat) = saved else { return None };
+            let mut entries = HashMap::new();
+            for [name, value] in flat.as_chunks::<2>().0 {
+                let SavedValue::Text(name) = name else { return None };
+                entries.insert(name.clone(), value.clone());
+            }
+            restore(entries)
+        },
+    )
+}
+
 /// The values a [`SaveableStateRegistry`] saved, by key; values with the same key in the order
 /// they were registered.
 #[derive(Clone, PartialEq, Debug, Default)]
@@ -595,6 +638,28 @@ impl<V: Clone + PartialEq + 'static> RememberSaveable for OwnedState<V> {
     }
     fn from_value(value: V) -> OwnedState<V> {
         mutable_state_of(value)
+    }
+}
+
+impl<T: Clone + 'static> RememberSaveable for crate::snapshots::OwnedStateList<T> {
+    type Value = Vec<T>;
+    fn with_value<R>(stored: &Self, save: impl FnOnce(&Vec<T>) -> R) -> R {
+        stored.handle().with(|items| save(items))
+    }
+    fn from_value(value: Vec<T>) -> Self {
+        crate::snapshots::mutable_state_list_from(value)
+    }
+}
+
+impl<T: Clone + std::hash::Hash + Eq + 'static> RememberSaveable
+    for crate::snapshots::OwnedStateSet<T>
+{
+    type Value = Vec<T>;
+    fn with_value<R>(stored: &Self, save: impl FnOnce(&Vec<T>) -> R) -> R {
+        save(&stored.handle().iter_cloned().collect())
+    }
+    fn from_value(value: Vec<T>) -> Self {
+        crate::snapshots::mutable_state_set_from(value)
     }
 }
 

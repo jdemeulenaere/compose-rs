@@ -914,21 +914,6 @@ pub(crate) fn mutable_state_with_equivalence<T: 'static>(
     new_state(value, equivalent, Location::caller())
 }
 
-/// A new state holding an empty list, as Compose's `mutableStateListOf()`: `edit` it to change
-/// the list; every edit invalidates the readers (the list's elements need no `PartialEq`).
-#[track_caller]
-pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>> {
-    new_state(Vec::new(), NeverEqualPolicy::equivalent, Location::caller())
-}
-
-/// A new list state holding `items`, as Compose's `toMutableStateList()`.
-#[track_caller]
-pub fn mutable_state_list_from<T: 'static>(
-    items: impl IntoIterator<Item = T>,
-) -> OwnedState<Vec<T>> {
-    new_state(items.into_iter().collect(), NeverEqualPolicy::equivalent, Location::caller())
-}
-
 fn new_state<T: 'static>(
     value: T,
     equivalent: fn(&T, &T) -> bool,
@@ -1059,6 +1044,15 @@ impl<T: 'static> MutableState<T> {
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let at = Location::caller();
         let cell = read_cell(self.id, at).unwrap_or_else(|error| stale(error, at));
+        let value = StateCell::<T>::of(&cell).read(at);
+        f(&value)
+    }
+
+    /// Runs `f` with the value, registering no read, as Compose's `withCurrent`: what a state
+    /// collection's writes read.
+    pub(crate) fn with_current<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let at = Location::caller();
+        let cell = object_cell(self.id, at);
         let value = StateCell::<T>::of(&cell).read(at);
         f(&value)
     }

@@ -332,6 +332,8 @@ impl<T: Clone + 'static> SnapshotStateList<T> {          // Copy handle
 }
 ```
 
+As built (D761): a collection is a value state whose record holds the `Rc` (one write path, not a cell type of its own); `mutable_state_list_of` needs no `T: Clone`, its writes do; a list's `set` compares by `ComposeArg::same`; a sublist's cursor only reads, as Compose's.
+
 The map (`get`, `contains_key`, `insert`, `remove`, `entry`-like `update(k, f)`, `keys()`, `values()`, `entries()` as cloned snapshots, `retain`, `clear`, `to_map()`, `with(|m| …)`) and the set (`contains`, `insert`, `remove`, `retain`, `clear`, `iter` in insertion order as a snapshot, `to_set()`, `with`) follow the same shape. An operation that leaves the collection as it was writes nothing (Compose's `newList == oldList`: `retain` removing nothing, `remove_item` of an absent item, `remove_range` of an empty range, `insert` of a present set element); `clear` always writes, as `clearImpl`. Each structural change bumps `structural` (sublists detect it); `set(i, v)` is non-structural. `Debug` reads without observing (`toStringOfSnapshotStateListDoesNotTriggerReadObserver`: `with_current`). The records don't merge (`MergeResult::Fail`), as Compose's.
 
 Saving (the `saveable-gaps` feature): `list_saver`, `map_saver`, and savers of `OwnedStateList`/`OwnedStateSet` for `remember_saveable`.

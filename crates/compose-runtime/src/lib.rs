@@ -92,16 +92,20 @@ pub use remember::{
 pub use reusable::{ReusableContent, ReusableContentHost};
 pub use saveable::{
     AutoSaver, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable, Saveable,
-    SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash,
-    remember_saveable, remember_saveable_with, saver,
+    SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash, list_saver,
+    map_saver, remember_saveable, remember_saveable_with, saver,
 };
 pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
 pub use scope::RecomposeScope;
+pub use snapshots::{
+    mutable_state_list_from, mutable_state_list_of, mutable_state_map_from, mutable_state_map_of,
+    mutable_state_set_from, mutable_state_set_of,
+};
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState,
     ReferentialEqualityPolicy, SharedValueEqualityPolicy, State, StructuralEqualityPolicy,
-    mutable_state_list_from, mutable_state_list_of, mutable_state_of, mutable_state_of_with,
-    never_equal_policy, referential_equality_policy, structural_equality_policy,
+    mutable_state_of, mutable_state_of_with, never_equal_policy, referential_equality_policy,
+    structural_equality_policy,
 };
 
 #[doc(hidden)]

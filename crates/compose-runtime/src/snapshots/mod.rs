@@ -4,8 +4,11 @@
 //! Each thread has its own snapshot world, as its own state (D14, D750).
 
 mod global;
+mod list;
+mod map;
 mod observer;
 mod records;
+mod set;
 
 pub use global::{ChangeSet, ObserverHandle, Snapshot, StateObserverFn, Turn};
 pub(crate) use global::{
@@ -15,8 +18,18 @@ pub(crate) use global::{
     begin_calculation, calculation_depth, calculation_reads, end_calculation, next_record,
     valid_mark,
 };
+pub use list::{
+    OwnedStateList, SnapshotStateList, StateListIterator, StateSubList, mutable_state_list_from,
+    mutable_state_list_of, snapshot_state_list,
+};
+pub use map::{
+    OwnedStateMap, SnapshotStateMap, StateMapContents, mutable_state_map_from, mutable_state_map_of,
+};
 pub use observer::SnapshotStateObserver;
 pub(crate) use records::{Records, SnapshotId, StateObjectCell};
+pub use set::{
+    OrderedSet, OwnedStateSet, SnapshotStateSet, mutable_state_set_from, mutable_state_set_of,
+};
 
 use std::fmt;
 

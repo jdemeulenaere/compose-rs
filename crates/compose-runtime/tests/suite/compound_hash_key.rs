@@ -218,8 +218,8 @@ fn composite_keys_are_consistent_when_content_is_recreated() {
 #[test]
 fn composite_keys_move_with_their_keys() {
     #[composable]
-    fn Content(trace: Trace, list: MutableState<Vec<i32>>) {
-        for item in list.get() {
+    fn Content(trace: Trace, list: compose_runtime::snapshots::SnapshotStateList<i32>) {
+        for item in list.iter_cloned() {
             key(item, || a(&trace));
         }
     }

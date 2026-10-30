@@ -201,7 +201,7 @@ pub fn Counter() {
 
 Writing state while composing panics: write from handlers, effects and tasks.
 
-`mutable_state_list_of()` and `mutable_state_list_from(items)` are `mutableStateListOf`: a state holding a `Vec`, edited with `edit(|list| list.push(…))`.
+`mutable_state_list_of()` and `mutable_state_list_from(items)` are `mutableStateListOf`, with `push`, `insert`, `remove`, `get`, `len`, `with(|list| …)` and `edit(|list| …)`; `mutable_state_map_of` and `mutable_state_set_of` are `mutableStateMapOf` and `mutableStateSetOf`.
 
 ### `rememberSaveable`
 

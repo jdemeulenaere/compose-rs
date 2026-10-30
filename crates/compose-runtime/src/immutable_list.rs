@@ -16,12 +16,17 @@ use crate::compose_arg::ComposeArg;
 ///
 /// It derefs to a slice: `list[0]`, `list.len()`, `list.iter()`, `for item in &list`.
 /// `PartialEq` compares contents.
-pub struct ImmutableList<T>(Rc<[T]>);
+pub struct ImmutableList<T>(Rc<Vec<T>>);
 
 impl<T> ImmutableList<T> {
     /// An empty list.
     pub fn new() -> ImmutableList<T> {
-        ImmutableList(Rc::from(Vec::new()))
+        ImmutableList(Rc::new(Vec::new()))
+    }
+
+    /// A list sharing `items`: what a state list hands out.
+    pub(crate) fn from_shared(items: Rc<Vec<T>>) -> ImmutableList<T> {
+        ImmutableList(items)
     }
 
     /// Whether two lists are the same list, not only equal.
@@ -62,25 +67,25 @@ impl<T> AsRef<[T]> for ImmutableList<T> {
 
 impl<T> From<Vec<T>> for ImmutableList<T> {
     fn from(items: Vec<T>) -> ImmutableList<T> {
-        ImmutableList(Rc::from(items))
+        ImmutableList(Rc::new(items))
     }
 }
 
 impl<T, const N: usize> From<[T; N]> for ImmutableList<T> {
     fn from(items: [T; N]) -> ImmutableList<T> {
-        ImmutableList(Rc::from(Vec::from(items)))
+        ImmutableList(Rc::new(Vec::from(items)))
     }
 }
 
 impl<T: Clone> From<&[T]> for ImmutableList<T> {
     fn from(items: &[T]) -> ImmutableList<T> {
-        ImmutableList(Rc::from(items))
+        ImmutableList(Rc::new(items.to_vec()))
     }
 }
 
 impl<T> FromIterator<T> for ImmutableList<T> {
     fn from_iter<I: IntoIterator<Item = T>>(items: I) -> ImmutableList<T> {
-        ImmutableList(items.into_iter().collect())
+        ImmutableList(Rc::new(items.into_iter().collect()))
     }
 }
 

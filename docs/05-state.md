@@ -23,7 +23,7 @@ pub struct State<T: 'static> { … }
 
 pub fn mutable_state_of<T: PartialEq + 'static>(value: T) -> OwnedState<T>;
 pub fn mutable_state_of_with<T: 'static>(value: T, policy: impl MutationPolicy<T>) -> OwnedState<T>;
-pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>>;   // Compose's mutableStateListOf(): edits always invalidate
+pub fn mutable_state_list_of<T: 'static>() -> OwnedStateList<T>;     // Compose's mutableStateListOf(); maps and sets too, below
 ```
 
 State holders (`DrawerState`, `LazyListState`, `CoroutineScope`, …) are `Copy` handles into the same arena ([State holders](#state-holders)).
@@ -70,6 +70,15 @@ Checkbox!(checked = todo.done.get(), on_checked_change = { let done = todo.done.
 ```
 
 Rows receive `Rc<Todo>`. `same` is `Rc::ptr_eq`, so after an add or remove re-runs the list scope, every unchanged row **skips**. In Rust, the `Rc` *is* the identity, as an object reference is in Kotlin.
+
+## State collections
+
+`snapshots::SnapshotStateList<T>`, `SnapshotStateMap<K, V>` and `SnapshotStateSet<T>` are Compose's (D761), `Copy` handles with owners as `MutableState`: `let todos = remember(|| mutable_state_list_of::<Rc<Todo>>())`, `mutable_state_list_from(items)`, `snapshot_state_list(size, init)`, `mutable_state_map_of()`, `mutable_state_map_from(entries)`, `mutable_state_set_of()`, `mutable_state_set_from(items)`.
+
+- **Reads** (`len`, `get`, `contains`, `index_of`, `with(|list| …)`, `iter_cloned`, `to_list`, `keys`, `values`, `entries`, `to_map`, `to_set`) subscribe to the whole collection, once each. `to_list`, `to_map` and `to_set` hand out the collection itself in O(1): a later write copies it, so what they gave stays as it was. A set iterates in insertion order. `Display` is Compose's `toString`, read without subscribing.
+- **Writes** (`push`, `insert`, `add_all`, `insert_all`, `remove`, `remove_item`, `remove_all`, `retain`, `retain_all`, `remove_range`, `set`, `clear`, `truncate`, `swap`, `reverse`, `sort_by`, `edit(|list| …)` for anything else; on maps `insert`, `insert_all`, `remove`, `update`, `retain`, `clear`; on sets `insert`, `add_all`, `remove`, `remove_all`, `retain`, `retain_all`, `clear`) change it in place unless something shares it, at the cost of the `Vec` or `HashMap` operation, and need `T: Clone` for that copy. One leaving it as it was writes nothing, but `clear` and `edit`; a list's `set` of the `same` element (`ComposeArg`) neither.
+- **`sub_list(range)`** is a live view, with the list's operations; a structural change other than through it makes it panic, as Compose's `ConcurrentModificationException`. **`list_iterator(index)`** is Compose's `listIterator`, moving both ways and, over a whole list, writing where it is; a sublist's only reads.
+- **Saved:** `remember_saveable` keeps a list or set of `Saveable` elements; `list_saver` and `map_saver` are Compose's `listSaver` and `mapSaver` (D762).
 
 ## Safety: stale handles and rules R1–R3
 

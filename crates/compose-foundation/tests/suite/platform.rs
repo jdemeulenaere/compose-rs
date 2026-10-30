@@ -193,6 +193,57 @@ fn remember_saveable_comes_back_in_a_new_host() {
     ui.on_node_with_text("Count: 6").assert_exists();
 }
 
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, simpleRestoreList
+#[test]
+fn a_state_list_comes_back_in_a_new_host() {
+    thread_local! {
+        static LIST: Cell<Option<compose_runtime::snapshots::SnapshotStateList<i32>>> =
+            const { Cell::new(None) };
+    }
+    #[composable]
+    fn Content() {
+        let list = remember_saveable(|| mutable_state_list_from([0]));
+        LIST.with(|cell| cell.set(Some(list)));
+        BasicText!("Item: {}", list.get(0).unwrap_or(-1));
+    }
+    let mut ui = compose_test(Content);
+    LIST.with(|cell| cell.get()).unwrap().set(0, 1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("Item: 1").assert_exists();
+    LIST.with(|cell| cell.set(None));
+    let mut ui = recreate(ui, Content);
+    ui.on_node_with_text("Item: 1").assert_exists();
+    assert_eq!(LIST.with(|cell| cell.get()).unwrap().get(0), Some(1));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, simpleRestoreSet
+#[test]
+fn a_state_set_comes_back_in_a_new_host() {
+    thread_local! {
+        static SET: Cell<Option<compose_runtime::snapshots::SnapshotStateSet<i32>>> =
+            const { Cell::new(None) };
+    }
+    #[composable]
+    fn Content() {
+        let set = remember_saveable(|| mutable_state_set_from([0]));
+        SET.with(|cell| cell.set(Some(set)));
+        BasicText!("Has one: {}", set.contains(&1));
+    }
+    let mut ui = compose_test(Content);
+    let set = SET.with(|cell| cell.get()).unwrap();
+    assert!(set.contains(&0));
+    set.remove(&0);
+    set.insert(1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("Has one: true").assert_exists();
+    SET.with(|cell| cell.set(None));
+    let mut ui = recreate(ui, Content);
+    ui.on_node_with_text("Has one: true").assert_exists();
+    let set = SET.with(|cell| cell.get()).unwrap();
+    assert!(set.contains(&1));
+    assert!(!set.contains(&0));
+}
+
 #[test]
 fn saved_values_find_their_place_by_key_and_order() {
     thread_local! { static ITEMS: Cell<Option<MutableState<Vec<u32>>>> = const { Cell::new(None) }; }

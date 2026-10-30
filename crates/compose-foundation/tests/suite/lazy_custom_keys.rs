@@ -229,20 +229,17 @@ fn data_set_from_an_effect_and_then_changed_is_applied() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyCustomKeysTest.kt, reordering_usingMutableStateListOf
 #[test]
 fn a_reorder_of_a_state_list_moves_the_states() {
-    let list = mutable_state_list_of::<i32>();
-    list.set(vec![0, 1, 2]);
+    let list = mutable_state_list_from([0, 1, 2]);
     let handle = list.handle();
     let mut ui = rule(move || {
-        let ids = handle.get();
+        let ids = handle.to_list();
         LazyColumn!(move |scope: LazyListScope| {
             scope.items_list_keyed(ids.clone(), |id: &i32| *id, |_, id: &i32| remembered_item(*id));
         });
     });
-    list.update(|ids| {
-        let mut ids = ids.clone();
+    list.edit(|ids| {
         let moved = ids.remove(1);
         ids.push(moved);
-        ids
     });
     ui.wait_for_idle();
     assert_items(&mut ui, &["0", "2", "1"]);

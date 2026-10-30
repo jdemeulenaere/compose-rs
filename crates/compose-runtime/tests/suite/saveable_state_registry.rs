@@ -125,3 +125,113 @@ fn unregistering_one_of_a_keys_values() {
     assert_eq!(restored.consume_restored(KEY), Some(int(1)));
     assert_eq!(restored.consume_restored(KEY), Some(int(3)));
 }
+
+// ---- list_saver and map_saver -----------------------------------------------------------------
+
+#[derive(PartialEq, Debug)]
+struct Size {
+    x: i32,
+    y: i32,
+}
+
+#[derive(PartialEq, Debug)]
+struct NullableSize {
+    x: Option<i32>,
+    y: Option<i32>,
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/ListSaverTest.kt, simpleSaveAndRestore
+#[test]
+fn a_list_saver_saves_and_restores() {
+    let saver = list_saver(
+        |size: &Size| vec![size.x, size.y],
+        |items: Vec<i32>| Some(Size { x: items[0], y: items[1] }),
+    );
+    let saved = saver.save(&Size { x: 2, y: 3 }).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(Size { x: 2, y: 3 }));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/ListSaverTest.kt, customListIsTransformedToArrayList
+#[test]
+fn a_list_saver_saves_a_state_list_as_a_plain_list() {
+    let saver = list_saver(
+        |list: &compose_runtime::snapshots::SnapshotStateList<String>| {
+            list.iter_cloned().collect::<Vec<String>>()
+        },
+        |_: Vec<String>| None,
+    );
+    let list = compose_runtime::mutable_state_list_from([String::from("One"), String::from("Two")]);
+    assert_eq!(
+        saver.save(&list.handle()),
+        Some(SavedValue::List(vec![
+            SavedValue::Text(String::from("One")),
+            SavedValue::Text(String::from("Two")),
+        ]))
+    );
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/ListSaverTest.kt, nullableListItemsAreSupported
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/ListSaverTest.kt, nullableTypeIsSupported
+#[test]
+fn a_list_saver_saves_none_items() {
+    let saver = list_saver(
+        |size: &Option<NullableSize>| {
+            vec![size.as_ref().and_then(|size| size.x), size.as_ref().and_then(|size| size.y)]
+        },
+        |items: Vec<Option<i32>>| Some(Some(NullableSize { x: items[0], y: items[1] })),
+    );
+    let original = Some(NullableSize { x: None, y: Some(3) });
+    let saved = saver.save(&original).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(original));
+    let saved = saver.save(&None).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(Some(NullableSize { x: None, y: None })));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/MapSaverTest.kt, simpleSaveAndRestore
+#[test]
+fn a_map_saver_saves_and_restores() {
+    let saver = map_saver(
+        |size: &Size| {
+            vec![
+                (String::from("x"), SavedValue::Int(i64::from(size.x))),
+                (String::from("y"), SavedValue::Int(i64::from(size.y))),
+            ]
+        },
+        |entries| {
+            let get = |name: &str| match entries.get(name) {
+                Some(SavedValue::Int(value)) => Some(*value as i32),
+                _ => None,
+            };
+            Some(Size { x: get("x")?, y: get("y")? })
+        },
+    );
+    let saved = saver.save(&Size { x: 2, y: 3 }).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(Size { x: 2, y: 3 }));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/MapSaverTest.kt, nullableMapItemsAreSupported
+// Compose: compose/runtime/runtime-saveable/src/androidHostTest/kotlin/androidx/compose/runtime/saveable/MapSaverTest.kt, nullableTypeIsSupported
+#[test]
+fn a_map_saver_saves_none_items() {
+    let saver = map_saver(
+        |size: &Option<NullableSize>| {
+            let item = |value: Option<i32>| value.map(i64::from).save();
+            vec![
+                (String::from("x"), item(size.as_ref().and_then(|size| size.x))),
+                (String::from("y"), item(size.as_ref().and_then(|size| size.y))),
+            ]
+        },
+        |entries| {
+            let get = |name: &str| Option::<i64>::restore(entries.get(name)?);
+            Some(Some(NullableSize {
+                x: get("x")?.map(|value| value as i32),
+                y: get("y")?.map(|value| value as i32),
+            }))
+        },
+    );
+    let original = Some(NullableSize { x: None, y: Some(3) });
+    let saved = saver.save(&original).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(original));
+    let saved = saver.save(&None).expect("saved");
+    assert_eq!(saver.restore(&saved), Some(Some(NullableSize { x: None, y: None })));
+}

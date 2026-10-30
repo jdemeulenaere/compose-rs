@@ -264,18 +264,17 @@ fn a_press_stops_a_fling() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTest.kt, removalWithMutableStateListOf
 #[test]
 fn an_item_removed_from_a_state_list_goes() {
-    let items = mutable_state_list_of::<&'static str>();
-    items.set(vec!["1", "2", "3"]);
+    let items = mutable_state_list_from(["1", "2", "3"]);
     let handle = items.handle();
     let mut ui = rule(move || {
-        let items = handle.get();
+        let items = handle.to_list();
         LazyColumn!(move |scope: LazyListScope| {
             scope.items_list(items.clone(), |_, item: &&str| {
                 Spacer(Modifier.size(15.dp()).test_tag(item.to_string()))
             });
         });
     });
-    items.update(|items| items[..items.len() - 1].to_vec());
+    items.truncate(items.len() - 1);
     ui.wait_for_idle();
     ui.on_node_with_tag("1").assert_exists();
     ui.on_node_with_tag("2").assert_exists();

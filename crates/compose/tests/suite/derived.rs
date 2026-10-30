@@ -26,7 +26,7 @@ fn composition() -> Composition {
 }
 
 #[composable]
-fn Status(items: MutableState<Vec<u32>>) {
+fn Status(items: compose::runtime::snapshots::SnapshotStateList<u32>) {
     let empty = remember(move || derived_state_of(move || items.with(Vec::is_empty)));
     log(format!("empty: {}", empty.get()));
 }

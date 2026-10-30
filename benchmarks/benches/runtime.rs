@@ -119,6 +119,21 @@ fn derived_reads(c: &mut Criterion) {
     });
 }
 
+/// A push on a state list, nothing sharing it: a `Vec` push, and what a write is (design §3.16).
+fn state_list_push(c: &mut Criterion) {
+    let list = mutable_state_list_of::<u64>();
+    let mut value = 0;
+    c.bench_function("state list push", |b| {
+        b.iter(|| {
+            value += 1;
+            if list.with(Vec::len) == 1024 {
+                list.clear();
+            }
+            list.push(black_box(value));
+        })
+    });
+}
+
 /// A host's tick with nothing to do: the executor's `run_ready` finding no task, no change to send
 /// and no derived state to flush.
 fn idle_tick(c: &mut Criterion) {
@@ -197,6 +212,7 @@ criterion_group!(
     state_writes,
     idle_tick,
     derived_reads,
+    state_list_push,
     many_readers
 );
 criterion_main!(benches);

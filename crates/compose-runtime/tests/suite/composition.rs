@@ -1088,9 +1088,9 @@ fn a_remember_keyed_on_fewer_keys_computes_anew() {
 #[test]
 fn groups_inserted_in_a_container_one_by_one() {
     #[composable]
-    fn Composition(values: MutableState<Vec<i32>>) {
+    fn Composition(values: snapshots::SnapshotStateList<i32>) {
         Linear!({
-            for value in values.get() {
+            for value in values.iter_cloned() {
                 Text(&value.to_string());
             }
         });
@@ -1100,7 +1100,7 @@ fn groups_inserted_in_a_container_one_by_one() {
     let v = values.handle();
     test.compose(move || Composition(v));
     test.validate(move |e| {
-        e.linear(|e| v.get().iter().for_each(|value| e.text(&value.to_string())))
+        e.linear(|e| v.iter_cloned().for_each(|value| e.text(&value.to_string())))
     });
     for i in 1..=10 {
         values.edit(|values| values.push(i));
@@ -2208,8 +2208,11 @@ fn keyed_texts_come_and_go_by_parity() {
 #[test]
 fn keyed_groups_move_their_slots_without_nodes() {
     #[composable]
-    fn Content(order: MutableState<Vec<i32>>, include_text: MutableState<Vec<i32>>) {
-        for i in order.get() {
+    fn Content(
+        order: snapshots::SnapshotStateList<i32>,
+        include_text: snapshots::SnapshotStateList<i32>,
+    ) {
+        for i in order.iter_cloned() {
             key(i, || {
                 if include_text.with(|included| included.contains(&i)) {
                     Text(&format!("Text for {i}"));
@@ -2224,7 +2227,7 @@ fn keyed_groups_move_their_slots_without_nodes() {
     let (o, i) = (order.handle(), include_text.handle());
     test.compose(move || Content(o, i));
     test.validate(move |v| {
-        for item in o.get() {
+        for item in o.iter_cloned() {
             if i.with(|included| included.contains(&item)) {
                 v.text(&format!("Text for {item}"));
             }
