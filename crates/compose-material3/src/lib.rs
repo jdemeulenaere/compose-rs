@@ -29,6 +29,7 @@ mod list_item;
 mod motion;
 mod navigation;
 mod progress;
+mod range_slider;
 mod ripple;
 mod scaffold;
 mod scrim;
@@ -99,6 +100,7 @@ pub use progress::{
     CircularProgressIndicator, DrawStopIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
 };
+pub use range_slider::{RangeSlider, RangeSliderState, remember_range_slider_state};
 pub use ripple::{
     LOCAL_RIPPLE_CONFIGURATION, LOCAL_RIPPLE_THEME_CONFIGURATION, RippleConfiguration,
     RippleConfigurationFocus, RippleDefaults, RippleOptions, RippleThemeConfiguration,
@@ -123,7 +125,7 @@ pub use sheet::{
 };
 pub use slider::{
     DrawSliderStopIndicator, DrawSliderTick, Slider, SliderColors, SliderDefaults, SliderState,
-    remember_slider_state,
+    VerticalSlider, remember_slider_state,
 };
 pub use snackbar::{
     ContentSnackbar, PlainTooltip, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration,

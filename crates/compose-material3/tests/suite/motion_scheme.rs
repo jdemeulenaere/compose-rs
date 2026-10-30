@@ -762,6 +762,80 @@ fn a_list_items_colors_and_shape_animate_with_the_scheme() {
     );
 }
 
+/// Reversed before it's finished, a shape goes back from where it is, not its start: as
+/// `animateToShape`'s flip of the progress.
+#[test]
+fn a_list_items_corners_reverse_from_where_they_are() {
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = themed(long_only(FastSpatial), move || {
+        let shape = |dp: f32| Shape::Rounded([CornerSize::Dp(dp.dp()); 4]);
+        let shapes = ListItemShapes {
+            shape: shape(0.0),
+            selected_shape: shape(20.0),
+            ..ListItemDefaults::shapes()
+        };
+        SelectableListItem!(read.get(), || {}, shapes = shapes, {
+            Text!("Item");
+        });
+    });
+    let corner = |ui: &mut ComposeTestRule| {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                DrawOp::DrawRoundRect(_, radii, _) => Some(radii[0]),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    selected.set(true);
+    to_halfway(&mut ui);
+    let halfway = corner(&mut ui);
+    assert!((5.0..15.0).contains(&halfway), "{halfway}");
+    selected.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let back = corner(&mut ui);
+    assert!((back - halfway).abs() < 2.0, "{back} isn't near {halfway}");
+    idle_after(&mut ui);
+    assert_eq!(corner(&mut ui), 0.0);
+}
+
+/// A text field's container following its state on the fast effects spec, as
+/// `TextFieldDefaults.Container`.
+#[test]
+fn a_text_fields_container_animates_with_the_scheme() {
+    assert_each_property_animates_with(&[FastEffects], |scheme| {
+        let enabled = mutable_state_of(true);
+        let read = enabled.handle();
+        let mut ui = themed(scheme, move || {
+            let colors = TextFieldColors {
+                container_color: Color::BLUE,
+                disabled_container_color: Color::RED,
+                ..TextFieldDefaults::colors()
+            };
+            TextField!(String::new(), |_| {}, enabled = read.get(), colors = colors);
+        });
+        enabled.set(false);
+        to_halfway(&mut ui);
+        let container = ui
+            .host()
+            .display_list()
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                DrawOp::DrawRoundRect(_, _, paint) | DrawOp::DrawPath { paint, .. } => {
+                    Some(paint.color)
+                }
+                _ => None,
+            })
+            .expect("a container");
+        vec![color_along(container, Color::BLUE, Color::RED)]
+    });
+}
+
 /// A text field focused: its label on the fast spatial spec and its color on fast effects, the
 /// border's color on fast effects and its thickness on fast spatial, the placeholder fading in on
 /// slow effects, as `TextFieldImpl`'s transition and `animateBorderStrokeAsState`.

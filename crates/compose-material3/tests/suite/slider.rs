@@ -23,9 +23,9 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Dp, DragInteraction, Interaction, Key, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier,
-    MutableInteractionSource, Offset, PointerEvent, PointerId, PointerType, PressInteraction,
-    ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
+    Color, Dp, DragInteraction, Interaction, Key, LOCAL_LAYOUT_DIRECTION, LayoutDirection,
+    Modifier, MutableInteractionSource, Offset, PointerEvent, PointerId, PointerType,
+    PressInteraction, ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
 };
 
 const TAG: &str = "slider";
@@ -1733,4 +1733,222 @@ fn the_tracks_gap_grows_by_the_rings_padding_when_focused() {
     ui.on_node_with_tag("slider").request_focus();
     ui.wait_for_idle();
     assert_eq!(active(&mut ui), unfocused - 4.0);
+}
+
+/// A vertical slider 300 dp high, its thumb and track tagged, in a 400 by 400 window.
+fn vertical(state: SliderState, top_to_bottom: bool, inset: bool) -> ComposeTestRule {
+    ComposeTestRule::sized(compose_ui::IntSize::new(400, 400), move || {
+        MaterialTheme!({
+            let theme = if inset {
+                RippleDefaults::INSET_FOCUS_RING_THEME_CONFIGURATION
+            } else {
+                RippleDefaults::THEME_CONFIGURATION
+            };
+            CompositionLocalProvider(LOCAL_RIPPLE_THEME_CONFIGURATION.provides(theme), move || {
+                Column!({
+                    Box!(modifier = Modifier.test_tag("other").size(10.dp()).focusable());
+                    VerticalSlider!(
+                        state,
+                        move |new| state.set_value(new),
+                        modifier = Modifier.test_tag(TAG).height(300.dp()),
+                        top_to_bottom = top_to_bottom,
+                        thumb = Some(|_| {
+                            Box!(modifier = Modifier.size((44.dp(), 4.dp())).test_tag("thumb"));
+                        }),
+                        track = Some(move |state: SliderState| {
+                            SliderDefaults::track(
+                                state,
+                                Modifier.test_tag("track"),
+                                true,
+                                SliderDefaults::colors(),
+                            );
+                        })
+                    );
+                });
+            });
+        });
+    })
+}
+
+fn rect_of(ui: &mut ComposeTestRule, tag: &str) -> Rect {
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+}
+
+/// Along its height, from its top: the track half a thumb in, the thumb at the value.
+#[test]
+fn a_vertical_slider_runs_down_its_height() {
+    let state = SliderState::new(0.5, 0, (0.0, 1.0));
+    let mut ui = vertical(*state, true, false);
+    let (thumb, track) = (rect_of(&mut ui, "thumb"), rect_of(&mut ui, "track"));
+    assert_eq!((track.width(), track.height()), (16.0, 296.0));
+    assert_eq!(thumb.top - track.top, 148.0 - 2.0);
+    state.set_value(0.0);
+    ui.wait_for_idle();
+    assert_eq!(rect_of(&mut ui, "thumb").top, track.top - 2.0);
+}
+
+/// `topToBottom = false`: its start at the bottom.
+#[test]
+fn a_reversed_vertical_slider_runs_up_its_height() {
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let mut ui = vertical(*state, false, false);
+    let (thumb, track) = (rect_of(&mut ui, "thumb"), rect_of(&mut ui, "track"));
+    assert_eq!(thumb.bottom, track.bottom + 2.0);
+}
+
+/// A press and a drag along it, reversed too, the value from the pointer's place on the track.
+#[test]
+fn a_vertical_slider_follows_a_press_and_a_drag() {
+    for top_to_bottom in [true, false] {
+        let state = SliderState::new(0.0, 0, (0.0, 1.0));
+        let mut ui = vertical(*state, top_to_bottom, false);
+        let track = rect_of(&mut ui, "track");
+        let bounds = rect_of(&mut ui, TAG);
+        let x = (bounds.left + bounds.right) / 2.0;
+        // A quarter along it, whichever way it runs.
+        let quarter = if top_to_bottom { 0.25 } else { 0.75 };
+        let y = track.top + track.height() * quarter;
+        ui.host().send_pointer(PointerEvent::press(Offset::new(x, y)));
+        ui.host().send_pointer(PointerEvent::release(Offset::new(x, y)));
+        ui.wait_for_idle();
+        assert_near(state.value(), 0.25);
+        // Dragged across, the value stays; along it, it follows, less the slop.
+        let down = Offset::new(x, y);
+        ui.host().send_pointer(PointerEvent::press(down));
+        let by = if top_to_bottom { 100.0 } else { -100.0 };
+        ui.host().send_pointer(PointerEvent::moved(down + Offset::new(0.0, by), true));
+        ui.wait_for_idle();
+        assert!(state.is_dragging());
+        assert!(state.value() > 0.25, "{}", state.value());
+        ui.host().send_pointer(PointerEvent::release(down + Offset::new(0.0, by)));
+        ui.wait_for_idle();
+        assert!(!state.is_dragging());
+    }
+}
+
+/// Up and Down its steps, a page by a tenth of them; a reversed one the other way; left and right
+/// aren't its keys.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SlideUsingKeysTest.kt, slider_vertical_keyboardNavigation
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SlideUsingKeysTest.kt, slider_vertical_reverseDirectionTrue_keyboardNavigation
+#[test]
+fn a_vertical_slider_takes_up_and_down() {
+    for (top_to_bottom, sign) in [(true, 1.0), (false, -1.0)] {
+        let start = if top_to_bottom { 0.0 } else { 100.0 };
+        let state = SliderState::new(start, 9, (0.0, 100.0));
+        let mut ui = vertical(*state, top_to_bottom, false);
+        ui.on_node_with_tag(TAG).request_focus();
+        ui.wait_for_idle();
+        ui.press_key(Key::DirectionDown);
+        assert_eq!(state.value(), start + sign * 10.0);
+        ui.press_key(Key::DirectionUp);
+        assert_eq!(state.value(), start);
+        ui.press_key(Key::PageDown);
+        assert_eq!(state.value(), start + sign * 10.0);
+        ui.press_key(Key::PageUp);
+        assert_eq!(state.value(), start);
+        ui.press_key(Key::DirectionRight);
+        assert_eq!(state.value(), start, "not one of its keys");
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SlideUsingKeysTest.kt, slider_vertical_rtl_keyboardNavigation
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SlideUsingKeysTest.kt, slider_vertical_rtl_reverseDirectionTrue_keyboardNavigation
+#[test]
+fn right_to_left_changes_nothing_for_a_vertical_sliders_keys() {
+    let state = SliderState::new(0.0, 9, (0.0, 100.0));
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl), || {
+            VerticalSlider!(
+                handle,
+                move |new| handle.set_value(new),
+                modifier = Modifier.test_tag(TAG).height(300.dp())
+            );
+        });
+    });
+    ui.on_node_with_tag(TAG).request_focus();
+    ui.wait_for_idle();
+    ui.press_key(Key::DirectionDown);
+    assert_eq!(state.value(), 10.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, verticalSlider_thumbPosition_staysSameWhenFocused_insetRing
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, verticalSlider_reversed_thumbPosition_staysSameWhenFocused_insetRing
+#[test]
+fn a_vertical_sliders_thumb_stays_where_it_is_when_an_inset_ring_shows() {
+    for top_to_bottom in [true, false] {
+        let state = SliderState::new(0.0, 0, (0.0, 1.0));
+        let handle = *state;
+        let mut ui = vertical(handle, top_to_bottom, true);
+        for value in [0.0, 0.3, 0.5, 1.0] {
+            handle.set_value(value);
+            ui.on_node_with_tag("other").request_focus();
+            ui.wait_for_idle();
+            let (thumb, track) = (rect_of(&mut ui, "thumb"), rect_of(&mut ui, "track"));
+            ui.on_node_with_tag(TAG).request_focus();
+            ui.wait_for_idle();
+            assert_eq!(rect_of(&mut ui, "thumb"), thumb, "at {value}");
+            assert_eq!(rect_of(&mut ui, "track"), track, "at {value}");
+        }
+    }
+}
+
+/// A track part in `color`, in the order drawn, and the dots in it.
+fn centered_parts(ui: &mut ComposeTestRule, color: Color) -> Vec<(f32, f32, f32, f32)> {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawRoundRect(rect, radii, paint)
+                if paint.color == color && rect.height() == 16.0 =>
+            {
+                Some((rect.left, rect.right, radii[0], radii[1]))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn centered(value: f32) -> ComposeTestRule {
+    ComposeTestRule::sized(compose_ui::IntSize::new(204, 48), move || {
+        MaterialTheme!({
+            let state = remember_slider_state!(value, 0, (-1.0, 1.0));
+            Slider!(
+                state,
+                |_| {},
+                track = Some(|state: SliderState| {
+                    SliderDefaults::centered_track(state, Modifier, true, SliderDefaults::colors());
+                })
+            );
+        });
+    })
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderScreenshotTest.kt, centeredSliderTest
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderScreenshotTest.kt, centeredSliderTest_middle
+#[test]
+fn a_centered_tracks_active_part_runs_from_the_middle_to_the_thumb() {
+    let scheme = light_color_scheme();
+    // The value past the middle: active from the middle to the gap before the handle.
+    let mut ui = centered(0.5);
+    let active = centered_parts(&mut ui, scheme.primary);
+    assert_eq!(active.len(), 1, "{active:?}");
+    assert_eq!(active[0].0, 100.0, "from the middle");
+    assert_eq!(active[0].1, 150.0 - 8.0, "the gap before the handle");
+    // Before the middle: from the gap after the handle to the middle.
+    let mut ui = centered(-0.5);
+    let active = centered_parts(&mut ui, scheme.primary);
+    assert_eq!(active.len(), 1, "{active:?}");
+    assert_eq!((active[0].0, active[0].1), (50.0 + 8.0, 100.0));
+    // Inactive parts on either side, each with a stop dot.
+    assert_eq!(centered_parts(&mut ui, scheme.secondary_container).len(), 2);
+    let dots = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, compose_ui::platform::DrawOp::DrawArc { .. }))
+        .count();
+    assert_eq!(dots, 2);
 }

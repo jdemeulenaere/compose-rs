@@ -30,10 +30,15 @@ struct SliderInner {
     is_dragging: OwnedState<bool>,
     /// Whether it holds the focus, as `isFocused`: what's padded for an inset focus ring.
     is_focused: OwnedState<bool>,
-    /// The thumb's size, its focus padding apart, and the slider's width, as the last layout
+    /// Which way it runs, as `orientation` and `reverseVerticalDirection`: `VerticalSlider` sets
+    /// them.
+    vertical: Cell<bool>,
+    reverse_vertical: Cell<bool>,
+    /// The thumb's size, its focus padding apart, and the slider's size, as the last layout
     /// measured them.
     thumb_size: Cell<IntSize>,
     total_width: Cell<i32>,
+    total_height: Cell<i32>,
     /// The track's corner, as its `CornerSizeAlignmentLine` (the default track sets it).
     track_corner: Cell<i32>,
 }
@@ -66,8 +71,11 @@ impl SliderState {
             should_auto_snap: Cell::new(true),
             is_dragging: mutable_state_of(false),
             is_focused: mutable_state_of(false),
+            vertical: Cell::new(false),
+            reverse_vertical: Cell::new(false),
             thumb_size: Cell::new(IntSize::ZERO),
             total_width: Cell::new(0),
+            total_height: Cell::new(0),
             track_corner: Cell::new(0),
         };
         Owned::new(inner, |object| SliderState { object })
@@ -126,6 +134,14 @@ impl SliderState {
         self.inner().is_some_and(|inner| inner.is_dragging.get())
     }
 
+    fn is_vertical(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.vertical.get())
+    }
+
+    fn is_reverse_vertical(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.reverse_vertical.get())
+    }
+
     /// The stops as fractions of the track (none without steps), as `tickFractions`.
     fn tick_fractions(&self) -> Vec<f32> {
         tick_fractions(self.steps())
@@ -173,7 +189,7 @@ pub fn remember_slider_state(
 
 /// The stops as fractions, as `stepsToTickFractions`: none without steps, else the ends and
 /// `steps` between.
-fn tick_fractions(steps: u32) -> Vec<f32> {
+pub(crate) fn tick_fractions(steps: u32) -> Vec<f32> {
     if steps == 0 {
         return Vec::new();
     }
@@ -182,7 +198,7 @@ fn tick_fractions(steps: u32) -> Vec<f32> {
 }
 
 /// The nearest stop's value to `value`, as `snapValueToTick`.
-fn snap_to_tick(value: f32, steps: u32, start: f32, end: f32) -> f32 {
+pub(crate) fn snap_to_tick(value: f32, steps: u32, start: f32, end: f32) -> f32 {
     if steps == 0 {
         return value;
     }
@@ -194,7 +210,7 @@ fn snap_to_tick(value: f32, steps: u32, start: f32, end: f32) -> f32 {
 }
 
 /// `position`'s fraction between `a` and `b`, 0 to 1, as `calcFraction`.
-fn fraction(a: f32, b: f32, position: f32) -> f32 {
+pub(crate) fn fraction(a: f32, b: f32, position: f32) -> f32 {
     (if b - a == 0.0 { 0.0 } else { (position - a) / (b - a) }).clamp(0.0, 1.0)
 }
 
@@ -249,22 +265,24 @@ impl SliderColors {
 pub struct SliderDefaults;
 
 /// The track's height, as `TrackHeight` (`SliderTokens.InactiveTrackHeight`).
-const TRACK_HEIGHT: Dp = Dp(16.0);
+pub(crate) const TRACK_HEIGHT: Dp = Dp(16.0);
 /// Around the handle and added to its gaps while an inset focus ring shows, as
 /// `insetFocusRingPadding`.
-const INSET_FOCUS_RING_PADDING: Dp = Dp(4.0);
+pub(crate) const INSET_FOCUS_RING_PADDING: Dp = Dp(4.0);
 /// The handle's width and height, as `ThumbWidth` and `ThumbHeight`.
-const THUMB_WIDTH: Dp = Dp(4.0);
+pub(crate) const THUMB_WIDTH: Dp = Dp(4.0);
 const THUMB_HEIGHT: Dp = Dp(44.0);
 /// Between the handle and the track, as `ThumbTrackGapSize`
 /// (`SliderTokens.ActiveHandleLeadingSpace`).
-const THUMB_TRACK_GAP_SIZE: Dp = Dp(6.0);
+pub(crate) const THUMB_TRACK_GAP_SIZE: Dp = Dp(6.0);
 /// The track's corners next to the handle, as `TrackInsideCornerSize`.
-const TRACK_INSIDE_CORNER_SIZE: Dp = Dp(2.0);
+pub(crate) const TRACK_INSIDE_CORNER_SIZE: Dp = Dp(2.0);
 
 impl SliderDefaults {
     /// The handle's size, as `ThumbSize`.
     pub const THUMB_SIZE: DpSize = DpSize::new(THUMB_WIDTH, THUMB_HEIGHT);
+    /// A vertical slider's handle, as `VerticalThumbSize`.
+    pub const VERTICAL_THUMB_SIZE: DpSize = DpSize::new(THUMB_HEIGHT, THUMB_WIDTH);
     /// The stop dot at the track's end, as `TrackStopIndicatorSize`.
     pub const TRACK_STOP_INDICATOR_SIZE: Dp = Dp(4.0);
     /// The steps' ticks, as `TickSize`.
@@ -300,10 +318,33 @@ impl SliderDefaults {
         enabled: bool,
         thumb_size: DpSize,
     ) {
+        SliderDefaults::thumb_with(
+            interaction_source,
+            false,
+            modifier,
+            colors,
+            enabled,
+            thumb_size,
+        );
+    }
+
+    /// As `SliderDefaults.Thumb(interactionSource, isVertical, ...)`: a vertical one half as high.
+    pub fn thumb_with(
+        interaction_source: MutableInteractionSource,
+        is_vertical: bool,
+        modifier: Modifier,
+        colors: SliderColors,
+        enabled: bool,
+        thumb_size: DpSize,
+    ) {
         let interacting = interaction_source.is_pressed()
             || interaction_source.is_dragged()
             || interaction_source.is_focused();
-        let width = if interacting { thumb_size.width / 2.0 } else { thumb_size.width };
+        let size = match (interacting, is_vertical) {
+            (false, _) => thumb_size,
+            (true, false) => DpSize::new(thumb_size.width / 2.0, thumb_size.height),
+            (true, true) => DpSize::new(thumb_size.width, thumb_size.height / 2.0),
+        };
         let color = colors.thumb_color(enabled);
         Box(
             modifier
@@ -315,7 +356,7 @@ impl SliderDefaults {
             compose_runtime::callback(move |_| {
                 Spacer(
                     Modifier
-                        .size((width, thumb_size.height))
+                        .size((size.width, size.height))
                         .background_with(color, compose_foundation::CIRCLE_SHAPE),
                 );
             }),
@@ -367,42 +408,69 @@ impl SliderDefaults {
         track_inside_corner_size: Dp,
         track_corner_size: Option<Dp>,
     ) {
-        let corner_size = track_corner_size.unwrap_or(Dp::UNSPECIFIED);
-        let modifier = modifier.fill_max_width().height(TRACK_HEIGHT).layout(
-            move |scope, measurable, constraints| {
-                let placeable = scope.measure(measurable, constraints);
-                // As the track's `CornerSizeAlignmentLine`: the slider places the handle at the
-                // stops with it.
-                let corner = if corner_size.is_specified() {
-                    scope.density().round_to_px(corner_size)
-                } else {
-                    placeable.height / 2
-                };
-                if let Some(inner) = slider_state.inner() {
-                    inner.track_corner.set(corner);
-                }
-                scope.place(&placeable, 0, 0);
-                scope.layout(placeable.width, placeable.height)
-            },
-        );
-        let focus_padding = if uses_inset_focus_ring()
-            && slider_state.inner().is_some_and(|inner| inner.is_focused.get())
-        {
-            INSET_FOCUS_RING_PADDING
-        } else {
-            Dp(0.0)
-        };
-        let style = TrackStyle {
+        track_impl(
+            slider_state,
+            modifier,
+            enabled,
+            colors,
             draw_stop_indicator,
             draw_tick,
-            thumb_track_gap_size: thumb_track_gap_size + focus_padding,
+            thumb_track_gap_size,
             track_inside_corner_size,
-            track_corner_size: corner_size,
-            corner_shrinking: track_corner_size.is_some(),
-        };
-        compose_foundation::layout::Canvas(modifier, move |scope| {
-            draw_track(scope, slider_state, enabled, &colors, &style);
-        });
+            track_corner_size.unwrap_or(Dp::UNSPECIFIED),
+            track_corner_size.is_some(),
+            false,
+        );
+    }
+
+    /// The track of a slider with its active part from the middle to the handle, as
+    /// `SliderDefaults.CenteredTrack(sliderState, modifier, enabled, colors)`: a stop dot at each
+    /// end.
+    pub fn centered_track(
+        slider_state: SliderState,
+        modifier: Modifier,
+        enabled: bool,
+        colors: SliderColors,
+    ) {
+        SliderDefaults::centered_track_with(
+            slider_state,
+            modifier,
+            enabled,
+            colors,
+            Some(SliderDefaults::default_draw_stop_indicator(enabled, colors)),
+            SliderDefaults::default_draw_tick(),
+            THUMB_TRACK_GAP_SIZE,
+            TRACK_INSIDE_CORNER_SIZE,
+            Dp::UNSPECIFIED,
+        );
+    }
+
+    /// As `SliderDefaults.CenteredTrack` with all its parameters.
+    #[allow(clippy::too_many_arguments)]
+    pub fn centered_track_with(
+        slider_state: SliderState,
+        modifier: Modifier,
+        enabled: bool,
+        colors: SliderColors,
+        draw_stop_indicator: Option<DrawSliderStopIndicator>,
+        draw_tick: DrawSliderTick,
+        thumb_track_gap_size: Dp,
+        track_inside_corner_size: Dp,
+        track_corner_size: Dp,
+    ) {
+        track_impl(
+            slider_state,
+            modifier,
+            enabled,
+            colors,
+            draw_stop_indicator,
+            draw_tick,
+            thumb_track_gap_size,
+            track_inside_corner_size,
+            track_corner_size,
+            true,
+            true,
+        );
     }
 
     /// The track's default stop dot: a `TRACK_STOP_INDICATOR_SIZE` dot in the active track's
@@ -471,116 +539,302 @@ impl DrawSliderTick {
     }
 }
 
+/// As `SliderDefaults`' `TrackImpl`: `enable_corner_shrinking` lets a part shorter than its corner
+/// still draw, `is_centered` makes it a centered track.
+#[allow(clippy::too_many_arguments)]
+fn track_impl(
+    slider_state: SliderState,
+    modifier: Modifier,
+    enabled: bool,
+    colors: SliderColors,
+    draw_stop_indicator: Option<DrawSliderStopIndicator>,
+    draw_tick: DrawSliderTick,
+    thumb_track_gap_size: Dp,
+    track_inside_corner_size: Dp,
+    track_corner_size: Dp,
+    enable_corner_shrinking: bool,
+    is_centered: bool,
+) {
+    let vertical = slider_state.is_vertical();
+    let modifier = if vertical {
+        let modifier = modifier.width(TRACK_HEIGHT).fill_max_height();
+        // Drawn from its top: reversed, the whole of it is flipped.
+        if slider_state.is_reverse_vertical() {
+            modifier.graphics_layer(|layer| layer.scale_y = -1.0)
+        } else {
+            modifier
+        }
+    } else {
+        modifier.fill_max_width().height(TRACK_HEIGHT)
+    };
+    let modifier = modifier.layout(move |scope, measurable, constraints| {
+        let placeable = scope.measure(measurable, constraints);
+        // As the track's `CornerSizeAlignmentLine`: the slider places the handle at the stops
+        // with it.
+        let corner = if track_corner_size.is_specified() {
+            scope.density().round_to_px(track_corner_size)
+        } else if vertical {
+            placeable.width / 2
+        } else {
+            placeable.height / 2
+        };
+        if let Some(inner) = slider_state.inner() {
+            inner.track_corner.set(corner);
+        }
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    });
+    let focus_padding = if uses_inset_focus_ring()
+        && slider_state.inner().is_some_and(|inner| inner.is_focused.get())
+    {
+        INSET_FOCUS_RING_PADDING
+    } else {
+        Dp(0.0)
+    };
+    let gap = thumb_track_gap_size + focus_padding;
+    compose_foundation::layout::Canvas(modifier, move |scope| {
+        let value = slider_state.coerced_value_as_fraction();
+        let density = scope.density();
+        let thumb = slider_state.inner().map_or(IntSize::ZERO, |inner| inner.thumb_size.get());
+        let thumb = (thumb.width as f32, thumb.height as f32);
+        // A centered track's gaps go around the handle on its side of the middle only.
+        let (start_thumb, end_thumb) = if is_centered {
+            (
+                if value > 0.5 { (0.0, 0.0) } else { thumb },
+                if value < 0.5 { (0.0, 0.0) } else { thumb },
+            )
+        } else {
+            ((0.0, 0.0), thumb)
+        };
+        draw_track(
+            scope,
+            &TrackDrawing {
+                ticks: &slider_state.tick_fractions(),
+                active_range: (0.0, value),
+                enabled,
+                colors: &colors,
+                start_thumb,
+                end_thumb,
+                start_gap: if is_centered { gap } else { Dp(0.0) },
+                end_gap: gap,
+                inside_corner: density.to_px(track_inside_corner_size),
+                corner: if track_corner_size.is_specified() {
+                    density.to_px(track_corner_size)
+                } else if vertical {
+                    scope.size().width / 2.0
+                } else {
+                    scope.size().height / 2.0
+                },
+                draw_stop_indicator: draw_stop_indicator.as_ref(),
+                draw_tick: &draw_tick,
+                is_range: false,
+                corner_shrinking: enable_corner_shrinking,
+                vertical,
+                is_centered,
+            },
+        );
+    });
+}
+
 /// Whether the theme shows a focus as an inset ring.
-fn uses_inset_focus_ring() -> bool {
+pub(crate) fn uses_inset_focus_ring() -> bool {
     matches!(
         crate::ripple::LOCAL_RIPPLE_THEME_CONFIGURATION.current().focus,
         crate::ripple::RippleThemeFocus::InsetRing { .. }
     )
 }
 
-/// What `SliderDefaults::track_with` draws with, past the colors.
-struct TrackStyle {
-    draw_stop_indicator: Option<DrawSliderStopIndicator>,
-    draw_tick: DrawSliderTick,
-    thumb_track_gap_size: Dp,
-    track_inside_corner_size: Dp,
-    track_corner_size: Dp,
-    corner_shrinking: bool,
+/// What `draw_track` draws, as the parameters of Compose's `drawTrack`.
+pub(crate) struct TrackDrawing<'a> {
+    pub ticks: &'a [f32],
+    /// As fractions of the track.
+    pub active_range: (f32, f32),
+    pub enabled: bool,
+    pub colors: &'a SliderColors,
+    pub start_thumb: (f32, f32),
+    pub end_thumb: (f32, f32),
+    pub start_gap: Dp,
+    pub end_gap: Dp,
+    pub inside_corner: f32,
+    pub corner: f32,
+    pub draw_stop_indicator: Option<&'a DrawSliderStopIndicator>,
+    pub draw_tick: &'a DrawSliderTick,
+    pub is_range: bool,
+    /// A part shorter than its corner still draws.
+    pub corner_shrinking: bool,
+    pub vertical: bool,
+    pub is_centered: bool,
 }
 
-/// A part of the track between `left` and `right`, its start's corners `start_radius` and its
-/// end's `end_radius` (left and right in a left-to-right track), as `drawTrackPath`.
-fn draw_track_part(
+/// A part of the track at `offset` of `length` along it, as `drawTrackPath`: `start_radius` its
+/// corners on the left (or top), `end_radius` on the right (or bottom).
+fn draw_track_path(
     scope: &mut DrawScope<'_>,
-    left: f32,
-    right: f32,
+    vertical: bool,
+    offset: f32,
+    length: f32,
     color: Color,
-    left_radius: f32,
-    right_radius: f32,
-) {
-    let height = scope.size().height;
-    scope.draw_round_rect(
-        Rect::new(left, 0.0, right, height),
-        [left_radius, right_radius, right_radius, left_radius],
-        Paint::fill(color),
-    );
-}
-
-/// The track's drawing, as Compose's `drawTrack` for a slider (not centered, not a range).
-fn draw_track(
-    scope: &mut DrawScope<'_>,
-    state: SliderState,
-    enabled: bool,
-    colors: &SliderColors,
-    style: &TrackStyle,
+    start_radius: f32,
+    end_radius: f32,
 ) {
     let size = scope.size();
+    let (rect, radii) = if vertical {
+        (
+            Rect::new(0.0, offset, size.width, offset + length),
+            [start_radius, start_radius, end_radius, end_radius],
+        )
+    } else {
+        (
+            Rect::new(offset, 0.0, offset + length, size.height),
+            [start_radius, end_radius, end_radius, start_radius],
+        )
+    };
+    scope.draw_round_rect(rect, radii, Paint::fill(color));
+}
+
+/// The track's drawing, as `SliderDefaults`' `drawTrack`, for a slider, a centered one or a range.
+pub(crate) fn draw_track(scope: &mut DrawScope<'_>, track: &TrackDrawing<'_>) {
+    let size = scope.size();
     let density = scope.density();
+    let vertical = track.vertical;
     let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
-    let corner = if style.track_corner_size.is_specified() {
-        density.to_px(style.track_corner_size)
-    } else {
-        size.height / 2.0
+    let rtl_horizontal = rtl && !vertical;
+    let (corner, inside) = (track.corner, track.inside_corner);
+    let slider_end = if vertical { size.height } else { size.width };
+    let (colors, enabled) = (track.colors, track.enabled);
+    let (inactive_color, active_color) =
+        (colors.track_color(enabled, false), colors.track_color(enabled, true));
+    let ticks = track.ticks;
+    let on_tick_end =
+        |fraction: f32| ticks.first() == Some(&fraction) || ticks.last() == Some(&fraction);
+    let position = |fraction: f32| {
+        if !ticks.is_empty() && !on_tick_end(fraction) {
+            (slider_end - corner * 2.0) * fraction + corner
+        } else {
+            slider_end * fraction
+        }
     };
-    let inside = density.to_px(style.track_inside_corner_size);
-    let ticks = state.tick_fractions();
-    let value = state.coerced_value_as_fraction();
-    let on_end = ticks.first() == Some(&value) || ticks.last() == Some(&value);
-    let width = size.width;
-    let value_end = if !ticks.is_empty() && !on_end {
-        (width - corner * 2.0) * value + corner
-    } else {
-        width * value
+    let (value_start, value_end) = (position(track.active_range.0), position(track.active_range.1));
+    let gap_of = |gap: Dp, thumb: (f32, f32)| {
+        if gap.0 > 0.0 {
+            (if vertical { thumb.1 } else { thumb.0 }) / 2.0 + density.to_px(gap)
+        } else {
+            0.0
+        }
     };
-    let thumb_width = state.inner().map_or(0, |inner| inner.thumb_size.get().width) as f32;
-    let end_gap = if style.thumb_track_gap_size.0 > 0.0 {
-        thumb_width / 2.0 + density.to_px(style.thumb_track_gap_size)
+    let start_gap = gap_of(track.start_gap, track.start_thumb);
+    let end_gap = gap_of(track.end_gap, track.end_thumb);
+    let center_axis = slider_end / 2.0;
+    let center_x = size.width / 2.0;
+    let center_y = size.height / 2.0;
+    let keep_corners = !track.corner_shrinking || !ticks.is_empty();
+
+    // The inactive track before the active one (centered or a range).
+    let threshold = start_gap + if keep_corners { corner } else { 0.0 };
+    let before_end = if track.is_centered { value_end.min(center_axis) } else { value_start };
+    if (track.is_centered || track.is_range) && before_end > threshold {
+        let (start_radius, end_radius) =
+            if rtl_horizontal { (inside, corner) } else { (corner, inside) };
+        let end = before_end - start_gap;
+        let offset = if rtl_horizontal { size.width - end } else { 0.0 };
+        draw_track_path(scope, vertical, offset, end, inactive_color, start_radius, end_radius);
+        if let Some(draw) = track.draw_stop_indicator {
+            let at = if vertical {
+                Offset::new(center_x, corner)
+            } else if rtl {
+                Offset::new(size.width - corner, center_y)
+            } else {
+                Offset::new(corner, center_y)
+            };
+            draw.draw(scope, at);
+        }
+    }
+    // The inactive track after it.
+    let threshold = slider_end - end_gap - if keep_corners { corner } else { 0.0 };
+    let after_start = if track.is_centered { value_end.max(center_axis) } else { value_end };
+    if after_start < threshold {
+        let (start_radius, end_radius) =
+            if rtl_horizontal { (corner, inside) } else { (inside, corner) };
+        let start = after_start + end_gap;
+        let length = slider_end - start;
+        let offset = if !vertical && rtl { 0.0 } else { start };
+        draw_track_path(scope, vertical, offset, length, inactive_color, start_radius, end_radius);
+        if let Some(draw) = track.draw_stop_indicator {
+            let at = if vertical {
+                Offset::new(center_x, slider_end - corner)
+            } else if rtl {
+                Offset::new(corner, center_y)
+            } else {
+                Offset::new(slider_end - corner, center_y)
+            };
+            draw.draw(scope, at);
+        }
+    }
+    // The active track.
+    let plain = !track.is_centered && !track.is_range;
+    let active_start = if track.is_centered {
+        before_end + if before_end < center_axis { start_gap } else { 0.0 }
+    } else if track.is_range {
+        value_start + start_gap
     } else {
         0.0
     };
-    // Without shrinking corners (or with ticks), a part shorter than its corner isn't drawn.
-    let keep_corners = !style.corner_shrinking || !ticks.is_empty();
-    let center_y = size.height / 2.0;
-    let x = |position: f32| if rtl { width - position } else { position };
-    // The inactive track, after the handle.
-    if value_end < width - end_gap - if keep_corners { corner } else { 0.0 } {
-        let start = value_end + end_gap;
-        let color = colors.track_color(enabled, false);
-        if rtl {
-            draw_track_part(scope, 0.0, width - start, color, corner, inside);
-        } else {
-            draw_track_part(scope, start, width, color, inside, corner);
-        }
-        if let Some(draw) = &style.draw_stop_indicator {
-            draw.draw(scope, Offset::new(x(width - corner), center_y));
-        }
-    }
-    // The active track, before the handle.
-    let active_end = value_end - end_gap;
-    let start_radius = if rtl { inside } else { corner };
+    let active_end = if track.is_centered {
+        after_start - if after_start > center_axis { end_gap } else { 0.0 }
+    } else {
+        value_end - end_gap
+    };
+    let start_radius = if rtl_horizontal || !plain { inside } else { corner };
+    let end_radius = if rtl_horizontal && plain { corner } else { inside };
+    let active_length =
+        if rtl_horizontal && plain { active_end } else { active_end - active_start };
     let threshold = if keep_corners { start_radius } else { 0.0 };
-    if active_end > threshold {
-        let color = colors.track_color(enabled, true);
-        if rtl {
-            draw_track_part(scope, width - active_end, width, color, inside, corner);
+    if active_length > threshold {
+        let offset = if vertical {
+            active_start
+        } else if rtl {
+            size.width - active_end
         } else {
-            draw_track_part(scope, 0.0, active_end, color, corner, inside);
-        }
+            active_start
+        };
+        draw_track_path(
+            scope,
+            vertical,
+            offset,
+            active_length,
+            active_color,
+            start_radius,
+            end_radius,
+        );
     }
-    // The ticks, but at the stop dot and in the gap around the handle.
-    let (start, end) = (corner, width - corner);
+    // The ticks, but at the stop dots and in the gaps around the handles and the middle.
+    let (start, end) = (corner, slider_end - corner);
+    let in_gap = |at: f32, center: f32, gap: f32| (center - gap..=center + gap).contains(&at);
     for (index, tick) in ticks.iter().enumerate() {
-        if style.draw_stop_indicator.is_some() && index == ticks.len() - 1 {
-            continue;
+        if track.draw_stop_indicator.is_some() {
+            let at_start = (track.is_centered || track.is_range) && index == 0;
+            if at_start || index == ticks.len() - 1 {
+                continue;
+            }
         }
         let at = start + (end - start) * tick;
-        if (value_end - end_gap..=value_end + end_gap).contains(&at) {
+        let beyond = value_end > center_axis;
+        let on_center =
+            track.is_centered && in_gap(at, center_axis, if beyond { start_gap } else { end_gap });
+        let on_start = track.is_range && in_gap(at, value_start, start_gap);
+        let end_tick_gap = if track.is_centered && !beyond { start_gap } else { end_gap };
+        if on_center || on_start || in_gap(at, value_end, end_tick_gap) {
             continue;
         }
-        let active = (0.0..=active_end).contains(&at);
-        let color = colors.tick_color(enabled, active);
-        style.draw_tick.draw(scope, Offset::new(x(at), center_y), color);
+        let offset = if vertical {
+            Offset::new(center_x, at)
+        } else if rtl {
+            Offset::new(size.width - at, center_y)
+        } else {
+            Offset::new(at, center_y)
+        };
+        let active = (active_start..=active_end).contains(&at);
+        track.draw_tick.draw(scope, offset, colors.tick_color(enabled, active));
     }
 }
 
@@ -606,6 +860,78 @@ pub fn Slider(
     #[default(None)] thumb: Option<impl Fn(SliderState) + 'static>,
     #[default(None)] track: Option<impl Fn(SliderState) + 'static>,
 ) {
+    if let Some(inner) = state.inner() {
+        inner.vertical.set(false);
+    }
+    let thumb =
+        thumb.map(|thumb| compose_runtime::callback(thumb) as Callback<dyn Fn(SliderState)>);
+    let track =
+        track.map(|track| compose_runtime::callback(track) as Callback<dyn Fn(SliderState)>);
+    slider_impl(
+        state,
+        compose_runtime::callback(on_value_change),
+        modifier,
+        enabled,
+        on_value_change_finished.map(compose_runtime::callback),
+        colors,
+        interaction_source,
+        thumb,
+        track,
+    );
+}
+
+/// A slider along its height, as Compose's `VerticalSlider`: `top_to_bottom`, its start at the top,
+/// else at the bottom. It's `Slider` but for its direction: Up and Down for its keys, a thumb half
+/// as high while interacted with.
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn VerticalSlider(
+    state: SliderState,
+    on_value_change: impl Fn(f32) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] on_value_change_finished: Option<impl Fn() + 'static>,
+    #[default(true)] top_to_bottom: bool,
+    #[default(crate::SliderDefaults::colors())] colors: SliderColors,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    #[default(None)] thumb: Option<impl Fn(SliderState) + 'static>,
+    #[default(None)] track: Option<impl Fn(SliderState) + 'static>,
+) {
+    if let Some(inner) = state.inner() {
+        inner.vertical.set(true);
+        inner.reverse_vertical.set(!top_to_bottom);
+    }
+    let thumb =
+        thumb.map(|thumb| compose_runtime::callback(thumb) as Callback<dyn Fn(SliderState)>);
+    let track =
+        track.map(|track| compose_runtime::callback(track) as Callback<dyn Fn(SliderState)>);
+    slider_impl(
+        state,
+        compose_runtime::callback(on_value_change),
+        modifier,
+        enabled,
+        on_value_change_finished.map(compose_runtime::callback),
+        colors,
+        interaction_source,
+        thumb,
+        track,
+    );
+}
+
+/// The sliders' body, as `SliderImpl`.
+#[allow(clippy::too_many_arguments)]
+fn slider_impl(
+    state: SliderState,
+    on_value_change: Callback<dyn Fn(f32)>,
+    modifier: Modifier,
+    enabled: bool,
+    on_value_change_finished: Option<Callback>,
+    colors: SliderColors,
+    interaction_source: Option<MutableInteractionSource>,
+    thumb: Option<Callback<dyn Fn(SliderState)>>,
+    track: Option<Callback<dyn Fn(SliderState)>>,
+) {
+    let vertical = state.is_vertical();
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     let input = SliderInput {
         state,
@@ -616,9 +942,11 @@ pub fn Slider(
     };
     // As Compose's: the semantics 10 dp wider on each side (`IncreaseHorizontalSemanticsBounds`),
     // the input inside.
+    let (min_width, min_height) =
+        if vertical { (TRACK_HEIGHT, THUMB_WIDTH) } else { (THUMB_WIDTH, TRACK_HEIGHT) };
     let modifier = minimum_interactive_component_size(modifier).size_in(SizeSpec {
         enforce_incoming: false,
-        ..SizeSpec::bounds(THUMB_WIDTH, TRACK_HEIGHT, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
+        ..SizeSpec::bounds(min_width, min_height, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
     });
     let modifier = crate::components::increase_semantics_bounds(modifier, true).then_custom(input);
     let is_focused = interaction_source.is_focused();
@@ -629,20 +957,11 @@ pub fn Slider(
     // padded while it shows, the track and the value as if it weren't.
     let inset_ring = uses_inset_focus_ring();
     let focus_padding = if inset_ring && is_focused { INSET_FOCUS_RING_PADDING } else { Dp(0.0) };
-    let thumb_modifier = Modifier.wrap_content_width();
+    let thumb_modifier =
+        if vertical { Modifier.wrap_content_height() } else { Modifier.wrap_content_width() };
     let thumb_modifier = if inset_ring {
         thumb_modifier
-            .indication(
-                interaction_source.clone(),
-                crate::ripple::ripple_with(crate::ripple::RippleOptions {
-                    focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
-                    enable_press_indication: false,
-                    enable_focus_indication: true,
-                    enable_drag_indication: false,
-                    enable_hover_indication: false,
-                    ..crate::ripple::RippleOptions::default()
-                }),
-            )
+            .indication(interaction_source.clone(), thumb_focus_ring())
             .padding(focus_padding)
     } else {
         thumb_modifier
@@ -653,12 +972,17 @@ pub fn Slider(
     let thumb = thumb.unwrap_or_else(|| {
         let source = interaction_source.clone();
         compose_runtime::callback(move |_: SliderState| {
-            SliderDefaults::thumb(
+            SliderDefaults::thumb_with(
                 source.clone(),
+                vertical,
                 Modifier,
                 colors,
                 enabled,
-                SliderDefaults::THUMB_SIZE,
+                if vertical {
+                    SliderDefaults::VERTICAL_THUMB_SIZE
+                } else {
+                    SliderDefaults::THUMB_SIZE
+                },
             );
         })
     });
@@ -688,9 +1012,21 @@ pub fn Slider(
     );
 }
 
-/// As Compose's `SliderImpl`'s measure policy: the thumb, then the track as wide as what's
-/// left; the track half a thumb in, the thumb at the value (at the stops, past the track's
-/// corners), both centered vertically.
+/// The ripple that's only a thumb's inset focus ring, as `focusRingModifier`.
+pub(crate) fn thumb_focus_ring() -> compose_ui::Indication {
+    crate::ripple::ripple_with(crate::ripple::RippleOptions {
+        focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
+        enable_press_indication: false,
+        enable_focus_indication: true,
+        enable_drag_indication: false,
+        enable_hover_indication: false,
+        ..crate::ripple::RippleOptions::default()
+    })
+}
+
+/// As Compose's `SliderImpl`'s measure policy: the thumb, then the track as long as what's left;
+/// the track half a thumb in, the thumb at the value (at the stops, past the track's corners), both
+/// centered across it.
 struct SliderLayout {
     state: SliderState,
     /// What the thumb's padded by for an inset focus ring: laid out as if it weren't.
@@ -707,45 +1043,71 @@ impl MeasurePolicy for SliderLayout {
         let [thumb, track] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
+        let vertical = self.state.is_vertical();
         let padding = scope.density().round_to_px(self.focus_padding);
         // With the slider's constraints, as Compose's (its minimum 4 by 16 dp).
         let thumb = scope.measure(*thumb, constraints);
         let (thumb_width, thumb_height) = (thumb.width - 2 * padding, thumb.height - 2 * padding);
-        let track = scope.measure(
-            *track,
+        let less = |bound: i32, by: i32| {
+            if bound == Constraints::INFINITY { Constraints::INFINITY } else { (bound - by).max(0) }
+        };
+        let track_constraints = if vertical {
+            Constraints::new(
+                0,
+                constraints.max_width,
+                (constraints.min_height - thumb_height).max(0),
+                less(constraints.max_height, thumb_height),
+            )
+        } else {
             Constraints::new(
                 (constraints.min_width - thumb_width).max(0),
-                if constraints.max_width == Constraints::INFINITY {
-                    Constraints::INFINITY
-                } else {
-                    (constraints.max_width - thumb_width).max(0)
-                },
+                less(constraints.max_width, thumb_width),
                 0,
                 constraints.max_height,
-            ),
-        );
-        let width = thumb_width + track.width;
-        let height = track.height.max(thumb_height);
+            )
+        };
+        let track = scope.measure(*track, track_constraints);
+        let (width, height) = if vertical {
+            (track.width.max(thumb_width), thumb_height + track.height)
+        } else {
+            (thumb_width + track.width, track.height.max(thumb_height))
+        };
         let Some(inner) = self.state.inner() else { return scope.layout(width, height) };
         inner.thumb_size.set(IntSize::new(thumb_width, thumb_height));
         inner.total_width.set(width);
+        inner.total_height.set(height);
         let corner = inner.track_corner.get();
         // Read while measuring: a new value places the thumb again.
         let value = self.state.coerced_value_as_fraction();
         let ticks = self.state.tick_fractions();
         let on_end = ticks.first() == Some(&value) || ticks.last() == Some(&value);
-        let offset = if !ticks.is_empty() && !on_end {
-            ((track.width - corner * 2) as f32 * value).round() as i32 + corner
-        } else {
-            (track.width as f32 * value).round() as i32
+        let along = |length: i32| {
+            if !ticks.is_empty() && !on_end {
+                ((length - corner * 2) as f32 * value).round() as i32 + corner
+            } else {
+                (length as f32 * value).round() as i32
+            }
         };
-        let track_x = thumb_width / 2;
-        scope.place_relative(&track, track_x, (height - track.height) / 2);
-        scope.place_relative(
-            &thumb,
-            offset + track_x - thumb.width / 2,
-            (height - thumb.height) / 2,
-        );
+        if vertical {
+            let track_y = thumb_height / 2;
+            let offset = along(track.height);
+            let offset =
+                if self.state.is_reverse_vertical() { track.height - offset } else { offset };
+            scope.place_relative(&track, (width - track.width) / 2, track_y);
+            scope.place_relative(
+                &thumb,
+                (width - thumb.width) / 2,
+                offset + track_y - thumb.height / 2,
+            );
+        } else {
+            let track_x = thumb_width / 2;
+            scope.place_relative(&track, track_x, (height - track.height) / 2);
+            scope.place_relative(
+                &thumb,
+                along(track.width) + track_x - thumb.width / 2,
+                (height - thumb.height) / 2,
+            );
+        }
         scope.layout(width, height)
     }
 
@@ -913,8 +1275,11 @@ impl SliderInputNode {
     /// half a thumb in to half a thumb before the end, snapped.
     fn value_at_offset(&self, x: f32) -> f32 {
         let Some(inner) = self.state.inner() else { return 0.0 };
-        let total = inner.total_width.get() as f32;
-        let thumb = inner.thumb_size.get().width as f32;
+        let vertical = inner.vertical.get();
+        let total =
+            if vertical { inner.total_height.get() } else { inner.total_width.get() } as f32;
+        let thumb = inner.thumb_size.get();
+        let thumb = if vertical { thumb.height } else { thumb.width } as f32;
         let max = (total - thumb / 2.0).max(0.0);
         let min = (thumb / 2.0).min(max);
         let (start, end) = self.state.track_range();
@@ -973,12 +1338,28 @@ impl SliderInputNode {
             || position.y > bounds.height as f32 + vertical
     }
 
-    /// The pointer's offset from the slider's start (from the right in a right-to-left layout).
-    fn start_offset(&self, x: f32, width: i32, context: &EventContext<'_>) -> f32 {
-        if context.layout_direction() == compose_ui::LayoutDirection::Rtl {
-            width as f32 - x
+    /// Whether it runs against its axis, as `reverseDirection`: right to left horizontally, or
+    /// bottom to top.
+    fn reverse_direction(&self, context: &EventContext<'_>) -> bool {
+        if self.state.is_vertical() {
+            self.state.is_reverse_vertical()
         } else {
-            x
+            context.layout_direction() == compose_ui::LayoutDirection::Rtl
+        }
+    }
+
+    /// `position` along the slider's axis.
+    fn along(&self, position: Offset) -> f32 {
+        if self.state.is_vertical() { position.y } else { position.x }
+    }
+
+    /// The pointer's offset from the slider's start: from its far edge, reversed.
+    fn start_offset(&self, position: Offset, bounds: IntSize, context: &EventContext<'_>) -> f32 {
+        let length = if self.state.is_vertical() { bounds.height } else { bounds.width };
+        if self.reverse_direction(context) {
+            length as f32 - self.along(position)
+        } else {
+            self.along(position)
         }
     }
 }
@@ -1006,8 +1387,8 @@ impl ModifierNode for SliderInputNode {
 }
 
 impl PointerInputModifierNode for SliderInputNode {
-    /// A tap moves the value to where it pressed; a horizontal drag past the touch slop follows
-    /// the pointer (less the slop); a vertical one is left to a scrolling parent, as Compose's.
+    /// A tap moves the value to where it pressed; a drag along it past the touch slop follows the
+    /// pointer (less the slop); one across it is left to a scrolling parent, as Compose's.
     /// The first finger only.
     fn on_pointer_event(
         &mut self,
@@ -1022,7 +1403,7 @@ impl PointerInputModifierNode for SliderInputNode {
         if self.down.is_some_and(|(pointer, _)| pointer != event.pointer) {
             return;
         }
-        let x = self.start_offset(event.position.x, bounds.width, context);
+        let x = self.start_offset(event.position, bounds, context);
         let slop = context.density().to_px(8.dp());
         match event.kind {
             PointerEventType::Press if self.down.is_none() && !event.consumed => {
@@ -1045,15 +1426,11 @@ impl PointerInputModifierNode for SliderInputNode {
                     self.end_press(false);
                     return;
                 }
-                let moved = event.position.x - start.x;
+                let moved = self.along(event.position) - self.along(start);
                 if moved.abs() > slop {
-                    // The lead is in the slider's direction: mirrored right to left.
+                    // The lead is in the slider's direction: mirrored against its axis.
                     let lead = slop * moved.signum();
-                    let lead = if context.layout_direction() == compose_ui::LayoutDirection::Rtl {
-                        -lead
-                    } else {
-                        lead
-                    };
+                    let lead = if self.reverse_direction(context) { -lead } else { lead };
                     self.drag_lag = Some(lead);
                     // The drag starts, then takes the press from the tap detector: in that order,
                     // as `slider_interactionSource_resetWhenDisposed` hears them.
@@ -1082,7 +1459,7 @@ impl PointerInputModifierNode for SliderInputNode {
                     self.end_press(released);
                     if released {
                         event.consume();
-                        let x = self.start_offset(start.x, bounds.width, context);
+                        let x = self.start_offset(start, bounds, context);
                         let value = self.value_at_offset(x);
                         self.change_to(value, context);
                         self.finish(context);
@@ -1118,23 +1495,21 @@ impl FocusTargetModifierNode for SliderInputNode {
 }
 
 impl KeyInputModifierNode for SliderInputNode {
-    /// Left and Right move a step (a hundredth of the range without steps), Page Up and Down
-    /// a tenth of the steps (1 to 10 of them), Home and End to the ends; the change finishes
-    /// when the key is released, as Compose's `slideOnKeyEvents`. Right is towards the start in
-    /// a right-to-left layout.
+    /// Left and Right (Up and Down, vertically) move a step (a hundredth of the range without
+    /// steps), Page Up and Down a tenth of the steps (1 to 10 of them), Home and End to the ends;
+    /// the change finishes when the key is released, as Compose's `slideOnKeyEvents`. Right is
+    /// towards the start in a right-to-left layout, Down in a slider going up.
     fn on_key_event(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
         if !self.enabled {
             return false;
         }
-        let handled = matches!(
-            event.key,
-            Key::DirectionRight
-                | Key::DirectionLeft
-                | Key::PageUp
-                | Key::PageDown
-                | Key::MoveHome
-                | Key::MoveEnd
-        );
+        let vertical = self.state.is_vertical();
+        let handled = match event.key {
+            Key::DirectionRight | Key::DirectionLeft => !vertical,
+            Key::DirectionUp | Key::DirectionDown => vertical,
+            Key::PageUp | Key::PageDown | Key::MoveHome | Key::MoveEnd => true,
+            _ => false,
+        };
         if !handled {
             return false;
         }
@@ -1147,14 +1522,16 @@ impl KeyInputModifierNode for SliderInputNode {
         let actual_steps = if steps > 0 { steps + 1 } else { 100 };
         let delta = (end - start).abs() / actual_steps as f32;
         let page = (actual_steps / 10).clamp(1, 10) as f32;
-        let sign =
-            if context.layout_direction() == compose_ui::LayoutDirection::Rtl { -1.0 } else { 1.0 };
+        let sign = if self.reverse_direction(context) { -1.0 } else { 1.0 };
         let value = self.state.value();
         let target = match event.key {
             Key::MoveHome => start,
             Key::MoveEnd => end,
-            Key::DirectionRight => value + sign * delta,
-            Key::DirectionLeft => value - sign * delta,
+            Key::DirectionRight | Key::DirectionDown => value + sign * delta,
+            Key::DirectionLeft | Key::DirectionUp => value - sign * delta,
+            // A page up is towards the start of a vertical slider, the end of a horizontal one.
+            Key::PageUp if vertical => value - page * sign * delta,
+            Key::PageDown if vertical => value + page * sign * delta,
             Key::PageUp => value + page * delta,
             Key::PageDown => value - page * delta,
             _ => return false,
@@ -1176,12 +1553,7 @@ impl SemanticsModifierNode for SliderInputNode {
             config.disabled();
         }
         if start < 0.0 {
-            // As Compose's: the value, two decimals at most, for a range below zero.
-            let value = (self.state.value() * 100.0).round() / 100.0;
-            // Kotlin's float formatting: a whole number keeps its ".0".
-            let text =
-                if value.fract() == 0.0 { format!("{value:.1}") } else { format!("{value}") };
-            config.set_state_description(text);
+            config.set_state_description(format_for_semantics(self.state.value()));
         }
         config.set_progress_bar_range_info(compose_ui::ProgressBarRangeInfo {
             current: self.state.value().clamp(start.min(end), start.max(end)),
@@ -1195,7 +1567,7 @@ impl SemanticsModifierNode for SliderInputNode {
         let on_value_change = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
         config.set_progress(None, move |target| {
-            let value = nearest_stop(state, target);
+            let value = nearest_stop(state.track_range(), state.steps(), target);
             if value == state.value() {
                 return false;
             }
@@ -1208,13 +1580,19 @@ impl SemanticsModifierNode for SliderInputNode {
     }
 }
 
-/// `target` in the state's range at its nearest stop, as `sliderSemantics`' search: from a
-/// distance of the target itself (`var distance: Float = newValue`: below zero no stop is that
-/// near, and the target stays as is), the last of two stops as near (`<=`).
-fn nearest_stop(state: SliderState, target: f32) -> f32 {
-    let (start, end) = state.track_range();
+/// As `formatForSemantics`: two decimals at most, for a range below zero; Kotlin's float formatting,
+/// a whole number keeping its ".0".
+pub(crate) fn format_for_semantics(value: f32) -> String {
+    let value = (value * 100.0).round() / 100.0;
+    if value.fract() == 0.0 { format!("{value:.1}") } else { format!("{value}") }
+}
+
+/// `target` in `range` at its nearest stop, as `sliderSemantics`' search: from a distance of the
+/// target itself (`var distance: Float = newValue`: below zero no stop is that near, and the target
+/// stays as is), the last of two stops as near (`<=`).
+pub(crate) fn nearest_stop(range: (f32, f32), steps: u32, target: f32) -> f32 {
+    let (start, end) = range;
     let target = target.clamp(start.min(end), start.max(end));
-    let steps = state.steps();
     if steps == 0 {
         return target;
     }
