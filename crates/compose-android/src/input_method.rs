@@ -2,9 +2,16 @@
 //! `EditorInfo` (`inputType` and `imeOptions`), as Compose's `EditorInfo.update(imeOptions,
 //! textFieldValue)` in `TextInputServiceAndroid`; and the keyboard's action key back as an
 //! `ImeAction`, as Compose's `RecordingInputConnection.performEditorAction`. Kotlin only applies
-//! the two ints.
+//! the two ints. And the keyboard's edits, which `ComposeRsInputConnection` passes on as they came:
+//! positions and lengths in UTF-16 units here become the bytes of Compose's edit commands
+//! (D1100, D1113).
 
-use compose_ui::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
+use compose_ui::platform::UiHost;
+use compose_ui::{
+    CommitTextCommand, DeleteSurroundingTextCommand, FinishComposingTextCommand, ImeAction,
+    ImeOptions, InputMethodCommand, KeyboardCapitalization, KeyboardType,
+    SetComposingRegionCommand,
+};
 
 /// `android.text.InputType`'s constants.
 pub mod input_type {
@@ -140,6 +147,79 @@ pub fn ime_action(editor_action: i32) -> ImeAction {
         IME_ACTION_GO => ImeAction::Go,
         _ => ImeAction::Default,
     }
+}
+
+/// The bytes of `chars`' first `units` UTF-16 units. A count ending inside a surrogate pair takes
+/// its character when `widen` (a range covers what it touches), else stops before it (a cursor
+/// goes to its character's start), as D1100 says; a count past the text stops at its end.
+fn bytes_of_units(chars: impl Iterator<Item = char>, units: usize, widen: bool) -> usize {
+    let (mut bytes, mut left) = (0, units);
+    for c in chars {
+        if left == 0 || (c.len_utf16() > left && !widen) {
+            break;
+        }
+        bytes += c.len_utf8();
+        left = left.saturating_sub(c.len_utf16());
+    }
+    bytes
+}
+
+/// `InputConnection.commitText`: `text` in place of the composition or the selection, the cursor
+/// at `new_cursor_position` in UTF-16 units (after the text plus it minus one when positive,
+/// before the text plus it otherwise), in bytes for `CommitTextCommand`, as Compose's
+/// `RecordingInputConnection` sends it. Returns whether the focused field took it.
+pub fn commit_text(ui: &mut UiHost, text: &str, new_cursor_position: i32) -> bool {
+    let Some(value) = ui.input_method_value() else { return false };
+    let replaced = value.composition().unwrap_or(value.selection());
+    let position = if new_cursor_position > 0 {
+        let after = &value.text()[replaced.max()..];
+        let units = new_cursor_position as usize - 1;
+        bytes_of_units(after.chars(), units, false) as isize + 1
+    } else {
+        let before = &value.text()[..replaced.min()];
+        let units = new_cursor_position.unsigned_abs() as usize;
+        -(bytes_of_units(before.chars().rev(), units, true) as isize)
+    };
+    ui.send_input_method_command(&InputMethodCommand::CommitText(CommitTextCommand::new(
+        text, position,
+    )))
+}
+
+/// `InputConnection.deleteSurroundingText`: `before` and `after` UTF-16 units around the selection
+/// and any composition, as one `DeleteSurroundingTextCommand` in bytes, whole characters: half a
+/// surrogate pair takes its pair (D1100). A negative length deletes nothing, as Android's
+/// `BaseInputConnection`. Returns whether the focused field took it.
+pub fn delete_surrounding_text(ui: &mut UiHost, before: i32, after: i32) -> bool {
+    let Some(value) = ui.input_method_value() else { return false };
+    let selection = value.selection();
+    let composition = value.composition().unwrap_or(selection);
+    let (start, end) =
+        (selection.min().min(composition.min()), selection.max().max(composition.max()));
+    let before = bytes_of_units(value.text()[..start].chars().rev(), before.max(0) as usize, true);
+    let after = bytes_of_units(value.text()[end..].chars(), after.max(0) as usize, true);
+    ui.send_input_method_command(&InputMethodCommand::DeleteSurroundingText(
+        DeleteSurroundingTextCommand::new(before, after),
+    ))
+}
+
+/// `InputConnection.setComposingRegion`: UTF-16 `start` and `end` of the text (in either order,
+/// kept in it), as one `SetComposingRegionCommand` in bytes, widened to the characters they touch;
+/// a collapsed range goes to its character's start. Returns whether the focused field took it.
+pub fn set_composing_region(ui: &mut UiHost, start: i32, end: i32) -> bool {
+    let Some(value) = ui.input_method_value() else { return false };
+    let (min, max) = (start.min(end).max(0) as usize, start.max(end).max(0) as usize);
+    let from = bytes_of_units(value.text().chars(), min, false);
+    let to = bytes_of_units(value.text().chars(), max, min != max);
+    ui.send_input_method_command(&InputMethodCommand::SetComposingRegion(
+        SetComposingRegionCommand::new(from as isize, to as isize),
+    ))
+}
+
+/// `InputConnection.finishComposingText`. Returns whether the focused field took it.
+pub fn finish_composing_text(ui: &mut UiHost) -> bool {
+    ui.send_input_method_command(&InputMethodCommand::FinishComposingText(
+        FinishComposingTextCommand,
+    ))
 }
 
 /// What a frame tells the view of text input.

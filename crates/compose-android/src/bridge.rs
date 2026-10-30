@@ -1150,19 +1150,63 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
     consumed
 }
 
-/// `ComposeRsNative.text(host, text)`: text an input method committed.
+/// `ComposeRsNative.commitText(host, text, newCursorPosition)`: text an input method committed,
+/// the cursor at its UTF-16 position relative to the text.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_text(
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_commitText(
     mut env: EnvUnowned,
     _class: JClass,
     host: jlong,
     text: JString,
+    new_cursor_position: jint,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     if let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) {
-        host.ui.send_text(&text);
+        crate::input_method::commit_text(&mut host.ui, &text, new_cursor_position);
     }
+}
+
+/// `ComposeRsNative.deleteSurroundingText(host, before, after)`: the UTF-16 lengths an input method
+/// deletes around the selection.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_deleteSurroundingText(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    before: jint,
+    after: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    crate::input_method::delete_surrounding_text(&mut host.ui, before, after);
+}
+
+/// `ComposeRsNative.setComposingRegion(host, start, end)`: the UTF-16 range of the text an input
+/// method composes over.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setComposingRegion(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    start: jint,
+    end: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    crate::input_method::set_composing_region(&mut host.ui, start, end);
+}
+
+/// `ComposeRsNative.finishComposingText(host)`: an input method ends its composition, keeping it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_finishComposingText(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    crate::input_method::finish_composing_text(&mut host.ui);
 }
 
 /// `ComposeRsNative.preedit(host, text, cursor)`: the text an input method is composing (empty

@@ -219,7 +219,7 @@ pub use text_attributes::{
 pub use text_editing::{
     BackspaceCommand, CommitTextCommand, DeleteAllCommand, DeleteSurroundingTextCommand,
     DeleteSurroundingTextInCodePointsCommand, EditCommand, EditProcessor, EditingBuffer,
-    FinishComposingTextCommand, MoveCursorCommand, SetComposingRegionCommand,
+    FinishComposingTextCommand, InputMethodCommand, MoveCursorCommand, SetComposingRegionCommand,
     SetComposingTextCommand, SetSelectionCommand, TextFieldValue,
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};

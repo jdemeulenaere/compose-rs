@@ -212,3 +212,29 @@ fn a_triple_click_selects_the_line() {
     ui.type_text("X");
     assert_eq!(text_of(&mut ui, "field"), "X");
 }
+
+/// A region an input method names is underlined where it is, in a text that's shown as it was
+/// (D1113): the underline follows the region, not the selection.
+#[test]
+fn a_composing_region_is_underlined_where_it_is() {
+    use compose_ui::{FinishComposingTextCommand, InputMethodCommand, SetComposingRegionCommand};
+    let region = |start, end| {
+        InputMethodCommand::SetComposingRegion(SetComposingRegionCommand::new(start, end))
+    };
+    let mut ui = editor("hello", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    let plain = ui.dump_display_list();
+    assert!(ui.host().send_input_method_command(&region(1, 3)));
+    ui.wait_for_idle();
+    let first = ui.dump_display_list();
+    assert_ne!(first, plain, "no underline");
+    assert_eq!(drawn_text(&mut ui), "hello");
+    assert!(ui.host().send_input_method_command(&region(2, 4)));
+    ui.wait_for_idle();
+    assert_ne!(ui.dump_display_list(), first, "the underline stayed");
+    let finish = InputMethodCommand::FinishComposingText(FinishComposingTextCommand);
+    assert!(ui.host().send_input_method_command(&finish));
+    ui.wait_for_idle();
+    assert_eq!(ui.dump_display_list(), plain);
+}

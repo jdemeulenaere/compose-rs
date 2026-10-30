@@ -890,8 +890,20 @@ class ComposeRsView @JvmOverloads constructor(
         return sendKey(event) || super.onKeyUp(keyCode, event)
     }
 
-    internal fun commitText(text: CharSequence) {
-        if (host != 0L) ComposeRsNative.text(host, text.toString())
+    internal fun commitText(text: CharSequence, newCursorPosition: Int) {
+        if (host != 0L) ComposeRsNative.commitText(host, text.toString(), newCursorPosition)
+    }
+
+    internal fun deleteSurroundingText(before: Int, after: Int) {
+        if (host != 0L) ComposeRsNative.deleteSurroundingText(host, before, after)
+    }
+
+    internal fun setComposingRegion(start: Int, end: Int) {
+        if (host != 0L) ComposeRsNative.setComposingRegion(host, start, end)
+    }
+
+    internal fun finishComposingText() {
+        if (host != 0L) ComposeRsNative.finishComposingText(host)
     }
 
     internal fun composeText(text: CharSequence, cursor: Int) {
@@ -1028,51 +1040,48 @@ class ComposeRsView @JvmOverloads constructor(
 }
 
 /**
- * The soft keyboard's edits, as compose-rs takes them: committed text, the composing text (shown
- * in place, underlined), deletions as Backspace and Delete keys. The field's text stays on the
- * Rust side, so the keyboard sees none (as a terminal's input connection).
+ * The soft keyboard's edits, passed on as Compose's `RecordingInputConnection` sends them, with
+ * their UTF-16 positions and lengths: Rust converts them with the field's text (D1113) and shows
+ * the composing text in place. The field's text stays on the Rust side, so the keyboard sees none
+ * (as a terminal's input connection). Once closed, the connection takes no more edits, as
+ * Compose's.
  */
 internal class ComposeRsInputConnection(private val view: ComposeRsView) : BaseInputConnection(view, false) {
-    private var composing: CharSequence = ""
+    private var active = true
 
-    override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-        if (composing.isNotEmpty()) {
-            composing = ""
-            view.composeText("", -1)
-        }
-        view.commitText(text)
-        return true
+    override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean = ifActive {
+        view.commitText(text, newCursorPosition)
     }
 
-    override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
-        composing = text
+    override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean = ifActive {
         view.composeText(text, -1)
-        return true
     }
 
-    override fun finishComposingText(): Boolean {
-        if (composing.isNotEmpty()) {
-            val text = composing
-            composing = ""
-            view.composeText("", -1)
-            view.commitText(text)
-        }
-        return true
+    override fun setComposingRegion(start: Int, end: Int): Boolean = ifActive {
+        view.setComposingRegion(start, end)
     }
 
-    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-        repeat(beforeLength) { key(KeyEvent.KEYCODE_DEL) }
-        repeat(afterLength) { key(KeyEvent.KEYCODE_FORWARD_DEL) }
-        return true
+    override fun finishComposingText(): Boolean = ifActive {
+        view.finishComposingText()
+    }
+
+    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean = ifActive {
+        view.deleteSurroundingText(beforeLength, afterLength)
     }
 
     /**
-     * The connection closes (the keyboard restarts input, focus moves): what it was composing
-     * is the field's to commit or drop (it already did), not to commit again.
+     * The connection closes (the keyboard restarts input, focus moves): what it was composing is
+     * the field's to commit or drop (it already did), not to commit again, which the base class's
+     * own [finishComposingText] here would.
      */
     override fun closeConnection() {
-        composing = ""
+        active = false
         super.closeConnection()
+    }
+
+    private inline fun ifActive(edit: () -> Unit): Boolean {
+        if (active) edit()
+        return active
     }
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
@@ -1088,10 +1097,5 @@ internal class ComposeRsInputConnection(private val view: ComposeRsView) : BaseI
     override fun performEditorAction(editorAction: Int): Boolean {
         view.performEditorAction(editorAction)
         return true
-    }
-
-    private fun key(code: Int) {
-        view.sendKey(KeyEvent(KeyEvent.ACTION_DOWN, code))
-        view.sendKey(KeyEvent(KeyEvent.ACTION_UP, code))
     }
 }
