@@ -42,7 +42,7 @@ impl FocusPin {
     pub fn focus_changed(&mut self, focused: bool, context: &EventContext<'_>) {
         if focused {
             if self.0.is_none()
-                && let Some(container) = context.context.current_value_of(&LOCAL_PINNABLE_CONTAINER)
+                && let Some(container) = context.current_value_of(&LOCAL_PINNABLE_CONTAINER)
             {
                 self.0 = Some(container.pin());
             }

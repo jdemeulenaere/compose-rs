@@ -45,6 +45,7 @@ pub(crate) struct OverlayElement {
     provider: Rc<dyn PopupPositionProvider>,
     focus_on_open: bool,
     pass_through: bool,
+    window: Option<crate::focus_manager::WindowToken>,
 }
 
 pub(crate) struct OverlayNode {
@@ -54,6 +55,8 @@ pub(crate) struct OverlayNode {
     pub(crate) focused_once: bool,
     /// What it hits, what's beneath gets too (a non-focusable popup's outside).
     pub(crate) pass_through: bool,
+    /// What its content's focus manager and window info find its window by.
+    pub(crate) window: Option<crate::focus_manager::WindowToken>,
 }
 
 impl ModifierNodeElement for OverlayElement {
@@ -64,6 +67,7 @@ impl ModifierNodeElement for OverlayElement {
             focus_on_open: self.focus_on_open,
             focused_once: false,
             pass_through: self.pass_through,
+            window: self.window.clone(),
         }
     }
     fn update(&self, node: &mut OverlayNode) {
@@ -74,6 +78,7 @@ impl ModifierNodeElement for OverlayElement {
         }
         node.focus_on_open = self.focus_on_open;
         node.pass_through = self.pass_through;
+        node.window = self.window.clone();
     }
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&other.provider, &self.provider)
@@ -100,7 +105,26 @@ impl Modifier {
     /// (a dialog). For `Popup`s and `Dialog`s: the node should be measured with the window's
     /// size (`MeasureScope::window_size`).
     pub fn overlay(self, provider: Rc<dyn PopupPositionProvider>, focus_on_open: bool) -> Modifier {
-        self.then_custom(OverlayElement { provider, focus_on_open, pass_through: false })
+        self.then_custom(OverlayElement {
+            provider,
+            focus_on_open,
+            pass_through: false,
+            window: None,
+        })
+    }
+
+    /// An overlay taking the focus, a window of its own that `token` names.
+    pub(crate) fn overlay_window(
+        self,
+        provider: Rc<dyn PopupPositionProvider>,
+        token: crate::focus_manager::WindowToken,
+    ) -> Modifier {
+        self.then_custom(OverlayElement {
+            provider,
+            focus_on_open: true,
+            pass_through: false,
+            window: Some(token),
+        })
     }
 
     /// An overlay whose hits also reach what's beneath it: a non-focusable popup's outside.
@@ -108,6 +132,11 @@ impl Modifier {
         self,
         provider: Rc<dyn PopupPositionProvider>,
     ) -> Modifier {
-        self.then_custom(OverlayElement { provider, focus_on_open: false, pass_through: true })
+        self.then_custom(OverlayElement {
+            provider,
+            focus_on_open: false,
+            pass_through: true,
+            window: None,
+        })
     }
 }

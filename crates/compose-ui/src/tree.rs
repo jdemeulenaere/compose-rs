@@ -337,9 +337,6 @@ pub struct UiTree {
     /// The overlay nodes, in the order they became overlays: later ones over earlier ones (and
     /// siblings in their order, a popup over its outside).
     pub(crate) overlays: Vec<NodeId>,
-    /// Overlays that took the focus when they opened, each with what had it before: focused
-    /// again once the overlay is gone, as a window regains its focus.
-    pub(crate) focus_restore: Vec<(NodeId, Option<crate::focus::FocusTargetRef>)>,
     /// The window's size, from the last layout.
     pub(crate) window: IntSize,
     /// Counts placements, for children's placement order.
@@ -481,7 +478,6 @@ impl UiTree {
             saveable_registry: None,
             pending_actions: Vec::new(),
             overlays: Vec::new(),
-            focus_restore: Vec::new(),
             window: IntSize::new(0, 0),
             place_serial: 0,
             captures: Vec::new(),
@@ -1409,11 +1405,15 @@ impl UiTree {
             value.overlay = overlay;
             if overlay {
                 self.overlays.push(node);
-                // What has the focus now is what it gives it back to: its content's effects
-                // may ask for the focus before it's laid out.
+                // A window of its own, at once: its content's effects may ask for the focus
+                // before it's laid out.
                 if self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open) {
-                    let before = self.focus.active;
-                    self.focus_restore.push((node, before));
+                    self.window_opened(node);
+                    if let Some(token) =
+                        self.overlay_node(node).and_then(|overlay| overlay.window.clone())
+                    {
+                        token.0.set(Some(node));
+                    }
                 }
             } else {
                 self.overlays.retain(|existing| *existing != node);

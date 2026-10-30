@@ -128,6 +128,7 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldNode;
     fn create(&self) -> TextFieldNode {
         TextFieldNode {
+            window: None,
             pin: Default::default(),
             is_focus_target: self.enabled,
             // At the start, as Compose's `TextFieldValue` with no selection given.
@@ -315,6 +316,8 @@ struct Press {
 }
 
 pub(crate) struct TextFieldNode {
+    /// Its window, read as it's focused: no cursor while another window takes the keys.
+    window: Option<compose_ui::WindowInfo>,
     /// The container around it, pinned while it has the focus.
     pin: compose_ui::FocusPin,
     /// Disabled, it isn't a focus target, as `undelegate(textFieldFocusableNode)` (D1274).
@@ -1155,7 +1158,10 @@ impl DrawModifierNode for TextFieldNode {
                 Paint::fill(color),
             );
         }
-        if self.focused && !self.read_only {
+        if self.focused
+            && !self.read_only
+            && self.window.as_ref().is_none_or(|window| window.is_window_focused())
+        {
             // The cursor: drawn where the measurer that laid the paragraph out puts it.
             let width = scope.density().to_px(CURSOR_WIDTH);
             let rect = shift(self.cursor_rect.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
@@ -1328,6 +1334,9 @@ impl FocusTargetModifierNode for TextFieldNode {
     ) {
         let focused = current.is_focused();
         self.pin.focus_changed(focused, context);
+        if focused {
+            self.window = Some(context.window_info());
+        }
         if self.focused == focused {
             return;
         }

@@ -539,8 +539,7 @@ impl UiTree {
     /// nothing focused, keys go to the topmost overlay that takes the focus (a dialog's Escape).
     fn key_path(&mut self) -> Vec<(NodeId, usize, EntryId)> {
         let mut path = Vec::new();
-        // Not what a modal shuts out (one with no target of its own to take the focus).
-        let focused = self.focused().filter(|&node| !self.is_occluded_by_modal(node));
+        let focused = self.focused();
         let mut node = focused.or_else(|| self.modal_overlay());
         // From the last before the next target after the active one: what's below that target is
         // its, as `lastLocalNode`.

@@ -175,7 +175,7 @@ pub use draw_modifiers::{CacheDrawScope, ContentDrawScope, DrawResult};
 pub use focus::{FocusState, FocusTargetNode, Focusability, focus_target_modifier_node};
 pub use focus_manager::{
     FocusDirection, FocusManager, LOCAL_FOCUS_MANAGER, LOCAL_SOFTWARE_KEYBOARD_CONTROLLER,
-    SoftwareKeyboardController,
+    LOCAL_WINDOW_INFO, SoftwareKeyboardController, WindowInfo,
 };
 pub use focus_properties::{
     FocusEnterExitBlock, FocusEnterExitScope, FocusProperties, FocusPropertiesModifierNode,

@@ -60,7 +60,7 @@ impl UiTree {
         self.overlays = overlays;
         // Closed overlays first give the focus back, so one opened in the same frame (a
         // dialog replacing a menu) gives it back in turn once it closes.
-        self.restore_focus_of_closed_overlays();
+        self.close_gone_windows();
         for index in 0..self.overlays.len() {
             let node = self.overlays[index];
             let value = self.node(node);
@@ -89,13 +89,16 @@ impl UiTree {
                         overlay.focused_once = true;
                     }
                 }
-                // A request from its content's effect came first: it's kept (D1268).
-                let before = self.focus.active;
-                if !self.focus_restore.iter().any(|each| each.0 == node) {
-                    self.focus_restore.push((node, before));
+                // A request from its content's effect came first: it's kept (D1268). It
+                // became a window just now if it wasn't one.
+                self.window_opened(node);
+                let token = self.overlay_node(node).and_then(|overlay| overlay.window.clone());
+                if let Some(token) = token {
+                    token.0.set(Some(node));
                 }
-                if !before.is_some_and(|active| self.is_at_or_below(active.node, node)) {
-                    self.focus_without_scrolling(node);
+                let active = self.in_window(Some(node), |tree| tree.focus.active);
+                if active.is_none() {
+                    self.in_window(Some(node), |tree| tree.focus_without_scrolling(node));
                 }
             }
         }
@@ -123,40 +126,6 @@ impl UiTree {
             members.sort_by_key(|&node| child_index(node));
             for (&index, member) in positions.iter().zip(members) {
                 overlays[index] = member;
-            }
-        }
-    }
-
-    /// Gives the focus back to what had it before an overlay that took it, once that overlay
-    /// is gone and nothing else took it meanwhile.
-    fn restore_focus_of_closed_overlays(&mut self) {
-        let mut index = 0;
-        while index < self.focus_restore.len() {
-            let (overlay, before) = self.focus_restore[index];
-            let takes_focus = self.get(overlay).is_some_and(|value| value.overlay)
-                && self.overlay_node(overlay).is_some_and(|overlay| overlay.focus_on_open);
-            if takes_focus {
-                index += 1;
-                continue;
-            }
-            self.focus_restore.remove(index);
-            // Overlays opened over it pass their restore on to it.
-            for later in 0..self.focus_restore.len() {
-                if self.focus_restore[later].1.is_some_and(|target| self.get(target.node).is_none())
-                {
-                    self.focus_restore[later].1 = before;
-                }
-            }
-            if self.focus.active.is_none()
-                && let Some(before) =
-                    before.filter(|&target| self.target_can_be_given_focus(target))
-            {
-                // Another modal still showing keeps it for its own closing.
-                if self.is_occluded_by_modal(before.node) {
-                    self.keep_for_when_modals_close(before);
-                } else {
-                    self.refocus_without_scrolling(before);
-                }
             }
         }
     }

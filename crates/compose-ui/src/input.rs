@@ -469,6 +469,11 @@ impl EventContext<'_> {
         self.actions.push(Action::Run(Box::new(function)));
     }
 
+    /// The node's window, as `requireOwner().windowInfo`.
+    pub fn window_info(&self) -> crate::WindowInfo {
+        self.context.window_info()
+    }
+
     /// Asks the scrolling containers around this node to show it, as a focused node does
     /// (`FocusableNode`'s `bringIntoView`): once it's placed, if it isn't yet.
     pub fn bring_into_view(&mut self) {

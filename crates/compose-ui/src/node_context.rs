@@ -220,6 +220,12 @@ impl NodeContext<'_> {
         self.composition_locals().get(local)
     }
 
+    /// The node's window, as `requireOwner().windowInfo`: where `current_value_of` wouldn't do,
+    /// the local's default only knowing a tree in composition.
+    pub fn window_info(&self) -> crate::WindowInfo {
+        crate::focus_manager::window_info_of(self.tree, self.node)
+    }
+
     /// Where its layout node reads composition locals, for `observe_reads` (whose block has no
     /// context): `context.observe_reads(|| locals.get(&LOCAL))`.
     pub fn composition_locals(&self) -> compose_runtime::CompositionLocalAnchor {

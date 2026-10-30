@@ -733,7 +733,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1266 | [ui-and-layout](decisions/ui-and-layout.md#d1266) | current |
 | D1267 | [ui-and-layout](decisions/ui-and-layout.md#d1267) | current |
 | D1268 | [ui-and-layout](decisions/ui-and-layout.md#d1268) | current |
-| D1269 | [ui-and-layout](decisions/ui-and-layout.md#d1269) | current |
+| D1269 | [ui-and-layout](decisions/ui-and-layout.md#d1269) | revised by [D1284](decisions/ui-and-layout.md#d1284) |
 | D1270 | [ui-and-layout](decisions/ui-and-layout.md#d1270) | current |
 | D1271 | [ui-and-layout](decisions/ui-and-layout.md#d1271) | current |
 | D1272 | [ui-and-layout](decisions/ui-and-layout.md#d1272) | current |
@@ -748,6 +748,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1281 | [ui-and-layout](decisions/ui-and-layout.md#d1281) | current |
 | D1282 | [ui-and-layout](decisions/ui-and-layout.md#d1282) | current |
 | D1283 | [ui-and-layout](decisions/ui-and-layout.md#d1283) | current |
+| D1284 | [ui-and-layout](decisions/ui-and-layout.md#d1284) | current |
 | D1350 | [ui-and-layout](decisions/ui-and-layout.md#d1350) | current |
 | D1351 | [ui-and-layout](decisions/ui-and-layout.md#d1351) | current |
 | D1352 | [ui-and-layout](decisions/ui-and-layout.md#d1352) | current |

@@ -761,7 +761,7 @@ mod tests {
             let node = focusable_node(tree);
             tree.queue_lifecycle(Lifecycle::AttachEntries(node));
             tree.run_lifecycle();
-            tree.focus_requests.push(FocusRequest::Clear { force: true });
+            tree.focus_requests.push(FocusRequest::Clear { force: true, window: None });
         });
         host.handle_focus_requests();
         assert!(requester.request_focus());

@@ -122,6 +122,11 @@ pub(crate) struct FocusOwner {
     /// nothing scrolls, and a modal overlay opening in this frame, which takes it next, doesn't
     /// shut it out.
     pub(crate) moved_by_tree: bool,
+    /// The overlay whose window `active` and `captured` are of: `None`, the main one's. What
+    /// takes keys and searches, but for a moment while a target of another's is asked (D1284).
+    pub(crate) window: Option<NodeId>,
+    /// The other windows, lowest first: their focus stays, as a window's does behind another.
+    pub(crate) other_windows: SmallVec<[WindowFocus; 1]>,
     /// Arrows, the D-pad, Enter, Back and Escape move the focus if nothing takes them, as on
     /// Android; else Tab alone (D230).
     pub(crate) keys_navigate: bool,
@@ -136,6 +141,15 @@ pub(crate) struct FocusOwner {
     /// A search waits for a container to lay out more beyond its bounds (D477): it unwinds, and
     /// is made again after the next layout.
     pub(crate) search_waiting: bool,
+}
+
+/// The focus of a window that isn't the one in `FocusOwner`, as each of Compose's owners has its
+/// own.
+#[derive(Clone, Copy)]
+pub(crate) struct WindowFocus {
+    pub(crate) window: Option<NodeId>,
+    pub(crate) active: Option<FocusTargetRef>,
+    pub(crate) captured: bool,
 }
 
 /// The result of `performCustomRequestFocus` and `performCustomClearFocus`.
@@ -339,16 +353,6 @@ impl UiTree {
     }
 
     /// Whether `target` is attached: its entry is in its chain, attached, and its delegate there.
-    /// `target`, shut out by a modal, has the focus when what shuts it out is gone: kept by the
-    /// lowest overlay not containing it (the window above the one it's in). Whether one kept it.
-    pub(crate) fn keep_for_when_modals_close(&mut self, target: FocusTargetRef) -> bool {
-        let lowest = (0..self.focus_restore.len())
-            .find(|&at| !self.is_at_or_below(target.node, self.focus_restore[at].0));
-        let Some(lowest) = lowest else { return false };
-        self.focus_restore[lowest].1 = Some(target);
-        true
-    }
-
     /// A window's view asked for the focus (`requestFocus(direction, rect)`), as
     /// `AndroidComposeView.requestFocus`: with something focused already nothing changes;
     /// else a search from `previous` (where it was, outside): whether it found something.
@@ -367,17 +371,206 @@ impl UiTree {
 
     /// A window's view lost the focus, as `releaseFocus`: forced, and no block has a say.
     pub(crate) fn owner_lost_focus(&mut self) {
-        self.prepare_to_clear_focus(None, true, true);
-        if let Some(previous) = self.focus.active {
-            self.set_active_target(None);
-            self.dispatch_focus_callbacks(previous, FocusState::Active, FocusState::Inactive);
+        self.in_each_window(|tree| {
+            tree.prepare_to_clear_focus(None, true, true);
+            if let Some(previous) = tree.focus.active {
+                tree.set_active_target(None);
+                tree.dispatch_focus_callbacks(previous, FocusState::Active, FocusState::Inactive);
+            }
+        });
+    }
+
+    // ---- Windows ---------------------------------------------------------------------------
+
+    /// The overlay whose window `node` is in: `None`, the main one.
+    pub(crate) fn focus_window_of(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.get(id)?;
+            if value.overlay && self.overlay_node(id).is_some_and(|it| it.focus_on_open) {
+                return Some(id);
+            }
+            current = value.parent.or_else(|| {
+                self.removed_parents
+                    .iter()
+                    .rfind(|(child, _)| *child == id)
+                    .map(|(_, parent)| *parent)
+            });
+        }
+        None
+    }
+
+    /// The active target and capture of the window `node` is in.
+    fn focus_of_focus_window_of(&self, node: NodeId) -> (Option<FocusTargetRef>, bool) {
+        if !self.focus.other_windows.is_empty() {
+            let window = self.focus_window_of(node);
+            if window != self.focus.window
+                && let Some(other) =
+                    self.focus.other_windows.iter().find(|other| other.window == window)
+            {
+                return (other.active, other.captured);
+            }
+        }
+        (self.focus.active, self.focus.captured)
+    }
+
+    /// `f`, with `window`'s focus the one a transaction acts on, as each owner has its own.
+    pub(crate) fn in_window<R>(
+        &mut self,
+        window: Option<NodeId>,
+        f: impl FnOnce(&mut UiTree) -> R,
+    ) -> R {
+        if window == self.focus.window {
+            return f(self);
+        }
+        let Some(at) = self.focus.other_windows.iter().position(|other| other.window == window)
+        else {
+            return f(self);
+        };
+        self.swap_window(at);
+        let result = f(self);
+        self.swap_window(at);
+        result
+    }
+
+    fn swap_window(&mut self, at: usize) {
+        let focus = &mut self.focus;
+        let other = &mut focus.other_windows[at];
+        mem::swap(&mut other.window, &mut focus.window);
+        mem::swap(&mut other.active, &mut focus.active);
+        mem::swap(&mut other.captured, &mut focus.captured);
+    }
+
+    /// `f`, in the window of `node`.
+    pub(crate) fn in_window_of<R>(&mut self, node: NodeId, f: impl FnOnce(&mut UiTree) -> R) -> R {
+        if self.focus.other_windows.is_empty() {
+            return f(self);
+        }
+        let window = self.focus_window_of(node);
+        self.in_window(window, f)
+    }
+
+    /// `f` in each window: what's asked of the active target, whichever it is.
+    pub(crate) fn in_each_window(&mut self, mut f: impl FnMut(&mut UiTree)) {
+        f(self);
+        for at in 0..self.focus.other_windows.len() {
+            self.swap_window(at);
+            f(self);
+            self.swap_window(at);
         }
     }
 
-    /// Whether `target` is there to be given the focus back: attached, and not put aside.
-    pub(crate) fn target_can_be_given_focus(&mut self, target: FocusTargetRef) -> bool {
-        self.get(target.node).is_some_and(|value| !value.deactivated)
-            && self.target_is_attached(target)
+    /// An overlay that takes the focus attached: a window of its own, with no focus yet, what
+    /// had it staying as it is (D1284).
+    pub(crate) fn window_opened(&mut self, overlay: NodeId) {
+        let window = Some(overlay);
+        if self.focus.window == window
+            || self.focus.other_windows.iter().any(|other| other.window == window)
+        {
+            return;
+        }
+        let focus = &mut self.focus;
+        focus.other_windows.push(WindowFocus {
+            window: focus.window,
+            active: focus.active,
+            captured: focus.captured,
+        });
+        focus.window = window;
+        focus.active = None;
+        focus.captured = false;
+        self.window_focus_changed();
+    }
+
+    /// Overlays that stopped taking the focus or are gone: the window under the top one takes
+    /// over with the focus it had (nothing's told: it never lost it).
+    pub(crate) fn close_gone_windows(&mut self) {
+        if self.focus.other_windows.is_empty() && self.focus.window.is_none() {
+            return;
+        }
+        let is_open = |tree: &UiTree, window: Option<NodeId>| {
+            window.is_none_or(|overlay| {
+                tree.get(overlay).is_some_and(|value| value.overlay)
+                    && tree.overlay_node(overlay).is_some_and(|it| it.focus_on_open)
+            })
+        };
+        let mut changed = false;
+        let mut at = 0;
+        while at < self.focus.other_windows.len() {
+            if is_open(self, self.focus.other_windows[at].window) {
+                at += 1;
+                continue;
+            }
+            self.swap_window(at);
+            self.clear_active_target(true, true);
+            self.swap_window(at);
+            self.focus.other_windows.remove(at);
+        }
+        while !is_open(self, self.focus.window) {
+            self.clear_active_target(true, true);
+            let Some(below) = self.focus.other_windows.pop() else { break };
+            let focus = &mut self.focus;
+            focus.window = below.window;
+            focus.active = below.active;
+            focus.captured = below.captured;
+            changed = true;
+        }
+        if changed {
+            self.needs_draw = true;
+            self.semantics_changed = true;
+            self.window_focus_changed();
+        }
+    }
+
+    /// `is_window_focused` reads this: written after the pass, the tree being in it.
+    fn window_focus_changed(&mut self) {
+        let window = self.focus.window;
+        let requests = self.focus_requests.clone();
+        self.focus_requests
+            .side_effects
+            .borrow_mut()
+            .push(Box::new(move || requests.focused_window.0.set(window)));
+        self.focus_requests.wake();
+    }
+
+    /// The event nodes among `events` on the path from this window's active target up: told what
+    /// that gives them, and taken out of `events`.
+    fn tell_events_of_active_path(&mut self, events: &mut SmallVec<[(NodeId, EntryId); 4]>) {
+        if let Some(active) = self.focus.active {
+            let active_state = self.focus_state_of(active);
+            let kinds = NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_EVENT;
+            let mut targets = 0;
+            let mut current = Some(active.node);
+            let mut end = self.target_index(active).map_or(0, |index| index + 1);
+            while let Some(id) = current {
+                let Some(value) = self.get(id) else { break };
+                let next = self.focus_parent_of(id);
+                if value.kinds.any(kinds) {
+                    for index in (0..end.min(value.chain.len())).rev() {
+                        let entry = &self.node(id).chain[index];
+                        if !entry.kinds.any(kinds) {
+                            continue;
+                        }
+                        let (entry_id, is_target) =
+                            (entry.id, entry.kinds.any(NodeKinds::FOCUS_TARGET));
+                        // Those between the active target and the first target above are told its
+                        // state, those further up `ActiveParent`.
+                        if is_target {
+                            targets += 1;
+                        }
+                        let Some(at) = events.iter().position(|each| *each == (id, entry_id))
+                        else {
+                            continue;
+                        };
+                        events.remove(at);
+                        let state =
+                            if targets <= 1 { active_state } else { FocusState::ActiveParent };
+                        self.tell_event_entry(id, entry_id, state);
+                    }
+                }
+                current = next;
+                end = usize::MAX;
+            }
+        }
     }
 
     fn target_is_attached(&mut self, target: FocusTargetRef) -> bool {
@@ -472,9 +665,10 @@ impl UiTree {
 
     /// The state of `target`, derived as `FocusTargetNode.focusState`.
     pub(crate) fn focus_state_of(&mut self, target: FocusTargetRef) -> FocusState {
-        let Some(active) = self.focus.active else { return FocusState::Inactive };
+        let (active, captured) = self.focus_of_focus_window_of(target.node);
+        let Some(active) = active else { return FocusState::Inactive };
         if active == target {
-            return if self.focus.captured { FocusState::Captured } else { FocusState::Active };
+            return if captured { FocusState::Captured } else { FocusState::Active };
         }
         if self.targets_above(active).contains(&target) {
             FocusState::ActiveParent
@@ -585,26 +779,23 @@ impl UiTree {
     }
 
     /// Whether `target` can be found by a search: its layout node is placed, attached, and no
-    /// modal overlay shuts it out, as `isEligibleForFocusSearch`.
+    /// other window has it, as `isEligibleForFocusSearch`.
     pub(crate) fn is_eligible_for_focus_search(&self, target: FocusTargetRef) -> bool {
         self.get(target.node).is_some_and(|value| value.attached)
             && self.is_placed_in_root(target.node)
-            && !self.is_occluded_by_modal(target.node)
+            && !self.is_in_another_window(target.node)
     }
 
-    /// Whether a modal overlay shows that `node` isn't in: what shuts it out of the focus, as
-    /// Compose's `isOccludedByInteractionBarrier` does for what's behind a barrier (D1269).
-    pub(crate) fn is_occluded_by_modal(&self, node: NodeId) -> bool {
-        self.modal_overlay().is_some_and(|modal| !self.is_at_or_below(node, modal))
+    /// Whether `node` is in another window than the one acted on: out of its searches, as
+    /// Compose's `isOccludedByInteractionBarrier` is for what's behind a barrier (D1269, D1284).
+    pub(crate) fn is_in_another_window(&self, node: NodeId) -> bool {
+        !self.focus.other_windows.is_empty() && self.focus_window_of(node) != self.focus.window
     }
 
-    /// The topmost overlay taking the focus (a dialog, a focusable popup): while it shows, the
-    /// rest of the window takes no focus nor keys.
+    /// The overlay whose window is acted on: the top one's, for the keys and what isn't from
+    /// behind (a dialog, a focusable popup).
     pub(crate) fn modal_overlay(&self) -> Option<NodeId> {
-        self.overlays.iter().rev().copied().find(|&node| {
-            self.get(node).is_some_and(|value| value.overlay && value.placed)
-                && self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open)
-        })
+        self.focus.window
     }
 
     /// Whether `node` is `ancestor` or below it.
@@ -887,6 +1078,14 @@ impl UiTree {
         target: FocusTargetRef,
         direction: FocusDirection,
     ) -> bool {
+        self.in_window_of(target.node, |tree| tree.request_focus_target_here(target, direction))
+    }
+
+    fn request_focus_target_here(
+        &mut self,
+        target: FocusTargetRef,
+        direction: FocusDirection,
+    ) -> bool {
         if self.fetch_focus_properties(target).can_focus {
             self.assign_focus(target, direction)
         } else {
@@ -921,11 +1120,6 @@ impl UiTree {
     }
 
     fn request_focus_of_target(&mut self, target: FocusTargetRef) -> bool {
-        if !self.focus.moved_by_tree && self.is_occluded_by_modal(target.node) {
-            // A dialog is a window of its own in Compose, which doesn't refuse this: it's what
-            // has the focus when the modal closes (D1269).
-            return self.keep_for_when_modals_close(target);
-        }
         let previous_active = self.focus.active;
         let previous_state = self.focus_state_of(target);
         if previous_active == Some(target) {
@@ -1031,6 +1225,10 @@ impl UiTree {
 
     /// As `captureFocus`.
     pub(crate) fn capture_focus_target(&mut self, target: FocusTargetRef) -> bool {
+        self.in_window_of(target.node, |tree| tree.capture_focus_target_here(target))
+    }
+
+    fn capture_focus_target_here(&mut self, target: FocusTargetRef) -> bool {
         match self.focus_state_of(target) {
             FocusState::Active => {
                 self.focus.captured = true;
@@ -1044,6 +1242,10 @@ impl UiTree {
 
     /// As `freeFocus`.
     pub(crate) fn free_focus_target(&mut self, target: FocusTargetRef) -> bool {
+        self.in_window_of(target.node, |tree| tree.free_focus_target_here(target))
+    }
+
+    fn free_focus_target_here(&mut self, target: FocusTargetRef) -> bool {
         match self.focus_state_of(target) {
             FocusState::Captured => {
                 self.focus.captured = false;
@@ -1212,12 +1414,14 @@ impl UiTree {
     /// The subtree at `root` is being detached: the active target in it loses the focus, as
     /// `FocusTargetNode.onDetach`, while everything is still attached.
     pub(crate) fn focus_subtree_detaching(&mut self, root: NodeId) {
-        if let Some(active) = self.focus.active
-            && self.is_at_or_below(active.node, root)
-        {
-            self.clear_active_target(true, true);
-            self.focus.recheck_active = true;
-        }
+        self.in_each_window(|tree| {
+            if let Some(active) = tree.focus.active
+                && tree.is_at_or_below(active.node, root)
+            {
+                tree.clear_active_target(true, true);
+                tree.focus.recheck_active = true;
+            }
+        });
         if !self.focus.saved_children.is_empty() {
             let saved: SmallVec<[FocusTargetRef; 4]> = self
                 .focus
@@ -1236,9 +1440,11 @@ impl UiTree {
     /// `node` is being reset (reused or deactivated): the active target on it loses the focus, as
     /// `FocusTargetNode.onReset`.
     pub(crate) fn focus_node_resetting(&mut self, node: NodeId) {
-        if self.focus.active.is_some_and(|active| active.node == node) {
-            self.clear_active_target(true, true);
-        }
+        self.in_each_window(|tree| {
+            if tree.focus.active.is_some_and(|active| active.node == node) {
+                tree.clear_active_target(true, true);
+            }
+        });
         if !self.focus.saved_children.is_empty() {
             let saved: SmallVec<[FocusTargetRef; 4]> = self
                 .focus
@@ -1276,6 +1482,33 @@ impl UiTree {
                 self.forget_saved_child_of(target);
             }
         }
+        // The window with the active target among them, if any.
+        let window = self.focus.window;
+        let with_it = std::iter::once(window)
+            .chain(self.focus.other_windows.iter().map(|other| other.window))
+            .zip(
+                std::iter::once(self.focus.active)
+                    .chain(self.focus.other_windows.iter().map(|other| other.active)),
+            )
+            .find(|(_, active)| {
+                active
+                    .is_some_and(|active| entries.iter().any(|(entry, _)| entry.id == active.entry))
+            })
+            .map(|(window, _)| window)
+            .unwrap_or(window);
+        self.in_window(with_it, |tree| tree.focus_entries_removed_here(node, entries));
+        for removed in entries.iter_mut() {
+            if removed.0.kinds.any(NodeKinds::FOCUS_EVENT) {
+                self.tell_removed_event_nodes(node, removed, FocusState::Inactive);
+            }
+        }
+    }
+
+    fn focus_entries_removed_here(
+        &mut self,
+        node: NodeId,
+        entries: &mut SmallVec<[(ChainEntry, usize); 2]>,
+    ) {
         if let Some(active) = self.focus.active
             && let Some(at) = entries.iter().position(|(entry, _)| entry.id == active.entry)
         {
@@ -1449,15 +1682,17 @@ impl UiTree {
     }
 
     pub(crate) fn focus_delegates_changed(&mut self, node: NodeId) {
-        if let Some(active) = self.focus.active
-            && active.node == node
-        {
-            if !self.target_is_attached(active) {
-                self.clear_active_target(true, true);
-            } else {
-                self.focus.recheck_active = true;
+        self.in_each_window(|tree| {
+            if let Some(active) = tree.focus.active
+                && active.node == node
+            {
+                if !tree.target_is_attached(active) {
+                    tree.clear_active_target(true, true);
+                } else {
+                    tree.focus.recheck_active = true;
+                }
             }
-        }
+        });
     }
 
     /// A chain change of `node` updated, inserted or removed nodes of `kinds`, and updated the event
@@ -1488,7 +1723,7 @@ impl UiTree {
             return;
         }
         if mem::take(&mut self.focus.recheck_active) {
-            self.invalidate_active_target();
+            self.in_each_window(|tree| tree.invalidate_active_target());
         }
         for (node, entry) in mem::take(&mut self.focus.target_flips) {
             self.apply_focus_target_flip(node, entry, false);
@@ -1503,42 +1738,9 @@ impl UiTree {
             let mut seen = std::collections::HashSet::with_capacity(events.len());
             events.retain(|each| seen.insert(*each));
         }
-        if let Some(active) = self.focus.active {
-            let active_state = self.focus_state_of(active);
-            let kinds = NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_EVENT;
-            let mut targets = 0;
-            let mut current = Some(active.node);
-            let mut end = self.target_index(active).map_or(0, |index| index + 1);
-            while let Some(id) = current {
-                let Some(value) = self.get(id) else { break };
-                let next = self.focus_parent_of(id);
-                if value.kinds.any(kinds) {
-                    for index in (0..end.min(value.chain.len())).rev() {
-                        let entry = &self.node(id).chain[index];
-                        if !entry.kinds.any(kinds) {
-                            continue;
-                        }
-                        let (entry_id, is_target) =
-                            (entry.id, entry.kinds.any(NodeKinds::FOCUS_TARGET));
-                        // Those between the active target and the first target above are told its
-                        // state, those further up `ActiveParent`.
-                        if is_target {
-                            targets += 1;
-                        }
-                        let Some(at) = events.iter().position(|each| *each == (id, entry_id))
-                        else {
-                            continue;
-                        };
-                        events.remove(at);
-                        let state =
-                            if targets <= 1 { active_state } else { FocusState::ActiveParent };
-                        self.tell_event_entry(id, entry_id, state);
-                    }
-                }
-                current = next;
-                end = usize::MAX;
-            }
-        }
+        let mut left = events;
+        self.in_each_window(|tree| tree.tell_events_of_active_path(&mut left));
+        let events = left;
         // Those not above the active target, or all with nothing focused.
         for (node, entry) in events {
             self.tell_event_entry(node, entry, FocusState::Inactive);
@@ -1567,8 +1769,6 @@ impl UiTree {
             self.clear_active_target(true, true);
             return;
         }
-        // Not whether a modal overlay shuts it out, as Compose's barriers: an overlay opening
-        // takes the focus, keeping who to give it back to (`position_overlays`).
         if !self.fetch_focus_properties_observed(active).can_focus {
             self.clear_focus_with(true, true, FocusDirection::Exit);
         }
@@ -1616,13 +1816,6 @@ impl UiTree {
     pub(crate) fn focus_without_scrolling(&mut self, node: NodeId) {
         let moving = mem::replace(&mut self.focus.moved_by_tree, true);
         self.request_focus_at_or_below(node, FocusDirection::Enter);
-        self.focus.moved_by_tree = moving;
-    }
-
-    /// Gives the focus back to `target`, the tree moving it itself.
-    pub(crate) fn refocus_without_scrolling(&mut self, target: FocusTargetRef) {
-        let moving = mem::replace(&mut self.focus.moved_by_tree, true);
-        self.request_focus_target(target, FocusDirection::Enter);
         self.focus.moved_by_tree = moving;
     }
 

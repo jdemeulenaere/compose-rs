@@ -6,6 +6,7 @@
 //! once where the tree is free (D1268), else once it's free, after the event that asked or at the
 //! next frame. Their locals' values are the composing tree's, so no host provides them.
 
+use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
 use compose_runtime::{ComposeArg, CompositionLocal};
@@ -36,13 +37,102 @@ pub enum FocusDirection {
 #[derive(Clone)]
 pub struct FocusManager {
     requests: Weak<FocusRequests>,
+    /// Its window, a dialog's or a popup's that takes the focus; `None`, the main one.
+    window: Option<WindowToken>,
+}
+
+/// Names a window from composition, where its overlay's node isn't known yet: set as it opens.
+#[derive(Clone, Default)]
+pub(crate) struct WindowToken(pub(crate) Rc<Cell<Option<crate::tree::NodeId>>>);
+
+/// The window taking keys and searches, as state.
+pub(crate) struct FocusedWindow(
+    pub(crate) compose_runtime::OwnedState<Option<crate::tree::NodeId>>,
+);
+
+impl Default for FocusedWindow {
+    fn default() -> FocusedWindow {
+        FocusedWindow(compose_runtime::mutable_state_of(None))
+    }
+}
+
+/// What a content knows of its window, as Compose's `WindowInfo`:
+/// `LOCAL_WINDOW_INFO.current()` in composition. A dialog or a popup that takes the focus is a
+/// window of its own.
+#[derive(Clone)]
+pub struct WindowInfo {
+    requests: Weak<FocusRequests>,
+    window: Option<WindowToken>,
+}
+
+impl WindowInfo {
+    fn of_composing_tree() -> WindowInfo {
+        WindowInfo { requests: composing_tree_requests(), window: None }
+    }
+
+    /// Whether this window takes the keys now, as `isWindowFocused`: a state. Only another
+    /// window of this host over it says no here: the platform's window isn't asked yet.
+    pub fn is_window_focused(&self) -> bool {
+        let Some(requests) = self.requests.upgrade() else { return true };
+        let window = self.window.as_ref().and_then(|token| token.0.get());
+        requests.focused_window.0.get() == window
+    }
+}
+
+impl ComposeArg for WindowInfo {
+    fn same(&self, other: &Self) -> bool {
+        self.requests.ptr_eq(&other.requests)
+            && match (&self.window, &other.window) {
+                (Some(one), Some(other)) => Rc::ptr_eq(&one.0, &other.0),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl std::fmt::Debug for WindowInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WindowInfo")
+    }
+}
+
+/// The window of `node`.
+pub(crate) fn window_info_of(tree: &UiTree, node: crate::tree::NodeId) -> WindowInfo {
+    let window = tree.focus_window_of(node);
+    WindowInfo {
+        requests: Rc::downgrade(&tree.focus_requests),
+        window: window.map(|overlay| WindowToken(Rc::new(Cell::new(Some(overlay))))),
+    }
+}
+
+/// The window of what's composing, as Compose's `LocalWindowInfo`. A node asks
+/// `NodeContext::window_info`.
+pub static LOCAL_WINDOW_INFO: CompositionLocal<WindowInfo> =
+    CompositionLocal::new("LocalWindowInfo", WindowInfo::of_composing_tree);
+
+/// `content` in the window `token` names: its focus manager and window info are that window's.
+pub(crate) fn in_window_of_token(token: WindowToken, content: impl FnOnce()) {
+    let manager = LOCAL_FOCUS_MANAGER.current();
+    let info = LOCAL_WINDOW_INFO.current();
+    compose_runtime::CompositionLocalProvider(
+        (
+            LOCAL_FOCUS_MANAGER
+                .provides(FocusManager { requests: manager.requests, window: Some(token.clone()) }),
+            LOCAL_WINDOW_INFO.provides(WindowInfo { requests: info.requests, window: Some(token) }),
+        ),
+        content,
+    );
 }
 
 impl FocusManager {
     /// The composing tree's, outside composition or another kind of tree's a manager that does
     /// nothing.
     fn of_composing_tree() -> FocusManager {
-        FocusManager { requests: composing_tree_requests() }
+        FocusManager { requests: composing_tree_requests(), window: None }
+    }
+
+    fn window_node(&self) -> Option<crate::tree::NodeId> {
+        self.window.as_ref().and_then(|token| token.0.get())
     }
 
     /// Clears the focus, as `clearFocus(force)`: the focused node and its ancestors hear they
@@ -50,7 +140,7 @@ impl FocusManager {
     /// focus refuses, and each `on_exit` on the focused path may refuse or redirect.
     pub fn clear_focus(&self, force: bool) {
         if let Some(requests) = self.requests.upgrade() {
-            perform_or_queue(&requests, FocusRequest::Clear { force });
+            perform_or_queue(&requests, FocusRequest::Clear { force, window: self.window_node() });
         }
     }
 
@@ -66,7 +156,9 @@ impl FocusManager {
     /// `true`, as it's expected to find it, D477).
     pub fn move_focus(&self, direction: FocusDirection) -> bool {
         match self.requests.upgrade() {
-            Some(requests) => perform_or_queue(&requests, FocusRequest::Move(direction)),
+            Some(requests) => {
+                perform_or_queue(&requests, FocusRequest::Move(direction, self.window_node()))
+            }
             None => false,
         }
     }
@@ -75,6 +167,11 @@ impl FocusManager {
 impl ComposeArg for FocusManager {
     fn same(&self, other: &Self) -> bool {
         self.requests.ptr_eq(&other.requests)
+            && match (&self.window, &other.window) {
+                (Some(one), Some(other)) => Rc::ptr_eq(&one.0, &other.0),
+                (None, None) => true,
+                _ => false,
+            }
     }
 }
 

@@ -33,6 +33,8 @@ pub(crate) struct FocusRequests {
     /// What the window's view should do: take the focus (the content gained it) or give it up
     /// (`clear_focus`), as `requestOwnerFocus` and `clearOwnerFocus`.
     pub(crate) owner_focus: std::cell::Cell<Option<bool>>,
+    /// The window taking keys and searches, for `WindowInfo::is_window_focused`.
+    pub(crate) focused_window: crate::focus_manager::FocusedWindow,
     /// Show (true) or hide (false) the on-screen keyboard: the last request, until the host's
     /// platform takes it.
     pub(crate) software_keyboard: std::cell::Cell<Option<bool>>,
@@ -73,10 +75,10 @@ pub(crate) struct FocusRequests {
 pub(crate) enum FocusRequest {
     /// The node's focus target, or the first below it: its semantics' `RequestFocus`.
     Node(NodeId),
-    /// `FocusManager::clear_focus`.
-    Clear { force: bool },
-    /// `FocusManager::move_focus`.
-    Move(FocusDirection),
+    /// `FocusManager::clear_focus`, of a window.
+    Clear { force: bool, window: Option<NodeId> },
+    /// `FocusManager::move_focus`, in a window.
+    Move(FocusDirection, Option<NodeId>),
     /// What a `FocusRequester` asks.
     Requester(FocusRequester, RequesterOperation),
     /// What a node asks of the targets at and below it, its own running.
@@ -168,8 +170,10 @@ impl UiTree {
                 self.get(node).is_some()
                     && self.request_focus_at_or_below(node, FocusDirection::Enter)
             }
-            FocusRequest::Clear { force } => {
-                let cleared = self.clear_focus_with(force, true, FocusDirection::Exit);
+            FocusRequest::Clear { force, window } => {
+                let cleared = self.in_window(window, |tree| {
+                    tree.clear_focus_with(force, true, FocusDirection::Exit)
+                });
                 // As `clearOwnerFocus`: in keyboard mode, the view system gives it back.
                 if cleared {
                     self.focus_requests.owner_focus.set(Some(false));
@@ -177,7 +181,9 @@ impl UiTree {
                 }
                 cleared
             }
-            FocusRequest::Move(direction) => self.move_focus_with(direction, true),
+            FocusRequest::Move(direction, window) => {
+                self.in_window(window, |tree| tree.move_focus_with(direction, true))
+            }
             FocusRequest::Requester(requester, operation) => {
                 requester.perform_on_tree(self, operation)
             }
@@ -282,6 +288,19 @@ impl UiTree {
     /// target nearest the root of `container`'s subtree overlapping the rectangle takes the
     /// focus. Still overlapping what has it: no change.
     pub(crate) fn request_focus_for_child_in_bounds(
+        &mut self,
+        container: NodeId,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    ) -> bool {
+        self.in_window_of(container, |tree| {
+            tree.request_focus_for_child_here(container, left, top, right, bottom)
+        })
+    }
+
+    fn request_focus_for_child_here(
         &mut self,
         container: NodeId,
         left: i32,

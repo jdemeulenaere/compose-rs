@@ -1154,7 +1154,8 @@ fn escape_closes_a_dialog_and_gives_a_field_its_focus_back() {
     ui.wait_for_idle();
     open.set(true);
     ui.wait_for_idle();
-    ui.on_node_with_tag("field").assert_is_not_focused();
+    // Its own window's: only the keys are the dialog's.
+    ui.on_node_with_tag("field").assert_is_focused();
     ui.host().send_key(KeyEvent::down(Key::Escape));
     ui.wait_for_idle();
     ui.on_node_with_tag("in").assert_does_not_exist();
@@ -1481,4 +1482,88 @@ fn a_focused_item_reused_for_another_key_tells_the_listener_that_was_there() {
     ui.wait_for_idle();
     assert_eq!(heard.borrow().first(), Some(&(0, FocusState::Inactive)));
     assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
+}
+
+#[test]
+fn a_text_fields_selection_survives_a_dialog_with_a_field_of_its_own() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+    let inside = Box::leak(Box::new(mutable_state_of(String::new()))).handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Column!({
+            BasicTextField!(
+                value.get(),
+                move |it| value.set(it),
+                single_line = true,
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            if open.get() {
+                Dialog!(on_dismiss_request = move || open.set(false), {
+                    BasicTextField!(
+                        inside.get(),
+                        move |it| inside.set(it),
+                        single_line = true,
+                        modifier = Modifier.size((100.dp(), 40.dp())).test_tag("in dialog")
+                    );
+                });
+            }
+        });
+    });
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    // The last letter selected.
+    ui.host().send_key(KeyEvent::down(Key::MoveEnd));
+    let mut left = KeyEvent::down(Key::DirectionLeft);
+    left.modifiers.shift = true;
+    ui.host().send_key(left);
+    ui.wait_for_idle();
+
+    open.set(true);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in dialog").perform_click();
+    ui.wait_for_idle();
+    // Typing goes to the dialog's field; the other keeps what it had.
+    ui.on_node_with_tag("in dialog").perform_text_input("x");
+    ui.wait_for_idle();
+    assert_eq!(inside.get(), "x");
+    assert_eq!(value.get(), "hello");
+
+    open.set(false);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").assert_is_focused();
+    // Typing replaces what's selected: it's still there.
+    ui.on_node_with_tag("field").perform_text_input("y");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "helly");
+}
+
+#[test]
+fn a_text_fields_cursor_shows_only_while_its_window_takes_the_keys() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let cursor = Color::GREEN;
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Column!({
+            BasicTextField!(
+                String::from("hello"),
+                |_| {},
+                cursor_color = cursor,
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            if open.get() {
+                Dialog!(on_dismiss_request = move || open.set(false), {
+                    Box!(modifier = Modifier.size(20.dp()));
+                });
+            }
+        });
+    });
+    let shown = |ui: &mut ComposeTestRule| {
+        ui.wait_for_idle();
+        ui.dump_display_list().contains("#FF00FF00")
+    };
+    ui.on_node_with_tag("field").request_focus();
+    assert!(shown(&mut ui), "{}", ui.dump_display_list());
+    open.set(true);
+    assert!(!shown(&mut ui), "the dialog takes the keys");
+    open.set(false);
+    assert!(shown(&mut ui), "they're back");
 }

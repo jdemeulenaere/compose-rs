@@ -168,7 +168,12 @@ pub fn PopupWithPositionProvider(
                 });
                 Layout(catcher, fill.clone(), compose_runtime::callback(|| {}));
             }
-            let mut modifier = Modifier.overlay(position_provider.clone(), properties.focusable);
+            let token = remember(crate::focus_manager::WindowToken::default);
+            let mut modifier = if properties.focusable {
+                Modifier.overlay_window(position_provider.clone(), token.clone())
+            } else {
+                Modifier.overlay(position_provider.clone(), false)
+            };
             // The popup's window, as Compose's `popup()` semantics on its layout.
             modifier = modifier.semantics(|config| config.popup());
             if properties.focusable {
@@ -187,11 +192,18 @@ pub fn PopupWithPositionProvider(
                 );
             }
             let content = content.clone();
+            let focusable = properties.focusable;
+            // A focusable popup is a window of its own: what's in it sees that window's focus.
+            let content = compose_runtime::callback(move || {
+                if focusable {
+                    crate::focus_manager::in_window_of_token(token.clone(), || content());
+                } else {
+                    content();
+                }
+            });
             compose_runtime::CompositionLocalProvider(
                 crate::back::LOCAL_BACK_LAYER.provides(layer),
-                move || {
-                    Layout(modifier, stack.clone(), compose_runtime::callback(move || content()))
-                },
+                move || Layout(modifier, stack.clone(), content),
             );
         }),
     );
@@ -220,8 +232,9 @@ pub fn Dialog(
         host,
         compose_runtime::callback(move || {
             let dismiss = on_dismiss_request.clone();
+            let token = remember(crate::focus_manager::WindowToken::default);
             let modifier = Modifier
-                .overlay(window.clone(), true)
+                .overlay_window(window.clone(), token.clone())
                 .background(SCRIM)
                 .then_custom(DismissOnClick {
                     on_dismiss: if properties.dismiss_on_click_outside {
@@ -248,11 +261,14 @@ pub fn Dialog(
             // The dialog's own node, as large as its content: what's marked a dialog.
             let content = compose_runtime::callback(move || {
                 let content = content.clone();
-                Layout(
-                    Modifier.semantics(|config| config.dialog()),
-                    stack.clone(),
-                    compose_runtime::callback(move || content()),
-                );
+                let stack = stack.clone();
+                crate::focus_manager::in_window_of_token(token.clone(), move || {
+                    Layout(
+                        Modifier.semantics(|config| config.dialog()),
+                        stack,
+                        compose_runtime::callback(move || content()),
+                    );
+                });
             });
             compose_runtime::CompositionLocalProvider(
                 crate::back::LOCAL_BACK_LAYER.provides(layer),

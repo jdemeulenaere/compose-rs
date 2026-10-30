@@ -301,6 +301,13 @@ impl UiTree {
 
     /// `place`'s children's: the target at `place`, for the public `focused_rect`.
     pub(crate) fn focused_rect_of(&mut self, place: FocusPlace) -> Option<Rect> {
+        match place {
+            Some(target) => self.in_window_of(target.node, |tree| tree.focused_rect_here(place)),
+            None => self.focused_rect_here(place),
+        }
+    }
+
+    fn focused_rect_here(&mut self, place: FocusPlace) -> Option<Rect> {
         let target = place?;
         let state = self.focus_state_of(target);
         if !state.has_focus() {
