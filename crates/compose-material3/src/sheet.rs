@@ -733,6 +733,7 @@ pub fn ModalBottomSheet(
                         compose_runtime::callback(|_| {}),
                     );
                     sheet_surface(
+                        sheet_state,
                         sheet_modifier.clone(),
                         shape.clone(),
                         container_color,
@@ -795,6 +796,7 @@ pub fn BottomSheet(
         policy,
         compose_runtime::callback(move || {
             sheet_surface(
+                state,
                 sheet_modifier.clone(),
                 shape.clone(),
                 container_color,
@@ -1035,6 +1037,7 @@ impl compose_ui::SemanticsModifierNode for HandleSemanticsNode {
 /// a column.
 #[allow(clippy::too_many_arguments)]
 fn sheet_surface(
+    state: SheetState,
     modifier: Modifier,
     shape: Shape,
     container_color: Color,
@@ -1047,8 +1050,21 @@ fn sheet_surface(
     handle_semantics: Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)>,
     content: compose_runtime::Callback<dyn Fn(ColumnScope)>,
 ) {
+    // How far the state's past its top anchor, as a spring overshoots.
+    let overflow_scale = move |height: f32| {
+        let overflow = state.inner().map_or(0.0, |inner| {
+            let (offset, top) = (inner.anchored.offset(), inner.anchored.bounds().0);
+            if offset < top { top - offset } else { 0.0 }
+        });
+        if overflow > 0.0 && height > 0.0 { (height + overflow) / height } else { 1.0 }
+    };
+    let at_top = compose_ui::TransformOrigin { pivot_fraction_x: 0.5, pivot_fraction_y: 0.0 };
     crate::components::Surface(
-        modifier.fill_max_width(),
+        // Scaled up so no gap shows below, as `verticalScaleUp`.
+        modifier.fill_max_width().graphics_layer(move |layer| {
+            layer.scale_y = overflow_scale(layer.size.height);
+            layer.transform_origin = at_top;
+        }),
         shape,
         container_color,
         content_color,
@@ -1060,7 +1076,14 @@ fn sheet_surface(
             let handle_semantics = handle_semantics.clone();
             let content = content.clone();
             Column(
-                Modifier.fill_max_width().window_insets_padding(content_window_insets.clone()),
+                // And the content back, as `verticalScaleDown`.
+                Modifier
+                    .fill_max_width()
+                    .graphics_layer(move |layer| {
+                        layer.scale_y = 1.0 / overflow_scale(layer.size.height);
+                        layer.transform_origin = at_top;
+                    })
+                    .window_insets_padding(content_window_insets.clone()),
                 compose_foundation::layout::Arrangement::TOP,
                 Alignment::START,
                 compose_runtime::callback(move |column: ColumnScope| {

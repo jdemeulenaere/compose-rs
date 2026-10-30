@@ -3,11 +3,11 @@
 //! `NavigationDrawerItem`.
 
 use compose_runtime::{ObjectHandle, Owned};
-use compose_ui::ClickableOptions;
+use compose_ui::{ClickableOptions, PredictiveBackHandler};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use compose_animation::{Animatable, AnimationSpec, tween};
+use compose_animation::{Animatable, AnimationSpec, Easing, spring, tween};
 use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{
     Box, Column, ColumnScope, Row, Spacer, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
@@ -136,8 +136,7 @@ impl DrawerState {
     /// (towards the start edge), NaN before it's laid out, as `currentOffset` (a state read).
     pub fn current_offset(&self) -> f32 {
         let Some(inner) = self.inner() else { return f32::NAN };
-        let fraction = inner.open.value().clamp(0.0, 1.0);
-        (fraction - 1.0) * inner.width.get()
+        (inner.open.value() - 1.0) * inner.width.get()
     }
 
     /// Where it is or is going, as `targetValue` (a state read).
@@ -251,9 +250,9 @@ impl DrawerState {
         if width.is_nan() { density.to_px(DrawerDefaults::MAXIMUM_DRAWER_WIDTH) } else { width }
     }
 
-    /// How far open it is, 0 to 1 (a state read).
+    /// How far open it is (a state read): 0 to 1, and past 1 as an expressive spring overshoots.
     fn fraction(&self) -> f32 {
-        self.inner().map_or(0.0, |inner| inner.open.value().clamp(0.0, 1.0))
+        self.inner().map_or(0.0, |inner| inner.open.value())
     }
 }
 
@@ -452,7 +451,9 @@ pub fn ModalNavigationDrawer(
                     Modifier
                         .fill_max_size()
                         .draw_behind(move |draw| {
-                            let alpha = scrim_color.alpha() as f32 / 255.0 * fraction.fraction();
+                            // Not past open, however far a spring takes the sheet.
+                            let alpha =
+                                scrim_color.alpha() as f32 / 255.0 * fraction.fraction().min(1.0);
                             draw.draw_rect(
                                 draw.bounds(),
                                 compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
@@ -712,6 +713,7 @@ impl MeasurePolicy for DrawerLayout {
 #[allow(non_snake_case)]
 pub fn ModalDrawerSheet(
     #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] drawer_state: Option<DrawerState>,
     #[default(crate::DrawerDefaults::shape())] drawer_shape: Shape,
     #[default(crate::DrawerDefaults::modal_container_color())] drawer_container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
@@ -719,7 +721,11 @@ pub fn ModalDrawerSheet(
     #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(ColumnScope) + 'static,
 ) {
+    let layers = compose_runtime::key(drawer_state.is_some(), || {
+        drawer_state.map(|state| SheetLayers { state, back: drawer_predictive_back_handler(state) })
+    });
     drawer_sheet(
+        layers,
         modifier,
         drawer_shape,
         drawer_container_color,
@@ -731,7 +737,178 @@ pub fn ModalDrawerSheet(
 }
 
 /// The sheets' body, as Compose's `DrawerSheet`.
+/// As `PredictiveBackDrawerMaxScaleXDistanceGrow`, `...Shrink` and `...YDistance`.
+const PREDICTIVE_BACK_MAX_SCALE_X_GROW: Dp = Dp(12.0);
+const PREDICTIVE_BACK_MAX_SCALE_X_SHRINK: Dp = Dp(24.0);
+const PREDICTIVE_BACK_MAX_SCALE_Y: Dp = Dp(48.0);
+/// As `PredictiveBack.transform`.
+const PREDICTIVE_BACK_EASING: Easing = Easing::cubic_bezier(0.1, 0.1, 0.0, 1.0);
+
+/// How far a back gesture has stretched a sheet, as Compose's `DrawerPredictiveBackState`.
+struct DrawerPredictiveBackState {
+    swipe_edge_matches_drawer: OwnedState<bool>,
+    scale_x_distance: Animatable<f32>,
+    scale_y_distance: OwnedState<f32>,
+}
+
+impl DrawerPredictiveBackState {
+    fn update(
+        &self,
+        progress: f32,
+        swipe_edge_left: bool,
+        rtl: bool,
+        density: compose_ui::Density,
+    ) {
+        let matches = swipe_edge_left != rtl;
+        self.swipe_edge_matches_drawer.set(matches);
+        let max_x = if matches {
+            PREDICTIVE_BACK_MAX_SCALE_X_GROW
+        } else {
+            PREDICTIVE_BACK_MAX_SCALE_X_SHRINK
+        };
+        self.scale_x_distance.snap_to(density.to_px(max_x) * progress);
+        self.scale_y_distance.set(density.to_px(PREDICTIVE_BACK_MAX_SCALE_Y) * progress);
+    }
+
+    fn clear(&self) {
+        self.swipe_edge_matches_drawer.set(true);
+        self.scale_x_distance.snap_to(0.0);
+        self.scale_y_distance.set(0.0);
+    }
+
+    /// The container's scales for a sheet of `size`: toward the far edge from the drawer's, and
+    /// less tall, as `calculatePredictiveBackScaleX` and `...Y`.
+    fn scales(&self, size: compose_ui::Size) -> (f32, f32) {
+        let x = if size.width == 0.0 {
+            1.0
+        } else {
+            let direction = if self.swipe_edge_matches_drawer.get() { 1.0 } else { -1.0 };
+            1.0 + self.scale_x_distance.value() * direction / size.width
+        };
+        let y =
+            if size.height == 0.0 { 1.0 } else { 1.0 - self.scale_y_distance.get() / size.height };
+        (x, y)
+    }
+}
+
+/// Takes back while `state`'s target is open, stretching the sheet by the gesture and closing the
+/// drawer at its end, as Compose's `DrawerPredictiveBackHandler`.
+fn drawer_predictive_back_handler(state: DrawerState) -> Rc<DrawerPredictiveBackState> {
+    let back = remember(|| {
+        Rc::new(DrawerPredictiveBackState {
+            swipe_edge_matches_drawer: mutable_state_of(true),
+            scale_x_distance: Animatable::new(0.0),
+            scale_y_distance: mutable_state_of(0.0),
+        })
+    });
+    let scope = remember_coroutine_scope();
+    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
+    let density = compose_ui::LOCAL_DENSITY.current();
+    {
+        let back = back.clone();
+        PredictiveBackHandler!(
+            enabled = state.target_value() == DrawerValue::Open,
+            on_back = move |mut progress: compose_ui::BackProgress| {
+                let back = back.clone();
+                async move {
+                    loop {
+                        match progress.next().await {
+                            Ok(Some(event)) => back.update(
+                                PREDICTIVE_BACK_EASING.transform(event.progress),
+                                event.swipe_edge == compose_ui::BackEventCompat::EDGE_LEFT,
+                                rtl,
+                                density,
+                            ),
+                            Ok(None) => break,
+                            // Compose's `catch` clears, and its `close()` in `finally` throws at
+                            // once in the cancelled coroutine: it stays open.
+                            Err(compose_ui::BackCancelled) => {
+                                back.clear();
+                                return;
+                            }
+                        }
+                    }
+                    // Stretched from the drawer's edge, it un-stretches, so that it hides whole
+                    // as it closes.
+                    if back.swipe_edge_matches_drawer.get() {
+                        let back = back.clone();
+                        scope.launch(async move {
+                            back.scale_x_distance.animate_to(0.0, spring()).await;
+                            back.clear();
+                        });
+                    }
+                    state.close().await;
+                }
+            }
+        );
+    }
+    let closed = !state.is_open() && state.target_value() == DrawerValue::Closed;
+    {
+        let back = back.clone();
+        compose_runtime::LaunchedEffect(closed, async move {
+            if closed {
+                back.clear();
+            }
+        });
+    }
+    back
+}
+
+fn origin(pivot_fraction_x: f32, pivot_fraction_y: f32) -> compose_ui::TransformOrigin {
+    compose_ui::TransformOrigin { pivot_fraction_x, pivot_fraction_y }
+}
+
+/// A sheet's stretch and its overshoot: on the container, `container`, and on the content inside
+/// it, `content`, the content keeping its proportions, as Compose's `horizontalScaleUp`,
+/// `horizontalScaleDown`, `predictiveBackDrawerContainer` and `predictiveBackDrawerChild`.
+struct SheetLayers {
+    state: DrawerState,
+    back: Rc<DrawerPredictiveBackState>,
+}
+
+impl SheetLayers {
+    fn overshoot_scale(state: DrawerState, density: compose_ui::Density) -> f32 {
+        let offset = state.current_offset();
+        if offset > 0.0 {
+            1.0 + offset / density.to_px(DrawerDefaults::MAXIMUM_DRAWER_WIDTH)
+        } else {
+            1.0
+        }
+    }
+
+    fn container(&self, modifier: Modifier, rtl: bool, density: compose_ui::Density) -> Modifier {
+        let (state, back) = (self.state, self.back.clone());
+        modifier
+            .graphics_layer(move |layer| {
+                layer.scale_x = Self::overshoot_scale(state, density);
+                layer.transform_origin = origin(if rtl { 0.0 } else { 1.0 }, 0.5);
+            })
+            .graphics_layer(move |layer| {
+                let (x, y) = back.scales(layer.size);
+                layer.scale_x = x;
+                layer.scale_y = y;
+                layer.transform_origin = origin(if rtl { 1.0 } else { 0.0 }, 0.5);
+            })
+    }
+
+    fn content(&self, modifier: Modifier, rtl: bool, density: compose_ui::Density) -> Modifier {
+        let (state, back) = (self.state, self.back.clone());
+        modifier
+            .graphics_layer(move |layer| {
+                layer.scale_x = 1.0 / Self::overshoot_scale(state, density);
+                layer.transform_origin = origin(if rtl { 0.0 } else { 1.0 }, 0.0);
+            })
+            .graphics_layer(move |layer| {
+                let (x, y) = back.scales(layer.size);
+                layer.scale_x = if x != 0.0 { y / x } else { 1.0 };
+                layer.transform_origin = origin(if rtl { 0.0 } else { 1.0 }, 0.0);
+            })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn drawer_sheet(
+    layers: Option<SheetLayers>,
     modifier: Modifier,
     drawer_shape: Shape,
     drawer_container_color: Color,
@@ -742,15 +919,20 @@ fn drawer_sheet(
 ) {
     let content_color = drawer_content_color
         .or(MaterialTheme::color_scheme().content_color_for(drawer_container_color));
+    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
+    let density = compose_ui::LOCAL_DENSITY.current();
+    let sized = modifier.size_in(SizeSpec::bounds(
+        240.dp(),
+        Dp::UNSPECIFIED,
+        DrawerDefaults::MAXIMUM_DRAWER_WIDTH,
+        Dp::UNSPECIFIED,
+    ));
+    let container = match &layers {
+        Some(layers) => layers.container(sized, rtl, density),
+        None => sized,
+    };
     Surface(
-        modifier
-            .size_in(SizeSpec::bounds(
-                240.dp(),
-                Dp::UNSPECIFIED,
-                DrawerDefaults::MAXIMUM_DRAWER_WIDTH,
-                Dp::UNSPECIFIED,
-            ))
-            .fill_max_height(),
+        container.fill_max_height(),
         drawer_shape,
         drawer_container_color,
         content_color,
@@ -759,8 +941,13 @@ fn drawer_sheet(
         None,
         compose_runtime::callback(move || {
             // Its content inside the insets, as Compose's `windowInsetsPadding(windowInsets)`.
+            let filled = Modifier.fill_max_height();
+            let inside = match &layers {
+                Some(layers) => layers.content(filled, rtl, density),
+                None => filled,
+            };
             Column(
-                Modifier.fill_max_height().window_insets_padding(window_insets.clone()),
+                inside.window_insets_padding(window_insets.clone()),
                 compose_foundation::layout::Arrangement::TOP,
                 Alignment::START,
                 content.clone(),
@@ -893,18 +1080,11 @@ pub fn DismissibleDrawerSheet(
     #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    let scope = remember_coroutine_scope();
-    compose_runtime::key(drawer_state.is_some(), || {
-        if let Some(state) = drawer_state {
-            compose_ui::BackHandler(
-                state.target_value() == DrawerValue::Open,
-                compose_runtime::callback(move || {
-                    scope.launch(async move { state.close().await });
-                }),
-            );
-        }
+    let layers = compose_runtime::key(drawer_state.is_some(), || {
+        drawer_state.map(|state| SheetLayers { state, back: drawer_predictive_back_handler(state) })
     });
     drawer_sheet(
+        layers,
         modifier,
         drawer_shape,
         drawer_container_color,
@@ -955,6 +1135,7 @@ pub fn PermanentDrawerSheet(
     content: impl Fn(ColumnScope) + 'static,
 ) {
     drawer_sheet(
+        None,
         modifier.semantics(|config| config.set_pane_title(NAVIGATION_MENU)),
         drawer_shape,
         drawer_container_color,

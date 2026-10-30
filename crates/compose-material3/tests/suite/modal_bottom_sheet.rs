@@ -555,3 +555,60 @@ fn back_doesnt_dismiss_a_small_sheet_without_dismissing_on_back_press() {
     ui.host().on_back_pressed();
     ui.run_on_idle(|_| assert_eq!(dismissals.get(), 0));
 }
+
+/// An expressive spring goes past the top anchor: the sheet scales down from its top so no gap
+/// shows below it, the content scaled back, as `verticalScaleUp` and `verticalScaleDown`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SheetDefaults.kt, verticalScaleUp, verticalScaleDown
+#[test]
+fn an_overshooting_sheet_scales_up_and_its_content_back_down() {
+    use compose_ui::platform::DrawOp;
+    let owned = sheet_state(&[SheetValue::Hidden, SheetValue::Expanded]);
+    let sheet = *owned;
+    let showing = mutable_state_of(false);
+    let shown = showing.handle();
+    let mut ui = ComposeTestRule::sized(compose_ui::IntSize::new(400, 800), move || {
+        let _ = &showing;
+        MaterialTheme!(motion_scheme = MotionScheme::expressive(), {
+            if !shown.get() {
+                return;
+            }
+            ModalBottomSheet!(
+                || {},
+                sheet_state = sheet,
+                drag_handle = None::<fn()>,
+                |_: ColumnScope| {
+                    Box!(
+                        modifier = Modifier
+                            .fill_max_width()
+                            .height(500.dp())
+                            .background(compose_ui::Color::RED)
+                    );
+                }
+            );
+        });
+    });
+    ui.set_auto_advance(false);
+    shown.set(true);
+    let mut overflowed = 0.0_f32;
+    for _ in 0..200 {
+        ui.advance_time_by(std::time::Duration::from_millis(16));
+        let overflow = 300.0 - sheet.require_offset();
+        if overflow > 1.0 {
+            let up = (500.0 + overflow) / 500.0;
+            let ops = ui.host().display_list().ops.clone();
+            let found: Vec<(f32, f32)> = ops
+                .iter()
+                .filter_map(|op| match op {
+                    DrawOp::Transform { scale, .. } if *scale != (1.0, 1.0) => Some(*scale),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(found.len(), 2, "{found:?}");
+            assert!((found[0].1 - up).abs() < 1e-3, "{found:?}, {up}");
+            assert!((found[1].1 - 1.0 / up).abs() < 1e-3, "{found:?}, {up}");
+            overflowed = overflowed.max(overflow);
+        }
+    }
+    assert!(overflowed > 0.0, "it never went past its top anchor");
+    assert_eq!(sheet.require_offset(), 300.0);
+}

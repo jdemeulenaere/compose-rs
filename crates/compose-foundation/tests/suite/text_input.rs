@@ -361,11 +361,67 @@ fn a_fingers_second_press_drags_by_words_and_the_page_stays() {
     });
     ui.on_node_with_tag("field").perform_touch_input(|touch| {
         touch.down(compose_ui::Offset::new(10.0, 10.0));
-        touch.move_by(compose_ui::Offset::new(60.0, 0.0));
+        for _ in 0..10 {
+            touch.move_by(compose_ui::Offset::new(10.0, -3.0));
+        }
         touch.up();
     });
     ui.wait_for_idle();
     assert_eq!(state.value(), 0);
-    // A word selected: what's typed replaces it.
-    assert!(text_after_typing(&mut ui).chars().count() < 12);
+    // Both words selected, the drag past the first: what's typed replaces them.
+    assert_eq!(text_after_typing(&mut ui), "X");
+}
+
+/// What takes a finger's moves ends its press: no tap at the release, though nothing took that.
+#[test]
+fn a_move_something_around_took_ends_the_fingers_press() {
+    let mut ui = compose_test(|| {
+        Box!(modifier = compose_ui::Modifier.then_custom(TakesMoves), {
+            let text = remember(|| mutable_state_of("hello world".to_string()));
+            BasicTextField!(
+                text.get(),
+                move |new: String| text.set(new),
+                modifier = compose_ui::Modifier.size((400.dp(), 100.dp())).test_tag("field")
+            );
+        });
+    });
+    ui.wait_for_idle();
+    finger_drag(&mut ui, compose_ui::Offset::new(100.0, 50.0), compose_ui::Offset::new(5.0, 0.0));
+    ui.on_node_with_tag("field").assert_is_not_focused();
+}
+
+struct TakesMoves;
+struct TakesMovesNode;
+
+impl compose_ui::ModifierNodeElement for TakesMoves {
+    type Node = TakesMovesNode;
+    fn create(&self) -> TakesMovesNode {
+        TakesMovesNode
+    }
+    fn update(&self, _: &mut TakesMovesNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl compose_ui::ModifierNode for TakesMovesNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for TakesMovesNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut compose_ui::PointerEvent,
+        pass: compose_ui::PointerEventPass,
+        _: compose_ui::IntSize,
+        _: &mut compose_ui::EventContext<'_>,
+    ) {
+        if pass == compose_ui::PointerEventPass::Main
+            && event.kind == compose_ui::PointerEventType::Move
+        {
+            event.consume();
+        }
+    }
 }

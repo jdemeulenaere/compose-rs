@@ -1487,3 +1487,11 @@ fn a_small_anchors_bounds_extend_to_the_touch_target() {
     drag_and_release(&mut ui, 25.0);
     assert_eq!(changes.get(), 1);
 }
+
+/// With the status bars added back, as anchors count from the very top: a menu ending below the
+/// height less the bars, and within it with them, stays below its anchor.
+#[test]
+fn the_status_bars_count_for_where_a_menu_fits_below_its_anchor() {
+    let menu = menu_with_insets(IntSize::new(411, 891), 24, (0, 48), (700, 20), 2);
+    assert_eq!(menu.top, 720.0);
+}
