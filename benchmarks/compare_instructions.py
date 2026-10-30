@@ -32,6 +32,7 @@ SCENARIOS = {
     "derived_after_write": 500000,
     "derived_recompute": 200000,
     "counter_click": 5000,
+    "counter_click_touch": 5000,
     "todo_toggle": 40,
     "first_frame_feed": 200,
     "first_frame_big": 10,

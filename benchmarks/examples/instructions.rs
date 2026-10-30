@@ -378,6 +378,21 @@ fn main() {
             let mut ui = compose_test(counter::Counter);
             clicks(&mut ui, has_text_containing("Count"), 0, n);
         }
+        // A finger: no hover, as on a phone.
+        "counter_click_touch" => {
+            let mut ui = compose_test(counter::Counter);
+            let center = ui
+                .on_all_nodes(has_text_containing("Count"))
+                .get(0)
+                .fetch_semantics_node()
+                .center();
+            let finger = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
+            for _ in 0..n {
+                ui.host().send_pointer(finger(PointerEvent::press(center)));
+                ui.host().send_pointer(finger(PointerEvent::release(center)));
+                ui.wait_for_idle();
+            }
+        }
         "todo_toggle" => {
             let mut ui =
                 ComposeTestRule::sized(IntSize::new(400, 100_000), || todo::TodoAppWith(1000));
