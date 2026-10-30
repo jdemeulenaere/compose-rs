@@ -59,10 +59,8 @@ impl Composition {
 
     /// Runs a pass if any scope is invalid. Returns whether a pass ran.
     pub fn recompose(&self) -> bool {
-        // The changes of the turn so far invalidate their readers first (D751), and derived
-        // states whose dependencies changed tell theirs.
+        // The changes of the turn so far invalidate their readers first (D751).
         crate::snapshots::Snapshot::send_apply_notifications();
-        crate::derived::flush_derived_states();
         // What was asked of the paused composition, if any, first (a cancel during a layout, a
         // completion a layout needs).
         crate::pausable::run_requests(self.id);
@@ -76,22 +74,15 @@ impl Composition {
 
     /// Whether some scope is invalid, so [`recompose`](Composition::recompose) would run a pass.
     pub fn has_invalidations(&self) -> bool {
-        // The turn's changes invalidate their readers first (D751); a derived state whose
-        // dependencies changed may have changed: computed now.
+        // The turn's changes invalidate their readers first (D751).
         let (invalid, busy, unsent) = with_runtime(|runtime| {
             let unsent = runtime.snapshots.has_changes();
             (self.data(runtime).has_invalidations(), runtime.is_busy(), unsent)
         });
-        if busy {
-            return invalid;
-        }
-        if !unsent && !crate::derived::has_pending_derived_states() {
+        if busy || !unsent {
             return invalid;
         }
         crate::snapshots::Snapshot::send_apply_notifications();
-        if crate::derived::has_pending_derived_states() {
-            crate::derived::flush_derived_states();
-        }
         with_runtime(|runtime| self.data(runtime).has_invalidations())
     }
 

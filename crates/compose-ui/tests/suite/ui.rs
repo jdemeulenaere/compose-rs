@@ -973,8 +973,8 @@ fn every_entry_point_of_the_host_is_a_turn() {
     }
 }
 
-/// A derived state read only by drawing: the state it reads, written outside a turn or in one,
-/// asks for a tick, and the tick recomputes it and asks for the frame that draws it (D758).
+/// A derived state read only by drawing: the send of what it reads validates it, in the tick a
+/// write outside a turn asks for or at a turn's end, and asks for the frame that draws it (D759).
 #[test]
 fn a_derived_state_read_only_by_drawing_gets_its_frame_from_the_tick() {
     let state = mutable_state_of(0);
@@ -1001,16 +1001,15 @@ fn a_derived_state_read_only_by_drawing_gets_its_frame_from_the_tick() {
     assert!(calls.frames.get() > 0, "the tick asks for the frame");
     host.frame();
     assert_eq!(drawn.get(), 10);
-    // In a turn: the turn sends, and the derived state is flushed at the tick it asked for.
+    // In a turn: its send validates the derived state, which asks for the frame.
     calls.frames.set(0);
     calls.wakes();
     {
         let _turn = Turn::begin();
         state.set(2);
     }
-    assert!(calls.wakes() > 0, "the write asks for a tick");
-    tick();
-    assert!(calls.frames.get() > 0, "the tick asks for the frame");
+    assert_eq!(calls.wakes(), 0, "no tick");
+    assert!(calls.frames.get() > 0, "the turn's end asks for the frame");
     host.frame();
     assert_eq!(drawn.get(), 20);
     // From a task, whose tick is the one running it.

@@ -1228,7 +1228,7 @@ pub(crate) fn run_walk(base: usize) {
             WalkStep::Done => return,
             WalkStep::Check(scope, conditions) => {
                 for cell in conditions {
-                    crate::state::refresh_if_dirty(cell);
+                    crate::state::current_version(cell);
                 }
                 with_runtime(|runtime| runtime.settle_conditions(scope));
             }

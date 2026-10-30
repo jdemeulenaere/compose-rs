@@ -90,6 +90,35 @@ fn state_reads(c: &mut Criterion) {
     c.bench_function("state get outside composition", |b| b.iter(|| black_box(state.get())));
 }
 
+/// A derived state read with nothing changed since it was validated, read after a write of a
+/// state nothing derives from (its dependency compared), and recomputed; and a write sent to a
+/// derived state an observation reads (design §3.16).
+fn derived_reads(c: &mut Criterion) {
+    let state = mutable_state_of(1u64);
+    let unrelated = mutable_state_of(0u64);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() + 1);
+    let read = derived.as_state();
+    assert_eq!(read.get(), 2);
+    c.bench_function("derived state read, valid", |b| b.iter(|| black_box(read.get())));
+    let mut value = 0;
+    c.bench_function("derived state read after an unrelated write", |b| {
+        b.iter(|| {
+            value += 1;
+            unrelated.set(value);
+            black_box(read.get())
+        })
+    });
+    let mut value = 1;
+    c.bench_function("derived state read, recomputed", |b| {
+        b.iter(|| {
+            value += 1;
+            state.set(value);
+            black_box(read.get())
+        })
+    });
+}
+
 /// A host's tick with nothing to do: the executor's `run_ready` finding no task, no change to send
 /// and no derived state to flush.
 fn idle_tick(c: &mut Criterion) {
@@ -167,6 +196,7 @@ criterion_group!(
     state_reads,
     state_writes,
     idle_tick,
+    derived_reads,
     many_readers
 );
 criterion_main!(benches);

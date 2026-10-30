@@ -17,7 +17,7 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 117 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 119 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 251 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 90 |
@@ -427,7 +427,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D704 | [ui-and-layout](decisions/ui-and-layout.md#d704) | current |
 | D705 | [benchmarks](decisions/benchmarks.md#d705) | current |
 | D710 | [api-and-tooling](decisions/api-and-tooling.md#d710) | current |
-| D711 | [runtime](decisions/runtime.md#d711) | current |
+| D711 | [runtime](decisions/runtime.md#d711) | revised by [D759](decisions/runtime.md#d759) |
 | D712 | [runtime](decisions/runtime.md#d712) | current |
 | D713 | [runtime](decisions/runtime.md#d713) | current |
 | D714 | [runtime](decisions/runtime.md#d714) | current |
@@ -441,8 +441,10 @@ The log is split by area into the files below, one table each, rows in number or
 | D754 | [runtime](decisions/runtime.md#d754) | current |
 | D755 | [runtime](decisions/runtime.md#d755) | current |
 | D756 | [runtime](decisions/runtime.md#d756) | current |
-| D757 | [runtime](decisions/runtime.md#d757) | current |
-| D758 | [runtime](decisions/runtime.md#d758) | current |
+| D757 | [runtime](decisions/runtime.md#d757) | revised by [D760](decisions/runtime.md#d760) |
+| D758 | [runtime](decisions/runtime.md#d758) | revised by [D759](decisions/runtime.md#d759) |
+| D759 | [runtime](decisions/runtime.md#d759) | current |
+| D760 | [runtime](decisions/runtime.md#d760) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |

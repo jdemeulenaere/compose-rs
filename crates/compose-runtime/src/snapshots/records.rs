@@ -72,4 +72,16 @@ pub(crate) trait StateObjectCell: Any {
     /// The write that just ended was write `version` in snapshot `id`: whether it made a new
     /// record there. Runs in the runtime's borrow, once the write's user code is over.
     fn wrote_in(&self, id: SnapshotId, version: u32) -> bool;
+    /// The version of the record a read would see, a derived state brought up to date first:
+    /// `None` if the records are borrowed for writing. May run a calculation: outside the
+    /// runtime's borrow.
+    fn current_version(&self) -> Option<u32>;
+    /// Whether a derived state was found valid at `mark` (the global snapshot and the write
+    /// counter), so it still is; a value state needs no validating.
+    #[inline]
+    fn valid_at(&self, _mark: (SnapshotId, u32)) -> bool {
+        true
+    }
+    /// Tells the read observers what this object read, a derived state's dependencies.
+    fn notify_dependencies(&self) {}
 }

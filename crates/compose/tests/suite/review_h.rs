@@ -112,6 +112,8 @@ fn a_synchronous_host_never_sees_a_derived_state_behind_its_dependency() {
     composition.set_content(move || Doubled(handle));
     assert_eq!(take_log(), ["count=1 doubled=2"]);
     count.set(2);
+    // A synchronous host recomposes at the send (D751).
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
     assert_eq!(take_log(), ["count=2 doubled=4"]);
 }
 

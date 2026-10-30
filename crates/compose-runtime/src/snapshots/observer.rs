@@ -3,9 +3,9 @@
 //!
 //! It's built on the runtime's keyed read observer (`platform::ReadObserver`, which compose-ui's
 //! layout and drawing use): each callback gets one, and its scopes are interned to keys. Started,
-//! it's an apply observer as others are, heard in registration order (D757): it maps the states
-//! changed to the keys that read them, and those to scopes, and calls the callbacks through its
-//! executor.
+//! it's an apply observer as others are, heard in registration order (D757): the send told its
+//! observer the keys whose reads changed, a derived state's read among them if its value did
+//! (D759), and it calls those scopes' callbacks once each through its executor.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -24,8 +24,11 @@ trait Group: Any {
     fn clear_scope(&self, scope: &dyn Any);
     fn clear_if(&self, predicate: &dyn Fn(&dyn Any) -> bool);
     fn clear_all(&self);
-    /// Calls the callback for the scopes that read a state in `changes`.
+    /// Calls the callback for the scopes that read a state in `changes` or whose reads the send
+    /// told it changed.
     fn notify_changes(&self, changes: &ChangeSet);
+    /// Forgets what the send told it (before the observer started).
+    fn discard_invalidated(&self);
     fn has_scopes(&self) -> bool;
 }
 
@@ -60,22 +63,14 @@ impl Inner {
 
 impl<S: Hash + Eq + Clone + 'static> ScopeGroup<S> {
     fn new(owner: &Rc<Inner>, callback: Rc<dyn Fn(&S)>) -> Rc<ScopeGroup<S>> {
-        Rc::new_cyclic(|group: &Weak<ScopeGroup<S>>| {
-            let group = group.clone();
-            let observer = ReadObserver::new(move || {
-                if let Some(group) = group.upgrade() {
-                    group.invalidated();
-                }
-            });
-            observer.set_apply_driven();
-            ScopeGroup {
-                owner: Rc::downgrade(owner),
-                callback,
-                observer,
-                keys: RefCell::new(HashMap::new()),
-                scopes: RefCell::new(HashMap::new()),
-                next_key: Cell::new(1),
-            }
+        Rc::new(ScopeGroup {
+            owner: Rc::downgrade(owner),
+            callback,
+            // The invalidated keys wait for the apply observer.
+            observer: ReadObserver::new(|| {}),
+            keys: RefCell::new(HashMap::new()),
+            scopes: RefCell::new(HashMap::new()),
+            next_key: Cell::new(1),
         })
     }
 
@@ -89,16 +84,6 @@ impl<S: Hash + Eq + Clone + 'static> ScopeGroup<S> {
         self.keys.borrow_mut().insert(scope.clone(), key);
         self.scopes.borrow_mut().insert(key, scope.clone());
         key
-    }
-
-    /// A derived state's result it read changed, which isn't a change sent: the scopes are
-    /// called, once each, if the observer is started.
-    fn invalidated(&self) {
-        let mut keys = Vec::new();
-        self.observer.drain_invalidated(|key| keys.push(key));
-        if self.owner.upgrade().is_some_and(|owner| owner.registration.borrow().is_some()) {
-            self.fire(keys);
-        }
     }
 
     fn fire(&self, mut keys: Vec<u64>) {
@@ -164,8 +149,15 @@ impl<S: Hash + Eq + Clone + 'static> Group for ScopeGroup<S> {
         }
     }
 
+    fn discard_invalidated(&self) {
+        self.observer.drain_invalidated(|_| {});
+    }
+
     fn notify_changes(&self, changes: &ChangeSet) {
         let mut keys = Vec::new();
+        // What the send told it, a derived state's read among them (D759), and, called directly,
+        // what `changes` names.
+        self.observer.drain_invalidated(|key| keys.push(key));
         for state in changes.iter() {
             keys.extend(self.observer.keys_reading(state.0));
         }
@@ -263,6 +255,10 @@ impl SnapshotStateObserver {
             }
         });
         *self.inner.registration.borrow_mut() = Some(registration);
+        // What was sent before it started isn't heard.
+        for group in self.groups() {
+            group.discard_invalidated();
+        }
     }
 
     /// Stops hearing changes, as `stop()`.

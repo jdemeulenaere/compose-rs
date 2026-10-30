@@ -300,8 +300,6 @@ pub fn run_ready() -> bool {
             if turn.is_none() {
                 crate::snapshots::send_unsent_outside_turns();
             }
-            drop(turn);
-            crate::snapshots::flush_derived_outside_turns();
             return ran;
         }
         turn.get_or_insert_with(crate::snapshots::Turn::begin);

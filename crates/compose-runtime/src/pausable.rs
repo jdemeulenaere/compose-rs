@@ -689,7 +689,6 @@ impl PausedComposition {
                 misuse(ComposeError::PausedCompositionState)
             }
             PausedState::InitialPending => {
-                crate::derived::flush_derived_states();
                 // Applying a pass's end (an effect resuming it): no pass now, nothing done.
                 let finishing = with_runtime(|runtime| {
                     runtime.compositions.get(self.composition).is_some_and(|data| data.finishing)

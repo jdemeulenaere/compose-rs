@@ -934,11 +934,9 @@ fn a_derived_state_read_under_a_scope_calls_it_back_when_it_changes() {
     observer.observe_reads("scope", &callback, || read.get());
     state.set(1);
     Snapshot::send_apply_notifications();
-    compose_runtime::platform::flush_derived_states();
     assert_eq!(changes.get(), 0, "the result is the same");
     state.set(2);
     Snapshot::send_apply_notifications();
-    compose_runtime::platform::flush_derived_states();
     assert_eq!(changes.get(), 1);
 }
 
@@ -1058,4 +1056,463 @@ fn an_edit_that_mutates_then_panics_is_a_change() {
     Snapshot::send_apply_notifications();
     assert_eq!(applies.get(), 1);
     assert!(requested.get(), "its reader is invalidated");
+}
+
+// ---- Derived states under SnapshotStateObserver (S2) --------------------------------------------
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateOfInvalidatesObserver
+#[test]
+fn a_derived_state_read_under_a_scope_calls_it_back() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let derived = derived_state_of(move || state.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        std::mem::forget(derived);
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateOfReferentialChangeDoesNotInvalidateObserver
+#[test]
+fn a_derived_state_of_an_equal_new_value_doesnt_call_its_scope_back() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, _| {
+        let state = mutable_state_of_with(Rc::new(vec![42]), ReferentialEqualityPolicy);
+        let handle = state.handle();
+        let derived = derived_state_of(move || handle.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        state.set(Rc::new(vec![42]));
+        Snapshot::send_apply_notifications();
+        std::mem::forget((state, derived));
+    });
+    assert_eq!(changes.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, nestedDerivedStateOfInvalidatesObserver
+#[test]
+fn a_derived_state_read_through_another_calls_its_scope_back() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let inner = derived_state_of(move || state.get());
+        let read_inner = inner.as_state();
+        let outer = derived_state_of(move || read_inner.get());
+        let read = outer.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        std::mem::forget((inner, outer));
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateOfWithReferentialMutationPolicy
+#[test]
+fn a_derived_state_with_a_referential_policy_calls_its_scope_back_for_a_new_value() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, _| {
+        let state = mutable_state_of_with(Rc::new(vec![1]), ReferentialEqualityPolicy);
+        let handle = state.handle();
+        let derived = derived_state_of_with(ReferentialEqualityPolicy, move || handle.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        state.set(Rc::new(vec![1]));
+        Snapshot::send_apply_notifications();
+        std::mem::forget((state, derived));
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateOfWithStructuralMutationPolicy
+#[test]
+fn a_derived_state_with_a_structural_policy_doesnt_call_its_scope_back_for_an_equal_value() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, _| {
+        let state = mutable_state_of_with(Rc::new(vec![1]), ReferentialEqualityPolicy);
+        let handle = state.handle();
+        let derived = derived_state_of_with(StructuralEqualityPolicy, move || handle.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        state.set(Rc::new(vec![1]));
+        Snapshot::send_apply_notifications();
+        std::mem::forget((state, derived));
+    });
+    assert_eq!(changes.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingDerivedStateAndDependencyInvalidates
+#[test]
+fn a_scope_reading_a_derived_state_and_what_it_reads_is_called_back_once() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let derived = derived_state_of(move || state.get() >= 0);
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || {
+            read.get();
+            state.get();
+        });
+        std::mem::forget(derived);
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+/// And when the derived state's value changes too: once per change, where it had been twice.
+#[test]
+fn a_scope_reading_a_changing_derived_state_and_what_it_reads_is_called_back_once() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let derived = derived_state_of(move || state.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || {
+            read.get();
+            state.get();
+        });
+        std::mem::forget(derived);
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingDerivedStateWithDependencyChangeInvalidates
+#[test]
+fn a_derived_state_reading_something_new_calls_its_scope_back_for_it() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let condition = mutable_state_of(false);
+        let reads = condition.handle();
+        let derived = derived_state_of(move || if reads.get() { Some(state.get()) } else { None });
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        condition.set(true);
+        Snapshot::send_apply_notifications();
+        Snapshot::notify_objects_initialized();
+        observer.observe_reads("scope", &callback, || read.get());
+        std::mem::forget((condition, derived));
+    });
+    assert_eq!(changes.get(), 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingDerivedStateConditionallyInvalidatesBothScopes
+#[test]
+fn a_scope_that_stopped_reading_a_derived_state_isnt_called_back() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let derived = derived_state_of(move || state.get());
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        observer.observe_reads("other scope", &callback, || read.get());
+        Snapshot::notify_objects_initialized();
+        observer.observe_reads("other scope", &callback, || {});
+        std::mem::forget(derived);
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateChangesDependencies
+#[test]
+fn a_derived_state_changing_what_it_reads_calls_its_scope_back_for_that() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, _| {
+        let (a, b, c) = (mutable_state_of(10), mutable_state_of(20), mutable_state_of(30));
+        let condition = mutable_state_of(true);
+        let (read_a, read_b, read_c, read_condition) =
+            (a.handle(), b.handle(), c.handle(), condition.handle());
+        let derived = derived_state_of(move || {
+            if read_condition.get() { read_a.get() + read_b.get() } else { read_c.get() }
+        });
+        let read = derived.as_state();
+        Snapshot::notify_objects_initialized();
+        observer.observe_reads("scope", &callback, || read.get());
+        condition.set(false);
+        Snapshot::send_apply_notifications();
+        assert_eq!(changes.get(), 0);
+        a.set(30);
+        Snapshot::send_apply_notifications();
+        assert_eq!(changes.get(), 0);
+        c.set(0);
+        Snapshot::send_apply_notifications();
+        assert_eq!(changes.get(), 1);
+        observer.observe_reads("scope", &callback, || read.get());
+        condition.set(true);
+        a.set(-20);
+        Snapshot::send_apply_notifications();
+        assert_eq!(changes.get(), 1);
+        a.set(0);
+        Snapshot::send_apply_notifications();
+        assert_eq!(changes.get(), 2);
+        std::mem::forget((a, b, c, condition, derived));
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingDerivedState_invalidatesWhenValueNotChanged
+#[test]
+fn a_derived_state_of_the_same_value_records_what_it_reads_at_the_send() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    run_simple_test(|observer, state| {
+        let condition = mutable_state_of(false);
+        let reads = condition.handle();
+        let derived = derived_state_of(move || if reads.get() { state.get() } else { 0 });
+        let read = derived.as_state();
+        observer.observe_reads("scope", &callback, || read.get());
+        condition.set(true);
+        Snapshot::send_apply_notifications();
+        std::mem::forget((condition, derived));
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, readingDerivedState_invalidatesIfReadBeforeSnapshotAdvance
+#[test]
+fn a_scope_is_called_back_when_a_read_elsewhere_recomputes_the_derived_state() {
+    let changes = Rc::new(Cell::new(0));
+    let callback: Callback = {
+        let changes = changes.clone();
+        Rc::new(move |scope| {
+            if *scope == "draw_1" {
+                changes.set(changes.get() + 1);
+            }
+        })
+    };
+    run_simple_test(|observer, state| {
+        let derived = derived_state_of(move || state.get());
+        let read = derived.as_state();
+        observer.observe_reads("draw", &callback, || read.get());
+        observer.observe_reads("draw_1", &callback, || read.get());
+        Snapshot::send_apply_notifications();
+        state.update(|value| value + 1);
+        observer.observe_reads("draw", &callback, || read.get());
+        assert_eq!(changes.get(), 1, "the second scope, once the value is read");
+        observer.observe_reads("draw_1", &callback, || read.get());
+        std::mem::forget(derived);
+    });
+    assert_eq!(changes.get(), 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsCommon.kt, derivedStateReentrant
+#[test]
+fn derived_states_writing_what_they_read_while_sent_settle() {
+    let callback: Callback = Rc::new(|_| {});
+    run_simple_test(|observer, state| {
+        let initial_read = mutable_state_of(true);
+        let reads = initial_read.handle();
+        let derived: Vec<DerivedState<()>> = (0..3)
+            .map(|_| {
+                derived_state_of(move || {
+                    if state.get() >= 2 || reads.get() {
+                        return;
+                    }
+                    if state.get() < 2 {
+                        state.update(|value| value + 1);
+                    }
+                })
+            })
+            .collect();
+        observer.observe_reads("scope", &callback, || {
+            for state in &derived {
+                state.get();
+            }
+        });
+        initial_read.set(false);
+        std::mem::forget((initial_read, derived));
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsJvm.kt, stateChangeTriggersUpdateWhenDerivedStateIsUsedRightAfter
+#[test]
+fn a_calculation_right_after_a_write_sends_it() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    let derived = derived_state_of(|| 0);
+    let read = derived.as_state();
+    run_simple_test(|observer, state| {
+        observer.observe_reads("data", &callback, || {
+            if state.get() == 0 {
+                state.update(|value| value + 1);
+            }
+            // The derived state's first calculation sends what the block wrote.
+            read.get();
+        });
+    });
+    assert_eq!(changes.get(), 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsJvm.kt, readingNestedDerivedStateFromAnImmediatelyRerunningObserver
+#[test]
+fn a_callback_reading_a_nested_derived_state_again_at_once_is_called_once() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let inner = derived_state_of(move || handle.get());
+    let read_inner = inner.as_state();
+    let outer = derived_state_of(move || read_inner.get());
+    let read = outer.as_state();
+    let observer = Rc::new(SnapshotStateObserver::new(|run| run()));
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(Cell::new(0));
+    let slot: Rc<RefCell<Option<Callback>>> = Rc::default();
+    let again = {
+        let (observer, slot) = (Rc::downgrade(&observer), slot.clone());
+        move || {
+            let callback = slot.borrow().clone().expect("the callback");
+            let observer = observer.upgrade().expect("the observer");
+            observer.observe_reads("scope", &callback, || read.get());
+        }
+    };
+    let callback: Callback = {
+        let (changes, again) = (changes.clone(), again.clone());
+        Rc::new(move |_| {
+            assert_eq!(changes.get(), 0);
+            changes.set(1);
+            again();
+        })
+    };
+    *slot.borrow_mut() = Some(callback);
+    again();
+    state.update(|value| value + 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+    observer.stop();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateObserverTestsJvm.kt, rereadingDerivedState_whenDependenciesChanged
+#[test]
+fn derived_states_of_the_same_value_reading_less_stay_quiet() {
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    let (first, second) = (mutable_state_of(true), mutable_state_of(true));
+    let (read_first, read_second) = (first.handle(), second.handle());
+    let derived: Vec<DerivedState<()>> = (0..10)
+        .map(|_| {
+            derived_state_of(move || {
+                if read_second.get() {
+                    read_first.get();
+                }
+            })
+        })
+        .collect();
+    run_simple_test(|observer, _| {
+        observer.observe_reads("draw", &callback, || {
+            for state in &derived {
+                state.get();
+            }
+        });
+        Snapshot::send_apply_notifications();
+        first.set(false);
+        second.set(false);
+        Snapshot::send_apply_notifications();
+    });
+    assert_eq!(changes.get(), 0);
+}
+
+// ---- Derived states and the sends (D759) --------------------------------------------------------
+
+/// A calculation reading its own derived state panics, with Compose's message.
+#[test]
+#[should_panic(expected = "A derived state calculation cannot read itself")]
+fn a_calculation_reading_itself_panics() {
+    let slot: Rc<Cell<Option<State<i32>>>> = Rc::default();
+    let reads = slot.clone();
+    let derived = derived_state_of(move || reads.get().map_or(0, |state| state.get()));
+    slot.set(Some(derived.as_state()));
+    derived.get();
+}
+
+/// A derived state nobody reads is never computed, however often what it read changes.
+#[test]
+fn a_derived_state_nobody_reads_isnt_computed_at_the_send() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let derived = derived_state_of(move || {
+        counted.set(counted.get() + 1);
+        handle.get()
+    });
+    assert_eq!(derived.get(), 0);
+    assert_eq!(runs.get(), 1);
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(runs.get(), 1);
+    assert_eq!(derived.get(), 2, "a read is never behind what it derives from");
+    assert_eq!(runs.get(), 2);
+}
+
+/// A read before any send sees the write, with no send asked of it first.
+#[test]
+fn a_derived_state_read_right_after_a_write_sees_it() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() * 2);
+    assert_eq!(derived.get(), 0);
+    Snapshot::notify_objects_initialized();
+    state.set(1);
+    assert_eq!(derived.get(), 2);
+    state.set(2);
+    assert_eq!(derived.get(), 4);
+}
+
+/// A state written where it was made, which is no change sent, still changes a derived state
+/// reading it: validation is by versions.
+#[test]
+fn a_write_that_is_no_change_is_seen_by_a_derived_state() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get());
+    assert_eq!(derived.get(), 0);
+    let fresh = mutable_state_of(1);
+    let read_fresh = fresh.handle();
+    let other = derived_state_of(move || read_fresh.get());
+    fresh.set(2);
+    assert_eq!(other.get(), 2);
+    fresh.set(3);
+    assert_eq!(other.get(), 3);
+}
+
+/// A derived state whose value is equivalent keeps its result, as the old instance, and its
+/// version: what reads it isn't recomputed.
+#[test]
+fn an_equivalent_result_stops_the_chain() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let inner = derived_state_of(move || handle.get() > 0);
+    let read_inner = inner.as_state();
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let outer = derived_state_of(move || {
+        counted.set(counted.get() + 1);
+        read_inner.get()
+    });
+    assert!(outer.get());
+    state.set(2);
+    assert!(outer.get());
+    assert_eq!(runs.get(), 1, "the outer one's dependency kept its version");
+    state.set(0);
+    assert!(!outer.get());
+    assert_eq!(runs.get(), 2);
+}
+
+/// Read in a block under `without_read_observation`, a state isn't a dependency.
+#[test]
+fn a_read_without_observation_in_a_calculation_is_no_dependency() {
+    let (read, hidden) = (mutable_state_of(1), mutable_state_of(10));
+    let (read_handle, hidden_handle) = (read.handle(), hidden.handle());
+    let derived = derived_state_of(move || {
+        read_handle.get() + Snapshot::without_read_observation(|| hidden_handle.get())
+    });
+    assert_eq!(derived.get(), 11);
+    hidden.set(20);
+    assert_eq!(derived.get(), 11, "not recomputed");
+    read.set(2);
+    assert_eq!(derived.get(), 22);
 }

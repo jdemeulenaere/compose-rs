@@ -60,6 +60,11 @@ pub(crate) struct Snapshots {
     writes_observed: bool,
     /// A write outside a turn asked the host for a turn since the last send.
     woken: bool,
+    /// Derived states an observation read, what they read having changed: the send validates
+    /// them, outside the borrow.
+    derived_queue: Vec<StateId>,
+    /// The calculations of derived states in progress, innermost last: what each read.
+    calculations: Vec<Vec<StateId>>,
 }
 
 impl Snapshots {
@@ -79,6 +84,20 @@ impl Snapshots {
             version: 0,
             writes_observed: false,
             woken: false,
+            derived_queue: Vec::new(),
+            calculations: Vec::new(),
+        }
+    }
+
+    /// Queues a derived state for the next send to validate.
+    pub(crate) fn queue_derived(&mut self, id: StateId) {
+        self.derived_queue.push(id);
+    }
+
+    /// The calculation in progress read `id`.
+    pub(crate) fn record_dependency(&mut self, id: StateId) {
+        if let Some(reads) = self.calculations.last_mut() {
+            reads.push(id);
         }
     }
 
@@ -86,6 +105,12 @@ impl Snapshots {
     #[inline]
     pub(crate) fn global(&self) -> SnapshotId {
         self.global
+    }
+
+    /// The last write's version.
+    #[inline]
+    pub(crate) fn version(&self) -> u32 {
+        self.version
     }
 
     /// A new write's version.
@@ -104,7 +129,7 @@ impl Snapshots {
     /// Whether the global snapshot has changes to send.
     #[inline]
     pub(crate) fn has_changes(&self) -> bool {
-        !self.modified.is_empty()
+        !self.modified.is_empty() || !self.derived_queue.is_empty()
     }
 
     /// Whether nothing is registered: the runtime may be released at thread exit.
@@ -410,27 +435,15 @@ fn tell(runtime: &mut Runtime, id: StateId) -> Told {
     let composing = runtime.is_composing();
     let snapshots = &mut runtime.snapshots;
     let version = snapshots.next_version();
-    let read_by_derived = runtime.cells.record_write(
-        id,
-        snapshots.global,
-        version,
-        !composing,
-        &mut snapshots.modified,
-    );
+    runtime.cells.record_write(id, snapshots.global, version, !composing, &mut snapshots.modified);
     // The first change since a send, outside any turn, asks the host for one.
-    let mut wake = !snapshots.modified.is_empty() && snapshots.turns == 0 && !snapshots.woken;
+    let wake = !snapshots.modified.is_empty() && snapshots.turns == 0 && !snapshots.woken;
     snapshots.woken |= wake;
     let observed = snapshots.writes_observed;
-    let scope = crate::scope::ScopeId::NONE;
+    // In composition everything is invalidated at once (D703, D712), reader by reader; a frame
+    // request waits for the pass's end. Outside, at the send (D751).
     if composing {
-        // In composition everything is invalidated at once (D703, D712), reader by reader; a
-        // frame request waits for the pass's end.
-        wake |= crate::state::invalidate_cell(runtime, id, scope, crate::state::Invalidation::ALL);
-    } else if read_by_derived {
-        // Derived states reading it are marked now: no read is behind what it derives from. The
-        // readers wait for the send (D751).
-        wake |=
-            crate::state::invalidate_cell(runtime, id, scope, crate::state::Invalidation::DERIVED);
+        crate::state::invalidate_cell(runtime, id, false);
     }
     Told { wake, requested: frames_requested(runtime), observed, composing }
 }
@@ -479,7 +492,7 @@ fn notify_write(id: StateId, composing: bool) {
 /// nothing while a pass composes (its writes invalidate at once; the next turn sends).
 fn send(always: bool) {
     let sent = with_runtime(|runtime| {
-        if runtime.is_composing() || runtime.snapshots.modified.is_empty() {
+        if runtime.is_composing() || !runtime.snapshots.has_changes() {
             if always {
                 runtime.snapshots.advance();
             }
@@ -489,21 +502,20 @@ fn send(always: bool) {
         let previous = runtime.snapshots.advance();
         runtime.snapshots.sending += 1;
         runtime.snapshots.woken = false;
-        let mut flush = false;
         for &id in &modified {
-            flush |= crate::state::invalidate_cell(
-                runtime,
-                id,
-                crate::scope::ScopeId::NONE,
-                crate::state::Invalidation::SENT,
-            );
+            crate::state::invalidate_cell(runtime, id, true);
+        }
+        let derived = std::mem::take(&mut runtime.snapshots.derived_queue);
+        for &id in &derived {
+            crate::state::dequeue_derived(runtime, id);
         }
         let requested = frames_requested(runtime);
-        let observers: Option<Vec<ApplyObserver>> = (!runtime.snapshots.apply_observers.is_empty())
-            .then(|| runtime.snapshots.apply_observers.iter().map(|(_, o)| o.clone()).collect());
-        Some((modified, previous, observers, requested, flush))
+        let observers: Option<Vec<ApplyObserver>> = (!modified.is_empty()
+            && !runtime.snapshots.apply_observers.is_empty())
+        .then(|| runtime.snapshots.apply_observers.iter().map(|(_, o)| o.clone()).collect());
+        Some((modified, previous, observers, requested, derived))
     });
-    let Some((modified, previous, observers, requested, flush)) = sent else { return };
+    let Some((modified, previous, observers, requested, derived)) = sent else { return };
     struct Sending;
     impl Drop for Sending {
         fn drop(&mut self) {
@@ -511,11 +523,12 @@ fn send(always: bool) {
         }
     }
     let _sending = Sending;
-    if flush {
-        crate::executor::wake_host();
-    }
     if requested {
         request_frames();
+    }
+    // What an observation read of a derived state: told now if its value changed.
+    for id in derived {
+        crate::state::current_version(id);
     }
     let changes = ChangeSet { ids: modified };
     if let Some(observers) = observers {
@@ -566,18 +579,6 @@ pub(crate) fn send_unsent_outside_turns() {
     }
 }
 
-/// What a host's tick does with no turn left open: recomputes the derived states read by layout
-/// or drawing that a write marked, whose readers nothing else would tell: the send doesn't, and
-/// no frame comes without them (D758). Step S2 replaces this, as derived states validate
-/// themselves.
-pub(crate) fn flush_derived_outside_turns() {
-    if crate::derived::has_pending_derived_states()
-        && with_runtime(|runtime| runtime.snapshots.turns == 0 && !runtime.is_busy())
-    {
-        crate::derived::flush_derived_states();
-    }
-}
-
 /// A turn of a host's loop (a run of the executor's tasks, an event, a frame): writes made in it
 /// don't wake the host, and the outermost turn sends the changes when it ends and advances the
 /// global snapshot.
@@ -603,6 +604,41 @@ impl Drop for Turn {
             send_settled();
         }
     }
+}
+
+/// The global snapshot and the write counter: while they're as they were, no state changed.
+pub(crate) fn valid_mark() -> (SnapshotId, u32) {
+    with_runtime(|runtime| (runtime.snapshots.global, runtime.snapshots.version))
+}
+
+/// The global snapshot and a new write's version, for a record a derived state writes.
+pub(crate) fn next_record() -> (SnapshotId, u32) {
+    with_runtime(|runtime| {
+        let version = runtime.snapshots.next_version();
+        (runtime.snapshots.global, version)
+    })
+}
+
+/// A derived state's calculation starts: its reads are recorded (`record_dependency`).
+pub(crate) fn begin_calculation() {
+    with_runtime(|runtime| runtime.snapshots.calculations.push(Vec::new()));
+}
+
+/// What the calculation in progress read.
+pub(crate) fn calculation_reads() -> Vec<StateId> {
+    with_runtime(|runtime| {
+        runtime.snapshots.calculations.last_mut().map(std::mem::take).unwrap_or_default()
+    })
+}
+
+/// The calculation in progress ended.
+pub(crate) fn end_calculation() {
+    let _ = try_with_runtime(|runtime| runtime.snapshots.calculations.pop());
+}
+
+/// How many derived states' calculations are in progress.
+pub(crate) fn calculation_depth() -> usize {
+    with_runtime(|runtime| runtime.snapshots.calculations.len())
 }
 
 /// Advances the global snapshot, without sending, around a pass: when it starts, as Compose's

@@ -9,8 +9,11 @@ mod records;
 
 pub use global::{ChangeSet, ObserverHandle, Snapshot, StateObserverFn, Turn};
 pub(crate) use global::{
-    Snapshots, advance_around_pass, flush_derived_outside_turns, notify_read,
-    send_unsent_outside_turns, wrote, wrote_unwinding,
+    Snapshots, advance_around_pass, notify_read, send_unsent_outside_turns, wrote, wrote_unwinding,
+};
+pub(crate) use global::{
+    begin_calculation, calculation_depth, calculation_reads, end_calculation, next_record,
+    valid_mark,
 };
 pub use observer::SnapshotStateObserver;
 pub(crate) use records::{Records, SnapshotId, StateObjectCell};

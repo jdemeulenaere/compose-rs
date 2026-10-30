@@ -2,6 +2,7 @@
 //! lazy and cached. The tests that take snapshots wait for snapshot isolation (D702).
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_runtime::*;
@@ -100,4 +101,40 @@ fn nested_derived_states_produce_a_result() {
     assert_eq!(third.get(), n * n);
     state.set(2);
     assert_eq!(third.get(), n * n * 2);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateReadsCanBeObserved
+// On `Snapshot::observe`: taking a snapshot with its read observer comes with step S5.
+#[test]
+fn a_read_observer_hears_a_derived_state_and_what_it_read() {
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get());
+    let read = derived.as_state();
+    let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = reads.clone();
+    let result =
+        Snapshot::observe(Some(Rc::new(move |id| log.borrow_mut().push(id))), None, || read.get());
+    assert_eq!(result, 0);
+    assert_eq!(reads.borrow().len(), 2, "1 for the derived state, 1 for the state");
+    assert!(reads.borrow().contains(&state.state_object_id()));
+    assert!(reads.borrow().contains(&read.state_object_id()));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, stateReadsCanBeObservedEvenIfCached
+#[test]
+fn a_read_observer_hears_what_a_cached_derived_state_read() {
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get());
+    let read = derived.as_state();
+    assert_eq!(read.get(), 0);
+    let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = reads.clone();
+    let result =
+        Snapshot::observe(Some(Rc::new(move |id| log.borrow_mut().push(id))), None, || read.get());
+    assert_eq!(result, 0);
+    assert_eq!(*reads.borrow(), [read.state_object_id(), state.state_object_id()]);
 }

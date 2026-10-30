@@ -21,9 +21,6 @@ pub(crate) struct ObserverEntry {
     invalidated: Vec<u64>,
     /// `notify` is queued, and not called again until the invalidated keys are drained.
     pending: bool,
-    /// It hears changes as an apply observer does (`SnapshotStateObserver`): invalidations
-    /// reach it only for a derived state's result, which isn't a change sent (D757).
-    apply_driven: bool,
     /// A derived state's result cell, marked dirty when a read is invalidated.
     dirty_cell: Option<crate::state::StateId>,
 }
@@ -78,15 +75,8 @@ impl Observers {
     }
 
     /// Records that a write invalidated `read`; returns the notification to queue, if any.
-    pub(crate) fn invalidate(
-        &mut self,
-        read: &ObservedRead,
-        derived_result: bool,
-    ) -> Option<Rc<dyn Fn()>> {
+    pub(crate) fn invalidate(&mut self, read: &ObservedRead) -> Option<Rc<dyn Fn()>> {
         let entry = self.entries.get_mut(read.observer as usize)?.as_mut()?;
-        if entry.apply_driven && !derived_result {
-            return None;
-        }
         if !entry.invalidated.contains(&read.key) {
             entry.invalidated.push(read.key);
         }
@@ -124,7 +114,6 @@ impl ReadObserver {
                 epochs: HashMap::default(),
                 invalidated: Vec::new(),
                 pending: false,
-                apply_driven: false,
                 dirty_cell: None,
             };
             let index = match observers.entries.iter().position(Option::is_none) {
@@ -194,18 +183,6 @@ impl ReadObserver {
         }
         let _restore = Restore(previous);
         f()
-    }
-
-    /// Makes this observer hear changes as an apply observer does, by [`keys_reading`]: an
-    /// invalidation reaches it only for a derived state's result.
-    ///
-    /// [`keys_reading`]: Self::keys_reading
-    pub(crate) fn set_apply_driven(&self) {
-        with_runtime(|runtime| {
-            if let Some(entry) = runtime.observers.entry(self.index, self.serial) {
-                entry.apply_driven = true;
-            }
-        });
     }
 
     /// Makes this observer a derived state's: an invalidated read marks `cell` dirty.
