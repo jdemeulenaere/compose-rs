@@ -197,7 +197,10 @@ pub use layout::{
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
     measure_policy,
 };
-pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
+pub use layout_callbacks::{
+    GlobalPositionAwareModifierNode, LayoutAwareModifierNode, LayoutCoordinates,
+    MeasuredSizeAwareModifierNode,
+};
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,

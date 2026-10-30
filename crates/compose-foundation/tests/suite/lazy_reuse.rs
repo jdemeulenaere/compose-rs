@@ -474,6 +474,47 @@ fn a_reused_items_modifier_nodes_are_reset_for_it() {
     assert!(nodes.len() < 30, "{} nodes: reused", nodes.len());
 }
 
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementReusableNodeTest.kt, onPlacedCalledOnReuseInsideLazyColumn
+#[test]
+fn a_reused_items_nodes_are_told_they_were_placed() {
+    use compose_foundation::layout::*;
+    let invocations = Rc::new([std::cell::Cell::new(0), std::cell::Cell::new(0)]);
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let i = invocations.clone();
+    // It's the same callback for all items, as the test's lambdas shared across iterations.
+    let outer: Callback<dyn Fn(compose_ui::LayoutCoordinates)> = {
+        let i = i.clone();
+        (move |_| i[0].set(i[0].get() + 1)).into_callback()
+    };
+    let inner: Callback<dyn Fn(compose_ui::LayoutCoordinates)> =
+        (move |_| i[1].set(i[1].get() + 1)).into_callback();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let (outer, inner) = (outer.clone(), inner.clone());
+        LazyColumn!(
+            modifier = Modifier.size((50.dp(), 100.dp())),
+            state = given,
+            move |scope: LazyListScope| {
+                let (outer, inner) = (outer.clone(), inner.clone());
+                scope.items(200, move |_| {
+                    let inner = inner.clone();
+                    Box!(modifier = Modifier.size(50.dp()).on_placed(outer.clone()), move |_| {
+                        Box!(modifier = Modifier.size(50.dp()).on_placed(inner.clone()));
+                    });
+                })
+            }
+        );
+    });
+    let mut expected = 2;
+    for _ in 0..100 {
+        ui.wait_for_idle();
+        assert!(invocations[0].get() >= expected, "{} of {expected}", invocations[0].get());
+        assert!(invocations[1].get() >= expected, "{} of {expected}", invocations[1].get());
+        state.dispatch_raw_delta(100.0);
+        expected += 2;
+    }
+}
+
 /// Items inserted before others in a list whose items are all composed: Compose's measurement
 /// finds each item's composition by its key, so only the new ones are composed. Here the
 /// composed range, in indices, would end before the last items, which would leave (their state

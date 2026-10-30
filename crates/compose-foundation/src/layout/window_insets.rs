@@ -19,9 +19,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use compose_runtime::{Callback, IntoCallback, OwnedState, mutable_state_of};
-use compose_ui::platform::{
-    Action, Insets, InsetsType, LOCAL_WINDOW_INSETS_SOURCE, WindowInsetsSource,
-};
+use compose_ui::platform::{Insets, InsetsType, LOCAL_WINDOW_INSETS_SOURCE, WindowInsetsSource};
 use compose_ui::{
     Constraints, Density, Dp, InspectorInfo, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope,
     LOCAL_DENSITY, LOCAL_LAYOUT_DIRECTION, LayoutCoordinates, LayoutDirection, LayoutModifierNode,
@@ -1302,13 +1300,17 @@ impl compose_ui::GlobalPositionAwareModifierNode for ConsumingNode {
     /// `recalculateWindowInsets`' placement: the window's edges' distance from it, written as
     /// the state its descendants read (Compose writes it as it places; compose-rs learns where
     /// a node is after the layout, which lays out again within the frame, D172).
-    fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates) -> Option<Action> {
-        let Consumer::Recalculate(value, root) = &self.consumer else { return None };
+    fn on_globally_positioned(
+        &mut self,
+        coordinates: LayoutCoordinates,
+        context: &mut NodeContext<'_>,
+    ) {
+        let Consumer::Recalculate(value, root) = &self.consumer else { return };
         // Measured without fixed constraints, it passes its ancestors' consumption on: a position
         // written here would be undone by the next measure, a frame every vsync (D1362).
         let root = root.get();
         if root == IntSize::ZERO {
-            return None;
+            return;
         }
         let position = coordinates.position_in_root();
         let size = coordinates.size();
@@ -1316,11 +1318,10 @@ impl compose_ui::GlobalPositionAwareModifierNode for ConsumingNode {
         let right = root.width - (position.x + size.width as f32).round() as i32;
         let bottom = root.height - (position.y + size.height as f32).round() as i32;
         let insets = Some(Insets::new(left, top, right, bottom));
-        if value.get() == insets {
-            return None;
+        if value.get() != insets {
+            let value = value.clone();
+            context.run_after_layout(move || value.set(insets));
         }
-        let value = value.clone();
-        Some(Action::Run(Box::new(move || value.set(insets))))
     }
 }
 

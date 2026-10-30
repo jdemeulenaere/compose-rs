@@ -5,14 +5,19 @@
 //! may write state: what that invalidates is composed and laid out again in the same frame,
 //! before drawing).
 
-use compose_runtime::{Callback, IntoCallback};
+use std::mem;
+use std::ops::ControlFlow;
 
-use crate::constraints::Constraints;
+use compose_runtime::{Callback, IntoCallback};
+use smallvec::SmallVec;
+
+use crate::delegation::dispatch_with_context;
+use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
 use crate::input::Action;
-use crate::layout::{IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
-use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
-use crate::node_chain::NodeKinds;
-use crate::tree::{NodeId, UiTree};
+use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement};
+use crate::node_chain::{NodeKinds, entry_state};
+use crate::node_context::NodeContext;
+use crate::tree::{LayoutNode, NodeId, UiTree};
 use crate::unit::{IntSize, Offset, Rect};
 
 /// Where a laid-out node is, as Compose's `LayoutCoordinates` (a snapshot rather than a live
@@ -53,12 +58,35 @@ impl LayoutCoordinates {
     }
 }
 
-/// A node told where it is after each layout that moved or resized it, as Compose's
-/// `GlobalPositionAwareModifierNode`. Called while the tree is laid out: it queues what it
-/// does (`UiTree` runs the actions it returns after the layout).
+/// A node told its layer was measured and placed, as Compose's `LayoutAwareModifierNode`.
+///
+/// `on_remeasured` runs where the layer was measured, its reads not observed; the context may
+/// invalidate, not measure. `on_placed` runs after the layout, with today's snapshot of the
+/// coordinates, the outer nodes first (the placement pass will run it in place: D1186).
+pub trait LayoutAwareModifierNode {
+    /// The layer it's in was placed, or laid out again.
+    fn on_placed(&mut self, _coordinates: LayoutCoordinates, _context: &mut NodeContext<'_>) {}
+
+    /// The layer it's in was measured, at `size`.
+    fn on_remeasured(&mut self, _size: IntSize, _context: &mut NodeContext<'_>) {}
+}
+
+/// A node told the size its layer was measured at, as Compose's `MeasuredSizeAwareModifierNode`.
+pub trait MeasuredSizeAwareModifierNode {
+    /// The layer it's in was measured, at `size`.
+    fn on_remeasured(&mut self, size: IntSize, context: &mut NodeContext<'_>);
+}
+
+/// A node told where it is after each layout, and each change of a graphics layer around it that
+/// moves it, as Compose's `GlobalPositionAwareModifierNode`. Called after the layout, outside
+/// any node's code.
 pub trait GlobalPositionAwareModifierNode {
-    /// The node's coordinates changed (or are first known): an action to run, if any.
-    fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates) -> Option<Action>;
+    /// Its coordinates may have changed (or are first known).
+    fn on_globally_positioned(
+        &mut self,
+        coordinates: LayoutCoordinates,
+        context: &mut NodeContext<'_>,
+    );
 }
 
 impl Modifier {
@@ -66,6 +94,12 @@ impl Modifier {
     /// measured and whenever it changes, as `Modifier.onSizeChanged`.
     pub fn on_size_changed(self, on_size_changed: impl IntoCallback<dyn Fn(IntSize)>) -> Modifier {
         self.then_custom(OnSizeChangedElement(on_size_changed.into_callback()))
+    }
+
+    /// Calls `on_placed` with the coordinates of what follows in the chain each time it's
+    /// placed, as `Modifier.onPlaced`, after the layout (D1186).
+    pub fn on_placed(self, on_placed: impl IntoCallback<dyn Fn(LayoutCoordinates)>) -> Modifier {
+        self.then_custom(OnPlacedElement(on_placed.into_callback()))
     }
 
     /// Calls `on_globally_positioned` with the coordinates of what follows in the chain once
@@ -103,67 +137,67 @@ impl ModifierNodeElement for OnSizeChangedElement {
 }
 
 impl ModifierNode for OnSizeChangedNode {
-    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+    fn as_measured_size_aware(&mut self) -> Option<&mut dyn MeasuredSizeAwareModifierNode> {
         Some(self)
     }
+    /// A new callback (a closure is one at each recomposition, Compose's compiler keeping its
+    /// own) is told the next change: nothing to measure for it (D1188).
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
     /// Reused, it reports the new content's size, measured again for it.
-    fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+    fn on_reset(&mut self, context: &mut NodeContext<'_>) {
         self.last = None;
         context.invalidate_measurement();
     }
 }
 
-impl LayoutModifierNode for OnSizeChangedNode {
-    fn measure(
-        &mut self,
-        scope: &mut MeasureScope<'_>,
-        content: Measurable,
-        constraints: Constraints,
-    ) -> MeasureResult {
-        let placeable = scope.measure(content, constraints);
-        let size = placeable.size();
-        // An intrinsic measurement's size isn't the layout's.
-        if self.last != Some(size) && !scope.is_intrinsic_measurement() {
+impl MeasuredSizeAwareModifierNode for OnSizeChangedNode {
+    fn on_remeasured(&mut self, size: IntSize, context: &mut NodeContext<'_>) {
+        if self.last != Some(size) {
             self.last = Some(size);
             let callback = self.callback.clone();
-            scope.run_after_layout(move || callback(size));
+            context.run_after_layout(move || callback(size));
         }
-        scope.place(&placeable, 0, 0);
-        scope.layout(placeable.width, placeable.height)
     }
+}
 
-    // Its content's intrinsics, as Compose's `onSizeChanged`, which isn't a layout modifier.
-    fn min_intrinsic_width(
-        &mut self,
-        scope: &mut IntrinsicMeasureScope<'_>,
-        content: Measurable,
-        height: i32,
-    ) -> i32 {
-        scope.min_intrinsic_width(content, height)
+struct OnPlacedElement(Callback<dyn Fn(LayoutCoordinates)>);
+
+pub(crate) struct OnPlacedNode {
+    callback: Callback<dyn Fn(LayoutCoordinates)>,
+}
+
+impl ModifierNodeElement for OnPlacedElement {
+    type Node = OnPlacedNode;
+    fn create(&self) -> OnPlacedNode {
+        OnPlacedNode { callback: self.0.clone() }
     }
-    fn min_intrinsic_height(
-        &mut self,
-        scope: &mut IntrinsicMeasureScope<'_>,
-        content: Measurable,
-        width: i32,
-    ) -> i32 {
-        scope.min_intrinsic_height(content, width)
+    fn update(&self, node: &mut OnPlacedNode) {
+        node.callback = self.0.clone();
     }
-    fn max_intrinsic_width(
-        &mut self,
-        scope: &mut IntrinsicMeasureScope<'_>,
-        content: Measurable,
-        height: i32,
-    ) -> i32 {
-        scope.max_intrinsic_width(content, height)
+    fn same(&self, other: &Self) -> bool {
+        other.0.ptr_eq(&self.0)
     }
-    fn max_intrinsic_height(
-        &mut self,
-        scope: &mut IntrinsicMeasureScope<'_>,
-        content: Measurable,
-        width: i32,
-    ) -> i32 {
-        scope.max_intrinsic_height(content, width)
+    fn name(&self) -> &'static str {
+        "on_placed"
+    }
+}
+
+impl ModifierNode for OnPlacedNode {
+    fn as_layout_aware(&mut self) -> Option<&mut dyn LayoutAwareModifierNode> {
+        Some(self)
+    }
+    /// As `on_size_changed`: a new closure, each recomposition, lays nothing out.
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+}
+
+impl LayoutAwareModifierNode for OnPlacedNode {
+    fn on_placed(&mut self, coordinates: LayoutCoordinates, context: &mut NodeContext<'_>) {
+        let callback = self.callback.clone();
+        context.run_after_layout(move || callback(coordinates));
     }
 }
 
@@ -201,27 +235,175 @@ impl ModifierNode for OnGloballyPositionedNode {
 }
 
 impl GlobalPositionAwareModifierNode for OnGloballyPositionedNode {
-    fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates) -> Option<Action> {
-        if self.last == Some(coordinates) {
-            return None;
+    fn on_globally_positioned(
+        &mut self,
+        coordinates: LayoutCoordinates,
+        context: &mut NodeContext<'_>,
+    ) {
+        if self.last != Some(coordinates) {
+            self.last = Some(coordinates);
+            let callback = self.callback.clone();
+            context.run_after_layout(move || callback(coordinates));
         }
-        self.last = Some(coordinates);
-        let callback = self.callback.clone();
-        Some(Action::Run(Box::new(move || callback(coordinates))))
     }
 }
 
 impl UiTree {
-    /// The callbacks the layouts since the last call queued: sizes changed, and the
-    /// coordinates of the position-aware nodes, if anything was laid out.
+    /// The callbacks the layouts since the last call queued: sizes changed, the layers placed,
+    /// and the coordinates of the position-aware nodes, if anything was laid out or a layer
+    /// around them moved.
     pub fn take_layout_callbacks(&mut self) -> Vec<Action> {
-        if std::mem::take(&mut self.laid_out_since_callbacks) && !self.positioned.is_empty() {
-            let mut positioned = std::mem::take(&mut self.positioned);
-            positioned.retain(|&node| self.notify_positioned(node));
+        // What the nodes delegated while measured.
+        if !self.delegates_noted.is_empty() {
+            self.layout_nodes_told = true;
+            self.sync_noted_delegates();
+        }
+        if !self.placed_layers.is_empty() {
+            self.layout_nodes_told = true;
+            self.notify_placed();
+        }
+        let laid_out = mem::take(&mut self.laid_out_since_callbacks);
+        if !self.positioned.is_empty() && (laid_out || !self.layers_moved.is_empty()) {
+            self.layout_nodes_told = true;
+            let mut positioned = mem::take(&mut self.positioned);
+            let waited = mem::replace(&mut self.delegates_wait, true);
+            positioned.retain(|&node| {
+                if laid_out || self.under_a_moved_layer(node) {
+                    self.notify_positioned(node)
+                } else {
+                    self.get(node).is_some()
+                }
+            });
+            self.delegates_wait = waited;
+            // Those that came with what the nodes delegated.
+            for node in mem::take(&mut self.positioned) {
+                if !positioned.contains(&node) {
+                    positioned.push(node);
+                }
+            }
             self.positioned = positioned;
             self.sync_noted_delegates();
         }
-        std::mem::take(&mut self.layout_callbacks)
+        if !self.layers_moved.is_empty() {
+            for node in mem::take(&mut self.layers_moved) {
+                if let Some(value) = self.get_mut(node) {
+                    value.layer_moved = false;
+                }
+            }
+        }
+        mem::take(&mut self.layout_callbacks)
+    }
+
+    /// One of `node`'s graphics layers may have changed: if it now transforms differently from
+    /// what a node under it was last told, those under it are told, with no layout, as
+    /// `NodeCoordinator`'s `onCommitAffectingLayerParams`.
+    pub(crate) fn note_layer_change(&mut self, node: NodeId) {
+        if self.positioned.is_empty() {
+            return;
+        }
+        let Some(value) = self.get(node) else { return };
+        if value.layer_moved || value.deactivated || !value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
+            return;
+        }
+        let moved = (0..value.chain.len()).any(|index| {
+            let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>();
+            // Its block runs again only if a node under it was told (D1187).
+            graphics.is_some_and(|graphics| {
+                graphics.told_a_node()
+                    && graphics.transform_changed(&self.properties_of_layer(node, index, graphics))
+            })
+        });
+        if moved {
+            self.node_mut(node).layer_moved = true;
+            self.layers_moved.push(node);
+        }
+    }
+
+    /// The properties of `graphics`, the node of chain entry `index` of `node`, seen from the
+    /// node's first layer.
+    fn properties_of_layer(
+        &self,
+        node: NodeId,
+        index: usize,
+        graphics: &GraphicsLayerNode,
+    ) -> LayerProperties {
+        let value = self.node(node);
+        let layer = value.layer_of(index);
+        graphics.properties(
+            value.density,
+            value.layout_direction,
+            layer_origin(value, layer),
+            value.layers[layer].measured.into(),
+        )
+    }
+
+    /// Whether `node` or an ancestor has a graphics layer that moved.
+    fn under_a_moved_layer(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let Some(value) = self.get(id) else { return false };
+            if value.layer_moved {
+                return true;
+            }
+            current = if value.overlay { None } else { value.parent };
+        }
+        false
+    }
+
+    /// Tells the nodes of the layers placed, each once, the outer ones first as a placement
+    /// goes: those whose node is placed, a layer measured but not placed being told when it is.
+    fn notify_placed(&mut self) {
+        let mut placed: SmallVec<[(u32, u64, u32, NodeId); 4]> = SmallVec::new();
+        for (node, layer) in mem::take(&mut self.placed_layers) {
+            let Some(value) = self.get(node) else { continue };
+            let order = value.place_order;
+            let mut depth = 0;
+            let mut current = value.parent;
+            while let Some(parent) = current {
+                depth += 1;
+                current = self.node(parent).parent;
+            }
+            placed.push((depth, order, layer, node));
+        }
+        placed.sort_unstable_by_key(|&(depth, order, layer, _)| (depth, order, layer));
+        placed.dedup();
+        let waited = mem::replace(&mut self.delegates_wait, true);
+        for (_, _, layer, node) in placed {
+            let layer = layer as usize;
+            // A node removed by what an earlier one did stays out.
+            if self.get(node).is_none_or(|value| value.deactivated || layer >= value.layers.len())
+                || !self.is_placed_in_root(node)
+            {
+                continue;
+            }
+            for index in self.node(node).entries_of_layer(layer) {
+                let Some(entry) = self.node(node).chain.get(index) else { break };
+                if !entry.kinds.any(NodeKinds::ON_PLACED)
+                    || entry.state & entry_state::ATTACHED == 0
+                {
+                    continue;
+                }
+                let own = entry.own;
+                let coordinates = self.coordinates(node, layer, index);
+                self.with_entry(node, index, |modifier_node, context| {
+                    let _ = dispatch_with_context(
+                        modifier_node,
+                        own,
+                        NodeKinds::ON_PLACED,
+                        false,
+                        context,
+                        &mut |modifier_node, context| {
+                            if let Some(aware) = modifier_node.as_layout_aware() {
+                                aware.on_placed(coordinates, context);
+                            }
+                            ControlFlow::Continue(())
+                        },
+                    );
+                });
+            }
+        }
+        self.delegates_wait = waited;
+        self.sync_noted_delegates();
     }
 
     /// Tells `node`'s position-aware modifier nodes where they are, if it's placed. Returns
@@ -232,35 +414,33 @@ impl UiTree {
         let mut any = false;
         let placed = self.is_placed_in_root(node);
         for index in 0..count {
-            let value = self.node_mut(node);
-            if !value.chain[index].kinds.any(NodeKinds::GLOBAL_POSITION_AWARE) {
+            let Some(entry) = self.node(node).chain.get(index) else { break };
+            if !entry.kinds.any(NodeKinds::GLOBAL_POSITION_AWARE) {
                 continue;
             }
             any = true;
-            if !placed {
+            if !placed || entry.state & entry_state::ATTACHED == 0 {
                 continue;
             }
-            let layer = value.layer_of(index);
+            let own = entry.own;
+            let layer = self.node(node).layer_of(index);
             let coordinates = self.coordinates(node, layer, index);
-            let entry = &mut self.node_mut(node).chain[index];
-            let mut actions: smallvec::SmallVec<[Action; 1]> = smallvec::SmallVec::new();
             // The node, or each of its delegates that wants to know.
-            crate::delegation::dispatch_for_kind(
-                &mut *entry.node,
-                entry.own,
-                NodeKinds::GLOBAL_POSITION_AWARE,
-                crate::node_chain::EntryId::NO_DELEGATE,
-                &mut |modifier_node, _| {
-                    if let Some(action) = modifier_node
-                        .as_global_position_aware()
-                        .and_then(|aware| aware.on_globally_positioned(coordinates))
-                    {
-                        actions.push(action);
-                    }
-                },
-            );
-            self.layout_callbacks.extend(actions);
-            self.note_delegates_changed(node, index);
+            self.with_entry(node, index, |modifier_node, context| {
+                let _ = dispatch_with_context(
+                    modifier_node,
+                    own,
+                    NodeKinds::GLOBAL_POSITION_AWARE,
+                    false,
+                    context,
+                    &mut |modifier_node, context| {
+                        if let Some(aware) = modifier_node.as_global_position_aware() {
+                            aware.on_globally_positioned(coordinates, context);
+                        }
+                        ControlFlow::Continue(())
+                    },
+                );
+            });
         }
         any
     }
@@ -375,29 +555,16 @@ impl UiTree {
         let mut point = point;
         loop {
             let value = self.node(current);
-            // In the node's own coordinates (its first layer's).
-            let layer_origin = |layer: usize| {
-                value.layers[1..=layer].iter().fold(Offset::ZERO, |origin, entry| {
-                    origin + Offset::new(entry.offset.x as f32, entry.offset.y as f32)
-                })
-            };
-            point = point + layer_origin(layer);
+            point = point + layer_origin(value, layer);
             let end = before.unwrap_or(value.chain.len());
             // The innermost first.
             for index in (0..end).rev() {
-                let Some(graphics) = value.chain[index]
-                    .node
-                    .downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
+                let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()
                 else {
                     continue;
                 };
-                let entry_layer = value.layer_of(index);
-                let properties = graphics.properties(
-                    self.density,
-                    value.layout_direction,
-                    layer_origin(entry_layer),
-                    value.layers[entry_layer].measured.into(),
-                );
+                let properties = self.properties_of_layer(current, index, graphics);
+                graphics.note_transform(&properties);
                 point = properties.map(point);
             }
             if value.overlay {
@@ -423,6 +590,13 @@ impl UiTree {
         }
         self.laid_out_since_callbacks = true;
     }
+}
+
+/// Where layer `layer` of `value` is, in the node's own coordinates (its first layer's).
+fn layer_origin(value: &LayoutNode, layer: usize) -> Offset {
+    value.layers[1..=layer].iter().fold(Offset::ZERO, |origin, entry| {
+        origin + Offset::new(entry.offset.x as f32, entry.offset.y as f32)
+    })
 }
 
 /// The intersection of two rectangles (empty at the first's top left if they don't meet).

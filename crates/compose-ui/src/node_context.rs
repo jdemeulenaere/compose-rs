@@ -183,6 +183,12 @@ impl NodeContext<'_> {
         self.tree.focus_requests.wake();
     }
 
+    /// Runs `action` after the layout under way, outside the tree: what a `Modifier` lambda
+    /// told of a layout goes through (D172).
+    pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
+        self.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+    }
+
     /// The density where its layout node is composed, as `requireDensity()`.
     pub fn require_density(&self) -> Density {
         self.tree.node(self.node).density

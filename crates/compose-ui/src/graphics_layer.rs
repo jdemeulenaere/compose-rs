@@ -14,6 +14,7 @@
 //! Hit testing follows a layer's clip but not its transform yet: a scaled or translated node
 //! takes pointer events at its laid-out bounds.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::alignment::LayoutDirection;
@@ -132,6 +133,29 @@ pub(crate) struct GraphicsLayerNode {
     layer: Layer,
     /// Its last path outline, with what it was made for (D1059).
     outline: std::cell::RefCell<Option<CachedOutline>>,
+    /// How it transformed when a node under it last asked where it is, as Compose's
+    /// `layerPositionalProperties`; `None` if none did.
+    positional: Cell<Option<LayerTransform>>,
+}
+
+/// What of a layer moves what's in it, as Compose's `LayerPositionalProperties`.
+#[derive(Clone, Copy, PartialEq)]
+struct LayerTransform {
+    pivot: Offset,
+    scale: (f32, f32),
+    rotation: f32,
+    translation: Offset,
+}
+
+impl LayerTransform {
+    fn of(properties: &LayerProperties) -> LayerTransform {
+        LayerTransform {
+            pivot: properties.pivot,
+            scale: properties.scale,
+            rotation: properties.rotation,
+            translation: properties.translation,
+        }
+    }
 }
 
 /// A built-in shape's path outline and what it was made for: made again only when one of them
@@ -153,6 +177,7 @@ impl GraphicsLayerNode {
         GraphicsLayerNode {
             layer: Layer::Fixed(GraphicsLayerScope { shape, clip: true, ..Default::default() }),
             outline: Default::default(),
+            positional: Cell::new(None),
         }
     }
 
@@ -177,6 +202,22 @@ impl GraphicsLayerNode {
                 ..Default::default()
             },
         }
+    }
+
+    /// Keeps how `properties` transform, which a node under it was just told.
+    pub(crate) fn note_transform(&self, properties: &LayerProperties) {
+        self.positional.set(Some(LayerTransform::of(properties)));
+    }
+
+    /// Whether a node under it was told where it is.
+    pub(crate) fn told_a_node(&self) -> bool {
+        self.positional.get().is_some()
+    }
+
+    /// Whether `properties` transform differently from what a node under it was last told. Its
+    /// other properties (an alpha) move nothing, as `onCommitAffectingLayerParams`.
+    pub(crate) fn transform_changed(&self, properties: &LayerProperties) -> bool {
+        self.positional.get() != Some(LayerTransform::of(properties))
     }
 
     /// Its properties for a layer of `size` at `origin` (in its group), its outline laid out
@@ -371,7 +412,11 @@ fn faded(color: Color, alpha: f32) -> Color {
 impl ModifierNodeElement for GraphicsLayerElement {
     type Node = GraphicsLayerNode;
     fn create(&self) -> GraphicsLayerNode {
-        GraphicsLayerNode { layer: self.0.clone(), outline: Default::default() }
+        GraphicsLayerNode {
+            layer: self.0.clone(),
+            outline: Default::default(),
+            positional: Cell::new(None),
+        }
     }
 
     fn update(&self, node: &mut GraphicsLayerNode) {

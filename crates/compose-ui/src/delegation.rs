@@ -668,7 +668,7 @@ fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeCont
     let Some(delegates) = node.delegates() else { return };
     delegates.changed = false;
     for mut gone in mem::take(&mut delegates.removed) {
-        delegates.pending |= gone.kinds;
+        delegates.pending |= gone.kinds.without(NodeKinds::LAYOUT_AWARE);
         detach_delegate(&mut gone, context);
         context.tree.mark_delegate_detached(&mut gone);
         context.tree.release_delegate(gone);

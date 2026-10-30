@@ -129,6 +129,8 @@ pub struct LayoutNode {
     pub(crate) subtree_needs_measure: bool,
     /// Whether the parent placed it in its last measurement: unplaced nodes aren't drawn.
     pub(crate) placed: bool,
+    /// In `UiTree::layers_moved`.
+    pub(crate) layer_moved: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
     pub(crate) measured_in: u64,
     /// The layout direction where it was composed (`LOCAL_LAYOUT_DIRECTION`).
@@ -199,6 +201,7 @@ impl LayoutNode {
             needs_measure: true,
             subtree_needs_measure: false,
             placed: false,
+            layer_moved: false,
             measured_in: 0,
             intrinsics_asked: false,
             children_intrinsics_asked: false,
@@ -234,6 +237,18 @@ impl LayoutNode {
     /// nodes before it.
     pub(crate) fn layer_of(&self, index: usize) -> usize {
         self.chain[..index].iter().filter(|entry| entry.kinds.any(NodeKinds::LAYOUT)).count()
+    }
+
+    /// The chain entries in layer `layer`: those after the layout node measuring the layer
+    /// outside it, up to its own.
+    pub(crate) fn entries_of_layer(&self, layer: usize) -> std::ops::Range<usize> {
+        let start = match layer {
+            0 => 0,
+            _ => self.layout_indices[layer - 1] as usize + 1,
+        };
+        let end =
+            self.layout_indices.get(layer).map_or(self.chain.len(), |&index| index as usize + 1);
+        start..end
     }
 }
 
@@ -316,6 +331,14 @@ pub struct UiTree {
     pub(crate) positioned: Vec<NodeId>,
     /// Something was laid out (or a position-aware node came) since the last callbacks.
     pub(crate) laid_out_since_callbacks: bool,
+    /// Whether `take_layout_callbacks` ran nodes' code, which may invalidate and write state.
+    pub(crate) layout_nodes_told: bool,
+    /// The layers of nodes with `LayoutAwareModifierNode`s measured or placed since the
+    /// callbacks last ran (`(node, layer)`, repeated), for `on_placed`.
+    pub(crate) placed_layers: Vec<(NodeId, u32)>,
+    /// The nodes (flagged `layer_moved`) one of whose graphics layers transforms differently
+    /// since the callbacks last ran, if a node wants to know where it is.
+    pub(crate) layers_moved: Vec<NodeId>,
     /// The last `EntryId` given to a chain entry.
     pub(crate) next_entry: u64,
     /// The last semantics id given (the root's is 0).
@@ -431,6 +454,9 @@ impl UiTree {
             layout_callbacks: Vec::new(),
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
+            layout_nodes_told: false,
+            placed_layers: Vec::new(),
+            layers_moved: Vec::new(),
             next_entry: 0,
             last_semantics_id: 0,
             window_insets: crate::configuration::WindowInsetsSource::NONE,
@@ -875,6 +901,7 @@ impl UiTree {
                 Observation::InnerLayers => {
                     if self.get(node).is_some_and(|value| !value.deactivated) {
                         self.invalidate_inner_layers(node);
+                        self.note_layer_change(node);
                     }
                 }
                 Observation::Layer => {
@@ -884,6 +911,7 @@ impl UiTree {
                     if let Some(retained) = value.and_then(|value| value.retained.as_mut()) {
                         retained.layer_dirty = true;
                     }
+                    self.note_layer_change(node);
                 }
                 Observation::Semantics => self.invalidate_semantics_of(node),
             }
@@ -1038,7 +1066,7 @@ impl UiTree {
             }
         }
         for removed in old_nodes.iter().flatten() {
-            invalidated |= removed.kinds;
+            invalidated |= removed.kinds.without(NodeKinds::LAYOUT_AWARE);
             structural |= removed.kinds;
         }
         let changed = reused != old.len() || reused != new.len() || layers_changed;
@@ -1123,7 +1151,12 @@ impl UiTree {
         structural: NodeKinds,
         parent_data_changed: bool,
     ) {
-        if kinds.any(NodeKinds::LAYOUT | NodeKinds::OVERLAY) {
+        // A layout-aware node come or updated (not one gone: it won't be told) sees a layout.
+        let measures = NodeKinds::LAYOUT
+            | NodeKinds::OVERLAY
+            | NodeKinds::ON_REMEASURED
+            | NodeKinds::ON_PLACED;
+        if kinds.any(measures) {
             self.invalidate_measure(node);
         } else if kinds.any(NodeKinds::DRAW | NodeKinds::GRAPHICS_LAYER) {
             self.invalidate_draw_of(node);

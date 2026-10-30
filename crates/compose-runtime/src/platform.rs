@@ -13,7 +13,7 @@ pub use crate::executor::{
     set_manual_clock, set_wake_handler,
 };
 pub use crate::node_tree::NodeTree;
-pub use crate::observe::ReadObserver;
+pub use crate::observe::{ReadObserver, without_read_observation};
 pub use crate::pausable::{PausableContent, PausableContentFor};
 pub use crate::remember::remember_across_reuse;
 pub use crate::snapshots::Turn;

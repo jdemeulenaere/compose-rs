@@ -57,6 +57,10 @@ impl NodeKinds {
     pub const SELECTABLE: NodeKinds = NodeKinds(1 << 28);
     /// `Modifier.repaint_boundary` and the nodes asking to be one.
     pub const REPAINT_BOUNDARY: NodeKinds = NodeKinds(1 << 29);
+    /// Told they were measured or placed: nothing to do for one gone.
+    pub(crate) const LAYOUT_AWARE: NodeKinds =
+        NodeKinds(NodeKinds::ON_REMEASURED.0 | NodeKinds::ON_PLACED.0);
+
     /// The kinds a delegate gives its owner: those the tree dispatches to delegates. The rest
     /// are the built-in elements' (which aren't delegated to) or answered by the chain's node
     /// itself, which forwards them if it wants to (`ModifierNode::delegates`).
@@ -67,6 +71,8 @@ impl NodeKinds {
             | NodeKinds::SEMANTICS.0
             | NodeKinds::POINTER_INPUT.0
             | NodeKinds::PARENT_DATA.0
+            | NodeKinds::ON_REMEASURED.0
+            | NodeKinds::ON_PLACED.0
             | NodeKinds::GLOBAL_POSITION_AWARE.0
             | NodeKinds::FOCUS_TARGET.0
             | NodeKinds::KEY_INPUT.0
@@ -151,6 +157,16 @@ impl NodeKinds {
             add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
             add(node.is_composition_local_consumer(), NodeKinds::COMPOSITION_LOCAL_CONSUMER);
             add(node.as_modifier_local().is_some(), NodeKinds::LOCALS);
+            // As `calculateNodeKindSetFrom`: `Modifier.on_placed`'s node is only placed, so a
+            // new one has nothing to measure.
+            if node.as_layout_aware().is_some() {
+                kinds |= NodeKinds::ON_PLACED;
+                if node.downcast_ref::<crate::layout_callbacks::OnPlacedNode>().is_none() {
+                    kinds |= NodeKinds::ON_REMEASURED;
+                }
+            } else if node.as_measured_size_aware().is_some() {
+                kinds |= NodeKinds::ON_REMEASURED;
+            }
         }
         kinds
     }

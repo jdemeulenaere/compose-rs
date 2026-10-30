@@ -816,8 +816,12 @@ impl UiHost {
                 tree.layout(size)
             });
             measured |= again;
-            let actions = self.with_tree(|tree| tree.take_layout_callbacks());
-            let called = !actions.is_empty();
+            let (actions, told) = self.with_tree(|tree| {
+                let actions = tree.take_layout_callbacks();
+                (actions, std::mem::take(&mut tree.layout_nodes_told))
+            });
+            // A node told may have invalidated or written state too.
+            let called = told || !actions.is_empty();
             Self::run(actions);
             if !again && !called {
                 break;

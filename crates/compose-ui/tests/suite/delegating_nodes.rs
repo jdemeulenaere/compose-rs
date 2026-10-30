@@ -1431,9 +1431,8 @@ impl ModifierNode for PositionAware {
 }
 
 impl GlobalPositionAwareModifierNode for PositionAware {
-    fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates) -> Option<Action> {
+    fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates, _: &mut NodeContext<'_>) {
         self.0.borrow_mut().push(coordinates.position_in_root());
-        None
     }
 }
 
@@ -1866,11 +1865,10 @@ impl PointerInputModifierNode for DelegatesOnEvents {
 }
 
 impl GlobalPositionAwareModifierNode for DelegatesOnEvents {
-    fn on_globally_positioned(&mut self, _: LayoutCoordinates) -> Option<Action> {
+    fn on_globally_positioned(&mut self, _: LayoutCoordinates, _: &mut NodeContext<'_>) {
         if self.label == "positioned" && self.delegates.nodes().next().is_none() {
             self.add();
         }
-        None
     }
 }
 

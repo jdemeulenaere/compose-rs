@@ -1083,6 +1083,20 @@ pub trait ModifierNode: Any {
         false
     }
     /// Told where it is after each layout that moved or resized it, as
+    /// `LayoutAwareModifierNode` (`on_placed`, `on_remeasured`).
+    fn as_layout_aware(
+        &mut self,
+    ) -> Option<&mut dyn crate::layout_callbacks::LayoutAwareModifierNode> {
+        None
+    }
+
+    /// `MeasuredSizeAwareModifierNode` (`on_remeasured`).
+    fn as_measured_size_aware(
+        &mut self,
+    ) -> Option<&mut dyn crate::layout_callbacks::MeasuredSizeAwareModifierNode> {
+        None
+    }
+
     /// `GlobalPositionAwareModifierNode` (`on_globally_positioned`).
     fn as_global_position_aware(
         &mut self,

@@ -477,13 +477,6 @@ impl<'a> MeasureScope<'a> {
         }
     }
 
-    /// Whether this is an intrinsic measurement: a default intrinsic function running
-    /// `measure` (Compose's `IntrinsicsMeasureScope`), where measuring returns intrinsics and
-    /// placing does nothing. What it measures isn't the layout's.
-    pub(crate) fn is_intrinsic_measurement(&self) -> bool {
-        self.intrinsic.is_some()
-    }
-
     /// Places `placeable` at `x`, `y` in this node's coordinates, as `Placeable.place`.
     pub fn place(&mut self, placeable: &Placeable, x: i32, y: i32) {
         self.place_at(placeable, IntOffset::new(x, y))

@@ -467,7 +467,9 @@ impl UiTree {
         };
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
-        let value = &mut self.node_mut(node).layers[layer];
+        let value = self.node_mut(node);
+        let layout_aware = value.kinds.any(NodeKinds::LAYOUT_AWARE);
+        let value = &mut value.layers[layer];
         let resized = value.measured != measured;
         value.measured = measured;
         value.size = size;
@@ -480,7 +482,53 @@ impl UiTree {
         if resized {
             self.measure_result_changed(node, layer);
         }
+        if layout_aware {
+            self.layer_measured(node, layer, measured);
+        }
         size
+    }
+
+    /// Layer `layer` of `node`, which has layout-aware nodes, was measured at `size`: its nodes
+    /// are told, without observing what they read, and will be told it was placed
+    /// (`NodeCoordinator.onMeasured`, `onPlaced`).
+    #[cold]
+    fn layer_measured(&mut self, node: NodeId, layer: usize, size: IntSize) {
+        if self.node(node).kinds.any(NodeKinds::ON_PLACED) {
+            self.placed_layers.push((node, layer as u32));
+        }
+        if !self.node(node).kinds.any(NodeKinds::ON_REMEASURED) {
+            return;
+        }
+        for index in self.node(node).entries_of_layer(layer) {
+            let entry = &self.node(node).chain[index];
+            if !entry.kinds.any(NodeKinds::ON_REMEASURED)
+                || entry.state & entry_state::ATTACHED == 0
+            {
+                continue;
+            }
+            let own = entry.own;
+            let waited = mem::replace(&mut self.delegates_wait, true);
+            self.with_entry(node, index, |modifier_node, context| {
+                compose_runtime::platform::without_read_observation(|| {
+                    let _ = dispatch_with_context(
+                        modifier_node,
+                        own,
+                        NodeKinds::ON_REMEASURED,
+                        false,
+                        context,
+                        &mut |modifier_node, context| {
+                            if let Some(aware) = modifier_node.as_layout_aware() {
+                                aware.on_remeasured(size, context);
+                            } else if let Some(aware) = modifier_node.as_measured_size_aware() {
+                                aware.on_remeasured(size, context);
+                            }
+                            ControlFlow::Continue(())
+                        },
+                    );
+                });
+            });
+            self.delegates_wait = waited;
+        }
     }
 
     /// Layer `layer` of `node` was measured at a new size: its draw nodes are told
@@ -494,13 +542,7 @@ impl UiTree {
         // The entries drawing in the layer: those after the layout node measuring the layer
         // outside it, up to its own (compose-rs draws a node in the layer its own layout node
         // measures, `LayoutNode::layer_of`).
-        let start = match layer {
-            0 => 0,
-            _ => value.layout_indices[layer - 1] as usize + 1,
-        };
-        let end =
-            value.layout_indices.get(layer).map_or(value.chain.len(), |&index| index as usize + 1);
-        for index in start..end {
+        for index in value.entries_of_layer(layer) {
             let Some(entry) = self.node(node).chain.get(index) else { return };
             let hears = NodeKinds::DRAW | NodeKinds::OBSERVED;
             if entry.kinds.all(hears) && entry.state & entry_state::ATTACHED != 0 {
@@ -569,6 +611,7 @@ impl UiTree {
     /// sees, as Compose does.
     pub(crate) fn place(&mut self, node: NodeId, layer: usize, position: IntOffset) {
         let value = self.node_mut(node);
+        let told = value.kinds.any(NodeKinds::ON_PLACED);
         let entry = &mut value.layers[layer];
         entry.position = position;
         let offset = position + centering(entry);
@@ -582,6 +625,9 @@ impl UiTree {
         }
         if moved {
             self.invalidate_position(node, layer);
+        }
+        if told {
+            self.placed_layers.push((node, layer as u32));
         }
     }
 }
