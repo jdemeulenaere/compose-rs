@@ -273,3 +273,13 @@ fn a_negative_animator_duration_scale_is_0() {
     assert_eq!(compose_ui::motion_duration_scale(), 0.5);
     compose_android::set_animator_duration_scale(1.0);
 }
+
+/// `ComposeRsView` sends `Lifecycle.State`'s ordinals (`Lifecycle.kt`).
+#[test]
+fn the_lifecycle_states_are_in_androidx_s_order() {
+    use compose_lifecycle::LifecycleState::*;
+    let states = [Destroyed, Initialized, Created, Started, Resumed];
+    for (ordinal, state) in states.iter().enumerate() {
+        assert_eq!(compose_android::lifecycle_state(ordinal as i32), *state);
+    }
+}

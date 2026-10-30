@@ -666,6 +666,7 @@ dependencies = [
  "compose-animation",
  "compose-desktop",
  "compose-foundation",
+ "compose-lifecycle",
  "compose-material3",
  "compose-navigation",
  "compose-runtime",
@@ -681,6 +682,7 @@ version = "0.1.0"
 dependencies = [
  "compose-animation",
  "compose-foundation",
+ "compose-lifecycle",
  "compose-runtime",
  "compose-test",
  "compose-ui",
@@ -721,6 +723,7 @@ dependencies = [
  "accesskit_winit",
  "arboard",
  "compose-foundation",
+ "compose-lifecycle",
  "compose-runtime",
  "compose-skia",
  "compose-ui",
@@ -738,6 +741,16 @@ dependencies = [
  "compose-test",
  "compose-ui",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "compose-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-runtime",
+ "compose-test",
+ "compose-ui",
 ]
 
 [[package]]
@@ -806,6 +819,7 @@ dependencies = [
 name = "compose-ui"
 version = "0.1.0"
 dependencies = [
+ "compose-lifecycle",
  "compose-runtime",
  "futures-core",
  "log",

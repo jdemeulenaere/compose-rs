@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 log.workspace = true
 compose-runtime.workspace = true
+compose-lifecycle.workspace = true
 compose-ui.workspace = true
 compose-skia.workspace = true
 winit = "0.30"

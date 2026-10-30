@@ -683,7 +683,7 @@ One entry per feature. Sizes:
   - a per-entry retained store (the `ViewModelStoreOwner` analogue, cleared on pop);
   - a per-entry saved-state registry.
 - **Tests:** `NavBackStackEntryProviderTest` (3), `NavHostTest` (~10), `NavDisplayLifecycleTest`.
-- **Dependencies:** a lifecycle model in compose-rs (ui/platform area; there is none).
+- **Dependencies:** a lifecycle model in compose-rs: `compose-lifecycle` (D837).
 
 <a id="navigation3"></a>
 #### navigation3: four features (a decision for the user before any work)

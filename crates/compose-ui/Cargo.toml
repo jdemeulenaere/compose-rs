@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 log.workspace = true
 compose-runtime.workspace = true
+compose-lifecycle.workspace = true
 # The `Stream` trait an interaction source's collector is (D1050), as the runtime's flows will be.
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 smallvec = { version = "1.13", features = ["const_new", "union"] }

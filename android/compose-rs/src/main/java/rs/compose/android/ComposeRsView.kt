@@ -236,6 +236,8 @@ class ComposeRsView @JvmOverloads constructor(
         insets.attach()
     }
 
+    private var lifecycleSource: LifecycleSource? = null
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ComposeRsRuntime.attach(this)
@@ -268,6 +270,10 @@ class ComposeRsView @JvmOverloads constructor(
     private fun create() {
         if (host != 0L) return
         val metrics = resources.displayMetrics
+        val lifecycle = LifecycleSource.of(this) { state ->
+            if (host != 0L) ComposeRsNative.setLifecycleState(host, state)
+        }
+        lifecycleSource = lifecycle
         host = ComposeRsNative.create(
             this,
             measurer,
@@ -280,6 +286,7 @@ class ComposeRsView @JvmOverloads constructor(
             layoutDirection == LAYOUT_DIRECTION_RTL,
             savedState,
             optimizations,
+            lifecycle.state,
         )
         savedState = null
         sendConfiguration(resources.configuration)
@@ -294,6 +301,8 @@ class ComposeRsView @JvmOverloads constructor(
 
     private fun destroy() {
         if (host == 0L) return
+        lifecycleSource?.remove()
+        lifecycleSource = null
         // Given back if it's composed again (attached again, or a new view of the same id).
         savedState = ComposeRsNative.saveState(host)
         cancelFrames()

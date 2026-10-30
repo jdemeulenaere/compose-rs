@@ -25,7 +25,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 28 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 49 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 50 |
 
 ## Index by number
 
@@ -479,6 +479,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D834 | [ui-and-layout](decisions/ui-and-layout.md#d834) | current |
 | D835 | [api-and-tooling](decisions/api-and-tooling.md#d835) | current |
 | D836 | [android-host-and-performance](decisions/android-host-and-performance.md#d836) | current |
+| D837 | [api-and-tooling](decisions/api-and-tooling.md#d837) | current |
 | D850 | [ui-and-layout](decisions/ui-and-layout.md#d850) | current |
 | D851 | [api-and-tooling](decisions/api-and-tooling.md#d851) | current |
 | D852 | [ui-and-layout](decisions/ui-and-layout.md#d852) | current |

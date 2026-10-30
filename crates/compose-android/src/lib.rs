@@ -32,6 +32,20 @@ mod services;
 
 pub use jni;
 
+/// A lifecycle state from the ordinal of AndroidX's `Lifecycle.State`, which has the same order.
+/// `ComposeRsView` sends what it follows (D837).
+#[doc(hidden)]
+pub fn lifecycle_state(ordinal: i32) -> compose_lifecycle::LifecycleState {
+    use compose_lifecycle::LifecycleState::*;
+    match ordinal {
+        0 => Destroyed,
+        1 => Initialized,
+        2 => Created,
+        3 => Started,
+        _ => Resumed,
+    }
+}
+
 /// Animations on this thread (the main thread) follow Android's animator duration scale, as
 /// Compose's `MotionDurationScale` does (D836). The setting holds what `adb` puts in it: a negative
 /// one, which Compose would throw on while animating, is 0, not a crash of the app.

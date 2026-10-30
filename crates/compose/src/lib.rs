@@ -32,6 +32,12 @@ pub mod foundation {
     pub use compose_foundation::*;
 }
 
+/// `androidx.lifecycle`: `Lifecycle`, `LifecycleRegistry`, `LOCAL_LIFECYCLE_OWNER`, the lifecycle
+/// effects.
+pub mod lifecycle {
+    pub use compose_lifecycle::*;
+}
+
 /// `androidx.compose.animation` and `animation.core`: `Animatable`, `tween`, `spring`, easings,
 /// `animate_*_as_state`, infinite transitions.
 pub mod animation {

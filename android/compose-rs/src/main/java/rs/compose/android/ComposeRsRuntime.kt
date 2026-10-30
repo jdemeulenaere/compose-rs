@@ -1,5 +1,6 @@
 package rs.compose.android
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.database.ContentObserver
 import android.net.Uri
@@ -67,6 +68,9 @@ object ComposeRsRuntime {
     private val animatorScaleObserver = object : ContentObserver(handler) {
         override fun onChange(selfChange: Boolean, uri: Uri?) = passAnimatorScale()
     }
+
+    /** The application's context, which lives as long as this object. */
+    @SuppressLint("StaticFieldLeak")
     private var animatorScaleContext: Context? = null
 
     private fun passAnimatorScale() {

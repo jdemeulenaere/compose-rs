@@ -5,6 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use compose_lifecycle::{LifecycleOwner, LifecycleRegistry, LifecycleState};
 use compose_runtime::Composition;
 
 use crate::display_list::FlatDisplayList;
@@ -34,6 +35,9 @@ type Waker = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 /// A composition of a UI tree in a root of a given size: the core every host shares.
 pub struct UiHost {
     composition: Composition,
+    /// After `composition`: dropped after it, as a window's lifecycle ends once its composition is
+    /// disposed.
+    lifecycle: HostLifecycle,
     size: IntSize,
     frame_requested: Rc<Cell<bool>>,
     /// A frame is running: what its tasks write is drawn by it.
@@ -138,6 +142,7 @@ impl UiHost {
         composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_source(insets_source));
         UiHost {
             composition,
+            lifecycle: HostLifecycle::new(),
             size,
             frame_requested,
             framing,
@@ -252,6 +257,24 @@ impl UiHost {
             self.size = size;
             self.window_size.set(size);
             self.wake();
+        }
+    }
+
+    /// The host's lifecycle, what `LOCAL_LIFECYCLE_OWNER` gives its content.
+    pub fn lifecycle(&self) -> compose_lifecycle::Lifecycle {
+        self.lifecycle.0.lifecycle()
+    }
+
+    /// Moves the host's lifecycle, as its platform's does (an activity's, a window's focus). Once
+    /// destroyed, it stays so. `Initialized` is `Created`: a lifecycle can't go back to it.
+    pub fn set_lifecycle_state(&self, state: LifecycleState) {
+        let registry = &self.lifecycle.0;
+        if registry.current_state() != LifecycleState::Destroyed {
+            registry.set_current_state(if state == LifecycleState::Initialized {
+                LifecycleState::Created
+            } else {
+                state
+            });
         }
     }
 
@@ -415,6 +438,7 @@ impl UiHost {
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
             let constants = HostLocals {
+                lifecycle: self.lifecycle.0.lifecycle(),
                 scheduler: self.prefetch_scheduler.clone(),
                 back_dispatcher: self.back_dispatcher.clone(),
                 saveable_registry: self.saveable_registry.clone(),
@@ -925,7 +949,28 @@ impl UiHost {
 }
 
 /// The root's locals that never change, provided outermost.
+/// The host's lifecycle, as an Android view's owner or a desktop window's: resumed from the start
+/// unless the host says otherwise (a test's, D837), destroyed with it.
+struct HostLifecycle(LifecycleRegistry);
+
+impl HostLifecycle {
+    fn new() -> HostLifecycle {
+        let registry = LifecycleRegistry::new();
+        registry.set_current_state(LifecycleState::Resumed);
+        HostLifecycle(registry)
+    }
+}
+
+impl Drop for HostLifecycle {
+    fn drop(&mut self) {
+        if self.0.current_state() != LifecycleState::Destroyed {
+            self.0.set_current_state(LifecycleState::Destroyed);
+        }
+    }
+}
+
 struct HostLocals {
+    lifecycle: compose_lifecycle::Lifecycle,
     scheduler: crate::prefetch::PrefetchScheduler,
     back_dispatcher: crate::back::OnBackPressedDispatcher,
     saveable_registry: compose_runtime::SaveableStateRegistry,
@@ -935,35 +980,22 @@ struct HostLocals {
 }
 
 impl HostLocals {
+    /// One provider for them all: each group more is what every local read above the content's
+    /// own providers walks (D839).
     fn provide(&self, content: impl FnOnce()) {
-        use compose_runtime::CompositionLocalProvider as Provide;
-        let scheduler =
-            crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(self.scheduler.clone()));
-        Provide(scheduler, || {
-            let dispatcher = crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
-                .provides(Some(self.back_dispatcher.clone()));
-            Provide(dispatcher, || {
-                let registry = compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
-                    .provides(Some(self.saveable_registry.clone()));
-                Provide(registry, || {
-                    Provide(
-                        crate::configuration::LOCAL_HOST_PROPS.provides(self.props.clone()),
-                        || {
-                            Provide(
-                                crate::configuration::LOCAL_HOST_EVENTS
-                                    .provides(self.events.clone()),
-                                || {
-                                    Provide(
-                                        crate::configuration::LOCAL_WINDOW_INSETS_SOURCE
-                                            .provides(self.insets.clone()),
-                                        content,
-                                    )
-                                },
-                            )
-                        },
-                    )
-                })
-            })
-        })
+        compose_runtime::CompositionLocalProvider(
+            (
+                compose_lifecycle::LOCAL_LIFECYCLE_OWNER.provides(self.lifecycle.clone()),
+                crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(self.scheduler.clone())),
+                crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
+                    .provides(Some(self.back_dispatcher.clone())),
+                compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
+                    .provides(Some(self.saveable_registry.clone())),
+                crate::configuration::LOCAL_HOST_PROPS.provides(self.props.clone()),
+                crate::configuration::LOCAL_HOST_EVENTS.provides(self.events.clone()),
+                crate::configuration::LOCAL_WINDOW_INSETS_SOURCE.provides(self.insets.clone()),
+            ),
+            content,
+        )
     }
 }

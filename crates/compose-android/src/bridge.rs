@@ -500,6 +500,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     rtl: jboolean,
     saved: JByteArray<'local>,
     optimizations: jlong,
+    lifecycle_state: jint,
 ) -> jlong {
     with_env(&mut env, |env| {
         create(
@@ -514,6 +515,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
             rtl,
             &saved,
             optimizations,
+            lifecycle_state,
         )
     })
 }
@@ -531,6 +533,7 @@ fn create(
     rtl: bool,
     saved: &JByteArray,
     optimizations: jlong,
+    lifecycle_state: jint,
 ) -> jlong {
     if WAKE.get().is_none() {
         let class_ref = env.new_global_ref(class).expect("compose-android: a global ref");
@@ -588,6 +591,8 @@ fn create(
     ui.set_keep_unplaced_groups(true);
     let optimizations = Optimizations::from_bits(optimizations as u64);
     ui.set_optimizations(optimizations);
+    // Before the content: its effects hear no resume the owner hasn't had.
+    ui.set_lifecycle_state(crate::lifecycle_state(lifecycle_state));
     crate::services::install(env, view, &view_ref, &ui);
     if rtl {
         ui.set_layout_direction(LayoutDirection::Rtl);
@@ -746,6 +751,19 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_resize(
 ) {
     // SAFETY: a live host, on the main thread.
     unsafe { self::host(host) }.ui.resize(IntSize::new(width, height));
+}
+
+/// `ComposeRsNative.setLifecycleState(host, state)`: where the view's lifecycle owner is, by the
+/// ordinal of `Lifecycle.State` (`crate::lifecycle_state`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setLifecycleState(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    state: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    unsafe { self::host(host) }.ui.set_lifecycle_state(crate::lifecycle_state(state));
 }
 
 /// `ComposeRsNative.setAnimatorDurationScale(scale)`: the setting's value (`ComposeRsRuntime.kt`

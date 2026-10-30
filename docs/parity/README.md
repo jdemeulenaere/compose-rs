@@ -21,6 +21,7 @@ One per area. Each lists every Compose test file with its status, the public API
 | [foundation-layout-lazy](foundation-layout-lazy.md) | foundation-layout, gestures, scrolling, lazy layouts, pager |
 | [foundation-text-misc](foundation-text-misc.md) | text, text fields, selection, clickable, interactions, images, shapes and the rest of foundation |
 | [animation-navigation](animation-navigation.md) | animation-core, animation, animation-graphics, Navigation 3 |
+| [lifecycle](lifecycle.md) | androidx.lifecycle: lifecycles and ViewModels (D704) |
 | [material3](material3.md) | Material 3 |
 
 Statuses: `covered` (compose-rs tests exercise it, cited), `port` (the feature exists, tests to adapt), `partial`, `feature:<name>` (waits on a missing feature), `n/a: <reason>`, and, once done, `ported` (with the compose-rs test files).

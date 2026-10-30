@@ -484,6 +484,15 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if let Some(shown) = self.windows.get_mut(&id) {
             shown.accessibility.process_event(&shown.window, &event);
+            if matches!(event, WindowEvent::Focused(_) | WindowEvent::Occluded(_)) {
+                let focused = match event {
+                    WindowEvent::Focused(focused) => focused,
+                    _ => shown.window.has_focus(),
+                };
+                let occluded = matches!(event, WindowEvent::Occluded(true))
+                    || shown.window.is_minimized().unwrap_or(false);
+                shown.host.set_lifecycle_state(window_lifecycle_state(focused, occluded));
+            }
         }
         match event {
             // The application decides: its `on_close_request` removes the window, or not.
@@ -735,6 +744,19 @@ pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
 /// The window's configuration for its content (`LOCAL_CONFIGURATION`): its size in dp, its
 /// density, and the system's appearance as winit reports it (light when unknown). Desktop
 /// windows have no insets: they stay zero.
+/// A window's lifecycle, as Compose Desktop's: focused it's resumed, in the background started,
+/// minimized or hidden created (D837).
+fn window_lifecycle_state(focused: bool, occluded: bool) -> compose_lifecycle::LifecycleState {
+    use compose_lifecycle::LifecycleState::*;
+    if occluded {
+        Created
+    } else if focused {
+        Resumed
+    } else {
+        Started
+    }
+}
+
 fn update_configuration(host: &mut UiHost, window: &winit::window::Window) {
     let physical = window.inner_size();
     let dark = window.theme() == Some(winit::window::Theme::Dark);
@@ -769,5 +791,18 @@ mod tests {
         // The window's host and renderer before `set_optimizations` gives them the window's.
         assert_eq!(UiHost::headless(10, 10).optimizations(), recommended);
         assert_eq!(RasterRenderer::new(1, 1).optimizations(), recommended);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use compose_lifecycle::LifecycleState::*;
+
+    #[test]
+    fn a_window_s_lifecycle_follows_its_focus_and_visibility() {
+        assert_eq!(super::window_lifecycle_state(true, false), Resumed);
+        assert_eq!(super::window_lifecycle_state(false, false), Started);
+        assert_eq!(super::window_lifecycle_state(true, true), Created);
+        assert_eq!(super::window_lifecycle_state(false, true), Created);
     }
 }

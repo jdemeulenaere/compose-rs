@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "examples/feed", "examples/guide", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-lifecycle", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "examples/feed", "examples/guide", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
-default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/guide"]
+default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-lifecycle", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/guide"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,6 +18,7 @@ unused_must_use = "deny"
 [workspace.dependencies]
 compose-macros = { path = "crates/compose-macros" }
 compose-runtime = { path = "crates/compose-runtime" }
+compose-lifecycle = { path = "crates/compose-lifecycle" }
 compose-ui = { path = "crates/compose-ui" }
 compose-test = { path = "crates/compose-test" }
 compose-skia = { path = "crates/compose-skia" }

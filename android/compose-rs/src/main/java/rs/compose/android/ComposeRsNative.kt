@@ -17,6 +17,7 @@ internal object ComposeRsNative {
         rtl: Boolean,
         saved: ByteArray?,
         optimizations: Long,
+        lifecycleState: Int,
     ): Long
 
     @JvmStatic external fun destroy(host: Long)
@@ -36,6 +37,9 @@ internal object ComposeRsNative {
     @JvmStatic external fun resize(host: Long, width: Int, height: Int)
 
     @JvmStatic external fun setDensity(host: Long, density: Float, fontScale: Float)
+
+    /** Where the view's lifecycle is, by the ordinal of AndroidX's `Lifecycle.State`. */
+    @JvmStatic external fun setLifecycleState(host: Long, state: Int)
 
     /** `Settings.Global.ANIMATOR_DURATION_SCALE`: the main thread's animations follow it. */
     @JvmStatic external fun setAnimatorDurationScale(scale: Float)
