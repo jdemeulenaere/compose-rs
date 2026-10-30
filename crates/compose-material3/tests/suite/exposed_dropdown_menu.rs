@@ -294,43 +294,42 @@ fn expands_if_the_touch_moves_inside() {
 fn does_not_expand_if_the_touch_is_part_of_a_scroll() {
     let state = mutable_state_of(false);
     let expanded = state.handle();
+    let scroll = Rc::new(Cell::new(None));
+    let scroll_out = scroll.clone();
     let mut ui = ComposeTestRule::sized(IntSize::new(600, 400), move || {
         let _ = &state;
+        let scroll_out = scroll_out.clone();
         MaterialTheme!({
-            Column!(
-                modifier = Modifier.fill_max_size().vertical_scroll(remember_scroll_state(0)),
-                {
-                    ExposedDropdownMenuBox!(
-                        expanded.get(),
-                        move |value: bool| expanded.set(value),
-                        |scope: ExposedDropdownMenuBoxScope| {
-                            TextField!(
-                                String::new(),
-                                |_: String| {},
-                                modifier = Modifier
-                                    .menu_anchor(
-                                        &scope,
-                                        ExposedDropdownMenuAnchorType::PrimaryEditable
-                                    )
-                                    .test_tag(TF)
-                            );
-                            ExposedDropdownMenu!(
-                                scope.clone(),
-                                expanded.get(),
-                                move || expanded.set(false),
-                                |_: ColumnScope| {
-                                    DropdownMenuItem!(
-                                        { Text!(OPTION) },
-                                        || {},
-                                        modifier = Modifier.test_tag(ITEM)
-                                    );
-                                }
-                            );
-                        }
-                    );
-                    Spacer!(Modifier.height(2000.dp()));
-                }
-            );
+            let page = remember_scroll_state(0);
+            scroll_out.set(Some(page));
+            Column!(modifier = Modifier.fill_max_size().vertical_scroll(page), {
+                ExposedDropdownMenuBox!(
+                    expanded.get(),
+                    move |value: bool| expanded.set(value),
+                    |scope: ExposedDropdownMenuBoxScope| {
+                        TextField!(
+                            String::new(),
+                            |_: String| {},
+                            modifier = Modifier
+                                .menu_anchor(&scope, ExposedDropdownMenuAnchorType::PrimaryEditable)
+                                .test_tag(TF)
+                        );
+                        ExposedDropdownMenu!(
+                            scope.clone(),
+                            expanded.get(),
+                            move || expanded.set(false),
+                            |_: ColumnScope| {
+                                DropdownMenuItem!(
+                                    { Text!(OPTION) },
+                                    || {},
+                                    modifier = Modifier.test_tag(ITEM)
+                                );
+                            }
+                        );
+                    }
+                );
+                Spacer!(Modifier.height(2000.dp()));
+            });
         });
     });
     ui.on_node_with_tag(TF).assert_is_displayed();
@@ -345,6 +344,7 @@ fn does_not_expand_if_the_touch_is_part_of_a_scroll() {
         touch.up();
     });
     assert!(!expanded.get());
+    assert!(scroll.get().unwrap().value() > 0, "the page scrolled");
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 

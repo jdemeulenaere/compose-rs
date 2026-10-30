@@ -258,3 +258,114 @@ fn a_key_a_preview_consumed_types_nothing() {
     ui.wait_for_idle();
     assert_eq!(*value.borrow(), "yy");
 }
+
+/// A text field of 400 by 100 in a column that scrolls, tagged, and what's scrolled.
+fn field_in_a_scrolling_page() -> (ComposeTestRule, ScrollState) {
+    let out = Rc::new(std::cell::Cell::new(None));
+    let scroll = out.clone();
+    let mut ui = compose_test(move || {
+        let state = remember_scroll_state(0);
+        scroll.set(Some(state));
+        Column!(modifier = compose_ui::Modifier.fill_max_size().vertical_scroll(state), {
+            let text = remember(|| mutable_state_of("hello world".to_string()));
+            BasicTextField!(
+                text.get(),
+                move |new: String| text.set(new),
+                modifier = compose_ui::Modifier.size((400.dp(), 100.dp())).test_tag("field")
+            );
+            Spacer!(compose_ui::Modifier.height(3000.dp()));
+        });
+    });
+    ui.wait_for_idle();
+    let state = out.get().unwrap();
+    (ui, state)
+}
+
+fn text_after_typing(ui: &mut ComposeTestRule) -> String {
+    ui.type_text("X");
+    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).unwrap().to_string()
+}
+
+fn finger_drag(ui: &mut ComposeTestRule, from: compose_ui::Offset, by: compose_ui::Offset) {
+    ui.on_node_with_tag("field").perform_touch_input(|touch| {
+        touch.down(from);
+        for _ in 0..10 {
+            touch.move_by(compose_ui::Offset::new(by.x / 10.0, by.y / 10.0));
+        }
+        touch.up();
+    });
+    ui.wait_for_idle();
+}
+
+/// A finger dragged on a field scrolls the page around it, and it's no tap.
+#[test]
+fn a_finger_dragged_on_a_text_field_scrolls_the_page() {
+    let (mut ui, state) = field_in_a_scrolling_page();
+    let from = compose_ui::Offset::new(100.0, 90.0);
+    finger_drag(&mut ui, from, compose_ui::Offset::new(0.0, -80.0));
+    assert!(state.value() > 40, "scrolled {}", state.value());
+    ui.on_node_with_tag("field").assert_is_not_focused();
+}
+
+/// With nothing taking it, a finger's wobble past the slop is still a tap, as `detectTapAndPress`,
+/// and doesn't select: a first press selects after a long press in Compose.
+#[test]
+fn a_fingers_wobble_past_the_slop_still_taps_and_does_not_select() {
+    let mut ui = compose_test(|| {
+        let text = remember(|| mutable_state_of("hello world".to_string()));
+        BasicTextField!(
+            text.get(),
+            move |new: String| text.set(new),
+            modifier = compose_ui::Modifier.size((400.dp(), 100.dp())).test_tag("field")
+        );
+    });
+    ui.wait_for_idle();
+    // Over the text, so that a drag would select.
+    let from = compose_ui::Offset::new(1.0, 8.0);
+    finger_drag(&mut ui, from, compose_ui::Offset::new(30.0, 0.0));
+    ui.on_node_with_tag("field").assert_is_focused();
+    // Nothing selected: what's typed replaces nothing.
+    assert_eq!(text_after_typing(&mut ui).chars().count(), 12);
+}
+
+/// A finger leaving the field is no tap, as `waitForUpOrCancellation`.
+#[test]
+fn a_finger_leaving_the_field_is_no_tap() {
+    let mut ui = compose_test(|| {
+        let text = remember(|| mutable_state_of("hello world".to_string()));
+        BasicTextField!(
+            text.get(),
+            move |new: String| text.set(new),
+            modifier = compose_ui::Modifier.size((400.dp(), 100.dp())).test_tag("field")
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(100.0, 50.0));
+        touch.move_by(compose_ui::Offset::new(0.0, 80.0));
+        touch.move_by(compose_ui::Offset::new(0.0, -80.0));
+        touch.up();
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").assert_is_not_focused();
+}
+
+/// A double tap's drag selects by words, whatever scrolls around, as
+/// `touchSelectionSubsequentPress`.
+#[test]
+fn a_fingers_second_press_drags_by_words_and_the_page_stays() {
+    let (mut ui, state) = field_in_a_scrolling_page();
+    ui.on_node_with_tag("field").perform_touch_input(|touch| {
+        touch.click_at(compose_ui::Offset::new(10.0, 10.0));
+    });
+    ui.on_node_with_tag("field").perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(10.0, 10.0));
+        touch.move_by(compose_ui::Offset::new(60.0, 0.0));
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.value(), 0);
+    // A word selected: what's typed replaces it.
+    assert!(text_after_typing(&mut ui).chars().count() < 12);
+}

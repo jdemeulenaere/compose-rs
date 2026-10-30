@@ -1186,7 +1186,19 @@ impl PointerInputModifierNode for TextFieldNode {
         bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        if pass != PointerEventPass::Main || !self.enabled {
+        if !self.enabled {
+            return;
+        }
+        // Something around took a move of the press (a page scrolling): no tap, as
+        // `detectTapAndPress`, the field having left the moves to it (below).
+        if pass == PointerEventPass::Final
+            && event.kind == PointerEventType::Move
+            && event.consumed
+            && self.press.as_ref().is_some_and(|press| !press.dragging)
+        {
+            self.press = None;
+        }
+        if pass != PointerEventPass::Main {
             return;
         }
         let inside = event.position.x >= 0.0
@@ -1229,12 +1241,18 @@ impl PointerInputModifierNode for TextFieldNode {
             }
             PointerEventType::Move if event.pressed => {
                 let Some(press) = &mut self.press else { return };
-                // A finger's press wobbles: it's still a tap within the touch slop, for what's
-                // watching for one (a menu's anchor).
-                let slop = match event.pointer_type {
-                    compose_ui::PointerType::Touch => context.view_configuration().touch_slop,
-                    _ => 1.0,
-                };
+                let touch = event.pointer_type != compose_ui::PointerType::Mouse;
+                // A finger's first press doesn't drag: the moves are for what's around, as
+                // `touchSelectionFirstPress`, and it's still a tap unless it leaves the field.
+                if touch && press.unit == Unit::Character {
+                    if !inside {
+                        self.press = None;
+                    }
+                    return;
+                }
+                // A later press drags by words or lines past the slop, as
+                // `touchSelectionSubsequentPress`.
+                let slop = if touch { context.view_configuration().touch_slop } else { 1.0 };
                 if !press.dragging
                     && (at - press.at).x.abs() < slop
                     && (at - press.at).y.abs() < slop
