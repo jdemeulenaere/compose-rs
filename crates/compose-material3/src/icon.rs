@@ -160,10 +160,338 @@ impl compose_runtime::ComposeArg for IconToggleButtonColors {
     }
 }
 
+/// An icon button's shape, resting and pressed, as Compose's `IconButtonShapes`: its corners move
+/// between them (on default effects, so as not to bounce); the same two don't read the press.
+#[derive(Clone, PartialEq, Debug)]
+pub struct IconButtonShapes {
+    pub shape: Shape,
+    pub pressed_shape: Shape,
+}
+
+impl compose_runtime::ComposeArg for IconButtonShapes {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl std::hash::Hash for IconButtonShapes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        crate::animated_shape::hash_shapes([&self.shape, &self.pressed_shape], state);
+    }
+}
+
+impl IconButtonShapes {
+    /// As `shapeForInteraction`.
+    fn for_state(&self, interaction_source: &MutableInteractionSource) -> Shape {
+        if self.shape == self.pressed_shape {
+            return self.shape.clone();
+        }
+        let target = if interaction_source.is_pressed() {
+            self.pressed_shape.clone()
+        } else {
+            self.shape.clone()
+        };
+        let corner_based = self.shape.corners().is_some() && self.pressed_shape.corners().is_some();
+        compose_runtime::key(self.clone(), || animated_if(corner_based, target))
+    }
+}
+
+/// An icon toggle button's shape, resting, pressed and checked, as Compose's
+/// `IconToggleButtonShapes`.
+#[derive(Clone, PartialEq, Debug)]
+pub struct IconToggleButtonShapes {
+    pub shape: Shape,
+    pub pressed_shape: Shape,
+    pub checked_shape: Shape,
+}
+
+impl compose_runtime::ComposeArg for IconToggleButtonShapes {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl std::hash::Hash for IconToggleButtonShapes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        crate::animated_shape::hash_shapes(
+            [&self.shape, &self.pressed_shape, &self.checked_shape],
+            state,
+        );
+    }
+}
+
+impl IconToggleButtonShapes {
+    /// As `shapeForInteraction`: pressed, then checked.
+    fn for_state(&self, checked: bool, interaction_source: &MutableInteractionSource) -> Shape {
+        if self.shape == self.pressed_shape && self.shape == self.checked_shape {
+            return self.shape.clone();
+        }
+        let target = if interaction_source.is_pressed() {
+            self.pressed_shape.clone()
+        } else if checked {
+            self.checked_shape.clone()
+        } else {
+            self.shape.clone()
+        };
+        let corner_based = self.shape.corners().is_some()
+            && self.pressed_shape.corners().is_some()
+            && self.checked_shape.corners().is_some();
+        compose_runtime::key(self.clone(), || animated_if(corner_based, target))
+    }
+}
+
+/// `target`, its corners moving to it if it has corners and its fellows do.
+fn animated_if(corner_based: bool, target: Shape) -> Shape {
+    if corner_based {
+        crate::animated_shape::remember_animated_shape(
+            target,
+            MaterialTheme::motion_scheme().default_effects_spec(),
+        )
+    } else {
+        target
+    }
+}
+
+/// An icon button's interaction source: with `shapes` one to read the press from, without, as given,
+/// its clickable making its own; in a group either way, so what's remembered after doesn't shift.
+fn hoisted_for_shapes(
+    given: Option<MutableInteractionSource>,
+    shaped: bool,
+) -> Option<MutableInteractionSource> {
+    compose_runtime::key(shaped, || {
+        if shaped { Some(crate::components::remembered_interaction_source(given)) } else { given }
+    })
+}
+
+/// How wide an icon button is for its height, as Compose's `IconButtonWidthOption`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IconButtonWidthOption {
+    Narrow,
+    Uniform,
+    Wide,
+}
+
+impl compose_runtime::ComposeArg for IconButtonWidthOption {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// An icon button's size from its icon, its height and the space each side for each option.
+const fn container_size(
+    icon: f32,
+    height: f32,
+    [narrow, uniform, wide]: [f32; 3],
+    option: IconButtonWidthOption,
+) -> compose_ui::DpSize {
+    let space = match option {
+        IconButtonWidthOption::Narrow => narrow,
+        IconButtonWidthOption::Uniform => uniform,
+        IconButtonWidthOption::Wide => wide,
+    };
+    compose_ui::DpSize::new(Dp(icon + space * 2.0), Dp(height))
+}
+
+/// The theme's shape of a size's token, as `IconButtonDefaults` has one for each.
+macro_rules! shape_tokens {
+    ($($(#[$doc:meta])* $name:ident => $field:ident,)*) => {
+        $(
+            $(#[$doc])*
+            pub fn $name() -> Shape {
+                MaterialTheme::shapes().$field.clone()
+            }
+        )*
+    };
+}
+
 /// As Compose's `IconButtonDefaults`.
 pub struct IconButtonDefaults;
 
 impl IconButtonDefaults {
+    pub const EXTRA_SMALL_ICON_SIZE: Dp = Dp(20.0);
+    pub const SMALL_ICON_SIZE: Dp = Dp(24.0);
+    pub const MEDIUM_ICON_SIZE: Dp = Dp(24.0);
+    pub const LARGE_ICON_SIZE: Dp = Dp(32.0);
+    pub const EXTRA_LARGE_ICON_SIZE: Dp = Dp(40.0);
+
+    /// As `extraSmallContainerSize(widthOption)`.
+    pub const fn extra_small_container_size(option: IconButtonWidthOption) -> compose_ui::DpSize {
+        container_size(20.0, 32.0, [4.0, 6.0, 10.0], option)
+    }
+
+    /// As `smallContainerSize(widthOption)`.
+    pub const fn small_container_size(option: IconButtonWidthOption) -> compose_ui::DpSize {
+        container_size(24.0, 40.0, [4.0, 8.0, 14.0], option)
+    }
+
+    /// As `mediumContainerSize(widthOption)`.
+    pub const fn medium_container_size(option: IconButtonWidthOption) -> compose_ui::DpSize {
+        container_size(24.0, 56.0, [12.0, 16.0, 24.0], option)
+    }
+
+    /// As `largeContainerSize(widthOption)`.
+    pub const fn large_container_size(option: IconButtonWidthOption) -> compose_ui::DpSize {
+        container_size(32.0, 96.0, [16.0, 32.0, 48.0], option)
+    }
+
+    /// As `extraLargeContainerSize(widthOption)`.
+    pub const fn extra_large_container_size(option: IconButtonWidthOption) -> compose_ui::DpSize {
+        container_size(40.0, 136.0, [32.0, 48.0, 72.0], option)
+    }
+
+    shape_tokens! {
+        /// As `extraSmallSquareShape`.
+        extra_small_square_shape => medium,
+        /// As `extraSmallPressedShape`.
+        extra_small_pressed_shape => small,
+        /// As `extraSmallSelectedRoundShape`.
+        extra_small_selected_round_shape => medium,
+        /// As `smallSquareShape`.
+        small_square_shape => medium,
+        /// As `smallPressedShape`.
+        small_pressed_shape => small,
+        /// As `smallSelectedRoundShape`.
+        small_selected_round_shape => medium,
+        /// As `mediumSquareShape`.
+        medium_square_shape => large,
+        /// As `mediumPressedShape`.
+        medium_pressed_shape => medium,
+        /// As `mediumSelectedRoundShape`.
+        medium_selected_round_shape => large,
+        /// As `largeSquareShape`.
+        large_square_shape => extra_large,
+        /// As `largePressedShape`.
+        large_pressed_shape => large,
+        /// As `largeSelectedRoundShape`.
+        large_selected_round_shape => extra_large,
+        /// As `extraLargeSquareShape`.
+        extra_large_square_shape => extra_large,
+        /// As `extraLargePressedShape`.
+        extra_large_pressed_shape => large,
+        /// As `extraLargeSelectedRoundShape`.
+        extra_large_selected_round_shape => extra_large,
+    }
+
+    /// As `extraSmallRoundShape`.
+    pub fn extra_small_round_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `extraSmallSelectedSquareShape`.
+    pub fn extra_small_selected_square_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `smallRoundShape`.
+    pub fn small_round_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `smallSelectedSquareShape`.
+    pub fn small_selected_square_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `mediumRoundShape`.
+    pub fn medium_round_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `mediumSelectedSquareShape`.
+    pub fn medium_selected_square_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `largeRoundShape`.
+    pub fn large_round_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `largeSelectedSquareShape`.
+    pub fn large_selected_square_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `extraLargeRoundShape`.
+    pub fn extra_large_round_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `extraLargeSelectedSquareShape`.
+    pub fn extra_large_selected_square_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
+    /// As `shapes()`: a circle, its corners coming in when pressed. Change one with struct update.
+    pub fn shapes() -> IconButtonShapes {
+        IconButtonShapes {
+            shape: Self::small_round_shape(),
+            pressed_shape: Self::small_pressed_shape(),
+        }
+    }
+
+    /// As `toggleableShapes()`: a circle, a rounded square checked.
+    pub fn toggleable_shapes() -> IconToggleButtonShapes {
+        IconToggleButtonShapes {
+            shape: Self::small_round_shape(),
+            pressed_shape: Self::small_pressed_shape(),
+            checked_shape: Self::small_selected_round_shape(),
+        }
+    }
+
+    /// As `iconButtonVibrantColors()`: not the local content color but the tokens.
+    pub fn icon_button_vibrant_colors() -> IconButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        IconButtonColors {
+            container_color: Color::TRANSPARENT,
+            content_color: scheme.on_surface_variant,
+            disabled_container_color: Color::TRANSPARENT,
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// As `iconToggleButtonVibrantColors()`.
+    pub fn icon_toggle_button_vibrant_colors() -> IconToggleButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        IconToggleButtonColors {
+            container_color: Color::TRANSPARENT,
+            content_color: scheme.on_surface_variant,
+            disabled_container_color: Color::TRANSPARENT,
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            checked_container_color: Color::TRANSPARENT,
+            checked_content_color: scheme.primary,
+        }
+    }
+
+    /// As `outlinedIconButtonVibrantColors()`.
+    pub fn outlined_icon_button_vibrant_colors() -> IconButtonColors {
+        IconButtonDefaults::icon_button_vibrant_colors()
+    }
+
+    /// As `outlinedIconToggleButtonVibrantColors()`.
+    pub fn outlined_icon_toggle_button_vibrant_colors() -> IconToggleButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        IconToggleButtonColors {
+            checked_container_color: scheme.inverse_surface,
+            checked_content_color: scheme.inverse_on_surface,
+            ..IconButtonDefaults::icon_toggle_button_vibrant_colors()
+        }
+    }
+
+    /// As `outlinedIconButtonVibrantBorder(enabled)`.
+    pub fn outlined_icon_button_vibrant_border(enabled: bool) -> BorderStroke {
+        let outline = MaterialTheme::color_scheme().outline_variant;
+        BorderStroke::new(1.dp(), if enabled { outline } else { outline.with_alpha(0.38) })
+    }
+
+    /// As `outlinedIconToggleButtonVibrantBorder(enabled, checked)`.
+    pub fn outlined_icon_toggle_button_vibrant_border(
+        enabled: bool,
+        checked: bool,
+    ) -> Option<BorderStroke> {
+        (!checked).then(|| IconButtonDefaults::outlined_icon_button_vibrant_border(enabled))
+    }
+
     /// A circle, as `standardShape`: the standard icon buttons'.
     pub fn standard_shape() -> Shape {
         CIRCLE_SHAPE
@@ -305,8 +633,15 @@ pub fn IconButton(
     #[default(crate::IconButtonDefaults::icon_button_colors())] colors: IconButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     #[default(crate::IconButtonDefaults::standard_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconButtonShapes>>,
     content: impl Fn() + 'static,
 ) {
+    let shapes: Option<IconButtonShapes> = shapes;
+    let interaction_source = hoisted_for_shapes(interaction_source, shapes.is_some());
+    let shape = match (&shapes, &interaction_source) {
+        (Some(shapes), Some(source)) => shapes.for_state(source),
+        _ => shape,
+    };
     let color = colors.content_color(enabled);
     let mut modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
@@ -345,9 +680,15 @@ pub fn IconToggleButton(
     colors: IconToggleButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     #[default(crate::IconButtonDefaults::standard_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconToggleButtonShapes>>,
     content: impl Fn() + 'static,
 ) {
+    let shapes: Option<IconToggleButtonShapes> = shapes;
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let shape = match &shapes {
+        Some(shapes) => shapes.for_state(checked, &interaction_source),
+        None => shape,
+    };
     let color = colors.content_color(enabled, checked);
     let modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
@@ -383,12 +724,17 @@ fn surface_icon_button(
     modifier: Modifier,
     enabled: bool,
     shape: Shape,
+    shapes: Option<IconButtonShapes>,
     colors: IconButtonColors,
     border: Option<BorderStroke>,
     interaction_source: Option<MutableInteractionSource>,
     content: compose_runtime::Callback,
 ) {
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let shape = match &shapes {
+        Some(shapes) => shapes.for_state(&interaction_source),
+        None => shape,
+    };
     let click = crate::components::SurfaceClick {
         on_click,
         enabled,
@@ -426,6 +772,7 @@ pub fn FilledIconButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconButtonShapes>>,
     #[default(crate::IconButtonDefaults::filled_icon_button_colors())] colors: IconButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn() + 'static,
@@ -435,6 +782,7 @@ pub fn FilledIconButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         None,
         interaction_source,
@@ -449,6 +797,7 @@ pub fn FilledTonalIconButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconButtonShapes>>,
     #[default(crate::IconButtonDefaults::filled_tonal_icon_button_colors())]
     colors: IconButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -459,6 +808,7 @@ pub fn FilledTonalIconButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         None,
         interaction_source,
@@ -474,6 +824,7 @@ pub fn OutlinedIconButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::outlined_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconButtonShapes>>,
     #[default(crate::IconButtonDefaults::outlined_icon_button_colors())] colors: IconButtonColors,
     #[default(None)] border: Option<BorderStroke>,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -485,6 +836,7 @@ pub fn OutlinedIconButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         border,
         interaction_source,
@@ -501,12 +853,17 @@ fn surface_icon_toggle_button(
     modifier: Modifier,
     enabled: bool,
     shape: Shape,
+    shapes: Option<IconToggleButtonShapes>,
     colors: IconToggleButtonColors,
     border: Option<BorderStroke>,
     interaction_source: Option<MutableInteractionSource>,
     content: compose_runtime::Callback,
 ) {
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let shape = match &shapes {
+        Some(shapes) => shapes.for_state(checked, &interaction_source),
+        None => shape,
+    };
     let click = crate::components::SurfaceClick {
         on_click: compose_runtime::callback(move || on_checked_change(!checked)),
         enabled,
@@ -546,6 +903,7 @@ pub fn FilledIconToggleButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconToggleButtonShapes>>,
     #[default(crate::IconButtonDefaults::filled_icon_toggle_button_colors())]
     colors: IconToggleButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -557,6 +915,7 @@ pub fn FilledIconToggleButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         None,
         interaction_source,
@@ -573,6 +932,7 @@ pub fn FilledTonalIconToggleButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconToggleButtonShapes>>,
     #[default(crate::IconButtonDefaults::filled_tonal_icon_toggle_button_colors())]
     colors: IconToggleButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -584,6 +944,7 @@ pub fn FilledTonalIconToggleButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         None,
         interaction_source,
@@ -601,6 +962,7 @@ pub fn OutlinedIconToggleButton(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::outlined_shape())] shape: Shape,
+    #[default(None)] shapes: impl Into<Option<IconToggleButtonShapes>>,
     #[default(crate::IconButtonDefaults::outlined_icon_toggle_button_colors())]
     colors: IconToggleButtonColors,
     #[default(None)] border: Option<BorderStroke>,
@@ -615,6 +977,7 @@ pub fn OutlinedIconToggleButton(
         modifier,
         enabled,
         shape,
+        shapes,
         colors,
         border,
         interaction_source,

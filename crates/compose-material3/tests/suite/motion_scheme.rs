@@ -1269,6 +1269,76 @@ fn a_shaped_filter_chips_icon_comes_with_the_scheme() {
     });
 }
 
+/// With `shapes`, going on fast spatial too.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
+#[test]
+fn a_shaped_filter_chips_icon_goes_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        let shows = mutable_state_of(true);
+        let read = shows.handle();
+        let mut ui = themed(scheme, move || {
+            let leading = read.get().then_some(|| {
+                Box!(modifier = Modifier.size(18.dp()));
+            });
+            FilterChip!(
+                false,
+                || {},
+                || Box!(modifier = Modifier.size((30.dp(), 18.dp())).test_tag("label")),
+                shapes = FilterChipDefaults::shapes(),
+                leading_icon = leading,
+            );
+        });
+        shows.set(false);
+        to_halfway(&mut ui);
+        let left = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left;
+        vec![along(left, 30.0, 16.0)]
+    });
+}
+
+/// A button's and an icon button's corners on default effects, "to prevent any bounce".
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Button.kt, Button
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/IconButton.kt, shapeForInteraction
+#[test]
+fn a_buttons_corners_animate_with_the_scheme() {
+    use compose_ui::{Offset, Press, PressInteraction};
+    let run = |icon: bool, scheme: MotionScheme| {
+        let source = MutableInteractionSource::new();
+        let hoisted = source.clone();
+        let mut ui = themed(scheme, move || {
+            let hoisted = Some(hoisted.clone());
+            if icon {
+                IconButton!(
+                    || {},
+                    shapes = IconButtonShapes { shape: round(2.0), pressed_shape: round(12.0) },
+                    colors = IconButtonColors {
+                        container_color: Color::BLUE,
+                        ..IconButtonDefaults::icon_button_colors()
+                    },
+                    interaction_source = hoisted,
+                    {}
+                );
+            } else {
+                Button!(
+                    || {},
+                    shapes = ButtonShapes { shape: round(2.0), pressed_shape: round(12.0) },
+                    colors = ButtonColors {
+                        container_color: Color::BLUE,
+                        ..ButtonDefaults::button_colors()
+                    },
+                    interaction_source = hoisted,
+                    |_: RowScope| {}
+                );
+            }
+        });
+        source.try_emit(PressInteraction::Press(Press::new(Offset::ZERO)));
+        to_halfway(&mut ui);
+        vec![along(round_corner(&mut ui), 2.0, 12.0)]
+    };
+    for icon in [false, true] {
+        assert_each_property_animates_with(&[DefaultEffects], |scheme| run(icon, scheme));
+    }
+}
+
 /// A chip's corners on the fast spatial spec, as its `defaultAnimationSpec`.
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
 #[test]

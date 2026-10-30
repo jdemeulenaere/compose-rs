@@ -10,10 +10,10 @@
 StackMeasurePolicy [0,0 400x800]
   RowColumnMeasurePolicy [0,0 137x136] Modifier.padding(16.dp, 16.dp, 16.dp, 16.dp)
     BoxMeasurePolicy [0,0 105x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
-      RowColumnMeasurePolicy [0,0 105x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
+      RowColumnMeasurePolicy [0,0 105x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
         EmptyMeasurePolicy [0,2 57x20] Modifier.Text {text=["Count: 3"]}
     BoxMeasurePolicy [0,56 84x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
-      RowColumnMeasurePolicy [0,0 84x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
+      RowColumnMeasurePolicy [0,0 84x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
         EmptyMeasurePolicy [0,2 36x20] Modifier.Text {text=["Reset"]}
 > click "Reset"
 > assert "Count: 0"

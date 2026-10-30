@@ -7,6 +7,7 @@ mod alert_dialog;
 mod animated_content;
 mod app_bars;
 mod bottom_sheet_scaffold;
+mod button_shapes;
 mod buttons;
 mod checkbox;
 mod checkbox_screenshots;

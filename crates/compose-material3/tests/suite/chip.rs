@@ -1198,3 +1198,162 @@ fn the_default_shapes_and_tonal_colors_are_the_tokens() {
     assert_eq!(elevated.container_color, scheme.surface_container_low);
     assert_eq!(tonal_input.leading_icon_color, scheme.on_surface_variant);
 }
+
+/// Right to left, the ends swap, a wide chip's trailing icon at the left.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, ChipArrangement
+#[test]
+fn right_to_left_a_chips_ends_swap() {
+    use compose_ui::{LOCAL_LAYOUT_DIRECTION, LayoutDirection};
+    let mut ui = rule(|| {
+        CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl), || {
+            Box!(modifier = Modifier.fill_max_size(), {
+                AssistChip!(
+                    || {},
+                    || Text!("Label", modifier = Modifier.test_tag("label")),
+                    modifier = Modifier.width(200.dp()),
+                    leading_icon = Some(|| Icon18("leading")),
+                    trailing_icon = Some(|| Icon18("trailing"))
+                );
+            });
+        });
+    });
+    assert_eq!(left(&mut ui, "leading"), 400.0 - 8.0 - 18.0);
+    assert_eq!(left(&mut ui, "trailing"), 200.0 + 8.0);
+}
+
+/// A row is as wide as the two spacings' mean twice: 4 and 8 compact beside a leading icon.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, ChipArrangement
+#[test]
+fn a_chips_width_has_both_spacings() {
+    let mut ui = rule(|| {
+        FilterChip!(
+            false,
+            || {},
+            || Text!("Label", modifier = Modifier.test_tag("label")),
+            modifier = Modifier.test_tag(TAG),
+            shapes = FilterChipDefaults::shapes(),
+            leading_icon = Some(|| Icon18("leading"))
+        );
+    });
+    assert_eq!(width(&mut ui, TAG), 8.0 + 18.0 + 4.0 + width(&mut ui, "label") + 8.0 + 8.0);
+}
+
+/// An input chip's padding at its end is 8 with a trailing icon.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, inputChipPadding
+#[test]
+fn an_input_chips_trailing_icon_is_8_dp_from_its_end() {
+    let mut ui = rule(|| {
+        InputChip!(
+            false,
+            || {},
+            || Text!("Label"),
+            modifier = Modifier.test_tag(TAG),
+            trailing_icon = Some(|| Icon18("trailing"))
+        );
+    });
+    assert_eq!(width(&mut ui, TAG) - left(&mut ui, "trailing") - 18.0, 8.0);
+}
+
+/// Flat, a filter chip rises by 1 dp on a hover, any chip by 8 dp on a drag; elevated, by 3 on a hover.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, filterChipElevation
+#[test]
+fn the_default_elevations_are_the_tokens() {
+    use compose_ui::{DragInteraction, DragStart, HoverEnter, HoverInteraction};
+    let hovered = |chip: fn(compose_ui::MutableInteractionSource)| {
+        let source = compose_ui::MutableInteractionSource::new();
+        let hoisted = source.clone();
+        let mut ui = rule(move || chip(hoisted.clone()));
+        source.try_emit(HoverInteraction::Enter(HoverEnter::new()));
+        ui.wait_for_idle();
+        the_shadow(&mut ui)
+    };
+    assert_eq!(
+        hovered(|source| {
+            FilterChip!(false, || {}, || Text!("a"), interaction_source = Some(source));
+        }),
+        1.0
+    );
+    assert_eq!(
+        hovered(|source| {
+            ElevatedFilterChip!(false, || {}, || Text!("a"), interaction_source = Some(source));
+        }),
+        3.0
+    );
+    assert_eq!(
+        hovered(|source| {
+            AssistChip!(|| {}, || Text!("a"), interaction_source = Some(source));
+        }),
+        0.0
+    );
+    let source = compose_ui::MutableInteractionSource::new();
+    let hoisted = source.clone();
+    let mut ui = rule(move || {
+        AssistChip!(|| {}, || Text!("a"), interaction_source = Some(hoisted.clone()));
+    });
+    source.try_emit(DragInteraction::Start(DragStart::new()));
+    ui.wait_for_idle();
+    assert_eq!(the_shadow(&mut ui), 8.0);
+}
+
+/// With `shapes`, the colors are the tonal ones: the leading icon not in the primary color.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, tonalFilterChipColors
+#[test]
+fn a_shaped_chips_colors_are_tonal() {
+    thread_local! {
+        static COLOR: Cell<Color> = const { Cell::new(Color::UNSPECIFIED) };
+    }
+    let scheme = light_color_scheme();
+    let _plain = rule(|| {
+        FilterChip!(
+            false,
+            || {},
+            || Text!("a"),
+            leading_icon = Some(|| COLOR.set(LOCAL_CONTENT_COLOR.current()))
+        );
+    });
+    assert_eq!(COLOR.get(), scheme.primary);
+    let _shaped = rule(|| {
+        FilterChip!(
+            false,
+            || {},
+            || Text!("a"),
+            shapes = FilterChipDefaults::shapes(),
+            leading_icon = Some(|| COLOR.set(LOCAL_CONTENT_COLOR.current()))
+        );
+    });
+    assert_eq!(COLOR.get(), scheme.on_surface_variant);
+    let _elevated = rule(|| {
+        ElevatedFilterChip!(
+            false,
+            || {},
+            || Text!("a"),
+            shapes = FilterChipDefaults::shapes(),
+            leading_icon = Some(|| COLOR.set(LOCAL_CONTENT_COLOR.current()))
+        );
+    });
+    assert_eq!(COLOR.get(), scheme.on_surface_variant);
+}
+
+/// A plain chip's ends each in their color.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, Chip
+#[test]
+fn a_plain_chips_ends_are_in_their_colors() {
+    thread_local! {
+        static COLORS: Cell<(Color, Color)> = const { Cell::new((Color::RED, Color::RED)) };
+    }
+    let _ui = rule(|| {
+        let colors = ChipColors {
+            leading_icon_content_color: Color::GREEN,
+            trailing_icon_content_color: Color::BLUE,
+            ..AssistChipDefaults::assist_chip_colors()
+        };
+        AssistChip!(
+            || {},
+            || Text!("a"),
+            colors = colors,
+            leading_icon = Some(|| COLORS.set((LOCAL_CONTENT_COLOR.current(), COLORS.get().1))),
+            trailing_icon = Some(|| COLORS.set((COLORS.get().0, LOCAL_CONTENT_COLOR.current())))
+        );
+    });
+    assert_eq!(COLORS.get(), (Color::GREEN, Color::BLUE));
+}

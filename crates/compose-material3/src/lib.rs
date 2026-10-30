@@ -54,8 +54,8 @@ pub use bottom_sheet_scaffold::{
     remember_bottom_sheet_scaffold_state,
 };
 pub use button::{
-    Button, ButtonColors, ButtonDefaults, ButtonElevation, ElevatedButton, FilledTonalButton,
-    OutlinedButton, TextButton,
+    Button, ButtonColors, ButtonDefaults, ButtonElevation, ButtonShapes, ElevatedButton,
+    FilledTonalButton, OutlinedButton, TextButton,
 };
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
 pub use chips::{
@@ -89,8 +89,9 @@ pub use fab::{
 };
 pub use icon::{
     FilledIconButton, FilledIconToggleButton, FilledTonalIconButton, FilledTonalIconToggleButton,
-    Icon, IconButton, IconButtonColors, IconButtonDefaults, IconToggleButton,
-    IconToggleButtonColors, OutlinedIconButton, OutlinedIconToggleButton, icons,
+    Icon, IconButton, IconButtonColors, IconButtonDefaults, IconButtonShapes,
+    IconButtonWidthOption, IconToggleButton, IconToggleButtonColors, IconToggleButtonShapes,
+    OutlinedIconButton, OutlinedIconToggleButton, icons,
 };
 pub use list_item::{
     ClickableListItem, ListItem, ListItemColors, ListItemDefaults, ListItemElevation,

@@ -600,13 +600,14 @@ pub fn Snackbar(
                 Modifier,
                 true,
                 crate::ButtonDefaults::shape(),
+                None,
                 crate::ButtonColors {
                     content_color: action_color,
                     ..crate::ButtonDefaults::text_button_colors()
                 },
                 None,
                 None,
-                crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+                Some(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
                 None,
                 compose_runtime::callback(move |_: RowScope| themed_text(label.clone())),
             );
@@ -623,6 +624,7 @@ pub fn Snackbar(
                 crate::IconButtonDefaults::icon_button_colors(),
                 None,
                 crate::IconButtonDefaults::standard_shape(),
+                None,
                 compose_runtime::callback(|| {
                     Icon(
                         icons::filled::close(),
