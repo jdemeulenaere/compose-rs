@@ -86,12 +86,20 @@ fn carousels(
     CELL_STALL.set(None);
     CELL_PARTS.with(|parts| parts.borrow_mut().clear());
     use_optimizations(optimizations);
+    let keep_behind = optimizations.contains(Optimization::KEEP_ITEMS_BEHIND);
     let state = LazyListState::new(first, 0);
     let given = *state;
     let ui = ComposeTestRule::sized(IntSize::new(200, 400), move || {
         LazyColumn!(
             modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
+            // The next row, whose size is the viewport, from the first pixel on; two kept behind
+            // with the optimization, which the default window would get.
+            cache_window = Some(lazy_layout_cache_window_with(
+                100.dp(),
+                if keep_behind { 200.dp() } else { 0.dp() },
+                false
+            )),
             |scope: LazyListScope| {
                 scope.items(100, CarouselRow);
             }

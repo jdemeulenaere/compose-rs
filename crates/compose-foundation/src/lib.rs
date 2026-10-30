@@ -13,7 +13,6 @@
 extern crate compose_runtime as compose;
 
 mod dark_theme;
-mod flags;
 mod fling;
 pub mod gestures;
 mod image;
@@ -35,7 +34,6 @@ pub use compose_ui::{
 
 pub use compose_ui::{BorderRenderer, BorderStroke};
 pub use dark_theme::is_system_in_dark_theme;
-pub use flags::ComposeFoundationFlags;
 pub use gestures::{
     DefaultFlingBehavior, DefaultScrollableState, DraggableModifier, DraggableState, FlingBehavior,
     Orientation, ScrollScope, ScrollableDefaults, ScrollableModifier, ScrollableState,
@@ -43,10 +41,13 @@ pub use gestures::{
 };
 pub use image::{ContentScale, Image};
 pub use lazy::{
-    GridCells, GridItemSpan, LazyColumn, LazyGridItemInfo, LazyGridItemSpanScope,
+    GridCells, GridItemSpan, LazyColumn, LazyGridDefaults, LazyGridItemInfo, LazyGridItemSpanScope,
     LazyGridLayoutInfo, LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyItemModifiers,
-    LazyItemScope, LazyLayoutScrollScope, LazyListItemInfo, LazyListLayoutInfo, LazyListScope,
-    LazyListState, LazyRow, LazyVerticalGrid, remember_lazy_grid_state, remember_lazy_list_state,
+    LazyItemScope, LazyLayoutCacheWindow, LazyLayoutScrollScope, LazyListDefaults,
+    LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState, LazyRow, LazyVerticalGrid,
+    lazy_layout_cache_window, lazy_layout_cache_window_fraction,
+    lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
+    remember_lazy_grid_state, remember_lazy_list_state,
 };
 pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};

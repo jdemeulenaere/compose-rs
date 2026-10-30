@@ -183,18 +183,15 @@ fn scroll_through(criterion: &mut Criterion) {
 /// The stress list's items prefetched in idle times of a given length, as Compose's pausable
 /// composition splits an item's composition across them (D590): per item a request composed,
 /// the time spent in prefetch (composing, applying, measuring, the strategy) and the idle times
-/// it took. `whole` is a request composing its item in one step (pausable composition off),
-/// `one idle time` a paused composition never short of time (one resume, then apply).
+/// it took. `one idle time` is a paused composition never short of time (one resume, then apply).
 fn prefetch_in_pauses(criterion: &mut Criterion) {
-    let budgets: [(&str, bool, Option<Duration>); 5] = [
-        ("whole", false, None),
-        ("one idle time", true, None),
-        ("20 µs idle times", true, Some(Duration::from_micros(20))),
-        ("12 µs idle times", true, Some(Duration::from_micros(12))),
-        ("8 µs idle times", true, Some(Duration::from_micros(8))),
+    let budgets: [(&str, Option<Duration>); 4] = [
+        ("one idle time", None),
+        ("20 µs idle times", Some(Duration::from_micros(20))),
+        ("12 µs idle times", Some(Duration::from_micros(12))),
+        ("8 µs idle times", Some(Duration::from_micros(8))),
     ];
-    for (label, pausable, budget) in budgets {
-        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(pausable);
+    for (label, budget) in budgets {
         let mut host = host(compose_rs_feed::stress::StressScroll);
         // A frame scrolling a third of a screen, then idle times until its requests are done.
         let step = |host: &mut UiHost| -> (Duration, u64, u64) {
@@ -249,7 +246,6 @@ fn prefetch_in_pauses(criterion: &mut Criterion) {
             })
         });
     }
-    ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(true);
 }
 
 criterion_group!(benches, scroll_through, prefetch_in_pauses);

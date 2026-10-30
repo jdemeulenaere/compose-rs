@@ -1,38 +1,32 @@
-//! Prefetch: what a lazy list (or grid) composes and measures between frames, as Compose
-//! 1.12.1's default `LazyListPrefetchStrategy` (a grid's `LazyGridPrefetchStrategy`) and
-//! `LazyLayoutPrefetchState` (docs/15, "Compose's defaults" (a), (b) and (f)):
+//! Prefetch: what a lazy list (or grid) composes and measures between frames, as Compose's
+//! `LazyLayoutPrefetchState` at the tip, its requests coming from the cache window
+//! (`cache_window`, Compose's `LazyListCacheWindowStrategy` and its grid's, D892):
 //!
-//! - after a layout that scrolled, a request for the item (a grid's line: a request per item)
-//!   next to those in view in the scroll direction, none behind; cancelled when the direction
-//!   turns, or once the item it holds isn't the next one any more; urgent when the same scroll
-//!   again would reach it (`lastItem.offset + size + spacing - viewportEndOffset < -delta`);
-//! - a request composes its item with a paused composition (Compose's default,
-//!   `isPausableCompositionInPrefetchEnabled`), which pauses at the runtime's pause points once
-//!   the time left is no more than the averages of a stretch of composition and a pause, and
-//!   resumes after the next frame; it applies it once complete, then composes the first items of
-//!   the lazy lists in it (two, then the running average of the smallest nested list's visible
-//!   count, per content type), composing only, then measures it: nothing places or draws it
-//!   until a frame wants it;
+//! - after a layout that scrolled, the window fills: requests one unit at a time (a list's item, a
+//!   grid's line, a request per item), the next when the last is done, until the window has no room;
+//!   those behind the (empty, by default) behind window, or out of it, are cancelled and let go;
+//!   urgent when the same scroll again would reach the unit;
+//! - a request composes its item with a paused composition, which pauses at the runtime's pause
+//!   points once the time left is no more than the averages of a stretch of composition and a
+//!   pause, and resumes after the next frame; it applies it once complete, then composes the first
+//!   items of the lazy lists in it (two, then the running average of the smallest nested list's
+//!   visible count, per content type), composing only, then measures it: nothing places or draws
+//!   it until a frame wants it;
 //! - each step runs only while the time left exceeds that step's running average for the item's
 //!   content type (`current / 4 * 3 + new / 4`, in integer nanoseconds; the first sample taken
-//!   as is): composing, a stretch and a pause; applying, measuring, their own; any time left
-//!   for an urgent request; a step that doesn't fit leaves the request queued, to go on after
-//!   the next frame.
+//!   as is): a stretch and a pause; applying, measuring, their own; any time left for an urgent
+//!   request; a step that doesn't fit leaves the request queued, to go on after the next frame.
 //!
-//! The composed items are those in view and those requests composed next to them: a frame's
-//! layout deactivates the others (kept for reuse), as Compose's measurement does. An item whose
-//! paused composition isn't applied yet (or was cancelled, its content removed) is one the
-//! layout lacks: wanted, the frame composes it (completing the paused composition first), as
-//! Compose's measurement completes a precomposed item's paused composition.
+//! The composed items are those in view and those in the window: a frame's layout deactivates the
+//! others (kept for reuse), as Compose's measurement does. An item whose paused composition isn't
+//! applied yet (or was cancelled, its content removed) is one the layout lacks: wanted, the frame
+//! composes it (completing the paused composition first), as Compose's measurement completes a
+//! precomposed item's paused composition.
 //!
-//! Without pausable composition (Compose's flag, off: `ComposeFoundationFlags`'
-//! `set_pausable_composition_in_prefetch_enabled(false)`), a request's composition is one step,
-//! applied with it, gated by the whole composition's average.
-//!
-//! compose-rs's own behaviours are optimizations of the host's (D560-D565): two items ahead
-//! (`PREFETCH_TWO_AHEAD`), D341/D381's estimate (`PREFETCH_BUDGET_RECENT_MAXIMUM`), prefetching
-//! at rest (`PREFETCH_AT_REST`), and two items kept behind, disposed between frames
-//! (`KEEP_ITEMS_BEHIND`).
+//! compose-rs's own behaviours are optimizations of the host's (D560-D565), widening the default
+//! window only (D893): a second item's worth ahead (`PREFETCH_TWO_AHEAD`), two items' worth kept
+//! behind (`KEEP_ITEMS_BEHIND`), filling at rest (`PREFETCH_AT_REST`); and D341/D381's estimate
+//! (`PREFETCH_BUDGET_RECENT_MAXIMUM`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -42,14 +36,16 @@ use std::time::Instant;
 
 use compose_runtime::PausedComposition;
 use compose_ui::platform::{NodeId, Optimization, Optimizations};
-use compose_ui::{Constraints, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler};
+use compose_ui::{Constraints, Density, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler};
 
+use super::cache_window::{
+    CacheWindowLogic, CacheWindowScope, DefaultCacheWindow, LazyLayoutCacheWindow, same_window,
+};
 use super::{Items, LazyListInner};
 
-/// Items kept composed behind those the layout wants, the other way from the scroll, with
-/// `KEEP_ITEMS_BEHIND`: a scroll reversing direction finds the first items it wants composed
-/// (D375).
-pub(super) const KEPT_BEHIND: usize = 2;
+/// Items' worth the default window keeps behind, with `KEEP_ITEMS_BEHIND`: a scroll reversing
+/// direction finds the first items it wants composed (D375, D893).
+pub(super) const KEPT_BEHIND: i32 = 2;
 
 /// What a prefetch step leaves of the idle time beyond its estimate, at least, with
 /// `PREFETCH_BUDGET_RECENT_MAXIMUM`: the estimate is a guess, and a step running past the
@@ -66,38 +62,31 @@ const PRECOMPOSED_KEPT: usize = 8;
 /// Items noted with nested lists beyond which the dead entries are forgotten.
 const NESTED_KEYS_KEPT: usize = 64;
 
-/// Which of compose-rs's own prefetch behaviours a list uses, from the host's optimizations.
+/// Which of compose-rs's own prefetch behaviours a list uses, from the host's optimizations: the
+/// default window's shape (D893), and the budget.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Policy {
-    /// Items (a grid's lines) prefetched ahead: one, as Compose's; two with
-    /// `PREFETCH_TWO_AHEAD` (D156).
-    pub(super) ahead: usize,
+    /// The default window ahead has another item's worth (`PREFETCH_TWO_AHEAD`, D156).
+    pub(super) two_ahead: bool,
     /// D341 and D381's budget (`PREFETCH_BUDGET_RECENT_MAXIMUM`).
     pub(super) recent_maximum: bool,
-    /// Items (a grid's lines) kept composed behind the scroll (`KEEP_ITEMS_BEHIND`, D375).
-    pub(super) keep_behind: usize,
-    /// Prefetch after a layout at rest too (`PREFETCH_AT_REST`, D470).
+    /// The default window behind has two items' worth (`KEEP_ITEMS_BEHIND`, D375).
+    pub(super) keep_behind: bool,
+    /// The default window fills at rest too (`PREFETCH_AT_REST`, D470).
     pub(super) at_rest: bool,
-    /// A request composes its item with a paused composition (Compose's default).
-    pub(super) pausable: bool,
 }
 
 impl Policy {
     /// Compose's.
     pub(super) const COMPOSE: Policy =
-        Policy { ahead: 1, recent_maximum: false, keep_behind: 0, at_rest: false, pausable: true };
+        Policy { two_ahead: false, recent_maximum: false, keep_behind: false, at_rest: false };
 
     pub(super) fn of(optimizations: Optimizations) -> Policy {
         Policy {
-            ahead: if optimizations.contains(Optimization::PREFETCH_TWO_AHEAD) { 2 } else { 1 },
+            two_ahead: optimizations.contains(Optimization::PREFETCH_TWO_AHEAD),
             recent_maximum: optimizations.contains(Optimization::PREFETCH_BUDGET_RECENT_MAXIMUM),
-            keep_behind: if optimizations.contains(Optimization::KEEP_ITEMS_BEHIND) {
-                KEPT_BEHIND
-            } else {
-                0
-            },
+            keep_behind: optimizations.contains(Optimization::KEEP_ITEMS_BEHIND),
             at_rest: optimizations.contains(Optimization::PREFETCH_AT_REST),
-            pausable: crate::ComposeFoundationFlags::is_pausable_composition_in_prefetch_enabled(),
         }
     }
 }
@@ -116,9 +105,8 @@ pub(super) struct Prefetch {
     pub(super) forward: Cell<bool>,
     /// Scrolled since the last layout that settled, in Compose's sign: negative towards the end.
     pub(super) delta: Cell<f32>,
-    /// The items composed may span, set by each layout: with `KEEP_ITEMS_BEHIND`, from the
-    /// first kept behind the wanted ones to the last prefetched ahead (a frame and prefetch trim
-    /// to them); else the wanted items and those requests composed next to them.
+    /// The items composed may span, set by each layout: the wanted items, those in the window,
+    /// and those requests composed next to them.
     pub(super) limits: Cell<(usize, usize)>,
     /// Each item's constraints, where they differ by item (a grid's spans); else the list's
     /// `item_constraints`.
@@ -127,10 +115,18 @@ pub(super) struct Prefetch {
     pub(super) policy: Cell<Policy>,
     /// The items, as last composed: their keys and content types.
     pub(super) items: RefCell<Weak<Items>>,
+    /// The list's axis, for an item's size along it.
+    pub(super) vertical: Cell<bool>,
     /// Items in view at the last layout: a parent's nested prefetch learns its count from it
     /// (Compose's `idealNestedPrefetchCount`).
     pub(super) visible: Cell<usize>,
-    strategy: Strategy,
+    /// The window's logic, and what the last layout that settled showed it.
+    window: RefCell<Option<CacheWindowLogic>>,
+    laid: RefCell<Shown>,
+    /// A buffer for the units in view's sizes.
+    pub(super) sizes: RefCell<Vec<i32>>,
+    /// A grid's lines, for the window's requests between frames; a list's units are its items.
+    pub(super) units: RefCell<Option<Rc<dyn Units>>>,
     /// Compose's `PrefetchMetrics`: the steps' averages by content type.
     metrics: RefCell<HashMap<Option<u64>, Averages>>,
     /// D341's estimates (`PREFETCH_BUDGET_RECENT_MAXIMUM`), one for all content types: a whole
@@ -181,8 +177,12 @@ impl Prefetch {
             constraints_of: RefCell::new(None),
             policy: Cell::new(Policy::COMPOSE),
             items: RefCell::new(Weak::new()),
+            vertical: Cell::new(true),
             visible: Cell::new(0),
-            strategy: Strategy::default(),
+            window: RefCell::new(None),
+            laid: RefCell::default(),
+            sizes: RefCell::default(),
+            units: RefCell::new(None),
             metrics: RefCell::default(),
             compose_cost: Cell::default(),
             apply_cost: Cell::default(),
@@ -200,164 +200,322 @@ impl Prefetch {
     }
 }
 
-/// Compose's strategy's state: the item (a grid's line) its requests are for, the way the
-/// list last scrolled, and what the last layout saw.
-#[derive(Default)]
-struct Strategy {
-    /// `indexToPrefetch` (a grid's `lineToPrefetch`): the nearest unit requested.
-    target: Cell<Option<usize>>,
-    /// `wasScrollingForward`.
-    was_forward: Cell<bool>,
-    /// `previousPassItemCount` and `previousPassDelta`.
-    previous_count: Cell<Option<usize>>,
-    previous_delta: Cell<f32>,
-    /// The requests held (`currentPrefetchHandle`, a grid's line's), each for one item.
-    handles: RefCell<Vec<Rc<Handle>>>,
-    /// What the last layout that ran the strategy showed (first and last units, the count):
-    /// one showing the same with no scroll since has nothing new for it.
-    last_laid: Cell<Option<(usize, usize, usize)>>,
+/// What the window's units are: a list's are its items, a grid's its lines.
+pub(super) trait Units {
+    /// The unit's items (`None`: no such unit).
+    fn items_of(&self, unit: usize) -> Option<Range<usize>>;
+    /// The unit of `item`.
+    fn unit_of(&self, item: usize) -> usize;
 }
 
-/// What a layout that settled shows, for the strategy: the first and last units in view (items;
-/// a grid's lines), their first and last items, and how far the first starts before the
-/// viewport (`viewportStartOffset - firstItem.offset`) and the last ends, with its spacing,
-/// past it (`lastItem.offset + lastItem.size + spacing - viewportEndOffset`).
+/// A list's units.
+struct ItemUnits(usize);
+
+impl Units for ItemUnits {
+    fn items_of(&self, unit: usize) -> Option<Range<usize>> {
+        (unit < self.0).then(|| unit..unit + 1)
+    }
+
+    fn unit_of(&self, item: usize) -> usize {
+        item
+    }
+}
+
+/// What a layout that settled shows, for the window: the first and last units in view, how far the
+/// first starts before the viewport and the last ends, with its spacing, past it (or short of it).
 pub(super) struct Laid {
     pub(super) first: usize,
     pub(super) last: usize,
-    pub(super) first_item: usize,
-    pub(super) last_item: usize,
-    pub(super) start_distance: i32,
-    pub(super) end_distance: i32,
+    pub(super) start_overflow: i32,
+    pub(super) end_overflow: i32,
+    pub(super) viewport: i32,
+    pub(super) spacing: i32,
+    pub(super) density: Density,
 }
 
-impl Laid {
-    /// `calculateIndexToPrefetch` (a grid's `calculateLineIndexToPrefetch`): the unit after the
-    /// last in view, or before the first (`None`: before the list's start).
-    fn unit_to_prefetch(&self, forward: bool) -> Option<usize> {
-        if forward { Some(self.last + 1) } else { self.first.checked_sub(1) }
-    }
+/// The last `Laid`, the units in view (their sizes and keys), and the count.
+struct Shown {
+    first: i32,
+    last: i32,
+    start_overflow: i32,
+    end_overflow: i32,
+    viewport: i32,
+    density: Density,
+    count: i32,
+    visible: Vec<(i32, u64)>,
+    average: i32,
+}
 
-    /// Compose's check before requesting: the item next to those in view that way exists.
-    fn next_item_exists(&self, forward: bool, count: usize) -> bool {
-        if forward { self.last_item + 1 < count } else { self.first_item > 0 }
+impl Default for Shown {
+    fn default() -> Shown {
+        Shown {
+            first: 0,
+            last: 0,
+            start_overflow: 0,
+            end_overflow: 0,
+            viewport: 0,
+            density: Density::new(1.0),
+            count: 0,
+            visible: Vec::new(),
+            average: 0,
+        }
     }
 }
 
-/// Whether `unit` is among the `ahead` units from `nearest` the `forward` way.
-fn in_window(unit: usize, nearest: usize, forward: bool, ahead: usize) -> bool {
-    if forward {
-        unit >= nearest && unit < nearest + ahead
-    } else {
-        unit <= nearest && unit + ahead > nearest
+/// The window's view of its layout, as Compose's `CacheWindowScope` over its layout info.
+struct WindowScope<'a> {
+    state: &'a Rc<LazyListInner>,
+    prefetch: &'a Prefetch,
+    shown: &'a Shown,
+    units: &'a dyn Units,
+    scheduler: Option<&'a PrefetchScheduler>,
+}
+
+impl CacheWindowScope for WindowScope<'_> {
+    fn total_items_count(&self) -> i32 {
+        self.shown.count
+    }
+
+    fn visible_items_count(&self) -> i32 {
+        self.shown.visible.len() as i32
+    }
+
+    fn has_visible_items(&self) -> bool {
+        !self.shown.visible.is_empty()
+    }
+
+    fn first_visible_item_index(&self) -> i32 {
+        self.shown.first
+    }
+
+    fn density(&self) -> Density {
+        self.shown.density
+    }
+
+    fn last_visible_item_index(&self) -> i32 {
+        self.shown.last
+    }
+
+    fn main_axis_viewport_size(&self) -> i32 {
+        self.shown.viewport
+    }
+
+    fn update_per_lane_main_axis_extra_start_space(&self, spaces: &mut [i32]) {
+        spaces[0] = self.shown.start_overflow;
+    }
+
+    fn update_per_lane_main_axis_extra_end_space(&self, spaces: &mut [i32]) {
+        spaces[0] = self.shown.end_overflow;
+    }
+
+    fn update_per_lane_first_visible_item_index(&self, indices: &mut [i32]) {
+        indices[0] = self.shown.first;
+    }
+
+    fn update_per_lane_last_visible_item_indexes(&self, indices: &mut [i32]) {
+        indices[0] = self.shown.last;
+    }
+
+    fn schedule_prefetch(&self, lane: i32, item_index: i32) -> Vec<Rc<Handle>> {
+        let (Some(scheduler), Ok(unit)) = (self.scheduler, usize::try_from(item_index)) else {
+            return Vec::new();
+        };
+        let Some(items) = self.prefetch.items.borrow().upgrade() else { return Vec::new() };
+        let Some(range) = self.units.items_of(unit) else { return Vec::new() };
+        // Each composes next to the composed items: a line before them from its end.
+        let forward = item_index > self.shown.last;
+        let range: Vec<usize> = if forward { range.collect() } else { range.rev().collect() };
+        let mut handles = Vec::with_capacity(range.len());
+        for item in range {
+            if item >= self.shown.count as usize {
+                continue;
+            }
+            let handle = Rc::new(Handle::new(self.state, &items, item, unit, Some(lane), true));
+            handle.queued.set(true);
+            handles.push(handle.clone());
+            scheduler.schedule_prefetch(Rc::new(HandleRequest(handle)));
+        }
+        handles
+    }
+
+    fn visible_item_size(&self, position: i32) -> i32 {
+        self.shown.visible[position as usize].0
+    }
+
+    fn visible_item_index(&self, position: i32) -> i32 {
+        self.shown.first + position
+    }
+
+    fn visible_item_key(&self, position: i32) -> u64 {
+        self.shown.visible[position as usize].1
+    }
+
+    fn visible_item_lane(&self, _: i32) -> i32 {
+        0
+    }
+
+    fn last_item_index_in_line(&self, item: i32) -> i32 {
+        usize::try_from(item)
+            .ok()
+            .and_then(|unit| self.units.items_of(unit))
+            .map_or(-1, |range| range.end as i32 - 1)
+    }
+
+    fn last_item_index(&self) -> i32 {
+        if self.shown.count == 0 {
+            return -1;
+        }
+        self.units.unit_of(self.shown.count as usize - 1) as i32
     }
 }
 
 impl Prefetch {
-    /// Compose's strategy after a layout that settled (no items missing): its
-    /// `onVisibleItemsUpdated`, then its `onScroll` with the scrolling since the last such
-    /// layout. `items_of` gives a unit's items (a list's: itself; a grid's line's).
+    /// The list's composition: `window` is its cache window from now on (`None`: the default, as
+    /// `LazyListDefaults.cacheWindow(state)`). Another one starts over, as Compose's
+    /// `remember(state, cacheWindow)` makes another strategy.
+    pub(super) fn use_window(
+        &self,
+        state: &Rc<LazyListInner>,
+        window: Option<Rc<dyn LazyLayoutCacheWindow>>,
+    ) {
+        let window = window.unwrap_or_else(|| {
+            let default = Rc::as_ptr(state) as usize;
+            let current = self.window.borrow();
+            match current.as_ref().map(|logic| logic.cache_window.value()) {
+                Some(Some(super::cache_window::WindowValue::Default(at))) if at == default => {
+                    current.as_ref().expect("there").cache_window.clone()
+                }
+                _ => Rc::new(DefaultCacheWindow { state: Rc::downgrade(state) }),
+            }
+        });
+        let mut current = self.window.borrow_mut();
+        if current.as_ref().is_some_and(|logic| same_window(&logic.cache_window, &window)) {
+            return;
+        }
+        if let Some(old) = current.as_mut() {
+            old.reset_strategy();
+        }
+        *current = Some(CacheWindowLogic::new(window, || 1));
+    }
+
+    /// The cache window in use.
+    pub(super) fn cache_window(&self) -> Option<Rc<dyn LazyLayoutCacheWindow>> {
+        self.window.borrow().as_ref().map(|logic| logic.cache_window.clone())
+    }
+
+    /// The units in view's average size and spacing, as `visibleItemsAverageSize`.
+    pub(super) fn visible_average(&self) -> i32 {
+        self.laid.borrow().average
+    }
+
+    fn window_behind_is_empty(&self) -> bool {
+        let shown = self.laid.borrow();
+        self.window.borrow().as_ref().is_none_or(|logic| {
+            logic.cache_window.calculate_behind_window(shown.density, shown.viewport) == 0
+        })
+    }
+
+    /// The position changed by a jump: requests are cancelled and the next scroll refills the
+    /// window, as `snapToItemIndexInternal`.
+    pub(super) fn reset_window(&self) {
+        if let Ok(mut window) = self.window.try_borrow_mut()
+            && let Some(logic) = window.as_mut()
+        {
+            logic.reset_strategy();
+        }
+    }
+
+    /// The window's first and last units, if it has bounds.
+    pub(super) fn window_bounds(&self) -> Option<(usize, usize)> {
+        let (start, end) = self.window.borrow_mut().as_mut()?.bounds()?;
+        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
+    }
+
+    /// The window after a layout that settled (no items missing): its `onVisibleItemsUpdated`, if
+    /// what's in view changed, as Compose's small scrolls don't call it, then its `onScroll` with
+    /// the scrolling since the last such layout. `sizes` are the units in view's main-axis sizes,
+    /// `key_of` gives a unit's key; `keys_changed`: the same units may have other keys.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn after_layout(
         &self,
         state: &Rc<LazyListInner>,
         scheduler: Option<&PrefetchScheduler>,
         laid: Option<&Laid>,
         count: usize,
-        items_of: &mut dyn FnMut(usize) -> Range<usize>,
+        keys_changed: bool,
+        units: Option<&dyn Units>,
+        sizes: &[i32],
+        key_of: &mut dyn FnMut(usize) -> u64,
     ) {
-        let policy = self.policy.get();
-        let strategy = &self.strategy;
         let delta = self.delta.replace(0.0);
         if let Some(scheduler) = scheduler
             && self.scheduler.borrow().is_none()
         {
             *self.scheduler.borrow_mut() = Some(scheduler.clone());
         }
-        // The same units in view, the same count, no scroll since: nothing to cancel or request
-        // (a frame laying the list out again for another reason).
-        let shown = laid.map(|laid| (laid.first, laid.last, count));
-        if delta == 0.0 && shown.is_some() && strategy.last_laid.replace(shown) == shown {
-            return;
-        }
-        strategy.last_laid.set(shown);
-        // A request for anything but the next unit the last scroll's way is cancelled (with two
-        // ahead, those out of the next two), as `evaluatePrefetchForCancellation`.
-        if let (Some(target), Some(laid)) = (strategy.target.get(), laid) {
-            let forward = strategy.was_forward.get();
-            let expected = laid.unit_to_prefetch(forward);
-            if expected != Some(target) {
-                strategy.target.set(None);
-                self.retain_handles(|unit| {
-                    expected.is_some_and(|nearest| in_window(unit, nearest, forward, policy.ahead))
-                });
+        let changed = {
+            let mut shown = self.laid.borrow_mut();
+            let count = count as i32;
+            let same = match laid {
+                Some(laid) => {
+                    shown.first == laid.first as i32
+                        && shown.last == laid.last as i32
+                        && shown.count == count
+                        && !keys_changed
+                        && shown.visible.len() == sizes.len()
+                        && shown.visible.iter().zip(sizes).all(|((size, _), new)| size == new)
+                }
+                None => shown.visible.is_empty() && shown.count == count,
+            };
+            shown.count = count;
+            if !same {
+                shown.visible.clear();
             }
-        }
-        // Items came or went after a scroll: the next unit the last scroll's way.
-        if let Some(previous) = strategy.previous_count.get()
-            && strategy.previous_delta.get() != 0.0
-            && previous != count
-            && let Some(laid) = laid
-        {
-            let forward = strategy.previous_delta.get() < 0.0;
-            if let Some(unit) = laid.unit_to_prefetch(forward)
-                && laid.next_item_exists(forward, count)
-                && strategy.target.get() != Some(unit)
-            {
-                strategy.target.set(Some(unit));
-                self.request(state, scheduler, unit, forward, count, items_of);
-            }
-        }
-        strategy.previous_count.set(Some(count));
-        if delta != 0.0 {
-            if let Some(laid) = laid {
-                let forward = delta < 0.0;
-                if let Some(unit) = laid.unit_to_prefetch(forward)
-                    && laid.next_item_exists(forward, count)
-                {
-                    if strategy.target.get() != Some(unit) {
-                        // The way turned: what was requested won't be reached soon.
-                        if strategy.was_forward.get() != forward {
-                            self.retain_handles(|_| false);
-                        }
-                        strategy.was_forward.set(forward);
-                        strategy.target.set(Some(unit));
-                        self.request(state, scheduler, unit, forward, count, items_of);
-                    }
-                    // The same scroll again would reach it: any time left is worth it.
-                    let urgent = if forward {
-                        (laid.end_distance as f32) < -delta
-                    } else {
-                        (laid.start_distance as f32) < delta
-                    };
-                    if urgent {
-                        for handle in strategy.handles.borrow().iter() {
-                            if handle.unit == unit {
-                                handle.urgent.set(true);
-                            }
+            match laid {
+                Some(laid) => {
+                    shown.first = laid.first as i32;
+                    shown.last = laid.last as i32;
+                    shown.start_overflow = laid.start_overflow;
+                    shown.end_overflow = laid.end_overflow;
+                    shown.viewport = laid.viewport;
+                    shown.density = laid.density;
+                    if !same {
+                        for (position, size) in sizes.iter().enumerate() {
+                            shown.visible.push((*size, key_of(laid.first + position)));
                         }
                     }
+                    let sum: i32 = sizes.iter().sum();
+                    shown.average = sum / sizes.len().max(1) as i32 + laid.spacing;
+                }
+                None => {
+                    shown.visible.clear();
+                    shown.average = 0;
                 }
             }
-            strategy.previous_delta.set(delta);
-        } else if policy.at_rest
-            && strategy.handles.borrow().is_empty()
-            && let Some(laid) = laid
-        {
-            let forward = self.forward.get();
-            if let Some(unit) = laid.unit_to_prefetch(forward)
-                && laid.next_item_exists(forward, count)
-            {
-                strategy.was_forward.set(forward);
-                strategy.target.set(Some(unit));
-                self.request(state, scheduler, unit, forward, count, items_of);
-            }
+            !same
+        };
+        if !changed && delta == 0.0 {
+            return;
+        }
+        let items = ItemUnits(count);
+        let units = units.unwrap_or(&items);
+        let shown = self.laid.borrow();
+        let scope = WindowScope { state, prefetch: self, shown: &shown, units, scheduler };
+        let mut window = self.window.borrow_mut();
+        let Some(logic) = window.as_mut() else { return };
+        if changed {
+            logic.on_visible_items_updated(&scope);
+        }
+        if delta != 0.0 {
+            logic.on_scroll(&scope, delta);
         }
         // D341's requests short of time wait for the next scroll (or, at rest, layout).
+        let policy = self.policy.get();
         if policy.recent_maximum
             && (delta != 0.0 || policy.at_rest)
             && let Some(scheduler) = scheduler
         {
-            for handle in strategy.handles.borrow().iter() {
+            for handle in logic.handles() {
                 if !handle.queued.get() && !handle.done.get() && !handle.canceled.get() {
                     handle.queued.set(true);
                     scheduler.schedule_prefetch(Rc::new(HandleRequest(handle.clone())));
@@ -366,95 +524,87 @@ impl Prefetch {
         }
     }
 
-    /// Requests the items of `unit` and of the units after it the `forward` way, `ahead` in
-    /// all, those not requested already, as `schedulePrefetch`.
-    fn request(
-        &self,
-        state: &Rc<LazyListInner>,
-        scheduler: Option<&PrefetchScheduler>,
-        unit: usize,
-        forward: bool,
-        count: usize,
-        items_of: &mut dyn FnMut(usize) -> Range<usize>,
-    ) {
-        let Some(scheduler) = scheduler else { return };
-        let Some(items) = self.items.borrow().upgrade() else { return };
-        let ahead = self.policy.get().ahead;
-        for step in 0..ahead {
-            let Some(unit) =
-                (if forward { unit.checked_add(step) } else { unit.checked_sub(step) })
-            else {
-                break;
-            };
-            // Each composes next to the composed items: a line before them from its end.
-            let line = items_of(unit);
-            let line: Vec<usize> = if forward { line.collect() } else { line.rev().collect() };
-            for item in line {
-                if item >= count
-                    || self.strategy.handles.borrow().iter().any(|handle| handle.item == item)
-                {
-                    continue;
-                }
-                let handle = Rc::new(Handle::new(state, &items, item, unit, true));
-                handle.queued.set(true);
-                self.strategy.handles.borrow_mut().push(handle.clone());
-                scheduler.schedule_prefetch(Rc::new(HandleRequest(handle)));
-            }
+    /// A request is over. Its unit's last, done, tells the window, which requests the next.
+    fn request_over(&self, state: &Rc<LazyListInner>, handle: &Handle) {
+        let Some(lane) = handle.lane else { return };
+        let Ok(mut window) = self.window.try_borrow_mut() else { return };
+        let Some(logic) = window.as_mut() else { return };
+        let unit = handle.unit as i32;
+        if handle.canceled.get() {
+            logic.forget(unit);
+            return;
         }
-    }
-
-    /// Cancels the requests whose unit `keep` doesn't keep, as `resetPrefetchState`.
-    fn retain_handles(&self, keep: impl Fn(usize) -> bool) {
-        let mut canceled = Vec::new();
-        self.strategy.handles.borrow_mut().retain(|handle| {
-            let kept = keep(handle.unit);
-            if !kept {
-                handle.canceled.set(true);
-                canceled.push(handle.clone());
+        let mut size = None;
+        for other in logic.handles().filter(|other| other.unit == handle.unit) {
+            if !other.done.get() {
+                return;
             }
-            kept
-        });
-        // Compose's `cancel` cleans up at once (`cleanUp`): a paused composition is cancelled
-        // (from a layout, its content is removed before the composition's next pass).
-        for handle in canceled {
-            handle.clean_up(self);
+            size = Some(size.unwrap_or(0).max(other.size.get()));
         }
+        let Some(size) = size else { return };
+        let scheduler = self.scheduler.borrow();
+        let shown = self.laid.borrow();
+        let stored = self.units.borrow();
+        let items = ItemUnits(shown.count as usize);
+        let units: &dyn Units = stored.as_deref().unwrap_or(&items);
+        let scope = WindowScope {
+            state,
+            prefetch: self,
+            shown: &shown,
+            units,
+            scheduler: scheduler.as_ref(),
+        };
+        logic.on_item_prefetched(&scope, lane, unit, size);
     }
 
     /// The items that stay composed, from those the layout wants and those `composed`: the
-    /// wanted ones; with `next` (the end, backward the start, of the unit after the wanted ones
-    /// the last scroll's way: an item, a grid's line), those composed next to them up to it (a
-    /// layout's estimate may compose one more than it places, where Compose's composes as it
+    /// wanted ones; those in the window (`window`, its first and past-its-last items), as Compose's
+    /// `keepAroundItems`; with `next` (the end, backward the start, of the unit after the wanted
+    /// ones the last scroll's way: an item, a grid's line), those composed next to them up to it
+    /// (a layout's estimate may compose one more than it places, where Compose's composes as it
     /// measures: it is the one a scroll that way requests, and disposed it would be composed
-    /// again); and the items of live requests next to those, composed by the request
-    /// (Compose's precomposed items, kept until their request is cancelled) or already. Any
-    /// other is let go: those behind, those further ahead, and without `next` (a focus search
-    /// ended, D482) those a search laid out (D577).
+    /// again); and the items of live requests next to those, composed by the request (Compose's
+    /// precomposed items, kept until their request is cancelled) or already. Any other is let go:
+    /// those behind, those further ahead, and without `next` (a focus search ended, D482) those a
+    /// search laid out (D577).
     pub(super) fn target(
         &self,
         wanted: (usize, usize),
         composed: (usize, usize),
+        window: Option<(usize, usize)>,
         next: Option<usize>,
     ) -> (usize, usize) {
-        let handles = self.strategy.handles.borrow();
         let (mut start, mut end) = wanted;
-        if let Some(next) = next
-            && composed.0 <= end
-            && composed.1 >= start
-        {
-            if self.forward.get() {
-                end = end.max(composed.1.min(next));
-            } else {
-                start = start.min(composed.0.max(next));
+        if composed.0 <= end && composed.1 >= start {
+            if let Some(window) = window {
+                // With no window behind the scroll, nothing there stays: the window learns of a
+                // scroll after the layout that shows it (`after_layout`), and this composition
+                // deactivating what's behind saves one between frames for it (D575).
+                let behind = self.window_behind_is_empty();
+                if !(behind && self.forward.get()) {
+                    start = start.min(composed.0.max(window.0));
+                }
+                if !(behind && !self.forward.get()) {
+                    end = end.max(composed.1.min(window.1));
+                }
+            }
+            if let Some(next) = next {
+                if self.forward.get() {
+                    end = end.max(composed.1.min(next));
+                } else {
+                    start = start.min(composed.0.max(next));
+                }
             }
         }
+        let logic = self.window.borrow();
+        let Some(logic) = logic.as_ref() else { return (start, end) };
         let holds = |handle: &&Rc<Handle>| {
             !handle.canceled.get()
                 && (handle.composed.get() || (composed.0..composed.1).contains(&handle.item))
         };
         loop {
             let mut grew = false;
-            for handle in handles.iter().filter(holds) {
+            for handle in logic.handles().filter(holds) {
                 if handle.item == end {
                     end += 1;
                     grew = true;
@@ -470,11 +620,9 @@ impl Prefetch {
     }
 
     /// Asks for the items composed beyond `limits` to be deactivated between frames (kept for
-    /// reuse), unless a request will (its composition trims them): those the layout no longer
-    /// wants stay composed, unplaced and undrawn, until then. Compose deactivates them in its
-    /// measurement, which composes nothing; here leaving needs a composition, which a frame
-    /// whose items are all composed doesn't run for them (D575). With `KEEP_ITEMS_BEHIND`,
-    /// behind the scroll only: those ahead are the next ones (D375).
+    /// reuse): those the layout no longer wants stay composed, unplaced and undrawn, until then.
+    /// Compose deactivates them in its measurement, which composes nothing; here leaving needs a
+    /// composition, which a frame whose items are all composed doesn't run for them (D575).
     pub(super) fn trim_between_frames(
         &self,
         state: &Rc<LazyListInner>,
@@ -482,14 +630,7 @@ impl Prefetch {
         composed: (usize, usize),
     ) {
         let (low, high) = self.limits.get();
-        let beyond = if self.policy.get().keep_behind == 0 {
-            composed.0 < low || composed.1 > high
-        } else if self.forward.get() {
-            composed.0 < low
-        } else {
-            composed.1 > high
-        };
-        if !beyond {
+        if composed.0 >= low && composed.1 <= high {
             return;
         }
         let Some(scheduler) = scheduler else { return };
@@ -498,20 +639,11 @@ impl Prefetch {
         }
         let request = Rc::new(TrimRequest { state: Rc::downgrade(state) });
         *self.trim.borrow_mut() = Rc::downgrade(&request);
-        if self.policy.get().keep_behind == 0 {
-            // First in the next idle time with any time left, whatever the queue holds: a
-            // request waiting for a longer idle time, or one whose item is composed already
-            // (which deactivates nothing), would leave them composed for good, and an animation
-            // in one asking for frames (D575).
-            scheduler.schedule_prefetch_first(request);
-        } else {
-            let composing = self.strategy.handles.borrow().iter().any(|handle| {
-                handle.queued.get() && !handle.composed.get() && !handle.canceled.get()
-            });
-            if !composing {
-                scheduler.schedule_prefetch(request);
-            }
-        }
+        // First in the next idle time with any time left, whatever the queue holds: a request
+        // waiting for a longer idle time, or one whose item is composed already (which
+        // deactivates nothing), would leave them composed for good, and an animation in one
+        // asking for frames (D575).
+        scheduler.schedule_prefetch_first(request);
     }
 
     fn averages(&self, content_type: Option<u64>) -> Averages {
@@ -692,16 +824,14 @@ impl Prefetch {
     }
 
     /// Composes `item` beside the composed ones, deactivating those beyond the limits on the
-    /// other side in the same composition (those the layout let go): with `pausable`, as a
-    /// paused composition, returned not composed yet (its first resume runs the pass). `None` if
-    /// it isn't next to them.
+    /// other side in the same composition (those the layout let go), as a paused composition,
+    /// returned not composed yet (its first resume runs the pass). `None` if it isn't next to them.
     fn compose_item(
         &self,
         state: &Rc<LazyListInner>,
         item: usize,
         key: u64,
         scope: &mut PrefetchRequestScope<'_>,
-        pausable: bool,
     ) -> Option<Composed> {
         let (start, end) = state.composed.get();
         if (start..end).contains(&item) {
@@ -711,7 +841,7 @@ impl Prefetch {
                 return Some(Composed::Already);
             }
             state.compose((start, end));
-            return Some(self.composed_by(scope, pausable.then(|| item_target(state, key))));
+            return Some(self.composed_by(scope, item_target(state, key)));
         }
         let (low, high) = self.limits.get();
         let range = if item == end {
@@ -729,20 +859,17 @@ impl Prefetch {
             }
             precomposed.push(key);
         }
+        // What it composes is within the limits until the next layout sets them.
+        self.limits.set((low.min(item), high.max(item + 1)));
         state.compose(range);
-        Some(self.composed_by(scope, pausable.then(|| item_target(state, key))))
+        Some(self.composed_by(scope, item_target(state, key)))
     }
 
-    /// Composes what the request's writes invalidated: at once, or as a paused composition of
-    /// the item's content (`target`), as Compose's item subcomposition (other lists' items its
-    /// pass composes are ordinary content, D597).
-    fn composed_by(&self, scope: &mut PrefetchRequestScope<'_>, target: Option<u64>) -> Composed {
-        if let Some(target) = target {
-            Composed::Paused(Rc::new(scope.recompose_pausable_for(target)))
-        } else {
-            scope.recompose();
-            Composed::Now
-        }
+    /// Composes what the request's writes invalidated, as a paused composition of the item's
+    /// content (`target`), as Compose's item subcomposition (other lists' items its pass composes
+    /// are ordinary content, D597).
+    fn composed_by(&self, scope: &mut PrefetchRequestScope<'_>, target: u64) -> Composed {
+        Composed::Paused(Rc::new(scope.recompose_pausable_for(target)))
     }
 
     /// Whether the item of `key` was composed by a request and not measured since: leaving, it
@@ -783,7 +910,7 @@ impl Prefetch {
 /// A prefetch step, as Compose's averages time them.
 #[derive(Clone, Copy)]
 enum Step {
-    /// A whole composition (without pausable composition).
+    /// A whole composition: what D341's budget estimates.
     Compose,
     /// A stretch of paused composition, up to a pause point.
     Resume,
@@ -797,8 +924,6 @@ enum Step {
 enum Composed {
     /// Composed already (the layout's, or a request's).
     Already,
-    /// Composed and applied now.
-    Now,
     /// In a paused composition, to resume until complete, then apply.
     Paused(Rc<PausedComposition>),
 }
@@ -806,7 +931,8 @@ enum Composed {
 /// Compose's `Averages`: a content type's steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Averages {
-    /// A whole composition's (`compositionTimeNanos`, without pausable composition).
+    /// A whole composition's (`PREFETCH_BUDGET_RECENT_MAXIMUM`'s gate to start one; Compose's has
+    /// no such average at the tip).
     composition: u64,
     /// A stretch of paused composition's and a pause's (`resumeTimeNanos`, `pauseTimeNanos`).
     resume: u64,
@@ -838,6 +964,10 @@ pub(super) struct Handle {
     pub(super) item: usize,
     /// Its unit: the item, or a grid's line.
     unit: usize,
+    /// The window's lane it's for (`None`: a nested list's, no window's).
+    lane: Option<i32>,
+    /// Its main-axis size, once measured.
+    size: Cell<i32>,
     /// The item's key when requested (`keyUsedForComposition`): another item there ends it.
     key: u64,
     content_type: Option<u64>,
@@ -877,12 +1007,15 @@ impl Handle {
         items: &Items,
         item: usize,
         unit: usize,
+        lane: Option<i32>,
         premeasure: bool,
     ) -> Handle {
         Handle {
             state: Rc::downgrade(state),
             item,
             unit,
+            lane,
+            size: Cell::new(0),
             key: items.key(item),
             content_type: items.content_type(item),
             premeasure,
@@ -896,6 +1029,21 @@ impl Handle {
             queued: Cell::new(false),
             nested: RefCell::new(None),
         }
+    }
+
+    /// Cancels the request, as its handle's `cancel`.
+    pub(super) fn cancel(&self) {
+        if self.canceled.replace(true) {
+            return;
+        }
+        if let Some(state) = self.state.upgrade() {
+            self.clean_up(&state.prefetch);
+        }
+    }
+
+    /// As its handle's `markAsUrgent`.
+    pub(super) fn mark_as_urgent(&self) {
+        self.urgent.set(true);
     }
 
     /// `executeRequest`: the steps not done yet, each while it fits. Returns whether work is
@@ -924,51 +1072,26 @@ impl Handle {
             self.composed.set(true);
         }
         if !self.composed.get() {
-            let pausable = prefetch.policy.get().pausable;
-            if pausable {
-                // Compose's gate: a stretch and a pause fit. With D341's budget, an item's
-                // composition starts only if the whole of it fits (its estimate of whole
-                // compositions), and a paused one resumes as Compose's (D596).
-                let starting = self.paused.borrow().is_none();
-                let fits = if starting && prefetch.policy.get().recent_maximum {
-                    prefetch.fits(scope, Step::Compose, averages.composition, urgent)
-                } else {
-                    let available = scope.available_time_nanos();
-                    let goes_on = prefetch.goes_on(available, scope.idle_time(), &averages, urgent);
-                    if !goes_on {
-                        prefetch.resume_missed(scope);
-                    }
-                    goes_on
-                };
-                if !fits {
-                    return self.short_of_time(&state);
-                }
-                let _section =
-                    compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
-                if !self.perform_pausable_composition(&state, scope, mark, urgent) {
-                    return false;
-                }
+            // Compose's gate: a stretch and a pause fit. With D341's budget, an item's
+            // composition starts only if the whole of it fits (its estimate of whole
+            // compositions), and a paused one resumes as Compose's (D596).
+            let starting = self.paused.borrow().is_none();
+            let fits = if starting && prefetch.policy.get().recent_maximum {
+                prefetch.fits(scope, Step::Compose, averages.composition, urgent)
             } else {
-                if !prefetch.fits(scope, Step::Compose, averages.composition, urgent) {
-                    return self.short_of_time(&state);
+                let available = scope.available_time_nanos();
+                let goes_on = prefetch.goes_on(available, scope.idle_time(), &averages, urgent);
+                if !goes_on {
+                    prefetch.resume_missed(scope);
                 }
-                let _section =
-                    compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
-                match prefetch.compose_item(&state, self.item, self.key, scope, false) {
-                    // Not next to the composed items: no longer to be prefetched.
-                    None => {
-                        self.canceled.set(true);
-                        return false;
-                    }
-                    Some(composed) => {
-                        if !matches!(composed, Composed::Already) {
-                            let nanos = mark.elapsed().as_nanos() as u64;
-                            prefetch.timed(scope, Step::Compose, self.content_type, nanos);
-                        }
-                    }
-                }
-                prefetch.stepped(scope);
-                self.composed.set(true);
+                goes_on
+            };
+            if !fits {
+                return self.short_of_time(&state);
+            }
+            let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
+            if !self.perform_pausable_composition(&state, scope, mark, urgent) {
+                return false;
             }
             if !self.composed.get() {
                 // Paused: it goes on after the next frame.
@@ -1048,7 +1171,10 @@ impl Handle {
                 // What measuring it wrote (a nested list's items, a `BoxWithConstraints`'
                 // constraints) is composed and measured too, as a frame's rounds do.
                 for _ in 0..3 {
-                    scope.premeasure(node, child, constraints);
+                    if let Some(size) = scope.premeasure(node, child, constraints) {
+                        let vertical = prefetch.vertical.get();
+                        self.size.set(if vertical { size.height } else { size.width });
+                    }
                     if !scope.recompose() {
                         break;
                     }
@@ -1108,7 +1234,7 @@ impl Handle {
         let existing = self.paused.borrow().clone();
         let paused = match existing {
             Some(paused) => paused,
-            None => match prefetch.compose_item(state, self.item, self.key, scope, true) {
+            None => match prefetch.compose_item(state, self.item, self.key, scope) {
                 None => {
                     self.canceled.set(true);
                     return false;
@@ -1119,7 +1245,7 @@ impl Handle {
                     *self.paused.borrow_mut() = Some(paused.clone());
                     paused
                 }
-                Some(Composed::Already | Composed::Now) => {
+                Some(Composed::Already) => {
                     self.composed.set(true);
                     return true;
                 }
@@ -1213,7 +1339,9 @@ impl Handle {
                     let requests =
                         list.prefetch.items.borrow().upgrade().map_or(Vec::new(), |items| {
                             (first..first + count)
-                                .map(|item| Rc::new(Handle::new(&list, &items, item, item, false)))
+                                .map(|item| {
+                                    Rc::new(Handle::new(&list, &items, item, item, None, false))
+                                })
                                 .collect()
                         });
                     nested.requests[nested.list] = Some(requests);
@@ -1301,16 +1429,21 @@ struct HandleRequest(Rc<Handle>);
 
 impl PrefetchRequest for HandleRequest {
     fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
-        let more = self.0.execute(scope);
+        let handle = &self.0;
+        let more = handle.execute(scope);
         if !more {
-            self.0.queued.set(false);
+            handle.queued.set(false);
+            if (handle.done.get() || handle.canceled.get())
+                && let Some(state) = handle.state.upgrade()
+            {
+                state.prefetch.request_over(&state, handle);
+            }
         }
         more
     }
 }
 
-/// With `KEEP_ITEMS_BEHIND`, disposes between frames the items composed beyond the limits the
-/// last layout set, when no request composes (which would trim them).
+/// Deactivates between frames the items composed beyond the limits the last layout set.
 struct TrimRequest {
     state: Weak<LazyListInner>,
 }
@@ -1326,27 +1459,20 @@ impl PrefetchRequest for TrimRequest {
             // The frame composes the wanted ones (and trims).
             return false;
         }
-        let policy = prefetch.policy.get();
-        // With `KEEP_ITEMS_BEHIND`, behind the scroll only: those ahead are the next ones.
-        let range = if policy.keep_behind == 0 {
-            (start.max(low), end.min(high))
-        } else if prefetch.forward.get() {
-            (start.max(low), end)
-        } else {
-            (start, end.min(high))
-        };
+        let range = (start.max(low), end.min(high));
         if range == (start, end) || range.0 >= range.1 {
             return false;
         }
         // Compose deactivates in its measurement, so any time left goes; D341's budget times it
         // as a composition.
-        let fits = if policy.recent_maximum {
+        let recent_maximum = prefetch.policy.get().recent_maximum;
+        let fits = if recent_maximum {
             prefetch.fits(scope, Step::Compose, prefetch.averages(None).composition, false)
         } else {
             scope.available_time_nanos() > 0
         };
         if !fits {
-            return !policy.recent_maximum;
+            return !recent_maximum;
         }
         let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
         state.compose(range);

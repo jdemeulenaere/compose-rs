@@ -19,7 +19,7 @@ use compose_ui::{
 };
 
 use super::layout_info::{LaidItem, LaidViewport};
-use super::prefetch::{Laid, Policy};
+use super::prefetch::{Laid, Policy, Units};
 use super::{
     BEYOND, FIRST_STEP, Interval, ItemStacking, Items, ItemsRef, LazyItems, LazyListInner,
     LazyListState, LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range,
@@ -109,7 +109,7 @@ pub(super) type SpanOf = Rc<dyn Fn(LazyGridItemSpanScope, usize) -> GridItemSpan
 /// [`remember_lazy_grid_state`] keeps that in the composition.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LazyGridState {
-    list: LazyListState,
+    pub(super) list: LazyListState,
     object: ObjectHandle<GridInner>,
 }
 
@@ -119,6 +119,12 @@ struct GridInner {
 }
 
 impl LazyGridState {
+    /// The cache window its grid uses, if composed.
+    #[doc(hidden)]
+    pub fn cache_window(&self) -> Option<Rc<dyn super::LazyLayoutCacheWindow>> {
+        self.list.cache_window()
+    }
+
     /// Scrolled to the line of item `first_visible_item_index`,
     /// `first_visible_item_scroll_offset` pixels into it.
     #[track_caller]
@@ -843,6 +849,7 @@ pub fn LazyVerticalGrid(
     >,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
+    #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     // (The `#[composable]` transform converts `impl Into` parameters.)
@@ -857,6 +864,7 @@ pub fn LazyVerticalGrid(
         cross_spacing,
         fling_behavior,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -878,6 +886,7 @@ pub fn LazyHorizontalGrid(
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
+    #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     let cross_spacing = vertical_arrangement.spacing();
@@ -891,6 +900,7 @@ pub fn LazyHorizontalGrid(
         cross_spacing,
         fling_behavior,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -940,6 +950,7 @@ fn LazyGrid(
     cross_spacing: Dp,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     user_scroll_enabled: bool,
+    cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     let scope = LazyGridScope::default();
@@ -948,6 +959,8 @@ fn LazyGrid(
     let items = Rc::new(Items::new(intervals));
     // The list state its position is in (detached once the grid state's owner went, D240).
     let list = state.list;
+    let inner = list.inner_or_detached();
+    inner.prefetch.use_window(&inner, cache_window);
     let info = GridInfo {
         items: items.clone(),
         cells,
@@ -963,6 +976,7 @@ fn LazyGrid(
             || {
                 let state = list.inner_or_detached();
                 let lines = Rc::new(RefCell::new(Lines::new(info.items.clone(), 0)));
+                *state.prefetch.units.borrow_mut() = Some(Rc::new(StoredLines(lines.clone())));
                 let slots = RefCell::new(None);
                 Rc::new(LazyGridLayout { state, info, scheduler, lines, slots })
                     as Rc<dyn MeasurePolicy>
@@ -1040,6 +1054,34 @@ impl Slots {
         let last = (slot + span).min(self.count()) - 1;
         let start = self.positions[slot];
         (start, self.positions[last] + self.sizes[last] - start)
+    }
+}
+
+/// A grid's units in its layout, where its lines are borrowed.
+struct LayoutLines<'a>(RefCell<&'a mut Lines>);
+
+impl Units for LayoutLines<'_> {
+    fn items_of(&self, line: usize) -> Option<std::ops::Range<usize>> {
+        let mut lines = self.0.try_borrow_mut().ok()?;
+        lines.exists(line).then(|| lines.start(line)..lines.start(line + 1))
+    }
+
+    fn unit_of(&self, item: usize) -> usize {
+        self.0.try_borrow_mut().map_or(0, |mut lines| lines.line_of(item))
+    }
+}
+
+/// A grid's units between frames, the lines as last laid out.
+struct StoredLines(Rc<RefCell<Lines>>);
+
+impl Units for StoredLines {
+    fn items_of(&self, line: usize) -> Option<std::ops::Range<usize>> {
+        let mut lines = self.0.try_borrow_mut().ok()?;
+        lines.exists(line).then(|| lines.start(line)..lines.start(line + 1))
+    }
+
+    fn unit_of(&self, item: usize) -> usize {
+        self.0.try_borrow_mut().map_or(0, |mut lines| lines.line_of(item))
     }
 }
 
@@ -1724,9 +1766,9 @@ impl MeasurePolicy for LazyGridLayout {
         let covers = composed_start <= wanted_items.0 && composed_end >= wanted_items.1;
         let prefetch = &state.prefetch;
         prefetch.policy.set(policy);
+        prefetch.vertical.set(self.info.vertical);
         prefetch.visible.set(m.lines.start(end_index) - m.lines.start(lead));
-        // Compose's grid prefetch strategy, once the layout settled: a line at a time, each of
-        // its items a request.
+        // The cache window, once the layout settled: a line at a time, each of its items a request.
         if !missing && wanted_before == 0 {
             let laid = match (placed.first().copied(), placed.last().copied()) {
                 (Some((_, first_main)), Some((last_line, last_main))) => {
@@ -1735,53 +1777,73 @@ impl MeasurePolicy for LazyGridLayout {
                     Some(Laid {
                         first,
                         last,
-                        first_item: m.lines.start(first),
-                        last_item: m.lines.start(last + 1).saturating_sub(1),
-                        start_distance: -first_main,
+                        // The window starts past lines laid out beyond those in view.
+                        start_overflow: if first < lead { 0 } else { (-first_main).max(0) },
                         // The last visible item's own size, as Compose's `lastItem.size` (an item
                         // shorter than its line ends before the line does).
-                        end_distance: last_main
-                            + m.sizes
-                                .get(m.lines.start(last_line + 1).saturating_sub(1))
-                                .unwrap_or_else(|| m.size_of(last_line))
-                            + spacing
-                            - main_max,
+                        end_overflow: if last + 1 > end_index {
+                            0
+                        } else {
+                            (last_main
+                                + m.sizes
+                                    .get(m.lines.start(last_line + 1).saturating_sub(1))
+                                    .unwrap_or_else(|| m.size_of(last_line))
+                                + spacing
+                                - main_max)
+                                .abs()
+                        },
+                        viewport: main_max,
+                        spacing,
+                        density,
                     })
                 }
                 _ => None,
             };
+            let mut sizes = prefetch.sizes.borrow_mut();
+            sizes.clear();
+            if let Some(laid) = &laid {
+                // Lines beyond those placed (`GRID_LINES_BEYOND`) count as the average.
+                for line in laid.first..=laid.last {
+                    sizes.push(if (lead..end_index).contains(&line) {
+                        m.size_of(line)
+                    } else {
+                        average
+                    });
+                }
+            }
+            // In the layout the lines are borrowed: a view of them.
+            let lines = LayoutLines(RefCell::new(&mut *m.lines));
+            let items = &info.items;
             prefetch.after_layout(
                 state,
                 self.scheduler.as_ref(),
                 laid.as_ref(),
                 count,
-                &mut |line| m.lines.start(line)..m.lines.start(line + 1),
+                state.laid_items_changed(&info.items),
+                Some(&lines),
+                &sizes,
+                &mut |line| items.key(lines.items_of(line).map_or(0, |range| range.start)),
             );
+            drop(sizes);
         }
-        // The items that may stay composed: with `KEEP_ITEMS_BEHIND`, those ahead in the scroll
-        // direction and just behind it kept (lines: the limits prefetching composes within too,
-        // in items, whatever the lines' spans, D456); else, as Compose's, those wanted and those
+        // The items that may stay composed: those wanted, those in the window (lines), and those
         // requests composed next to them.
-        let keep = policy.keep_behind > 0;
         // A focus search that laid lines out beyond the bounds is over: they go (D482, D577).
         let beyond_ended = state.beyond_ended.take();
-        let limits = if keep {
-            let (behind, ahead) = if prefetch.forward.get() {
-                (policy.keep_behind, policy.ahead)
-            } else {
-                (policy.ahead, policy.keep_behind)
-            };
-            (m.lines.start(wanted_start.saturating_sub(behind)), m.lines.start(wanted_end + ahead))
-        } else {
+        let limits = {
             // The line after the wanted ones the scroll's way, if no focus search just ended.
             let next = if prefetch.forward.get() {
                 m.lines.start(wanted_end + 1)
             } else {
                 m.lines.start(wanted_start.saturating_sub(1))
             };
+            let window = prefetch
+                .window_bounds()
+                .map(|(first, last)| (m.lines.start(first), m.lines.start(last + 1)));
             prefetch.target(
                 wanted_items,
                 (composed_start, composed_end),
+                window,
                 (!beyond_ended).then_some(next),
             )
         };
@@ -1794,30 +1856,7 @@ impl MeasurePolicy for LazyGridLayout {
         let composed_more = state.composed_more.take();
         // A paused composition cancelled: the items composed again first (D594).
         let recompose = m.lacked_unready.get() || prefetch.take_cancelled();
-        if keep {
-            let slack = 2 * BEYOND;
-            let too_many = (wanted_start > slack
-                && composed_start < m.lines.start(wanted_start - slack))
-                || composed_end > m.lines.start(wanted_end + slack)
-                || search_ended;
-            if composed_more && covers && !too_many {
-                state.composed.set(composed);
-            }
-            if !covers || too_many || recompose {
-                let start = if (composed_start..=composed_end).contains(&wanted_items.0) {
-                    composed_start.max(limits.0)
-                } else {
-                    wanted_items.0
-                };
-                let end = if (composed_start..=composed_end).contains(&wanted_items.1) {
-                    composed_end.min(limits.1)
-                } else {
-                    wanted_items.1
-                };
-                composed = (start, end);
-                state.compose(composed);
-            }
-        } else if !covers || search_ended || recompose {
+        if !covers || search_ended || recompose {
             // Items to compose (or a focus search's to let go): this composition deactivates
             // those no longer wanted too.
             composed = limits;

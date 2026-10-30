@@ -421,6 +421,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
             compose_foundation::Alignment::START,
             None,
             true,
+            None,
             callback(move |scope: compose_foundation::LazyListScope| {
                 scope.items(100, move |index| {
                     let color = if index % 3 == 0 { Color::RED } else { Color::BLUE };

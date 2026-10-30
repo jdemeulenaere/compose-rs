@@ -79,23 +79,6 @@ fn with(name: Optimization) -> Optimizations {
     Optimizations::NONE.with(name, true)
 }
 
-/// Compose's prefetch without pausable composition (its flag off): a request composes its item
-/// whole, gated by the whole composition's average. Restored when dropped.
-pub(crate) struct WholeCompositions;
-
-impl WholeCompositions {
-    pub(crate) fn new() -> WholeCompositions {
-        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(false);
-        WholeCompositions
-    }
-}
-
-impl Drop for WholeCompositions {
-    fn drop(&mut self) {
-        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(true);
-    }
-}
-
 fn later() -> Instant {
     Instant::now() + Duration::from_secs(60)
 }
@@ -200,36 +183,6 @@ fn a_request_for_an_item_no_longer_next_is_cancelled() {
     assert_eq!(live_items(), (3..10).collect::<Vec<_>>());
 }
 
-/// Without pausable composition: a composition (a row's whole, 25 ms) starts only once the time
-/// left exceeds the whole composition's average (`prefetch_pausable` has the pausable gate).
-#[test]
-fn an_urgent_request_composes_with_any_time_left() {
-    let _whole = WholeCompositions::new();
-    let (mut ui, state) = list(Optimizations::NONE);
-    SLOW_EVEN.set(Duration::from_millis(25));
-    SLOW_ODD.set(Duration::from_millis(25));
-    // 5 px down: row 6 requested, not urgent (row 5 ends 15 px past the viewport, more than
-    // 5 px); its composition's first sample is taken as is: about 25 ms.
-    scroll(&mut ui, *state, 5.0);
-    assert!(!ui.host().prefetch(later()));
-    assert_eq!(compositions(6), 1);
-    // 30 px more: rows 1 to 6 show, row 6 ending 5 px past the viewport: the same scroll again
-    // reaches row 7, so its request is urgent, and composes with 5 ms left.
-    scroll(&mut ui, *state, 30.0);
-    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)), "measuring is left");
-    assert_eq!(compositions(7), 1);
-    // 6 px more: row 7 shows, ending 19 px past the viewport: row 8's request isn't urgent, and
-    // 5 ms is less than the average.
-    scroll(&mut ui, *state, 6.0);
-    assert_eq!(state.first_visible_item_index(), 2);
-    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)), "left for later");
-    assert_eq!(compositions(8), 0);
-    assert!(ui.host().has_prefetch_work(), "the request stays queued");
-    // The next idle time with time for it composes it.
-    assert!(!ui.host().prefetch(later()));
-    assert_eq!(compositions(8), 1);
-}
-
 /// Scrolls 6 px at a time (from `at` px, which it moves on) until row `row` is the one after
 /// those in view: its request isn't urgent (the row before it ends 14 to 20 px past the
 /// viewport, more than 6 px).
@@ -244,6 +197,25 @@ fn scroll_until_requested(
         scroll(ui, state, 6.0);
     }
     assert_eq!((*at as usize + 99) / 20 + 1, row, "row {row} is the next");
+}
+
+/// A composition (a row's whole, 25 ms) doesn't start with less time left than its average, but
+/// for an urgent request (`prefetch_pausable` has the gate's details).
+#[test]
+fn an_urgent_request_composes_with_any_time_left() {
+    let (mut ui, state) = list(Optimizations::NONE);
+    SLOW_EVEN.set(Duration::from_millis(25));
+    SLOW_ODD.set(Duration::from_millis(25));
+    // 5 px down: row 6 requested, not urgent (row 5 ends 15 px past the viewport, more than
+    // 5 px); its composition's first sample is taken as is: about 25 ms.
+    scroll(&mut ui, *state, 5.0);
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(compositions(6), 1);
+    // 30 px more: rows 1 to 6 show, row 6 ending 5 px past the viewport: the same scroll again
+    // reaches row 7, so its request is urgent, and composes with 5 ms left.
+    scroll(&mut ui, *state, 30.0);
+    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)), "measuring is left");
+    assert_eq!(compositions(7), 1);
 }
 
 #[test]
@@ -265,31 +237,6 @@ fn prefetch_budget_recent_maximum_gives_a_request_up_until_the_next_scroll() {
     assert!(ui.host().has_prefetch_work());
     assert!(!ui.host().prefetch(later()));
     assert_eq!(compositions(7), 1);
-}
-
-/// Without pausable composition, as `an_urgent_request_composes_with_any_time_left`.
-#[test]
-fn each_content_type_has_its_own_averages() {
-    let _whole = WholeCompositions::new();
-    let (mut ui, state) = list(Optimizations::NONE);
-    // Even rows take 25 ms to compose, odd ones no time. Rows 6 (even) and 7 (odd) prefetched:
-    // each type has a sample.
-    SLOW_EVEN.set(Duration::from_millis(25));
-    let mut at = 0;
-    scroll_until_requested(&mut ui, *state, &mut at, 6);
-    assert!(!ui.host().prefetch(later()));
-    scroll_until_requested(&mut ui, *state, &mut at, 7);
-    assert!(!ui.host().prefetch(later()));
-    assert_eq!((compositions(6), compositions(7)), (1, 1));
-    // Row 8 (even): 5 ms is less than its type's average.
-    scroll_until_requested(&mut ui, *state, &mut at, 8);
-    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(5)));
-    assert_eq!(compositions(8), 0);
-    assert!(!ui.host().prefetch(later()));
-    // Row 9 (odd): its type's average is far less than 5 ms.
-    scroll_until_requested(&mut ui, *state, &mut at, 9);
-    assert!(!ui.host().prefetch(Instant::now() + Duration::from_millis(5)));
-    assert_eq!(compositions(9), 1);
 }
 
 thread_local! {

@@ -177,7 +177,10 @@ fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
     state.dispatch_raw_delta(100.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 105);
-    assert_eq!(live_items(), (103..110).collect::<Vec<_>>());
+    // Those behind the window go between frames, as the window learns of a scroll after the layout
+    // showing it (D892); then the window ahead fills, with two items.
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (103..112).collect::<Vec<_>>());
 }
 
 #[test]
@@ -265,6 +268,7 @@ fn prefetched_items_left_far_behind_are_disposed() {
     state.dispatch_raw_delta(-240.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 89);
+    ui.host().prefetch(later());
     assert!(!live(last + 1) && !live(last + 2), "{:?}", LIVE.with(|live| live.borrow().clone()));
 }
 

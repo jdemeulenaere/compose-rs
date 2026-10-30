@@ -451,7 +451,8 @@ fn last_visible(first: usize, offset: f32, unit: impl Fn(usize) -> f32) -> usize
 
 /// After a scroll and the idle time it wants, a still screen asks for nothing more (no frame,
 /// no prefetch), and what stays composed is at most what Compose's would hold: the items in
-/// view and the next one the scroll's way (a grid: lines), for mixed item sizes.
+/// view and those in the ahead window (at most half the viewport, its last item over it), for mixed
+/// item sizes (a grid: lines).
 #[test]
 fn x_a_still_screen_goes_idle_holding_what_compose_would() {
     let mut failures = Vec::new();
@@ -471,7 +472,9 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
             if ui.host().needs_frame() || ui.host().has_prefetch_work() {
                 failures.push(format!("list {pattern} {step}: not idle"));
             }
-            if live.first() != Some(&first) || *live.last().unwrap() > last + 1 {
+            let window: f32 =
+                (last + 1..*live.last().unwrap()).map(|index| height(pattern, index)).sum();
+            if live.first() != Some(&first) || window >= 50.0 {
                 failures
                     .push(format!("list {pattern} {step}: shows {first}..={last}, holds {live:?}"));
             }
@@ -502,9 +505,9 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
             if ui.host().needs_frame() || ui.host().has_prefetch_work() {
                 failures.push(format!("grid {pattern} {step}: not idle"));
             }
-            if live.first() != Some(&(first_line * 3))
-                || *live.last().unwrap() >= (last_line + 2) * 3
-            {
+            let window: f32 =
+                (last_line + 1..*live.last().unwrap() / 3).map(|line| height(pattern, line)).sum();
+            if live.first() != Some(&(first_line * 3)) || window >= 50.0 {
                 failures.push(format!(
                     "grid {pattern} {step}: shows lines {first_line}..={last_line}, holds {live:?}"
                 ));

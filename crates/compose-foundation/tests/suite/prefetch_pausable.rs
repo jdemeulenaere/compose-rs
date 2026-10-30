@@ -251,22 +251,6 @@ fn a_composition_starts_only_if_a_stretch_and_a_pause_fit() {
     assert_eq!(parts(7), 4);
 }
 
-#[test]
-fn without_pausable_composition_a_request_composes_its_item_whole() {
-    let _whole = crate::prefetch_parity::WholeCompositions::new();
-    let (mut ui, state) = list(Optimizations::NONE);
-    PART_TIME.set(Duration::from_millis(4));
-    scroll(&mut ui, *state, 5.0);
-    assert!(!ui.host().prefetch(later()));
-    let mut at = 5;
-    scroll_until_requested(&mut ui, *state, &mut at, 7);
-    // 6 ms: less than the whole composition's average (16 ms): not started.
-    assert!(ui.host().prefetch(within(6)));
-    assert_eq!(parts(7), 0);
-    // Started, it composes all four parts in one step.
-    assert!(!ui.host().prefetch(later()));
-    assert_eq!(parts(7), 4);
-}
 /// Scrolls `steps` times by random amounts, mostly forward, each frame followed by an idle
 /// time of a random length, with `optimizations`: after each frame, every row in view shows all
 /// its parts and runs its effect (applied), and the composition is consistent.
@@ -328,22 +312,6 @@ fn compose_rs_prefetch_flags_work_with_pausable_composition() {
     }
 }
 
-#[test]
-fn compose_rs_prefetch_flags_work_without_pausable_composition() {
-    let _whole = crate::prefetch_parity::WholeCompositions::new();
-    let flags = [
-        Optimizations::NONE,
-        Optimizations::NONE.with(Optimization::PREFETCH_BUDGET_RECENT_MAXIMUM, true),
-        Optimizations::NONE
-            .with(Optimization::PREFETCH_TWO_AHEAD, true)
-            .with(Optimization::KEEP_ITEMS_BEHIND, true)
-            .with(Optimization::PREFETCH_AT_REST, true),
-    ];
-    for (index, optimizations) in flags.into_iter().enumerate() {
-        scroll_at_random(optimizations, 100 + index as u64, 30);
-    }
-}
-
 thread_local! {
     static CELLS: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
     static CELLS_AT_MEASURE: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
@@ -391,6 +359,8 @@ fn a_paused_item_prefetches_its_nested_lists_once_applied() {
         LazyColumn!(
             modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
+            // The next row, whose size is the viewport, from the first pixel on.
+            cache_window = Some(lazy_layout_cache_window_with(100.dp(), 0.dp(), false)),
             |scope: LazyListScope| {
                 scope.items(100, Carousel);
             }

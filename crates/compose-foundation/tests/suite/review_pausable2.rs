@@ -271,6 +271,8 @@ fn nested_prefetch_after_switch(switch: bool) -> Option<usize> {
         LazyColumn!(
             modifier = Modifier.size((100.dp(), 100.dp())),
             state = state,
+            // The next row, whose size is the viewport, from the first pixel on.
+            cache_window = Some(lazy_layout_cache_window_with(100.dp(), 0.dp(), false)),
             |scope: LazyListScope| {
                 // A content type each: no row reuses another's carousel (whose slots it
                 // would keep, composing as many cells as it had).

@@ -21,11 +21,17 @@
 //! in lines.
 
 mod animate_scroll;
+mod cache_window;
 mod grid;
 mod layout_info;
 mod prefetch;
 
 pub use animate_scroll::LazyLayoutScrollScope;
+pub use cache_window::{
+    LazyGridDefaults, LazyLayoutCacheWindow, LazyListDefaults, WindowValue,
+    lazy_layout_cache_window, lazy_layout_cache_window_fraction,
+    lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
+};
 pub use grid::{
     GridCells, GridItemSpan, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
     LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
@@ -227,6 +233,11 @@ impl LazyListInner {
     }
 
     /// Notes `items` as those laid out; returns whether they're others than last time.
+    /// Whether `items` aren't the items last laid out.
+    fn laid_items_changed(&self, items: &Rc<Items>) -> bool {
+        !self.laid_items.borrow().as_ref().is_some_and(|laid| Rc::ptr_eq(laid, items))
+    }
+
     fn note_laid_items(&self, items: &Rc<Items>) -> bool {
         let mut laid = self.laid_items.borrow_mut();
         if laid.as_ref().is_some_and(|laid| Rc::ptr_eq(laid, items)) {
@@ -248,7 +259,8 @@ impl LazyListInner {
     }
 
     fn new(first_visible_item_index: usize, first_visible_item_scroll_offset: i32) -> Self {
-        let offset = first_visible_item_scroll_offset.max(0);
+        // A negative offset: before the item, as Compose's; the first layout coerces it.
+        let offset = first_visible_item_scroll_offset;
         LazyListInner {
             position: Cell::new((first_visible_item_index, offset as f32)),
             first_key: Cell::new(None),
@@ -276,7 +288,7 @@ impl LazyListInner {
             room_backward: Cell::new(if first_visible_item_index > 0 {
                 f32::INFINITY
             } else {
-                offset as f32
+                offset.max(0) as f32
             }),
             room_forward: Cell::new(f32::INFINITY),
             room_estimated: Cell::new((false, false)),
@@ -373,6 +385,12 @@ impl LazyListState {
         self.inner().unwrap_or_else(|| Rc::new(LazyListInner::new(0, 0)))
     }
 
+    /// The cache window its list uses, if composed.
+    #[doc(hidden)]
+    pub fn cache_window(&self) -> Option<Rc<dyn LazyLayoutCacheWindow>> {
+        self.inner()?.prefetch.cache_window()
+    }
+
     /// The first item in view, as `firstVisibleItemIndex` (a state read).
     pub fn first_visible_item_index(&self) -> usize {
         self.inner().map_or(0, |inner| inner.first_index.get())
@@ -402,6 +420,9 @@ impl LazyListState {
         let Some(inner) = self.inner() else { return };
         // A jump is no user input: nothing it passes goes to nested-scroll parents.
         inner.overshoot.borrow_mut().take();
+        if inner.published.get() != (index, scroll_offset) {
+            inner.prefetch.reset_window();
+        }
         inner.position.set((index, scroll_offset as f32));
         inner.first_key.set(None);
         inner.pending.set(0.0);
@@ -1733,6 +1754,7 @@ pub fn LazyColumn(
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
+    #[default(None)] cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
 ) {
     LazyList(
@@ -1753,6 +1775,7 @@ pub fn LazyColumn(
         Alignment::new(horizontal_alignment.bias, -1.0),
         fling_behavior,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -1770,6 +1793,7 @@ pub fn LazyRow(
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
+    #[default(None)] cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
 ) {
     LazyList(
@@ -1790,6 +1814,7 @@ pub fn LazyRow(
         Alignment::new(-1.0, vertical_alignment.bias),
         fling_behavior,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -1806,11 +1831,14 @@ fn LazyList(
     alignment: Alignment,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     user_scroll_enabled: bool,
+    cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
 ) {
+    let inner = state.inner_or_detached();
+    inner.prefetch.use_window(&inner, cache_window);
     // In an item a request composes, the list is one to prefetch the first items of (Compose's
     // nested prefetch).
-    prefetch::note_nested(&state.inner_or_detached());
+    prefetch::note_nested(&inner);
     let scope = LazyListScope {
         intervals: Rc::default(),
         item_scope: LazyItemScope { parent_size: state.inner_or_detached().parent_size.clone() },
@@ -2527,8 +2555,6 @@ impl MeasurePolicy for LazyListLayout {
         // The items wanted composed: those in view, those a focus search asked for beyond them
         // (D477), and as many more as the room left would take if items were missing.
         let average = sizes.average();
-        let viewport_worth =
-            ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
         let (beyond_before, beyond_after) = state.beyond_bounds.get();
         let wanted_start = lead.saturating_sub(beyond_before + wanted_before);
         let mut wanted_end = (end_index + beyond_after).min(count);
@@ -2565,51 +2591,53 @@ impl MeasurePolicy for LazyListLayout {
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         let prefetch = &state.prefetch;
         prefetch.policy.set(policy);
+        prefetch.vertical.set(info.vertical);
         prefetch.visible.set(end_index - lead);
-        // Compose's prefetch strategy, once the layout settled (nothing missing, nothing waiting
-        // to be composed before): what it shows, and the scrolling since.
+        // The cache window, once the layout settled (nothing missing, nothing waiting to be composed
+        // before): what it shows, and the scrolling since.
         if !missing && wanted_before == 0 {
             let laid = match (placed.first(), placed.last()) {
                 (Some((_, first_main)), Some((last, last_main))) => Some(Laid {
                     first: lead,
                     last: end_index - 1,
-                    first_item: lead,
-                    last_item: end_index - 1,
-                    start_distance: -first_main,
-                    end_distance: last_main + main_of(last) + spacing - main_max,
+                    start_overflow: (-first_main).max(0),
+                    end_overflow: (last_main + main_of(last) + spacing - main_max).abs(),
+                    viewport: main_max,
+                    spacing,
+                    density,
                 }),
                 _ => None,
             };
+            let items = &info.items;
+            let mut sizes = prefetch.sizes.borrow_mut();
+            sizes.clear();
+            sizes.extend(placed.iter().map(|(placeable, _)| main_of(placeable)));
             prefetch.after_layout(
                 state,
                 self.scheduler.as_ref(),
                 laid.as_ref(),
                 count,
-                &mut |unit| unit..unit + 1,
+                state.laid_items_changed(&info.items),
+                None,
+                &sizes,
+                &mut |unit| items.key(unit),
             );
         }
-        // The items that may stay composed: with `KEEP_ITEMS_BEHIND`, those up to the ones
-        // kept behind and prefetched ahead (D375); else, as Compose's, those wanted and those
-        // requests composed next to them.
-        let keep = policy.keep_behind > 0;
+        // The items that may stay composed: those wanted, those in the window, and those requests
+        // composed next to them.
         // A focus search that laid items out beyond the bounds is over.
         let beyond_ended = state.beyond_ended.take();
-        let limits = if keep {
-            let (behind, ahead) = if prefetch.forward.get() {
-                (policy.keep_behind, policy.ahead)
-            } else {
-                (policy.ahead, policy.keep_behind)
-            };
-            (wanted_start.saturating_sub(behind), wanted_end + ahead)
-        } else {
+        let limits = {
             let next = if prefetch.forward.get() {
                 wanted_end + 1
             } else {
                 wanted_start.saturating_sub(1)
             };
+            let window = prefetch.window_bounds().map(|(first, last)| (first, last + 1));
             prefetch.target(
                 (wanted_start, wanted_end),
                 (composed_start, composed_end),
+                window,
                 (!beyond_ended).then_some(next),
             )
         };
@@ -2624,33 +2652,7 @@ impl MeasurePolicy for LazyListLayout {
         let composed_more = state.composed_more.take();
         // A paused composition cancelled: the items composed again first (D594).
         let recompose = lacked_unready.get() || prefetch.take_cancelled();
-        if keep {
-            // Items composed far from those wanted are left in a frame, beyond two viewports'
-            // worth of them: prefetch leaves those within `limits` between frames.
-            let slack = 2 * viewport_worth;
-            let too_many = composed_start + slack < wanted_start
-                || composed_end > wanted_end + slack
-                || search_ended;
-            if composed_more && covers && !too_many {
-                state.composed.set(composed);
-            }
-            if !covers || too_many || recompose {
-                // Those next to the wanted ones stay (a jump keeps none, and composes none
-                // beyond them).
-                let start = if (composed_start..=composed_end).contains(&wanted_start) {
-                    composed_start.max(limits.0)
-                } else {
-                    wanted_start
-                };
-                let end = if (composed_start..=composed_end).contains(&wanted_end) {
-                    composed_end.min(limits.1)
-                } else {
-                    wanted_end
-                };
-                composed = (start, end);
-                state.compose(composed);
-            }
-        } else if !covers || search_ended || recompose {
+        if !covers || search_ended || recompose {
             // Items to compose (or a focus search's to let go): this composition deactivates
             // those the layout no longer wants too (kept for reuse), as Compose's measurement.
             composed = limits;
