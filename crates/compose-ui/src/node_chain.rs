@@ -79,6 +79,12 @@ impl NodeKinds {
         self.0 & other.0 != 0
     }
 
+    /// It and `other`'s kinds.
+    #[inline]
+    pub(crate) const fn with(self, other: NodeKinds) -> NodeKinds {
+        NodeKinds(self.0 | other.0)
+    }
+
     /// Whether it has every one of `other`'s kinds.
     #[inline]
     pub const fn all(self, other: NodeKinds) -> bool {
@@ -248,9 +254,24 @@ pub(crate) struct ChainEntry {
 }
 
 impl ChainEntry {
-    /// An entry for `node`, its kinds probed now.
-    pub(crate) fn new(mut node: Box<dyn ModifierNode>, observed: bool, id: EntryId) -> ChainEntry {
-        let own = NodeKinds::of(&mut *node, observed);
+    /// An entry for `node`, its kinds `fixed` if its element's type says them (checked in debug
+    /// builds), else probed now.
+    pub(crate) fn new(
+        mut node: Box<dyn ModifierNode>,
+        fixed: Option<NodeKinds>,
+        id: EntryId,
+    ) -> ChainEntry {
+        let own = match fixed {
+            Some(kinds) => {
+                debug_assert_eq!(
+                    kinds,
+                    NodeKinds::of(&mut *node, false),
+                    "compose-ui: a built-in element's kinds (`Element::fixed_kinds`)"
+                );
+                kinds
+            }
+            None => NodeKinds::of(&mut *node, true),
+        };
         let mut kinds = own;
         let mut state = 0;
         // A user-defined element's node, or a built-in one with a lifecycle (`observes_reads`).

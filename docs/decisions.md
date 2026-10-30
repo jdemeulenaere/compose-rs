@@ -18,19 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 126 |
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 257 |
-=======
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 252 |
->>>>>>> af67875b (keyframes_with_spline as Compose's KeyframesWithSplineSpec, on a port of MonoSpline, periodic too (D843))
-=======
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 253 |
->>>>>>> a78744d5 (Arcs as Compose's: ArcMode, a port of ArcSpline, keyframes using_arc, ArcAnimationSpec (D844))
-=======
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 254 |
->>>>>>> 6bbf56a3 (Review of predictive back, splines and arcs: a press's return, a dialog's composable handler, handlers changing outside a frame, a collector in another task, a task's end on leaving, old androidx.activity, splines kept by values (D846-D848))
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 258 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 90 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
@@ -670,6 +658,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1178 | [ui-and-layout](decisions/ui-and-layout.md#d1178) | current |
 | D1179 | [ui-and-layout](decisions/ui-and-layout.md#d1179) | current |
 | D1180 | [ui-and-layout](decisions/ui-and-layout.md#d1180) | current |
+| D1181 | [ui-and-layout](decisions/ui-and-layout.md#d1181) | current |
 | D1200 | [ui-and-layout](decisions/ui-and-layout.md#d1200) | current |
 | D1201 | [ui-and-layout](decisions/ui-and-layout.md#d1201) | current |
 | D1202 | [ui-and-layout](decisions/ui-and-layout.md#d1202) | current |

@@ -17,6 +17,7 @@ use crate::graphics::{Color, Shape};
 use crate::input::{EventContext, KeyEvent, PointerEvent, PointerEventPass};
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::layout_modifiers::SizeOrIntrinsic;
+use crate::node_chain::NodeKinds;
 use crate::semantics::{Role, SemanticsConfiguration};
 use crate::text::SharedString;
 use crate::unit::{Dp, DpSize, IntSize};
@@ -831,6 +832,41 @@ const _: () = assert!(std::mem::size_of::<Element>() == 64, "an Element is 64 by
 const _: () = assert!(std::mem::size_of::<Modifier>() == 392, "a Modifier is 392 bytes");
 
 impl Element {
+    /// What its node is, if the element's type says so: a built-in element's node has fixed
+    /// kinds, so a node made (most of a first frame's) probes nothing. A user-defined element's
+    /// is asked once, each instance answering for itself.
+    pub(crate) fn fixed_kinds(&self) -> Option<NodeKinds> {
+        const ANY: NodeKinds = NodeKinds::ANY;
+        Some(match self {
+            Element::Padding(_)
+            | Element::Offset(..)
+            | Element::MinimumTouchTarget(_)
+            | Element::Size(_)
+            | Element::Fill(_) => ANY.with(NodeKinds::LAYOUT),
+            Element::Weight(..)
+            | Element::Align(_)
+            | Element::ZIndex(_)
+            | Element::FillCrossAxis(_) => ANY,
+            Element::Background(..) | Element::Border(..) => ANY.with(NodeKinds::DRAW),
+            Element::Clip(_) => ANY.with(NodeKinds::DRAW).with(NodeKinds::GRAPHICS_LAYER),
+            Element::Clickable(_) => ANY
+                .with(NodeKinds::OBSERVED)
+                .with(NodeKinds::DRAW)
+                .with(NodeKinds::POINTER_INPUT)
+                .with(NodeKinds::SEMANTICS)
+                .with(NodeKinds::FOCUS_TARGET)
+                .with(NodeKinds::KEY_INPUT),
+            Element::Focusable(_) => ANY
+                .with(NodeKinds::OBSERVED)
+                .with(NodeKinds::SEMANTICS)
+                .with(NodeKinds::FOCUS_TARGET),
+            Element::OnFocusChanged(_) => ANY.with(NodeKinds::FOCUS_EVENT),
+            Element::OnKeyEvent(_) => ANY.with(NodeKinds::KEY_INPUT),
+            Element::TestTag(_) | Element::Semantics(..) => ANY.with(NodeKinds::SEMANTICS),
+            Element::Custom(_) => return None,
+        })
+    }
+
     /// Whether `other` is the same kind of element, so its node can be updated in place.
     pub(crate) fn same_kind(&self, other: &Element) -> bool {
         match (self, other) {

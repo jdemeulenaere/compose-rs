@@ -901,9 +901,11 @@ impl UiTree {
                 }
                 None => {
                     next_entry += 1;
-                    let observed = matches!(element, Element::Custom(_));
-                    let mut entry =
-                        ChainEntry::new(nodes::create(element), observed, EntryId(next_entry));
+                    let mut entry = ChainEntry::new(
+                        nodes::create(element),
+                        element.fixed_kinds(),
+                        EntryId(next_entry),
+                    );
                     if attached {
                         entry.state |= entry_state::ATTACHED;
                         inserted = true;
