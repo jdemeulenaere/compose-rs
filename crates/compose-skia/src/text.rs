@@ -61,7 +61,8 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
     let text = &entry.text;
     let paragraph = &entry.paragraph;
     // Each UTF-16 index's byte offset (a low surrogate's: its character's), the end included:
-    // the line metrics' indices read in constant time, so reading the layout is O(n).
+    // the line metrics' indices read in constant time. Reading the layout is O(n·lines), not
+    // O(n): each character's `get_rects_for_range` walks SkParagraph's lines.
     let mut bytes = Vec::with_capacity(text.len() + 1);
     for (offset, character) in text.char_indices() {
         bytes.extend(std::iter::repeat_n(offset, character.len_utf16()));
@@ -79,10 +80,7 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         let visible_end = if entry.ellipsized && number + 1 == count {
             byte_at(line.end_excluding_whitespaces).max(start)
         } else {
-            start
-                + text[start..end]
-                    .trim_end_matches(compose_ui::platform::is_line_end_space)
-                    .len()
+            start + text[start..end].trim_end_matches(compose_ui::platform::is_line_end_space).len()
         };
         let mut glyphs = Vec::new();
         // A running UTF-16 index through the line.

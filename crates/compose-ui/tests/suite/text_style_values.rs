@@ -275,6 +275,15 @@ fn lerping_paints_lerps_colors_and_brush_alphas() {
     assert_eq!(lerped, brushed(black_white, 0.4 * 0.4 + 0.6 * 0.7));
 }
 
+/// A fraction outside 0..1 (an overshooting easing) is clamped, as Compose's
+/// `lerp(Color, Color, Float)` clamps it.
+#[test]
+fn lerping_colors_clamps_the_fraction() {
+    let (start, stop) = (Color::RED, Color::GREEN);
+    assert_eq!(Color::lerp(start, stop, 1.5), Color::lerp(start, stop, 1.0));
+    assert_eq!(Color::lerp(start, stop, -0.5), Color::lerp(start, stop, 0.0));
+}
+
 fn padding(include_font_padding: bool) -> PlatformParagraphStyle {
     PlatformParagraphStyle { include_font_padding, ..PlatformParagraphStyle::DEFAULT }
 }
