@@ -16,7 +16,7 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::{Optimization, Optimizations};
-use compose_ui::{Constraints, IntSize, UnitExt};
+use compose_ui::{Constraints, IntSize, PrefetchClock, UnitExt, prefetch_now};
 
 thread_local! {
     /// Each row's parts composed.
@@ -44,7 +44,7 @@ fn Part(row: usize, part: usize) {
     PARTS.with(|parts| *parts.borrow_mut().entry(row).or_insert(0) += 1);
     let time = PART_TIME.get();
     if !time.is_zero() {
-        std::thread::sleep(time);
+        PrefetchClock::advance(time);
     }
     Box!(modifier = Modifier.size((25.dp(), 20.dp())).test_tag(format!("part {row}.{part}")));
 }
@@ -101,11 +101,11 @@ fn list_from(
 }
 
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+    prefetch_now() + Duration::from_secs(60)
 }
 
 fn within(millis: u64) -> Instant {
-    Instant::now() + Duration::from_millis(millis)
+    prefetch_now() + Duration::from_millis(millis)
 }
 
 fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
@@ -148,6 +148,7 @@ fn first_request_paused() -> (ComposeTestRule, Owned<LazyListState>) {
 
 #[test]
 fn a_composition_out_of_time_pauses_and_resumes_after_the_next_frame() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, state) = first_request_paused();
     // Nothing of it applied: not in the tree, its effect not run.
     assert!(!in_tree(&ui, "row 7"));
@@ -172,6 +173,7 @@ fn a_composition_out_of_time_pauses_and_resumes_after_the_next_frame() {
 /// nodes attach as the composition is applied.
 #[test]
 fn a_paused_items_focus_requester_attaches_as_it_is_applied() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, _state) = first_request_paused();
     let requester = REQUESTERS.with(|requesters| requesters.borrow().get(&7).copied());
     let requester = requester.expect("row 7's requester remembered");
@@ -185,6 +187,7 @@ fn a_paused_items_focus_requester_attaches_as_it_is_applied() {
 /// the request (D592).
 #[test]
 fn items_leaving_go_while_a_request_is_paused() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, state) = first_request_paused();
     assert!(live(1));
     // 15 px more: row 1 leaves the view, row 7 not in it yet.
@@ -204,6 +207,7 @@ fn items_leaving_go_while_a_request_is_paused() {
 
 #[test]
 fn a_frame_wanting_a_paused_item_completes_it() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, state) = first_request_paused();
     // Row 7 comes into view: the frame completes its composition, applies it, and shows it.
     scroll(&mut ui, *state, 20.0);
@@ -219,6 +223,7 @@ fn a_frame_wanting_a_paused_item_completes_it() {
 
 #[test]
 fn a_turn_cancels_a_paused_composition_and_lets_its_item_go() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, state) = first_request_paused();
     let composed = parts(7);
     // 3 px back up: row 7's request is cancelled (in the layout: its content goes before the
@@ -240,6 +245,7 @@ fn a_turn_cancels_a_paused_composition_and_lets_its_item_go() {
 
 #[test]
 fn a_composition_starts_only_if_a_stretch_and_a_pause_fit() {
+    let _clock = PrefetchClock::hold();
     let (mut ui, state) = list(Optimizations::NONE);
     // Parts of 20 ms: the stretches between pause points average several milliseconds.
     PART_TIME.set(Duration::from_millis(20));
@@ -286,7 +292,7 @@ fn scroll_at_random(optimizations: Optimizations, seed: u64, steps: usize) {
         for row in first..first + 5 {
             assert!(live(row), "seed {seed}, step {step}: row {row}'s effect doesn't run");
         }
-        let deadline = Instant::now() + Duration::from_micros(next(3_000));
+        let deadline = prefetch_now() + Duration::from_micros(next(3_000));
         ui.host().prefetch(deadline);
         ui.host().composition().validate();
     }
@@ -297,6 +303,7 @@ fn scroll_at_random(optimizations: Optimizations, seed: u64, steps: usize) {
 
 #[test]
 fn compose_rs_prefetch_flags_work_with_pausable_composition() {
+    let _clock = PrefetchClock::hold();
     let flags = [
         Optimizations::NONE,
         Optimizations::NONE.with(Optimization::PREFETCH_TWO_AHEAD, true),
@@ -352,6 +359,7 @@ fn Carousel(row: usize) {
 
 #[test]
 fn a_paused_item_prefetches_its_nested_lists_once_applied() {
+    let _clock = PrefetchClock::hold();
     CELLS.with(|cells| cells.borrow_mut().clear());
     CELLS_AT_MEASURE.with(|at| at.borrow_mut().clear());
     PARTS.with(|parts| parts.borrow_mut().clear());
