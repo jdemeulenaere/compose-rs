@@ -766,7 +766,7 @@ fn a_one_item_viewports_item_reused_after_a_jump_is_placed() {
         );
     });
     for index in 1..6 {
-        state.scroll_to_item(index, 0);
+        state.request_scroll_to_item(index, 0);
         ui.on_node_with_tag(&format!("{index}"))
             .assert_is_displayed()
             .assert_top_position_in_root_is_equal_to(0.dp());

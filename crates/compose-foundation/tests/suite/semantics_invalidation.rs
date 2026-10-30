@@ -207,7 +207,7 @@ fn a_scrolls_range_follows_its_offset_and_content() {
     assert_eq!(range.value, 0.0);
     let largest = range.max_value;
     assert!(largest > 0.0);
-    scroll.scroll_to(30);
+    scroll.dispatch_raw_delta(30.0);
     let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_node());
     assert_eq!(range.value, 30.0);
     height.set(200);
@@ -245,11 +245,11 @@ fn a_lazy_lists_range_follows_its_scroll_and_items() {
     });
     let first = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
     assert_eq!(first.value, 0.0);
-    assert!(state.scroll_by(30.0));
+    assert_ne!(state.dispatch_raw_delta(30.0), 0.0);
     ui.wait_for_idle();
     let scrolled = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
     assert!(scrolled.value > first.value, "{scrolled:?}");
-    state.scroll_to_item(20, 0);
+    state.request_scroll_to_item(20, 0);
     ui.wait_for_idle();
     let far = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
     assert!(far.value > scrolled.value, "{far:?}");
@@ -258,7 +258,7 @@ fn a_lazy_lists_range_follows_its_scroll_and_items() {
     let more = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
     assert!(more.max_value > far.max_value, "{more:?}");
     // To the end: no room left that way.
-    state.scroll_to_item(99, 0);
+    state.request_scroll_to_item(99, 0);
     ui.wait_for_idle();
     let end = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
     assert_eq!(end.value, end.max_value, "{end:?}");
@@ -467,7 +467,7 @@ fn a_lazy_item_reused_shows_and_does_what_the_new_item_does() {
     assert_eq!(own_text(&first), ["Item 0"]);
     let mut seen = vec![first.semantics_id];
     for index in 1..12 {
-        state.scroll_to_item(index, 0);
+        state.request_scroll_to_item(index, 0);
         ui.wait_for_idle();
         let tag = format!("item{index}");
         let node = ui.on_node_with_tag(&tag).fetch_semantics_node();
@@ -652,7 +652,7 @@ fn a_write_during_a_prefetch_only_semantics_read_asks_for_a_frame() {
         );
     });
     assert!(find_by_tag(&host.semantics_tree(true), "before").is_some());
-    assert!(state.scroll_by(30.0));
+    assert_ne!(state.dispatch_raw_delta(30.0), 0.0);
     host.settle(10);
     assert!(host.has_prefetch_work());
     armed.set(true);

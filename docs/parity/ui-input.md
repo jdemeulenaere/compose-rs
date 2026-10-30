@@ -12,11 +12,11 @@ This ledger maps Jetpack Compose UI's tests and public API in input, focus, sema
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `covered` | 4 | 17 |
+| `covered` | 5 | 39 |
 | `ported` | 3 | 67 |
 | `port` | 15 | 302 |
 | `partial` | 36 | 1,185 |
-| `feature:*` | 131 | 1,498 |
+| `feature:*` | 130 | 1,476 |
 | `n/a` | 50 | 456 |
 | **Total** | **239** | **3,525** |
 

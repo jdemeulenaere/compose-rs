@@ -263,7 +263,7 @@ fn a_deactivated_node_computes_nothing() {
     });
     ui.wait_for_idle();
     semantics[0].reset_counters();
-    state.scroll_to_item(1, 0);
+    state.request_scroll_to_item(1, 0);
     ui.wait_for_idle();
     ui.on_node_with_tag("0").assert_does_not_exist();
     assert_eq!(semantics[0].invocations(), 0);

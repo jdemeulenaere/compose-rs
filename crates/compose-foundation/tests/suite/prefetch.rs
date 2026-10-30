@@ -481,7 +481,7 @@ fn prefetch_into_slots_kept_behind_asks_for_no_frame() {
         let counter = wakes.clone();
         ui.host().set_frame_waker(move || counter.set(counter.get() + 1));
         for step in 0..40 {
-            state.scroll_by(30.0);
+            state.dispatch_raw_delta(30.0);
             ui.wait_for_idle();
             let before = wakes.get();
             while ui.host().prefetch(later()) {}

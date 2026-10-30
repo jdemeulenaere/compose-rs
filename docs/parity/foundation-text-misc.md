@@ -12,18 +12,17 @@ What Compose's `compose/foundation/foundation` tests and public API in this area
 
 | Status | Files | @Test |
 |---|---:|---:|
-| `ported` | 11 | 86 |
+| `ported` | 12 | 94 |
 | `covered` | 11 | 59 |
-| `ported` | 1 | 8 |
-| `port` | 16 | 116 |
-| `partial` | 25 | 671 |
-| `feature:<name>` | 177 | 2,828 |
+| `port` | 15 | 107 |
+| `partial` | 22 | 655 |
+| `feature:<name>` | 170 | 2,767 |
 | `n/a` | 75 | 988 |
 | **Total** | **305** | **4,670** |
 
 Of the `n/a` tests, 571 (48 files) test the **deprecated** value-based `BasicTextField` and its internals (see below) or `ClickableText`/`onFocusedBoundsChanged`, 389 (23 files) test Compose-internal data structures or helpers whose behaviour other files check through public API, and 28 (4 files) test Compose's own test infrastructure or compare a golden image. Three `feature:` rows (`textfield/TextFieldContextMenuTest`, `textfield/TextFieldTextContextMenuBuilderTest`, `textfield/TextFieldToolbarTest`) mix the legacy and state-based fields: their 41 legacy (`btf1`) tests are n/a too.
 
-By feature, the `feature:` rows wait on: `text-field-state` 697 tests (30 files), `android-ime` 316 (17), `text-context-menu` 294 (21), `touch-text-selection` 227 (10), `style-api` 159 (9), `secure-text-field` 106 (5), `border-parity` 92 (4), `output-transformation` 87 (6), `handwriting` 84 (6), `magnifier` 78 (5), `polygon-shapes` 64 (4), `text-field-styles` 64 (3), `text-links` 56 (3), `shapes` 50 (5), `bring-into-view-requester` 48 (3), `undo-parity` 46 (4), `content-receiver` 40 (4), `selection-state` 34, `input-transformation` 34 (3), `drag-and-drop` 31 (4), `clickable-parity` 26 (4), `basic-marquee` 23, `android-external-surface` 20 (2), `hover-icon-override` 18, `android-window-rects` 16 (2), `text-auto-size` 15, `focusable-parity` 14, `smart-selection` 13 (4), `background-text-measurement` 11, `cursor-blink` 11 (2), `indication` 10, `basic-tooltip` 8, `inline-content` 6, `dead-keys` 6, `ui-text-substitution` 6 (2), `interactions` 5, `ui-text-async-fonts` 4, `text-selection-colors` 4, `basic-text-drawing` 3, `progress-semantics` 2. The `partial` rows add more demand on `interactions`, `indication`, `clickable-parity`, `shapes` and `image-painter`: `ClickableTest`, `CombinedClickableTest`, `ToggleableTest`, `SelectableTest` and `FocusableTest` alone are 361 tests, most of them about interactions and indication.
+By feature, the `feature:` rows wait on: `text-field-state` 702 tests (31 files), `android-ime` 316 (17), `text-context-menu` 294 (21), `touch-text-selection` 227 (10), `style-api` 159 (9), `secure-text-field` 106 (5), `output-transformation` 87 (6), `handwriting` 84 (6), `border-parity` 79 (3), `magnifier` 78 (5), `polygon-shapes` 64 (4), `text-field-styles` 64 (3), `text-links` 56 (3), `bring-into-view-requester` 48 (3), `undo-parity` 46 (4), `content-receiver` 40 (4), `input-transformation` 34 (3), `selection-state` 34, `drag-and-drop` 31 (4), `clickable-parity` 26 (4), `basic-marquee` 23, `android-external-surface` 20 (2), `hover-icon-override` 18, `android-window-rects` 16 (2), `text-auto-size` 15, `focusable-parity` 14, `shapes` 14, `smart-selection` 13 (4), `background-text-measurement` 11, `cursor-blink` 11 (2), `basic-tooltip` 8, `dead-keys` 6, `inline-content` 6, `ui-text-substitution` 6 (2), `text-selection-colors` 4, `ui-text-async-fonts` 4, `basic-text-drawing` 3. The `partial` rows add more demand on `clickable-parity`, `focusable-parity` and `image-painter`, and on ui's input mode and indirect pointers (`ClickableTest`, `CombinedClickableTest`, `ToggleableTest`, `SelectableTest` and `FocusableTest`'s remaining scenarios).
 
 **The value-based `BasicTextField` is deprecated.** At this commit both `BasicTextField(value: String, onValueChange, …)` and `BasicTextField(value: TextFieldValue, …)` are `@Deprecated("Use the BasicTextField(state: TextFieldState, ...) overload instead …")` (`BasicTextField.kt` lines 799 and 970). compose-rs's only text field is the `String` one (D96). So its tests (`textfield/**`, `text/CoreTextField*`, the `Legacy*` IME tests and the legacy internals) are `n/a` here, and the state-based field's tests (`text/input/**`) wait on `text-field-state`, even where compose-rs's field already does what they check (the rows say so). `KeyboardActions`, `KeyboardOptions` and `VisualTransformation` aren't deprecated themselves, but in foundation only the deprecated field takes `KeyboardActions` and `VisualTransformation`.
 

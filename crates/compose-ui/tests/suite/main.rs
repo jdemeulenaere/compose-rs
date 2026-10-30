@@ -37,3 +37,4 @@ mod text_unit;
 mod ui;
 mod velocity_data;
 mod velocity_tracker;
+mod word_boundary;

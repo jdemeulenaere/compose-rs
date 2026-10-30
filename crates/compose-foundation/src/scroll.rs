@@ -14,11 +14,11 @@ use compose_runtime::{
     mutable_state_of,
 };
 use compose_ui::{
-    Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    MutableInteractionSource, NestedScrollConnection, NestedScrollSource, Offset, Outline,
-    PointerEvent, PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode, Rect,
-    platform::NestedScrollChain,
+    Constraints, DragInteraction, DragStart, DrawModifierNode, DrawScope, EventContext, IntSize,
+    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, MutableInteractionSource, NestedScrollConnection, NestedScrollSource,
+    Offset, Outline, PointerEvent, PointerEventPass, PointerEventType, PointerId,
+    PointerInputModifierNode, Rect, platform::NestedScrollChain,
 };
 
 use crate::gestures::{
@@ -773,7 +773,7 @@ pub(crate) struct DragScroller {
     /// The drag's hold on the state's scroll, while it scrolls.
     session: Option<DragSession>,
     /// Where the drag going on was told (to tell it ended).
-    dragged: Option<MutableInteractionSource>,
+    dragged: Option<(MutableInteractionSource, DragStart)>,
     /// The nested-scroll connections around, as the last press or wheel turn found them.
     chain: NestedScrollChain,
     /// The axis, for a cancel's fling dispatch.
@@ -943,10 +943,11 @@ impl DragScroller {
                     let source = driver.interaction_source.cloned().or_else(|| {
                         driver.state_source.then(|| driver.state.internal_interaction_source())?
                     });
-                    if let Some(source) = &source {
-                        source.set_dragged(true);
-                    }
-                    self.dragged = source;
+                    self.dragged = source.map(|source| {
+                        let start = DragStart::new();
+                        source.try_emit(DragInteraction::Start(start));
+                        (source, start)
+                    });
                     // What moved past the slop scrolls.
                     drag_by(&self.session, -(along - slop.copysign(along)));
                 }
@@ -992,8 +993,8 @@ impl DragScroller {
         if let Some(session) = self.session.take() {
             session.end();
         }
-        if let Some(source) = self.dragged.take() {
-            source.set_dragged(false);
+        if let Some((source, start)) = self.dragged.take() {
+            source.try_emit(DragInteraction::Stop(start));
         }
     }
 

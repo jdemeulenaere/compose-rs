@@ -501,7 +501,7 @@ fn a_reused_item_is_another_virtual_view() {
     let mut kept = KeptSemanticsTree::default();
     let mut seen = Vec::new();
     for index in 0..8 {
-        state.scroll_to_item(index, 0);
+        state.request_scroll_to_item(index, 0);
         while host.needs_frame() {
             kept.after_frame(&host.frame());
         }
