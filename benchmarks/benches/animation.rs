@@ -225,5 +225,69 @@ fn frame_awaiters(criterion: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, frame_awaiters, infinite_transitions);
+#[composable]
+fn VisibleBoxes() {
+    Column!({
+        for index in 0..100u32 {
+            compose::runtime::key(index, || {
+                AnimatedVisibility!(true, {
+                    Box!(modifier = Modifier.size(4.dp()));
+                });
+            });
+        }
+    });
+}
+
+#[composable]
+fn EnteringBoxes() {
+    Column!({
+        for index in 0..100u32 {
+            compose::runtime::key(index, || {
+                let state = compose::runtime::remember(|| {
+                    let state = MutableTransitionState::new(false);
+                    state.set_target_state(true);
+                    state
+                });
+                AnimatedVisibility!(state, {
+                    Box!(modifier = Modifier.size(4.dp()));
+                });
+            });
+        }
+    });
+}
+
+/// The first frame of 100 `AnimatedVisibility`s, at rest and entering: what each costs to set up,
+/// its transitions, tracker and modifiers (the cost of D828 to those without a deferred phase,
+/// D834).
+fn animated_visibility_first_frame(criterion: &mut Criterion) {
+    platform::set_manual_clock(platform::now_nanos());
+    let cases: [(&str, fn()); 2] = [
+        ("100 AnimatedVisibility, first frame", VisibleBoxes),
+        ("100 AnimatedVisibility entering, first frame", EnteringBoxes),
+    ];
+    for (title, content) in cases {
+        criterion.bench_function(title, |bench| {
+            bench.iter_custom(|iterations| {
+                (0..iterations)
+                    .map(|_| {
+                        let mut host = UiHost::new(
+                            IntSize::new(1080, 2400),
+                            Density::new(2.625),
+                            Box::new(FixedTextMeasurer::new()),
+                        );
+                        host.set_optimizations(Optimizations::NONE);
+                        let start = Instant::now();
+                        host.set_content(content);
+                        host.frame();
+                        let elapsed = start.elapsed();
+                        drop(host);
+                        elapsed
+                    })
+                    .sum()
+            })
+        });
+    }
+}
+
+criterion_group!(benches, frame_awaiters, infinite_transitions, animated_visibility_first_frame);
 criterion_main!(benches);

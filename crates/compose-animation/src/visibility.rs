@@ -1055,10 +1055,10 @@ fn update_enter_exit_modifier_state(
         } else if target != EnterExitState::PostExit {
             // What the deferred phase moved stays tracked even if `enter` leaves it out, so an
             // interruption doesn't snap it; `enter`'s parts go over those.
-            let handoff = transform_state
-                .as_ref()
-                .map_or(EnterTransition::NONE, |state| state.handoff_enter());
-            previous + (handoff + enter)
+            match &transform_state {
+                Some(state) => previous + (state.handoff_enter() + enter),
+                None => previous + enter,
+            }
         } else {
             previous
         };
@@ -1078,9 +1078,10 @@ fn update_enter_exit_modifier_state(
             } else {
                 neutralized(&previous)
             };
-            let handoff =
-                transform_state.as_ref().map_or(ExitTransition::NONE, |state| state.handoff_exit());
-            neutral + handoff + exit
+            match &transform_state {
+                Some(state) => neutral + state.handoff_exit() + exit,
+                None => neutral + exit,
+            }
         } else {
             previous
         };

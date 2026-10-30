@@ -307,7 +307,7 @@ pub(crate) struct TransitionInner<S: 'static> {
     target_untracked: RefCell<S>,
     /// The target it waits for, as `pendingTargetState`: only a deferred transition and its
     /// children have one, so the others pay nothing.
-    pending: Option<PendingTarget<S>>,
+    pending: Option<Box<PendingTarget<S>>>,
     segment: OwnedState<Segment<S>>,
     /// The frame time it started at, as `startTimeNanos`: `UNSPECIFIED_TIME` when not running.
     start_time_nanos: OwnedState<i64>,
@@ -884,9 +884,11 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                 parent,
                 target: mutable_state_of(current.clone()),
                 target_untracked: RefCell::new(current.clone()),
-                pending: deferred.then(|| PendingTarget {
-                    state: mutable_state_of(None),
-                    untracked: RefCell::new(None),
+                pending: deferred.then(|| {
+                    Box::new(PendingTarget {
+                        state: mutable_state_of(None),
+                        untracked: RefCell::new(None),
+                    })
                 }),
                 segment: mutable_state_of(Segment {
                     initial_state: current.clone(),
