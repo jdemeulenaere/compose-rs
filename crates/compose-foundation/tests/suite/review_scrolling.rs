@@ -145,7 +145,7 @@ fn scroller(
                         state = state,
                         move |scope: LazyListScope| {
                             let inner = inner.clone();
-                            scope.item(move || inner());
+                            scope.item(inner);
                             scope.items(100, |_| Spacer(Modifier.size((100.dp(), 50.dp()))));
                         }
                     );
@@ -543,7 +543,8 @@ fn a_diagonal_wheel_turn_scrolls_the_scrollable_of_its_dominant_axis() {
     wheel(&mut ui, Offset::new(-100.0, -50.0));
     assert!(across.get() > 0.0, "mostly horizontal");
     assert_eq!(down.get(), 0.0);
-    (across.set(0.0), down.set(0.0));
+    across.set(0.0);
+    down.set(0.0);
     wheel(&mut ui, Offset::new(-10.0, -50.0));
     assert!(down.get() > 0.0, "mostly vertical");
     assert_eq!(across.get(), 0.0);

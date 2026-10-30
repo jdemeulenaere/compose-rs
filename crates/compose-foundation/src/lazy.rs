@@ -1323,7 +1323,7 @@ struct Items {
 
 /// How many keys `Items` keeps at most: more than the items in view of most lists; made per run of
 /// the content lambda, as few as the list has (D886).
-const KEY_CACHE: usize = 32;
+const KEY_CACHE: usize = 64;
 
 impl Items {
     fn new(intervals: Vec<Interval>) -> Items {
@@ -3279,5 +3279,33 @@ impl PointerInputModifierNode for LazyScrollNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.drag.cancel();
+    }
+}
+
+#[cfg(test)]
+mod items_tests {
+    use super::*;
+
+    #[test]
+    fn only_lists_with_key_functions_keep_keys() {
+        let unkeyed = Items::new(vec![Interval::new(1000, Rc::new(|_| {}))]);
+        assert!(unkeyed.keys.is_empty());
+        assert_eq!(unkeyed.key(5), unkeyed.key(5));
+        assert_ne!(unkeyed.key(5), unkeyed.key(6));
+        let few = Items::new(vec![Interval::keyed(3, |index| index, Rc::new(|_| {}))]);
+        assert_eq!(few.keys.len(), 3);
+        let many = Items::new(vec![Interval::keyed(1000, |index| index, Rc::new(|_| {}))]);
+        assert_eq!(many.keys.len(), KEY_CACHE);
+    }
+
+    #[test]
+    fn a_default_key_in_a_keyed_list_is_not_kept() {
+        let items = Items::new(vec![
+            Interval::new(1, Rc::new(|_| {})),
+            Interval::keyed(1, |_| 7, Rc::new(|_| {})),
+        ]);
+        assert_eq!(items.key(0), hash_key(&DefaultKey(0)));
+        assert_eq!(items.keys[0].get().0, usize::MAX);
+        assert_eq!(items.key(1), hash_key(&7));
     }
 }
