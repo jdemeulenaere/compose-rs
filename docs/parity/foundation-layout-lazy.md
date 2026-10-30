@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 42 | 651 |
+| `ported` | 46 | 726 |
 | `port` | 1 | 1 |
 | `partial` | 26 | 845 |
-| `feature:<name>` | 93 | 1,367 |
+| `feature:<name>` | 89 | 1,292 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -251,10 +251,10 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/TrackpadScrollable2DTest.kt | 3 | Trackpad on `scrollable2D` | feature:scrollable2d (+ pointer-input-types) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/TransformableTest.kt | 33 | `transformable`: zoom, pan, rotate, locks, `canPan`, in scrollables, trackpad, `animate*By` | feature:transformable |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/focus/LazyListFocusableInteractionTest.kt | 1 | Scrolling a column up and down with a focused item doesn't crash | ported (`port_rows.rs`: a focusable item, where its is an `AndroidView`) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableDecayAnimationTest.kt | 1 | `animateToWithDecay` | feature:anchored-draggable |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableGestureTest.kt | 18 | Swipes settle by positional and velocity thresholds, disabled, nested | feature:anchored-draggable |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableDecayAnimationTest.kt | 1 | `animateToWithDecay` | ported (`anchored_draggable.rs`) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableGestureTest.kt | 18 | Swipes settle by positional and velocity thresholds, disabled, nested | ported (`anchored_draggable.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableOverscrollTest.kt | 7 | Overscroll gets out-of-bounds deltas and velocity | feature:anchored-draggable (+ overscroll) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableStateTest.kt | 45 | `AnchoredDraggableState`: target, current, settled, progress, `updateAnchors`, `snapTo`/`animateTo`, `confirmValueChange`, saver | feature:anchored-draggable (material3's private `Anchored` in `crates/compose-material3/src/anchored.rs` is the seed) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableStateTest.kt | 45 | `AnchoredDraggableState`: target, current, settled, progress, `updateAnchors`, `snapTo`/`animateTo`, `confirmValueChange`, saver | ported (`anchored_draggable.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/AwaitEachGestureTest.kt | 3 | `awaitEachGesture` loops and cancellation | feature:gesture-detectors |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/AwaitLongPressOrCancellationTest.kt | 9 | `awaitLongPressOrCancellation` | feature:gesture-detectors |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/DragGestureDetectorTest.kt | 14 | Drag detectors: normal, cross-axis, two fingers, cancel during and after the slop, priority lock, back and forth, callback order | partial (`detect_drag_gestures` exists: `pointer_input.rs::drags_start_past_the_slop_and_report_their_amounts`, `review_round7.rs`. Missing: horizontal/vertical/orientation-locked/after-long-press variants and `drag`/`awaitDragOrCancellation` (feature:gesture-detectors); multi-pointer events (ui)) |
@@ -272,7 +272,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewScrollableInteractionTest.kt | 24 | Scrollables scroll requested rects into view (leading, trailing, center, bigger than the parent) | feature:bring-into-view (compose-rs scrolls a focused node into view, `ModifierNode::bring_into_view`: some cases can be checked through focus now) |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/MutatorMutexTest.kt | 8 | `MutatorMutex` priorities, `tryMutate`, `tryLock` | ported (`mutator_mutex.rs`: 7 tests for the 8; `tryLock`/`unlock` are internal, checked through `try_mutate`; an interrupted mutation returns `Err(MutationInterrupted)`, D850) |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/BringIntoViewRequestPriorityQueueTest.kt | 15 | The internal request queue of `ContentInViewNode` | n/a: internal class (port its rules with feature:bring-into-view if compose-rs grows the same queue) |
-| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/DraggableAnchorsTest.kt | 11 | `DraggableAnchors` builder, closest anchor, min/max, equality | feature:anchored-draggable |
+| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/DraggableAnchorsTest.kt | 11 | `DraggableAnchors` builder, closest anchor, min/max, equality | ported (`anchored_draggable.rs`; `equality_differentObject` compares with a string, which Rust doesn't compile) |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/DraggableIsAnyChangedToDownTest.kt | 10 | The internal `isAnyChangedToDown` helper | n/a: internal helper |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/UpdatableAnimationStateTest.kt | 7 | The internal animation state behind bring-into-view | n/a: internal class |
 
@@ -365,8 +365,8 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `detectTransformGestures`, `calculatePan`, `calculateZoom`, `calculateRotation`, `calculateCentroid`, `calculateCentroidSize`;
   - `Modifier.transformable` (with and without `canPan`), `TransformableState`, `rememberTransformableState`, `TransformScope`;
   - `animateBy`, `animatePanBy`, `animateRotateBy`, `animateZoomBy`, `panBy`, `rotateBy`, `zoomBy`, `stopTransformation`.
-- **anchored-draggable:** `AnchoredDraggableState` (both constructors, `anchoredDrag`, `dispatchRawDelta`, `progress(from, to)`, `requireOffset`, `settle(spec)`, `updateAnchors`, `currentValue`, `targetValue`, `settledValue`, `offset`, `lastVelocity`, `isAnimationRunning`, `Saver()`), `DraggableAnchors {}`, `DraggableAnchorsConfig`, `Modifier.anchoredDraggable` (both overloads), `AnchoredDragScope`, `AnchoredDraggableDefaults` (`flingBehavior`, `PositionalThreshold`, `SnapAnimationSpec`, `DecayAnimationSpec`), `animateTo`, `animateToWithDecay`, `snapTo`, `forEach`.
-- **snapping:** `SnapLayoutInfoProvider` (interface, and for `LazyListState`/`LazyGridState`), `SnapPosition` (Start, Center, End), `snapFlingBehavior`, `rememberSnapFlingBehavior` (for a provider, a `LazyListState` or a `LazyGridState`).
+- **anchored-draggable:** Done (D1463) but for the `overscrollEffect` parameter, the deprecated constructors and `settle(velocity)`: `AnchoredDraggableState` (both constructors, `anchoredDrag`, `dispatchRawDelta`, `progress(from, to)`, `requireOffset`, `settle(spec)`, `updateAnchors`, `currentValue`, `targetValue`, `settledValue`, `offset`, `lastVelocity`, `isAnimationRunning`, `Saver()`), `DraggableAnchors {}`, `DraggableAnchorsConfig`, `Modifier.anchoredDraggable` (both overloads), `AnchoredDragScope`, `AnchoredDraggableDefaults` (`flingBehavior`, `PositionalThreshold`, `SnapAnimationSpec`, `DecayAnimationSpec`), `animateTo`, `animateToWithDecay`, `snapTo`, `forEach`.
+- **snapping:** Done (D1462): `SnapLayoutInfoProvider` (interface, and for `LazyListState`/`LazyGridState`), `SnapPosition` (Start, Center, End), `snapFlingBehavior`, `rememberSnapFlingBehavior` (for a provider, a `LazyListState` or a `LazyGridState`).
 - **bring-into-view:** `BringIntoViewRequester()`, `Modifier.bringIntoViewRequester`, `bringIntoView(rect)`. compose-rs only brings focused nodes into view, through its internal `ModifierNode::bring_into_view`.
 - **lazy-layout-info:** done (D859).
 - **lazy-state-api:** on `LazyListState` and `LazyGridState`:
@@ -480,7 +480,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: the five files in `gestures/snapping`.
     - Depends on: scrollable (`FlingBehavior`), lazy-layout-info, animation's decay specs (`DecayAnimationSpec`, `exponentialDecay`, `splineBasedDecay`: animation ledger).
     - Size: M. Experimental: no.
-16. **anchored-draggable.**
+16. **anchored-draggable.** Done (D1463), but for material3's private `Anchored`, which isn't moved onto it yet.
     - API: the `anchoredDraggable` family (see above).
     - Tests: the four `anchoredDraggable` files, DraggableAnchorsTest.
     - Depends on: draggable, snapping (`TargetedFlingBehavior`), the decay specs (animation), overscroll (for its overscroll tests).

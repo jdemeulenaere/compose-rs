@@ -35,6 +35,14 @@ pub use compose_ui::{
 pub use compose_ui::{BorderRenderer, BorderStroke};
 pub use dark_theme::is_system_in_dark_theme;
 pub use gestures::{
+    AnchoredDragScope, AnchoredDraggableDefaults, AnchoredDraggableModifier,
+    AnchoredDraggableOptions, AnchoredDraggableState, DraggableAnchors, DraggableAnchorsConfig,
+    SnapFlingBehavior, SnapLayoutInfoProvider, SnapPosition, TargetedFlingBehavior,
+    anchored_fling_behavior, grid_snap_layout_info_provider, list_snap_layout_info_provider,
+    remember_anchored_fling_behavior, remember_grid_snap_fling_behavior,
+    remember_list_snap_fling_behavior, remember_snap_fling_behavior, snap_fling_behavior,
+};
+pub use gestures::{
     DefaultDraggable2DState, DefaultDraggableState, DefaultFlingBehavior, DefaultScrollableState,
     Drag2DScope, DragScope, Draggable2DOptions, Draggable2DState, Draggable2DStateExt,
     DraggableModifier, DraggableOptions, DraggableState, DraggableStateExt, FlingBehavior,

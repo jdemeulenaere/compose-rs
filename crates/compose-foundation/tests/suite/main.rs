@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod anchored_draggable;
 mod clickable_parity;
 mod combined_clickable_parity;
 mod draggable;

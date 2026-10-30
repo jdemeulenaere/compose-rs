@@ -100,6 +100,8 @@ impl Deltas {
 pub(crate) trait DragBehavior: 'static {
     /// The behavior itself, for its element to give it new inputs.
     fn as_any(&self) -> &dyn std::any::Any;
+    /// Told of the node's layout direction and density at each event.
+    fn on_pointer_context(&self, _context: &EventContext<'_>) {}
     /// Holds the state's drag, its deltas applied, until they end.
     fn drag(
         self: Rc<Self>,
@@ -662,6 +664,7 @@ impl PointerInputModifierNode for DragGestureNode {
         context: &mut EventContext<'_>,
     ) {
         self.listening_to_pointers = true;
+        self.behavior.on_pointer_context(context);
         // The pointers down are its own count of Compose's event's changes, which it has whether
         // it's enabled or not: disabled meanwhile, it must not lose or keep one.
         if pass == PointerEventPass::Initial {

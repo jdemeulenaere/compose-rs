@@ -2,12 +2,18 @@
 //! deltas to a `DraggableState`), and scrolling (`scrollable`: `ScrollableState`,
 //! `Modifier.scrollable`, flings).
 
+mod anchored_draggable;
 mod drag_gesture;
 mod draggable;
 mod mouse_wheel;
 mod scrollable;
 mod snapping;
 
+pub use anchored_draggable::{
+    AnchoredDragScope, AnchoredDraggableDefaults, AnchoredDraggableModifier,
+    AnchoredDraggableOptions, AnchoredDraggableState, DraggableAnchors, DraggableAnchorsConfig,
+    anchored_fling_behavior, remember_anchored_fling_behavior,
+};
 pub use draggable::{
     DefaultDraggable2DState, DefaultDraggableState, Drag2DBlock, Drag2DScope, DragBlock, DragScope,
     Draggable2DOptions, Draggable2DState, Draggable2DStateExt, DraggableModifier, DraggableOptions,
