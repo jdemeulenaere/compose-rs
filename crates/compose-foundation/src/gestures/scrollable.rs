@@ -33,12 +33,27 @@ pub type ScrollBlock<'a> = Box<dyn FnOnce(ScrollScope) -> LocalBoxFuture<'a, ()>
 #[derive(Clone)]
 pub struct ScrollScope {
     scroll_by: Rc<dyn Fn(f32) -> f32>,
+    /// A fling's: set once its node left, as Compose's `FlingCancellationException` thrown out of
+    /// `scrollBy`, which the default behavior catches.
+    fling_cancelled: Option<Rc<Cell<bool>>>,
 }
 
 impl ScrollScope {
     /// A scope whose `scroll_by` calls `scroll_by`.
     pub fn new(scroll_by: impl Fn(f32) -> f32 + 'static) -> ScrollScope {
-        ScrollScope { scroll_by: Rc::new(scroll_by) }
+        ScrollScope { scroll_by: Rc::new(scroll_by), fling_cancelled: None }
+    }
+
+    /// A fling's scope, whose `scroll_by` sets `cancelled` once its node left.
+    pub(crate) fn of_fling(
+        scroll_by: impl Fn(f32) -> f32 + 'static,
+        cancelled: Rc<Cell<bool>>,
+    ) -> ScrollScope {
+        ScrollScope { scroll_by: Rc::new(scroll_by), fling_cancelled: Some(cancelled) }
+    }
+
+    fn is_fling_cancelled(&self) -> bool {
+        self.fling_cancelled.as_ref().is_some_and(|cancelled| cancelled.get())
     }
 
     /// Scrolls by `pixels` (positive: towards the end); returns the pixels used, as
@@ -437,16 +452,23 @@ impl FlingBehavior for DefaultFlingBehavior {
                 let delta = target - covered;
                 covered = target;
                 let used = if delta == 0.0 { 0.0 } else { scope.scroll_by(delta) };
+                // Its velocity there (the spline's slope), as Compose's `velocityLeft`.
+                let velocity_here = || {
+                    let step = 0.01f32.min(fraction);
+                    let seconds = course.duration_nanos as f32 / 1e9;
+                    (course.distance_at(fraction) - course.distance_at(fraction - step))
+                        / (step * seconds).max(f32::EPSILON)
+                };
+                // The node left, as Compose's catch of the fling's cancellation.
+                if scope.is_fling_cancelled() {
+                    return velocity_here();
+                }
                 if fraction >= 1.0 {
                     return 0.0;
                 }
-                // An edge took less than asked: the fling ends there, with its velocity there
-                // (the spline's slope), as Compose's `velocityLeft`.
+                // An edge took less than asked: the fling ends there.
                 if (delta - used).abs() > 0.5 {
-                    let step = 0.01f32.min(fraction);
-                    let seconds = course.duration_nanos as f32 / 1e9;
-                    return (course.distance_at(fraction) - course.distance_at(fraction - step))
-                        / (step * seconds).max(f32::EPSILON);
+                    return velocity_here();
                 }
             }
         })

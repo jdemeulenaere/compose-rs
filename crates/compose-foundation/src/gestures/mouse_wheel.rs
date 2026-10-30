@@ -14,7 +14,7 @@ use compose_ui::{Offset, PointerEvent, PointerEventPass, VelocityTracker1D};
 
 use crate::gestures::{ScrollScope, ScrollableStateExt};
 use crate::mutator::MutatePriority;
-use crate::scroll::{FlingJob, ScrollTarget, event_time};
+use crate::scroll::{ScrollTarget, event_time};
 
 /// A delta at least this long (dp) animates; a shorter one applies at once. Compose's
 /// `AnimationThreshold`: the speed over a 60 Hz frame, at the longest animation.
@@ -69,7 +69,7 @@ struct Shared {
     /// gestures, its samples ageing out, as Compose's.
     velocity: RefCell<VelocityTracker1D>,
     /// The fling a stopped gesture started: it lives on with the node.
-    fling: RefCell<Option<FlingJob>>,
+    fling: Cell<Option<Job>>,
 }
 
 impl MouseWheel {
@@ -81,7 +81,7 @@ impl MouseWheel {
             scrolling: Cell::new(false),
             target: RefCell::new(target),
             velocity: RefCell::new(VelocityTracker1D::new(true)),
-            fling: RefCell::new(None),
+            fling: Cell::new(None),
         });
         let job = CoroutineScope::new().launch(run(shared.clone()));
         MouseWheel { shared, job }
@@ -135,13 +135,16 @@ impl MouseWheel {
         true
     }
 
-    /// The node leaves: the gesture ends at once, and a fling it started at its next delta, as a
-    /// fling of a node gone.
+    /// The node leaves, or another state takes over: the gesture ends at once.
     pub(crate) fn stop(&self) {
         self.job.cancel();
         self.shared.scrolling.set(false);
-        if let Some(fling) = self.shared.fling.borrow_mut().take() {
-            fling.abort();
+    }
+
+    /// The fling a stopped gesture started ends now, for another state.
+    pub(crate) fn cancel_fling(&self) {
+        if let Some(fling) = self.shared.fling.take() {
+            fling.cancel();
         }
     }
 }
@@ -326,6 +329,6 @@ impl Shared {
             velocity =
                 if last_target == 0.0 { 0.0 } else { (per_milli * 1000.0).copysign(last_target) };
         }
-        *self.fling.borrow_mut() = Some(target.launch_fling(velocity));
+        self.fling.set(Some(target.launch_fling(velocity)));
     }
 }
