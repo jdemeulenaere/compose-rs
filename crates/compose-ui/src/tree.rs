@@ -302,8 +302,7 @@ pub struct UiTree {
     last_semantics_id: i32,
     /// The window's insets, the host's state: read while measuring (insets paddings), so a
     /// change measures their readers again.
-    pub(crate) window_insets:
-        Option<compose_runtime::MutableState<crate::configuration::PlatformWindowInsets>>,
+    pub(crate) window_insets: crate::configuration::WindowInsetsSource,
     /// Nodes measured ahead of the layout placing them (`premeasure`: a lazy list's prefetched
     /// items), oldest first: the repaint boundaries among them are drawn ahead too
     /// (`draw_ahead`), so the frame placing them finds them drawn.
@@ -407,7 +406,7 @@ impl UiTree {
             laid_out_since_callbacks: false,
             next_entry: 0,
             last_semantics_id: 0,
-            window_insets: None,
+            window_insets: crate::configuration::WindowInsetsSource::NONE,
             measured_ahead: Vec::new(),
             kept: Vec::new(),
             keeps_unplaced: false,
@@ -430,11 +429,11 @@ impl UiTree {
     }
 
     /// The host's window insets state, which `MeasureScope::window_insets` reads.
-    pub fn set_window_insets_state(
+    pub(crate) fn set_window_insets_source(
         &mut self,
-        state: compose_runtime::MutableState<crate::configuration::PlatformWindowInsets>,
+        source: crate::configuration::WindowInsetsSource,
     ) {
-        self.window_insets = Some(state);
+        self.window_insets = source;
     }
 
     /// `node`'s placed children's indices in drawing order, if it isn't their order (`None` when

@@ -134,10 +134,16 @@ internal object ComposeRsNative {
     )
 
     /**
-     * The window's insets in pixels, 4 per kind (left, top, right, bottom): status bars,
-     * navigation bars, caption bar, keyboard, display cutout.
+     * The window's insets in pixels, 4 per insets (left, top, right, bottom), and the types
+     * hidden: [ComposeRsInsets.values].
      */
     @JvmStatic external fun setWindowInsets(host: Long, insets: IntArray)
+
+    /**
+     * The display cutout's outline, as [android.graphics.Path.approximate] gives it, null for
+     * none: [ComposeRsInsets.cutoutPath].
+     */
+    @JvmStatic external fun setWindowCutoutPath(host: Long, points: FloatArray?)
 
     /** A property for the content: [kind] 0 removes it, 1 is [text], 2 [number], 3 a boolean. */
     @JvmStatic external fun setProp(host: Long, name: String, kind: Int, text: String?, number: Double)

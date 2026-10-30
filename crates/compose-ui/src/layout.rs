@@ -294,7 +294,7 @@ impl IntrinsicMeasureScope<'_> {
     /// The window's insets (system bars, the keyboard, a cutout), as the platform reports them:
     /// a read observed as state is, so a change measures this node again.
     pub fn window_insets(&self) -> crate::configuration::PlatformWindowInsets {
-        self.tree.window_insets.map(|state| state.get()).unwrap_or_default()
+        self.tree.window_insets.get()
     }
 
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {

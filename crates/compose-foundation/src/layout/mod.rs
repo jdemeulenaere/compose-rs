@@ -25,7 +25,10 @@ pub use arrangement::{
 };
 pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
 pub use flow::{FlowColumn, FlowColumnScope, FlowLayoutModifiers, FlowRow, FlowRowScope};
-pub use window_insets::{WindowInsets, WindowInsetsModifiers, WindowInsetsSides};
+pub use window_insets::{
+    ConsumedInsets, InsetsLength, MutableWindowInsets, WindowInsets, WindowInsetsModifiers,
+    WindowInsetsProvider, WindowInsetsSides,
+};
 
 /// Scratch space for a policy's children, without allocating for up to 16 of them.
 mod smallvec_free {

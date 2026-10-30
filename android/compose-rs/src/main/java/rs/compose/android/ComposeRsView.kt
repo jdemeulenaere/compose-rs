@@ -22,7 +22,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
-import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeProvider
 import android.view.inputmethod.BaseInputConnection
@@ -186,8 +185,32 @@ class ComposeRsView @JvmOverloads constructor(
     private var back: BackRegistration? = null
     private var backEnabled = false
 
-    /** The window's insets, 4 per kind (see [ComposeRsNative.setWindowInsets]). */
-    private val insets = IntArray(20)
+    /** The window's insets, as the content reads them (see [ComposeRsInsets]). */
+    private val insets = ComposeRsInsets(
+        this,
+        send = { values ->
+            if (host != 0L) {
+                ComposeRsNative.setWindowInsets(host, values)
+                requestFrame()
+            }
+        },
+        sendCutoutPath = { points ->
+            if (host != 0L) {
+                ComposeRsNative.setWindowCutoutPath(host, points)
+                requestFrame()
+            }
+        },
+    )
+
+    /**
+     * Whether the view consumes the window's insets, so the views below it don't get them, as
+     * Compose's `AbstractComposeView.consumeWindowInsets`. False by default.
+     */
+    var consumeWindowInsets: Boolean
+        get() = insets.consumes
+        set(value) {
+            insets.consumes = value
+        }
 
     /** The properties given to the content, set again on each composition. */
     private val props = LinkedHashMap<String, Any>()
@@ -204,16 +227,14 @@ class ComposeRsView @JvmOverloads constructor(
         isFocusableInTouchMode = true
         // Its instance state is saved only with an id.
         if (id == NO_ID) id = R.id.compose_rs_view
-        setOnApplyWindowInsetsListener { _, windowInsets ->
-            updateInsets(windowInsets)
-            windowInsets
-        }
+        insets.attach()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ComposeRsRuntime.attach(this)
         accessibility.attach()
+        insets.resetState()
         requestApplyInsets()
         if (width > 0 && height > 0) create()
     }
@@ -256,7 +277,8 @@ class ComposeRsView @JvmOverloads constructor(
         )
         savedState = null
         sendConfiguration(resources.configuration)
-        ComposeRsNative.setWindowInsets(host, insets)
+        ComposeRsNative.setWindowInsets(host, insets.values)
+        insets.cutoutPath?.let { ComposeRsNative.setWindowCutoutPath(host, it) }
         for ((name, value) in props) sendProp(name, value)
         updatePerformanceHint()
         // Composed, laid out and recorded now (during the window's layout), so the first frame
@@ -359,40 +381,6 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     // ---- Insets, properties and events ----------------------------------------------------
-
-    private fun updateInsets(windowInsets: WindowInsets) {
-        fun put(kind: Int, left: Int, top: Int, right: Int, bottom: Int) {
-            insets[kind * 4] = left
-            insets[kind * 4 + 1] = top
-            insets[kind * 4 + 2] = right
-            insets[kind * 4 + 3] = bottom
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            val kinds = intArrayOf(
-                WindowInsets.Type.statusBars(),
-                WindowInsets.Type.navigationBars(),
-                WindowInsets.Type.captionBar(),
-                WindowInsets.Type.ime(),
-                WindowInsets.Type.displayCutout(),
-            )
-            for ((kind, type) in kinds.withIndex()) {
-                val value = windowInsets.getInsets(type)
-                put(kind, value.left, value.top, value.right, value.bottom)
-            }
-        } else {
-            // API 29: the system windows' insets, the status bar at the top.
-            @Suppress("DEPRECATION")
-            val system = windowInsets.systemWindowInsets
-            put(0, 0, system.top, 0, 0)
-            put(1, system.left, 0, system.right, system.bottom)
-            val cutout = windowInsets.displayCutout
-            put(4, cutout?.safeInsetLeft ?: 0, cutout?.safeInsetTop ?: 0, cutout?.safeInsetRight ?: 0, cutout?.safeInsetBottom ?: 0)
-        }
-        if (host != 0L) {
-            ComposeRsNative.setWindowInsets(host, insets)
-            requestFrame()
-        }
-    }
 
     /**
      * Sets the property [name] for the content (`LOCAL_HOST_PROPS`), recomposing its readers.

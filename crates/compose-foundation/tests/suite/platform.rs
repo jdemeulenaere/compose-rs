@@ -389,6 +389,8 @@ fn insets_paddings_follow_the_host_insets() {
     ui.host().set_window_insets(PlatformWindowInsets {
         status_bars: Insets::new(0, 24, 0, 0),
         navigation_bars: Insets::new(0, 0, 10, 48),
+        // As Android reports them: the bars' insets together.
+        system_bars: Insets::new(0, 24, 10, 48),
         ime: Insets::new(0, 0, 0, 300),
         ..PlatformWindowInsets::default()
     });
@@ -411,6 +413,7 @@ fn insets_as_padding_values_are_read_in_composition() {
     ui.on_node_with_text("top 0 bottom 0").assert_exists();
     ui.host().set_window_insets(PlatformWindowInsets {
         status_bars: Insets::new(0, 24, 0, 0),
+        system_bars: Insets::new(0, 24, 0, 0),
         display_cutout: Insets::new(0, 30, 0, 0),
         ime: Insets::new(0, 0, 0, 100),
         ..PlatformWindowInsets::default()

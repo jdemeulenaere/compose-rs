@@ -48,6 +48,9 @@ pub(crate) struct FocusRequests {
             std::hash::BuildHasherDefault<compose_runtime::KeyHasher>,
         >,
     >,
+    /// What nodes asked to run through their handles (`NodeHandle::side_effect`), run with the
+    /// tree's own side effects.
+    pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
 }
 
 /// A focus change asked for outside dispatch.

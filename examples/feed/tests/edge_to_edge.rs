@@ -111,6 +111,7 @@ fn the_screens_keep_their_content_clear_of_the_system_bars() {
     let insets = PlatformWindowInsets {
         status_bars: Insets::new(0, STATUS_BAR, 0, 0),
         navigation_bars: Insets::new(0, 0, 0, NAVIGATION_BAR),
+        system_bars: Insets::new(0, STATUS_BAR, 0, NAVIGATION_BAR),
         ..PlatformWindowInsets::default()
     };
     // A small top app bar: 64 dp (144 px) below the status bar.

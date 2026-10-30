@@ -1320,8 +1320,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
     });
 }
 
-/// `ComposeRsNative.setWindowInsets(host, insets)`: the window's insets in pixels, 4 per kind
-/// (left, top, right, bottom): status bars, navigation bars, caption bar, keyboard, cutout.
+/// `ComposeRsNative.setWindowInsets(host, insets)`: the window's insets in pixels, 4 per insets
+/// (left, top, right, bottom): the 10 types in `InsetsType::ALL`'s order, the 5 ignoring
+/// visibility (status bars, navigation bars, caption bar, system bars, tappable element), the
+/// keyboard animation's source and target; then the types hidden, by their index
+/// (`ComposeRsInsets.values`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'local>(
     mut env: EnvUnowned<'local>,
@@ -1331,26 +1334,81 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let mut values = [0; 20];
+    let mut values = [0; WINDOW_INSETS_VALUES];
     if with_env(&mut env, |env| insets.get_region(env, 0, &mut values)).is_err() {
         return;
     }
-    let side = |kind: usize| {
-        let at = kind * 4;
-        compose_ui::platform::Insets::new(
-            values[at],
-            values[at + 1],
-            values[at + 2],
-            values[at + 3],
-        )
+    host.ui.set_window_insets(window_insets(&values));
+}
+
+/// The ints `ComposeRsInsets.values` holds.
+const WINDOW_INSETS_VALUES: usize = 17 * 4 + 1;
+
+/// The window's insets from `ComposeRsInsets.values`.
+fn window_insets(
+    values: &[i32; WINDOW_INSETS_VALUES],
+) -> compose_ui::platform::PlatformWindowInsets {
+    use compose_ui::platform::{Insets, InsetsType, PlatformWindowInsets};
+    let side = |index: usize| {
+        let at = index * 4;
+        Insets::new(values[at], values[at + 1], values[at + 2], values[at + 3])
     };
-    host.ui.set_window_insets(compose_ui::platform::PlatformWindowInsets {
-        status_bars: side(0),
-        navigation_bars: side(1),
-        caption_bar: side(2),
-        ime: side(3),
-        display_cutout: side(4),
+    let mut insets = PlatformWindowInsets::default();
+    for (index, kind) in InsetsType::ALL.into_iter().enumerate() {
+        insets.set(kind, side(index));
+        let hidden = values[17 * 4] & (1 << index) != 0;
+        if kind != InsetsType::Waterfall {
+            insets.set_visible(kind, !hidden);
+        }
+    }
+    insets.status_bars_ignoring_visibility = side(10);
+    insets.navigation_bars_ignoring_visibility = side(11);
+    insets.caption_bar_ignoring_visibility = side(12);
+    insets.system_bars_ignoring_visibility = side(13);
+    insets.tappable_element_ignoring_visibility = side(14);
+    insets.ime_animation_source = side(15);
+    insets.ime_animation_target = side(16);
+    insets
+}
+
+/// `ComposeRsNative.setWindowCutoutPath(host, points)`: the display cutout's outline, as
+/// `android.graphics.Path.approximate` gives it, null for none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowCutoutPath<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    points: JFloatArray<'local>,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let path = with_env(&mut env, |env| -> jni::errors::Result<_> {
+        if points.is_null() {
+            return Ok(None);
+        }
+        let mut values = vec![0.0; points.len(env)?];
+        points.get_region(env, 0, &mut values)?;
+        Ok(Some(values))
     });
+    let Ok(points) = path else { return };
+    host.ui.set_window_cutout_path(points.map(|points| path_of_approximation(&points)));
+}
+
+/// The path `android.graphics.Path.approximate` describes, a (fraction along the path, x, y) per
+/// point: lines from point to point, a fraction repeated standing for a jump (where a contour
+/// ends and the next starts).
+fn path_of_approximation(points: &[f32]) -> compose_ui::Path {
+    let path = compose_ui::Path::new();
+    let mut fraction = None;
+    for &[at, x, y] in points.as_chunks::<3>().0 {
+        if fraction.is_none() || fraction == Some(at) {
+            path.move_to(x, y);
+        } else {
+            path.line_to(x, y);
+        }
+        fraction = Some(at);
+    }
+    path
 }
 
 /// `ComposeRsNative.setProp(host, name, kind, text, number)`: a property for the content
@@ -1402,5 +1460,49 @@ mod tests {
         // Grown past its capacity: a new allocation, or the same one larger.
         bytes.extend_from_slice(&[0; 64]);
         assert_eq!(taken_drawing(&bytes, given), 67 | NEW_DRAWING_BUFFER);
+    }
+
+    #[test]
+    fn the_listeners_values_are_the_insets_of_each_type() {
+        use compose_ui::platform::{Insets, InsetsType};
+        let mut values = [0; WINDOW_INSETS_VALUES];
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = index as i32;
+        }
+        // The keyboard (index 3) and the system bars (index 5) hidden.
+        values[17 * 4] = (1 << 3) | (1 << 5);
+        let insets = window_insets(&values);
+        let at = |index: i32| Insets::new(index * 4, index * 4 + 1, index * 4 + 2, index * 4 + 3);
+        for (index, kind) in InsetsType::ALL.into_iter().enumerate() {
+            assert_eq!(insets.get(kind), at(index as i32), "{kind:?}");
+            assert_eq!(insets.is_visible(kind), index != 3 && index != 5, "{kind:?}");
+        }
+        assert_eq!(insets.status_bars_ignoring_visibility, at(10));
+        assert_eq!(insets.navigation_bars_ignoring_visibility, at(11));
+        assert_eq!(insets.caption_bar_ignoring_visibility, at(12));
+        assert_eq!(insets.system_bars_ignoring_visibility, at(13));
+        assert_eq!(insets.tappable_element_ignoring_visibility, at(14));
+        assert_eq!(insets.ime_animation_source, at(15));
+        assert_eq!(insets.ime_animation_target, at(16));
+    }
+
+    #[test]
+    fn an_approximated_path_jumps_where_a_fraction_repeats() {
+        use compose_ui::{Offset, PathCommand as Command};
+        let path = path_of_approximation(&[
+            0.0, 1.0, 2.0, 0.25, 3.0, 4.0, 0.5, 5.0, 6.0, //
+            0.5, 7.0, 8.0, 1.0, 9.0, 10.0,
+        ]);
+        let data = path.data();
+        assert_eq!(
+            data.commands(),
+            [
+                Command::MoveTo(Offset::new(1.0, 2.0)),
+                Command::LineTo(Offset::new(3.0, 4.0)),
+                Command::LineTo(Offset::new(5.0, 6.0)),
+                Command::MoveTo(Offset::new(7.0, 8.0)),
+                Command::LineTo(Offset::new(9.0, 10.0)),
+            ]
+        );
     }
 }

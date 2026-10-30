@@ -467,6 +467,17 @@ impl NodeHandle {
         self.request(Invalidation::DrawForSubtree);
     }
 
+    /// Runs `effect` once the tree applied the changes under way, as the node's context's
+    /// `side_effect` does (after the composition pass, before the frame's layout; asked outside
+    /// a pass, at the next frame): for an element's `update`, which runs during the pass without
+    /// the node's context, to finish its work with it (`with_node` in `effect`), as Compose's
+    /// `update` does at once (D1355). Dropped if the tree is gone.
+    pub fn side_effect(&self, effect: impl FnOnce() + 'static) {
+        let Some(requests) = requests_of(self.tree) else { return };
+        requests.side_effects.borrow_mut().push(Box::new(effect));
+        requests.wake();
+    }
+
     /// Runs `f` with the node, as an `N`, and its context, now, if the tree is free (a task
     /// resuming between frames or in a frame's task step, a side effect). `None` if the node is
     /// gone, isn't an `N`, or its tree is busy: inside a composition pass, a node's callback,

@@ -116,3 +116,4 @@ mod text_input;
 mod text_reuse;
 mod text_selection_colors;
 mod window;
+mod window_insets;

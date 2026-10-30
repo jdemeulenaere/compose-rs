@@ -62,6 +62,7 @@ pub struct UiHost {
     configuration: compose_runtime::OwnedState<crate::configuration::Configuration>,
     /// The window's insets (`LOCAL_PLATFORM_WINDOW_INSETS`, and read while measuring).
     window_insets: compose_runtime::OwnedState<crate::configuration::PlatformWindowInsets>,
+    window_cutout_path: compose_runtime::OwnedState<crate::configuration::CutoutPath>,
     /// The platform's properties and its event listener (`LOCAL_HOST_PROPS`,
     /// `LOCAL_HOST_EVENTS`).
     props: crate::configuration::HostProps,
@@ -136,8 +137,13 @@ impl UiHost {
         let window_insets = compose_runtime::mutable_state_of(
             crate::configuration::PlatformWindowInsets::default(),
         );
-        let insets = window_insets.handle();
-        composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_state(insets));
+        let window_cutout_path =
+            compose_runtime::mutable_state_of(crate::configuration::CutoutPath::default());
+        let insets_source = crate::configuration::WindowInsetsSource::of(
+            window_insets.handle(),
+            window_cutout_path.handle(),
+        );
+        composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_source(insets_source));
         UiHost {
             composition,
             size,
@@ -158,6 +164,7 @@ impl UiHost {
                 crate::configuration::Configuration::from_window(size, density, false),
             ),
             window_insets,
+            window_cutout_path,
             props: crate::configuration::HostProps::default(),
             events: crate::configuration::HostEvents::default(),
         }
@@ -200,7 +207,11 @@ impl UiHost {
     /// tree is free, as Compose's `onEndApplyChanges`: what they queue in turn runs too.
     fn run_side_effects(&self) {
         loop {
-            let effects = self.with_tree(|tree| std::mem::take(&mut tree.side_effects));
+            let effects = self.with_tree(|tree| {
+                let mut effects = std::mem::take(&mut tree.side_effects);
+                effects.append(&mut tree.focus_requests.side_effects.borrow_mut());
+                effects
+            });
             if effects.is_empty() {
                 return;
             }
@@ -301,11 +312,18 @@ impl UiHost {
         self.configuration.handle().get()
     }
 
-    /// The window's insets (system bars, the keyboard, a cutout), which the insets paddings and
-    /// `LOCAL_PLATFORM_WINDOW_INSETS` read.
+    /// The window's insets (system bars, the keyboard, a cutout, …), which foundation's
+    /// `WindowInsets` (through `LOCAL_WINDOW_INSETS_SOURCE`) and `LOCAL_PLATFORM_WINDOW_INSETS`
+    /// read.
     pub fn set_window_insets(&mut self, insets: crate::configuration::PlatformWindowInsets) {
         let _turn = compose_runtime::platform::Turn::begin();
         self.window_insets.set(insets);
+    }
+
+    /// The display cutout's outline, if the platform reports one, which foundation's
+    /// `WindowInsets::cutout_path` reads.
+    pub fn set_window_cutout_path(&mut self, path: Option<crate::path::Path>) {
+        self.window_cutout_path.set(crate::configuration::CutoutPath(path));
     }
 
     /// The properties the platform passes to the content (`LOCAL_HOST_PROPS`).
@@ -370,7 +388,11 @@ impl UiHost {
             || self.with_tree(|tree| tree.needs_draw || tree.semantics_changed)
             || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
-            || self.with_tree(|tree| tree.has_node_requests() || !tree.side_effects.is_empty())
+            || self.with_tree(|tree| {
+                tree.has_node_requests()
+                    || !tree.side_effects.is_empty()
+                    || !tree.focus_requests.side_effects.borrow().is_empty()
+            })
             || self.with_tree(|tree| tree.has_beyond_bounds_moves())
     }
 
@@ -407,6 +429,10 @@ impl UiHost {
                 saveable_registry: self.saveable_registry.clone(),
                 props: self.props.clone(),
                 events: self.events.clone(),
+                insets: crate::configuration::WindowInsetsSource::of(
+                    self.window_insets.handle(),
+                    self.window_cutout_path.handle(),
+                ),
             };
             let configuration = self.configuration.handle();
             let insets = self.window_insets.handle();
@@ -923,6 +949,7 @@ struct HostLocals {
     saveable_registry: compose_runtime::SaveableStateRegistry,
     props: crate::configuration::HostProps,
     events: crate::configuration::HostEvents,
+    insets: crate::configuration::WindowInsetsSource,
 }
 
 impl HostLocals {
@@ -943,7 +970,13 @@ impl HostLocals {
                             Provide(
                                 crate::configuration::LOCAL_HOST_EVENTS
                                     .provides(self.events.clone()),
-                                content,
+                                || {
+                                    Provide(
+                                        crate::configuration::LOCAL_WINDOW_INSETS_SOURCE
+                                            .provides(self.insets),
+                                        content,
+                                    )
+                                },
                             )
                         },
                     )
