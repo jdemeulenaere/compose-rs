@@ -14,6 +14,7 @@ extern crate compose_runtime as compose;
 
 mod anchored;
 mod app_bar;
+mod bottom_sheet_scaffold;
 mod button;
 mod checkbox;
 mod chips;
@@ -43,6 +44,10 @@ pub use app_bar::{
     BottomAppBar, BottomAppBarDefaults, CenterAlignedTopAppBar, LargeTopAppBar, MediumTopAppBar,
     TopAppBar, TopAppBarColors, TopAppBarDefaults, TopAppBarScrollBehavior, TopAppBarState,
     remember_top_app_bar_state,
+};
+pub use bottom_sheet_scaffold::{
+    BottomSheetScaffold, BottomSheetScaffoldState, default_scaffold_snackbar_host,
+    remember_bottom_sheet_scaffold_state,
 };
 pub use button::{
     Button, ButtonColors, ButtonDefaults, ButtonElevation, ElevatedButton, FilledTonalButton,
@@ -106,8 +111,8 @@ pub use selection::{
     RadioButton, RadioButtonColors, RadioButtonDefaults, Switch, SwitchColors, SwitchDefaults,
 };
 pub use sheet::{
-    BottomSheetDefaults, ModalBottomSheet, ModalBottomSheetDefaults, ModalBottomSheetProperties,
-    SheetState, SheetValue, remember_bottom_sheet_state,
+    BottomSheet, BottomSheetDefaults, ModalBottomSheet, ModalBottomSheetDefaults,
+    ModalBottomSheetProperties, SheetState, SheetValue, remember_bottom_sheet_state,
 };
 pub use slider::{
     DrawSliderStopIndicator, DrawSliderTick, Slider, SliderColors, SliderDefaults, SliderState,

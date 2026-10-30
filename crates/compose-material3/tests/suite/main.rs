@@ -6,6 +6,7 @@ extern crate compose_runtime as compose;
 mod alert_dialog;
 mod animated_content;
 mod app_bars;
+mod bottom_sheet_scaffold;
 mod buttons;
 mod checkbox;
 mod checkbox_screenshots;

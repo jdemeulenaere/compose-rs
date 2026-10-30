@@ -17,6 +17,9 @@ pub(crate) struct Anchored {
     resting: Cell<bool>,
     /// The values and their offsets, as the last layout found them.
     anchors: RefCell<Vec<(Key, f32)>>,
+    /// Changes with `anchors`, for what reads them as a state (`observe_anchors`).
+    anchors_version: OwnedState<u32>,
+    anchors_changes: Cell<u32>,
     /// As Compose's `currentValue`: where it last settled, or, while dragged, the anchor it was
     /// dragged half way to.
     current: OwnedState<Key>,
@@ -38,6 +41,8 @@ impl Anchored {
             offset: Animatable::new(0.0),
             resting: Cell::new(true),
             anchors: RefCell::new(Vec::new()),
+            anchors_version: mutable_state_of(0),
+            anchors_changes: Cell::new(0),
             current: mutable_state_of(initial),
             settled: mutable_state_of(initial),
             target: mutable_state_of(initial),
@@ -72,6 +77,17 @@ impl Anchored {
         self.anchors.borrow().iter().find(|(anchor, _)| *anchor == value).map(|&(_, at)| at)
     }
 
+    /// How many anchors it has, as `anchors.size`.
+    pub fn anchor_count(&self) -> usize {
+        self.anchors.borrow().len()
+    }
+
+    /// `has_anchor` and `anchor_count` as states, for what reads them outside a measurement (a
+    /// drag handle's semantics): read this first, and new anchors invalidate the reader.
+    pub fn observe_anchors(&self) {
+        let _ = self.anchors_version.get();
+    }
+
     pub fn has_anchor(&self, value: Key) -> bool {
         self.position_of(value).is_some()
     }
@@ -93,6 +109,10 @@ impl Anchored {
         let changed = *self.anchors.borrow() != anchors;
         if changed {
             *self.anchors.borrow_mut() = anchors;
+            // A count of its own: this runs in a measurement, which shouldn't read the state.
+            let next = self.anchors_changes.get().wrapping_add(1);
+            self.anchors_changes.set(next);
+            self.anchors_version.set(next);
         }
         changed
     }

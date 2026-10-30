@@ -53,16 +53,16 @@ impl SheetValue {
         [SheetValue::Hidden, SheetValue::PartiallyExpanded, SheetValue::Expanded];
 }
 
-struct SheetInner {
-    anchored: Anchored,
-    skip_partially_expanded: bool,
-    skip_hidden_state: bool,
+pub(crate) struct SheetInner {
+    pub(crate) anchored: Anchored,
+    pub(crate) skip_partially_expanded: bool,
+    pub(crate) skip_hidden_state: bool,
     /// How far a drag must go to settle at the next anchor, in pixels, as
     /// `positionalThreshold`.
-    positional_threshold: Box<dyn Fn() -> f32>,
+    pub(crate) positional_threshold: Box<dyn Fn() -> f32>,
     /// A release faster than this (pixels per second) settles in its direction, as
     /// `velocityThreshold`.
-    velocity_threshold: Box<dyn Fn() -> f32>,
+    pub(crate) velocity_threshold: Box<dyn Fn() -> f32>,
     confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
     /// What showing and expanding animate with, and hiding and partially expanding, as
     /// `showMotionSpec` and `hideMotionSpec`: at once until a sheet sets its motion.
@@ -117,7 +117,7 @@ impl SheetState {
     /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
     /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Option<Rc<SheetInner>> {
+    pub(crate) fn inner(&self) -> Option<Rc<SheetInner>> {
         self.object.get()
     }
 
@@ -225,7 +225,7 @@ impl SheetState {
     }
 
     /// Whether `confirm_value_change` lets it go to `value`.
-    fn confirms(&self, value: SheetValue) -> bool {
+    pub(crate) fn confirms(&self, value: SheetValue) -> bool {
         self.inner().is_some_and(|inner| (inner.confirm_value_change)(value))
     }
 
@@ -288,7 +288,7 @@ impl SheetState {
     /// Sets what it animates with, as Compose's sheets do from the motion scheme: showing and
     /// expanding with the default spatial spring, hiding with the fast effects one, drags
     /// settling with the default spatial one.
-    fn set_motion(&self) {
+    pub(crate) fn set_motion(&self) {
         if let Some(inner) = self.inner() {
             *inner.show_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL);
             *inner.hide_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::FAST_EFFECTS);
@@ -461,6 +461,8 @@ pub struct BottomSheetDefaults;
 impl BottomSheetDefaults {
     /// The widest a sheet gets, as `SheetMaxWidth`.
     pub const SHEET_MAX_WIDTH: Dp = Dp(640.0);
+    /// A standard sheet's shadow, as `Elevation` (`ElevationTokens.Level1`).
+    pub const ELEVATION: Dp = Dp(1.0);
     /// As `SheetPeekHeight`.
     pub const SHEET_PEEK_HEIGHT: Dp = Dp(56.0);
     /// How far a drag must go to settle at the next anchor, as Compose's internal
@@ -509,28 +511,38 @@ impl BottomSheetDefaults {
     /// The drag handle, as `DragHandle()`: a 32 by 4 dp pill in the on-surface-variant color
     /// at 40 %, 22 dp above and below.
     pub fn drag_handle() {
-        let color = MaterialTheme::color_scheme().on_surface_variant.with_alpha(0.4);
+        BottomSheetDefaults::drag_handle_with(
+            Modifier,
+            32.dp(),
+            4.dp(),
+            MaterialTheme::shapes().extra_large.clone(),
+            MaterialTheme::color_scheme().on_surface_variant.with_alpha(0.4),
+        );
+    }
+
+    /// The drag handle with `DragHandle`'s parameters.
+    pub fn drag_handle_with(modifier: Modifier, width: Dp, height: Dp, shape: Shape, color: Color) {
         crate::components::Surface(
-            Modifier.padding((Dp(0.0), 22.dp())).semantics(|config| {
+            modifier.padding((Dp(0.0), 22.dp())).semantics(|config| {
                 config.set_content_description("Drag handle");
             }),
-            MaterialTheme::shapes().extra_large.clone(),
+            shape,
             color,
             Color::UNSPECIFIED,
             Dp(0.0),
             Dp(0.0),
             None,
-            compose_runtime::callback(|| {
-                compose_foundation::layout::Spacer(Modifier.size((32.dp(), 4.dp())));
+            compose_runtime::callback(move || {
+                compose_foundation::layout::Spacer(Modifier.size((width, height)));
             }),
         );
     }
 }
 
 /// The sheet's part in its content's scrolls.
-struct SheetConnection {
-    state: SheetState,
-    settle: RefCell<Rc<dyn Fn(f32)>>,
+pub(crate) struct SheetConnection {
+    pub(crate) state: SheetState,
+    pub(crate) settle: RefCell<Rc<dyn Fn(f32)>>,
 }
 
 impl NestedScrollConnection for SheetConnection {
@@ -648,6 +660,172 @@ pub fn ModalBottomSheet(
             }
         });
     }
+    let parts = sheet_parts(
+        sheet_state,
+        on_dismiss_request,
+        modifier,
+        sheet_gestures_enabled,
+        scope,
+        density,
+    );
+    let policy = {
+        let state = sheet_state;
+        compose_runtime::remember_keyed((sheet_state, sheet_max_width), move || {
+            Rc::new(SheetLayout { state, max_width: sheet_max_width }) as Rc<dyn MeasurePolicy>
+        })
+    };
+    // The scrim fades in while the sheet is going anywhere but hidden, on the default effects
+    // spring.
+    let scrim_alpha = compose_animation::animate_float_as_state(
+        if sheet_state.target_value() != SheetValue::Hidden { 1.0 } else { 0.0 },
+        AnimationSpec::Spring(crate::motion::DEFAULT_EFFECTS),
+        Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
+        "ScrimAlpha",
+        None,
+    );
+    let provider = remember(|| Rc::new(AtWindowTop) as Rc<dyn PopupPositionProvider>);
+    let popup_properties = PopupProperties {
+        focusable: true,
+        dismiss_on_back_press: properties.should_dismiss_on_back_press,
+        dismiss_on_click_outside: false,
+    };
+    let SheetParts { dismiss, back, modifier: sheet_modifier, handle_click, handle_semantics } =
+        parts;
+    compose_ui::PopupWithPositionProvider(
+        provider,
+        Some(back),
+        popup_properties,
+        compose_runtime::callback(move || {
+            let (dismiss, content, drag_handle, handle_click) =
+                (dismiss.clone(), content.clone(), drag_handle.clone(), handle_click.clone());
+            let handle_semantics = handle_semantics.clone();
+            let sheet_modifier = sheet_modifier.clone();
+            let shape = shape.clone();
+            Layout(
+                // Read in order: the sheet, then the scrim's close (`Scrim`'s traversal index).
+                Modifier.semantics(|config| config.set_is_traversal_group(true)),
+                policy.clone(),
+                compose_runtime::callback(move || {
+                    Box(
+                        Modifier
+                            .fill_max_size()
+                            .draw_behind(move |scope| {
+                                let alpha = scrim_color.alpha() as f32 / 255.0 * scrim_alpha.get();
+                                scope.draw_rect(
+                                    scope.bounds(),
+                                    compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
+                                );
+                            })
+                            .then_custom(crate::drawer::ScrimElement {
+                                close: dismiss.clone(),
+                                enabled: properties.should_dismiss_on_click_outside,
+                                description: Some("Close sheet".into()),
+                                traversal_index: Some(1.0),
+                            }),
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(|_| {}),
+                    );
+                    sheet_surface(
+                        sheet_modifier.clone(),
+                        shape.clone(),
+                        container_color,
+                        content_color,
+                        tonal_elevation,
+                        Dp(0.0),
+                        content_window_insets,
+                        drag_handle.clone(),
+                        handle_click.clone(),
+                        handle_semantics.clone(),
+                        content.clone(),
+                    );
+                }),
+            );
+        }),
+    );
+}
+
+/// A bottom sheet in place, as Compose's `BottomSheet`: no window and no scrim, at the bottom of
+/// the space it's given (up to `max_width`, centered), its drag handle and content in a column.
+/// It stays where its `state` says; `state.show()` shows it. Drags move it between its anchors
+/// (with `gestures_enabled`); back (with `back_handler_enabled`, while it's visible) takes an
+/// expanded sheet half way if it can rest there, else hides it and calls `on_dismiss_request`.
+#[composable]
+#[allow(clippy::too_many_arguments)]
+pub fn BottomSheet(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::remember_bottom_sheet_state(
+        crate::SheetValue::Hidden,
+        &crate::SheetValue::ALL,
+        crate::always_confirm(),
+    ))]
+    state: SheetState,
+    #[default(|| {})] on_dismiss_request: impl Fn() + 'static,
+    #[default(crate::BottomSheetDefaults::SHEET_MAX_WIDTH)] max_width: Dp,
+    #[default(true)] gestures_enabled: bool,
+    #[default(true)] back_handler_enabled: bool,
+    #[default(crate::default_drag_handle())] drag_handle: Option<impl Fn() + 'static>,
+    #[default(crate::BottomSheetDefaults::standard_window_insets())]
+    content_window_insets: WindowInsets,
+    #[default(crate::BottomSheetDefaults::expanded_shape())] shape: Shape,
+    #[default(crate::BottomSheetDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::Dp(0.0))] shadow_elevation: Dp,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    let scope = remember_coroutine_scope();
+    let density = compose_ui::LOCAL_DENSITY.current();
+    compose_runtime::SideEffect(move || state.set_motion());
+    let SheetParts { back, modifier: sheet_modifier, handle_click, handle_semantics, .. } =
+        sheet_parts(state, on_dismiss_request, modifier, gestures_enabled, scope, density);
+    compose_ui::BackHandler(back_handler_enabled && state.is_visible(), back);
+    let policy = compose_runtime::remember_keyed((state, max_width), move || {
+        Rc::new(SheetLayout { state, max_width }) as Rc<dyn MeasurePolicy>
+    });
+    Layout(
+        Modifier,
+        policy,
+        compose_runtime::callback(move || {
+            sheet_surface(
+                sheet_modifier.clone(),
+                shape.clone(),
+                container_color,
+                content_color,
+                tonal_elevation,
+                shadow_elevation,
+                content_window_insets,
+                drag_handle.clone(),
+                handle_click.clone(),
+                handle_semantics.clone(),
+                content.clone(),
+            );
+        }),
+    );
+}
+
+/// What a modal and a standalone sheet share, as Compose's `BottomSheetImpl`.
+struct SheetParts {
+    /// Hides it (if `confirm_value_change` lets it), then tells the caller.
+    dismiss: compose_runtime::Callback,
+    /// Back: an expanded sheet that can rest half way goes there, else as `dismiss`.
+    back: compose_runtime::Callback,
+    /// The sheet's own modifier: its drags and nested scroll, its pane.
+    modifier: Modifier,
+    /// A click on the drag handle.
+    handle_click: compose_runtime::Callback,
+    /// The drag handle's actions.
+    handle_semantics: Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)>,
+}
+
+fn sheet_parts(
+    sheet_state: SheetState,
+    on_dismiss_request: compose_runtime::Callback,
+    modifier: Modifier,
+    sheet_gestures_enabled: bool,
+    scope: compose_runtime::CoroutineScope,
+    density: compose_ui::Density,
+) -> SheetParts {
     // Hides the sheet, then tells the caller.
     // The scrim hides the sheet (if `confirm_value_change` lets it), then tells the caller, as
     // Compose's `animateToDismiss`.
@@ -740,27 +918,6 @@ pub fn ModalBottomSheet(
             })
         })
     };
-    let policy = {
-        let state = sheet_state;
-        compose_runtime::remember_keyed((sheet_state, sheet_max_width), move || {
-            Rc::new(SheetLayout { state, max_width: sheet_max_width }) as Rc<dyn MeasurePolicy>
-        })
-    };
-    // The scrim fades in while the sheet is going anywhere but hidden, on the default effects
-    // spring.
-    let scrim_alpha = compose_animation::animate_float_as_state(
-        if sheet_state.target_value() != SheetValue::Hidden { 1.0 } else { 0.0 },
-        AnimationSpec::Spring(crate::motion::DEFAULT_EFFECTS),
-        Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
-        "ScrimAlpha",
-        None,
-    );
-    let provider = remember(|| Rc::new(AtWindowTop) as Rc<dyn PopupPositionProvider>);
-    let popup_properties = PopupProperties {
-        focusable: true,
-        dismiss_on_back_press: properties.should_dismiss_on_back_press,
-        dismiss_on_click_outside: false,
-    };
     // Dragged once shown, and part of its content's scrolls, with its gestures.
     let sheet_modifier = modifier
         .consume_window_insets(WindowInsets::from_provider(SheetWindowInsets(sheet_state)))
@@ -791,6 +948,9 @@ pub fn ModalBottomSheet(
             if !sheet_gestures_enabled {
                 return;
             }
+            if let Some(inner) = state.inner() {
+                inner.anchored.observe_anchors();
+            }
             let on_dismiss = dismiss.clone();
             config.dismiss(Some("Dismiss bottom sheet".into()), move || {
                 on_dismiss();
@@ -813,7 +973,8 @@ pub fn ModalBottomSheet(
             }
         }
     };
-    let handle_semantics = Rc::new(handle_semantics);
+    let handle_semantics: Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)> =
+        Rc::new(handle_semantics);
     // A click on the drag handle expands the sheet, dismisses it once expanded, as Compose's.
     let handle_click = {
         let (state, scope, dismiss) = (sheet_state, scope, dismiss.clone());
@@ -827,83 +988,91 @@ pub fn ModalBottomSheet(
             }
         })
     };
-    compose_ui::PopupWithPositionProvider(
-        provider,
-        Some(back),
-        popup_properties,
+    SheetParts { dismiss, back, modifier: sheet_modifier, handle_click, handle_semantics }
+}
+
+/// A drag handle's actions, read when the semantics are (they depend on the anchors, which the
+/// layout finds after the composition), merging what's in it, as Compose's lambda.
+pub(crate) struct HandleSemantics(pub(crate) Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)>);
+
+pub(crate) struct HandleSemanticsNode(Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)>);
+
+impl compose_ui::ModifierNodeElement for HandleSemantics {
+    type Node = HandleSemanticsNode;
+    fn create(&self) -> HandleSemanticsNode {
+        HandleSemanticsNode(self.0.clone())
+    }
+    fn update(&self, node: &mut HandleSemanticsNode) {
+        node.0 = self.0.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+    fn name(&self) -> &'static str {
+        "sheet_drag_handle_semantics"
+    }
+}
+
+impl compose_ui::ModifierNode for HandleSemanticsNode {
+    fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::SemanticsModifierNode for HandleSemanticsNode {
+    fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
+        config.is_merging_semantics_of_descendants = true;
+        (self.0)(config);
+    }
+}
+
+/// The sheet: a surface of `shape`, its drag handle (clickable, with its actions) and content in
+/// a column.
+#[allow(clippy::too_many_arguments)]
+fn sheet_surface(
+    modifier: Modifier,
+    shape: Shape,
+    container_color: Color,
+    content_color: Color,
+    tonal_elevation: Dp,
+    shadow_elevation: Dp,
+    content_window_insets: WindowInsets,
+    drag_handle: Option<compose_runtime::Callback>,
+    handle_click: compose_runtime::Callback,
+    handle_semantics: Rc<dyn Fn(&mut compose_ui::SemanticsConfiguration)>,
+    content: compose_runtime::Callback<dyn Fn(ColumnScope)>,
+) {
+    crate::components::Surface(
+        modifier.fill_max_width(),
+        shape,
+        container_color,
+        content_color,
+        tonal_elevation,
+        shadow_elevation,
+        None,
         compose_runtime::callback(move || {
-            let (dismiss, content, drag_handle, handle_click) =
-                (dismiss.clone(), content.clone(), drag_handle.clone(), handle_click.clone());
+            let (drag_handle, handle_click) = (drag_handle.clone(), handle_click.clone());
             let handle_semantics = handle_semantics.clone();
-            let sheet_modifier = sheet_modifier.clone();
-            Layout(
-                // Read in order: the sheet, then the scrim's close (`Scrim`'s traversal index).
-                Modifier.semantics(|config| config.set_is_traversal_group(true)),
-                policy.clone(),
-                compose_runtime::callback(move || {
-                    Box(
-                        Modifier
-                            .fill_max_size()
-                            .draw_behind(move |scope| {
-                                let alpha = scrim_color.alpha() as f32 / 255.0 * scrim_alpha.get();
-                                scope.draw_rect(
-                                    scope.bounds(),
-                                    compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
-                                );
-                            })
-                            .then_custom(crate::drawer::ScrimElement {
-                                close: dismiss.clone(),
-                                enabled: properties.should_dismiss_on_click_outside,
-                                description: Some("Close sheet".into()),
-                                traversal_index: Some(1.0),
-                            }),
-                        Alignment::TOP_START,
-                        false,
-                        compose_runtime::callback(|_| {}),
-                    );
-                    let (content, drag_handle, handle_click) =
-                        (content.clone(), drag_handle.clone(), handle_click.clone());
-                    let handle_semantics = handle_semantics.clone();
-                    crate::components::Surface(
-                        sheet_modifier.clone().fill_max_width(),
-                        shape,
-                        container_color,
-                        content_color,
-                        tonal_elevation,
-                        Dp(0.0),
-                        None,
-                        compose_runtime::callback(move || {
-                            let (drag_handle, handle_click) =
-                                (drag_handle.clone(), handle_click.clone());
-                            let handle_semantics = handle_semantics.clone();
-                            let content = content.clone();
-                            Column(
-                                Modifier
-                                    .fill_max_width()
-                                    .window_insets_padding(content_window_insets.clone()),
-                                compose_foundation::layout::Arrangement::TOP,
-                                Alignment::START,
-                                compose_runtime::callback(move |column: ColumnScope| {
-                                    if let Some(drag_handle) = drag_handle.clone() {
-                                        let click = handle_click.clone();
-                                        let semantics = handle_semantics.clone();
-                                        Box(
-                                            Modifier
-                                                .align(column, Alignment::CENTER_HORIZONTALLY)
-                                                .clickable(move || click())
-                                                .semantics_with(true, move |config| {
-                                                    semantics(config)
-                                                }),
-                                            Alignment::TOP_START,
-                                            false,
-                                            compose_runtime::callback(move |_| drag_handle()),
-                                        );
-                                    }
-                                    content(column);
-                                }),
-                            );
-                        }),
-                    );
+            let content = content.clone();
+            Column(
+                Modifier.fill_max_width().window_insets_padding(content_window_insets.clone()),
+                compose_foundation::layout::Arrangement::TOP,
+                Alignment::START,
+                compose_runtime::callback(move |column: ColumnScope| {
+                    if let Some(drag_handle) = drag_handle.clone() {
+                        let click = handle_click.clone();
+                        let semantics = handle_semantics.clone();
+                        Box(
+                            Modifier
+                                .align(column, Alignment::CENTER_HORIZONTALLY)
+                                .clickable(click)
+                                .then_custom(HandleSemantics(semantics)),
+                            Alignment::TOP_START,
+                            false,
+                            compose_runtime::callback(move |_| drag_handle()),
+                        );
+                    }
+                    content(column);
                 }),
             );
         }),
@@ -924,17 +1093,21 @@ impl MeasurePolicy for SheetLayout {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let [scrim, sheet] = measurables else {
-            return scope.layout(constraints.min_width, constraints.min_height);
+        let (scrim, sheet) = match measurables {
+            [scrim, sheet] => (Some(scrim), sheet),
+            [sheet] => (None, sheet),
+            _ => return scope.layout(constraints.min_width, constraints.min_height),
         };
         let (width, height) = (constraints.max_width, constraints.max_height);
-        let scrim = scope.measure(*scrim, Constraints::fixed(width, height));
+        let scrim = scrim.map(|scrim| scope.measure(*scrim, Constraints::fixed(width, height)));
         let sheet_width = width.min(scope.density().round_to_px(self.max_width));
         let sheet = scope.measure(*sheet, Constraints::new(0, sheet_width, 0, height));
         let full = height as f32;
         let sheet_height = sheet.height as f32;
         let Some(inner) = self.state.inner() else {
-            scope.place(&scrim, 0, 0);
+            if let Some(scrim) = &scrim {
+                scope.place(scrim, 0, 0);
+            }
             return scope.layout(width, height);
         };
         // Hidden below the window; half way when it can rest there (Compose's
@@ -978,7 +1151,9 @@ impl MeasurePolicy for SheetLayout {
         // Read while measuring: a frame of the slide places the sheet again only.
         let offset = inner.anchored.offset();
         let top = if offset.is_nan() { full } else { offset };
-        scope.place(&scrim, 0, 0);
+        if let Some(scrim) = &scrim {
+            scope.place(scrim, 0, 0);
+        }
         scope.place(&sheet, (width - sheet.width) / 2, top.round() as i32);
         scope.layout(width, height)
     }
