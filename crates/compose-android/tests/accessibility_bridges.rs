@@ -20,9 +20,14 @@ use compose_runtime::{MutableState, mutable_state_of};
 use compose_ui::platform::{SemanticsSnapshot, UiHost};
 use compose_ui::*;
 
+/// `content` in a column: at the root, each would be over the one before.
 fn host_of(content: impl Fn() + 'static) -> UiHost {
     let mut host = UiHost::headless(400, 800);
-    host.set_content(content);
+    let content = compose_runtime::callback(content);
+    host.set_content(move || {
+        let content = content.clone();
+        Column!({ content() });
+    });
     frames(&mut host);
     host
 }
@@ -39,7 +44,7 @@ fn by_tag<'a>(node: &'a SemanticsSnapshot, tag: &str) -> Option<&'a SemanticsSna
 }
 
 fn tagged(host: &UiHost, tag: &str) -> SemanticsSnapshot {
-    by_tag(&host.accessibility_tree(), tag).expect("tagged").clone()
+    by_tag(&host.accessibility_tree_with_covered(), tag).expect("tagged").clone()
 }
 
 /// The tags of `sorted_for_accessibility`, in the merged tree.
@@ -208,7 +213,7 @@ fn a_live_region_and_a_heading_show_in_the_flags() {
         let heading = Modifier.semantics(|config| config.heading());
         Box!(modifier = heading.test_tag("heading"), {});
     });
-    let root = host.accessibility_tree();
+    let root = host.accessibility_tree_with_covered();
     let mut out = Writer::default();
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let flags = read_flags(&out.bytes);
@@ -705,7 +710,7 @@ fn what_is_hidden_or_says_nothing_is_not_read_and_each_record_names_the_next() {
     });
     assert_eq!(order(&host), ["first", "last"]);
 
-    let root = host.accessibility_tree();
+    let root = host.accessibility_tree_with_covered();
     let mut out = Writer::default();
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let read = records(&out.bytes);
@@ -1609,4 +1614,274 @@ fn a_merging_nodes_role_is_its_class_with_or_without_what_is_beside_it() {
     for tag in ["empty", "with text", "with a child"] {
         assert_eq!(class_and_role(&tagged(&host, tag)).0, "android.widget.Button", "{tag}");
     }
+}
+
+// ---- What's completely covered is left out (D1655) -----------------------------------------------
+
+/// The node tagged `tag` in what a service is told of.
+fn uncovered(host: &UiHost, tag: &str) -> SemanticsSnapshot {
+    by_tag(&host.accessibility_tree(), tag).expect("tagged").clone()
+}
+
+/// The children of the root that are written, by text.
+fn texts_of(host: &UiHost) -> Vec<String> {
+    host.accessibility_tree().children.iter().map(|child| read_as(child).0).collect()
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_completelyCovered
+#[test]
+fn a_node_a_sibling_completely_covers_is_left_out() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!("Child One", modifier = Modifier.z_index(1.0).required_size(50.dp()));
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    let parent = uncovered(&host, "parent");
+    assert_eq!(parent.children.len(), 1);
+    assert_eq!(read_as(&parent.children[0]).0, "Child One");
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_partiallyCovered
+#[test]
+fn a_node_partly_covered_stays_with_what_is_left_of_its_bounds() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!("Child One", modifier = Modifier.z_index(1.0).required_size(100.dp()));
+            BasicText!(
+                "Child Two",
+                modifier = Modifier.test_tag("two").required_size((200.dp(), 100.dp()))
+            );
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+    let two = uncovered(&host, "two");
+    let left = two.uncovered_bounds.expect("pruned");
+    assert_eq!((left.width(), left.height()), (100.0, 100.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_testTagOnlyDoesNotPrune
+#[test]
+fn what_over_it_means_nothing_to_a_service_covers_nothing() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            Box!(modifier = Modifier.z_index(1.0).test_tag("one").required_size(50.dp()));
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_hideFromAccessibilityDoesNotPrune
+#[test]
+fn what_over_it_is_hidden_covers_nothing() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!(
+                "Child One",
+                modifier = Modifier
+                    .z_index(1.0)
+                    .semantics(|it| it.hide_from_accessibility())
+                    .required_size(50.dp())
+            );
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testUncoveredNodes_notPlacedNodes_notIncluded
+#[test]
+fn what_is_not_placed_is_left_out() {
+    let host = host_of(|| {
+        Row!(modifier = Modifier.size(10.dp()), {
+            for _ in 0..3 {
+                Box!(
+                    modifier =
+                        Modifier.size(10.dp()).semantics(|it| it.set_content_description("a"))
+                );
+            }
+        });
+    });
+    assert_eq!(host.accessibility_tree().children.len(), 1);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testUncoveredNodes_zeroBoundsRoot_included
+#[test]
+fn a_root_of_no_size_is_still_visited() {
+    let mut host = UiHost::headless(0, 0);
+    host.set_content(|| {});
+    frames(&mut host);
+    let owner = host.semantics_owner();
+    let root = owner.unmerged_root_semantics_node().id();
+    let mut visited = Vec::new();
+    owner.for_each_uncovered_semantics_node(|node, _, _| visited.push(node.id()));
+    assert_eq!(visited, [root]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, clippedChildInScrollContainer_doesNotOccludeAdjacentSiblingTouchTarget
+#[test]
+fn a_clipped_childs_touch_target_covers_nothing_past_its_clip() {
+    let offset = Box::leak(Box::new(mutable_state_of(-12i32))).handle();
+    let mut host = host_of(move || {
+        Column!(modifier = Modifier.size(200.dp()), {
+            Box!(modifier = Modifier.fill_max_width().height(56.dp()), |scope: BoxScope| {
+                Box!(
+                    modifier = Modifier
+                        .size(48.dp())
+                        .align(scope, Alignment::BOTTOM_START)
+                        .test_tag("top")
+                        .clickable(|| {})
+                );
+            });
+            Box!(modifier = Modifier.fill_max_width().height(144.dp()).clip_to_bounds(), {
+                Box!(
+                    modifier = Modifier
+                        .offset(0.dp(), offset.get().dp())
+                        .size(100.dp())
+                        .test_tag("item")
+                        .clickable(|| {})
+                );
+            });
+        });
+    });
+    assert_eq!(uncovered(&host, "top").uncovered_bounds.expect("pruned").height(), 48.0);
+    // 20 of it left in the clip: its target goes past it, and still covers nothing there.
+    offset.set(-80);
+    frames(&mut host);
+    let owner = host.semantics_owner();
+    let item = uncovered(&host, "item").semantics_id;
+    let mut top_of_item = None;
+    owner.unmerged_root_semantics_node();
+    fn find_node(node: compose_ui::SemanticsNode, id: i32) -> Option<compose_ui::SemanticsNode> {
+        if node.id() == id {
+            return Some(node);
+        }
+        node.children().into_iter().find_map(|child| find_node(child, id))
+    }
+    if let Some(node) = find_node(owner.unmerged_root_semantics_node(), item) {
+        top_of_item = Some(node.touch_bounds_in_root().top);
+    }
+    assert!(top_of_item.expect("there") < 56.0);
+    assert_eq!(uncovered(&host, "top").uncovered_bounds.expect("pruned").height(), 48.0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, overlappingClippedChildrenNearContainerEdge_occludedChildIsPruned
+#[test]
+fn what_is_covered_inside_a_clip_is_left_out_whatever_sticks_past_it() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.size(100.dp()).clip_to_bounds(), {
+            for tag in ["primary", "secondary"] {
+                Box!(
+                    modifier = Modifier
+                        .offset(0.dp(), 80.dp())
+                        .size((80.dp(), 0.dp()))
+                        .test_tag(tag)
+                        .clickable(|| {})
+                );
+            }
+        });
+    });
+    let root = host.accessibility_tree();
+    assert_eq!(root.children.len(), 1);
+    assert!(by_tag(&root, "primary").is_none());
+    assert_eq!(by_tag(&root, "secondary").expect("there").uncovered_bounds.unwrap().height(), 48.0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, overlappingClippedChildrenInContainerCorner_occludedChildIsPruned
+#[test]
+fn what_is_covered_in_a_corner_of_a_clip_is_left_out() {
+    let host = host_of(|| {
+        Box!(
+            modifier = Modifier.padding(50.dp()).size(100.dp()).clip_to_bounds(),
+            |scope: BoxScope| {
+                for tag in ["primary", "secondary"] {
+                    Box!(
+                        modifier = Modifier
+                            .align(scope, Alignment::BOTTOM_START)
+                            .size(20.dp())
+                            .test_tag(tag)
+                            .clickable(|| {})
+                    );
+                }
+            }
+        );
+    });
+    let root = host.accessibility_tree();
+    assert_eq!(root.children.len(), 1);
+    let left = by_tag(&root, "secondary").expect("there").uncovered_bounds.unwrap();
+    assert_eq!((left.width(), left.height()), (48.0, 48.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, clippedChildWithPerpendicularSiblingOverlap_preservesFullTouchTargetBounds
+#[test]
+fn a_clipped_childs_whole_touch_target_is_told_when_a_sibling_overlaps_a_side() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.padding(50.dp()).size(200.dp()), {
+            Box!(
+                modifier = Modifier.size((100.dp(), 32.dp())).clip_to_bounds(),
+                |scope: BoxScope| {
+                    Box!(
+                        modifier = Modifier
+                            .align(scope, Alignment::CENTER_END)
+                            .padding((0.dp(), 0.dp(), 4.dp(), 0.dp()))
+                            .size(24.dp())
+                            .test_tag("dismiss")
+                            .clickable(|| {})
+                    );
+                }
+            );
+            Box!(
+                modifier = Modifier
+                    .offset(0.dp(), 40.dp())
+                    .size((100.dp(), 32.dp()))
+                    .test_tag("lower")
+                    .clickable(|| {})
+            );
+        });
+    });
+    let left = uncovered(&host, "dismiss").uncovered_bounds.expect("pruned");
+    assert_eq!((left.width(), left.height()), (48.0, 48.0));
+}
+
+#[test]
+fn one_window_over_another_covers_nothing_in_it() {
+    let host = host_of(|| {
+        Box!({
+            BasicText!("under", modifier = Modifier.test_tag("under").size(100.dp()));
+            Popup!(properties = PopupProperties::default(), {
+                BasicText!("over", modifier = Modifier.size(300.dp()));
+            });
+        });
+    });
+    assert!(by_tag(&host.accessibility_tree(), "under").is_some());
+}
+
+#[test]
+fn the_tree_kept_for_a_keyboard_pays_for_no_pruning_and_a_service_gets_it_pruned() {
+    let host = host_of(|| {
+        Box!({
+            BasicText!("One", modifier = Modifier.z_index(1.0).required_size(50.dp()));
+            BasicText!("Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    let mut kept = compose_android::accessibility::KeptSemanticsTree::default();
+    assert_eq!(kept.get_with_covered(&host).children.len(), 2);
+    assert_eq!(kept.get(&host).children.len(), 1);
+    assert_eq!(kept.get_with_covered(&host).children.len(), 1, "the same tree, kept");
+    assert_eq!(texts_of(&host), ["One"]);
+}
+
+#[test]
+fn what_a_scroller_clips_all_of_away_is_left_out() {
+    let host = host_of(|| {
+        let scroll = remember_scroll_state!();
+        Column!(modifier = Modifier.size(100.dp()).vertical_scroll(scroll), {
+            BasicText!("shown", modifier = Modifier.size(100.dp()).test_tag("shown"));
+            BasicText!("past it", modifier = Modifier.size(100.dp()).test_tag("past it"));
+        });
+    });
+    let root = host.accessibility_tree();
+    assert!(by_tag(&root, "shown").is_some());
+    assert!(by_tag(&root, "past it").is_none());
 }

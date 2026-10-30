@@ -1599,7 +1599,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
         node.children.iter().find_map(password)
     }
     let options = host.ui.text_input_options().unwrap_or_default();
-    let masks_password = password(host.semantics_tree.get(&host.ui)).unwrap_or(false);
+    let masks_password = password(host.semantics_tree.get_with_covered(&host.ui)).unwrap_or(false);
     crate::input_method::editor_info(options, masks_password).pack()
 }
 

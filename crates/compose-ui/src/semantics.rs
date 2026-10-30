@@ -105,6 +105,9 @@ pub struct SemanticsSnapshot {
     /// text beside it: what Compose's fake nodes are for, which the merged tree has no need of
     /// (D1653).
     pub reading_order: Option<crate::SharedString>,
+    /// What's left of its touch bounds, what's over it taken away, once a tree for accessibility
+    /// was pruned (`UiHost::prune_covered_semantics`).
+    pub uncovered_bounds: Option<Rect>,
 }
 
 impl SemanticsSnapshot {
@@ -591,6 +594,7 @@ impl UiTree {
             place_order: 0,
             hidden: false,
             reading_order: None,
+            uncovered_bounds: None,
         }
     }
 
@@ -718,6 +722,7 @@ impl UiTree {
                     place_order: value.place_order,
                     hidden,
                     reading_order,
+                    uncovered_bounds: None,
                 });
             }
         }

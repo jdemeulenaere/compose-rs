@@ -533,6 +533,55 @@ impl UiTree {
         Some((unclipped, coordinates.clipped_bounds))
     }
 
+    /// The clips around `node`'s semantics in the root, nearest first.
+    pub(crate) fn clips_around_semantics(&mut self, node: NodeId) -> Vec<Rect> {
+        let mut clips = Vec::new();
+        let Some(layer) = self.own_semantics(node).map(|own| own.layer) else { return clips };
+        let value = self.node(node);
+        let mut layer_of_entry = 0;
+        let mut entry = None;
+        for (index, bits) in value.chain.iter().map(|entry| entry.kinds).enumerate() {
+            if entry.is_none() && layer_of_entry == layer && bits.any(NodeKinds::SEMANTICS) {
+                entry = Some(index);
+            }
+            if bits.any(NodeKinds::LAYOUT) {
+                layer_of_entry += 1;
+            }
+        }
+        self.clips_of_node(node, entry, &mut clips);
+        let value = self.node(node);
+        let mut current = if value.overlay { None } else { value.parent };
+        while let Some(id) = current {
+            self.clips_of_node(id, None, &mut clips);
+            let value = self.node(id);
+            current = if value.overlay { None } else { value.parent };
+        }
+        clips
+    }
+
+    /// Adds `id`'s clipping modifiers' rectangles to `clips`, innermost first; those before chain
+    /// entry `before_entry` if it's given.
+    fn clips_of_node(&mut self, id: NodeId, before_entry: Option<usize>, clips: &mut Vec<Rect>) {
+        let at = clips.len();
+        let mut layer_of_entry = 0;
+        for index in 0..self.node(id).chain.len() {
+            if before_entry.is_some_and(|before| index >= before) {
+                break;
+            }
+            let value = self.node_mut(id);
+            let size = value.layers[layer_of_entry].size;
+            let density = value.density;
+            let is_layout = value.chain[index].kinds.any(NodeKinds::LAYOUT);
+            if value.chain[index].hit_clip_at(size.into(), density).is_some() {
+                clips.push(self.rect_in_root(id, layer_of_entry, Some(index), size));
+            }
+            if is_layout {
+                layer_of_entry += 1;
+            }
+        }
+        clips[at..].reverse();
+    }
+
     /// `node`'s outermost layer in the root, unclipped, through the graphics layers around it.
     pub(crate) fn outer_bounds_in_root(&mut self, node: NodeId) -> Rect {
         let size = self.node(node).layers[0].size;

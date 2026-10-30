@@ -171,52 +171,146 @@ impl SemanticsOwner {
         if !root.layout_info().is_attached() {
             return;
         }
-        let mut unaccounted = SemanticsRegion::of(root.bounds_in_root());
-        visit_uncovered(root, root, &mut unaccounted, false, &mut visitor);
+        // The root always, and its windows each on their own: one over another covers nothing, as
+        // in Compose, where each is a host of its own.
+        let bounds = root.bounds_in_root();
+        visitor(root, SemanticsRegion::of(bounds).bounds_or(rounded(bounds)), false);
+        let mut windows: Vec<(Option<NodeId>, SemanticsRegion)> = Vec::new();
+        let mut children = Vec::new();
+        root.for_each_accessibility_child(|child| children.push(child));
+        for child in children.into_iter().rev() {
+            let window = child.read(|tree, node| tree.overlay_around(node)).flatten();
+            let at = match windows.iter().position(|(it, _)| *it == window) {
+                Some(at) => at,
+                None => {
+                    windows.push((window, SemanticsRegion::of(bounds)));
+                    windows.len() - 1
+                }
+            };
+            visit_uncovered(child, &mut windows[at].1, false, &mut visitor);
+        }
+    }
+}
+
+fn is_placed(node: SemanticsNode) -> bool {
+    let info = node.layout_info();
+    info.is_placed() && info.is_attached()
+}
+
+/// Whether the node hides what's in it, as `hideFromAccessibility` on a merging node.
+fn hides_what_it_merges(node: SemanticsNode) -> bool {
+    let config = node.unmerged_config();
+    config.is_merging_semantics_of_descendants
+        && config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+}
+
+/// As `isPartiallyOffscreenInScrollParent`: some of it is past the nearest scrolling node's ends.
+fn is_partly_past_its_scroller(node: SemanticsNode) -> bool {
+    let mut parent = node.parent();
+    while let Some(scroller) = parent {
+        let config = scroller.unmerged_config();
+        if config.contains(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+            || config.contains(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+        {
+            let (own, around) =
+                (node.unclipped_bounds_in_root(), scroller.unclipped_bounds_in_root());
+            return own.left < around.left
+                || own.top < around.top
+                || own.right > around.right
+                || own.bottom > around.bottom;
+        }
+        parent = scroller.parent();
+    }
+    false
+}
+
+fn fake_node_bounds(node: SemanticsNode) -> Rect {
+    match node.parent() {
+        Some(owner) if owner.layout_info().is_placed() => rounded(owner.bounds_in_root()),
+        _ => Rect::new(0.0, 0.0, 10.0, 10.0),
     }
 }
 
 fn visit_uncovered(
-    root: SemanticsNode,
     node: SemanticsNode,
     unaccounted: &mut SemanticsRegion,
     hidden: bool,
     visitor: &mut impl FnMut(SemanticsNode, Rect, bool),
 ) {
-    let is_root = node == root;
-    let info = node.layout_info();
-    if (unaccounted.is_empty() && !is_root)
-        || (node.fake.is_none() && !(is_root || (info.is_placed() && info.is_attached())))
-    {
+    if unaccounted.is_empty() || (node.fake.is_none() && !is_placed(node)) {
         return;
     }
     if node.fake.is_some() {
-        let owner = node.parent().unwrap_or(root);
-        let bounds = owner.bounds_in_root();
-        visitor(node, rounded(bounds), hidden);
+        visitor(node, fake_node_bounds(node), hidden);
+        return;
+    }
+    let touch = rounded(node.touch_bounds_in_root());
+    let clipped =
+        rounded(node.read(|tree, id| tree.semantics_touch_bounds(id, true)).unwrap_or(EMPTY));
+    let hidden = hidden || hides_what_it_merges(node);
+    // What's uncovered is decided inside what clips it, and a node left in is reported with all its
+    // touch target: an overhang past a clip neither keeps it alone nor covers what's beside.
+    let mut region = SemanticsRegion::of(clipped);
+    if !region.intersect(unaccounted) {
+        return;
+    }
+    if clipped != touch {
+        region = SemanticsRegion::of(touch);
+        region.intersect(unaccounted);
+    }
+    visitor(node, region.bounds(), hidden);
+    let mut children = Vec::new();
+    node.for_each_accessibility_child(|child| children.push(child));
+    let merges = node.unmerged_config().is_merging_semantics_of_descendants;
+    if merges && is_partly_past_its_scroller(node) {
+        // What's past the scroller is reported too, unclipped, for a screen reader to scroll to.
+        let mut inside = SemanticsRegion::of(node.unclipped_bounds_in_root());
+        for child in children.into_iter().rev() {
+            visit_uncovered_past_scroller(child, &mut inside, hidden, visitor);
+        }
+    } else {
+        for child in children.into_iter().rev() {
+            visit_uncovered(child, unaccounted, hidden, visitor);
+        }
+    }
+    if node.is_important_for_accessibility() {
+        unaccounted.difference(clipped);
+    }
+}
+
+/// `visit_uncovered` inside a merging node partly past its scroller: what's all past it counts by
+/// its unclipped bounds, and what's accounted for is within that node.
+fn visit_uncovered_past_scroller(
+    node: SemanticsNode,
+    unaccounted: &mut SemanticsRegion,
+    hidden: bool,
+    visitor: &mut impl FnMut(SemanticsNode, Rect, bool),
+) {
+    if node.fake.is_some() {
+        if is_placed(node.parent().unwrap_or(node)) || !unaccounted.is_empty() {
+            visitor(node, fake_node_bounds(node), hidden);
+        }
+        return;
+    }
+    if !is_placed(node) || unaccounted.is_empty() {
         return;
     }
     let touch = node.touch_bounds_in_root();
-    let config = node.unmerged_config();
-    let hidden = hidden
-        || (config.is_merging_semantics_of_descendants
-            && config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY));
-    let mut region = SemanticsRegion::of(touch);
-    let uncovered = region.intersect(unaccounted);
-    if uncovered {
-        visitor(node, region.bounds(), hidden);
-        // The children over one another: those drawn last first.
-        let mut children = Vec::new();
-        node.for_each_accessibility_child(|child| children.push(child));
-        for child in children.into_iter().rev() {
-            visit_uncovered(root, child, unaccounted, hidden, visitor);
-        }
-        if node.is_important_for_accessibility() {
-            unaccounted.difference(rounded(touch));
-        }
-    } else if is_root {
-        // A root with nothing in it is still a root (a host maps its id to its own).
-        visitor(node, region.bounds(), hidden);
+    let empty = touch.right <= touch.left || touch.bottom <= touch.top;
+    let bounds = rounded(if empty { node.unclipped_bounds_in_root() } else { touch });
+    let hidden = hidden || hides_what_it_merges(node);
+    let mut region = SemanticsRegion::of(bounds);
+    if !region.intersect(unaccounted) {
+        return;
+    }
+    visitor(node, region.bounds(), hidden);
+    let mut children = Vec::new();
+    node.for_each_accessibility_child(|child| children.push(child));
+    for child in children.into_iter().rev() {
+        visit_uncovered_past_scroller(child, unaccounted, hidden, visitor);
+    }
+    if node.is_important_for_accessibility() {
+        unaccounted.difference(bounds);
     }
 }
 
@@ -241,6 +335,11 @@ impl SemanticsRegion {
 
     fn is_empty(&self) -> bool {
         self.rects.is_empty()
+    }
+
+    /// Its bounds, or `otherwise` if nothing's in it (a root of no size is still a root).
+    fn bounds_or(&self, otherwise: Rect) -> Rect {
+        if self.is_empty() { otherwise } else { self.bounds() }
     }
 
     /// Keeps what's in `other`: whether anything is left.
@@ -753,7 +852,7 @@ impl SemanticsNode {
     /// at least the minimum touch target around it.
     pub fn touch_bounds_in_root(&self) -> Rect {
         let this = self.owner_of_bounds();
-        this.read(|tree, node| tree.semantics_touch_bounds(node)).unwrap_or(EMPTY)
+        this.read(|tree, node| tree.semantics_touch_bounds(node, false)).unwrap_or(EMPTY)
     }
 
     /// Its bounds in the closest layout around it with bounds, or the root, clipped, as
@@ -855,10 +954,15 @@ impl UiTree {
         (SemanticsBounds { unclipped: bounds, clipped: bounds }, measured)
     }
 
-    /// `node`'s touch bounds: its clipped bounds, with a click action at least the minimum
-    /// touch target around it, clipped by what's around it, the target extending past a clip
-    /// only as far as a parent's own would.
-    pub(crate) fn semantics_touch_bounds(&mut self, node: NodeId) -> Rect {
+    /// `node`'s touch bounds: its clipped bounds, with a click action at least the minimum touch
+    /// target around it, each clip around it letting the target past as `rectInParent` does. With
+    /// `clip_to_large_parents`, a clip at least the target's size stops it (`clippedTouchBoundsInRoot`):
+    /// what's covered is decided inside such a clip.
+    pub(crate) fn semantics_touch_bounds(
+        &mut self,
+        node: NodeId,
+        clip_to_large_parents: bool,
+    ) -> Rect {
         let (bounds, size) = self.semantics_geometry(node);
         let clicks = self
             .own_semantics(node)
@@ -868,19 +972,66 @@ impl UiTree {
         }
         let density = self.density_of(node);
         let minimum = self.view_configuration_of(node).minimum_touch_target_size;
-        let horizontal = ((density.to_px(minimum.width) - size.width as f32) / 2.0).max(0.0);
-        let vertical = ((density.to_px(minimum.height) - size.height as f32) / 2.0).max(0.0);
-        if bounds.clipped.right <= bounds.clipped.left
-            || bounds.clipped.bottom <= bounds.clipped.top
-        {
-            return EMPTY;
-        }
-        Rect::new(
+        let (target_width, target_height) =
+            (density.to_px(minimum.width), density.to_px(minimum.height));
+        let horizontal = ((target_width - size.width as f32) / 2.0).max(0.0);
+        let vertical = ((target_height - size.height as f32) / 2.0).max(0.0);
+        let mut touch = Rect::new(
             bounds.unclipped.left - horizontal,
             bounds.unclipped.top - vertical,
             bounds.unclipped.right + horizontal,
             bounds.unclipped.bottom + vertical,
-        )
+        );
+        for clip in self.clips_around_semantics(node) {
+            let (width, height) = (clip.width(), clip.height());
+            let (x, y) = (touch.left - clip.left, touch.top - clip.top);
+            let (right, bottom) = (touch.right - clip.left, touch.bottom - clip.top);
+            // How far past its start the clip lets the target go.
+            let past = right < 0.0 || x > width || bottom < 0.0 || y > height;
+            let before = |start: f32, end: f32, target: f32| {
+                let under = (target - (end - start)) / 2.0;
+                if past {
+                    0.0
+                } else if under > 0.0 {
+                    start - under
+                } else {
+                    start.max((end - target).min(0.0)).max(-target / 2.0)
+                }
+            };
+            let (from_x, from_y) =
+                (before(x, right, target_width), before(y, bottom, target_height));
+            let to_x = (width + target_width).min(width.max(from_x + target_width));
+            let to_y = (height + target_height).min(height.max(from_y + target_height));
+            let large_across = clip_to_large_parents && width >= target_width;
+            let large_along = clip_to_large_parents && height >= target_height;
+            let left = clip.left + if large_across { 0.0 } else { from_x };
+            let top = clip.top + if large_along { 0.0 } else { from_y };
+            let right = clip.left + if large_across { width } else { to_x };
+            let bottom = clip.top + if large_along { height } else { to_y };
+            touch = Rect::new(
+                touch.left.max(left),
+                touch.top.max(top),
+                touch.right.min(right),
+                touch.bottom.min(bottom),
+            );
+            if touch.right <= touch.left || touch.bottom <= touch.top {
+                return EMPTY;
+            }
+        }
+        touch
+    }
+
+    /// The window `node` is in: the overlay around it, or `None` for the main one.
+    pub(crate) fn overlay_around(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.node(id);
+            if value.overlay {
+                return Some(id);
+            }
+            current = value.parent;
+        }
+        None
     }
 
     /// The one layer of semantics nodes below `node`, in drawing order: a node with nothing to say

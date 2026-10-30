@@ -129,7 +129,11 @@ pub fn tell_at_once(stats: &FrameStats) -> bool {
 /// built when first asked after a frame that may have changed it, or a change since the last
 /// frame (a focus moved by an event), as they'd each build it otherwise (D1259).
 #[derive(Default)]
-pub struct KeptSemanticsTree(Option<SemanticsSnapshot>);
+pub struct KeptSemanticsTree {
+    tree: Option<SemanticsSnapshot>,
+    /// What's covered was taken out of it: only a service's asking pays for that.
+    pruned: bool,
+}
 
 impl KeptSemanticsTree {
     /// A frame that did `stats` ran: returns whether the semantics may have changed
@@ -137,17 +141,32 @@ impl KeptSemanticsTree {
     pub fn after_frame(&mut self, stats: &FrameStats) -> bool {
         let changed = semantics_may_have_changed(stats);
         if changed {
-            self.0 = None;
+            self.tree = None;
         }
         changed
     }
 
     /// The tree, as it is now.
     pub fn get(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
-        if ui.semantics_changed_since_frame() {
-            self.0 = None;
+        self.get_with_covered(ui);
+        let pruned = std::mem::replace(&mut self.pruned, true);
+        let tree = self.tree.as_mut().expect("kept");
+        if !pruned {
+            ui.prune_covered_semantics(tree);
         }
-        self.0.get_or_insert_with(|| ui.accessibility_tree())
+        tree
+    }
+
+    /// The tree, what's covered in it or not: for what doesn't depend on that, as a keyboard's
+    /// options (`bridge.rs`).
+    pub fn get_with_covered(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
+        if ui.semantics_changed_since_frame() {
+            self.tree = None;
+        }
+        if self.tree.is_none() {
+            self.pruned = false;
+        }
+        self.tree.get_or_insert_with(|| ui.accessibility_tree_with_covered())
     }
 }
 
@@ -524,7 +543,9 @@ fn write_node(
     let clip = around.clip;
     let visible = clipped(node.bounds, clip);
     let tags_are_ids = tags_are_resource_ids(node, around.tags_are_ids);
-    let bounds = visible.unwrap_or(node.bounds);
+    let shown = visible.unwrap_or(node.bounds);
+    // A service is told of what's left of its touch target, as `adjustedBounds`.
+    let bounds = node.uncovered_bounds.unwrap_or(shown);
     let scroll = scroll_range(node);
     let mut flags = flags(node);
     if visible.is_none() || node.hidden {
@@ -582,7 +603,7 @@ fn write_node(
         out.f32(range.max_value);
         // A page: the viewport's length along the axis, as shown (clipped), as Compose's
         // `boundsInParent`.
-        out.f32(if horizontal { bounds.width() } else { bounds.height() });
+        out.f32(if horizontal { shown.width() } else { shown.height() });
         out.u8(scroll_actions(node));
     }
     out.u32(before.get(&id).copied().unwrap_or(-1) as u32);
