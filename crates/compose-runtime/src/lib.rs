@@ -32,6 +32,7 @@ mod derived;
 mod effects;
 mod error;
 mod executor;
+pub mod flow;
 mod frame_clock;
 mod hash;
 mod immutable_list;
@@ -72,6 +73,7 @@ pub use executor::{
     CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos,
     with_infinite_animation_frame_millis, with_infinite_animation_frame_nanos,
 };
+pub use flow::{collect_as_state, collect_as_state_with, snapshot_flow, snapshot_flow_with};
 pub use frame_clock::{
     BroadcastFrameClock, ExecutorFrameClock, MonotonicFrameClock, PausableMonotonicFrameClock,
 };
