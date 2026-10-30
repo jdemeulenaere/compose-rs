@@ -2,8 +2,8 @@
 //! and input method commits, focus.
 
 use compose_ui::{
-    Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, PointerId, PointerType,
-    WheelStep, platform::UiHost,
+    Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerButtons, PointerEvent, PointerId,
+    PointerType, WheelStep, platform::UiHost,
 };
 use winit::event::{
     ElementState, Ime, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent,
@@ -13,7 +13,8 @@ use winit::keyboard::{Key as WinitKey, NamedKey};
 #[derive(Default)]
 pub(crate) struct InputState {
     cursor: Offset,
-    pressed: bool,
+    /// The mouse's buttons held.
+    buttons: PointerButtons,
     modifiers: KeyModifiers,
     /// The cursor left the window during a drag: its hover ends at the release.
     left: bool,
@@ -26,6 +27,19 @@ pub(crate) enum Outcome {
     Close,
     /// Quit the application (Cmd+Q on macOS).
     Quit,
+}
+
+/// A mouse's button among those of an event, as `PointerButtons` numbers them: a button with no
+/// purpose past the stylus's two, up to what the bits hold.
+fn button_bit(button: MouseButton) -> i32 {
+    match button {
+        MouseButton::Left => PointerButtons::PRIMARY.0,
+        MouseButton::Right => PointerButtons::SECONDARY.0,
+        MouseButton::Middle => PointerButtons::TERTIARY.0,
+        MouseButton::Back => PointerButtons::BACK.0,
+        MouseButton::Forward => PointerButtons::FORWARD.0,
+        MouseButton::Other(index) => 1 << (index.clamp(5, 28) + 2),
+    }
 }
 
 fn key_of(key: &WinitKey) -> Option<Key> {
@@ -97,23 +111,34 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
     match event {
         WindowEvent::CursorMoved { position, .. } => {
             state.cursor = Offset::new(position.x as f32, position.y as f32);
-            host.send_pointer(PointerEvent::moved(state.cursor, state.pressed));
+            let held = state.buttons.are_any_pressed();
+            host.send_pointer(
+                PointerEvent::moved(state.cursor, held)
+                    .with_buttons(state.buttons)
+                    .with_keyboard_modifiers(state.modifiers.into()),
+            );
         }
-        WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
+        WindowEvent::MouseInput { state: button_state, button, .. } => {
             let pressed = *button_state == ElementState::Pressed;
-            state.pressed = pressed;
+            let bit = button_bit(*button);
+            let buttons = if pressed { state.buttons.0 | bit } else { state.buttons.0 & !bit };
+            state.buttons = PointerButtons(buttons);
             let event = if pressed {
                 PointerEvent::press(state.cursor)
             } else {
                 PointerEvent::release(state.cursor)
             };
-            host.send_pointer(event);
-            if !pressed && std::mem::take(&mut state.left) {
+            host.send_pointer(
+                event.with_buttons(state.buttons).with_keyboard_modifiers(state.modifiers.into()),
+            );
+            if !state.buttons.are_any_pressed() && std::mem::take(&mut state.left) {
                 host.send_pointer_left();
             }
         }
         WindowEvent::MouseWheel { delta, .. } => {
-            host.send_pointer(wheel_event(state.cursor, delta));
+            host.send_pointer(
+                wheel_event(state.cursor, delta).with_keyboard_modifiers(state.modifiers.into()),
+            );
         }
         WindowEvent::Touch(Touch { phase, location, id, .. }) => {
             let position = Offset::new(location.x as f32, location.y as f32);
@@ -128,14 +153,18 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
                     return Outcome::Handled;
                 }
             };
-            host.send_pointer(event.with_pointer(pointer, PointerType::Touch));
+            host.send_pointer(
+                event
+                    .with_pointer(pointer, PointerType::Touch)
+                    .with_keyboard_modifiers(state.modifiers.into()),
+            );
         }
         // A drag goes on outside the window (the system keeps sending its moves and its
         // release), as Compose Desktop's.
-        WindowEvent::CursorLeft { .. } if state.pressed => state.left = true,
+        WindowEvent::CursorLeft { .. } if state.buttons.are_any_pressed() => state.left = true,
         WindowEvent::CursorEntered { .. } => state.left = false,
         WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
-            state.pressed = false;
+            state.buttons = PointerButtons::NONE;
             host.with_tree(|tree| tree.cancel_pointers());
             host.send_pointer_left();
         }
@@ -189,6 +218,110 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
         _ => return Outcome::Ignored,
     }
     Outcome::Handled
+}
+
+#[cfg(test)]
+mod button_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use compose_ui::{
+        EventContext, IntSize, Modifier, ModifierNode, ModifierNodeElement, PointerEventPass,
+        PointerEventType, PointerEvents, PointerInputModifierNode, UnitExt,
+    };
+    use winit::event::{DeviceId, WindowEvent};
+
+    use super::*;
+
+    type Heard = Rc<RefCell<Vec<(PointerEventType, PointerButtons, bool)>>>;
+
+    struct Recorder(Heard);
+    struct RecorderNode(Heard);
+
+    impl ModifierNodeElement for Recorder {
+        type Node = RecorderNode;
+        fn create(&self) -> RecorderNode {
+            RecorderNode(self.0.clone())
+        }
+        fn update(&self, _: &mut RecorderNode) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+
+    impl ModifierNode for RecorderNode {
+        fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+            Some(self)
+        }
+    }
+
+    impl PointerInputModifierNode for RecorderNode {
+        fn takes_whole_events(&self) -> bool {
+            true
+        }
+        fn on_pointer_events(
+            &mut self,
+            event: &PointerEvents,
+            pass: PointerEventPass,
+            _: IntSize,
+            _: &mut EventContext<'_>,
+        ) {
+            if pass == PointerEventPass::Main && event.kind != PointerEventType::Enter {
+                let pressed = event.changes[0].pressed;
+                self.0.borrow_mut().push((event.kind, event.buttons, pressed));
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_tells_each_button_and_is_down_until_the_last_is_up() {
+        let heard = Heard::default();
+        let seen = heard.clone();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            compose_ui::Layout(
+                Modifier.size(50.dp()).then_custom(Recorder(seen.clone())),
+                compose_ui::empty_measure_policy(),
+                compose_runtime::callback(|| {}),
+            );
+        });
+        host.frame();
+        let mut state = InputState::default();
+        let device = DeviceId::dummy();
+        let input = |button_state, button| WindowEvent::MouseInput {
+            device_id: device,
+            state: button_state,
+            button,
+        };
+        let right = input(ElementState::Pressed, MouseButton::Right);
+        let left = input(ElementState::Pressed, MouseButton::Left);
+        let left_up = input(ElementState::Released, MouseButton::Left);
+        let right_up = input(ElementState::Released, MouseButton::Right);
+        for event in [&right, &left, &left_up, &right_up] {
+            handle(&mut state, &mut host, event);
+        }
+        let both = PointerButtons(PointerButtons::PRIMARY.0 | PointerButtons::SECONDARY.0);
+        assert_eq!(
+            *heard.borrow(),
+            [
+                (PointerEventType::Press, PointerButtons::SECONDARY, true),
+                (PointerEventType::Press, both, true),
+                (PointerEventType::Release, PointerButtons::SECONDARY, true),
+                (PointerEventType::Release, PointerButtons::NONE, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn buttons_have_their_bits_and_others_an_index_of_their_own() {
+        assert_eq!(button_bit(MouseButton::Left), PointerButtons::PRIMARY.0);
+        assert_eq!(button_bit(MouseButton::Middle), PointerButtons::TERTIARY.0);
+        assert_eq!(button_bit(MouseButton::Forward), PointerButtons::FORWARD.0);
+        assert!(PointerButtons(button_bit(MouseButton::Other(6))).is_pressed(6));
+        // A small number is X11's for one of those it named: past them, not on them.
+        assert!(PointerButtons(button_bit(MouseButton::Other(1))).is_pressed(5));
+        assert!(!PointerButtons(button_bit(MouseButton::Other(1))).is_secondary_pressed());
+    }
 }
 
 #[cfg(test)]

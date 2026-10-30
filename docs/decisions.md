@@ -105,7 +105,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D72 | [android-drawing](decisions/android-drawing.md#d72) | superseded by [D155](decisions/android-drawing.md#d155) |
 | D73 | [ui-and-layout](decisions/ui-and-layout.md#d73) | current |
 | D74 | [ui-and-layout](decisions/ui-and-layout.md#d74) | current |
-| D75 | [ui-and-layout](decisions/ui-and-layout.md#d75) | current |
+| D75 | [ui-and-layout](decisions/ui-and-layout.md#d75) | revised by [D1657](decisions/ui-and-layout.md#d1657) |
 | D76 | [ui-and-layout](decisions/ui-and-layout.md#d76) | current |
 | D77 | [ui-and-layout](decisions/ui-and-layout.md#d77) | current |
 | D78 | [api-and-tooling](decisions/api-and-tooling.md#d78) | current |
@@ -585,7 +585,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |
-| D903 | [api-and-tooling](decisions/api-and-tooling.md#d903) | revised by [D907](decisions/api-and-tooling.md#d907) |
+| D903 | [api-and-tooling](decisions/api-and-tooling.md#d903) | revised by [D907](decisions/api-and-tooling.md#d907), [D1658](decisions/ui-and-layout.md#d1658) |
 | D904 | [api-and-tooling](decisions/api-and-tooling.md#d904) | current |
 | D905 | [api-and-tooling](decisions/api-and-tooling.md#d905) | current |
 | D906 | [api-and-tooling](decisions/api-and-tooling.md#d906) | current |
@@ -879,6 +879,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D1654 | [ui-and-layout](decisions/ui-and-layout.md#d1654) | current |
 | D1655 | [ui-and-layout](decisions/ui-and-layout.md#d1655) | current |
 | D1656 | [ui-and-layout](decisions/ui-and-layout.md#d1656) | current |
+| D1657 | [ui-and-layout](decisions/ui-and-layout.md#d1657) | current |
+| D1658 | [ui-and-layout](decisions/ui-and-layout.md#d1658) | current |
 | D1659 | [ui-and-layout](decisions/ui-and-layout.md#d1659) | current |
 | D1660 | [ui-and-layout](decisions/ui-and-layout.md#d1660) | current |
 | D1661 | [ui-and-layout](decisions/ui-and-layout.md#d1661) | current |

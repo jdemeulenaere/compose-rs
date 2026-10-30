@@ -1549,41 +1549,134 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawingBuffer<'lo
     })
 }
 
-/// `ComposeRsNative.touch(host, action, pointer, x, y, age)`: action 0 down, 1 move, 2 up, 3
-/// cancel; positions in the view's pixels; `age` how long ago it happened (nanoseconds), so a
-/// batch of samples keeps their times (a fling's velocity comes from them).
+/// `ComposeRsNative.touchCancel(host, pointer)`: the system took a finger back.
 #[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touchCancel(
     _env: EnvUnowned,
     _class: JClass,
     host: jlong,
-    action: jint,
     pointer: jint,
-    x: jfloat,
-    y: jfloat,
+    tool: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let (pointer, _) = pointer_of(pointer, tool);
+    host.ui.with_tree(|tree| tree.cancel_pointer(pointer));
+}
+
+/// `ComposeRsNative.touches(...)`'s values, kept apart from its arrays.
+struct MotionSample {
+    /// 0 down, 1 move, 2 up, 3 a button's press or release, 4 hover.
+    action: i32,
+    action_index: usize,
+    buttons: i32,
+    meta: i32,
+    time: u64,
+}
+
+/// A pointer's id: a mouse's is 0, as its wheel's; other touches' start at 1.
+fn pointer_of(id: i32, tool: i32) -> (PointerId, PointerType) {
+    match tool {
+        3 => (PointerId(0), PointerType::Mouse),
+        1 => (PointerId(id as u64 + 1), PointerType::Touch),
+        2 => (PointerId(id as u64 + 1), PointerType::Stylus),
+        4 => (PointerId(id as u64 + 1), PointerType::Eraser),
+        _ => (PointerId(id as u64 + 1), PointerType::Unknown),
+    }
+}
+
+/// One `MotionEvent`'s (or one of its historical samples') changes: the pointer of its action
+/// comes down or up, the others are as they are, as `MotionEventAdapter` has them all.
+fn motion_events(
+    sample: &MotionSample,
+    ids: &[i32],
+    xs: &[f32],
+    ys: &[f32],
+    pressures: &[f32],
+    tools: &[i32],
+) -> Vec<PointerEvent> {
+    (0..ids.len())
+        .map(|index| {
+            let position = Offset::new(xs[index], ys[index]);
+            let (pointer, pointer_type) = pointer_of(ids[index], tools[index]);
+            let acting = index == sample.action_index;
+            let mut event = match sample.action {
+                0 if acting => PointerEvent::press(position),
+                2 if acting => PointerEvent::release(position),
+                3 => PointerEvent {
+                    kind: compose_ui::PointerEventType::Unknown,
+                    ..PointerEvent::moved(position, true)
+                },
+                4 => PointerEvent::moved(position, false),
+                _ => PointerEvent::moved(position, true),
+            }
+            .with_pointer(pointer, pointer_type)
+            .with_keyboard_modifiers(compose_ui::PointerKeyboardModifiers(sample.meta))
+            .with_pressure(pressures[index])
+            .at_time(sample.time);
+            event.buttons = compose_ui::PointerButtons(sample.buttons);
+            event
+        })
+        .collect()
+}
+
+/// `ComposeRsNative.touches(host, action, actionIndex, count, ids, xs, ys, pressures, tools, buttons,
+/// meta, age)`: one `MotionEvent`'s pointers together (`MotionSample.action`); `tools` their
+/// `MotionEvent.TOOL_TYPE`s, `buttons` its `buttonState`, `meta` its `metaState`; the arrays are the
+/// view's, reused, of which the first `count`; `age` as `touch`'s.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touches<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    action: jint,
+    action_index: jint,
+    count: jint,
+    ids: JIntArray<'local>,
+    xs: JFloatArray<'local>,
+    ys: JFloatArray<'local>,
+    pressures: JFloatArray<'local>,
+    tools: JIntArray<'local>,
+    buttons: jint,
+    meta: jint,
     age: jlong,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let position = Offset::new(x, y);
-    // Pointer 0 is the mouse's: touches start at 1.
-    let pointer = PointerId(pointer as u64 + 1);
-    let event = match action {
-        0 => PointerEvent::press(position),
-        1 => PointerEvent::moved(position, true),
-        2 => PointerEvent::release(position),
-        _ => {
-            host.ui.with_tree(|tree| tree.cancel_pointer(pointer));
-            return;
-        }
-    };
+    let count = count.max(0) as usize;
     let time = platform::now_nanos().saturating_sub(age.max(0) as u64).max(1);
-    host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch).at_time(time));
+    let sample = MotionSample { action, action_index: action_index as usize, buttons, meta, time };
+    let events = with_env(&mut env, |env| {
+        let (mut id, mut tool) = (vec![0; count], vec![0; count]);
+        let (mut x, mut y, mut pressure) = (vec![0.0; count], vec![0.0; count], vec![0.0; count]);
+        let read = ids
+            .get_region(env, 0, &mut id)
+            .and_then(|_| xs.get_region(env, 0, &mut x))
+            .and_then(|_| ys.get_region(env, 0, &mut y))
+            .and_then(|_| pressures.get_region(env, 0, &mut pressure))
+            .and_then(|_| tools.get_region(env, 0, &mut tool));
+        // Only the view's own arrays, as long as `count` says: nothing to tell if not.
+        read.map_or(Vec::new(), |_| motion_events(&sample, &id, &x, &y, &pressure, &tool))
+    });
+    host.ui.send_pointers(&events);
 }
 
-/// `ComposeRsNative.scroll(host, x, y, dx, dy)`: a mouse wheel at (`x`, `y`), by pixels.
+/// `ComposeRsNative.hoverExit(host)`: the mouse left the view.
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_hoverExit(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.send_pointer_left();
+}
+
+/// `ComposeRsNative.scroll(host, x, y, dx, dy, meta)`: a mouse wheel at (`x`, `y`), by pixels.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_scroll(
     _env: EnvUnowned,
     _class: JClass,
@@ -1592,10 +1685,14 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_scroll(
     y: jfloat,
     dx: jfloat,
     dy: jfloat,
+    meta: jint,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    host.ui.send_pointer(PointerEvent::scroll(Offset::new(x, y), Offset::new(dx, dy)));
+    host.ui.send_pointer(
+        PointerEvent::scroll(Offset::new(x, y), Offset::new(dx, dy))
+            .with_keyboard_modifiers(compose_ui::PointerKeyboardModifiers(meta)),
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -2228,6 +2325,68 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
 
 #[cfg(test)]
 mod tests {
+    use compose_ui::{PointerEventType, PointerId, PointerType};
+
+    fn sample(action: i32, action_index: usize, buttons: i32) -> super::MotionSample {
+        super::MotionSample { action, action_index, buttons, meta: 0x1000, time: 7 }
+    }
+
+    // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/MotionEventAdapterTest.kt, convertToPointerInputEvent_1pointerActionDown_convertsCorrectly, convertToPointerInputEvent_2pointers1stPointerActionPointerDown_convertsCorrectly, convertToPointerInputEvent_2pointers2ndPointerActionPointerUP_convertsCorrectly
+    #[test]
+    fn a_motion_events_pointers_go_together_its_action_on_one() {
+        let events = super::motion_events(
+            &sample(0, 1, 0),
+            &[3, 5],
+            &[1.0, 2.0],
+            &[10.0, 20.0],
+            &[0.5, 0.75],
+            &[1, 2],
+        );
+        assert_eq!(events[0].kind, PointerEventType::Move);
+        assert_eq!(events[0].pointer, PointerId(4));
+        assert_eq!(events[0].pointer_type, PointerType::Touch);
+        assert!(events[0].pressed);
+        assert_eq!(events[1].kind, PointerEventType::Press);
+        assert_eq!(events[1].pointer, PointerId(6));
+        assert_eq!(events[1].pointer_type, PointerType::Stylus);
+        assert_eq!(events[1].pressure, 0.75);
+        assert_eq!(events[1].time_nanos, 7);
+        assert!(events[1].keyboard_modifiers.is_ctrl_pressed());
+        let up = super::motion_events(&sample(2, 0, 0), &[3], &[1.0], &[1.0], &[0.0], &[1]);
+        assert_eq!(up[0].kind, PointerEventType::Release);
+        assert!(!up[0].pressed);
+    }
+
+    #[test]
+    fn a_mouse_is_the_pointer_of_its_wheel_with_its_buttons_said() {
+        let events = super::motion_events(&sample(0, 0, 2), &[9], &[1.0], &[1.0], &[1.0], &[3]);
+        assert_eq!(events[0].pointer, PointerId(0));
+        assert_eq!(events[0].pointer_type, PointerType::Mouse);
+        assert!(events[0].buttons.is_secondary_pressed());
+        // Another of its buttons: nothing else of it changed, and it's still down.
+        let events = super::motion_events(&sample(3, 0, 3), &[9], &[1.0], &[1.0], &[1.0], &[3]);
+        assert_eq!(events[0].kind, PointerEventType::Unknown);
+        assert!(events[0].pressed && events[0].buttons.is_primary_pressed());
+        // A hover: nothing down.
+        let events = super::motion_events(&sample(4, 0, 0), &[9], &[1.0], &[1.0], &[0.0], &[3]);
+        assert_eq!(events[0].kind, PointerEventType::Move);
+        assert!(!events[0].pressed);
+    }
+
+    #[test]
+    fn other_tools_tell_what_they_are() {
+        let events = super::motion_events(
+            &sample(1, 0, 0),
+            &[0, 1],
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            &[4, 0],
+        );
+        assert_eq!(events[0].pointer_type, PointerType::Eraser);
+        assert_eq!(events[1].pointer_type, PointerType::Unknown);
+    }
+
     use super::*;
 
     #[test]

@@ -12,8 +12,8 @@ use compose_foundation::*;
 use compose_test::*;
 use compose_ui::{
     EventContext, IntSize, Key, KeyEvent, KeyEventType, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, PointerEvent, PointerEventPass, PointerEventType, PointerId,
-    PointerInputModifierNode, PointerType, TapGestures, UnitExt,
+    ModifierNodeElement, Offset, PointerButtons, PointerEvent, PointerEventPass, PointerEventType,
+    PointerId, PointerInputModifierNode, PointerType, TapGestures, UnitExt,
 };
 
 /// One pointer event as a node got it: what, which pointer, where, when (ms).
@@ -628,10 +628,122 @@ fn a_mouse_click_presses_and_releases() {
     assert_eq!(press.position, Offset::new(10.0, 20.0));
     assert_eq!(release.millis - press.millis, 60);
     assert!(recorded.iter().all(|event| event.pointer_type == PointerType::Mouse));
-    let message = expect_error(|| {
-        ui.on_node_with_tag("box").perform_mouse_input(|mouse| mouse.right_click(Offset::ZERO));
+}
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/PressTest.kt
+/// Pressing a second button keeps the pointer down; it comes up with the last.
+#[test]
+fn a_mouse_presses_and_releases_several_buttons() {
+    let heard: Rc<RefCell<Vec<(PointerEventType, PointerButtons, bool)>>> = Rc::default();
+    let seen = heard.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).test_tag("box").pointer_input((), move |scope| {
+                let seen = seen.clone();
+                async move {
+                    loop {
+                        let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                        if !matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
+                            let pressed = event.changes[0].pressed;
+                            seen.borrow_mut().push((event.kind, event.buttons, pressed));
+                        }
+                    }
+                }
+            })
+        );
     });
-    assert!(message.contains("primary button only"), "{message}");
+    ui.on_node_with_tag("box").perform_mouse_input(|mouse| {
+        mouse.update_pointer_to(Offset::new(10.0, 10.0));
+        mouse.press(MouseButton::Secondary);
+        mouse.press(MouseButton::Primary);
+        mouse.release(MouseButton::Secondary);
+        mouse.release(MouseButton::Primary);
+    });
+    let both = PointerButtons(PointerButtons::PRIMARY.0 | PointerButtons::SECONDARY.0);
+    let heard = heard.borrow();
+    assert_eq!(heard[0], (PointerEventType::Press, PointerButtons::SECONDARY, true));
+    assert_eq!(heard[1], (PointerEventType::Press, both, true));
+    assert_eq!(heard[2], (PointerEventType::Release, PointerButtons::PRIMARY, true));
+    assert_eq!(heard[3], (PointerEventType::Release, PointerButtons::NONE, false));
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMousePress (the button's already down)
+#[test]
+fn pressing_a_held_button_again_says_so() {
+    let (mut ui, _events) = recording_box(Offset::ZERO);
+    let message = expect_error(|| {
+        ui.on_node_with_tag("box").perform_mouse_input(|mouse| {
+            mouse.update_pointer_to(Offset::new(10.0, 10.0));
+            mouse.press(MouseButton::Secondary);
+            mouse.press(MouseButton::Secondary);
+        });
+    });
+    assert!(message.contains("already pressed"), "{message}");
+}
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/MoveTest.kt
+/// Every finger's move is one event, as `move()` sends them.
+#[test]
+fn two_fingers_moved_together_are_one_event() {
+    let heard: Rc<RefCell<Vec<(PointerEventType, usize)>>> = Rc::default();
+    let seen = heard.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).test_tag("box").pointer_input((), move |scope| {
+                let seen = seen.clone();
+                async move {
+                    loop {
+                        let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                        seen.borrow_mut().push((event.kind, event.changes.len()));
+                    }
+                }
+            })
+        );
+    });
+    ui.on_node_with_tag("box").perform_touch_input(|touch| {
+        touch.down_pointer(0, Offset::new(10.0, 10.0));
+        touch.down_pointer(1, Offset::new(20.0, 10.0));
+        touch.update_pointer_to(0, Offset::new(12.0, 10.0));
+        touch.update_pointer_to(1, Offset::new(22.0, 10.0));
+        touch.move_pointers();
+    });
+    assert_eq!(
+        *heard.borrow(),
+        [(PointerEventType::Press, 1), (PointerEventType::Press, 2), (PointerEventType::Move, 2)]
+    );
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, metaState
+/// A mouse's event tells the keys held by the key injection.
+#[test]
+fn a_pointer_event_tells_the_keys_injected() {
+    let heard: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let seen = heard.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).test_tag("box").pointer_input((), move |scope| {
+                let seen = seen.clone();
+                async move {
+                    loop {
+                        let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                        if event.kind == PointerEventType::Press {
+                            seen.borrow_mut().push(event.keyboard_modifiers.is_shift_pressed());
+                        }
+                    }
+                }
+            })
+        );
+    });
+    ui.on_node_with_tag("box").perform_key_input(|keys| keys.key_down(Key::ShiftLeft));
+    ui.on_node_with_tag("box")
+        .perform_mouse_input(|mouse| mouse.click_at(Offset::new(5.0, 5.0), MouseButton::Primary));
+    ui.on_node_with_tag("box").perform_key_input(|keys| keys.key_up(Key::ShiftLeft));
+    ui.on_node_with_tag("box")
+        .perform_mouse_input(|mouse| mouse.click_at(Offset::new(5.0, 5.0), MouseButton::Primary));
+    assert_eq!(*heard.borrow(), [true, false]);
 }
 
 // Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMouseMove (an exit, then the move)

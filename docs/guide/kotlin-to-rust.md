@@ -1831,7 +1831,7 @@ The semantics block gets a `SemanticsConfiguration` whose fields are Compose's p
 
 ## Gestures
 
-`Modifier.pointer_input(key, |scope| async move { … })` runs a coroutine over the pointer events, as `Modifier.pointerInput(key) { … }`, with Compose's detectors: `detect_tap_gestures` and `detect_drag_gestures`, configured by builders (`TapGestures::default().on_double_tap(…)`), and `await_pointer_event` for your own.
+`Modifier.pointer_input(key, |scope| async move { … })` runs a coroutine over the pointer events, as `Modifier.pointerInput(key) { … }`, with Compose's detectors: `detect_tap_gestures` and `detect_drag_gestures`, configured by builders (`TapGestures::default().on_double_tap(…)`), and `await_pointer_event` for your own, which gives every change of an event (`event.changes`, `event.kind` for `event.type`, `event.buttons`, `event.keyboard_modifiers`). The type is `PointerEvents` for now, `PointerEvent` being what a host sends, one pointer's (D1657).
 
 ```kotlin
 Box(Modifier.size(160.dp).background(Color.LightGray).pointerInput(Unit) {

@@ -1087,6 +1087,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | Dropping the per-paragraph render node | at most 4.5 ms of the big frame, and the animation frames that re-record groups would pay (D153) |
 | `RegisterNatives`, lazier initialization at startup | under 0.2 ms and 0.3 ms |
 | `opt-level = "s"`/`"z"` for Android | on top of #4, 45 KB smaller and frames 11–13 % slower |
+| Shaving the cost of pointer events with several changes (D1657) | retired instructions per iteration against its base: `sheet_drag` +4 % (90,400 to 94,200, about 3,800 for a move through its nodes, three passes each), `counter_click` +1 to 1.4 %, `list_scroll` +0.2 %: under the frame's work by far. Taking the block's event by value, keeping a pointer's state in place and reserving the tree's entries moved nothing past the spread |
 | Thin LTO | byte-identical output |
 | Optimizing steady-state runtime frames | 1.5–2.1 µs headless; the device's frame cost is fixed overhead |
 | Hit-test culling | helps the todo benchmark (about −100 µs), not a phone |

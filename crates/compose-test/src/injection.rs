@@ -8,8 +8,8 @@ use std::ops::Deref;
 use std::time::Duration;
 
 use compose_ui::{
-    Density, Dp, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent,
-    PointerId, PointerType, Rect, ViewConfiguration, platform::NodeId,
+    Density, Dp, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerButtons,
+    PointerEvent, PointerId, PointerType, Rect, ViewConfiguration, platform::NodeId,
 };
 
 use crate::interaction::SemanticsNodeInteraction;
@@ -38,14 +38,24 @@ fn default_double_tap_delay_millis(configuration: &ViewConfiguration) -> u64 {
     (configuration.double_tap_min_time_millis + configuration.double_tap_timeout_millis) / 2
 }
 
-/// A mouse button, as Compose's `MouseButton`. compose-rs's pointer events carry the primary
-/// button only (D903).
+/// A mouse button, as Compose's `MouseButton`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum MouseButton {
     #[default]
     Primary,
     Secondary,
     Tertiary,
+}
+
+impl MouseButton {
+    /// Its bit among an event's buttons.
+    fn bit(self) -> PointerButtons {
+        match self {
+            MouseButton::Primary => PointerButtons::PRIMARY,
+            MouseButton::Secondary => PointerButtons::SECONDARY,
+            MouseButton::Tertiary => PointerButtons::TERTIARY,
+        }
+    }
 }
 
 /// A mouse's scroll wheel, as Compose's `ScrollWheel`.
@@ -65,7 +75,7 @@ pub(crate) struct InputState {
     touch_updated: bool,
     mouse: Offset,
     mouse_entered: bool,
-    mouse_pressed: bool,
+    mouse_buttons: PointerButtons,
     keys: Vec<Key>,
     /// When the last key went down, the key that repeats, and when it last repeated (ms of the
     /// test clock).
@@ -244,8 +254,17 @@ impl<'r> InjectionScope<'r> {
     }
 
     fn send(&mut self, event: PointerEvent) {
-        let event = event.at_time(self.now_nanos());
-        self.rule.host.send_pointer(event);
+        self.send_together(&[event]);
+    }
+
+    /// The changes of one event, at its time, with the keys held.
+    fn send_together(&mut self, events: &[PointerEvent]) {
+        let (time, modifiers) = (self.now_nanos(), self.modifiers().into());
+        let events: Vec<PointerEvent> = events
+            .iter()
+            .map(|event| event.at_time(time).with_keyboard_modifiers(modifiers))
+            .collect();
+        self.rule.host.send_pointers(&events);
         self.rule.run_current();
     }
 
@@ -332,8 +351,8 @@ impl TouchInjectionScope<'_> {
             !self.input().touches.contains_key(&id),
             "compose-test: Cannot send DOWN event, a gesture is already in progress for pointer {id}"
         );
-        if self.input().mouse_pressed {
-            self.0.rule.input.mouse_pressed = false;
+        if self.input().mouse_buttons.are_any_pressed() {
+            self.0.rule.input.mouse_buttons = PointerButtons::NONE;
             self.0.rule.host.with_tree(|tree| tree.cancel_pointer(PointerId(0)));
         } else if self.input().mouse_entered {
             self.0.rule.input.mouse_entered = false;
@@ -386,14 +405,19 @@ impl TouchInjectionScope<'_> {
         self.send_move();
     }
 
-    /// One move event per finger down (compose-rs's pointer events carry one change each).
+    /// One move event of every finger down.
     fn send_move(&mut self) {
         self.input().touch_updated = false;
-        let touches: Vec<(u64, Offset)> =
-            self.input().touches.iter().map(|(id, position)| (*id, *position)).collect();
-        for (id, position) in touches {
-            self.touch_event(PointerEvent::moved(position, true), id);
-        }
+        let touches: Vec<PointerEvent> = self
+            .input()
+            .touches
+            .iter()
+            .map(|(id, position)| {
+                PointerEvent::moved(*position, true)
+                    .with_pointer(touch_pointer(*id), PointerType::Touch)
+            })
+            .collect();
+        self.0.send_together(&touches);
     }
 
     /// Moves the first finger to `position`, an event period on, as `moveTo(position)`.
@@ -861,11 +885,11 @@ impl MouseInjectionScope<'_> {
             self.input().mouse_entered = false;
             self.0.rule.host.send_pointer_left();
         }
-        if inside && !self.input().mouse_pressed {
+        let buttons = self.input().mouse_buttons;
+        if inside && !buttons.are_any_pressed() {
             self.input().mouse_entered = true;
         }
-        let pressed = self.input().mouse_pressed;
-        self.mouse_event(PointerEvent::moved(root, pressed));
+        self.mouse_event(PointerEvent::moved(root, false).with_buttons(buttons));
     }
 
     /// Moves the cursor by `delta`, an event period on, as `moveBy(delta)`.
@@ -886,21 +910,13 @@ impl MouseInjectionScope<'_> {
         self.update_pointer_to(position);
     }
 
-    #[track_caller]
-    fn primary_only(button: MouseButton) {
-        assert!(
-            button == MouseButton::Primary,
-            "compose-test: compose-rs's pointer events carry the primary button only, not \
-             {button:?}"
-        );
-    }
-
     /// Presses `button` where the cursor is, as `press(button)`.
     #[track_caller]
     pub fn press(&mut self, button: MouseButton) {
-        Self::primary_only(button);
+        let bit = button.bit();
+        let held = self.input().mouse_buttons;
         assert!(
-            !self.input().mouse_pressed,
+            held.0 & bit.0 == 0,
             "compose-test: Cannot send mouse button down event, button {button:?} is already \
              pressed"
         );
@@ -911,23 +927,29 @@ impl MouseInjectionScope<'_> {
              position is {position:?}"
         );
         self.cancel_touch();
-        self.input().mouse_pressed = true;
+        let buttons = PointerButtons(held.0 | bit.0);
+        self.input().mouse_buttons = buttons;
         // A press ends the hover until the release, as Compose's on Android (`exitHoverOnPress`).
         self.input().mouse_entered = false;
-        self.mouse_event(PointerEvent::press(position));
+        self.mouse_event(PointerEvent::press(position).with_buttons(buttons));
     }
 
     /// Releases `button`, as `release(button)`: the cursor hovers again.
     #[track_caller]
     pub fn release(&mut self, button: MouseButton) {
-        Self::primary_only(button);
+        let bit = button.bit();
+        let held = self.input().mouse_buttons;
         assert!(
-            self.input().mouse_pressed,
+            held.0 & bit.0 != 0,
             "compose-test: Cannot send mouse button up event, button {button:?} is not pressed"
         );
-        self.input().mouse_pressed = false;
+        let buttons = PointerButtons(held.0 & !bit.0);
+        self.input().mouse_buttons = buttons;
         let position = self.input().mouse;
-        self.mouse_event(PointerEvent::release(position));
+        self.mouse_event(PointerEvent::release(position).with_buttons(buttons));
+        if buttons.are_any_pressed() {
+            return;
+        }
         // Inside the window, the cursor hovers again at once: the enter and a move where it
         // is, as Compose's `enqueueMouseRelease` on Android (`exitHoverOnPress`).
         let inside = self.0.within_root(position);
@@ -941,11 +963,11 @@ impl MouseInjectionScope<'_> {
     #[track_caller]
     pub fn cancel(&mut self) {
         assert!(
-            self.input().mouse_pressed,
+            self.input().mouse_buttons.are_any_pressed(),
             "compose-test: Cannot send mouse cancel event, no mouse buttons are pressed"
         );
         self.0.advance_event_time(EVENT_PERIOD_MILLIS);
-        self.input().mouse_pressed = false;
+        self.input().mouse_buttons = PointerButtons::NONE;
         self.0.rule.host.with_tree(|tree| tree.cancel_pointer(PointerId(0)));
         self.0.rule.run_current();
     }
@@ -958,7 +980,7 @@ impl MouseInjectionScope<'_> {
             "compose-test: Cannot send mouse hover enter event, mouse is already hovering"
         );
         assert!(
-            !self.input().mouse_pressed,
+            !self.input().mouse_buttons.are_any_pressed(),
             "compose-test: Cannot send mouse hover enter event, mouse buttons are down"
         );
         self.0.advance_event_time(EVENT_PERIOD_MILLIS);

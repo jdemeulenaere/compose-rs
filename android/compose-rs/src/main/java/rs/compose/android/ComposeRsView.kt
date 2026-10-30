@@ -922,42 +922,72 @@ class ComposeRsView @JvmOverloads constructor(
 
     // ---- Touch ---------------------------------------------------------------------------
 
+    // What the pointers of a MotionEvent cross JNI in, reused: a move's are per frame's samples.
+    private var touchIds = IntArray(MAX_TOUCHES)
+    private var touchTools = IntArray(MAX_TOUCHES)
+    private var touchXs = FloatArray(MAX_TOUCHES)
+    private var touchYs = FloatArray(MAX_TOUCHES)
+    private var touchPressures = FloatArray(MAX_TOUCHES)
+
+    /** `event`'s pointers together: at its historical `sample`, or as it is. */
+    private fun sendTouches(event: MotionEvent, action: Int, sample: Int, age: Long) {
+        val count = event.pointerCount
+        if (count > touchIds.size) {
+            touchIds = IntArray(count)
+            touchTools = IntArray(count)
+            touchXs = FloatArray(count)
+            touchYs = FloatArray(count)
+            touchPressures = FloatArray(count)
+        }
+        for (index in 0 until count) {
+            touchIds[index] = event.getPointerId(index)
+            touchTools[index] = event.getToolType(index)
+            if (sample < 0) {
+                touchXs[index] = event.getX(index)
+                touchYs[index] = event.getY(index)
+                touchPressures[index] = event.getPressure(index)
+            } else {
+                touchXs[index] = event.getHistoricalX(index, sample)
+                touchYs[index] = event.getHistoricalY(index, sample)
+                touchPressures[index] = event.getHistoricalPressure(index, sample)
+            }
+        }
+        ComposeRsNative.touches(
+            host,
+            action,
+            event.actionIndex,
+            count,
+            touchIds,
+            touchXs,
+            touchYs,
+            touchPressures,
+            touchTools,
+            event.buttonState,
+            event.metaState,
+            age,
+        )
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (host == 0L) return false
         val now = SystemClock.uptimeMillis()
         fun age(time: Long) = (now - time).coerceAtLeast(0L) * 1_000_000L
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val index = event.actionIndex
-                ComposeRsNative.touch(host, 0, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
-            }
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
+                sendTouches(event, 0, -1, age(event.eventTime))
             MotionEvent.ACTION_MOVE -> {
                 // The samples batched since the last event, then the latest, at their times: a
                 // fling's velocity comes from all of them.
                 for (sample in 0 until event.historySize) {
-                    val time = age(event.getHistoricalEventTime(sample))
-                    for (index in 0 until event.pointerCount) {
-                        ComposeRsNative.touch(
-                            host,
-                            1,
-                            event.getPointerId(index),
-                            event.getHistoricalX(index, sample),
-                            event.getHistoricalY(index, sample),
-                            time,
-                        )
-                    }
+                    sendTouches(event, 1, sample, age(event.getHistoricalEventTime(sample)))
                 }
-                for (index in 0 until event.pointerCount) {
-                    ComposeRsNative.touch(host, 1, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
-                }
+                sendTouches(event, 1, -1, age(event.eventTime))
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                val index = event.actionIndex
-                ComposeRsNative.touch(host, 2, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
-            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP ->
+                sendTouches(event, 2, -1, age(event.eventTime))
             MotionEvent.ACTION_CANCEL -> {
                 for (index in 0 until event.pointerCount) {
-                    ComposeRsNative.touch(host, 3, event.getPointerId(index), 0f, 0f, 0L)
+                    ComposeRsNative.touchCancel(host, event.getPointerId(index), event.getToolType(index))
                 }
             }
         }
@@ -966,11 +996,37 @@ class ComposeRsView @JvmOverloads constructor(
         return true
     }
 
+    /** A mouse moving with no button down: what's under it hears `Enter` and `Exit`. */
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        if (host != 0L && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                    sendTouches(event, 4, -1, 0L)
+                    return true
+                }
+                MotionEvent.ACTION_HOVER_EXIT -> {
+                    ComposeRsNative.hoverExit(host)
+                    return true
+                }
+            }
+        }
+        return super.onHoverEvent(event)
+    }
+
     /**
      * A mouse wheel (or a trackpad's scroll), in pixels, by the view configuration's scroll factors,
      * as Compose's `AndroidConfig` (D1450).
      */
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        // Another of a mouse's buttons, its pointer being down already.
+        if (host != 0L &&
+            (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
+                event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) &&
+            event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+        ) {
+            sendTouches(event, 3, -1, 0L)
+            return true
+        }
         if (host != 0L && event.actionMasked == MotionEvent.ACTION_SCROLL) {
             val configuration = ViewConfiguration.get(context)
             ComposeRsNative.scroll(
@@ -982,6 +1038,7 @@ class ComposeRsView @JvmOverloads constructor(
                     configuration.scaledHorizontalScrollFactor,
                 -event.getAxisValue(MotionEvent.AXIS_VSCROLL) *
                     configuration.scaledVerticalScrollFactor,
+                event.metaState,
             )
             return true
         }
@@ -1182,6 +1239,8 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     private companion object {
+        /** The pointers `sendTouches`'s arrays start with room for. */
+        const val MAX_TOUCHES = 10
         const val SUPER_STATE = "rs.compose.android.super"
 
         /** `ComposeRsNative.performAction`'s for a request for the focus. */

@@ -118,7 +118,24 @@ internal object ComposeRsNative {
     @JvmStatic external fun cancelDrawAhead(host: Long)
 
     /** Action 0 down, 1 move, 2 up, 3 cancel; [age]: how long ago it happened (ns). */
-    @JvmStatic external fun touch(host: Long, action: Int, pointer: Int, x: Float, y: Float, age: Long)
+    @JvmStatic external fun touches(
+        host: Long,
+        action: Int,
+        actionIndex: Int,
+        count: Int,
+        ids: IntArray,
+        xs: FloatArray,
+        ys: FloatArray,
+        pressures: FloatArray,
+        tools: IntArray,
+        buttons: Int,
+        meta: Int,
+        age: Long,
+    )
+
+    @JvmStatic external fun touchCancel(host: Long, pointer: Int, tool: Int)
+
+    @JvmStatic external fun hoverExit(host: Long)
 
     @JvmStatic
     external fun key(host: Long, key: Int, character: Int, down: Boolean, meta: Int): Boolean
@@ -126,7 +143,7 @@ internal object ComposeRsNative {
     @JvmStatic external fun text(host: Long, text: String)
 
     /** A wheel's scroll at ([x], [y]), by ([dx], [dy]) pixels. */
-    @JvmStatic external fun scroll(host: Long, x: Float, y: Float, dx: Float, dy: Float)
+    @JvmStatic external fun scroll(host: Long, x: Float, y: Float, dx: Float, dy: Float, meta: Int)
 
     @JvmStatic external fun setRtl(host: Long, rtl: Boolean)
 
