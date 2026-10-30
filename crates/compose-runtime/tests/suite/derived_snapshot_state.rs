@@ -1,10 +1,10 @@
 //! Compose's `DerivedSnapshotStateTests`, adapted: `derived_state_of` outside composition is
 //! lazy and cached. The tests that take snapshots wait for snapshot isolation (D702).
 
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use compose_runtime::platform;
 use compose_runtime::*;
 
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/DerivedSnapshotStateTests.kt, aStateFreeCalculationCanBeUsed
@@ -137,4 +137,283 @@ fn a_read_observer_hears_what_a_cached_derived_state_read() {
         Snapshot::observe(Some(Rc::new(move |id| log.borrow_mut().push(id))), None, || read.get());
     assert_eq!(result, 0);
     assert_eq!(*reads.borrow(), [read.state_object_id(), state.state_object_id()]);
+}
+
+// ---- After the review of S2 (D763-D767) ---------------------------------------------------------
+
+/// A read of a nested derived state whose inner calculation sends, the send validating the outer
+/// one an observation read, doesn't conflict with the validation in progress.
+#[test]
+fn a_nested_derived_state_read_by_an_observation_reads_after_a_write() {
+    use compose_runtime::snapshots::Snapshot;
+    let a = mutable_state_of(1);
+    let ah = a.handle();
+    let inner = derived_state_of(move || ah.get() * 2);
+    let i = inner.as_state();
+    let outer = derived_state_of(move || i.get() + 1);
+    let o = outer.as_state();
+    let observer = platform::ReadObserver::new(|| {});
+    assert_eq!(observer.observe(1, || o.get()), 3);
+    Snapshot::notify_objects_initialized();
+    a.set(2);
+    assert_eq!(outer.get(), 5);
+}
+
+/// The same from an apply observer, reading what a send told it about.
+#[test]
+fn a_nested_derived_state_read_in_an_apply_observer_reads_after_a_write() {
+    use compose_runtime::snapshots::Snapshot;
+    let a = mutable_state_of(1);
+    let ah = a.handle();
+    let inner = derived_state_of(move || ah.get() * 2);
+    let i = inner.as_state();
+    let outer = derived_state_of(move || i.get() + 1);
+    let o = outer.as_state();
+    let observer = platform::ReadObserver::new(|| {});
+    assert_eq!(observer.observe(1, || o.get()), 3);
+    let seen = Rc::new(Cell::new(0));
+    let reads = seen.clone();
+    let _observer = Snapshot::register_apply_observer(move |_, _| reads.set(o.get()));
+    Snapshot::notify_objects_initialized();
+    a.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(seen.get(), 5);
+}
+
+/// A read observer reading the derived state it's told about, on a cached read: no record is
+/// held while it runs.
+#[test]
+fn a_read_observer_can_read_a_derived_state_it_hears_of() {
+    use compose_runtime::snapshots::Snapshot;
+    let a = mutable_state_of(1);
+    let ah = a.handle();
+    let derived = derived_state_of(move || ah.get() * 2);
+    let read = derived.as_state();
+    assert_eq!(read.get(), 2);
+    let inside = Rc::new(Cell::new(false));
+    let seen = Rc::new(Cell::new(0));
+    let (flag, value) = (inside.clone(), seen.clone());
+    Snapshot::observe(
+        Some(Rc::new(move |_| {
+            if !flag.replace(true) {
+                ah.set(5);
+                value.set(read.get());
+                flag.set(false);
+            }
+        })),
+        None,
+        || read.get(),
+    );
+    assert_eq!(seen.get(), 10);
+}
+
+/// A freed dependency can't change: the derived state stays valid after an unrelated write.
+#[test]
+fn a_freed_dependency_counts_as_unchanged() {
+    let a = mutable_state_of(1);
+    let ah = a.handle();
+    let other = mutable_state_of(0);
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let d = derived_state_of(move || {
+        counted.set(counted.get() + 1);
+        ah.try_get().unwrap_or(-1) * 2
+    });
+    assert_eq!(d.get(), 2);
+    drop(a);
+    other.set(1);
+    assert_eq!(d.get(), 2);
+    assert_eq!(runs.get(), 1);
+}
+
+/// A write during the send a recomputation causes is seen by the next read: the mark taken for
+/// the fast path is the one before the send (D765).
+#[test]
+fn a_write_during_a_calculations_send_is_seen_by_the_next_read() {
+    use compose_runtime::snapshots::Snapshot;
+    let (a, b) = (mutable_state_of(0), mutable_state_of(0));
+    let (ah, bh) = (a.handle(), b.handle());
+    let derived = derived_state_of(move || ah.get());
+    assert_eq!(derived.get(), 0);
+    Snapshot::notify_objects_initialized();
+    let writes = Rc::new(Cell::new(false));
+    let once = writes.clone();
+    let id = bh.state_object_id();
+    let _observer = Snapshot::register_apply_observer(move |changed, _| {
+        if changed.contains(id) && !once.replace(true) {
+            ah.set(2);
+        }
+    });
+    a.set(1);
+    b.set(1);
+    // Recomputed at 1; its send writes 2.
+    assert_eq!(derived.get(), 1);
+    assert!(writes.get());
+    assert_eq!(derived.get(), 2, "no read is behind what it derives from");
+}
+
+/// As Compose's `derivedStateOf(calculation)`, a calculation always writes a new record, so what
+/// reads it is computed again; readers compare structurally.
+#[test]
+fn without_a_policy_an_equal_result_still_recomputes_what_reads_it() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let inner = derived_state_of(move || handle.get() > 0);
+    let read_inner = inner.as_state();
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let outer = derived_state_of(move || {
+        counted.set(counted.get() + 1);
+        read_inner.get()
+    });
+    assert!(outer.get());
+    state.set(2);
+    assert!(outer.get());
+    assert_eq!(runs.get(), 2);
+}
+
+/// With a policy, a result it finds equivalent keeps the record, and stops the chain.
+#[test]
+fn with_a_policy_an_equivalent_result_stops_the_chain() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let inner = derived_state_of_with(StructuralEqualityPolicy, move || handle.get() > 0);
+    let read_inner = inner.as_state();
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    let outer = derived_state_of(move || {
+        counted.set(counted.get() + 1);
+        read_inner.get()
+    });
+    assert!(outer.get());
+    state.set(2);
+    assert!(outer.get());
+    assert_eq!(runs.get(), 1);
+    state.set(0);
+    assert!(!outer.get());
+    assert_eq!(runs.get(), 2);
+}
+
+/// A never-equal state over an inner one whose policy finds the result equivalent isn't computed:
+/// nothing it read changed. Over one without a policy it is, and its readers are told.
+#[test]
+fn a_never_equal_derived_state_follows_what_it_reads() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let kept = derived_state_of_with(StructuralEqualityPolicy, move || handle.get() > 0);
+    let unkept = derived_state_of(move || handle.get() > 0);
+    let (read_kept, read_unkept) = (kept.as_state(), unkept.as_state());
+    let (over_kept_runs, over_unkept_runs) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (counted_kept, counted_unkept) = (over_kept_runs.clone(), over_unkept_runs.clone());
+    let over_kept = derived_state_of_with(NeverEqualPolicy, move || {
+        counted_kept.set(counted_kept.get() + 1);
+        read_kept.get()
+    });
+    let over_unkept = derived_state_of_with(NeverEqualPolicy, move || {
+        counted_unkept.set(counted_unkept.get() + 1);
+        read_unkept.get()
+    });
+    assert!(over_kept.get() && over_unkept.get());
+    state.set(2);
+    assert!(over_kept.get() && over_unkept.get());
+    assert_eq!(over_kept_runs.get(), 1);
+    assert_eq!(over_unkept_runs.get(), 2);
+}
+
+thread_local! {
+    static COMPARED: RefCell<Vec<(i32, i32)>> = const { RefCell::new(Vec::new()) };
+}
+
+struct Recording;
+
+impl MutationPolicy<i32> for Recording {
+    fn equivalent(a: &i32, b: &i32) -> bool {
+        COMPARED.with(|compared| compared.borrow_mut().push((*a, *b)));
+        a == b
+    }
+}
+
+/// The policy is asked `equivalent(new, old)`, as `DerivedState.kt` does.
+#[test]
+fn a_policy_compares_the_new_result_with_the_old() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let derived = derived_state_of_with(Recording, move || handle.get());
+    assert_eq!(derived.get(), 1);
+    state.set(2);
+    assert_eq!(derived.get(), 2);
+    assert_eq!(COMPARED.with(|compared| compared.borrow()[0]), (2, 1));
+}
+
+/// On a recomputation, read observers hear the derived state first, as Compose's value getter.
+#[test]
+fn a_read_observer_hears_a_derived_state_before_what_its_calculation_reads() {
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get());
+    let read = derived.as_state();
+    let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = reads.clone();
+    Snapshot::observe(Some(Rc::new(move |id| log.borrow_mut().push(id))), None, || read.get());
+    assert_eq!(*reads.borrow(), [read.state_object_id(), state.state_object_id()]);
+}
+
+/// On a cached read of a diamond, what both sides read is heard once.
+#[test]
+fn a_cached_diamond_tells_what_it_read_once() {
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let left = derived_state_of(move || handle.get() + 1);
+    let right = derived_state_of(move || handle.get() + 2);
+    let (read_left, read_right) = (left.as_state(), right.as_state());
+    let top = derived_state_of(move || read_left.get() + read_right.get());
+    let read = top.as_state();
+    assert_eq!(read.get(), 5);
+    let reads: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = reads.clone();
+    Snapshot::observe(Some(Rc::new(move |id| log.borrow_mut().push(id))), None, || read.get());
+    let heard = reads.borrow();
+    assert_eq!(heard.iter().filter(|id| **id == state.state_object_id()).count(), 1);
+    assert_eq!(heard.len(), 4, "the top, each side, the state");
+}
+
+/// An observation started in a calculation adds to it: what's read is a dependency too, as
+/// Compose merges read observers.
+#[test]
+fn a_read_in_an_observation_inside_a_calculation_is_a_dependency() {
+    use compose_runtime::snapshots::{Snapshot, SnapshotStateObserver};
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let observer = Rc::new(SnapshotStateObserver::new(|run| run()));
+    observer.start();
+    let changes = Rc::new(Cell::new(0));
+    let counted = changes.clone();
+    let callback: Rc<dyn Fn(&&'static str)> = Rc::new(move |_| counted.set(counted.get() + 1));
+    let inside = observer.clone();
+    let derived =
+        derived_state_of(move || inside.observe_reads("scope", &callback, || handle.get()));
+    assert_eq!(derived.get(), 1);
+    Snapshot::notify_objects_initialized();
+    state.set(2);
+    assert_eq!(derived.get(), 2, "a dependency of the derived state");
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1, "and read in the observation");
+    observer.stop();
+}
+
+/// A `with` closure holds no record: writing what the state read and reading it again works, the
+/// value it's looking at staying as it was.
+#[test]
+fn a_with_closure_can_write_a_dependency_and_read_again() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() * 2);
+    let read = derived.as_state();
+    let (first, second) = read.with(|value| {
+        handle.set(2);
+        (*value, read.get())
+    });
+    assert_eq!((first, second), (2, 4));
 }

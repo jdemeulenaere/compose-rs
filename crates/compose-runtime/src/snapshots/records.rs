@@ -82,6 +82,6 @@ pub(crate) trait StateObjectCell: Any {
     fn valid_at(&self, _mark: (SnapshotId, u32)) -> bool {
         true
     }
-    /// Tells the read observers what this object read, a derived state's dependencies.
-    fn notify_dependencies(&self) {}
+    /// Adds what this object read, a derived state's dependencies, each once.
+    fn collect_dependencies(&self, _into: &mut Vec<crate::state::StateId>) {}
 }

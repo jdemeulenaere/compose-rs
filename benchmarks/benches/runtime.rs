@@ -134,6 +134,29 @@ fn state_list_push(c: &mut Criterion) {
     });
 }
 
+/// A write sent to 20,000 derived states of one state, each computed and read by nobody: the
+/// send's walk visits each once (the classic `derived_state_of(|| selected.get() == id)` per row).
+fn send_to_many_derived(c: &mut Criterion) {
+    let state = mutable_state_of(0u64);
+    let handle = state.handle();
+    let derived: Vec<_> =
+        (0..20_000u64).map(|id| derived_state_of(move || handle.get() == id)).collect();
+    for one in &derived {
+        one.get();
+    }
+    let mut value = 0;
+    c.bench_function("a write sent to 20,000 derived states", |b| {
+        b.iter(|| {
+            value += 1;
+            state.set(value);
+            for one in derived.iter().take(1) {
+                black_box(one.get());
+            }
+            compose::runtime::snapshots::Snapshot::send_apply_notifications();
+        })
+    });
+}
+
 /// A host's tick with nothing to do: the executor's `run_ready` finding no task, no change to send
 /// and no derived state to flush.
 fn idle_tick(c: &mut Criterion) {
@@ -211,6 +234,7 @@ criterion_group!(
     state_reads,
     state_writes,
     idle_tick,
+    send_to_many_derived,
     derived_reads,
     state_list_push,
     many_readers

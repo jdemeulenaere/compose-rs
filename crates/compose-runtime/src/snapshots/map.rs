@@ -46,6 +46,12 @@ impl<K: 'static, V: 'static> PartialEq for SnapshotStateMap<K, V> {
 
 impl<K: 'static, V: 'static> Eq for SnapshotStateMap<K, V> {}
 
+impl<K: 'static, V: 'static> Hash for SnapshotStateMap<K, V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.state.hash(state);
+    }
+}
+
 impl<K: 'static, V: 'static> ComposeArg for SnapshotStateMap<K, V> {
     fn same(&self, other: &Self) -> bool {
         self == other
@@ -60,7 +66,7 @@ impl<K: 'static, V: 'static> From<SnapshotStateMap<K, V>> for StateObjectId {
 
 /// Owns a map state: dropping it retires the state. Derefs to its handle.
 pub struct OwnedStateMap<K: 'static, V: 'static> {
-    _owner: OwnedState<MapRecord<K, V>>,
+    owner: OwnedState<MapRecord<K, V>>,
     handle: SnapshotStateMap<K, V>,
 }
 
@@ -75,6 +81,11 @@ impl<K: 'static, V: 'static> OwnedStateMap<K, V> {
     /// The `Copy` handle.
     pub fn handle(&self) -> SnapshotStateMap<K, V> {
         self.handle
+    }
+
+    /// Whether the state is still live.
+    pub fn is_alive(&self) -> bool {
+        self.owner.is_alive()
     }
 }
 
@@ -106,7 +117,7 @@ pub fn mutable_state_map_from<K: Hash + Eq + 'static, V: 'static>(
     let record = MapRecord { map: Rc::new(entries.into_iter().collect()) };
     let owner = mutable_state_of_with(record, NeverEqualPolicy);
     let handle = SnapshotStateMap { state: owner.handle() };
-    OwnedStateMap { _owner: owner, handle }
+    OwnedStateMap { owner, handle }
 }
 
 impl<K: 'static, V: 'static> SnapshotStateMap<K, V> {
@@ -150,14 +161,16 @@ impl<K: 'static, V: 'static> SnapshotStateMap<K, V> {
         self.state.edit(|record| f(Rc::make_mut(&mut record.map)))
     }
 
-    /// Removes everything, as `clear`: always a write.
+    /// Removes everything, as `clear`. Empty, it writes nothing, as Compose's `newMap !== map`.
     #[track_caller]
     pub fn clear(&self)
     where
         K: Clone,
         V: Clone,
     {
-        self.write(HashMap::clear);
+        if !self.current(HashMap::is_empty) {
+            self.write(HashMap::clear);
+        }
     }
 }
 
@@ -181,17 +194,37 @@ impl<K: Clone + Hash + Eq + 'static, V: Clone + 'static> SnapshotStateMap<K, V> 
         self.with(|map| map.values().any(|other| other == value))
     }
 
-    /// Writes `value` at `key`, as `put`, returning the old one.
+    /// Writes `value` at `key`, as `put`, returning the old one. An equal value writes nothing,
+    /// as Compose's `newMap == oldMap`, here for the one entry.
     #[track_caller]
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
+    pub fn insert(&self, key: K, value: V) -> Option<V>
+    where
+        V: PartialEq,
+    {
+        let same = self.current(|map| map.get(&key).filter(|old| **old == value).cloned());
+        if same.is_some() {
+            return same;
+        }
         self.write(|map| map.insert(key, value))
     }
 
-    /// Writes each of `entries`, as `putAll`. None writes nothing.
+    /// Like [`insert`](Self::insert), for values that can't be compared: always a write.
     #[track_caller]
-    pub fn insert_all(&self, entries: impl IntoIterator<Item = (K, V)>) {
+    pub fn insert_always(&self, key: K, value: V) -> Option<V> {
+        self.write(|map| map.insert(key, value))
+    }
+
+    /// Writes each of `entries`, as `putAll`. Only equal values, or none, write nothing.
+    #[track_caller]
+    pub fn insert_all(&self, entries: impl IntoIterator<Item = (K, V)>)
+    where
+        V: PartialEq,
+    {
         let entries: Vec<(K, V)> = entries.into_iter().collect();
-        if !entries.is_empty() {
+        let changed = self.current(|map| {
+            entries.iter().any(|(key, value)| map.get(key).is_none_or(|old| old != value))
+        });
+        if changed {
             self.write(|map| map.extend(entries));
         }
     }
@@ -206,13 +239,17 @@ impl<K: Clone + Hash + Eq + 'static, V: Clone + 'static> SnapshotStateMap<K, V> 
         }
     }
 
-    /// Replaces `key`'s value with `f(old)`, `None` for none; `f` giving `None` removes it.
+    /// Replaces `key`'s value with `f(old)`, `None` for none; `f` giving `None` removes it. An
+    /// equal value writes nothing.
     #[track_caller]
-    pub fn update(&self, key: K, f: impl FnOnce(Option<&V>) -> Option<V>) {
+    pub fn update(&self, key: K, f: impl FnOnce(Option<&V>) -> Option<V>)
+    where
+        V: PartialEq,
+    {
         let value = self.current(|map| f(map.get(&key)));
         match value {
             Some(value) => {
-                self.write(|map| map.insert(key, value));
+                self.insert(key, value);
             }
             None => {
                 self.remove(&key);

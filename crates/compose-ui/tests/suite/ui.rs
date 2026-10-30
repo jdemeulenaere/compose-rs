@@ -1021,3 +1021,31 @@ fn a_derived_state_read_only_by_drawing_gets_its_frame_from_the_tick() {
     host.frame();
     assert_eq!(drawn.get(), 30);
 }
+
+/// A nested derived state drawing reads, read in a turn right after a write: its inner
+/// calculation's send validates it, while the read validates it too (D763).
+#[test]
+fn a_nested_derived_state_drawing_reads_can_be_read_after_a_write() {
+    let state = mutable_state_of(1);
+    let handle = state.handle();
+    let inner = derived_state_of(move || handle.get() * 2);
+    let read_inner = inner.as_state();
+    let outer = derived_state_of(move || read_inner.get() + 1);
+    let read = outer.as_state();
+    let drawn = Rc::new(Cell::new(0));
+    let seen = drawn.clone();
+    let mut host = host(move || {
+        let seen = seen.clone();
+        let draw = Modifier.draw_behind(move |_| seen.set(read.get()));
+        Layout(draw, measure_policy(|scope, _, _| scope.layout(100, 100)), callback(|| {}));
+    });
+    assert_eq!(drawn.get(), 3);
+    host.frame();
+    {
+        let _turn = Turn::begin();
+        state.set(2);
+        assert_eq!(read.get(), 5);
+    }
+    host.frame();
+    assert_eq!(drawn.get(), 5);
+}

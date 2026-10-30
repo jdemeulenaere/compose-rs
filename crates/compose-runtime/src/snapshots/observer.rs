@@ -155,9 +155,16 @@ impl<S: Hash + Eq + Clone + 'static> Group for ScopeGroup<S> {
 
     fn notify_changes(&self, changes: &ChangeSet) {
         let mut keys = Vec::new();
-        // What the send told it, a derived state's read among them (D759), and, called directly,
-        // what `changes` names.
-        self.observer.drain_invalidated(|key| keys.push(key));
+        // What the send told it, a derived state's read among them (D759), if it's started: not
+        // started, it heard no send, and drops what they told it. And, called directly, what
+        // `changes` names.
+        let started =
+            self.owner.upgrade().is_some_and(|owner| owner.registration.borrow().is_some());
+        self.observer.drain_invalidated(|key| {
+            if started {
+                keys.push(key);
+            }
+        });
         for state in changes.iter() {
             keys.extend(self.observer.keys_reading(state.0));
         }

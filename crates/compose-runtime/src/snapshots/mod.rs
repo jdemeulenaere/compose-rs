@@ -16,7 +16,7 @@ pub(crate) use global::{
 };
 pub(crate) use global::{
     begin_calculation, calculation_depth, calculation_reads, end_calculation, next_record,
-    valid_mark,
+    notify_read_if_observed, observe_calculation, return_calculation_reads, valid_mark,
 };
 pub use list::{
     OwnedStateList, SnapshotStateList, StateListIterator, StateSubList, mutable_state_list_from,

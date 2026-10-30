@@ -57,6 +57,15 @@ impl<T: Clone + Hash + Eq> OrderedSet<T> {
     }
 }
 
+/// Equal as sets, whatever the order, as Kotlin's `Set`.
+impl<T: Hash + Eq> PartialEq for OrderedSet<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().all(|value| other.index.contains_key(value))
+    }
+}
+
+impl<T: Hash + Eq> Eq for OrderedSet<T> {}
+
 impl<T> OrderedSet<T> {
     pub fn len(&self) -> usize {
         self.index.len()
@@ -98,6 +107,12 @@ impl<T: 'static> PartialEq for SnapshotStateSet<T> {
 
 impl<T: 'static> Eq for SnapshotStateSet<T> {}
 
+impl<T: 'static> Hash for SnapshotStateSet<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.state.hash(state);
+    }
+}
+
 impl<T: 'static> ComposeArg for SnapshotStateSet<T> {
     fn same(&self, other: &Self) -> bool {
         self == other
@@ -112,7 +127,7 @@ impl<T: 'static> From<SnapshotStateSet<T>> for StateObjectId {
 
 /// Owns a set state: dropping it retires the state. Derefs to its handle.
 pub struct OwnedStateSet<T: 'static> {
-    _owner: OwnedState<SetRecord<T>>,
+    owner: OwnedState<SetRecord<T>>,
     handle: SnapshotStateSet<T>,
 }
 
@@ -127,6 +142,11 @@ impl<T: 'static> OwnedStateSet<T> {
     /// The `Copy` handle.
     pub fn handle(&self) -> SnapshotStateSet<T> {
         self.handle
+    }
+
+    /// Whether the state is still live.
+    pub fn is_alive(&self) -> bool {
+        self.owner.is_alive()
     }
 }
 
@@ -161,7 +181,7 @@ pub fn mutable_state_set_from<T: Clone + Hash + Eq + 'static>(
     let record = SetRecord { set: Rc::new(set) };
     let owner = mutable_state_of_with(record, NeverEqualPolicy);
     let handle = SnapshotStateSet { state: owner.handle() };
-    OwnedStateSet { _owner: owner, handle }
+    OwnedStateSet { owner, handle }
 }
 
 impl<T: 'static> SnapshotStateSet<T> {

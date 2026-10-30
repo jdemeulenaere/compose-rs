@@ -1479,29 +1479,6 @@ fn a_write_that_is_no_change_is_seen_by_a_derived_state() {
     assert_eq!(other.get(), 3);
 }
 
-/// A derived state whose value is equivalent keeps its result, as the old instance, and its
-/// version: what reads it isn't recomputed.
-#[test]
-fn an_equivalent_result_stops_the_chain() {
-    let state = mutable_state_of(1);
-    let handle = state.handle();
-    let inner = derived_state_of(move || handle.get() > 0);
-    let read_inner = inner.as_state();
-    let runs = Rc::new(Cell::new(0));
-    let counted = runs.clone();
-    let outer = derived_state_of(move || {
-        counted.set(counted.get() + 1);
-        read_inner.get()
-    });
-    assert!(outer.get());
-    state.set(2);
-    assert!(outer.get());
-    assert_eq!(runs.get(), 1, "the outer one's dependency kept its version");
-    state.set(0);
-    assert!(!outer.get());
-    assert_eq!(runs.get(), 2);
-}
-
 /// Read in a block under `without_read_observation`, a state isn't a dependency.
 #[test]
 fn a_read_without_observation_in_a_calculation_is_no_dependency() {
@@ -1515,4 +1492,26 @@ fn a_read_without_observation_in_a_calculation_is_no_dependency() {
     assert_eq!(derived.get(), 11, "not recomputed");
     read.set(2);
     assert_eq!(derived.get(), 22);
+}
+
+/// Called directly on an observer not started, `notify_changes` maps what it's given and nothing
+/// else: the sends it heard nothing of don't fire later.
+#[test]
+fn notify_changes_on_an_observer_not_started_ignores_earlier_sends() {
+    let (read, other) = (mutable_state_of(0), mutable_state_of(0));
+    Snapshot::notify_objects_initialized();
+    let observer = Rc::new(SnapshotStateObserver::new(|run| run()));
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || read.get());
+    read.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0);
+    let told = observer.clone();
+    let _apply = Snapshot::register_apply_observer(move |changed, snapshot| {
+        told.notify_changes(changed, snapshot);
+    });
+    other.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0, "it read nothing of what these changes name");
 }

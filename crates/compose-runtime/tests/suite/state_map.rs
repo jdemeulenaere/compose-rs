@@ -247,4 +247,53 @@ fn an_operation_leaving_the_map_as_it_was_writes_nothing() {
     map.clear();
     Snapshot::send_apply_notifications();
     assert_eq!(changes.get(), 1);
+    Snapshot::notify_objects_initialized();
+    map.clear();
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1, "clearing an empty map writes nothing, unlike a list or a set");
+}
+
+/// An equal value writes nothing, by `==`, as Compose's `newMap == oldMap`; `insert_always` writes.
+#[test]
+fn writing_an_equal_value_doesnt_change_the_map() {
+    let map = mutable_state_map_from([(0, Rc::new(0))]);
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(std::cell::Cell::new(0));
+    let counted = changes.clone();
+    let _observer =
+        Snapshot::register_apply_observer(move |set, _| counted.set(counted.get() + set.len()));
+    assert_eq!(map.insert(0, Rc::new(0)), Some(Rc::new(0)));
+    map.insert_all([(0, Rc::new(0))]);
+    map.update(0, |value| value.cloned());
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0);
+    map.insert_always(0, Rc::new(0));
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+    Snapshot::notify_objects_initialized();
+    map.insert_all([(0, Rc::new(0)), (1, Rc::new(1))]);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 2);
+}
+
+/// `to_map` hands out the map itself, and what it handed out stays as it was.
+#[test]
+fn to_map_shares_the_map_until_a_write_copies_it() {
+    let map = mutable_state_map_from([(0, 0)]);
+    let (first, second) = (map.to_map(), map.to_map());
+    assert!(Rc::ptr_eq(&first, &second));
+    map.insert(1, 1);
+    assert_eq!(first.len(), 1);
+    assert_eq!(map.len(), 2);
+    assert!(!Rc::ptr_eq(&first, &map.to_map()));
+}
+
+/// An owner tells if its state is alive, and handles hash by identity.
+#[test]
+fn a_map_handle_hashes_and_its_owner_knows_its_alive() {
+    let (one, other) = (mutable_state_map_from([(0, 0)]), mutable_state_map_from([(0, 0)]));
+    assert!(one.is_alive());
+    let handles: std::collections::HashSet<SnapshotStateMap<i32, i32>> =
+        [one.handle(), one.handle(), other.handle()].into_iter().collect();
+    assert_eq!(handles.len(), 2);
 }

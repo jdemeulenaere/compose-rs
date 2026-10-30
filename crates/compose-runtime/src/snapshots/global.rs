@@ -63,8 +63,20 @@ pub(crate) struct Snapshots {
     /// Derived states an observation read, what they read having changed: the send validates
     /// them, outside the borrow.
     derived_queue: Vec<StateId>,
-    /// The calculations of derived states in progress, innermost last: what each read.
-    calculations: Vec<Vec<StateId>>,
+    /// The calculations of derived states in progress, innermost last.
+    calculations: Vec<Calculation>,
+    /// The current walk through derived states (`invalidate_cell`).
+    walk: u32,
+    /// A finished calculation's list of what it read, for its room.
+    spare_reads: Vec<StateId>,
+}
+
+/// A derived state's calculation in progress.
+struct Calculation {
+    /// What it read.
+    reads: Vec<StateId>,
+    /// Its observation, which reads in observations started inside it add to.
+    observing: Option<crate::observe::Observing>,
 }
 
 impl Snapshots {
@@ -86,7 +98,26 @@ impl Snapshots {
             woken: false,
             derived_queue: Vec::new(),
             calculations: Vec::new(),
+            walk: 0,
+            spare_reads: Vec::new(),
         }
+    }
+
+    /// The current walk through derived states: one a send, one a write in composition.
+    #[inline]
+    pub(crate) fn walk(&self) -> u32 {
+        self.walk
+    }
+
+    /// Starts a walk through derived states.
+    fn next_walk(&mut self) {
+        self.walk = self.walk.wrapping_add(1);
+    }
+
+    /// The observation of the calculation in progress, if any.
+    #[inline]
+    pub(crate) fn observing_calculation(&self) -> Option<crate::observe::Observing> {
+        self.calculations.last()?.observing
     }
 
     /// Queues a derived state for the next send to validate.
@@ -96,8 +127,8 @@ impl Snapshots {
 
     /// The calculation in progress read `id`.
     pub(crate) fn record_dependency(&mut self, id: StateId) {
-        if let Some(reads) = self.calculations.last_mut() {
-            reads.push(id);
+        if let Some(calculation) = self.calculations.last_mut() {
+            calculation.reads.push(id);
         }
     }
 
@@ -404,6 +435,15 @@ impl Drop for FrameGuard {
     }
 }
 
+/// Tells the read observers of `id`, if there are any; returns whether there were.
+pub(crate) fn notify_read_if_observed(id: StateId) -> bool {
+    let observed = with_runtime(|runtime| runtime.snapshots.reads_observed());
+    if observed {
+        notify_read(id);
+    }
+    observed
+}
+
 /// Calls the read observers of the frames above the latest barrier, innermost first.
 pub(crate) fn notify_read(id: StateId) {
     let observers: Vec<StateObserverFn> = with_runtime(|runtime| {
@@ -443,6 +483,7 @@ fn tell(runtime: &mut Runtime, id: StateId) -> Told {
     // In composition everything is invalidated at once (D703, D712), reader by reader; a frame
     // request waits for the pass's end. Outside, at the send (D751).
     if composing {
+        runtime.snapshots.next_walk();
         crate::state::invalidate_cell(runtime, id, false);
     }
     Told { wake, requested: frames_requested(runtime), observed, composing }
@@ -502,6 +543,7 @@ fn send(always: bool) {
         let previous = runtime.snapshots.advance();
         runtime.snapshots.sending += 1;
         runtime.snapshots.woken = false;
+        runtime.snapshots.next_walk();
         for &id in &modified {
             crate::state::invalidate_cell(runtime, id, true);
         }
@@ -621,14 +663,38 @@ pub(crate) fn next_record() -> (SnapshotId, u32) {
 
 /// A derived state's calculation starts: its reads are recorded (`record_dependency`).
 pub(crate) fn begin_calculation() {
-    with_runtime(|runtime| runtime.snapshots.calculations.push(Vec::new()));
+    with_runtime(|runtime| {
+        let reads = std::mem::take(&mut runtime.snapshots.spare_reads);
+        runtime.snapshots.calculations.push(Calculation { reads, observing: None })
+    });
+}
+
+/// The calculation in progress has its observation.
+pub(crate) fn observe_calculation() {
+    with_runtime(|runtime| {
+        let observing = runtime.observing;
+        if let Some(calculation) = runtime.snapshots.calculations.last_mut() {
+            calculation.observing = observing;
+        }
+    });
 }
 
 /// What the calculation in progress read.
 pub(crate) fn calculation_reads() -> Vec<StateId> {
     with_runtime(|runtime| {
-        runtime.snapshots.calculations.last_mut().map(std::mem::take).unwrap_or_default()
+        runtime
+            .snapshots
+            .calculations
+            .last_mut()
+            .map(|calculation| std::mem::take(&mut calculation.reads))
+            .unwrap_or_default()
     })
+}
+
+/// A list `calculation_reads` gave, for its room.
+pub(crate) fn return_calculation_reads(mut reads: Vec<StateId>) {
+    reads.clear();
+    with_runtime(|runtime| runtime.snapshots.spare_reads = reads);
 }
 
 /// The calculation in progress ended.

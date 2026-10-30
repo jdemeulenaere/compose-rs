@@ -485,6 +485,7 @@ Each round, 5 runs a side on the feed, the header and the stress list. On the st
 
 ## Compose behaviours worth knowing
 
+- **`derivedStateOf(calculation)` writes a new record on an equal result**, so what reads it recalculates, though no reader of it would see a change (`DerivedState.kt:241-255`; readers compare at `isInvalidFor`). Stopping the chain there, as `derivedStateOf(structuralEqualityPolicy()) { … }` does, is a candidate to backport for a nested derived state over a value that rarely changes in effect. compose-rs follows Compose at parity (D764), and pins it with `without_a_policy_an_equal_result_still_recomputes_what_reads_it`.
 Found while matching Compose 1.12.1's defaults ([15](15-android-stress-benchmark.md), "Compose's defaults", with line numbers):
 
 - **Prefetch's per-type averages start at zero.**

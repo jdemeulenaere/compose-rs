@@ -56,7 +56,6 @@ fn a_set_iterates_in_insertion_order() {
     assert_eq!(items(*set), [3, 1, 4, 5, 9, 2, 0]);
 }
 
-// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateSetTests.kt, validateIterator_remove
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateSetTests.kt, validateIterator_orderedAfterRemove
 #[test]
 fn a_set_keeps_its_order_after_a_removal() {
@@ -165,4 +164,35 @@ fn formatting_a_set_reads_nothing() {
 fn a_set_displays_its_elements() {
     let set = mutable_state_set_from([0, 1, 2]);
     assert!(format!("{}", *set).starts_with("SnapshotStateSet(value=[0, 1, 2])@"));
+}
+
+/// `to_set` hands out the set itself, and what it handed out stays as it was.
+#[test]
+fn to_set_shares_the_set_until_a_write_copies_it() {
+    let set = mutable_state_set_from([0]);
+    let (first, second) = (set.to_set(), set.to_set());
+    assert!(Rc::ptr_eq(&first, &second));
+    set.insert(1);
+    assert_eq!(first.len(), 1);
+    assert_eq!(set.len(), 2);
+    assert!(!Rc::ptr_eq(&first, &set.to_set()));
+}
+
+/// Two sets are equal as sets, whatever their order.
+#[test]
+fn ordered_sets_are_equal_as_sets() {
+    let (one, other) = (mutable_state_set_from([0, 1]), mutable_state_set_from([1, 0]));
+    assert!(*one.to_set() == *other.to_set());
+    other.remove(&0);
+    assert!(*one.to_set() != *other.to_set());
+}
+
+/// An owner tells if its state is alive, and handles hash by identity.
+#[test]
+fn a_set_handle_hashes_and_its_owner_knows_its_alive() {
+    let (one, other) = (mutable_state_set_from([0]), mutable_state_set_from([0]));
+    assert!(one.is_alive());
+    let handles: std::collections::HashSet<SnapshotStateSet<i32>> =
+        [one.handle(), one.handle(), other.handle()].into_iter().collect();
+    assert_eq!(handles.len(), 2);
 }

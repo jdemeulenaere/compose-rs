@@ -648,3 +648,89 @@ fn a_composable_reading_a_list_recomposes_when_it_changes() {
     assert!(composition.recompose());
     assert_eq!(*sums.borrow(), [3, 6]);
 }
+
+// ---- After the review of S3 (D766) --------------------------------------------------------------
+
+/// Elements that can't be compared are set with `set_always`, which always writes; a list of
+/// comparable ones writes nothing for an equal value, by `==`, a new `Rc` of an equal value too.
+#[test]
+fn a_list_sets_by_equality_or_always() {
+    struct Opaque;
+    let opaque = mutable_state_list_from([Rc::new(Opaque)]);
+    Snapshot::notify_objects_initialized();
+    let same = opaque.get(0).expect("an element");
+    assert_eq!(
+        changes_of(|| {
+            opaque.set_always(0, same);
+        }),
+        1
+    );
+    let shared = mutable_state_list_from([Rc::new(1)]);
+    Snapshot::notify_objects_initialized();
+    assert_eq!(
+        changes_of(|| {
+            shared.set(0, Rc::new(1));
+        }),
+        0
+    );
+}
+
+/// A cursor's snapshot is dropped before it writes, so a write doesn't copy the list.
+#[test]
+fn a_cursors_write_doesnt_copy_the_list() {
+    thread_local! { static CLONES: Cell<u32> = const { Cell::new(0) }; }
+    struct Counted;
+    impl Clone for Counted {
+        fn clone(&self) -> Counted {
+            CLONES.with(|clones| clones.set(clones.get() + 1));
+            Counted
+        }
+    }
+    let list = mutable_state_list_from([Counted, Counted, Counted]);
+    let mut iterator = list.list_iterator(0);
+    iterator.add(Counted);
+    iterator.add(Counted);
+    assert_eq!(CLONES.with(Cell::get), 0);
+    assert_eq!(list.len(), 5);
+}
+
+/// A cursor iterates what the list was when it was made, as Kotlin's `toList()`.
+#[test]
+fn a_cursors_size_is_no_read_of_the_list() {
+    let list = mutable_state_list_from([0, 1]);
+    let mut iterator = list.list_iterator(0);
+    let sub_list = list.sub_list(0..1);
+    let mut sub_iterator = sub_list.list_iterator(0);
+    let reads = Rc::new(Cell::new(0));
+    let counted = reads.clone();
+    Snapshot::observe(Some(Rc::new(move |_| counted.set(counted.get() + 1))), None, || {
+        assert!(iterator.has_next());
+        assert_eq!(sub_list.len(), 1);
+        assert!(!sub_list.is_empty());
+        assert!(sub_iterator.has_next());
+    });
+    assert_eq!(reads.get(), 0);
+    assert_eq!(iterator.next(), Some(0));
+    assert_eq!(sub_iterator.next(), Some(0));
+}
+
+/// A sublist's size and an empty sublist's `clear` don't validate, as Compose's.
+#[test]
+fn a_sublists_size_and_an_empty_clear_dont_validate() {
+    let list = mutable_state_list_from([0, 1, 2]);
+    let (sub_list, empty) = (list.sub_list(0..2), list.sub_list(1..1));
+    list.push(3);
+    assert_eq!(sub_list.len(), 2);
+    assert!(!sub_list.is_empty());
+    empty.clear();
+}
+
+// Compose: compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/snapshots/SnapshotStateList.kt, SubList.removeAll
+#[test]
+fn a_sublist_removes_one_occurrence_per_value_given() {
+    let list = mutable_state_list_from([1, 1, 2]);
+    let sub_list = list.sub_list(0..3);
+    assert!(sub_list.remove_all(&[1]));
+    assert_eq!(sub_list.to_vec(), [1, 2]);
+    assert_eq!(items(*list), [1, 2]);
+}

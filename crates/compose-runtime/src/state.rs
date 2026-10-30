@@ -75,6 +75,9 @@ struct CellEntry {
     in_global_modified: bool,
     /// A derived state, queued for the next send to validate.
     in_derived_queue: bool,
+    /// The walk from what changed through the derived states reading it that last reached this
+    /// derived state: each is visited once.
+    walked: u32,
     created_at: &'static Location<'static>,
     /// The generation and creation site of the cell last freed here, so a stale handle still
     /// names its creation site after the slot is reused (rule R3).
@@ -127,6 +130,7 @@ impl Cells {
                 pending: false,
                 in_global_modified: false,
                 in_derived_queue: false,
+                walked: 0,
                 created_at,
                 freed: (0, created_at),
             });
@@ -407,16 +411,10 @@ pub(crate) fn read_if_valid(
     }
 }
 
-/// Registers a read of derived state `id`, brought up to date; returns whether read observers
-/// heard it.
-pub(crate) fn register_read_of(id: StateId, at: &'static Location<'static>) -> bool {
-    match with_runtime(|runtime| read_cell_in(runtime, id, at)) {
-        Read::Cell(_) => false,
-        Read::Observed(_) => {
-            crate::snapshots::notify_read(id);
-            true
-        }
-        Read::Stale(error) => stale(error, at),
+/// Registers a read of derived state `id`, brought up to date. Read observers heard it already.
+pub(crate) fn register_read_of(id: StateId, at: &'static Location<'static>) {
+    if let Read::Stale(error) = with_runtime(|runtime| read_cell_in(runtime, id, at)) {
+        stale(error, at)
     }
 }
 
@@ -430,15 +428,29 @@ pub(crate) fn current_version(id: StateId) -> Option<u32> {
     cell.current_version()
 }
 
-/// Tells the read observers what state object `id` read, if it's a derived state.
-pub(crate) fn notify_dependencies(id: StateId) {
+/// Whether dependency `id` still has version `seen`: a freed one can't have changed.
+pub(crate) fn dependency_unchanged(id: StateId, seen: u32) -> bool {
+    let cell = try_with_runtime(|runtime| match runtime.cells.entry(id) {
+        Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) => Some(cell.clone()),
+        _ => None,
+    })
+    .flatten();
+    match cell {
+        // Being written (an `edit` reading this derived state): not as it was seen.
+        Some(cell) => cell.current_version() == Some(seen),
+        None => true,
+    }
+}
+
+/// Adds what state object `id` read, if it's a derived state, each once.
+pub(crate) fn collect_dependencies(id: StateId, into: &mut Vec<StateId>) {
     let cell = try_with_runtime(|runtime| match runtime.cells.entry(id) {
         Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) => Some(cell.clone()),
         _ => None,
     })
     .flatten();
     if let Some(cell) = cell {
-        cell.notify_dependencies();
+        cell.collect_dependencies(into);
     }
 }
 
@@ -485,19 +497,32 @@ fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'stat
     };
     // `without_read_observation` stops what started before it from recording reads.
     match *observing {
-        Some(observing) if observing.exclusive || scope.is_none() => {
-            if snapshots.observes_at(observing.depth)
-                && register_observed_read(entry, observers, observing)
-                && observing.exclusive
+        Some(observing) => {
+            // An observation started in a calculation adds to it, as Compose merges observers.
+            let calculation =
+                if observing.exclusive { None } else { snapshots.observing_calculation() };
+            if observing.exclusive || scope.is_none() || calculation.is_some() {
+                if snapshots.observes_at(observing.depth)
+                    && register_observed_read(entry, observers, observing)
+                    && observing.exclusive
+                {
+                    // A derived state's calculation: what it read, this once, is a dependency.
+                    snapshots.record_dependency(id);
+                }
+            } else if snapshots.composition_reads() {
+                register_read(entry, scopes, scope)
+            }
+            if let Some(calculation) = calculation
+                && snapshots.observes_at(calculation.depth)
+                && register_observed_read(entry, observers, calculation)
             {
-                // A derived state's calculation: what it read, this once, is a dependency.
                 snapshots.record_dependency(id);
             }
         }
-        _ if !scope.is_none() && snapshots.composition_reads() => {
+        None if !scope.is_none() && snapshots.composition_reads() => {
             register_read(entry, scopes, scope)
         }
-        _ => {}
+        None => {}
     }
     let cell = entry.state();
     if snapshots.reads_observed() { Read::Observed(cell) } else { Read::Cell(cell) }
@@ -582,11 +607,7 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
                 return false;
             }
             match observers.dirty_cell(read) {
-                Some(cell) => {
-                    if !derived.contains(&cell) {
-                        derived.push(cell);
-                    }
-                }
+                Some(cell) => derived.push(cell),
                 None => {
                     if let Some(notify) = observers.invalidate(read) {
                         frame_requests.push(notify);
@@ -596,11 +617,15 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
             true
         });
     }
+    let walk = snapshots.walk();
     let mut next = 0;
     while next < derived.len() {
         let cell = derived[next];
         next += 1;
         let Ok(entry) = cells.entry(cell) else { continue };
+        if std::mem::replace(&mut entry.walked, walk) == walk {
+            continue;
+        }
         entry.readers.retain(|reader| {
             if !scopes.is_current(reader.scope, reader.epoch) {
                 return false;
@@ -621,11 +646,7 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
                 continue;
             }
             match observers.dirty_cell(read) {
-                Some(reading) => {
-                    if !derived.contains(&reading) {
-                        derived.push(reading);
-                    }
-                }
+                Some(reading) => derived.push(reading),
                 None => observed = true,
             }
         }

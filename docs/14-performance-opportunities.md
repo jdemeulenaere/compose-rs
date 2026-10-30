@@ -885,6 +885,8 @@ Exact or chunked growth of the groups and the arena would save about 1.7 MB of a
 
 ## Runtime core (headless)
 
+Derived states on records (D759, D763, D764), against the marks at the write they replaced: a valid read +6 ns (5.6 → 11.1 ns), a read after an unrelated write +17 ns (15.4 → 32.4 ns), a recomputation +45 to +65 ns (104 → 150 to 168 ns, with D763's `Rc`s), for a read of plain state and a write that no longer check for them (5.95 → 5.15 ns, 10.5 → 9.95 ns). A write sent to 20,000 derived states of one state takes 150 µs (D767).
+
 **Composing a big screen had a quadratic scan (#5).** (Only the 200-post screen was measured, not the scaling.)
 - Every layout node reads `LOCAL_LAYOUT_DIRECTION`, so that local's state cell gathers thousands of readers.
   - Each new read searched all of them (`register_read`, crates/compose-runtime/src/state.rs): 23 % of the big screen's first frame.

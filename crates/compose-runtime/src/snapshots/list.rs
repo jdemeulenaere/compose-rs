@@ -189,7 +189,9 @@ impl<T: 'static> SnapshotStateList<T> {
     pub fn list_iterator(&self, index: usize) -> StateListIterator<T> {
         let len = self.len();
         assert!(index <= len, "list_iterator at {index} of a list of {len} elements");
-        StateListIterator { list: self.sub_list(0..len), index, last: None, writes: true }
+        let snapshot = Some(self.to_list());
+        let cursor = Cursor::List { list: *self, snapshot, structural: self.structural() };
+        StateListIterator { cursor, index, last: None }
     }
 
     /// Writes the list; `structural` if its length or order changes.
@@ -293,23 +295,34 @@ impl<T: 'static> SnapshotStateList<T> {
         }
     }
 
-    /// Replaces the element at `index`, returning the old one, as `set`. Writing the `same` value
-    /// (by [`ComposeArg`]: an `Rc` by pointer, a small value by value) writes nothing. Panics if
-    /// it's out of bounds.
+    /// Replaces the element at `index`, returning the old one, as `set`. An equal value writes
+    /// nothing, as Compose's `newList == oldList`, here for the one element. Panics if it's out of
+    /// bounds.
     #[track_caller]
     pub fn set(&self, index: usize, value: T) -> T
     where
-        T: Clone + ComposeArg,
+        T: Clone + PartialEq,
     {
         let same = self.current(|list| {
             let len = list.len();
             let current =
                 list.get(index).unwrap_or_else(|| panic!("set at {index} in a list of {len}"));
-            current.same(&value).then(|| current.clone())
+            (*current == value).then(|| current.clone())
         });
-        if let Some(current) = same {
-            return current;
+        match same {
+            Some(current) => current,
+            None => self.write(false, |list| std::mem::replace(&mut list[index], value)),
         }
+    }
+
+    /// Like [`set`](Self::set), for values that can't be compared: always a write.
+    #[track_caller]
+    pub fn set_always(&self, index: usize, value: T) -> T
+    where
+        T: Clone,
+    {
+        let len = self.current(Vec::len);
+        assert!(index < len, "set at {index} in a list of {len} elements");
         self.write(false, |list| std::mem::replace(&mut list[index], value))
     }
 
@@ -513,14 +526,13 @@ impl<T: 'static> StateSubList<T> {
         self.list.with(|list| f(&list[offset..offset + size]))
     }
 
-    #[track_caller]
+    /// Its size, as it knows it: no read of the list, as Compose's.
     pub fn len(&self) -> usize {
-        self.with(<[T]>::len)
+        self.size.get()
     }
 
-    #[track_caller]
     pub fn is_empty(&self) -> bool {
-        self.with(<[T]>::is_empty)
+        self.size.get() == 0
     }
 
     #[track_caller]
@@ -586,6 +598,7 @@ impl<T: 'static> StateSubList<T> {
     where
         T: Clone,
     {
+        self.check();
         let size = self.len();
         assert!(index <= size, "insert at {index} in a sublist of {size} elements");
         self.list.insert(self.offset + index, value);
@@ -605,6 +618,7 @@ impl<T: 'static> StateSubList<T> {
     where
         T: Clone,
     {
+        self.check();
         let size = self.len();
         assert!(index <= size, "insert_all at {index} in a sublist of {size} elements");
         let items: Vec<T> = items.into_iter().collect();
@@ -619,6 +633,7 @@ impl<T: 'static> StateSubList<T> {
     where
         T: Clone,
     {
+        self.check();
         let size = self.len();
         assert!(index < size, "remove at {index} in a sublist of {size} elements");
         let value = self.list.remove(self.offset + index);
@@ -648,12 +663,15 @@ impl<T: 'static> StateSubList<T> {
     where
         T: Clone,
     {
-        let kept: Vec<bool> = self.with(|list| list.iter().map(&mut keep).collect());
+        self.check();
+        let (offset, size) = (self.offset, self.len());
+        let kept: Vec<bool> =
+            self.list.current(|list| list[offset..offset + size].iter().map(&mut keep).collect());
         let left = kept.iter().filter(|&&kept| kept).count();
         if left == kept.len() {
             return false;
         }
-        let (offset, end) = (self.offset, self.offset + kept.len());
+        let end = offset + kept.len();
         let mut index = 0;
         self.list.edit(|list| {
             list.retain(|_| {
@@ -666,12 +684,18 @@ impl<T: 'static> StateSubList<T> {
         true
     }
 
+    /// Removes one occurrence per element of `values`, as Compose's `SubList.removeAll` (unlike
+    /// the list's, which removes them all). Returns whether any went.
     #[track_caller]
     pub fn remove_all(&self, values: &[T]) -> bool
     where
         T: Clone + PartialEq,
     {
-        self.retain(|item| !values.contains(item))
+        let mut removed = false;
+        for value in values {
+            removed |= self.remove_item(value);
+        }
+        removed
     }
 
     #[track_caller]
@@ -682,11 +706,13 @@ impl<T: 'static> StateSubList<T> {
         self.retain(|item| values.contains(item))
     }
 
+    /// Replaces the element at `index`: an equal value writes nothing.
     #[track_caller]
     pub fn set(&self, index: usize, value: T) -> T
     where
-        T: Clone + ComposeArg,
+        T: Clone + PartialEq,
     {
+        self.check();
         let size = self.len();
         assert!(index < size, "set at {index} in a sublist of {size} elements");
         let old = self.list.set(self.offset + index, value);
@@ -694,13 +720,31 @@ impl<T: 'static> StateSubList<T> {
         old
     }
 
-    /// Removes the view's elements from the list.
+    /// Like [`set`](Self::set), for values that can't be compared: always a write.
+    #[track_caller]
+    pub fn set_always(&self, index: usize, value: T) -> T
+    where
+        T: Clone,
+    {
+        self.check();
+        let size = self.len();
+        assert!(index < size, "set at {index} in a sublist of {size} elements");
+        let old = self.list.set_always(self.offset + index, value);
+        self.structural.set(self.list.structural());
+        old
+    }
+
+    /// Removes the view's elements from the list. Empty, it does nothing, not even validating.
     #[track_caller]
     pub fn clear(&self)
     where
         T: Clone,
     {
         let size = self.len();
+        if size == 0 {
+            return;
+        }
+        self.check();
         self.list.remove_range(self.offset..self.offset + size);
         self.changed(0);
     }
@@ -708,6 +752,7 @@ impl<T: 'static> StateSubList<T> {
     /// A view of `range` of this view: of the same list, as `subList`.
     #[track_caller]
     pub fn sub_list(&self, range: std::ops::Range<usize>) -> StateSubList<T> {
+        self.check();
         let size = self.len();
         assert!(
             range.start <= range.end && range.end <= size,
@@ -726,7 +771,8 @@ impl<T: 'static> StateSubList<T> {
     pub fn list_iterator(&self, index: usize) -> StateListIterator<T> {
         let size = self.len();
         assert!(index <= size, "list_iterator at {index} of a sublist of {size} elements");
-        StateListIterator { list: self.sub_list(0..size), index, last: None, writes: false }
+        let cursor = Cursor::Sub(self.sub_list(0..size));
+        StateListIterator { cursor, index, last: None }
     }
 }
 
@@ -734,12 +780,65 @@ impl<T: 'static> StateSubList<T> {
 /// whole list, sets, adds and removes where it is. A structural change other than through it makes
 /// it panic.
 pub struct StateListIterator<T: 'static> {
-    list: StateSubList<T>,
+    cursor: Cursor<T>,
     index: usize,
     /// What the last `next` or `previous` returned, which `set` and `remove` act on.
     last: Option<usize>,
-    /// A whole list's: a sublist's cursor can't write, as Compose's.
-    writes: bool,
+}
+
+enum Cursor<T: 'static> {
+    /// A whole list's: over what `to_list` gave, as Kotlin's `stateList.toList()`, dropped before
+    /// a write so that the write doesn't copy.
+    List { list: SnapshotStateList<T>, snapshot: Option<ImmutableList<T>>, structural: u32 },
+    /// A sublist's, which only reads.
+    Sub(StateSubList<T>),
+}
+
+impl<T: 'static> Cursor<T> {
+    /// Its element at `index`, `None` past the end.
+    #[track_caller]
+    fn element(&self, index: usize) -> Option<T>
+    where
+        T: Clone,
+    {
+        match self {
+            Cursor::List { list, snapshot, structural } => {
+                assert!(
+                    *structural == list.structural(),
+                    "compose-runtime: an iterator of a SnapshotStateList used after the list \
+                     changed structurally (ConcurrentModification)"
+                );
+                snapshot.as_ref().and_then(|snapshot| snapshot.get(index).cloned())
+            }
+            Cursor::Sub(list) => list.get(index),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Cursor::List { snapshot, .. } => snapshot.as_ref().map_or(0, |snapshot| snapshot.len()),
+            Cursor::Sub(list) => list.len(),
+        }
+    }
+
+    /// Runs a write of the whole list (a sublist's panics): the snapshot dropped before it, so it
+    /// doesn't copy, and taken again after.
+    #[track_caller]
+    fn write<R>(&mut self, f: impl FnOnce(SnapshotStateList<T>) -> R) -> R {
+        let Cursor::List { list, snapshot, structural } = self else {
+            panic!("Cannot modify a state list through an iterator");
+        };
+        assert!(
+            *structural == list.structural(),
+            "compose-runtime: an iterator of a SnapshotStateList used after the list changed \
+             structurally (ConcurrentModification)"
+        );
+        *snapshot = None;
+        let result = f(*list);
+        *snapshot = Some(list.to_list());
+        *structural = list.structural();
+        result
+    }
 }
 
 impl<T: Clone + 'static> Iterator for StateListIterator<T> {
@@ -747,7 +846,7 @@ impl<T: Clone + 'static> Iterator for StateListIterator<T> {
 
     #[track_caller]
     fn next(&mut self) -> Option<T> {
-        let value = self.list.get(self.index)?;
+        let value = self.cursor.element(self.index)?;
         self.last = Some(self.index);
         self.index += 1;
         Some(value)
@@ -755,9 +854,9 @@ impl<T: Clone + 'static> Iterator for StateListIterator<T> {
 }
 
 impl<T: 'static> StateListIterator<T> {
-    #[track_caller]
+    /// Whether there's a next element, as it knows it: no read of the list.
     pub fn has_next(&self) -> bool {
-        self.index < self.list.len()
+        self.index < self.cursor.len()
     }
 
     pub fn has_previous(&self) -> bool {
@@ -780,27 +879,35 @@ impl<T: 'static> StateListIterator<T> {
         T: Clone,
     {
         let index = self.index.checked_sub(1)?;
-        let value = self.list.get(index)?;
+        let value = self.cursor.element(index)?;
         self.index = index;
         self.last = Some(index);
         Some(value)
     }
 
-    #[track_caller]
-    fn check_writes(&self) {
-        assert!(self.writes, "Cannot modify a state list through an iterator");
-    }
-
     /// Replaces what the last `next` or `previous` returned, as `set`. Panics if nothing was, or
-    /// `add` or `remove` came since.
+    /// `add` or `remove` came since. An equal value writes nothing.
     #[track_caller]
     pub fn set(&mut self, value: T)
     where
-        T: Clone + ComposeArg,
+        T: Clone + PartialEq,
     {
-        self.check_writes();
-        let index = self.last.expect("set before next or previous");
-        self.list.set(index, value);
+        let last = self.last;
+        self.cursor.write(|list| {
+            list.set(last.expect("set before next or previous"), value);
+        });
+    }
+
+    /// Like [`set`](Self::set), for values that can't be compared: always a write.
+    #[track_caller]
+    pub fn set_always(&mut self, value: T)
+    where
+        T: Clone,
+    {
+        let last = self.last;
+        self.cursor.write(|list| {
+            list.set_always(last.expect("set before next or previous"), value);
+        });
     }
 
     /// Adds `value` before the cursor, moving past it, as `add`.
@@ -809,8 +916,8 @@ impl<T: 'static> StateListIterator<T> {
     where
         T: Clone,
     {
-        self.check_writes();
-        self.list.insert(self.index, value);
+        let index = self.index;
+        self.cursor.write(|list| list.insert(index, value));
         self.index += 1;
         self.last = None;
     }
@@ -822,9 +929,13 @@ impl<T: 'static> StateListIterator<T> {
     where
         T: Clone,
     {
-        self.check_writes();
-        let index = self.last.take().expect("remove before next or previous");
-        self.list.remove(index);
+        let last = self.last;
+        let index = self.cursor.write(|list| {
+            let index = last.expect("remove before next or previous");
+            list.remove(index);
+            index
+        });
+        self.last = None;
         self.index = index;
     }
 }
