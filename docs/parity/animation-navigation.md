@@ -1,6 +1,6 @@
 # Parity ledger: animation and navigation
 
-The inventory of Compose's animation and navigation tests and public API against compose-rs's `compose-animation` and `compose-navigation`, for the agents porting them. Read-only survey; nothing here is implemented yet.
+The inventory of Compose's animation and navigation tests and public API against compose-rs's `compose-animation` and `compose-navigation`, for the agents porting them.
 
 ## Scope
 
@@ -9,11 +9,11 @@ The inventory of Compose's animation and navigation tests and public API against
   - `compose/animation/animation-core` (Animatable, `animate*AsState`, Transition, specs, easing, converters, decay, infinite transitions);
   - `compose/animation/animation` (AnimatedVisibility, AnimatedContent, Crossfade, `animateContentSize`, enter/exit transitions, shared transitions, `animateBounds`, spline decay);
   - `compose/animation/animation-graphics` (animated vector drawables).
-- **Navigation:** both libraries exist in the checkout:
-  - Navigation Compose: `navigation/navigation-compose`, on top of `navigation-runtime`'s `NavController`;
+- **Navigation:** both libraries exist in the checkout, and **Navigation 3 is the one in scope** (D704, the user's decision):
+  - Navigation Compose: `navigation/navigation-compose`, on top of `navigation-runtime`'s `NavController`: inventoried below, all `n/a: replaced by Navigation 3 (D704)`;
   - Navigation 3: `navigation3/navigation3-runtime` and `navigation3/navigation3-ui`.
 
-  **compose-rs models Navigation Compose**: `NavController`, `NavHost`, `NavBackStackEntry`, `NavOptions`, `remember_nav_controller`, `pop_up_to`, `launch_single_top` (D291). Its destinations are values of the app's own type, though, an enum `match`ed in `NavHost`, with no routes or graph. That is closer to Navigation 3's data model, where the back stack is a list of keys and `entryProvider` maps them to content. So Navigation 3 is listed in full, as features compose-rs would have to choose to adopt (see [navigation3](#navigation3)).
+  **`crates/compose-navigation` stays as it is until Navigation 3 replaces it.** It's still the Navigation Compose model of D291 (`NavController`, `NavHost`, `NavBackStackEntry`, `NavOptions`, `remember_nav_controller`), with destinations that are values of the app's own type `match`ed in `NavHost`. It takes no new features: D704 replaces it rather than keeping both, so the work goes to Navigation 3 (see [navigation3](#navigation3)), which starts once the runtime's state collections land (S3 of the snapshot work).
 - **Test source sets:** all of them: `commonTest`, `androidHostTest`, `androidDeviceTest`. Helper files with no `@Test` are left out of the table (9 of them: `AnimationTestUtils.kt`, the 4 `IgnoreAndroidHostTestTarget*.kt`, the 2 `TestUtils.kt`, `TestNestedTransitionScenes.kt`, `TestDualPaneScenes.kt`). Counts are `grep -cE '^\s*@Test\b'` per file. `SharedTransitionTest.kt` has 71 `@Test` lines for 69 named methods.
 - **API:** each module's `api/current.txt`. `restricted_current.txt` was used only to tell what isn't public. Experimental means an `@Experimental*` opt-in annotation on the declaration. At this tip, almost nothing in animation is experimental:
   - `ArcAnimationSpec` (`@ExperimentalAnimationSpecApi`);
@@ -31,12 +31,12 @@ The inventory of Compose's animation and navigation tests and public API against
 
 | Status | Files | @Test |
 |---|---|---|
-| `covered` | 1 | 1 |
+| `covered` | 0 | 0 |
 | `ported` | 29 | 236 |
 | `port` | 0 | 0 |
-| `partial` | 9 | 127 |
-| `feature:<name>` | 54 | 648 |
-| `n/a` | 2 | 9 |
+| `partial` | 6 | 59 |
+| `feature:<name>` | 50 | 598 |
+| `n/a` | 10 | 128 |
 
 By module:
 
@@ -45,7 +45,7 @@ By module:
 | animation-core | 30 | 212 | 0 | 22 / 157 | 0 | 3 / 19 | 5 / 36 | 0 |
 | animation | 15 | 238 | 0 | 7 / 79 | 0 | 3 / 40 | 5 / 119 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
-| navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
+| navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
 | navigation3-ui | 15 | 121 | 0 | 0 | 0 | 0 | 15 / 121 | 0 |
 
@@ -57,26 +57,20 @@ By module:
 | nav3-ui | 15 | 121 |
 | shared-transition | 2 | 86 |
 | nav3-runtime | 8 | 79 |
-| nav-graphs | 1 | 33 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
 | arc-animation | 2 | 14 |
 | path-easing | 1 | 12 |
 | keyframes-with-spline | 2 | 10 |
-| nav-dialog-destinations | 1 | 10 |
 | nav3-results | 4 | 10 |
 | captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
-| nav-transitions | 1 | 5 |
-| predictive-back | 1 | 2 |
 
-Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
+Three parts:
 
-- 1 file is `covered`, 7 are `port` and 13 are `partial` (198 tests), so most of the animation and Navigation Compose basics are portable now;
-- 36 files (390 tests) are blocked on features;
-- 2 files (5 tests) are `n/a`.
-
-The partial files' notes count about 60 tests portable today.
+- **Animation** (50 files, 472 tests): 29 files `ported` (236 tests), 6 `partial` (59), 15 waiting on features (177), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the remaining specs (keyframes-with-spline, path-easing, arc-animation), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
+- **Navigation 3** (36 files, 428 tests): 35 files waiting on its four features (421 tests), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3. Predictive back is one of its dependencies.
+- **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
 ## Test files
 
@@ -142,15 +136,15 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 48 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorTest.kt` | 10 | object animators, keyframes, sets, path data morphing, delays, repeats | `feature:animated-image-vector` |  |
 | 49 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/compat/XmlAnimatedVectorParserTest.kt` | 1 | parsing an animated-vector XML | `feature:animated-image-vector` | needs an XML parser; compose-rs parses no vector XML today |
 | 50 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/compat/XmlAnimatorParserTest.kt` | 4 | parsing objectAnimator/set/propertyValuesHolder XML | `feature:animated-image-vector` |  |
-| 51 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/ComposeNavigatorTest.kt` | 1 | navigating and popping updates the navigator's back stack | covered | `navigation.rs` `navigate_shows_the_destination_and_pop_goes_back` checks the same stack changes (there's no Navigator layer) |
-| 52 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/DialogNavigatorTest.kt` | 10 | dialog destinations: shown, dismissed on pop, nested NavHost, transition completion order | `feature:nav-dialog-destinations` |  |
-| 53 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavBackStackEntryProviderTest.kt` | 5 | an entry provides ViewModelStore/Lifecycle/SavedStateRegistry owners; saveable values saved, plain ones not | partial | the 2 saveable tests are covered (`navigation.rs` `an_entry_keeps_its_state_while_on_the_stack`, `the_back_stack_and_its_states_survive_the_process`); 3 owner tests need nav-entry-owners |
-| 54 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavGraphBuilderTest.kt` | 33 | graph builder: composable/dialog/navigation with routes, KClass and objects, nested graphs, default args, deep links | `feature:nav-graphs` | 1 portable now (current entry after navigate); ~14 are n/a (string routes, `typeMap`/`NavType` arguments, deep links: compose-rs destinations are typed values); nested-graph ones need nav-graphs, dialog ones nav-dialog-destinations |
-| 55 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostControllerTest.kt` | 27 | `rememberNavController`, current entry, navigate/pop, singleTop, KClass routes with args, dialogs, getBackStackEntry | partial | ~6 covered (`navigation.rs`: navigate/pop, pop_up_to, single top, current entry); singleTop with other arguments is a documented difference (D291); getBackStackEntry (3) needs nav-controller-extras; dialog KClass (6) nav-dialog-destinations; Bundle/SavedStateHandle argument tests (~10) n/a |
-| 56 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostPredictiveBackTest.kt` | 2 | NavHost animations driven by a predictive back gesture; disabling in the same frame | `feature:predictive-back` |  |
-| 57 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostPreviewTest.kt` | 2 | NavHost renders in an Android Studio preview (no lifecycle owner) | n/a: Android Studio preview (`LocalInspectionMode`), no analogue |  |
-| 58 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostScreenShotTest.kt` | 5 | z-order of entering/leaving entries, predictive back frames, custom transitions, size transform (screenshots) | `feature:nav-transitions` | z-order can be asserted on the display list instead of goldens; predictive ones need predictive-back |
-| 59 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostTest.kt` | 36 | NavHost: navigate, pop, state saving/restoring, dialogs, ViewModels, graphs, animations, lifecycles, nested hosts, back handlers | partial | ~9 covered (`navigation.rs`, `review.rs`: navigate, pop, saveable state kept/cleared, process death, back handler order, fade); ~5 portable now (navigate outside a state change, same controller after disposing the host, nested host back, nested host restore, back interrupting the animation); the rest need nav-entry-owners (lifecycle, ViewModel: ~10), nav-graphs (7), nav-dialog-destinations (2), nav-transitions; the deep link test is n/a |
+| 51 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/ComposeNavigatorTest.kt` | 1 | navigating and popping updates the navigator's back stack | n/a: replaced by Navigation 3 (D704) | `navigation.rs` still checks the same stack changes of the model that stays until it's replaced |
+| 52 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/DialogNavigatorTest.kt` | 10 | dialog destinations: shown, dismissed on pop, nested NavHost, transition completion order | n/a: replaced by Navigation 3 (D704) | `NavDisplayTest` (dialogs), the scene tests and `NavDisplayLifecycleTest` take over |
+| 53 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavBackStackEntryProviderTest.kt` | 5 | an entry provides ViewModelStore/Lifecycle/SavedStateRegistry owners; saveable values saved, plain ones not | n/a: replaced by Navigation 3 (D704) | the entry decorators of nav3-runtime (`DecoratedNavEntriesTest`, per `contentKey`), with `lifecycle-viewmodel-navigation3` |
+| 54 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavGraphBuilderTest.kt` | 33 | graph builder: composable/dialog/navigation with routes, KClass and objects, nested graphs, default args, deep links | n/a: replaced by Navigation 3 (D704) | no graphs in Navigation 3: the back stack is the app's list of keys, `entryProvider` maps them |
+| 55 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostControllerTest.kt` | 27 | `rememberNavController`, current entry, navigate/pop, singleTop, KClass routes with args, dialogs, getBackStackEntry | n/a: replaced by Navigation 3 (D704) | the app owns the back stack: no controller, no `NavOptions` |
+| 56 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostPredictiveBackTest.kt` | 2 | NavHost animations driven by a predictive back gesture; disabling in the same frame | n/a: replaced by Navigation 3 (D704) | `NavDisplayPredictiveBackTest` takes over (`feature:nav3-ui`, also predictive-back) |
+| 57 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostPreviewTest.kt` | 2 | NavHost renders in an Android Studio preview (no lifecycle owner) | n/a: replaced by Navigation 3 (D704) | also Android Studio's preview (`LocalInspectionMode`), no analogue |
+| 58 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostScreenShotTest.kt` | 5 | z-order of entering/leaving entries, predictive back frames, custom transitions, size transform (screenshots) | n/a: replaced by Navigation 3 (D704) | `NavDisplayScreenshotTest` takes over |
+| 59 | `navigation/navigation-compose/src/androidDeviceTest/kotlin/androidx/navigation/compose/NavHostTest.kt` | 36 | NavHost: navigate, pop, state saving/restoring, dialogs, ViewModels, graphs, animations, lifecycles, nested hosts, back handlers | n/a: replaced by Navigation 3 (D704) | `NavDisplayTest`, `AnimatedTest` and `NavDisplayLifecycleTest` take over |
 | 60 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/DecoratedNavEntriesTest.kt` | 42 | `rememberDecoratedNavEntries`: decorators called once/in order, onPop, re-decoration, state per contentKey, multiple back stacks | `feature:nav3-runtime` |  |
 | 61 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/NavBackStackSerializerTest.kt` | 5 | `NavBackStack` kotlinx.serialization round trips | `feature:nav3-runtime` | adapt to `Saveable`, not serialization |
 | 62 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/NavEntryTest.kt` | 2 | `NavEntry.contentKey` for objects and data classes | `feature:nav3-runtime` |  |
@@ -234,7 +228,7 @@ Deprecated and left out:
 - `Modifier.animate_content_size()`/`animate_content_size_with(spec, alignment, finished_listener)`.
 - `DeferredAnimatedVisibility`, `DeferredAnimatedContent`, `MutableTransform`, `MutableContentTransform`, `TransformScope` (D828); `BoundsTransform`, `SharedTransitionDefaults`, `PlaceholderSize`, `ResizeMode`, `SharedContentConfig` (D829).
 
-**navigation:** see [Navigation Compose](#navigation-compose-androidxnavigationcompose-and-navcontroller).
+**navigation:** [Navigation Compose](#navigation-compose-androidxnavigationcompose-and-navcontroller), until [Navigation 3](#navigation-3) replaces it.
 
 ### animation-core (`androidx.compose.animation.core`)
 
@@ -313,7 +307,7 @@ Deprecated and left out:
 
 ### Navigation Compose (`androidx.navigation.compose`) and `NavController`
 
-What compose-rs has:
+`n/a: replaced by Navigation 3 (D704)`. `crates/compose-navigation` has what follows, and stays as it is until Navigation 3 replaces it; what it lacks of Navigation Compose (graphs, dialog destinations, entry owners, pop transitions, saved back stacks, deep links) isn't to be added to it.
 
 - `remember_nav_controller(start)`, `NavController`:
   - `navigate`, `navigate_with(NavOptions { pop_up_to, pop_up_to_inclusive, launch_single_top })`;
@@ -322,20 +316,9 @@ What compose-rs has:
 - `NavBackStackEntry { id, destination }`.
 - `NavHost!(controller, modifier, content_alignment, enter_transition, exit_transition, content)`: saveable state per entry, back pops.
 
-| API | compose-rs | Feature |
-|---|---|---|
-| `NavHost(…, enterTransition, exitTransition, popEnterTransition, popExitTransition, sizeTransform)` as functions of `AnimatedContentTransitionScope<NavBackStackEntry>`; per-destination transitions on `composable(…)`/`ComposeNavigatorDestinationBuilder`; `DefaultNavTransitions` (`fadeIn(tween(700))`/`fadeOut(tween(700))`, `popEnterTransition`, `popExitTransition`, `sizeTransform = null`) | fixed `EnterTransition`/`ExitTransition` values, the same both ways, `NONE` by default | nav-transitions |
-| `DefaultNavTransitions.predictivePopEnterTransition`/`predictivePopExitTransition`, predictive back seeking the NavHost's transition, `NavBackStackEntryInfo` (navigation events) | missing: back has no progress | predictive-back |
-| `NavHost(navController, startDestination, …) { composable<T>(); dialog<T>(); navigation<T>(startDestination) {} }`, `NavHost(navController, graph: NavGraph, …)`; `NavGraphBuilder.composable/dialog/navigation` (route strings, `KClass`, objects; `typeMap`, `deepLinks`, `arguments`) | a `match` on the app's enum takes the place of the builder (D291); no nested graphs | nav-graphs (routes, `typeMap`, `NavType` and `arguments`: n/a, since destinations are typed values) |
-| `dialog(…)` destinations, `DialogNavigator`, `DialogNavigator.Destination`, `DialogNavigatorDestinationBuilder`, `DialogHost` | missing | nav-dialog-destinations |
-| `NavBackStackEntry.lifecycle` and `visibleEntries`, `LocalOwnersProvider(entry, saveableStateHolder, content)`, the per-entry `ViewModelStoreOwner` and `SavedStateRegistryOwner`, `savedStateHandle` | missing: compose-rs has no lifecycle or ViewModel model | nav-entry-owners |
-| `NavController.navigateUp`, `popBackStack(route, inclusive, saveState)`, `clearBackStack`, `NavOptions.saveState`/`restoreState` (multiple back stacks), `getBackStackEntry(route)`; `launchSingleTop` replacing the arguments of an entry of the same route | missing; single top keeps the top only when `==` (documented) | nav-controller-extras |
-| `ComposeNavigator`, `ComposeNavigator.Destination`, `ComposeNavigatorDestinationBuilder`, `rememberNavController(vararg navigators)` | no navigator layer | n/a: the Navigator plug-in architecture has no analogue in a typed-destination design |
-| deep links (`NavDeepLink` into Activities, `handleDeepLink(Intent)`) | missing | n/a: Android intents |
-
 ### Navigation 3
 
-Navigation 3 is a second, newer Navigation library for Compose. compose-rs doesn't model it, but its data model (a list of typed keys the app owns, mapped to content) is closer to compose-rs's typed destinations than Navigation Compose's routes are. All of it is missing.
+What compose-rs is to model (D704): a list of typed keys the app owns, mapped to content, which fits its typed destinations. Nothing of it exists yet; it starts once the runtime's state collections land (S3), since `NavBackStack` is a snapshot-state list.
 
 **navigation3-runtime** (`androidx.navigation3.runtime`):
 
@@ -632,68 +615,30 @@ One entry per feature. Sizes:
 
 ### Navigation
 
-#### nav-transitions (M, not exp.)
-
-- **API:**
-  - `enter_transition`, `exit_transition`, `pop_enter_transition`, `pop_exit_transition` and `size_transform`, as functions of the change on `NavHost`;
-  - per-destination overrides (Rust shape: a function of `(from, to)`, since there is no graph builder);
-  - `DefaultNavTransitions` (700 ms fades);
-  - the z-order of a pop (the entry leaving stays on top).
-- **Behaviour to change:** the default should become Compose's 700 ms fade, a behaviour change from D291's none.
-- **Tests:** `NavHostScreenShotTest`, `NavHostTest.testNavHostAnimations`/`testNavHostAnimationsBackInterrupt`.
-- **Dependencies:** animated-content-scope.
-
 #### predictive-back (L, not exp.)
 
 - **API:**
   - back with progress, swipe edge and cancel: `PredictiveBackHandler` in activity-compose, `NavigationEventHandler` in the `navigationevent` library;
-  - NavHost seeking its transition by it: `predictive_pop_enter_transition`/`_exit_transition`, `NavBackStackEntryInfo`.
+  - `NavDisplay` seeking its transition by it: `predictivePopTransitionSpec`, `NavigationBackHandler`, `rememberNavigationEventState`, in nav3-ui.
 - **What it does:** on Android, the back gesture previews the screen underneath and commits or cancels.
-- **Tests:** `NavHostPredictiveBackTest`, `NavHostScreenShotTest` (3), `NavHostTest.testNavBackStackEntryInfoHistory`, and the predictive-back tests of navigation3-ui.
+- **Tests:** the `PredictiveBackHandler` tests of activity-compose where they're in the checkout, then the predictive-back tests of navigation3-ui (`NavDisplayPredictiveBackTest`, `NavDisplayInfoTest`, `NavigationBackHandlerTest`, `RememberNavigationEventStateTest`).
 - **Dependencies:**
-  - the ui/platform area: the Android host delivering `BackEvent` progress, and `BackHandler` growing a progress form. docs/11 notes there's no `PredictiveBackHandler`;
-  - seekable-transition, nav-transitions.
+  - the ui/platform area: the Android host delivering back progress, and `BackHandler` growing a progress form. docs/11 notes there's no `PredictiveBackHandler`;
+  - seekable-transition (done).
 
-#### nav-dialog-destinations (M, not exp.)
+#### Navigation Compose's features: n/a
 
-- **API:** dialog destinations shown in a `Dialog` over the current entry, popped on dismiss (`DialogNavigator`, `DialogHost`); Rust shape: a destination flag or a separate `dialog` arm.
-- **Tests:** `DialogNavigatorTest`, `NavHostTest` (2), `NavGraphBuilderTest` (dialog ones), `NavHostControllerTest` (6 dialog `KClass` ones, minus the argument checks).
-- **Dependencies:** compose-ui `Dialog` (present).
-
-#### nav-controller-extras (S–M, not exp.)
-
-- **API:** `navigate_up`, `get_back_stack_entry(dest)`, `clear_back_stack`, and `save_state`/`restore_state` in `NavOptions` and `pop_back_stack` (multiple back stacks for bottom navigation, whose entries keep their saveable state).
-- **Tests:** `NavHostControllerTest` (3), and the multiple-back-stack scenarios in `NavHostTest`.
-- **Dependencies:** none.
-
-#### nav-graphs (M, not exp.)
-
-- **API:**
-  - nested graphs: a destination grouping a sub-stack with its own start, popped and navigated to as a unit;
-  - changing the start destination;
-  - graph-scoped state.
-- **What it does:** a Rust shape would keep the `match` and add graph nodes to the destination type.
-- **Tests:** `NavGraphBuilderTest` (about 19 of 33; the route-string, `typeMap` and deep-link ones are n/a), `NavHostTest` (`setSameGraph*` (7), `testChangeStartDestination`).
-- **Dependencies:** none.
-
-#### nav-entry-owners (L, not exp.)
-
-- **API:**
-  - per-entry lifecycles (`CREATED`, `STARTED`, `RESUMED`, following transitions), `visible_entries`;
-  - a per-entry retained store (the `ViewModelStoreOwner` analogue, cleared on pop);
-  - a per-entry saved-state registry.
-- **Tests:** `NavBackStackEntryProviderTest` (3), `NavHostTest` (~10), `NavDisplayLifecycleTest`.
-- **Dependencies:** a lifecycle model in compose-rs: `compose-lifecycle` (D837).
+nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and nav-entry-owners were this ledger's features for extending `compose-navigation`. They're `n/a: replaced by Navigation 3 (D704)`: their behaviours come back as Navigation 3's, derived from its own tests, `NavDisplay`'s transition metadata and z-order (`AnimatedTest`, `NavDisplayScreenshotTest`), `DialogSceneStrategy` (`NavDisplayTest`), and entry lifecycles and view models through decorators (`NavDisplayLifecycleTest`, `lifecycle-viewmodel-navigation3`, on `compose-lifecycle`: D837, D838). The local branch `parked/nav-compose-extras`, not merged, is reference for a seekable transition's mechanism and its back-interrupt fix, not a source of behaviours.
 
 <a id="navigation3"></a>
-#### navigation3: four features (a decision for the user before any work)
+#### navigation3: four features (D704, after S3)
 
 - **nav3-runtime (L):** `NavEntry`, `entryProvider`, decorators and `rememberDecoratedNavEntries`, the saveable-state decorator, `NavKey`/`NavBackStack`/`rememberNavBackStack` over `Saveable`, metadata keys.
   - Tests: 8 runtime files (79 tests).
-  - Dependencies: none beyond what NavHost uses.
+  - Dependencies: the runtime's state collections (S3: `NavBackStack` is a snapshot-state list).
 - **nav3-ui (L):** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`.
   - Tests: 15 ui files (121 tests).
-  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (2 tests), nav-entry-owners (lifecycle test).
+  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (2 tests), the entry decorators over `compose-lifecycle` (lifecycle test).
 - **nav3-results (S):** `ResultEventBus`, `ResultEffect` and the decorator.
   - Tests: 4 files (10 tests).
   - Dependencies: nav3-runtime.
@@ -701,7 +646,7 @@ One entry per feature. Sizes:
   - Tests: 8 files (211 tests).
   - Dependencies: a URI type and a decoding trait (the analogue of kotlinx.serialization), and a platform path delivering links: on Android an `Intent`, which is n/a, or a desktop URL handler.
 
-Navigation 3 is a separate library from Navigation Compose. Adopting it would mean either replacing compose-navigation's model (D291) or offering both. Its back-stack-as-a-list design fits compose-rs's typed destinations well. That choice is the user's.
+Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting beside it: its crate's users move then, and what's left of D291's goes.
 
 ### Suggested order
 
@@ -717,19 +662,18 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 5. **transition-state (M–L).** Revisit D423: a single play-time loop.
 6. **animated-visibility-scope (M)**, then **animated-content-scope (M–L)** and **crossfade-extras (S)**.
 7. **The animation-core additions:** decay-animation (M), then suspend-animate (M) and motion-duration-scale (S–M).
-8. **The Navigation Compose basics:** nav-transitions (M), nav-controller-extras (S–M), nav-dialog-destinations (M).
-9. **seekable-transition (L)**, then **predictive-back (L)**, with the platform back-progress work.
-10. **The remaining specs:** keyframes-with-spline (M), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental).
+8. **seekable-transition (L)**.
+9. **The remaining specs:** keyframes-with-spline (M), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental).
+10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
-12. **After ui lookahead (and movable content) lands in its own area:**
+12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last or never. It replaces `compose-navigation`.
+13. **After ui lookahead (and movable content) lands in its own area:**
     - lookahead in animations (S–M);
     - animate-bounds (L);
     - shared-transition (XL);
     - lookahead-visual-debug (M, experimental).
-13. **captured-animated-visibility (M)**, after ui layer recording.
-14. **nav-graphs (M)** and **nav-entry-owners (L)**, after a lifecycle model.
+14. **captured-animated-visibility (M)**, after ui layer recording.
 15. **animated-image-vector (L)**, after a full `ImageVector`.
-16. **Navigation 3**, if the user chooses it: nav3-runtime, then nav3-ui, nav3-results, and nav3-deep-links last or never.
 
 ## Notes for the porting agents
 
@@ -754,7 +698,6 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 | `performTouchInput { swipe… }` | the touch injection scope (D903) |
 | recomposition counts (`TransitionTest.testRecompositionCountWhenPassingTransition`) | `recomposition_counts()` / `track_recompositions` |
 | `DetectLeaksAfterTestSuccess` | n/a |
-| `TestNavHostController`, `createNavController(context)` | `NavController::new(start)` (returns its owner) or `remember_nav_controller(start)` |
 | an exception from an interrupted `animateTo` | `AnimationResult { end_reason: AnimationEndReason::Interrupted, .. }` (D120) |
 | `assertEquals(expected, actual, delta)` over frames | assert per frame; specs evaluate as Compose's to the bit (D800), so exact comparisons hold where Compose's do |
 
@@ -790,8 +733,7 @@ Each item names the Compose test that would catch it, in the file's notes or lis
    - Caught by: `AnimatedContentTest.AnimatedContentWithKeysTest` and `AnimatedContentWithContentKey`. Write a rapid four-state test for the cap.
 8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804), and both run on a transition of the app's (`transition.AnimatedVisibility`, `transition.AnimatedContent`, D812); `AnimatedContent`'s content gets an `AnimatedContentScope` (D817). A transition remembered with a `SeekableTransitionState` is seeked (D821).
    - A task resumed by a frame continues within that frame, before its composition, where Compose dispatches it after: a frame callback that changes a transition's target sees the transition run a frame later than Compose's (D817; `AnimatedContentWithKeysTest`, `crossfadeTest_contentKey` wait a frame more).
-9. **`NavHost` has no default transition** (Compose fades for 700 ms) and never pops its start destination. `launch_single_top` compares with `==`, where Compose compares the route and replaces the arguments. All are documented in D291, but ported tests must expect compose-rs's behaviour or the decision must change.
-   - Caught by: `NavHostTest.testNavHostAnimations`, `NavHostControllerTest.testNavigateOptionSingleTopDifferentArguments`.
+9. *(Navigation Compose's differences, D291: `n/a` with its model, D704. What `NavDisplay` does by default comes from its own tip when Navigation 3 starts.)*
 10. **Keyframe times are `u32`.** Fixed: they're `i32`, and out-of-range keyframes are ignored as Compose's (`keyframe_animation.rs`).
     - Also: at the end, compose-rs's frame returns the target; Compose's *vectorized* spec returns a keyframe placed at the duration, while its `TargetBasedAnimation` returns the target. Compare at the matching level.
     - Caught by: `KeyframeAnimationTest.outOfRangeValues_withForcedInitialAndTarget`.
