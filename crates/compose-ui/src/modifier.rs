@@ -1174,6 +1174,12 @@ pub trait ModifierNode: Any {
     }
 
     /// `GlobalPositionAwareModifierNode` (`on_globally_positioned`).
+    fn as_unplaced_aware(
+        &mut self,
+    ) -> Option<&mut dyn crate::layout_callbacks::UnplacedAwareModifierNode> {
+        None
+    }
+
     fn as_global_position_aware(
         &mut self,
     ) -> Option<&mut dyn crate::layout_callbacks::GlobalPositionAwareModifierNode> {

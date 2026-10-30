@@ -240,6 +240,7 @@ pub use layout::{
 };
 pub use layout_callbacks::{
     GlobalPositionAwareModifierNode, LayoutAwareModifierNode, MeasuredSizeAwareModifierNode,
+    UnplacedAwareModifierNode,
 };
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{

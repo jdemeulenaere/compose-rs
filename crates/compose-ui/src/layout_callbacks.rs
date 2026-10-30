@@ -51,6 +51,13 @@ pub trait MeasuredSizeAwareModifierNode {
     fn on_remeasured(&mut self, size: IntSize, context: &mut NodeContext<'_>);
 }
 
+/// A node told it's no longer placed, as Compose's `UnplacedAwareModifierNode`: by its parent, or
+/// any above it, or as it's removed or deactivated, once for each time it was placed. After the
+/// layout that left it out, or before its `on_detach`.
+pub trait UnplacedAwareModifierNode {
+    fn on_unplaced(&mut self, context: &mut NodeContext<'_>);
+}
+
 /// A node told where it is after each layout, and each change of a graphics layer around it that
 /// moves it, as Compose's `GlobalPositionAwareModifierNode`. Called after the layout, outside
 /// any node's code.
@@ -252,6 +259,9 @@ impl UiTree {
             self.notify_placed();
         }
         let laid_out = mem::take(&mut self.laid_out_since_callbacks);
+        if laid_out && !self.unplaced_aware.is_empty() {
+            self.notify_unplaced();
+        }
         if !self.positioned.is_empty() && (laid_out || !self.layers_moved.is_empty()) {
             self.layout_nodes_told = true;
             let mut positioned = mem::take(&mut self.positioned);
@@ -560,6 +570,67 @@ impl UiTree {
                     );
                 });
             }
+        }
+        self.delegates_wait = waited;
+        self.sync_noted_delegates();
+    }
+
+    /// Those of `unplaced_aware` that were placed and aren't any more are told; those placed now,
+    /// noted. What's gone is forgotten.
+    fn notify_unplaced(&mut self) {
+        let mut index = 0;
+        while index < self.unplaced_aware.len() {
+            let (node, was) = self.unplaced_aware[index];
+            let Some(value) = self.get(node) else {
+                self.unplaced_aware.swap_remove(index);
+                continue;
+            };
+            let now = !value.deactivated && self.is_placed_in_root(node);
+            self.unplaced_aware[index].1 = now;
+            if was && !now {
+                self.layout_nodes_told = true;
+                self.tell_unplaced(node);
+            }
+            index += 1;
+        }
+    }
+
+    /// `node` is going (removed or deactivated): told, if it was placed.
+    pub(crate) fn tell_unplaced_going(&mut self, node: NodeId) {
+        if !self.get(node).is_some_and(|value| value.kinds.any(NodeKinds::UNPLACED)) {
+            return;
+        }
+        let Some(at) = self.unplaced_aware.iter().position(|(it, _)| *it == node) else { return };
+        if std::mem::replace(&mut self.unplaced_aware[at].1, false) {
+            self.tell_unplaced(node);
+        }
+    }
+
+    fn tell_unplaced(&mut self, node: NodeId) {
+        let waited = mem::replace(&mut self.delegates_wait, true);
+        for index in 0..self.node(node).chain.len() {
+            let Some(entry) = self.get(node).and_then(|value| value.chain.get(index)) else {
+                break;
+            };
+            if !entry.kinds.any(NodeKinds::UNPLACED) || entry.state & entry_state::ATTACHED == 0 {
+                continue;
+            }
+            let own = entry.own;
+            self.with_entry(node, index, |modifier_node, context| {
+                let _ = dispatch_with_context(
+                    modifier_node,
+                    own,
+                    NodeKinds::UNPLACED,
+                    false,
+                    context,
+                    &mut |modifier_node, context| {
+                        if let Some(aware) = modifier_node.as_unplaced_aware() {
+                            aware.on_unplaced(context);
+                        }
+                        ControlFlow::Continue(())
+                    },
+                );
+            });
         }
         self.delegates_wait = waited;
         self.sync_noted_delegates();
@@ -938,6 +1009,15 @@ impl UiTree {
         }
         let position = value.layers[0].offset;
         point + Offset::new(position.x as f32, position.y as f32)
+    }
+
+    /// Registers `node` as having nodes that hear of being no longer placed.
+    pub(crate) fn register_unplaced_aware(&mut self, node: NodeId) {
+        if !self.unplaced_aware.iter().any(|(it, _)| *it == node) {
+            let placed = self.is_placed_in_root(node);
+            self.unplaced_aware.push((node, placed));
+        }
+        self.laid_out_since_callbacks = true;
     }
 
     /// Registers `node` as having position-aware modifier nodes (from its chain refresh).

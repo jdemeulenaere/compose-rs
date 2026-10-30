@@ -429,6 +429,11 @@ impl UiTree {
     pub(crate) fn detach_subtree(&mut self, root: NodeId) {
         self.focus_subtree_detaching(root);
         let nodes = self.subtree(root);
+        if !self.unplaced_aware.is_empty() {
+            for &node in &nodes {
+                self.tell_unplaced_going(node);
+            }
+        }
         for &node in &nodes {
             self.for_custom_entries(node, entry_state::ATTACH_RAN, true, detach_with_delegates);
         }

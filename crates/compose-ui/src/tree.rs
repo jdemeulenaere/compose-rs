@@ -410,6 +410,9 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// The nodes with `UnplacedAwareModifierNode`s, and whether each was placed when last looked
+    /// at.
+    pub(crate) unplaced_aware: Vec<(NodeId, bool)>,
     /// Nodes whose graphics layers came or were updated since the last draw (`run_new_layers`).
     pub(crate) new_layers: Vec<NodeId>,
     /// Where the host's root is on the screen (`UiHost::set_window_origin`).
@@ -537,6 +540,7 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            unplaced_aware: Vec::new(),
             new_layers: Vec::new(),
             window_origin: Offset::ZERO,
             next_entry: 0,
@@ -1507,6 +1511,9 @@ impl UiTree {
         if positioned {
             self.register_positioned(node);
         }
+        if self.node(node).kinds.any(NodeKinds::UNPLACED) {
+            self.register_unplaced_aware(node);
+        }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
         // Those of layers gone: the rest measure again, whatever they were.
@@ -1930,6 +1937,8 @@ impl Applier for UiTree {
         }
         value.placed = false;
         value.subtree_needs_measure = false;
+        self.tell_unplaced_going(node);
+        let Some(value) = self.get_mut(node) else { return };
         // The outermost deactivated node: its parent lays out and draws without it.
         if let Some(parent) = value.parent
             && self.get(parent).is_some_and(|parent| !parent.deactivated)

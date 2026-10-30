@@ -704,6 +704,9 @@ impl UiTree {
             entry.kinds |= kinds | NodeKinds::DELEGATING;
             let after = entry.kinds;
             self.entry_kinds_changed(node, before, after);
+            if kinds.any(NodeKinds::UNPLACED) {
+                self.register_unplaced_aware(node);
+            }
         }
     }
 

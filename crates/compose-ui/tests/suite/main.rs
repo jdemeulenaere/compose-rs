@@ -56,6 +56,7 @@ mod text_style_attributes;
 mod text_style_values;
 mod text_unit;
 mod ui;
+mod unplaced_aware;
 mod velocity_data;
 mod velocity_tracker;
 mod word_boundary;

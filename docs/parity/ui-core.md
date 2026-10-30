@@ -17,10 +17,10 @@ What of Jetpack Compose's ui core compose-rs has, which of Compose's tests its o
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 3 | 11 |
-| `ported` | 31 | 322 |
+| `ported` | 32 | 325 |
 | `port` | 11 | 112 |
 | `partial` | 58 | 1,124 |
-| `feature:<name>` | 75 | 1,339 |
+| `feature:<name>` | 74 | 1,336 |
 | `n/a` | 57 | 257 |
 
 By module: `ui` 147 files (125 device, 22 host), `ui-graphics` 64, `ui-geometry` 7, `ui-unit` 14, `ui-util` 3.
@@ -112,7 +112,7 @@ Status in bold for the ones that need work now (`port`, `partial`, `covered`); `
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt` | 108 | `SubcomposeLayout`: slots, recomposition isolation, disposal, draw order, z-index, density, precompose/premeasure/dispose, paused precomposition, slot reuse policy, deactivation, nested, lookahead | `feature:subcompose-layout` | compose-rs's lazy lists and `BoxWithConstraints` stand in with composition between measure rounds (docs/11, "No subcomposition"). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TestRuleExecutesLayoutPassesWhenWaitingForIdleTest.kt` | 9 | `waitForIdle` runs measure/placement passes of animations (also through AndroidView and SubcomposeLayout) | **partial** | compose-test's `wait_for_idle` runs frames until idle (compose-test/src/lib.rs); port the measure/placement animation cases; AndroidView n/a; subcompose variants need feature:subcompose-layout. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TogglePlacementInLookaheadScopeTest.kt` | 4 | Toggling placement in and out within a LookaheadScope, reusable content | `feature:lookahead` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/UnplacedAwareModifierNodeTest.kt` | 3 | `UnplacedAwareModifierNode.onUnplaced` when not placed, removed, deactivated | `feature:placement-pass` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/UnplacedAwareModifierNodeTest.kt` | 3 | `UnplacedAwareModifierNode.onUnplaced` when not placed, removed, deactivated | **ported** | crates/compose-ui/tests/suite/unplaced_aware.rs (D1217). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/WindowInsetsRulersTest.kt` | 23 | `WindowInsetsRulers`: current/maximum, waterfall, display cutout, animations, dialogs, `innermostOf`, disabling | `feature:rulers` | Insets values come from the host (compose-rs has `PlatformWindowInsets`). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/CompositionLocalMapInjectionTest.kt` | 12 | Modifier nodes consuming composition locals in draw, layout and attach; notified of changes; skippable updates | **ported** | crates/compose-ui/tests/suite/node_locals.rs (the three that say what they read; "this not crashing" comes with them). The `SkippableUpdate` ones: n/a, `OldBoxSkippableUpdate` is about Compose's compiler. `LocalView`: n/a. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/ModifierLocalMultiLayoutNodeTest.kt` | 15 | Modifier locals across layout nodes: parent/grandparent, nearest, types, provider changes, moves | **ported** | crates/compose-ui/tests/suite/modifier_locals.rs. |
@@ -354,7 +354,6 @@ From each module's `api/current.txt` (public, non-deprecated; experimental inclu
 - **Has:** `Modifier.on_placed`, `LayoutAwareModifierNode` and `MeasuredSizeAwareModifierNode` (D1186, D1188), `CompositionLocalConsumerModifierNode` and `currentValueOf` (`is_composition_local_consumer`, `current_value_of` on `NodeContext`, `MeasureScope` and `DrawScope`, D1182), `TraversableNode` (`traverse_key`), `findNearestAncestor`, `traverseAncestors`, `traverseChildren`, `traverseDescendants`, `TraverseDescendantsAction` (on `NodeContext`, D1171), `DelegatingNode` as `Delegates` (`delegate`, `undelegate`, D1169), `ModifierNodeElement` (typed as Compose's: `type Node`, `create`, `update`, `same` for `equals`, `inspectable_properties` with `InspectorInfo`), `Modifier.Node.shouldAutoInvalidate` (`should_auto_invalidate`) and auto-invalidation by node kinds, `onAttach`, `onDetach`, `onReset`, `isAttached`, `coroutineScope`, `sideEffect` (`on_attach`, `on_detach`, `on_reset`, `NodeContext::is_attached`, `coroutine_scope`, `side_effect`; `on_release` compose-rs's), `DelegatableNode.onDensityChange`, `onLayoutDirectionChange`, `requireDensity`, `requireLayoutDirection`, the invalidations `invalidateDraw`, `invalidateMeasurement`, `invalidatePlacement`, `invalidateLayer`, `invalidateSemantics`, `invalidateParentData`, `invalidateSubtree`, `invalidateMeasurementForSubtree`, `invalidateDrawForSubtree` (on `NodeContext` and `NodeHandle`, D1153, D1154), `LayoutModifierNode.remeasureSync` (`NodeContext::remeasure_sync`, D1165), `DrawModifierNode.onMeasureResultChanged` (`on_measure_result_changed`, D1166), `ObserverModifierNode` and `observeReads` (`as_observer`, `NodeContext::observe_reads`, D1167), `ParentDataModifierNode` and `invalidateParentData` (`as_parent_data`, D1168), `LayoutModifierNode.measure`, `DrawModifierNode` (`draw`, `draw_after`, `draw_with_content`), `GlobalPositionAwareModifierNode`, `PointerInputModifierNode` and `SemanticsModifierNode` (other agents), and `ModifierNode::on_reset`/`on_detach`.
 - **Missing:**
   - `DrawModifierNode.dispatchDraw` isn't there: the tree dispatches to draw delegates (D1170); `RegistrationHandle`, `requireGraphicsContext` (**graphics-layer-object**), `LayoutModifierNode.updateLayerBlock` (**place-with-layer**), `invalidateRulers` (**rulers**); `invalidatePlacement` measures a node placing inside its measurement (D1209).
-  - `UnplacedAwareModifierNode`: **placement-pass**.
   - `findNearestBeyondBoundsLayoutAncestor`: **beyond-bounds-layout**. `dispatchOnScrollChanged`: foundation agent (scroll).
   - `ObservationTarget` (*experimental*, host API): **layout-info**.
   - Not to port: `Ref` (Kotlin), `RootForTest` (Android test host), `InteroperableComposeUiNode` (internal), `requireView`, `requestAutofill` (autofill agent), `TouchBoundsExpansion`/`DpTouchBoundsExpansion` and the pointer node's extras (input agent), `invalidateSemantics` (semantics agent).
@@ -489,7 +488,7 @@ One entry per feature, in the suggested order (below, after the entries). Sizes:
 - *Tests:* PlacementLayoutCoordinatesTest, RequireLayoutCoordinatesTest, PlacementScopeMotionFrameOfReferenceTest; completes OnGloballyPositionedTest, LayoutNodeTest.
 - *Depends on:* 3.13 (`PlacementScope.coordinates`); 3.18 for `get(alignmentLine)`. Foundation: popups' anchors, `onGloballyPositioned` users, lazy layouts' `withMotionFrameOfReferencePlacement`, staggered grid and pager (foundation gaps).
 
-**3.15 `on-placed`** — S to M. **Done but for `UnplacedAwareModifierNode`, with the placement pass** (step MN-11: D1186, D1188).
+**3.15 `on-placed`** — S to M. **Done** (step MN-11: D1186, D1188; `UnplacedAwareModifierNode`: D1217).
 - *API:* `Modifier.onPlaced`, `LayoutAwareModifierNode` (`onPlaced`, `onRemeasured`), `MeasuredSizeAwareModifierNode`, `UnplacedAwareModifierNode` (`onUnplaced`).
 - *Does:* callbacks when a node is placed (with its coordinates), measured, or no longer placed.
 - *Tests:* UnplacedAwareModifierNodeTest, PlacementReusableNodeTest; completes PlacedChildTest, OnSizeChangedTest.
