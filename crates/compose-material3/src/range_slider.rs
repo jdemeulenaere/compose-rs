@@ -12,7 +12,7 @@ use compose_ui::{
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode,
     ModifierNodeElement, MutableInteractionSource, Offset, PointerEvent, PointerEventPass,
     PointerEventType, PointerId, PointerInputModifierNode, Press, PressInteraction,
-    SemanticsConfiguration, SemanticsModifierNode, SizeSpec, UnitExt,
+    SemanticsConfiguration, SemanticsModifierNode, SizeSpec,
 };
 
 use crate::components::{increase_semantics_bounds, minimum_interactive_component_size};
@@ -806,6 +806,8 @@ struct RangePressDragNode {
     on_value_change: Callback<dyn Fn((f32, f32))>,
     on_value_change_finished: Option<Callback>,
     gesture: Gesture,
+    /// Other fingers down during a gesture, and where.
+    others: Vec<(compose_ui::PointerId, Offset)>,
 }
 
 impl ModifierNodeElement for RangePressDrag {
@@ -818,6 +820,7 @@ impl ModifierNodeElement for RangePressDrag {
             on_value_change: self.on_value_change.clone(),
             on_value_change_finished: self.on_value_change_finished.clone(),
             gesture: Gesture::Idle,
+            others: Vec::new(),
         }
     }
 
@@ -881,6 +884,7 @@ impl RangePressDragNode {
     /// As the gesture's `finally`: where there's no event context, a press is cancelled, and a drag
     /// too, its change finishing in a task.
     fn cancel(&mut self) {
+        self.others.clear();
         match std::mem::replace(&mut self.gesture, Gesture::Idle) {
             Gesture::Down { is_start, press, .. } => {
                 self.source(is_start).try_emit(PressInteraction::Cancel(press));
@@ -920,6 +924,16 @@ impl PointerInputModifierNode for RangePressDragNode {
         let rtl = context.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let released = event.kind == PointerEventType::Release;
         let moved = released || event.kind == PointerEventType::Move;
+        // Other fingers down, for when the one dragging lifts.
+        if let Gesture::Down { pointer, .. } | Gesture::Dragging { pointer, .. } = self.gesture
+            && pointer != event.pointer
+        {
+            self.others.retain(|(other, _)| *other != event.pointer);
+            if event.pressed {
+                self.others.push((event.pointer, event.position));
+            }
+            return;
+        }
         match std::mem::replace(&mut self.gesture, Gesture::Idle) {
             Gesture::Idle => {
                 if event.kind != PointerEventType::Press {
@@ -949,14 +963,14 @@ impl PointerInputModifierNode for RangePressDragNode {
                     return;
                 }
                 let over = over + (event.position - last);
-                let slop = context.density().to_px(8.dp());
+                let slop = context.view_configuration().touch_slop;
                 if !released && over.x * over.x + over.y * over.y < slop * slop {
                     self.gesture =
                         Gesture::Down { pointer, last: event.position, x, is_start, press, over };
                     return;
                 }
                 let Some(inner) = self.state.inner() else { return };
-                if over.x.abs() > over.y.abs() {
+                if !released && over.x.abs() > over.y.abs() {
                     // A drag: the press is over, the event taken so a horizontal scroll around
                     // doesn't start too.
                     event.consume();
@@ -974,14 +988,8 @@ impl PointerInputModifierNode for RangePressDragNode {
                     let offset = x - raw + if rtl { -over.x } else { over.x };
                     self.drag(is_start, offset, context);
                     self.set_dragging(true);
-                    if released {
-                        self.set_dragging(false);
-                        self.finish(context);
-                        self.source(is_start).try_emit(DragInteraction::Stop(start));
-                    } else {
-                        self.gesture =
-                            Gesture::Dragging { pointer, last: event.position, is_start, start };
-                    }
+                    self.gesture =
+                        Gesture::Dragging { pointer, last: event.position, is_start, start };
                 } else if released {
                     self.source(is_start).try_emit(PressInteraction::Release(press));
                     let raw = if is_start { inner.raw_start.get() } else { inner.raw_end.get() };
@@ -1005,17 +1013,24 @@ impl PointerInputModifierNode for RangePressDragNode {
                     self.source(is_start).try_emit(DragInteraction::Cancel(start));
                     return;
                 }
-                let delta = event.position.x - last.x;
-                self.drag(is_start, if rtl { -delta } else { delta }, context);
-                event.consume();
                 if released {
+                    // Its last move isn't a drag's, as `drag`: an up ends it first. Another finger
+                    // still down takes over, as `awaitDragOrUp`.
+                    if let Some((other, at)) = self.others.first().copied() {
+                        self.gesture =
+                            Gesture::Dragging { pointer: other, last: at, is_start, start };
+                        self.others.remove(0);
+                        return;
+                    }
                     self.set_dragging(false);
                     self.finish(context);
                     self.source(is_start).try_emit(DragInteraction::Stop(start));
-                } else {
-                    self.gesture =
-                        Gesture::Dragging { pointer, last: event.position, is_start, start };
+                    return;
                 }
+                let delta = event.position.x - last.x;
+                self.drag(is_start, if rtl { -delta } else { delta }, context);
+                event.consume();
+                self.gesture = Gesture::Dragging { pointer, last: event.position, is_start, start };
             }
             Gesture::Waiting { pointer } => {
                 if !(event.pointer == pointer && released) {

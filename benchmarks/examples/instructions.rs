@@ -173,6 +173,120 @@ fn AnimatedCells() {
     });
 }
 
+/// A first frame of a hundred plain list items.
+#[composable]
+fn ManyListItems() {
+    use compose::material3::*;
+    MaterialTheme!({
+        Column!({
+            for index in 0..100usize {
+                key(index, || {
+                    ListItem!({
+                        Text!("Item");
+                    });
+                });
+            }
+        });
+    });
+}
+
+/// A first frame of a hundred selectable list items.
+#[composable]
+fn ManySelectableItems() {
+    use compose::material3::*;
+    MaterialTheme!({
+        Column!({
+            for index in 0..100usize {
+                key(index, || {
+                    SelectableListItem!(index == 0, || {}, {
+                        Text!("Item");
+                    });
+                });
+            }
+        });
+    });
+}
+
+thread_local! {
+    static PICKED: compose::runtime::OwnedState<usize> = mutable_state_of(0);
+    static VALUE: compose::runtime::OwnedState<String> = mutable_state_of(String::new());
+}
+
+/// Five navigation items, the picked one selected.
+#[composable]
+fn NavigationItems() {
+    use compose::material3::*;
+    let picked = PICKED.with(|it| it.handle()).get();
+    MaterialTheme!({
+        NavigationBar!(|row: RowScope| {
+            for index in 0..5usize {
+                key(index, || {
+                    NavigationBarItem!(
+                        row,
+                        index == picked,
+                        || {},
+                        {
+                            Box!(modifier = Modifier.size(24.dp()));
+                        },
+                        label = Some(|| Text!("Item"))
+                    );
+                });
+            }
+        });
+    });
+}
+
+/// A hundred list items, the picked one selected.
+#[composable]
+fn SelectedListItem() {
+    use compose::material3::*;
+    let picked = PICKED.with(|it| it.handle()).get();
+    MaterialTheme!({
+        Column!({
+            for index in 0..100usize {
+                key(index, || {
+                    SelectableListItem!(index == picked, || {}, {
+                        Text!("Item");
+                    });
+                });
+            }
+        });
+    });
+}
+
+/// Two text fields with labels, the first with what's typed in it.
+#[composable]
+fn Fields() {
+    use compose::material3::*;
+    let value = VALUE.with(|it| it.handle());
+    MaterialTheme!({
+        Column!({
+            TextField!(
+                value.get(),
+                move |new| value.set(new),
+                modifier = Modifier.test_tag("first"),
+                label = Some(|| Text!("Label")),
+            );
+            TextField!(
+                String::new(),
+                |_| {},
+                modifier = Modifier.test_tag("second"),
+                label = Some(|| Text!("Label")),
+            );
+        });
+    });
+}
+
+/// `n` selections, each until idle, among `count` items.
+fn selections(content: fn(), count: usize, n: usize) {
+    let mut ui = compose_test(content);
+    let picked = PICKED.with(|it| it.handle());
+    for turn in 0..n {
+        picked.set((turn + 1) % count);
+        ui.wait_for_idle();
+    }
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(scenario), Some(n)) = (args.next(), args.next()) else {
@@ -216,6 +330,31 @@ fn main() {
         "cells_animated_positioned" => {
             POSITIONED.set(true);
             frames(AnimatedCells, n);
+        }
+        "first_frame_list_items" => first_frames(ManyListItems, n),
+        "first_frame_selectable_items" => first_frames(ManySelectableItems, n),
+        "nav_selection" => selections(NavigationItems, 5, n),
+        "list_selection" => selections(SelectedListItem, 2, n),
+        "field_focus" => {
+            let mut ui = compose_test(Fields);
+            for turn in 0..n {
+                let tag = if turn % 2 == 0 { "first" } else { "second" };
+                ui.on_node_with_tag(tag).request_focus();
+                ui.wait_for_idle();
+            }
+        }
+        "field_keystroke" => {
+            let mut ui = compose_test(Fields);
+            ui.on_node_with_tag("first").request_focus();
+            ui.wait_for_idle();
+            let value = VALUE.with(|it| it.handle());
+            for turn in 0..n {
+                ui.on_node_with_tag("first").perform_text_input("x");
+                if turn % 20 == 19 {
+                    value.set(String::new());
+                    ui.wait_for_idle();
+                }
+            }
         }
         other => panic!("no scenario {other}"),
     }

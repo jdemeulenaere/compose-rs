@@ -940,15 +940,16 @@ fn slider_impl(
         enabled,
         interaction_source: interaction_source.clone(),
     };
-    // As Compose's: the semantics 10 dp wider on each side (`IncreaseHorizontalSemanticsBounds`),
-    // the input inside.
+    // As Compose's: the semantics 10 dp longer at each end (`IncreaseHorizontalSemanticsBounds`,
+    // `IncreaseVerticalSemanticsBounds`), the input inside.
     let (min_width, min_height) =
         if vertical { (TRACK_HEIGHT, THUMB_WIDTH) } else { (THUMB_WIDTH, TRACK_HEIGHT) };
     let modifier = minimum_interactive_component_size(modifier).size_in(SizeSpec {
         enforce_incoming: false,
         ..SizeSpec::bounds(min_width, min_height, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
     });
-    let modifier = crate::components::increase_semantics_bounds(modifier, true).then_custom(input);
+    let modifier =
+        crate::components::increase_semantics_bounds(modifier, !vertical).then_custom(input);
     let is_focused = interaction_source.is_focused();
     if let Some(inner) = state.inner() {
         inner.is_focused.set(is_focused);
@@ -988,7 +989,22 @@ fn slider_impl(
     });
     let track = track.unwrap_or_else(|| {
         compose_runtime::callback(move |state: SliderState| {
-            SliderDefaults::track(state, Modifier, enabled, colors);
+            if vertical {
+                // Its overload with corners that shrink, as `VerticalSlider`'s default.
+                SliderDefaults::track_with(
+                    state,
+                    Modifier,
+                    enabled,
+                    colors,
+                    Some(SliderDefaults::default_draw_stop_indicator(enabled, colors)),
+                    SliderDefaults::default_draw_tick(),
+                    THUMB_TRACK_GAP_SIZE,
+                    TRACK_INSIDE_CORNER_SIZE,
+                    Some(Dp::UNSPECIFIED),
+                );
+            } else {
+                SliderDefaults::track(state, Modifier, enabled, colors);
+            }
         })
     });
     Layout(

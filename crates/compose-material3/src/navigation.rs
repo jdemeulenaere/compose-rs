@@ -24,7 +24,7 @@ pub struct NavigationBarDefaults;
 
 impl NavigationBarDefaults {
     /// Its tonal elevation, as `NavigationBarDefaults.Elevation`.
-    pub const ELEVATION: Dp = Dp(3.0);
+    pub const ELEVATION: Dp = Dp(0.0);
 
     /// Its color, as `NavigationBarDefaults.containerColor`.
     pub fn container_color() -> Color {
@@ -38,7 +38,7 @@ impl NavigationBarDefaults {
     }
 }
 
-/// A bar of destinations, as Compose's `NavigationBar`: 80 dp high, its items sharing the
+/// A bar of destinations, as Compose's `NavigationBar`: at least 80 dp high, its items sharing the
 /// width, 8 dp apart.
 #[composable]
 #[allow(non_snake_case)]
@@ -65,7 +65,8 @@ pub fn NavigationBar(
                 Modifier
                     .fill_max_width()
                     .window_insets_padding(window_insets.clone())
-                    .height(80.dp()),
+                    .default_min_size(Dp::UNSPECIFIED, BAR_HEIGHT)
+                    .selectable_group(),
                 Arrangement::spaced_by(8.dp()).into(),
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
@@ -101,7 +102,7 @@ impl NavigationBarItemDefaults {
         let scheme = MaterialTheme::color_scheme();
         NavigationBarItemColors {
             selected_icon_color: scheme.on_secondary_container,
-            selected_text_color: scheme.on_surface,
+            selected_text_color: scheme.secondary,
             selected_indicator_color: scheme.secondary_container,
             unselected_icon_color: scheme.on_surface_variant,
             unselected_text_color: scheme.on_surface_variant,
@@ -112,7 +113,7 @@ impl NavigationBarItemDefaults {
     }
 }
 
-/// A destination of a `NavigationBar`, as Compose's `NavigationBarItem`: its icon in a 64 by
+/// A destination of a `NavigationBar`, as Compose's `NavigationBarItem`: its icon in a 56 by
 /// 32 dp pill when selected, its label (label-medium) 4 dp below, centered in its share of the
 /// bar; clicking selects it.
 #[composable]
@@ -131,7 +132,7 @@ pub fn NavigationBarItem(
 ) {
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     navigation_item(
-        modifier.weight(scope, 1.0).fill_max_height(),
+        modifier.default_min_size(Dp::UNSPECIFIED, BAR_HEIGHT).weight(scope, 1.0),
         ItemKind::Bar,
         selected,
         on_click,
@@ -143,6 +144,12 @@ pub fn NavigationBarItem(
         interaction_source,
     );
 }
+
+/// The bar's height, as `NavigationBarHeight`.
+const BAR_HEIGHT: Dp = Dp(80.0);
+/// A rail's item, as `NavigationRailItemWidth` and `NavigationRailItemHeight`.
+const RAIL_ITEM_WIDTH: Dp = Dp(80.0);
+const RAIL_ITEM_HEIGHT: Dp = Dp(56.0);
 
 /// Which of the two an item is: their measures differ.
 #[derive(Clone, Copy, PartialEq)]
@@ -156,7 +163,7 @@ impl ItemKind {
     /// and `IndicatorVerticalPadding`, a rail's item without a label a circle.
     fn indicator_padding(self, has_label: bool) -> (Dp, Dp) {
         match (self, has_label) {
-            (ItemKind::Bar, _) => (20.dp(), 4.dp()),
+            (ItemKind::Bar, _) => (16.dp(), 4.dp()),
             (ItemKind::Rail, true) => (16.dp(), 4.dp()),
             (ItemKind::Rail, false) => (16.dp(), 16.dp()),
         }
@@ -184,6 +191,7 @@ fn navigation_item(
         (true, true) => (colors.selected_icon_color, colors.selected_text_color),
         (true, false) => (colors.unselected_icon_color, colors.unselected_text_color),
     };
+    let color_spec = MaterialTheme::motion_scheme().default_effects_spec();
     let motion = MaterialTheme::motion_scheme();
     let target = if selected { 1.0 } else { 0.0 };
     let alpha = compose_animation::animate_float_as_state(
@@ -198,18 +206,6 @@ fn navigation_item(
         motion.fast_spatial_spec(),
         compose_animation::Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
         "NavigationItemIndicatorSize",
-        None,
-    );
-    let icon_color = compose_animation::animate_color_as_state(
-        icon_color,
-        motion.default_effects_spec(),
-        "NavigationItemIconColor",
-        None,
-    );
-    let text_color = compose_animation::animate_color_as_state(
-        text_color,
-        motion.default_effects_spec(),
-        "NavigationItemTextColor",
         None,
     );
     let pill_position = remember(|| Rc::new(Cell::new(compose_ui::Offset::ZERO)));
@@ -228,7 +224,6 @@ fn navigation_item(
     });
     let pill = remember(|| Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]));
     let indicator_color = colors.selected_indicator_color;
-    let typography = MaterialTheme::typography();
     // The press, focus and hover show on the pill only, as Compose's: the item's
     // `selectable(indication = null)`, its interactions mapped into the pill's coordinates for
     // the pill's own ripple.
@@ -276,51 +271,69 @@ fn navigation_item(
                 false,
                 compose_runtime::callback(|_| {}),
             );
-            let icon = icon.clone();
-            let icon_modifier = if clear_icon_semantics {
-                Modifier.clear_and_set_semantics(|_| {})
-            } else {
-                Modifier
-            };
-            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(icon_color.get()), || {
-                Box(
-                    icon_modifier.clone(),
-                    Alignment::CENTER,
-                    false,
-                    compose_runtime::callback(move |_| icon()),
-                );
-            });
+            NavigationIcon(icon_color, color_spec.clone(), clear_icon_semantics, icon.clone());
             if let Some(label) = label.clone() {
-                CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color.get()), || {
-                    CompositionLocalProvider(
-                        LOCAL_TEXT_STYLE.provides(typography.label_medium.clone()),
-                        || {
-                            let label_modifier = if always_show_label {
-                                Modifier
-                            } else {
-                                Modifier.graphics_layer(move |layer| layer.alpha = alpha.get())
-                            };
-                            Box(
-                                label_modifier,
-                                Alignment::CENTER,
-                                false,
-                                compose_runtime::callback({
-                                    let label = label.clone();
-                                    move |_| label()
-                                }),
-                            );
-                        },
-                    );
-                });
+                let label_modifier = if always_show_label {
+                    Modifier
+                } else {
+                    Modifier.graphics_layer(move |layer| layer.alpha = alpha.get())
+                };
+                NavigationLabel(text_color, color_spec.clone(), label_modifier, label);
             }
         }),
     );
 }
 
+/// As `styledIcon`: its color animated and read here, so a frame of it composes this alone.
+#[composable]
+#[allow(non_snake_case)]
+fn NavigationIcon(
+    color: Color,
+    spec: compose_animation::AnimationSpec,
+    clear_semantics: bool,
+    icon: compose_runtime::Callback,
+) {
+    let color =
+        compose_animation::animate_color_as_state(color, spec, "NavigationItemIconColor", None)
+            .get();
+    let modifier =
+        if clear_semantics { Modifier.clear_and_set_semantics(|_| {}) } else { Modifier };
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+        let icon = icon.clone();
+        Box(modifier.clone(), Alignment::CENTER, false, compose_runtime::callback(move |_| icon()));
+    });
+}
+
+/// As `styledLabel`: its color animated and read here, so a frame of it composes this alone.
+#[composable]
+#[allow(non_snake_case)]
+fn NavigationLabel(
+    color: Color,
+    spec: compose_animation::AnimationSpec,
+    modifier: Modifier,
+    label: compose_runtime::Callback,
+) {
+    let color =
+        compose_animation::animate_color_as_state(color, spec, "NavigationItemTextColor", None)
+            .get();
+    let style = MaterialTheme::typography().label_medium.clone();
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style.clone()), || {
+            let label = label.clone();
+            Box(
+                modifier.clone(),
+                Alignment::CENTER,
+                false,
+                compose_runtime::callback(move |_| label()),
+            );
+        });
+    });
+}
+
 /// As Compose's `NavigationBarItemLayout` and `NavigationRailItemLayout`: the pill's size from the
 /// icon's, the indicator on it `progress` of its width, the icon centered on them and the label
 /// 4 dp below, all centered across. A label that only shows when selected moves them: at 0 the
-/// icon is centered and the label transparent.
+/// icon is centered and the label not placed.
 struct NavigationItemLayout {
     kind: ItemKind,
     has_label: bool,
@@ -344,78 +357,91 @@ impl MeasurePolicy for NavigationItemLayout {
         let loose = constraints.loosen();
         let icon = scope.measure(measurables[2], loose);
         let (horizontal, vertical) = self.kind.indicator_padding(self.has_label);
-        let (horizontal, vertical) =
-            (density.round_to_px(horizontal), density.round_to_px(vertical));
-        let pill_width = icon.width + 2 * horizontal;
-        let pill_height = icon.height + 2 * vertical;
+        let pill_width = icon.width + density.round_to_px(horizontal * 2.0);
+        let pill_height = icon.height + density.round_to_px(vertical * 2.0);
         let ripple = scope.measure(measurables[0], Constraints::fixed(pill_width, pill_height));
         let indicator = scope.measure(
             measurables[1],
             Constraints::fixed((pill_width as f32 * progress).round() as i32, pill_height),
         );
         let label = measurables.get(3).map(|&label| scope.measure(label, loose));
-        let gap = density.round_to_px(4.dp());
-        let content = icon.height + vertical + label.as_ref().map_or(0, |it| gap + it.height);
-        // The room around a label's content, and the item's size.
-        let (width, height) = match self.kind {
-            ItemKind::Bar => {
-                // Unbounded (asked its intrinsics), as Compose's: the icon and 44 dp each side
-                // (`NavigationBarItemToIconMinimumPadding`); the bar's 80 dp high, or with a label
-                // its content and the indicator's 4 dp above and below (D1207).
-                let width = if constraints.has_bounded_width() {
-                    constraints.max_width
-                } else {
-                    icon.width + 2 * density.round_to_px(44.dp())
-                };
-                let height = if constraints.has_bounded_height() {
-                    constraints.max_height
-                } else if label.is_some() {
-                    content + 2 * vertical
-                } else {
-                    constraints.constrain_height(density.round_to_px(80.dp()))
-                };
-                (width, height)
+        let bar_width = |icon_width: i32| {
+            if constraints.has_bounded_width() {
+                constraints.max_width
+            } else {
+                // Asked its intrinsics: `NavigationBarItemToIconMinimumPadding` each side.
+                icon_width + 2 * density.round_to_px(44.dp())
             }
+        };
+        let Some(label) = label else {
+            // `placeIcon`: all centered.
+            let (width, height) = match self.kind {
+                ItemKind::Bar => (
+                    bar_width(icon.width),
+                    constraints.constrain_height(density.round_to_px(BAR_HEIGHT)),
+                ),
+                ItemKind::Rail => (
+                    constraints.constrain_width(icon.width.max(pill_width).max(indicator.width)),
+                    constraints.constrain_height(density.round_to_px(RAIL_ITEM_HEIGHT)),
+                ),
+            };
+            let (ripple_x, ripple_y) = ((width - pill_width) / 2, (height - pill_height) / 2);
+            self.pill_position.set(compose_ui::Offset::new(ripple_x as f32, ripple_y as f32));
+            scope.place_relative(&indicator, (width - indicator.width) / 2, ripple_y);
+            scope.place_relative(&icon, (width - icon.width) / 2, (height - icon.height) / 2);
+            scope.place_relative(&ripple, ripple_x, ripple_y);
+            return scope.layout(width, height);
+        };
+        // `placeLabelAndIcon`, in its float arithmetic, rounded where it places.
+        let vertical_px = density.to_px(vertical);
+        let gap = density.to_px(4.dp());
+        let content = icon.height as f32 + vertical_px + gap + label.height as f32;
+        let padding = ((constraints.min_height as f32 - content) / 2.0).max(vertical_px);
+        let height = content + padding * 2.0;
+        let selected_icon_y = padding;
+        let unselected_icon_y = if self.always_show_label {
+            selected_icon_y
+        } else {
+            (height - icon.height as f32) / 2.0
+        };
+        let offset = (unselected_icon_y - selected_icon_y) * (1.0 - progress);
+        let label_y = selected_icon_y + icon.height as f32 + vertical_px + gap;
+        let width = match self.kind {
+            ItemKind::Bar => bar_width(icon.width),
             ItemKind::Rail => {
-                let minimum = density.round_to_px(56.dp());
-                let height = match &label {
-                    Some(_) => constraints
-                        .constrain_height(content + 2 * ((minimum - content) / 2).max(vertical)),
-                    None => constraints.constrain_height(minimum),
-                };
-                let width = constraints.constrain_width(
-                    pill_width.max(minimum).max(label.as_ref().map_or(0, |it| it.width)),
-                );
-                (width, height)
+                constraints.constrain_width(icon.width.max(label.width).max(indicator.width))
             }
         };
-        let center = |child_width: i32| (width - child_width) / 2;
-        let (icon_y, label_y, offset) = match &label {
-            None => ((height - icon.height) / 2, 0, 0),
-            Some(_) => {
-                let selected_icon_y = ((height - content) / 2).max(vertical);
-                let unselected_icon_y = if self.always_show_label {
-                    selected_icon_y
-                } else {
-                    (height - icon.height) / 2
-                };
-                let distance = (unselected_icon_y - selected_icon_y) as f32;
-                let offset = (distance * (1.0 - progress)).round() as i32;
-                (selected_icon_y, selected_icon_y + icon.height + vertical + gap, offset)
-            }
+        let ripple_y = selected_icon_y - vertical_px;
+        // The bar rounds its padding here, the rail doesn't, as each of Compose's does.
+        let indicator_y = match self.kind {
+            ItemKind::Bar => selected_icon_y - density.round_to_px(vertical) as f32,
+            ItemKind::Rail => ripple_y,
         };
-        let pill_y = icon_y - vertical + offset;
-        self.pill_position.set(compose_ui::Offset::new(center(pill_width) as f32, pill_y as f32));
-        scope.place_relative(&indicator, center(indicator.width), pill_y);
-        // A hidden label is placed all the same, transparent, where Compose's isn't: it names the
-        // item for screen readers there, its unplaced node still in the semantics, and unplaced
-        // nodes are absent from compose-rs's (D1027).
-        if let Some(label) = &label {
-            scope.place_relative(label, center(label.width), label_y + offset);
+        let ripple_x = (width - pill_width) / 2;
+        let placed_ripple_y = (ripple_y + offset).round() as i32;
+        self.pill_position.set(compose_ui::Offset::new(ripple_x as f32, placed_ripple_y as f32));
+        scope.place_relative(
+            &indicator,
+            (width - indicator.width) / 2,
+            (indicator_y + offset).round() as i32,
+        );
+        // Unplaced while it doesn't show, as Compose's: it still names the item, its semantics
+        // merging all the same (`merge_into`).
+        if self.always_show_label || progress != 0.0 {
+            scope.place_relative(
+                &label,
+                (width - label.width) / 2,
+                (label_y + offset).round() as i32,
+            );
         }
-        scope.place_relative(&icon, center(icon.width), icon_y + offset);
-        scope.place_relative(&ripple, center(pill_width), pill_y);
-        scope.layout(width, height)
+        scope.place_relative(
+            &icon,
+            (width - icon.width) / 2,
+            (selected_icon_y + offset).round() as i32,
+        );
+        scope.place_relative(&ripple, ripple_x, placed_ripple_y);
+        scope.layout(width, height.round() as i32)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -509,7 +535,7 @@ pub fn NavigationRail(
 }
 
 /// A destination of a `NavigationRail`, as Compose's `NavigationRailItem`: its icon on a 56 by
-/// 32 dp pill when selected, its label (label-medium) 4 dp below; 56 dp wide, 56 dp high
+/// 32 dp pill when selected, its label (label-medium) 4 dp below; at least 80 dp wide, 56 dp high
 /// without a label (the pill a 56 dp circle), 60 with one; clicking selects it.
 #[composable]
 #[allow(non_snake_case)]
@@ -526,7 +552,12 @@ pub fn NavigationRailItem(
 ) {
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     navigation_item(
-        modifier,
+        modifier.default_min_size(Dp::UNSPECIFIED, RAIL_ITEM_HEIGHT).size_in(SizeSpec::bounds(
+            RAIL_ITEM_WIDTH,
+            Dp::UNSPECIFIED,
+            Dp::UNSPECIFIED,
+            Dp::UNSPECIFIED,
+        )),
         ItemKind::Rail,
         selected,
         on_click,

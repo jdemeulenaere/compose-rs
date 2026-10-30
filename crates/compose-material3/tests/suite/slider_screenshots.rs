@@ -5,11 +5,11 @@
 //! the track's corners 8 dp (2 dp by the handle), the gap on each side of the handle 6 dp past
 //! its half (8 dp from its center).
 //!
-//! Not ported: `slider_focused_insetFocusRings` (no inset focus ring),
-//! `sliderTest_withSteps_rtl_lookaheadScope` (no `LookaheadScope`),
-//! `sliderTest_middle_custom_corners_track_icons` (icons drawn over the track by a draw
-//! modifier: covered by the corners of `a_track_with_its_own_corners…`), and the vertical,
-//! centered and range sliders' goldens (not in compose-rs yet).
+//! Not ported: `sliderTest_withSteps_rtl_lookaheadScope` (no `LookaheadScope`),
+//! `sliderTest_middle_custom_corners_track_icons` (icons drawn over the track by a draw modifier:
+//! covered by the corners of `a_track_with_its_own_corners…`). Elsewhere: `slider_focused_insetFocusRings`
+//! and the vertical and centered sliders' goldens in `slider.rs`, the range sliders' in
+//! `range_slider.rs`.
 
 use compose_material3::*;
 use compose_runtime::*;

@@ -688,7 +688,7 @@ fn a_navigation_items_selection_animates_with_the_scheme() {
         to_halfway(&mut ui);
         let (width, alpha) = indicator(&mut ui);
         let (icon, text) = COLORS.with(|it| (it[0].get(), it[1].get()));
-        let full = if rail { 56.0 } else { 64.0 };
+        let full = 56.0;
         vec![
             along(width, 0.0, full),
             along(alpha, 0.0, 1.0),
@@ -760,6 +760,438 @@ fn a_list_items_colors_and_shape_animate_with_the_scheme() {
             ]
         },
     );
+}
+
+/// A list item's elevation on the fast spatial spec, as its `elevationAnimationSpec`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, InteractiveListItem
+#[test]
+fn a_list_items_elevation_animates_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        let raised = mutable_state_of(false);
+        let read = raised.handle();
+        let mut ui = themed(scheme, move || {
+            let elevation = ListItemElevation {
+                elevation: if read.get() { 10.dp() } else { 0.dp() },
+                dragged_elevation: 0.dp(),
+            };
+            SelectableListItem!(false, || {}, elevation = elevation, {
+                Text!("Item");
+            });
+        });
+        raised.set(true);
+        to_halfway(&mut ui);
+        let shadow = ui
+            .host()
+            .display_list()
+            .groups
+            .iter()
+            .filter_map(|group| group.layer.as_ref())
+            .map(|layer| layer.shadow_elevation)
+            .fold(0.0f32, f32::max);
+        vec![along(shadow, 0.0, 10.0)]
+    });
+}
+
+/// The corner a cut shape draws: the start of the background's path.
+fn cut_corner(ui: &mut ComposeTestRule) -> f32 {
+    let list = ui.host().display_list();
+    let commands = list.ops.iter().find_map(|op| match op {
+        DrawOp::DrawPath { path, .. } => Some(path.commands().to_vec()),
+        _ => None,
+    });
+    match commands.expect("a path").first() {
+        Some(compose_ui::PathCommand::MoveTo(point)) => point.y,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn cut(dp: f32) -> Shape {
+    Shape::Cut([CornerSize::Dp(dp.dp()); 4])
+}
+
+/// Cut corners move too, as `CutCornerShape.lerp`, cut all the while, and end at the state's.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/shape/CutCornerShape.kt, lerp
+#[test]
+fn a_list_items_cut_corners_morph() {
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        let selected = mutable_state_of(false);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            let shapes = ListItemShapes {
+                shape: cut(4.0),
+                selected_shape: cut(24.0),
+                pressed_shape: cut(4.0),
+                focused_shape: cut(4.0),
+                hovered_shape: cut(4.0),
+                dragged_shape: cut(4.0),
+            };
+            SelectableListItem!(read.get(), || {}, shapes = shapes, {
+                Text!("Item");
+            });
+        });
+        assert_eq!(cut_corner(&mut ui), 4.0, "at rest it follows the state's");
+        selected.set(true);
+        to_halfway(&mut ui);
+        vec![along(cut_corner(&mut ui), 4.0, 24.0)]
+    });
+}
+
+/// Between families there's no way of moving corners: the nearer shape, as `Interpolatable.lerp`.
+// Compose: compose/ui/ui-graphics/src/commonMain/kotlin/androidx/compose/ui/graphics/Interpolatable.kt, lerp
+#[test]
+fn a_list_item_between_cut_and_rounded_shows_the_nearer() {
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = themed(long_only(FastSpatial), move || {
+        let shapes = ListItemShapes {
+            shape: cut(10.0),
+            selected_shape: Shape::Rounded([CornerSize::Dp(10.dp()); 4]),
+            pressed_shape: cut(10.0),
+            focused_shape: cut(10.0),
+            hovered_shape: cut(10.0),
+            dragged_shape: cut(10.0),
+        };
+        SelectableListItem!(read.get(), || {}, shapes = shapes, {
+            Text!("Item");
+        });
+    });
+    let rounded = |ui: &mut ComposeTestRule| {
+        ui.host().display_list().ops.iter().any(|op| matches!(op, DrawOp::DrawRoundRect(..)))
+    };
+    assert!(!rounded(&mut ui));
+    selected.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(LONG / 4));
+    assert!(!rounded(&mut ui), "still the nearer");
+    ui.advance_time_by(Duration::from_millis(LONG));
+    assert!(rounded(&mut ui));
+}
+
+/// The first corner of the background, rounded.
+fn round_corner(ui: &mut ComposeTestRule) -> f32 {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::DrawRoundRect(_, radii, _) => Some(radii[0]),
+            DrawOp::DrawRect(..) => Some(0.0),
+            _ => None,
+        })
+        .expect("a background")
+}
+
+fn round(dp: f32) -> Shape {
+    Shape::Rounded([CornerSize::Dp(dp.dp()); 4])
+}
+
+/// New shapes start over, showing the new one at once, as `key(this)`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItemDefaults.kt, shapeForInteraction
+#[test]
+fn a_list_items_new_shapes_snap() {
+    let corner = mutable_state_of(4.0f32);
+    let read = corner.handle();
+    let mut ui = themed(long_only(FastSpatial), move || {
+        let shapes = ListItemShapes { shape: round(read.get()), ..ListItemDefaults::shapes() };
+        SelectableListItem!(false, || {}, shapes = shapes, {
+            Text!("Item");
+        });
+    });
+    assert_eq!(round_corner(&mut ui), 4.0);
+    corner.set(20.0);
+    ui.advance_time_by_frame();
+    assert_eq!(round_corner(&mut ui), 20.0);
+}
+
+/// What's remembered after the shape stays put whether it animates or not: shapes that stop having
+/// corners keep the colors where they were.
+#[test]
+fn a_list_items_colors_stay_when_its_shapes_stop_having_corners() {
+    let cornered = mutable_state_of(true);
+    let selected = mutable_state_of(false);
+    let (read, read_selected) = (cornered.handle(), selected.handle());
+    let mut ui = themed(long_only(DefaultEffects), move || {
+        let shapes = ListItemShapes {
+            shape: if read.get() { round(4.0) } else { Shape::Rectangle },
+            ..ListItemDefaults::shapes()
+        };
+        let colors = ListItemColors {
+            container_color: Color::BLUE,
+            selected_container_color: Color::RED,
+            ..ListItemDefaults::colors()
+        };
+        SelectableListItem!(read_selected.get(), || {}, colors = colors, shapes = shapes, {
+            Text!("Item");
+        });
+    });
+    selected.set(true);
+    to_halfway(&mut ui);
+    let container = |ui: &mut ComposeTestRule| {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                DrawOp::DrawRoundRect(_, _, paint) | DrawOp::DrawRect(_, paint) => {
+                    Some(paint.color)
+                }
+                _ => None,
+            })
+            .expect("a background")
+    };
+    let halfway = color_along(container(&mut ui), Color::BLUE, Color::RED);
+    assert!((0.1..0.9).contains(&halfway), "{halfway}");
+    cornered.set(false);
+    ui.advance_time_by_frame();
+    let after = color_along(container(&mut ui), Color::BLUE, Color::RED);
+    assert!((after - halfway).abs() < 0.2 && after < 0.9, "from {halfway} to {after}");
+}
+
+/// A spring going past its end takes corners below zero: they stop there, not failing the shape's
+/// check on them.
+#[test]
+fn a_bouncy_spring_stops_a_shrinking_corner_at_zero() {
+    let mut scheme = long_only(FastSpatial);
+    scheme.fast_spatial = AnimationSpec::Spring(compose_animation::spring_with(0.2, 200.0));
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = themed(scheme, move || {
+        let shapes = ListItemShapes {
+            shape: round(20.0),
+            selected_shape: round(0.0),
+            ..ListItemDefaults::shapes()
+        };
+        SelectableListItem!(read.get(), || {}, shapes = shapes, {
+            Text!("Item");
+        });
+    });
+    selected.set(true);
+    for _ in 0..120 {
+        ui.advance_time_by(Duration::from_millis(16));
+        assert!(round_corner(&mut ui) >= 0.0);
+    }
+    assert_eq!(round_corner(&mut ui), 0.0);
+}
+
+/// A new target midway starts from what shows, not the old start or end.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/AnimatedShape.kt, animateToShape
+#[test]
+fn a_list_items_new_target_midway_starts_from_what_shows() {
+    let source = MutableInteractionSource::new();
+    let item_source = source.clone();
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = themed(long_only(FastSpatial), move || {
+        let shapes = ListItemShapes {
+            shape: round(0.0),
+            selected_shape: round(20.0),
+            pressed_shape: round(24.0),
+            ..ListItemDefaults::shapes()
+        };
+        SelectableListItem!(
+            read.get(),
+            || {},
+            shapes = shapes,
+            interaction_source = Some(item_source.clone()),
+            {
+                Text!("Item");
+            }
+        );
+    });
+    selected.set(true);
+    to_halfway(&mut ui);
+    let midway = round_corner(&mut ui);
+    assert!(midway > 2.0 && midway < 18.0, "{midway}");
+    // Pressed: towards a third, from the point it's frozen at.
+    source.try_emit(compose_ui::PressInteraction::Press(compose_ui::Press::new(
+        compose_ui::Offset::ZERO,
+    )));
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let frozen = round_corner(&mut ui);
+    assert!((frozen - midway).abs() < 2.0, "{midway} to {frozen}");
+    ui.advance_time_by(Duration::from_millis(LONG / 2));
+    let towards = round_corner(&mut ui);
+    assert!(towards > frozen + 3.0 && towards < 23.0, "{frozen} to {towards}");
+    // There in the end.
+    ui.advance_time_by(Duration::from_millis(LONG));
+    assert_eq!(round_corner(&mut ui), 24.0);
+}
+
+/// The placeholder leaves on the fast effects spec when a focused field empties unfocused, as
+/// `placeholderOpacity`'s first case.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, placeholderOpacity
+#[test]
+fn a_placeholder_leaves_a_field_on_fast_effects() {
+    assert_each_property_animates_with(&[FastEffects], |scheme| {
+        let mut ui = themed(scheme, move || {
+            Column!({
+                TextField!(
+                    String::new(),
+                    |_| {},
+                    modifier = Modifier.test_tag("field"),
+                    label = Some(|| Text!("Label")),
+                    placeholder = Some(|| Text!("Hint")),
+                );
+                Box!(modifier = Modifier.test_tag("other").focusable().size(4.dp()));
+            });
+        });
+        ui.on_node_with_tag("field").request_focus();
+        ui.advance_time_by(Duration::from_millis(2 * LONG));
+        ui.on_node_with_tag("other").request_focus();
+        to_halfway(&mut ui);
+        let (_, placeholder) = layer_scale_and_alpha(&mut ui);
+        // Gone, it's arrived: no layer to read an alpha from.
+        vec![if placeholder == 1.0 { 1.0 } else { 1.0 - placeholder }]
+    });
+}
+
+/// Disabled, the indicator is the unfocused 1 dp and its color snaps, as `animateBorderStrokeAsState`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, animateBorderStrokeAsState
+#[test]
+fn a_disabled_fields_indicator_is_thin_and_snaps() {
+    let enabled = mutable_state_of(true);
+    let read = enabled.handle();
+    let mut ui = themed(long_only(FastEffects), move || {
+        let colors = TextFieldColors {
+            focused_indicator_color: Color::BLUE,
+            unfocused_indicator_color: Color::BLUE,
+            disabled_indicator_color: Color::RED,
+            ..TextFieldDefaults::colors()
+        };
+        TextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            enabled = read.get(),
+            colors = colors
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    ui.advance_time_by(Duration::from_millis(2 * LONG));
+    let line = |ui: &mut ComposeTestRule, color: Color| {
+        ui.host().display_list().ops.iter().find_map(|op| match op {
+            DrawOp::DrawRect(rect, paint) if paint.color == color => Some(rect.height()),
+            _ => None,
+        })
+    };
+    assert_eq!(line(&mut ui, Color::BLUE), Some(2.0), "focused");
+    enabled.set(false);
+    ui.advance_time_by_frame();
+    assert_eq!(line(&mut ui, Color::RED), Some(1.0), "at once");
+}
+
+/// An outlined one's too, its outline the unfocused width.
+#[test]
+fn a_disabled_outlined_fields_outline_is_thin() {
+    let enabled = mutable_state_of(true);
+    let read = enabled.handle();
+    let mut ui = themed(long_only(FastEffects), move || {
+        OutlinedTextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            enabled = read.get()
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    ui.advance_time_by(Duration::from_millis(2 * LONG));
+    let width = |ui: &mut ComposeTestRule| {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                DrawOp::DrawPath { paint, .. } | DrawOp::DrawRoundRect(_, _, paint) => {
+                    match paint.style {
+                        PaintStyle::Stroke(width) => Some(width),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("an outline")
+    };
+    assert_eq!(width(&mut ui), 2.0, "focused");
+    enabled.set(false);
+    ui.advance_time_by_frame();
+    assert_eq!(width(&mut ui), 1.0);
+}
+
+/// A run starts from what shows, at no speed: nothing jumps on its first frame, and interrupted it
+/// goes back from where it was.
+#[test]
+fn a_list_items_colors_reverse_from_where_they_are() {
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = themed(long_only(DefaultEffects), move || {
+        let colors = ListItemColors {
+            container_color: Color::BLUE,
+            selected_container_color: Color::RED,
+            ..ListItemDefaults::colors()
+        };
+        SelectableListItem!(read.get(), || {}, colors = colors, {
+            Text!("Item");
+        });
+    });
+    let container = |ui: &mut ComposeTestRule| {
+        let color = ui.host().display_list().ops.iter().find_map(|op| match op {
+            DrawOp::DrawRoundRect(_, _, paint) | DrawOp::DrawRect(_, paint) => Some(paint.color),
+            _ => None,
+        });
+        color_along(color.expect("a background"), Color::BLUE, Color::RED)
+    };
+    selected.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let first = container(&mut ui);
+    assert!(first < 0.1, "{first}");
+    ui.advance_time_by(Duration::from_millis(LONG / 2));
+    let halfway = container(&mut ui);
+    assert!((0.1..0.9).contains(&halfway), "{halfway}");
+    selected.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    let back = container(&mut ui);
+    assert!((back - halfway).abs() < 0.1, "from {halfway} to {back}");
+}
+
+thread_local! {
+    static FIELD_COMPOSED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static LABEL_COMPOSED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A frame of a label floating composes the label, not the field around it: a trailing icon is
+/// composed once for the focus, not again. As `labelProgressProducer`, `DecoratedLabel`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, CommonDecorationBox
+#[test]
+fn a_fields_frames_compose_the_label_alone() {
+    FIELD_COMPOSED.set(0);
+    LABEL_COMPOSED.set(0);
+    let mut ui = themed(long_only(FastSpatial), || {
+        TextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            label = Some(|| {
+                LABEL_COMPOSED.set(LABEL_COMPOSED.get() + 1);
+                Text!("Label");
+            }),
+            trailing_icon = Some(|| {
+                FIELD_COMPOSED.set(FIELD_COMPOSED.get() + 1);
+                Box!(modifier = Modifier.size(24.dp()));
+            }),
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(32));
+    let (field, label) = (FIELD_COMPOSED.get(), LABEL_COMPOSED.get());
+    for _ in 0..10 {
+        ui.advance_time_by(Duration::from_millis(16));
+    }
+    assert_eq!(FIELD_COMPOSED.get(), field, "the field");
+    assert!(LABEL_COMPOSED.get() >= label + 5, "the label: {label} to {}", LABEL_COMPOSED.get());
 }
 
 /// Reversed before it's finished, a shape goes back from where it is, not its start: as
@@ -1327,11 +1759,10 @@ fn a_top_app_bar_settles_with_the_scheme() {
     });
 }
 
-/// The label floating on the fast spatial spec, as `labelProgress`; the transition's affix opacity,
-/// on fast effects, is part of it with or without an affix, as Compose's.
+/// The label floating on the fast spatial spec, as `labelProgress`.
 #[test]
 fn a_text_fields_label_animates_with_the_scheme() {
-    assert_animates_with(&[FastSpatial, FastEffects], |scheme| {
+    assert_animates_with(&[FastSpatial], |scheme| {
         let value = mutable_state_of(String::new());
         let read = value.handle();
         let mut ui = themed(scheme, move || {

@@ -429,13 +429,15 @@ fn a_two_row_bars_second_row_pads_only_its_sides() {
 #[test]
 fn a_navigation_bar_pads_its_row_by_its_insets() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || {
-        NavigationBar!(
-            modifier = Modifier.test_tag("bar"),
-            window_insets = WindowInsets::new(10.dp(), 20.dp(), 30.dp(), 40.dp()),
-            |_| {
-                Box!(modifier = Modifier.test_tag("item").fill_max_size());
-            }
-        );
+        Box!({
+            NavigationBar!(
+                modifier = Modifier.test_tag("bar"),
+                window_insets = WindowInsets::new(10.dp(), 20.dp(), 30.dp(), 40.dp()),
+                |_| {
+                    Box!(modifier = Modifier.test_tag("item").fill_max_width().height(80.dp()));
+                }
+            );
+        });
     });
     let bar = bounds(&mut ui, "bar");
     assert_eq!((bar.width(), bar.height()), (400.0, 20.0 + 80.0 + 40.0));

@@ -102,6 +102,52 @@ fn thumbs_stop_at_each_other() {
     assert_eq!((state.start_value(), state.end_value()), (0.0, 0.5));
 }
 
+/// What the callback hears stops at the track's ends and the other thumb, whatever the pixels round
+/// to, as `onDrag`'s coercions: before the state's setters, which would hide it.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Slider.kt, onDrag
+#[test]
+fn what_a_drag_asks_stops_at_the_ends_and_the_other_thumb() {
+    let run = |start: f32, end: f32, from_end: bool, by: f32| {
+        let state = RangeSliderState::new(start, end, 0, (0.0, 1.0));
+        let handle = *state;
+        let heard = Rc::new(Cell::new((start, end)));
+        let last = heard.clone();
+        let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+            let last = last.clone();
+            MaterialTheme!({
+                let last = last.clone();
+                RangeSlider!(
+                    handle,
+                    move |range: (f32, f32)| {
+                        last.set(range);
+                        handle.set_start_value(range.0);
+                        handle.set_end_value(range.1);
+                    },
+                    modifier = Modifier.test_tag(TAG)
+                );
+            });
+        });
+        let (left, right, _, y) = frame(&mut ui);
+        let at = if from_end { end } else { start };
+        let x = left + 2.0 + at * (right - left - 4.0);
+        drag(&mut ui, Offset::new(x, y), &[by.signum() * SLOP, by * (right - left)]);
+        heard.get()
+    };
+    for hundredth in 20..90 {
+        let at = hundredth as f32 / 100.0;
+        // Past the other thumb.
+        let (start, end) = run(0.1, at, false, 1.0);
+        assert!(start <= end, "{start} past {end}");
+        near(start, at);
+        let (start, end) = run(at, 1.0, true, -1.0);
+        assert!(start <= end, "{start} past {end}");
+        near(end, at);
+        // Past its end.
+        assert_eq!(run(at, 1.0, false, -1.0).0, 0.0);
+        assert_eq!(run(0.0, at, true, 1.0).1, 1.0);
+    }
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_tap
 #[test]
 fn a_tap_moves_the_nearer_thumb_there() {
@@ -288,6 +334,8 @@ fn a_thumbs_node_is_wider_than_the_thumb() {
     let mut ui = thumbs_rule(*state);
     for tag in ["start", "end"] {
         let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_node();
+        // Compose's is 14: its `boundsInRoot` is clipped by the slider's edge, a thumb being at its
+        // end. A node's bounds here aren't clipped, so 10 dp on both sides: 24.
         assert_eq!((node.bounds.width(), node.bounds.height()), (4.0 + 20.0, 44.0), "{tag}");
     }
 }
@@ -315,8 +363,308 @@ fn with_infinite_width_it_takes_its_minimum() {
             });
         });
     });
-    let (left, right, _, _) = frame(&mut ui);
-    assert!(right - left >= 4.0, "{left}..{right}");
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    assert_eq!(bounds.width(), 48.0);
+}
+
+/// In a row with room without end, a weight has nothing to share: it lays out.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_rowWithInfiniteWidth
+#[test]
+fn a_weighted_slider_in_an_infinite_row_lays_out() {
+    let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Box!(modifier = Modifier.horizontal_scroll(remember_scroll_state!()), {
+                Row!(|row: RowScope| {
+                    RangeSlider!(
+                        handle,
+                        |_| {},
+                        modifier = Modifier.weight(row, 1.0).test_tag(TAG)
+                    );
+                });
+            });
+        });
+    });
+    ui.on_node_with_tag(TAG).assert_exists();
+}
+
+/// A state made for a new range, a tap goes by it.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_tap_rangeChange
+#[test]
+fn a_tap_goes_by_a_new_states_range() {
+    let range_end = mutable_state_of(0.25f32);
+    let read = range_end.handle();
+    let held = Rc::new(RefCell::new(None));
+    let current = held.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let current = current.clone();
+        MaterialTheme!({
+            let end = read.get();
+            let state =
+                remember_keyed(end.to_bits(), || RangeSliderState::new(0.0, 25.0, 0, (0.0, end)));
+            let handle = state;
+            *current.borrow_mut() = Some(handle);
+            RangeSlider!(
+                handle,
+                move |(start, end)| {
+                    handle.set_start_value(start);
+                    handle.set_end_value(end);
+                },
+                modifier = Modifier.test_tag(TAG)
+            );
+        });
+    });
+    range_end.set(1.0);
+    ui.wait_for_idle();
+    let (left, right, x, y) = frame(&mut ui);
+    drag(&mut ui, Offset::new(x + 50.0, y), &[]);
+    let state = held.borrow().expect("composed");
+    near(state.end_value(), value_at(left, right, x + 50.0));
+}
+
+/// A callback that opens a snackbar doesn't get in the way of the drag it ends.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_onValueChangeFinishedWithSnackbar
+#[test]
+fn a_drags_end_can_show_a_snackbar() {
+    let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let host = SnackbarHostState::new();
+    let shown = *host;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        MaterialTheme!({
+            let scope = remember_coroutine_scope();
+            Scaffold!(
+                snackbar_host = || {
+                    SnackbarHost!(shown);
+                },
+                |_| {
+                    RangeSlider!(
+                        handle,
+                        move |(start, end)| {
+                            handle.set_start_value(start);
+                            handle.set_end_value(end);
+                        },
+                        modifier = Modifier.test_tag(TAG),
+                        on_value_change_finished = Some(move || {
+                            scope.launch(async move {
+                                shown.show_snackbar("Snackbar Description").await;
+                            });
+                        })
+                    );
+                }
+            );
+        });
+    });
+    let (left, right, x, y) = frame(&mut ui);
+    drag(&mut ui, Offset::new(x, y), &[SLOP, 100.0]);
+    assert_eq!(state.start_value(), 0.0);
+    near(state.end_value(), value_at(left, right, x + SLOP + 100.0));
+    ui.on_node_with_text("Snackbar Description").assert_exists();
+}
+
+thread_local! {
+    static START_OUTER: Cell<u32> = const { Cell::new(0) };
+    static START_INNER: Cell<u32> = const { Cell::new(0) };
+    static END_OUTER: Cell<u32> = const { Cell::new(0) };
+    static END_INNER: Cell<u32> = const { Cell::new(0) };
+}
+
+#[composable]
+fn OuterContent(state: RangeSliderState) {
+    SideEffect(|| START_OUTER.with(|count| count.set(count.get() + 1)));
+    Column!({
+        Text!("OuterContent");
+        InnerContent(state);
+    });
+}
+
+#[composable]
+fn InnerContent(state: RangeSliderState) {
+    SideEffect(|| START_INNER.with(|count| count.set(count.get() + 1)));
+    Text!("InnerContent: {}..{}", state.start_value(), state.end_value());
+}
+
+#[composable]
+fn EndOuterContent(state: RangeSliderState) {
+    SideEffect(|| END_OUTER.with(|count| count.set(count.get() + 1)));
+    Column!({
+        Text!("OuterContent");
+        EndInnerContent(state);
+    });
+}
+
+#[composable]
+fn EndInnerContent(state: RangeSliderState) {
+    SideEffect(|| END_INNER.with(|count| count.set(count.get() + 1)));
+    Text!("InnerContent: {}..{}", state.start_value(), state.end_value());
+}
+
+fn reset_counts() {
+    for count in [&START_OUTER, &START_INNER, &END_OUTER, &END_INNER] {
+        count.with(|count| count.set(0));
+    }
+}
+
+/// Down at its center, and three moves back and forth, each composed.
+fn drag_back_and_forth(ui: &mut ComposeTestRule) {
+    let (_, _, x, y) = frame(ui);
+    let mut at = Offset::new(x, y);
+    ui.host().send_pointer(compose_ui::PointerEvent::press(at));
+    for dx in [100.0, -100.0, 100.0] {
+        at = Offset::new(at.x + dx, at.y);
+        ui.host().send_pointer(compose_ui::PointerEvent::moved(at, true));
+        ui.wait_for_idle();
+    }
+}
+
+/// The thumbs' slots compose once from the outside; what reads the values each time they change.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_thumb_recomposition
+#[test]
+fn a_drag_recomposes_only_what_reads_the_values_in_the_thumbs() {
+    reset_counts();
+    let state = RangeSliderState::new(0.0, 100.0, 0, (0.0, 100.0));
+    let handle = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        MaterialTheme!({
+            RangeSlider!(
+                handle,
+                move |(start, end)| {
+                    handle.set_start_value(start);
+                    handle.set_end_value(end);
+                },
+                modifier = Modifier.test_tag(TAG),
+                start_thumb = Some(OuterContent),
+                end_thumb = Some(EndOuterContent),
+            );
+        });
+    });
+    drag_back_and_forth(&mut ui);
+    assert_eq!(START_OUTER.with(Cell::get), 1);
+    assert_eq!(END_OUTER.with(Cell::get), 1);
+    // The first composition and each move, composed before the next: Compose's count of 2 has its
+    // moves come together, as `slider.rs`'s single slider counts them too.
+    assert_eq!(START_INNER.with(Cell::get), 4);
+    assert_eq!(END_INNER.with(Cell::get), 4);
+}
+
+/// The same for the track, 3 as Compose's: it's its text that sizes the slider here, too small
+/// for the first move to change the end, already at the last place.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_track_recomposition
+#[test]
+fn a_drag_recomposes_only_what_reads_the_values_in_the_track() {
+    reset_counts();
+    let state = RangeSliderState::new(0.0, 100.0, 0, (0.0, 100.0));
+    let handle = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        MaterialTheme!({
+            RangeSlider!(
+                handle,
+                move |(start, end)| {
+                    handle.set_start_value(start);
+                    handle.set_end_value(end);
+                },
+                modifier = Modifier.test_tag(TAG),
+                track = Some(OuterContent),
+            );
+        });
+    });
+    drag_back_and_forth(&mut ui);
+    assert_eq!(START_OUTER.with(Cell::get), 1);
+    assert_eq!(START_INNER.with(Cell::get), 3);
+}
+
+/// A move in the up event itself isn't a drag's, as `drag`, which returns on an up first.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt, drag
+#[test]
+fn an_up_somewhere_else_moves_nothing() {
+    let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
+    let mut ui = rule(*state, LayoutDirection::Ltr);
+    let (_, _, x, y) = frame(&mut ui);
+    let at = Offset::new(x + 20.0, y);
+    ui.host().send_pointer(compose_ui::PointerEvent::press(Offset::new(x, y)));
+    ui.host().send_pointer(compose_ui::PointerEvent::moved(at, true));
+    ui.wait_for_idle();
+    let before = state.end_value();
+    ui.host().send_pointer(compose_ui::PointerEvent::release(Offset::new(x + 90.0, y)));
+    ui.wait_for_idle();
+    assert_eq!(state.end_value(), before);
+}
+
+/// The finger dragging lifts with another down: that one goes on with it, and the drag ends with
+/// it, as `awaitDragOrUp`.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt, awaitDragOrUp
+#[test]
+fn another_finger_takes_over_a_drag() {
+    let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let finished = Rc::new(Cell::new(0));
+    let heard = finished.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let heard = heard.clone();
+        MaterialTheme!({
+            let heard = heard.clone();
+            RangeSlider!(
+                handle,
+                move |(start, end)| {
+                    handle.set_start_value(start);
+                    handle.set_end_value(end);
+                },
+                modifier = Modifier.test_tag(TAG),
+                on_value_change_finished = Some(move || heard.set(heard.get() + 1))
+            );
+        });
+    });
+    let (left, right, x, y) = frame(&mut ui);
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| {
+        touch.down_pointer(0, Offset::new(x, y));
+        touch.move_pointer_by(0, Offset::new(20.0 + SLOP, 0.0), 0);
+        touch.down_pointer(1, Offset::new(x + 100.0, y));
+        touch.up_pointer(0);
+    });
+    ui.wait_for_idle();
+    let lifted = state.end_value();
+    assert_eq!(finished.get(), 0, "the drag goes on");
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| {
+        touch.move_pointer_by(1, Offset::new(30.0, 0.0), 0);
+    });
+    ui.wait_for_idle();
+    near(state.end_value(), lifted + 30.0 / (right - left - 4.0));
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| touch.up_pointer(1));
+    ui.wait_for_idle();
+    assert_eq!(finished.get(), 1);
+}
+
+/// A tap with a little horizontal jitter under the slop is a tap: released, not cancelled.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Slider.kt, rangeSliderPressDragModifier
+#[test]
+fn a_tap_that_moved_a_little_is_a_release() {
+    let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let source = compose_ui::MutableInteractionSource::new();
+    let end_source = source.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let end_source = end_source.clone();
+        MaterialTheme!({
+            RangeSlider!(
+                handle,
+                |_| {},
+                modifier = Modifier.test_tag(TAG),
+                end_thumb_interaction_source = Some(end_source.clone())
+            );
+        });
+    });
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let interactions = source.interactions();
+    compose_runtime::platform::launch(async move {
+        interactions.collect(|interaction| log.borrow_mut().push(format!("{interaction:?}"))).await;
+    });
+    let (_, _, x, y) = frame(&mut ui);
+    drag(&mut ui, Offset::new(x + 50.0, y), &[1.0]);
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|it| it.contains("Release")), "{seen:?}");
+    assert!(!seen.iter().any(|it| it.contains("Cancel")), "{seen:?}");
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, rangeSlider_valueUpdatedByLaunchEffectAndInteraction
@@ -686,4 +1034,39 @@ fn a_keys_range_stops_at_the_other_thumb() {
     ui.press_key(Key::Tab);
     ui.press_key(Key::MoveHome);
     assert_eq!(heard.get(), (0.25, 0.25));
+}
+
+/// At the other thumb's value, each of the keys stops there too, not only Home and End.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Slider.kt, rangeSliderOnKeyEvents
+#[test]
+fn every_key_stops_at_the_other_thumb() {
+    use compose_ui::Key;
+    let run = |start: f32, end: f32, tabs: u32, keys: [Key; 2], expected: (f32, f32)| {
+        let state = RangeSliderState::new(start, end, 0, (0.0, 1.0));
+        let handle = *state;
+        let heard = Rc::new(Cell::new((f32::NAN, f32::NAN)));
+        let last = heard.clone();
+        let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+            let last = last.clone();
+            MaterialTheme!({
+                let last = last.clone();
+                RangeSlider!(
+                    handle,
+                    move |range| last.set(range),
+                    modifier = Modifier.test_tag(TAG)
+                );
+            });
+        });
+        for _ in 0..tabs {
+            ui.press_key(Key::Tab);
+        }
+        for key in keys {
+            ui.press_key(key);
+            assert_eq!(heard.get(), expected, "{key:?}");
+        }
+    };
+    // The start thumb, right up against the end's.
+    run(0.75, 0.75, 1, [Key::DirectionRight, Key::PageUp], (0.75, 0.75));
+    // The end thumb, down against the start's.
+    run(0.25, 0.25, 2, [Key::DirectionLeft, Key::PageDown], (0.25, 0.25));
 }

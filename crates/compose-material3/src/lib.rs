@@ -25,6 +25,7 @@ mod drag_handle;
 mod drawer;
 mod fab;
 mod icon;
+mod lazy_animation;
 mod list_item;
 mod motion;
 mod navigation;

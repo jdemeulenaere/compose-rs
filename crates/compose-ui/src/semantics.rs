@@ -568,7 +568,12 @@ impl UiTree {
         mut own: Option<&mut SemanticsConfiguration>,
         children: &mut Vec<SemanticsNode>,
     ) {
-        if self.left_out(node) || self.node(node).overlay {
+        // Only deactivated content is skipped, as `fillOneLayerOfSemanticsWrappers`
+        // (`isAttached && !isDeactivated`): what's merely unplaced still merges (a navigation
+        // item's hidden label names it). A merging node apart from it is a node of its own, and
+        // unplaced nodes have none (`semantics_of_node`).
+        let value = self.node(node);
+        if value.overlay || (value.deactivated && !WITH_DEACTIVATED.with(std::cell::Cell::get)) {
             return;
         }
         if let Some(own_semantics) = self.own_semantics(node) {

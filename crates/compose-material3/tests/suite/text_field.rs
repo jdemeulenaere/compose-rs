@@ -73,6 +73,7 @@ fn supporting_text_and_errors_show_below_in_the_error_color() {
     assert!(list.contains(&format!("{:?}", error)), "{list}");
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TextFieldTest.kt, testTextField_prefixAndSuffixPosition_whenNoLabel
 #[test]
 fn a_prefix_and_a_suffix_go_around_the_text() {
     let mut ui = compose_test(|| {
@@ -95,6 +96,179 @@ fn a_prefix_and_a_suffix_go_around_the_text() {
     assert_eq!(field.right - suffix.right, 16.0);
     assert_eq!(prefix.top, suffix.top);
     assert_eq!((prefix.top + prefix.bottom) / 2.0, (field.top + field.bottom) / 2.0);
+}
+
+/// Resting empty with a label, all three are out of the tree, not merely transparent: they'd
+/// interfere with a screen reader, as Compose's "Transparent components interfere with Talkback".
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TextFieldTest.kt, testTextField_prefixAndSuffixAndPlaceholder_areNotDisplayed_withLabel_ifLabelCanExpand
+#[test]
+fn a_hidden_prefix_suffix_and_placeholder_are_not_there() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            TextField!(
+                String::new(),
+                |_| {},
+                label = Some(|| Text!("Label")),
+                prefix = Some(|| Text!("Prefix")),
+                suffix = Some(|| Text!("Suffix")),
+                placeholder = Some(|| Text!("Placeholder")),
+            );
+        });
+    });
+    ui.on_node_with_text("Label").assert_is_displayed();
+    ui.on_node_with_text("Prefix").assert_does_not_exist();
+    ui.on_node_with_text("Suffix").assert_does_not_exist();
+    ui.on_node_with_text("Placeholder").assert_does_not_exist();
+    // Nor drawn, measured or composed: an outlined one too.
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            OutlinedTextField!(
+                String::new(),
+                |_| {},
+                label = Some(|| Text!("Label")),
+                prefix = Some(|| Text!("Prefix")),
+                suffix = Some(|| Text!("Suffix")),
+                placeholder = Some(|| Text!("Placeholder")),
+            );
+        });
+    });
+    ui.on_node_with_text("Prefix").assert_does_not_exist();
+    ui.on_node_with_text("Suffix").assert_does_not_exist();
+    ui.on_node_with_text("Placeholder").assert_does_not_exist();
+}
+
+/// With no label they're shown from the start, and a filled text shows the prefix and the suffix.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TextFieldTest.kt, testTextField_prefixAndSuffixAndPlaceholder_areDisplayed_withLabel_ifLabelCannotExpand
+#[test]
+fn a_prefix_suffix_and_placeholder_show_without_a_label() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            TextField!(
+                String::new(),
+                |_| {},
+                prefix = Some(|| Text!("Prefix")),
+                suffix = Some(|| Text!("Suffix")),
+                placeholder = Some(|| Text!("Placeholder")),
+            );
+        });
+    });
+    ui.on_node_with_text("Prefix").assert_is_displayed();
+    ui.on_node_with_text("Suffix").assert_is_displayed();
+    ui.on_node_with_text("Placeholder").assert_is_displayed();
+}
+
+/// Empty as the text shows, as `visualText`: a transformation showing something for no text
+/// leaves no room for the placeholder.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, CommonDecorationBox
+#[test]
+fn a_placeholder_goes_by_the_text_as_it_shows() {
+    use compose_foundation::{
+        OffsetMapping, TransformedText, VisualTransform, VisualTransformation,
+    };
+    struct Same;
+    impl OffsetMapping for Same {
+        fn original_to_transformed(&self, _offset: usize) -> usize {
+            0
+        }
+        fn transformed_to_original(&self, _offset: usize) -> usize {
+            0
+        }
+    }
+    struct Shows;
+    impl VisualTransform for Shows {
+        fn filter(&self, _text: &str) -> TransformedText {
+            TransformedText { text: "shows".to_string(), offset_mapping: std::rc::Rc::new(Same) }
+        }
+    }
+    let transformation = VisualTransformation::new(Shows);
+    let mut ui = compose_test(move || {
+        let transformation = transformation.clone();
+        MaterialTheme!({
+            TextField!(
+                String::new(),
+                |_| {},
+                placeholder = Some(|| Text!("Placeholder")),
+                visual_transformation = transformation.clone(),
+            );
+        });
+    });
+    ui.on_node_with_text("Placeholder").assert_does_not_exist();
+}
+
+/// A style with a color of its own on one of its two ends: the label takes it, focused the small
+/// one's, else the large one's, a missing one the label's color.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, overrideLabelTextStyleColor
+#[test]
+fn a_label_takes_the_color_of_the_typography_with_one() {
+    use compose_ui::Color;
+    use std::cell::Cell;
+    thread_local! {
+        static SEEN: Cell<Color> = const { Cell::new(Color::BLACK) };
+    }
+    let field = || {
+        TextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            label = Some(|| SEEN.set(LOCAL_TEXT_STYLE.current().color)),
+        );
+    };
+    let mut ui = compose_test(move || {
+        let mut typography = (*MaterialTheme::typography()).clone();
+        typography.body_large.color = Color::RED;
+        MaterialTheme!(typography = typography, {
+            field();
+        });
+    });
+    assert_eq!(SEEN.get(), Color::RED);
+    // Focused, the small one's, which has none: the label's color.
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    assert_eq!(SEEN.get(), light_color_scheme().primary);
+    // Without one on either, it has none: the label's content color applies.
+    let _ui = compose_test(move || {
+        MaterialTheme!({
+            field();
+        });
+    });
+    assert_eq!(SEEN.get(), Color::UNSPECIFIED);
+}
+
+/// A focused and an errored field have containers of their own, as `containerColor`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TextFieldDefaults.kt, containerColor
+#[test]
+fn a_fields_container_follows_focus_and_error() {
+    use compose_ui::Color;
+    let field = |is_error: bool| {
+        let colors = TextFieldColors {
+            container_color: Color::RED,
+            focused_container_color: Color::GREEN,
+            error_container_color: Color::BLUE,
+            ..TextFieldDefaults::colors()
+        };
+        TextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            is_error = is_error,
+            colors = colors,
+        );
+    };
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            field(false);
+        });
+    });
+    assert!(ui.dump_display_list().contains("#FFFF0000"), "{}", ui.dump_display_list());
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    assert!(ui.dump_display_list().contains("#FF00FF00"), "{}", ui.dump_display_list());
+    let ui = compose_test(move || {
+        MaterialTheme!({
+            field(true);
+        });
+    });
+    assert!(ui.dump_display_list().contains("#FF0000FF"), "{}", ui.dump_display_list());
 }
 
 #[test]

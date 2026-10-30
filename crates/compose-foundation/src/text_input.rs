@@ -176,7 +176,7 @@ impl VisualTransformation {
     }
 
     /// The text shown for `text`, or `None` when it's shown as it is.
-    pub(crate) fn filter(&self, text: &str) -> Option<TransformedText> {
+    pub fn filter(&self, text: &str) -> Option<TransformedText> {
         match &self.0 {
             Kind::None => None,
             Kind::Password(mask) => Some(PasswordVisualTransformation { mask: *mask }.filter(text)),

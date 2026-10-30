@@ -474,6 +474,47 @@ fn removing_the_focused_node_clears_focus() {
 
 // ---- Semantics ---------------------------------------------------------------------------------
 
+/// Measured and not placed, a child still merges: Compose's filter is on attached and not
+/// deactivated, not on placed. A node apart, or an unmerged one, it isn't: it has no place.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, fillOneLayerOfSemanticsWrappers
+#[test]
+fn an_unplaced_child_merges_into_its_parent() {
+    struct PlacesTheFirst;
+    impl MeasurePolicy for PlacesTheFirst {
+        fn measure(
+            &self,
+            scope: &mut MeasureScope<'_>,
+            measurables: &[Measurable],
+            constraints: Constraints,
+        ) -> MeasureResult {
+            let placeables: Vec<_> =
+                measurables.iter().map(|&it| scope.measure(it, constraints)).collect();
+            scope.place_relative(&placeables[0], 0, 0);
+            scope.layout(placeables[0].width, placeables[0].height)
+        }
+    }
+    let host = host(|| {
+        Layout(
+            Modifier.clickable(|| {}),
+            remember(|| Rc::new(PlacesTheFirst) as Rc<dyn MeasurePolicy>),
+            callback(|| {
+                Text!("Placed");
+                Text!("Not placed");
+            }),
+        );
+    });
+    let merged = host.semantics_tree(true);
+    assert_eq!(
+        merged.dump(),
+        "\
+[0,0 200x100] 
+  [0,0 42x18] text=[\"Placed\", \"Not placed\"] clickable focusable merged
+"
+    );
+    let unmerged = host.semantics_tree(false);
+    assert_eq!(unmerged.children[0].children.len(), 1, "only what's placed is a node");
+}
+
 #[test]
 fn a_clickable_merges_its_descendants_semantics() {
     let host = host(|| {

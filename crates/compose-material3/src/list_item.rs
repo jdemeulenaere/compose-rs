@@ -173,9 +173,27 @@ impl compose_runtime::ComposeArg for ListItemShapes {
     }
 }
 
+/// For `key(shapes)`: equal shapes hash alike, a custom shape's by its kind alone.
+impl std::hash::Hash for ListItemShapes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for shape in self.all() {
+            std::mem::discriminant(shape).hash(state);
+            for corner in shape.corners().into_iter().flatten() {
+                let (kind, size) = match corner {
+                    CornerSize::Dp(size) => (0u8, size.0),
+                    CornerSize::Px(size) => (1u8, size),
+                    CornerSize::Percent(size) => (2u8, size),
+                };
+                kind.hash(state);
+                // Plus zero: minus zero is equal to it, and hashes alike then.
+                (size + 0.0).to_bits().hash(state);
+            }
+        }
+    }
+}
+
 impl ListItemShapes {
-    /// Whether all its shapes have rounded corners, which is what animates between them.
-    fn all_rounded(&self) -> bool {
+    fn all(&self) -> [&Shape; 6] {
         [
             &self.shape,
             &self.selected_shape,
@@ -184,8 +202,12 @@ impl ListItemShapes {
             &self.hovered_shape,
             &self.dragged_shape,
         ]
-        .into_iter()
-        .all(|shape| matches!(shape, Shape::Rounded(_)))
+    }
+
+    /// Whether all its shapes have corners, which is what animates between them, as
+    /// `hasRoundedCornerShapes` and `hasCornerBasedShapes`.
+    fn corner_based(&self) -> bool {
+        self.all().into_iter().all(|shape| shape.corners().is_some())
     }
 
     /// The shape for a state: pressed, then dragged, selected, focused, hovered, else the
@@ -529,12 +551,18 @@ struct Slots {
     content: Callback,
 }
 
-/// What a list item's colors follow, as `InteractiveListColorState`.
-#[derive(Clone, Copy, PartialEq)]
-struct ColorState {
-    enabled: bool,
-    selected: bool,
-    dragged: bool,
+/// The container's and the content's colors of an item, one value to animate.
+type ItemColors = [Color; 6];
+
+fn lerp_colors(start: ItemColors, stop: ItemColors, fraction: f32) -> ItemColors {
+    // Most don't change between states: no going through Oklab for those each frame.
+    std::array::from_fn(|index| {
+        if start[index] == stop[index] {
+            start[index]
+        } else {
+            Color::lerp(start[index], stop[index], fraction)
+        }
+    })
 }
 
 /// The body the list items share, as Compose's `InteractiveListItem`: its colors, shape and shadow
@@ -564,40 +592,37 @@ fn interactive_list_item(
     // compose-rs has no drag interactions: an item is never dragged here.
     let dragged = false;
     let motion = MaterialTheme::motion_scheme();
-    // Rounded corners move from one state's to another's, one shape all the while; any other shape
-    // (Compose's cut corners too, an outline with no corners to move here) snaps.
+    // Corners move from one state's to another's, one shape all the while; any other shape snaps.
+    // New shapes start over, snapping too, as `key(this)`; the group is there either way, so what's
+    // remembered next doesn't shift.
     let target_shape = shapes.for_state(selected, pressed, focused, hovered);
-    let shape = if shapes.all_rounded() {
-        crate::animated_shape::remember_animated_shape(target_shape, motion.fast_spatial_spec())
-    } else {
-        target_shape
-    };
-    let transition = compose_animation::update_transition(
-        ColorState { enabled, selected, dragged },
-        "ListColor",
-    );
-    let color_spec = motion.default_effects_spec();
-    let animate = |label: &'static str, color: fn(&ListItemColors, bool, bool, bool) -> Color| {
-        let spec = color_spec.clone();
-        transition.animate_color_with(
-            move |_| spec.clone(),
-            label,
-            move |state: &ColorState| color(&colors, state.enabled, state.selected, state.dragged),
-        )
-    };
-    let container = animate("ContainerColor", ListItemColors::container_color).get();
-    let content_color = animate("ContentColor", ListItemColors::content_color).get();
-    let leading_color = animate("LeadingColor", ListItemColors::leading_content_color);
-    let trailing_color = animate("TrailingColor", ListItemColors::trailing_content_color);
-    let overline_color = animate("OverlineColor", ListItemColors::overline_content_color);
-    let supporting_color = animate("SupportingColor", ListItemColors::supporting_content_color);
-    let shadow = compose_animation::animate_dp_as_state(
+    let shape = compose_runtime::key(shapes.clone(), || {
+        if shapes.corner_based() {
+            crate::animated_shape::remember_animated_shape(target_shape, motion.fast_spatial_spec())
+        } else {
+            target_shape
+        }
+    });
+    // Each on `DefaultEffects`, as `InteractiveListItem`'s transition, though one animation, made
+    // when they first change: an item of a lazy list that never changes pays for none (D1036).
+    let [container, content_color, leading_color, trailing_color, overline_color, supporting_color] =
+        crate::lazy_animation::animate_lazily(
+            [
+                colors.container_color(enabled, selected, dragged),
+                colors.content_color(enabled, selected, dragged),
+                colors.leading_content_color(enabled, selected, dragged),
+                colors.trailing_content_color(enabled, selected, dragged),
+                colors.overline_content_color(enabled, selected, dragged),
+                colors.supporting_content_color(enabled, selected, dragged),
+            ],
+            motion.default_effects_spec(),
+            lerp_colors,
+        );
+    let shadow = crate::lazy_animation::animate_lazily(
         if dragged { elevation.dragged_elevation } else { elevation.elevation },
         motion.fast_spatial_spec(),
-        "ListItemElevation",
-        None,
-    )
-    .get();
+        |start: Dp, stop: Dp, fraction| Dp(start.0 + (stop.0 - start.0) * fraction),
+    );
     let is_clickable = click.is_some();
     let modifier = modifier.semantics_with(true, move |config| match semantics {
         ItemSemantics::None => {
@@ -639,7 +664,7 @@ fn interactive_list_item(
                 // The ring on the item's shape, as Compose's, where that's one object; where it
                 // isn't, in the focused shape: a factory changing with the state would make the
                 // node again.
-                indication: crate::ripple::shaped_ripple(if shapes.all_rounded() {
+                indication: crate::ripple::shaped_ripple(if shapes.corner_based() {
                     shape.clone()
                 } else {
                     shapes.focused_shape.clone()
@@ -690,7 +715,7 @@ fn interactive_list_item(
                     side_decorator(
                         (0.dp(), 0.dp(), ITEM_BETWEEN_SPACE, 0.dp()),
                         leading_start + ITEM_BETWEEN_SPACE,
-                        leading_color.get(),
+                        leading_color,
                         typography.title_medium.clone(),
                         leading,
                     );
@@ -699,17 +724,17 @@ fn interactive_list_item(
                     side_decorator(
                         (ITEM_BETWEEN_SPACE, 0.dp(), 0.dp(), 0.dp()),
                         trailing_end + ITEM_BETWEEN_SPACE,
-                        trailing_color.get(),
+                        trailing_color,
                         typography.label_small.clone(),
                         trailing,
                     );
                 }
                 if let Some(overline) = overline_content.clone() {
-                    decorator(overline_color.get(), typography.label_small.clone(), overline);
+                    decorator(overline_color, typography.label_small.clone(), overline);
                 }
                 decorator(content_color, typography.body_large.clone(), content.clone());
                 if let Some(supporting) = supporting_content.clone() {
-                    decorator(supporting_color.get(), typography.body_medium.clone(), supporting);
+                    decorator(supporting_color, typography.body_medium.clone(), supporting);
                 }
             }),
         );
