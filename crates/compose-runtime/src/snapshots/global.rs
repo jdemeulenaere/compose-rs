@@ -83,6 +83,12 @@ impl Snapshots {
         }
     }
 
+    /// Whether the global snapshot has changes to send.
+    #[inline]
+    pub(crate) fn has_changes(&self) -> bool {
+        !self.modified.is_empty()
+    }
+
     /// Whether nothing is registered: the runtime may be released at thread exit.
     pub(crate) fn is_empty(&self) -> bool {
         self.apply_observers.is_empty() && self.global_write_observers.is_empty() && self.turns == 0
@@ -496,20 +502,25 @@ fn send(always: bool) {
     });
 }
 
-/// Whether the global snapshot has changes to send.
-fn has_pending_changes() -> bool {
-    try_with_runtime(|runtime| !runtime.snapshots.modified.is_empty()).unwrap_or(false)
-}
-
 /// Sends, and again while what the send ran (apply observers, observations' callbacks) wrote
 /// state, a few times at most: a turn ends with its changes sent, as Compose's next-turn send
 /// would. What's still pending then waits for the next turn, which the host is asked for.
 fn send_settled() {
     for _ in 0..16 {
-        send(false);
-        if !has_pending_changes() {
+        // What the turn made is initialized too: its next write is a change, whatever read it
+        // meanwhile, as `Recomposer`'s `notifyObjectsInitialized` closes a frame (D754).
+        let settled = try_with_runtime(|runtime| {
+            let snapshots = &mut runtime.snapshots;
+            let settled = !snapshots.has_changes();
+            if settled {
+                snapshots.advance();
+            }
+            settled
+        });
+        if settled != Some(false) {
             return;
         }
+        send(false);
     }
     crate::executor::wake_host();
 }
@@ -537,9 +548,6 @@ impl Drop for Turn {
         });
         if outermost == Some(true) && !std::thread::panicking() {
             send_settled();
-            // What the turn made is initialized: its next write is a change, whatever read it
-            // meanwhile, as `Recomposer`'s `notifyObjectsInitialized` closes a frame (D754).
-            let _ = try_with_runtime(|runtime| runtime.snapshots.advance());
         }
     }
 }

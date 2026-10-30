@@ -71,6 +71,8 @@ struct CellEntry {
     refresh: Option<std::rc::Weak<dyn crate::derived::Refresh>>,
     /// Written outside composition since the last send: its readers are invalidated then.
     pending: bool,
+    /// A derived state's calculation may have read it (it stays set): a write marks those dirty.
+    read_by_derived: bool,
     created_at: &'static Location<'static>,
     /// The generation and creation site of the cell last freed here, so a stale handle still
     /// names its creation site after the slot is reused (rule R3).
@@ -128,6 +130,7 @@ impl Cells {
                 stale: false,
                 refresh: None,
                 pending: false,
+                read_by_derived: false,
                 created_at,
                 freed: (0, created_at),
             });
@@ -158,6 +161,7 @@ impl Cells {
         entry.stale = false;
         entry.refresh = None;
         entry.pending = false;
+        entry.read_by_derived = false;
         self.dirty_derived.remove(&id.index);
         self.free.push(id.index);
         entry.cell.take()
@@ -335,11 +339,13 @@ fn register_observed_read(
     if entry.observed.len() == entry.observed.capacity() {
         entry.observed.retain(|read| observers.is_current(read));
     }
-    entry.observed.push(crate::observe::ObservedRead {
+    let read = crate::observe::ObservedRead {
         observer: observing.observer,
         key: observing.key,
         epoch: observing.epoch,
-    });
+    };
+    entry.read_by_derived |= observers.dirty_cell(&read).is_some();
+    entry.observed.push(read);
 }
 
 /// A state object's cell, out of the arena.
@@ -635,6 +641,10 @@ pub(crate) fn invalidate_cell(
         let Ok(entry) = cells.entry(id) else {
             return false;
         };
+        // At a write, nearly always: no derived state read it.
+        if !reach.readers && !entry.read_by_derived {
+            return false;
+        }
         let mut requested = false;
         if reach.readers {
             entry.readers.retain(|reader| {

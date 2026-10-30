@@ -214,12 +214,13 @@ impl UiHost {
     /// call (`on_focus_changed`) without recomposing: a frame does it first, and a test rule
     /// between frames, so what the calls write recomposes at its next frame (D906).
     pub fn handle_focus_requests(&self) {
-        let _turn = compose_runtime::platform::Turn::begin();
+        let mut _turn = None;
         loop {
             let pending = self.with_tree(|tree| tree.focus_requests.pending.take());
             if pending.is_empty() {
                 return;
             }
+            _turn.get_or_insert_with(compose_runtime::platform::Turn::begin);
             for request in pending {
                 let actions = self.with_tree(|tree| tree.perform_focus_request(request));
                 Self::run(actions);

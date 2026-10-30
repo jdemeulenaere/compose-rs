@@ -76,11 +76,19 @@ impl Composition {
     pub fn has_invalidations(&self) -> bool {
         // The turn's changes invalidate their readers first (D751); a derived state whose
         // dependencies changed may have changed: computed now.
-        if !crate::runtime::with_runtime(|runtime| runtime.is_busy()) {
-            crate::snapshots::Snapshot::send_apply_notifications();
-            if crate::derived::has_pending_derived_states() {
-                crate::derived::flush_derived_states();
-            }
+        let (invalid, busy, unsent) = with_runtime(|runtime| {
+            let unsent = runtime.snapshots.has_changes();
+            (self.data(runtime).has_invalidations(), runtime.is_busy(), unsent)
+        });
+        if busy {
+            return invalid;
+        }
+        if !unsent && !crate::derived::has_pending_derived_states() {
+            return invalid;
+        }
+        crate::snapshots::Snapshot::send_apply_notifications();
+        if crate::derived::has_pending_derived_states() {
+            crate::derived::flush_derived_states();
         }
         with_runtime(|runtime| self.data(runtime).has_invalidations())
     }
