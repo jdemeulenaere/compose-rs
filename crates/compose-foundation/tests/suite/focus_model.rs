@@ -454,13 +454,16 @@ fn a_restorer_whose_item_is_gone_gives_the_focus_to_what_is_shown() {
 
 /// `count` rows of a lazy column, each a lazy row in a restorer, of `count` items 10 wide.
 #[composable]
-fn NestedRows(rows: usize, columns: usize) {
+fn NestedRows(rows: usize, columns: usize, first_row: LazyListState) {
     LazyColumn!(
         modifier = Modifier.size(100.dp()).focus_restorer(FocusRequester::DEFAULT),
         move |scope: LazyListScope| {
             scope.items(rows, move |row| {
+                let state = remember_lazy_list_state(0, 0);
+                let state = if row == 0 { first_row } else { state };
                 LazyRow!(
                     modifier = Modifier.focus_restorer(FocusRequester::DEFAULT),
+                    state = state,
                     move |scope: LazyListScope| {
                         scope.items(columns, move |column| {
                             Box!(
@@ -480,14 +483,18 @@ fn NestedRows(rows: usize, columns: usize) {
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, restoringItemsInNestedLazyList
 #[test]
 fn nested_lazy_lists_with_restorers_bring_the_focus_back_to_the_child_each_row_left() {
+    let first_row = LazyListState::new(0, 0);
+    let given = *first_row;
     let kept: Manager = Rc::default();
     let keeping = kept.clone();
     let mut ui = compose_test(move || {
         *keeping.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
-        NestedRows(20, 20);
+        NestedRows(20, 20, given);
     });
     let manager = manager_of(&kept);
-    ui.on_node_with_tag("0,9").request_focus();
+    first_row.request_scroll_to_item(19, 0);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("0,19").request_focus();
     ui.wait_for_idle();
     ui.on_node_with_tag("1,0").request_focus();
     ui.wait_for_idle();
@@ -500,7 +507,7 @@ fn nested_lazy_lists_with_restorers_bring_the_focus_back_to_the_child_each_row_l
         manager.move_focus(FocusDirection::Up);
         ui.wait_for_idle();
     }
-    ui.on_node_with_tag("0,9").assert_is_focused();
+    ui.on_node_with_tag("0,19").assert_is_focused();
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, disposedLazyRowWithFocusRestorerRestoresFocusCorrectly_firstRow
@@ -1310,7 +1317,7 @@ fn group_in_a_host(
     shown: bool,
     steps: impl FnOnce(&mut ComposeTestRule, FocusRequester, compose_runtime::MutableState<bool>),
 ) -> (SavedState, Vec<String>) {
-    let mut host = UiHost::new(
+    let host = UiHost::new(
         IntSize::new(400, 400),
         Density::new(1.0),
         Box::new(compose_ui::platform::FixedTextMeasurer::new()),
@@ -1445,4 +1452,33 @@ fn every_row_with_a_restorer_disposed_and_composed_again_gives_the_focus_to_what
         press(&mut ui, FocusDirection::Down);
         ui.on_node_with_tag(&format!("{row}-1")).assert_is_focused();
     }
+}
+
+#[test]
+fn a_focused_item_reused_for_another_key_tells_the_listener_that_was_there() {
+    let heard: &'static RefCell<Vec<(usize, FocusState)>> = Box::leak(Box::default());
+    let requester = FocusRequester::new();
+    let first = Box::leak(Box::new(mutable_state_of(0usize))).handle();
+    let mut ui = compose_test(move || {
+        LazyRow!(modifier = Modifier.size(10.dp()), move |scope: LazyListScope| {
+            scope.item_keyed(first.get(), move || {
+                let at = first.get();
+                Box!(
+                    modifier = Modifier
+                        .size(10.dp())
+                        .on_focus_changed(move |it: FocusState| heard.borrow_mut().push((at, it)))
+                        .focus_requester(requester)
+                        .focus_target()
+                );
+            });
+        });
+    });
+    ui.wait_for_idle();
+    assert!(requester.request_focus());
+    ui.wait_for_idle();
+    heard.borrow_mut().clear();
+    first.set(1);
+    ui.wait_for_idle();
+    assert_eq!(heard.borrow().first(), Some(&(0, FocusState::Inactive)));
+    assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
 }

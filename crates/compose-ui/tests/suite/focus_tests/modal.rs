@@ -311,3 +311,34 @@ fn keys_go_to_a_modal_with_no_target_rather_than_what_it_shuts_out() {
     scene.with_host(|host| host.send_key(KeyEvent::down(Key::Space)));
     assert_eq!(scene.said(), ["modal"]);
 }
+
+#[test]
+fn a_modal_closing_with_another_still_showing_leaves_what_it_covered_for_the_other() {
+    let scene = scene(|scene| {
+        Column!({
+            Leaf(scene.target("behind").size(10.dp()));
+            if scene.flag("both").get() {
+                for name in ["lower", "upper"] {
+                    if name == "lower" || !scene.flag("upper gone").get() {
+                        Stack!(
+                            modifier = Modifier
+                                .overlay(Rc::new(WindowPosition), true)
+                                .required_size((50.dp(), 50.dp()))
+                                .then(scene.listen(name))
+                                .focus_target(),
+                            {}
+                        );
+                    }
+                }
+            }
+        });
+    });
+    assert!(scene.request("behind"));
+    // Opening together, each keeps what had it behind.
+    scene.set("both", true);
+    assert_eq!(scene.state("behind"), Inactive);
+    scene.set("upper gone", true);
+    assert_eq!(scene.state("behind"), Inactive, "the lower one still shuts it out");
+    scene.set("both", false);
+    assert_eq!(scene.focused(), ["behind"]);
+}

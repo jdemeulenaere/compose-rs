@@ -525,6 +525,26 @@ fn a_target_reused_starts_again_without_the_focus() {
     }
 }
 
+/// What's told is the listener that was there, not the one its new key brings.
+#[test]
+fn a_target_reused_with_the_focus_tells_the_listener_of_its_old_content() {
+    let key = shared(0);
+    let scene = scene(move |scene| {
+        let at = key.get();
+        ReusableContent(at, move || {
+            let name = if at == 0 { "old" } else { "new" };
+            Leaf(scene.listen_anew(name).then(scene.req("y")).focus_target());
+        });
+    });
+    assert!(scene.request("y"));
+    assert_eq!(scene.state("old"), Active);
+    scene.forget();
+    key.set(1);
+    scene.idle();
+    assert_eq!(scene.heard("old"), [Inactive]);
+    assert!(scene.heard("new").is_empty(), "its state is the same: nothing changed for it");
+}
+
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTargetAttachDetachTest.kt, reusedContent_clearsFocusOnReset
 #[test]
 fn a_target_in_content_put_aside_for_reuse_loses_the_focus() {

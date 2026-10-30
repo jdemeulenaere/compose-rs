@@ -15,6 +15,9 @@ pub enum InputMode {
     Keyboard,
 }
 
+/// What asks the system for keyboard mode: whether it's granted.
+type KeyboardRequest = Rc<dyn Fn() -> bool>;
+
 /// What reads and asks to change the input mode, as Compose's `InputModeManager`:
 /// `LOCAL_INPUT_MODE_MANAGER.current()`.
 #[derive(Clone)]
@@ -24,7 +27,7 @@ pub struct InputModeManager {
     system_decides: Rc<std::cell::Cell<bool>>,
     /// What asks the system for keyboard mode (Android's `requestFocusFromTouch`), which then says
     /// so as it does.
-    keyboard_request: Rc<std::cell::RefCell<Option<Rc<dyn Fn() -> bool>>>>,
+    keyboard_request: Rc<std::cell::RefCell<Option<KeyboardRequest>>>,
 }
 
 impl InputModeManager {
@@ -58,7 +61,7 @@ impl InputModeManager {
     }
 
     /// Who asks the system for keyboard mode.
-    pub(crate) fn set_keyboard_request(&self, request: Rc<dyn Fn() -> bool>) {
+    pub(crate) fn set_keyboard_request(&self, request: KeyboardRequest) {
         *self.keyboard_request.borrow_mut() = Some(request);
     }
 
