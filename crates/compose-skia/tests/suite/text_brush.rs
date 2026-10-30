@@ -205,6 +205,26 @@ fn a_brush_is_the_same_whichever_way_a_text_runs() {
 }
 
 #[test]
+fn a_start_ellipsis_draws_the_ellipsis_glyph_then_the_lines_end() {
+    let drawn = draw_with((150, 100), (150, 100), 1.0, 0, |scope, measurer| {
+        let options = DrawTextOptions {
+            style: sample(50.0),
+            overflow: compose::ui::TextOverflow::StartEllipsis,
+            max_lines: 1,
+            ..DrawTextOptions::default()
+        };
+        scope.draw_text(measurer, "abcde", options);
+    });
+    // The sample font's "…" is a bar under the baseline, 40 pixels down; a letter a triangle
+    // from the top of the line, with nothing beyond where the line ends.
+    assert_ne!(drawn.pixel(2, 45), Color::WHITE);
+    assert_eq!(drawn.pixel(2, 5), Color::WHITE);
+    assert_ne!(drawn.pixel(52, 5), Color::WHITE);
+    assert_ne!(drawn.pixel(102, 5), Color::WHITE);
+    assert_eq!(drawn.pixel(52, 60), Color::WHITE);
+}
+
+#[test]
 fn a_gradient_runs_across_the_paragraph_not_a_glyph() {
     let style = sample(100.0).with_brush(Some(left_to_right()), f32::NAN);
     let drawn = picture("abc", style, 300, 100);

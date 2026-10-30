@@ -256,6 +256,8 @@ struct Entry {
     min_intrinsic_width: f32,
     /// It ends with an ellipsis (more lines than its maximum, ellipsized).
     ellipsized: bool,
+    /// It's a start or middle ellipsis: its line ends where the text does.
+    ellipsis_inside: bool,
 }
 
 /// The queries of `entry`'s paragraph (D1105): its lines from SkParagraph's line metrics, each
@@ -282,7 +284,7 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         let end = byte_at(line.end_including_newline);
         // As Compose's `lineEndToVisibleEnd` (SkParagraph's own takes a tab for whitespace too),
         // but an ellipsized line, which ends where its ellipsis starts.
-        let visible_end = if entry.ellipsized && number + 1 == count {
+        let visible_end = if entry.ellipsized && !entry.ellipsis_inside && number + 1 == count {
             byte_at(line.end_excluding_whitespaces).max(start)
         } else {
             start + text[start..end].trim_end_matches(compose_ui::platform::is_line_end_space).len()
@@ -675,8 +677,10 @@ impl SkiaTextMeasurer {
         }
         // As Compose: an ellipsis without soft wrapping is one line.
         let ellipsis = options.overflow == compose_ui::TextOverflow::Ellipsis;
-        let max_lines = if ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
-        if max_lines != u32::MAX {
+        let any_ellipsis = options.overflow.is_ellipsis();
+        let max_lines = if any_ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
+        // An ellipsis without a maximum would be one line to SkParagraph, not to Compose.
+        if max_lines != u32::MAX || ellipsis {
             paragraph_style.set_max_lines(max_lines.max(1) as usize);
         }
         if ellipsis {
@@ -695,21 +699,26 @@ impl SkiaTextMeasurer {
             run_styles.push(run);
         }
         let collection = &self.collection;
-        let build = |text_style: &SkiaTextStyle, run_styles: &[SkiaTextStyle]| {
-            let mut builder = ParagraphBuilder::new(&paragraph_style, collection.clone());
+        // What's shown: the text, but where a start or middle ellipsis hides some of it.
+        let mut shown = ShownText::whole(text);
+        let build = |paragraph_style: &ParagraphStyle,
+                     shown: &ShownText<'_>,
+                     text_style: &SkiaTextStyle,
+                     run_styles: &[SkiaTextStyle]| {
+            let mut builder = ParagraphBuilder::new(paragraph_style, collection.clone());
             builder.push_style(text_style);
             if runs.is_empty() {
-                builder.add_text(text);
+                builder.add_text(&*shown.text);
             }
             for ((range, _, _), run) in runs.iter().zip(run_styles) {
                 builder.push_style(run);
-                builder.add_text(&text[range.clone()]);
+                builder.add_text(shown.range(range.clone()));
                 builder.pop();
             }
             builder.build()
         };
-        let mut paragraph = build(&text_style, &run_styles);
-        let width = if (options.soft_wrap || ellipsis) && constraints.has_bounded_width() {
+        let mut paragraph = build(&paragraph_style, &shown, &text_style, &run_styles);
+        let width = if (options.soft_wrap || any_ellipsis) && constraints.has_bounded_width() {
             constraints.max_width as f32
         } else {
             f32::INFINITY
@@ -725,6 +734,42 @@ impl SkiaTextMeasurer {
             max_intrinsic_width = paragraph.max_intrinsic_width();
             paragraph.layout(width);
         }
+        // A start or middle ellipsis, on one line only (else a clip, as `StaticLayout`).
+        let middle = options.overflow == compose_ui::TextOverflow::MiddleEllipsis;
+        let mut ellipsis_inside = false;
+        if width.is_finite()
+            && max_lines == 1
+            && (middle || options.overflow == compose_ui::TextOverflow::StartEllipsis)
+        {
+            let first_line = text.find('\n').unwrap_or(text.len());
+            // On a line, at a finite width: right to left starts from it.
+            paragraph.layout(f32::INFINITY);
+            paragraph.layout(paragraph.max_intrinsic_width().ceil() + 1.0);
+            let widths = unit_widths(&paragraph, &text[..first_line]);
+            let total: f32 = widths.iter().sum();
+            if total > width + 0.001 || first_line < text.len() {
+                let ellipsis_width = {
+                    let mut builder = ParagraphBuilder::new(&paragraph_style, collection.clone());
+                    builder.push_style(&text_style);
+                    builder.add_text("\u{2026}");
+                    let mut ellipsis = builder.build();
+                    ellipsis.layout(f32::INFINITY);
+                    ellipsis.max_intrinsic_width()
+                };
+                let (start, count) = compose_ui::platform::start_or_middle_ellipsis(
+                    &widths,
+                    ellipsis_width,
+                    width,
+                    middle,
+                );
+                if count > 0 {
+                    shown = ShownText::hiding(text, start, count);
+                    ellipsis_inside = true;
+                    paragraph = build(&paragraph_style, &shown, &text_style, &run_styles);
+                }
+            }
+            paragraph.layout(width);
+        }
         // As Compose's `finalMaxWidth`: laid out again at the text's own width, rounded up and
         // kept in the constraints, so alignment and right-to-left text start where the text
         // is (not at an unbounded width's far edge).
@@ -737,6 +782,19 @@ impl SkiaTextMeasurer {
         if measured_width != width {
             paragraph.layout(measured_width);
         }
+        // As Compose's `AndroidParagraph`: an ellipsis ends the last line the height has room for
+        // (one, if it has room for none).
+        if ellipsis && max_lines > 1 && paragraph.height() > constraints.max_height as f32 {
+            let limit = f64::from(constraints.max_height);
+            let fitting = paragraph
+                .get_line_metrics()
+                .iter()
+                .take_while(|line| line.baseline + line.descent <= limit)
+                .count();
+            paragraph_style.set_max_lines(fitting.max(1));
+            paragraph = build(&paragraph_style, &shown, &text_style, &run_styles);
+            paragraph.layout(measured_width);
+        }
         // A gradient is over the paragraph's size, known now: built again with it. skia-safe
         // can't change a paragraph's paints (D555).
         let painted_size = compose_ui::Size::new(measured_width, paragraph.height());
@@ -745,7 +803,7 @@ impl SkiaTextMeasurer {
             shaded |= apply_gradient(run, run_style, painted_size);
         }
         if shaded {
-            paragraph = build(&text_style, &run_styles);
+            paragraph = build(&paragraph_style, &shown, &text_style, &run_styles);
             paragraph.layout(measured_width);
         }
         let size = IntSize::new(measured_width.ceil() as i32, paragraph.height().ceil() as i32);
@@ -759,7 +817,7 @@ impl SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
-        let ellipsized = ellipsis && paragraph.did_exceed_max_lines();
+        let ellipsized = (ellipsis && paragraph.did_exceed_max_lines()) || ellipsis_inside;
         let entry = Entry {
             resolved_fonts,
             paragraph,
@@ -769,6 +827,7 @@ impl SkiaTextMeasurer {
             max_intrinsic_width,
             min_intrinsic_width,
             ellipsized,
+            ellipsis_inside,
         };
         match self.free.pop() {
             Some(index) => {
@@ -781,6 +840,80 @@ impl SkiaTextMeasurer {
             }
         }
     }
+}
+
+/// A text as a paragraph shows it, as Android's `Layout` does an ellipsis: UTF-16 unit for unit
+/// (the first hidden a "…", the others U+FEFF, zero wide), so a query's offsets are the text's.
+struct ShownText<'a> {
+    original: &'a str,
+    text: std::borrow::Cow<'a, str>,
+    /// The bytes hidden in the original.
+    hidden_start: usize,
+    hidden_end: usize,
+}
+
+impl<'a> ShownText<'a> {
+    fn whole(text: &'a str) -> ShownText<'a> {
+        ShownText { original: text, text: text.into(), hidden_start: 0, hidden_end: 0 }
+    }
+
+    /// `text` with `count` UTF-16 units from unit `start` hidden.
+    fn hiding(text: &'a str, start: usize, count: usize) -> ShownText<'a> {
+        let (mut unit, mut hidden_start, mut hidden_end) = (0, text.len(), text.len());
+        for (offset, character) in text.char_indices() {
+            if unit == start {
+                hidden_start = offset;
+            }
+            if unit == start + count {
+                hidden_end = offset;
+                break;
+            }
+            unit += character.len_utf16();
+        }
+        let mut shown = String::with_capacity(text.len() + count * 3);
+        shown.push_str(&text[..hidden_start]);
+        shown.push('\u{2026}');
+        for _ in 1..count {
+            shown.push('\u{FEFF}');
+        }
+        shown.push_str(&text[hidden_end..]);
+        ShownText { original: text, text: shown.into(), hidden_start, hidden_end }
+    }
+
+    /// The part of the shown text a range of the original's bytes is: what's hidden goes with
+    /// the run the first of it starts.
+    fn range(&self, range: std::ops::Range<usize>) -> &str {
+        let shown_end = self.text.len() - (self.original.len() - self.hidden_end);
+        let at = |offset: usize| {
+            if offset <= self.hidden_start {
+                offset
+            } else if offset >= self.hidden_end {
+                offset - self.hidden_end + shown_end
+            } else {
+                shown_end
+            }
+        };
+        &self.text[at(range.start)..at(range.end)]
+    }
+}
+
+/// The width of each UTF-16 unit of `line`, the start of `paragraph` laid out on a line: all a
+/// cluster's on its first unit.
+fn unit_widths(paragraph: &Paragraph, line: &str) -> Vec<f32> {
+    let units = line.encode_utf16().count();
+    (0..units)
+        .map(|unit| {
+            paragraph
+                .get_rects_for_range(
+                    unit..unit + 1,
+                    skia_safe::textlayout::RectHeightStyle::Tight,
+                    skia_safe::textlayout::RectWidthStyle::Tight,
+                )
+                .iter()
+                .map(|text_box| text_box.rect.width())
+                .sum()
+        })
+        .collect()
 }
 
 /// The font size of `style` in pixels (the default size if unset).

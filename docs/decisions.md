@@ -359,7 +359,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D540 | [benchmarks](decisions/benchmarks.md#d540) | revised by [D622](decisions/api-and-tooling.md#d622) |
 | D550 | [text](decisions/text.md#d550) | revised by [D554](decisions/text.md#d554), [D555](decisions/text.md#d555) |
 | D551 | [text](decisions/text.md#d551) | current |
-| D552 | [text](decisions/text.md#d552) | current |
+| D552 | [text](decisions/text.md#d552) | revised by D1126 |
 | D553 | [benchmarks](decisions/benchmarks.md#d553) | current |
 | D554 | [text](decisions/text.md#d554) | revised by [D556](decisions/text.md#d556), [D1200](decisions/ui-and-layout.md#d1200) |
 | D555 | [text](decisions/text.md#d555) | current |
@@ -686,6 +686,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1123 | [text](decisions/text.md#d1123) | current |
 | D1124 | [text](decisions/text.md#d1124) | current |
 | D1125 | [text](decisions/text.md#d1125) | current |
+| D1126 | [text](decisions/text.md#d1126) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

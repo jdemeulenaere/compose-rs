@@ -188,6 +188,7 @@ impl TextBackend for Model {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        _max_height: i32,
     ) -> Option<LaidOut> {
         let kept = self.paragraphs.borrow_mut().remove(&previous)?.kept;
         Some(self.lay_out(handle, kept, min_width, max_width))
@@ -200,6 +201,7 @@ impl TextBackend for Model {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        _max_height: i32,
     ) -> Option<LaidOut> {
         let kept = self.paragraphs.borrow().get(&previous)?.kept.clone();
         Some(self.lay_out(handle, kept, min_width, max_width))

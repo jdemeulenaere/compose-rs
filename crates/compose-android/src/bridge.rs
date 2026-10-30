@@ -525,10 +525,11 @@ impl TextBackend for JniText {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        max_height: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
         let relaid = with_main_env(|env| {
-            // SAFETY: the method's signature is `(IIII)Z`.
+            // SAFETY: the method's signature is `(IIIII)Z`.
             let relaid = unsafe {
                 env.call_method_unchecked(
                     &*self.measurer,
@@ -539,6 +540,7 @@ impl TextBackend for JniText {
                         JValue::Int(handle as jint).as_jni(),
                         JValue::Int(min_width).as_jni(),
                         JValue::Int(max_width).as_jni(),
+                        JValue::Int(max_height).as_jni(),
                     ],
                 )
             };
@@ -555,10 +557,11 @@ impl TextBackend for JniText {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        max_height: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
         let laid = with_main_env(|env| {
-            // SAFETY: the method's signature is `(IIII)Z`.
+            // SAFETY: the method's signature is `(IIIII)Z`.
             let laid = unsafe {
                 env.call_method_unchecked(
                     &*self.measurer,
@@ -569,6 +572,7 @@ impl TextBackend for JniText {
                         JValue::Int(handle as jint).as_jni(),
                         JValue::Int(min_width).as_jni(),
                         JValue::Int(max_width).as_jni(),
+                        JValue::Int(max_height).as_jni(),
                     ],
                 )
             };
@@ -934,10 +938,10 @@ fn create(
             jni_str!("layout"),
             jni_sig!("(ILjava/lang/String;Ljava/nio/ByteBuffer;)V"),
         ),
-        relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIII)Z")),
+        relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIIII)Z")),
         restyle: method(env, measurer, jni_str!("restyle"), jni_sig!("(IIII)Z")),
         painted: method(env, measurer, jni_str!("painted"), jni_sig!("(IIII)Z")),
-        probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIII)Z")),
+        probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIIII)Z")),
         min_intrinsic_width: method(env, measurer, jni_str!("minIntrinsicWidth"), jni_sig!("(I)F")),
         hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),
         cursor: method(env, measurer, jni_str!("cursor"), jni_sig!("(II)V")),

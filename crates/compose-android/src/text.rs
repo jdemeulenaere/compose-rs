@@ -38,6 +38,7 @@ pub trait TextBackend: 'static {
         _handle: u32,
         _min_width: i32,
         _max_width: i32,
+        _max_height: i32,
     ) -> Option<LaidOut> {
         None
     }
@@ -50,6 +51,7 @@ pub trait TextBackend: 'static {
         _handle: u32,
         _min_width: i32,
         _max_width: i32,
+        _max_height: i32,
     ) -> Option<LaidOut> {
         None
     }
@@ -297,8 +299,9 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             let handle = self.next_handle();
             let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
             let (min_width, max_width) = width_bounds(constraints);
+            let max_height = constraints.max_height;
             if let Some(laid_out) =
-                self.backend.probe_layout(previous, handle, min_width, max_width)
+                self.backend.probe_layout(previous, handle, min_width, max_width, max_height)
             {
                 let entry = &self.paragraphs[&previous];
                 let entry = Entry {
@@ -404,7 +407,8 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         let handle = self.next_handle();
         let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
         let (min_width, max_width) = width_bounds(constraints);
-        let laid_out = self.backend.relayout(previous, handle, min_width, max_width)?;
+        let max_height = constraints.max_height;
+        let laid_out = self.backend.relayout(previous, handle, min_width, max_width, max_height)?;
         let entry = self.paragraphs.remove(&previous).expect("checked above");
         self.paragraphs.insert(handle, Entry { laid_out, ..entry });
         Some(ParagraphHandle(handle as u64))
@@ -648,7 +652,8 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
-/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
+/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only), max lines (u32), ellipsis (u8: 0
+/// none, 1 at the end, 2 at the start, 3 in the middle), alignment (u8: 0 normal, 1
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
@@ -656,7 +661,8 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 /// through, and [`paint_extras_flags`]'s: what follows the style, [`encode_paint_extras`]), line
 /// height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
 /// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
-/// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style.
+/// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style. Last, the maximum
+/// height (i32).
 #[allow(clippy::too_many_arguments)]
 fn encode_request(
     out: &mut Writer,
@@ -671,13 +677,18 @@ fn encode_request(
     fonts: &mut RequestFonts<'_>,
 ) {
     out.bytes.clear();
-    let ellipsis = options.overflow == TextOverflow::Ellipsis;
     // As Compose: an ellipsis without soft wrapping is one line.
-    let max_lines = if ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
+    let max_lines =
+        if options.overflow.is_ellipsis() && !options.soft_wrap { 1 } else { options.max_lines };
     out.u8(u8::from(options.soft_wrap) | (u8::from(probe) << 1));
     // A Java `int`: unlimited is `Integer.MAX_VALUE`, not -1.
     out.u32(max_lines.clamp(1, i32::MAX as u32));
-    out.u8(u8::from(ellipsis));
+    out.u8(match options.overflow {
+        TextOverflow::Ellipsis => 1,
+        TextOverflow::StartEllipsis => 2,
+        TextOverflow::MiddleEllipsis => 3,
+        _ => 0,
+    });
     let normal = |start: bool| if start { 0 } else { 1 };
     out.u8(match style.text_align {
         None | Some(TextAlign::Start) => 0,
@@ -703,6 +714,7 @@ fn encode_request(
         out.u8(inherits);
         encode_style(out, run_style, *background, density, fonts);
     }
+    out.u32(constraints.max_height as u32);
 }
 
 /// What of `style` only paints: its color (ARGB, black if unset) and decoration (1 underline,
@@ -924,7 +936,7 @@ mod tests {
     /// font size, weight, italic, family and letter spacing.
     const DECORATION_AT: usize = 16 + 4 + 4 + 4 + 1 + 1 + 4;
     /// A request's length with a plain style and no runs.
-    const PLAIN_REQUEST: usize = DECORATION_AT + 1 + 4 + 4 + 1 + 4 + 4;
+    const PLAIN_REQUEST: usize = DECORATION_AT + 1 + 4 + 4 + 1 + 4 + 4 + 4;
 
     fn request_of(style: &TextStyle) -> Vec<u8> {
         let mut measurer = AndroidTextMeasurer::new(Fake::default());
@@ -951,6 +963,36 @@ mod tests {
     }
 
     #[test]
+    fn an_ellipsis_says_where_and_one_without_soft_wrap_is_one_line() {
+        for (overflow, kind) in [
+            (TextOverflow::Clip, 0),
+            (TextOverflow::Visible, 0),
+            (TextOverflow::Ellipsis, 1),
+            (TextOverflow::StartEllipsis, 2),
+            (TextOverflow::MiddleEllipsis, 3),
+        ] {
+            let mut measurer = AndroidTextMeasurer::new(Fake::default());
+            let options = TextLayoutOptions {
+                overflow,
+                soft_wrap: false,
+                max_lines: 4,
+                ..TextLayoutOptions::default()
+            };
+            measurer.layout(
+                "text",
+                &TextStyle::DEFAULT,
+                options,
+                Constraints::new(0, 100, 0, 77),
+                &Density::new(1.0),
+            );
+            let request = &measurer.backend.requests[0];
+            assert_eq!(request[5], kind, "{overflow:?}");
+            assert_eq!(u32_at(request, 1), if kind == 0 { 4 } else { 1 }, "{overflow:?}");
+            assert_eq!(u32_at(request, request.len() - 4), 77, "the height, last");
+        }
+    }
+
+    #[test]
     fn a_plain_style_sends_no_paint_extras() {
         let request = request_of(&TextStyle::DEFAULT);
         assert_eq!(request.len(), PLAIN_REQUEST);
@@ -970,7 +1012,7 @@ mod tests {
         let style = TextStyle::DEFAULT.with_brush(Some(gradient()), 0.5);
         let request = request_of(&style);
         assert_eq!(request[DECORATION_AT], 4);
-        let extras = &request[PLAIN_REQUEST - 4..];
+        let extras = &request[PLAIN_REQUEST - 8..];
         // Linear, clamped, at half its alpha.
         assert_eq!(&extras[..2], &[0, 0]);
         assert_eq!(f32_at(extras, 2), 0.5);
@@ -984,7 +1026,7 @@ mod tests {
         assert_eq!(f32_at(extras, 26), 0.0);
         assert!(f32_at(extras, 30).is_infinite());
         assert_eq!(f32_at(extras, 34), 0.0);
-        assert_eq!(extras.len(), 38 + 4, "and the runs' count");
+        assert_eq!(extras.len(), 38 + 8, "and the runs' count and the height");
     }
 
     #[test]
@@ -1004,7 +1046,7 @@ mod tests {
         };
         let request = request_of(&style);
         assert_eq!(request[DECORATION_AT], 8 | 16);
-        let extras = &request[PLAIN_REQUEST - 4..];
+        let extras = &request[PLAIN_REQUEST - 8..];
         assert_eq!(u32_at(extras, 0), Color::GREEN.argb());
         assert_eq!((f32_at(extras, 4), f32_at(extras, 8), f32_at(extras, 12)), (1.0, 2.0, 3.0));
         assert_eq!((f32_at(extras, 16), f32_at(extras, 20)), (5.0, 4.0));
@@ -1044,7 +1086,7 @@ mod tests {
         assert_eq!(request[DECORATION_AT], 4 | 8);
         // The paragraph's gradient and shadow are the paragraph's: its runs set none.
         let (base_extras, shadow) = (38, 16);
-        let runs_at = PLAIN_REQUEST - 4 + base_extras + shadow;
+        let runs_at = PLAIN_REQUEST - 8 + base_extras + shadow;
         assert_eq!(u32_at(request, runs_at), 2);
         let first_run_style = runs_at + 4 + 4 + 4 + 1;
         assert_eq!(request[first_run_style + DECORATION_AT - 16], 0);

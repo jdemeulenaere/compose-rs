@@ -454,7 +454,8 @@ internal class TextMeasurer(
         val letterSpaced: Boolean,
         val softWrap: Boolean,
         val maxLines: Int,
-        val ellipsis: Boolean,
+        /** Where it ellipsizes, as Compose's `TextOverflow`: a start or a middle on one line only. */
+        val ellipsis: TextUtils.TruncateAt?,
         /** 0 normal, 1 opposite, 2 center, 3 justify. */
         val align: Int,
         /** The boring line's width, as Compose's `maxIntrinsicWidth` takes it. */
@@ -508,7 +509,12 @@ internal class TextMeasurer(
         // For an intrinsic probe only: measured, never drawn, so not recorded ahead (D556).
         val probe = flags and 2 != 0
         val maxLines = request.getInt()
-        val ellipsis = request.get().toInt() != 0
+        val ellipsis = when (request.get().toInt()) {
+            1 -> TextUtils.TruncateAt.END
+            2 -> TextUtils.TruncateAt.START
+            3 -> TextUtils.TruncateAt.MIDDLE
+            else -> null
+        }
         val align = request.get().toInt()
         val rtl = request.get().toInt() != 0
         val minWidth = request.getInt()
@@ -544,6 +550,7 @@ internal class TextMeasurer(
             }
             spannable
         }
+        val maxHeight = request.getInt()
         // A line height over every line (Compose's span, [StyledLineHeightSpan]), an empty text's
         // included (its line takes it from [lastLineMetrics], as Compose's).
         val lineHeight = if (base.lineHeightPx > 0f) base.lineHeightPx else 0f
@@ -563,7 +570,7 @@ internal class TextMeasurer(
             maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
         )
         kept.extras = base.extras
-        layoutAt(handle, kept, minWidth, maxWidth, drawn = !probe)
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = !probe)
     }
 
     /**
@@ -571,9 +578,9 @@ internal class TextMeasurer(
      * [relayout] does but keeping [previous]: measured from what [previous] kept, never drawn, so
      * not recorded ahead (D556). False (nothing changed) when [previous] kept nothing.
      */
-    fun probeLayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+    fun probeLayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int, maxHeight: Int): Boolean {
         val kept = intrinsics.get(previous) ?: return false
-        layoutAt(handle, kept, minWidth, maxWidth, drawn = false)
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = false)
         return true
     }
 
@@ -625,51 +632,62 @@ internal class TextMeasurer(
 
     /**
      * Lays out paragraph [previous]'s text again as paragraph [handle], between [minWidth] and
-     * [maxWidth] (`Int.MAX_VALUE`: unbounded), from what [previous] kept of it ([Intrinsics]: no
+     * [maxWidth] (`Int.MAX_VALUE`: unbounded) and at most [maxHeight] high if it's ellipsized, from
+     * what [previous] kept of it ([Intrinsics]: no
      * measure of the text), as Compose's new `Paragraph` from the `ParagraphIntrinsics` its cache
      * keeps when only the constraints change; then releases [previous]. False (nothing changed,
      * [results] untouched) when [previous] kept nothing.
      */
-    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int, maxHeight: Int): Boolean {
         // Rust lays the text out anew (nothing kept: a paragraph cleared or never laid out).
         val kept = intrinsics.get(previous) ?: return false
         release(previous)
-        layoutAt(handle, kept, minWidth, maxWidth)
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight)
         return true
     }
 
     /** Lays out [kept]'s text as paragraph [handle] at the constraints' width, writing [results]. */
-    private fun layoutAt(handle: Int, kept: Intrinsics, minWidth: Int, maxWidth: Int, drawn: Boolean = true) {
+    private fun layoutAt(
+        handle: Int,
+        kept: Intrinsics,
+        minWidth: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        drawn: Boolean = true,
+    ) {
         // The width to break lines at, as Compose's `finalMaxWidth`: the constraint when wrapping
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
-        val available = if ((kept.softWrap || kept.ellipsis) && bounded) maxWidth else Int.MAX_VALUE
+        val available = if ((kept.softWrap || kept.ellipsis != null) && bounded) maxWidth else Int.MAX_VALUE
         val width = if (minWidth == available) {
             available
         } else {
             ceil(kept.maxIntrinsicWidth).toInt().coerceIn(minWidth, available)
         }
-        val maxLines = kept.maxLines
-        // As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else
-        // a `StaticLayout`.
-        val boring = kept.boring
-        val layout = if (Build.VERSION.SDK_INT >= 33 && boring != null && kept.boringWidth <= width) {
-            val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
-            if (checkBoring) {
-                val static = staticLayout(
-                    kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis,
-                    kept.align,
-                )
-                // A difference is logged, and the StaticLayout kept (as before D330).
-                if (sameLayout(layout, static, kept.paint)) layout else static
-            } else {
-                layout
-            }
-        } else {
-            staticLayout(
-                kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
-                kept.ellipsis, kept.align,
+        var maxLines = kept.maxLines
+        var layout = textLayout(kept, width, maxLines)
+        // Below API 35 the characters hidden by a start or middle ellipsis keep their letter
+        // spacing, as they do for Compose's `AndroidParagraph`, which lays out without them.
+        if (Build.VERSION.SDK_INT < 35 && kept.letterSpaced && layout.lineCount > 0 && layout.getEllipsisCount(0) > 0 &&
+            kept.ellipsis != TextUtils.TruncateAt.END
+        ) {
+            val before = layout.getEllipsisStart(0)
+            val after = before + layout.getEllipsisCount(0)
+            val text = kept.staticText
+            val shown = TextUtils.concat(text.subSequence(0, before), "\u2026", text.subSequence(after, text.length))
+            layout = staticLayout(
+                shown, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
             )
+        }
+        // As Compose's: an ellipsis ends the last line the height has room for (one, if it has
+        // room for none).
+        if (kept.ellipsis == TextUtils.TruncateAt.END && maxLines > 1 && layout.height > maxHeight) {
+            var fitting = 0
+            while (fitting < layout.lineCount && layout.getLineBottom(fitting) <= maxHeight) fitting++
+            if (fitting != maxLines) {
+                maxLines = fitting.coerceAtLeast(1)
+                layout = textLayout(kept, width, maxLines)
+            }
         }
         layouts.put(handle, layout)
         intrinsics.put(handle, kept)
@@ -692,6 +710,24 @@ internal class TextMeasurer(
         results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
         // The text's own width, from which Rust can tell another width would lay it out the same.
         results.putInt(24, kept.maxIntrinsicWidth.toRawBits())
+    }
+
+    /** As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else a `StaticLayout`. */
+    private fun textLayout(kept: Intrinsics, width: Int, maxLines: Int): Layout {
+        val boring = kept.boring
+        if (Build.VERSION.SDK_INT < 33 || boring == null || kept.boringWidth > width) {
+            return staticLayout(
+                kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
+                kept.ellipsis, kept.align,
+            )
+        }
+        val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
+        if (!checkBoring) return layout
+        val static = staticLayout(
+            kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
+        )
+        // A difference is logged, and the StaticLayout kept (as before D330).
+        return if (sameLayout(layout, static, kept.paint)) layout else static
     }
 
     /**
@@ -873,7 +909,7 @@ internal class TextMeasurer(
         alignment: Layout.Alignment,
         direction: TextDirectionHeuristic,
         maxLines: Int,
-        ellipsis: Boolean,
+        ellipsis: TextUtils.TruncateAt?,
         align: Int,
     ): Layout {
         val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
@@ -884,7 +920,7 @@ internal class TextMeasurer(
             .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .setMaxLines(maxLines)
-        if (ellipsis) builder.setEllipsize(TextUtils.TruncateAt.END)
+        if (ellipsis != null) builder.setEllipsize(ellipsis)
         if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
         return builder.build()
     }
@@ -989,7 +1025,8 @@ internal class TextMeasurer(
         out[7] = if (lastEllipsized) 1f else 0f
         for (line in 0 until lines) {
             val at = PARAGRAPH_HEADER + line * PARAGRAPH_LINE
-            val ellipsized = line == lines - 1 && lastEllipsized
+            // Compose's `getLineEnd` and `getLineVisibleEnd`: a start or a middle one leaves them.
+            val ellipsized = line == lines - 1 && lastEllipsized && kept?.ellipsis == TextUtils.TruncateAt.END
             out[at] = layout.getLineStart(line).toFloat()
             out[at + 1] = (if (ellipsized) length else layout.getLineEnd(line)).toFloat()
             out[at + 2] = (if (ellipsized) layout.getLineStart(line) + layout.getEllipsisStart(line) else lineVisibleEnd(layout, line)).toFloat()

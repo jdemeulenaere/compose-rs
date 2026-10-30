@@ -7,8 +7,8 @@ use std::rc::Rc;
 use compose::test::basic_measure_font;
 use compose::ui::platform::{FixedFontMetrics, FixedTextMeasurer, TextLayoutOptions, TextMeasurer};
 use compose::ui::{
-    Constraints, Density, Offset, Paragraph, Rect, ResolvedTextDirection, TextDirection, TextRange,
-    TextStyle, UnitExt,
+    Constraints, Density, Offset, Paragraph, Rect, ResolvedTextDirection, TextDirection,
+    TextOverflow, TextRange, TextStyle, UnitExt,
 };
 use compose_skia::SkiaTextMeasurer;
 
@@ -186,4 +186,192 @@ fn a_space_in_the_sample_font_is_one_em_and_ends_a_word() {
         assert_eq!(paragraph.max_intrinsic_width(), 7.0 * FONT_SIZE, "{stack}");
         assert_eq!(paragraph.get_word_boundary(1), TextRange::new(0, 3), "{stack}");
     });
+}
+
+fn ellipsized(overflow: TextOverflow, max_lines: u32) -> TextLayoutOptions {
+    TextLayoutOptions { overflow, max_lines, ..TextLayoutOptions::default() }
+}
+
+/// `text` laid out on each stack at `width`, at most `height` high.
+fn at_height(
+    text: &str,
+    options: TextLayoutOptions,
+    width: f32,
+    height: f32,
+    check: impl Fn(&str, &dyn Paragraph),
+) {
+    let layout = |measurer: &mut dyn TextMeasurer| {
+        let constraints = Constraints::new(width as i32, width as i32, 0, height as i32);
+        let handle = measurer.layout(text, &style(), options, constraints, &Density::new(1.0));
+        let paragraph = measurer.paragraph(handle);
+        measurer.release(handle);
+        paragraph
+    };
+    let mut fixed = FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT);
+    check("the fixed measurer", &*layout(&mut fixed));
+    let mut skia = SkiaTextMeasurer::new();
+    check("SkParagraph", &*layout(&mut skia));
+}
+
+/// The text of Compose's height cases: four lines at this width.
+const THIS_IS_A_TEXT: &str = "This is a text";
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withLimitedHeightFitAllLines_doesNotEllipsis
+#[test]
+fn an_ellipsis_with_room_for_every_line_is_not_there() {
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, 6.0 * FONT_SIZE, |stack, paragraph| {
+        for line in 0..paragraph.line_count() {
+            assert!(!paragraph.is_line_ellipsized(line), "{stack}: {line}");
+        }
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withLimitedHeight_doesEllipsis
+#[test]
+fn an_ellipsis_ends_the_last_line_the_height_has_room_for() {
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, 2.2 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert!(paragraph.is_line_ellipsized(1), "{stack}");
+        assert!(paragraph.did_exceed_max_lines(), "{stack}");
+        assert_eq!(paragraph.height(), 2.0 * FONT_SIZE, "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withLimitedHeight_overflowNotEllipsis_doesNotEllipsis
+#[test]
+fn a_clipped_text_is_not_ellipsized_at_the_height() {
+    let options = ellipsized(TextOverflow::Clip, u32::MAX);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, 2.2 * FONT_SIZE, |stack, paragraph| {
+        assert!(paragraph.line_count() > 2, "{stack}");
+        for line in 0..paragraph.line_count() {
+            assert!(!paragraph.is_line_ellipsized(line), "{stack}: {line}");
+        }
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesMoreThanTextLines_andLimitedHeight_doesEllipsis
+#[test]
+fn the_height_decides_over_more_maximum_lines() {
+    let options = ellipsized(TextOverflow::Ellipsis, 5);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, 2.2 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert!(paragraph.is_line_ellipsized(1), "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLines_andLimitedHeight_doesEllipsis
+#[test]
+fn the_maximum_lines_decide_with_room_in_the_height() {
+    let options = ellipsized(TextOverflow::Ellipsis, 2);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, 4.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert!(paragraph.is_line_ellipsized(1), "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_whenHeightAllowsForZeroLines_doesEllipsis
+#[test]
+fn a_height_for_no_line_still_ellipsizes_one() {
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    at_height(THIS_IS_A_TEXT, options, 4.0 * FONT_SIZE, FONT_SIZE / 4.0, |stack, paragraph| {
+        assert!(paragraph.did_exceed_max_lines(), "{stack}");
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+    });
+}
+
+fn a_box(left: f32, width: f32) -> Rect {
+    Rect::new(left * FONT_SIZE, 0.0, (left + width) * FONT_SIZE, FONT_SIZE)
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesOne_doesStartEllipsis
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/ParagraphIntegrationTest.kt, getLineStartEllipsisCount
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/TextLayoutIsLineEllipsizedTest.kt, ellipsizeEnd_start_ltr
+#[test]
+fn a_start_ellipsis_shows_the_end_of_the_line() {
+    let options = ellipsized(TextOverflow::StartEllipsis, 1);
+    on_each_stack("abcde", options, 3.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+        assert_eq!(paragraph.get_line_start(0), 0, "{stack}");
+        assert_eq!(paragraph.get_line_end(0, false), 5, "{stack}");
+        // Compose's visible end stops at an ellipsis at the end only.
+        assert_eq!(paragraph.get_line_end(0, true), 5, "{stack}");
+        // The "…", where the first of three characters hidden is, the other two nothing, and
+        // the two characters left.
+        assert_eq!(paragraph.get_bounding_box(0), a_box(0.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(1).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(2).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(3), a_box(1.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(4), a_box(2.0, 1.0), "{stack}");
+        assert_eq!(paragraph.max_intrinsic_width(), 5.0 * FONT_SIZE, "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesOne_doesMiddleEllipsis
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/ParagraphIntegrationTest.kt, getLineMiddleEllipsisCount
+#[test]
+fn a_middle_ellipsis_shows_both_ends_of_the_line() {
+    let options = ellipsized(TextOverflow::MiddleEllipsis, 1);
+    on_each_stack("abcde", options, 3.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+        assert_eq!(paragraph.get_line_end(0, false), 5, "{stack}");
+        assert_eq!(paragraph.get_line_end(0, true), 5, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(0), a_box(0.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(1), a_box(1.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(2).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(3).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(4), a_box(2.0, 1.0), "{stack}");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/TextLayoutIsLineEllipsizedTest.kt, ellipsizeEnd_start_rtl
+#[test]
+fn a_start_ellipsis_right_to_left_shows_the_end_on_the_left() {
+    let text = "\u{5D0}\u{5D1}\u{5D2}\u{5D3}\u{5D4}";
+    let options = ellipsized(TextOverflow::StartEllipsis, 1);
+    on_each_stack(text, options, 3.0 * FONT_SIZE, |stack, paragraph| {
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+        // The "…" at the right, in the place of the first letter, the last on the left.
+        assert_eq!(paragraph.get_bounding_box(0), a_box(2.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(8), a_box(0.0, 1.0), "{stack}");
+    });
+}
+
+#[test]
+fn a_start_ellipsis_that_fits_is_not_there() {
+    for overflow in [TextOverflow::StartEllipsis, TextOverflow::MiddleEllipsis] {
+        on_each_stack("abc", ellipsized(overflow, 1), 3.0 * FONT_SIZE, |stack, paragraph| {
+            assert!(!paragraph.is_line_ellipsized(0), "{stack}");
+            assert!(!paragraph.did_exceed_max_lines(), "{stack}");
+            assert_eq!(paragraph.get_line_end(0, true), 3, "{stack}");
+        });
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/TextLayoutLineVisibleEndTest.kt, excludesLineBreak_whenMaxLinesPresent_withEllipsisStart
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/TextLayoutLineVisibleEndTest.kt, excludesLineBreak_whenMaxLinesPresent_withEllipsisMiddle
+#[test]
+fn a_line_feed_past_the_first_line_is_not_visible_and_ellipsizes_nothing_with_room() {
+    for overflow in [TextOverflow::StartEllipsis, TextOverflow::MiddleEllipsis] {
+        on_each_stack("abc\ndef", ellipsized(overflow, 1), 10.0 * FONT_SIZE, |stack, paragraph| {
+            assert_eq!(paragraph.line_count(), 1, "{stack}");
+            assert_eq!(paragraph.get_line_end(0, true), 3, "{stack}");
+            assert!(!paragraph.is_line_ellipsized(0), "{stack}");
+        });
+    }
+}
+
+#[test]
+fn a_start_ellipsis_falls_back_to_a_clip_on_many_lines() {
+    for overflow in [TextOverflow::StartEllipsis, TextOverflow::MiddleEllipsis] {
+        on_each_stack("abcdef", ellipsized(overflow, 3), 3.0 * FONT_SIZE, |stack, paragraph| {
+            assert_eq!(paragraph.line_count(), 2, "{stack}");
+            assert!(!paragraph.is_line_ellipsized(0), "{stack}");
+            assert!(!paragraph.is_line_ellipsized(1), "{stack}");
+        });
+    }
 }

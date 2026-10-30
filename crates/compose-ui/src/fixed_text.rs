@@ -456,7 +456,7 @@ impl FixedTextMeasurer {
         }
         // Compose's `finalMaxWidth`: the constraints' width when fixed, else the text's own
         // width rounded up and kept in them; unbounded without wrapping.
-        let width_matters = options.soft_wrap || options.overflow == TextOverflow::Ellipsis;
+        let width_matters = options.soft_wrap || options.overflow.is_ellipsis();
         let max_width = if width_matters && constraints.has_bounded_width() {
             constraints.max_width as f32
         } else {
@@ -489,13 +489,38 @@ impl FixedTextMeasurer {
             }
         }
         // As Compose: an ellipsis without soft wrapping is one line.
-        let max_lines = if options.overflow == TextOverflow::Ellipsis && !options.soft_wrap {
+        let max_lines = if options.overflow.is_ellipsis() && !options.soft_wrap {
             1
         } else {
             options.max_lines.max(1)
         } as usize;
-        let exceeded = lines.len() > max_lines;
-        let ellipsized = exceeded && options.overflow == TextOverflow::Ellipsis;
+        // A start or middle ellipsis, on one line only: the first paragraph's all of it, as
+        // `StaticLayout` makes it, and the characters it hides (the first is the "…").
+        let mut hidden = 0..0;
+        let middle = options.overflow == TextOverflow::MiddleEllipsis;
+        if max_lines == 1 && (middle || options.overflow == TextOverflow::StartEllipsis) {
+            let first = paragraphs[0].clone();
+            let feed = usize::from(first.end < glyphs.len());
+            lines.retain(|(index, _)| *index != 0);
+            lines.insert(0, (0, first.start..first.end + feed));
+            let available = width - indent.0;
+            if width_of(first.clone()) > available + 0.001 || lines.len() > 1 {
+                let widths: Vec<f32> = glyphs[first.clone()].iter().map(|g| g.advance).collect();
+                let ellipsis = base_px * metrics.advance;
+                let (start, count) = crate::paragraph::start_or_middle_ellipsis(
+                    &widths, ellipsis, available, middle,
+                );
+                hidden = first.start + start..first.start + start + count;
+            }
+        }
+        for index in hidden.clone() {
+            glyphs[index].advance =
+                if index == hidden.start { base_px * metrics.advance } else { 0.0 };
+        }
+        let width_of = |range: Range<usize>| glyphs[range].iter().map(|g| g.advance).sum::<f32>();
+        let at_end = options.overflow == TextOverflow::Ellipsis;
+        let exceeded = lines.len() > max_lines || !hidden.is_empty();
+        let ellipsized = (lines.len() > max_lines && at_end) || !hidden.is_empty();
         lines.truncate(max_lines);
         let line_height = resolve_text_unit_px(style.line_height, base_px, density);
         let base_ascent = base_px * metrics.ascent;
@@ -521,7 +546,7 @@ impl FixedTextMeasurer {
                 .map_or(range.start, |index| index + 1);
             // An ellipsized last line shows what fits before its "…" (one advance of the
             // style's font), as Android's ellipsis start (D1110).
-            let shown_end = if ellipsized && number + 1 == lines.len() {
+            let shown_end = if ellipsized && hidden.is_empty() && number + 1 == lines.len() {
                 let margin = if range.start == paragraph.start { indent.0 } else { indent.1 };
                 let room = width - margin - base_px * metrics.advance;
                 let (mut used, mut index) = (0.0, range.start);
@@ -715,6 +740,23 @@ impl FixedTextMeasurer {
                 glyphs: glyph_boxes,
             });
             top += height;
+        }
+        // As Compose's `AndroidParagraph`: an ellipsis ends the last line the height has room for
+        // (one, if it has room for none).
+        if options.overflow == TextOverflow::Ellipsis
+            && max_lines > 1
+            && top > constraints.max_height as f32
+        {
+            let bottoms: Vec<f32> = if full {
+                laid_out.iter().map(|line| line.bottom).collect()
+            } else {
+                measured_lines.iter().map(|line| line.bottom).collect()
+            };
+            let limit = constraints.max_height as f32;
+            let fitting = bottoms.iter().take_while(|bottom| **bottom <= limit).count();
+            drop(scratch);
+            let options = TextLayoutOptions { max_lines: fitting.max(1) as u32, ..options };
+            return self.lay_out(string, spans, style, options, constraints, density, full);
         }
         let size = ParagraphSize {
             width,

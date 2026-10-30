@@ -11,9 +11,9 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::platform::{FixedTextMeasurer, UiHost};
+use compose_ui::platform::{FixedFontMetrics, FixedTextMeasurer, UiHost};
 use compose_ui::{
-    Constraints, Density, IntSize, TextAlign, TextOverflow, TextStyle, UnitExt,
+    Constraints, Density, IntSize, TextAlign, TextLayoutResult, TextOverflow, TextStyle, UnitExt,
     remember_text_measurer,
 };
 use std::cell::{Cell, RefCell};
@@ -682,4 +682,39 @@ fn a_text_is_laid_out_again_when_a_spans_font_arrives() {
     host.frame();
     host.frame();
     assert_eq!(counter.of("Hello").fresh, 2);
+}
+
+/// A height shrinking under an ellipsized text ends it on a line the height has room for, and
+/// growing again brings the lines back.
+#[test]
+fn an_ellipsized_text_follows_the_height_it_is_given() {
+    let height_owner = mutable_state_of(200i32);
+    let height = height_owner.handle();
+    let lines = Rc::new(Cell::new(0));
+    let heard = lines.clone();
+    let mut host = UiHost::new(
+        IntSize::new(100, 400),
+        Density::new(1.0),
+        Box::new(FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT)),
+    );
+    host.set_content(move || {
+        let heard = heard.clone();
+        Box!(modifier = Modifier.size((100.dp(), height.get().dp())), {
+            let heard = heard.clone();
+            BasicText!(
+                "abcde abcde abcde abcde",
+                style = TextStyle { font_size: 20.sp(), ..TextStyle::DEFAULT },
+                overflow = TextOverflow::Ellipsis,
+                on_text_layout = Some(move |result: TextLayoutResult| heard.set(result.line_count)),
+            );
+        });
+    });
+    host.frame();
+    assert_eq!(lines.get(), 4);
+    height_owner.set(50);
+    host.frame();
+    assert_eq!(lines.get(), 2);
+    height_owner.set(200);
+    host.frame();
+    assert_eq!(lines.get(), 4);
 }

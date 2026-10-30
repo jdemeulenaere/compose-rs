@@ -115,6 +115,48 @@ impl fmt::Debug for dyn Paragraph {
     }
 }
 
+/// Where a single line of `widths` (each UTF-16 unit's, or each glyph's: 0 for all but a cluster's
+/// first) loses characters to a start or middle ellipsis of `ellipsis_width` in `available`, as
+/// Android's `StaticLayout.calculateEllipsis`: the first hidden and how many. The first shows the
+/// "…", the others nothing. None hidden when they all fit beside the ellipsis.
+pub fn start_or_middle_ellipsis(
+    widths: &[f32],
+    ellipsis_width: f32,
+    available: f32,
+    middle: bool,
+) -> (usize, usize) {
+    // From the end, what fits in `room`; a cluster stays whole.
+    let fitting_from_end = |room: f32| {
+        let mut used = 0.0;
+        let mut right = widths.len();
+        while right > 0 {
+            let width = widths[right - 1];
+            if used + width > room {
+                while right < widths.len() && widths[right] == 0.0 {
+                    right += 1;
+                }
+                break;
+            }
+            used += width;
+            right -= 1;
+        }
+        (right, used)
+    };
+    if !middle {
+        let (right, _) = fitting_from_end(available - ellipsis_width);
+        return (0, right);
+    }
+    let (right, used) = fitting_from_end((available - ellipsis_width) / 2.0);
+    let room = available - ellipsis_width - used;
+    let mut left = 0;
+    let mut filled = 0.0;
+    while left < right && filled + widths[left] <= room {
+        filled += widths[left];
+        left += 1;
+    }
+    (left, right - left)
+}
+
 /// What a text was laid out from, as Compose's `TextLayoutInput`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct TextLayoutInput {
