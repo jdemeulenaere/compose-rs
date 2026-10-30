@@ -960,3 +960,53 @@ fn every_entry_point_of_the_host_is_a_turn() {
         host.frame();
     }
 }
+
+/// A derived state read only by drawing: the state it reads, written outside a turn or in one,
+/// asks for a tick, and the tick recomputes it and asks for the frame that draws it (D758).
+#[test]
+fn a_derived_state_read_only_by_drawing_gets_its_frame_from_the_tick() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() * 10);
+    let read = derived.as_state();
+    let drawn = Rc::new(Cell::new(-1));
+    let seen = drawn.clone();
+    let mut host = host(move || {
+        let seen = seen.clone();
+        let draw = Modifier.draw_behind(move |_| seen.set(read.get()));
+        Layout(draw, measure_policy(|scope, _, _| scope.layout(100, 100)), callback(|| {}));
+    });
+    assert_eq!(drawn.get(), 0);
+    let calls = HostCalls::of(&host);
+    host.frame();
+    // Outside a turn.
+    calls.frames.set(0);
+    calls.wakes();
+    state.set(1);
+    assert!(calls.wakes() > 0, "the write asks for a tick");
+    assert_eq!(calls.frames.get(), 0);
+    tick();
+    assert!(calls.frames.get() > 0, "the tick asks for the frame");
+    host.frame();
+    assert_eq!(drawn.get(), 10);
+    // In a turn: the turn sends, and the derived state is flushed at the tick it asked for.
+    calls.frames.set(0);
+    calls.wakes();
+    {
+        let _turn = Turn::begin();
+        state.set(2);
+    }
+    assert!(calls.wakes() > 0, "the write asks for a tick");
+    tick();
+    assert!(calls.frames.get() > 0, "the tick asks for the frame");
+    host.frame();
+    assert_eq!(drawn.get(), 20);
+    // From a task, whose tick is the one running it.
+    calls.frames.set(0);
+    let scope = CoroutineScope::new();
+    scope.launch(async move { handle.set(3) });
+    tick();
+    assert!(calls.frames.get() > 0, "the task's tick asks for the frame");
+    host.frame();
+    assert_eq!(drawn.get(), 30);
+}

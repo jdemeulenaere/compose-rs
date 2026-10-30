@@ -271,7 +271,7 @@ fn is_live(key: TaskKey) -> bool {
 /// between its steps, as Compose's `yield()`. Returns whether a task ran.
 pub fn run_ready() -> bool {
     // A turn, if any task is ready: what the tasks write is sent when it ends (D751).
-    let mut _turn = None;
+    let mut turn = None;
     let mut ran = false;
     // A set: a frame resumes hundreds of tasks (an animated value each), and a scan per key
     // made that quadratic; the first few in an array, so a run polling a task or two (an
@@ -297,12 +297,14 @@ pub fn run_ready() -> bool {
                     .append(&mut deferred);
             }
             // No task ran: a write outside any turn still has this one to send it (D755).
-            if _turn.is_none() {
+            if turn.is_none() {
                 crate::snapshots::send_unsent_outside_turns();
             }
+            drop(turn);
+            crate::snapshots::flush_derived_outside_turns();
             return ran;
         }
-        _turn.get_or_insert_with(crate::snapshots::Turn::begin);
+        turn.get_or_insert_with(crate::snapshots::Turn::begin);
         for &key in &keys {
             if !polled.insert(key) {
                 if !deferred.contains(&key) {

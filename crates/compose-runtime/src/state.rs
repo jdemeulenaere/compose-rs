@@ -245,17 +245,24 @@ impl Cells {
         self.entries.len() - self.free.len()
     }
 
-    /// Records a write in the global snapshot: with `new_record`, a change, in `modified` once;
-    /// `pending`, made outside composition: the next send invalidates its readers. Returns
-    /// whether a derived state's calculation may have read it.
+    /// Records a write in the global snapshot, as write `version` of snapshot `global`: a new
+    /// record there is a change, in `modified` once; `pending`, made outside composition: the
+    /// next send invalidates its readers. Returns whether a derived state's calculation may
+    /// have read it.
     pub(crate) fn record_write(
         &mut self,
         id: StateId,
-        new_record: bool,
+        global: crate::snapshots::SnapshotId,
+        version: u32,
         pending: bool,
         modified: &mut Vec<StateId>,
     ) -> bool {
+        // An `edit` may have freed its own state.
         let Ok(entry) = self.entry(id) else { return false };
+        let new_record = match &entry.cell {
+            Some(CellValue::State(cell)) => cell.wrote_in(global, version),
+            _ => false,
+        };
         if new_record {
             if !entry.in_global_modified {
                 entry.in_global_modified = true;
@@ -264,6 +271,19 @@ impl Cells {
             entry.pending |= pending;
         }
         entry.read_by_derived
+    }
+
+    /// Marks a derived state's result written: nothing to tell, its readers are invalidated
+    /// by the derived state.
+    pub(crate) fn mark_written(
+        &mut self,
+        id: StateId,
+        global: crate::snapshots::SnapshotId,
+        version: u32,
+    ) {
+        if let Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) = self.entry(id) {
+            cell.wrote_in(global, version);
+        }
     }
 }
 
@@ -364,8 +384,8 @@ fn register_observed_read(
 /// A state object's cell, out of the arena.
 type StateRc = Rc<dyn StateObjectCell>;
 
-/// `write_cell` or `try_write_cell`: the cell, and what the write needs of the runtime.
-type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Writing, Stale>;
+/// `write_cell` or `try_write_cell`: the cell.
+type CellLookup = fn(StateId, &'static Location<'static>) -> Result<StateRc, Stale>;
 
 /// Looks a cell up for reading, registering the read. A dirty derived state's result is
 /// refreshed first, outside the borrow.
@@ -449,6 +469,9 @@ struct Uncomputed<T> {
 impl<T: 'static> StateObjectCell for Uncomputed<T> {
     fn record_count(&self) -> usize {
         0
+    }
+    fn wrote_in(&self, _id: crate::snapshots::SnapshotId, _version: u32) -> bool {
+        false
     }
 }
 
@@ -539,66 +562,30 @@ fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'stat
     if snapshots.reads_observed() { Read::Observed(cell) } else { Read::Cell(cell) }
 }
 
-/// A cell looked up for writing, and what the write needs of the runtime, read in the borrow
-/// that looked it up.
-struct Writing {
-    cell: StateRc,
-    /// A pass is composing.
-    composing: bool,
-    /// The global snapshot's id.
-    snapshot: crate::snapshots::SnapshotId,
-    version: u32,
-}
-
 /// Looks a cell up for writing.
-fn write_cell(id: StateId, at: &'static Location<'static>) -> Result<Writing, Stale> {
+fn write_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc, Stale> {
     with_runtime(|runtime| write_cell_in(runtime, id, at))
 }
 
 /// Like [`write_cell`], for `try_set`: a stale cell once the thread's runtime is gone.
-fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<Writing, Stale> {
+fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc, Stale> {
     try_with_runtime(|runtime| write_cell_in(runtime, id, at))
         .unwrap_or(Err(Stale { created_at: None }))
 }
 
 /// A write during composition is allowed, as Compose's (D703): it invalidates the readers, the
-/// ones the pass will still reach in this pass. Returns whether a pass is composing.
+/// ones the pass will still reach in this pass.
 fn write_cell_in(
     runtime: &mut Runtime,
     id: StateId,
     _at: &'static Location<'static>,
-) -> Result<Writing, Stale> {
-    let composing = runtime.is_composing();
+) -> Result<StateRc, Stale> {
     let entry = runtime.cells.entry(id)?;
-    let cell = entry.cell.as_ref().expect("a live cell").state();
-    let version = runtime.snapshots.next_version();
-    Ok(Writing { cell, composing, snapshot: runtime.snapshots.global(), version })
+    Ok(entry.cell.as_ref().expect("a live cell").state())
 }
 
-/// What a write did.
-#[derive(Clone, Copy)]
-struct Written {
-    /// It made a new record in the global snapshot: a change apply observers hear.
-    new_record: bool,
-    /// It was made while a pass composed.
-    composing: bool,
-}
-
-/// After a write that changed a state: in composition, its readers are invalidated now (D703,
-/// D712); outside, at the next send (D751). Either way it's recorded in the global snapshot.
-fn after_write(id: StateId, written: Written) {
-    if written.composing {
-        invalidate_readers(id);
-    }
-    crate::snapshots::wrote(id, written.new_record, written.composing);
-}
-
-/// Invalidates the scopes that read a cell in their latest run, and prunes the others.
-fn invalidate_readers(id: StateId) {
-    invalidate_readers_except(id, ScopeId::NONE);
-}
-
-/// The same, but `skip`, a scope reading the cell right now (a derived state refreshed for it).
+/// Invalidates the scopes that read a cell in their latest run, and prunes the others, but
+/// `skip`, a scope reading the cell right now (a derived state refreshed for it).
 ///
 /// Derived states that read the cell are marked dirty, and those reading them, at once, without
 /// computing anything (a handler's writes may be half done): a read recomputes them. The
@@ -800,6 +787,11 @@ impl<T: 'static> StateObjectCell for StateCell<T> {
     fn record_count(&self) -> usize {
         self.records.try_borrow().map_or(1, |records| records.len())
     }
+    #[inline]
+    fn wrote_in(&self, id: crate::snapshots::SnapshotId, version: u32) -> bool {
+        // Nothing holds the records now: a write conflicting with a borrow panicked at its start.
+        self.records.try_borrow_mut().map_or(true, |mut records| records.wrote_in(id, version))
+    }
 }
 
 impl<T: 'static> StateCell<T> {
@@ -888,16 +880,6 @@ impl<T> Drop for CellRef<'_, T> {
 struct CellMut<'a, T> {
     records: RefMut<'a, Records<ValueRecord<T>>>,
     cell: &'a StateCell<T>,
-}
-
-impl<T> CellMut<'_, T> {
-    /// The write is done, as `version` in `snapshot`: whether it made a new record in the global
-    /// snapshot (the readable one was written in an earlier one). Not called if it panicked, so
-    /// the next write to the state is still a change.
-    #[inline]
-    fn wrote_in(&mut self, snapshot: crate::snapshots::SnapshotId, version: u32) -> bool {
-        self.records.wrote_in(snapshot, version)
-    }
 }
 
 impl<T> Deref for CellMut<'_, T> {
@@ -1162,9 +1144,8 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn set(&self, value: T) {
         let at = Location::caller();
-        if let Some((written, old)) = self.write(value, at).unwrap_or_else(|error| stale(error, at))
-        {
-            after_write(self.id, written);
+        if let Some(old) = self.write(value, at).unwrap_or_else(|error| stale(error, at)) {
+            crate::snapshots::wrote(self.id);
             // User code, and the write is told before it can panic.
             drop(old);
         }
@@ -1195,14 +1176,13 @@ impl<T: 'static> MutableState<T> {
             drop(old);
             return;
         }
-        let lookup: CellLookup = |id, at| {
-            with_runtime(|runtime| {
-                write_cell_in(runtime, id, at)
-                    .map(|writing| Writing { composing: false, ..writing })
-            })
-        };
-        if let Ok(Some((_, old))) = self.write_with(value, at, lookup) {
-            let skip = with_runtime(|runtime| runtime.reading_scope());
+        if let Ok(Some(old)) = self.write_with(value, at, write_cell) {
+            let skip = with_runtime(|runtime| {
+                let version = runtime.snapshots.next_version();
+                let global = runtime.snapshots.global();
+                runtime.cells.mark_written(self.id, global, version);
+                runtime.reading_scope()
+            });
             invalidate_readers_except(self.id, skip);
             drop(old);
         }
@@ -1228,16 +1208,23 @@ impl<T: 'static> MutableState<T> {
     /// changed.
     #[track_caller]
     pub fn edit<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        /// An `edit` that panics told of what it may have mutated.
+        struct OnUnwind(StateId);
+        impl Drop for OnUnwind {
+            fn drop(&mut self) {
+                crate::snapshots::wrote_unwinding(self.0);
+            }
+        }
         let at = Location::caller();
-        let Writing { cell, composing, snapshot, version } =
-            write_cell(self.id, at).unwrap_or_else(|error| stale(error, at));
-        let (result, new_record) = {
+        let cell = write_cell(self.id, at).unwrap_or_else(|error| stale(error, at));
+        let on_unwind = OnUnwind(self.id);
+        let result = {
             let mut record = StateCell::<T>::of(&cell).write(at);
-            let result = f(&mut record);
-            (result, record.wrote_in(snapshot, version))
+            f(&mut record)
         };
+        std::mem::forget(on_unwind);
         drop(cell);
-        after_write(self.id, Written { new_record, composing });
+        crate::snapshots::wrote(self.id);
         result
     }
 
@@ -1257,8 +1244,8 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn try_set(&self, value: T) -> bool {
         match self.write_with(value, Location::caller(), try_write_cell) {
-            Ok(Some((written, old))) => {
-                after_write(self.id, written);
+            Ok(Some(old)) => {
+                crate::snapshots::wrote(self.id);
                 drop(old);
                 true
             }
@@ -1277,12 +1264,8 @@ impl<T: 'static> MutableState<T> {
         State { handle: *self }
     }
 
-    /// What the write did and the old value, or `None` if the policy found the value equivalent.
-    fn write(
-        &self,
-        value: T,
-        at: &'static Location<'static>,
-    ) -> Result<Option<(Written, T)>, Stale> {
+    /// The old value, or `None` if the policy found the value equivalent.
+    fn write(&self, value: T, at: &'static Location<'static>) -> Result<Option<T>, Stale> {
         self.write_with(value, at, write_cell)
     }
 
@@ -1291,8 +1274,8 @@ impl<T: 'static> MutableState<T> {
         value: T,
         at: &'static Location<'static>,
         lookup: CellLookup,
-    ) -> Result<Option<(Written, T)>, Stale> {
-        let Writing { cell, composing, snapshot, version } = lookup(self.id, at)?;
+    ) -> Result<Option<T>, Stale> {
+        let cell = lookup(self.id, at)?;
         let cell = StateCell::<T>::of(&cell);
         let equivalent = {
             let current = cell.read(at);
@@ -1302,10 +1285,7 @@ impl<T: 'static> MutableState<T> {
             return Ok(None);
         }
         let mut record = cell.write(at);
-        let old = std::mem::replace(&mut *record, value);
-        let new_record = record.wrote_in(snapshot, version);
-        drop(record);
-        Ok(Some((Written { new_record, composing }, old)))
+        Ok(Some(std::mem::replace(&mut *record, value)))
     }
 }
 

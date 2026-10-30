@@ -941,3 +941,121 @@ fn a_derived_state_read_under_a_scope_calls_it_back_when_it_changes() {
     compose_runtime::platform::flush_derived_states();
     assert_eq!(changes.get(), 1);
 }
+
+// ---- After the short review (D758) --------------------------------------------------------------
+
+/// Counts the wake handler's calls, for a test's thread.
+fn counting_wakes() -> impl Fn() -> usize {
+    let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = wakes.clone();
+    compose_runtime::platform::set_wake_handler(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    move || wakes.swap(0, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A turn that panicked keeps its write unsent, and a later write to the same state, no new record
+/// in the same snapshot, still asks the host for a tick, which sends it.
+#[test]
+fn a_write_to_the_state_a_panicked_turn_wrote_wakes_the_host() {
+    let woken = counting_wakes();
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let (applies, _sizes, _observer) = heard();
+    let handle = state.handle();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _turn = compose_runtime::platform::Turn::begin();
+        handle.set(1);
+        panic!("in the turn");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(woken(), 0);
+    state.set(2);
+    assert_eq!(woken(), 1, "the changes wait for a tick");
+    compose_runtime::platform::run_ready();
+    assert_eq!(applies.get(), 1);
+}
+
+/// An `edit` that frees its own state leaves nothing to send, so it asks for no tick, and doesn't
+/// count as having asked: the next change does.
+#[test]
+fn an_edit_that_frees_its_own_state_doesnt_stop_later_wakes() {
+    let woken = counting_wakes();
+    let owner = mutable_state_of(0);
+    let other = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let handle = owner.handle();
+    handle.edit(move |_| drop(owner));
+    assert_eq!(woken(), 0, "nothing to send");
+    other.set(1);
+    assert_eq!(woken(), 1);
+    Snapshot::send_apply_notifications();
+}
+
+/// A state freed before the send leaves no mark on the cell made in its slot: the new state's
+/// changes are heard.
+#[test]
+fn a_change_to_a_state_made_where_a_changed_one_was_freed_is_heard() {
+    let changes: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = changes.clone();
+    let _observer = Snapshot::register_apply_observer(move |changed, _| {
+        log.borrow_mut().extend(changed.iter());
+    });
+    let doomed = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    doomed.set(1);
+    drop(doomed);
+    let fresh = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    changes.borrow_mut().clear();
+    fresh.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(*changes.borrow(), [fresh.state_object_id()]);
+}
+
+/// An `edit` whose closure sends before it mutates: the mutation is in the snapshot after the
+/// send, a change of its own.
+#[test]
+fn an_edit_that_sends_before_it_mutates_is_a_change() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let (applies, _sizes, _observer) = heard();
+    state.set(1);
+    state.edit(|value| {
+        Snapshot::send_apply_notifications();
+        *value = 2;
+    });
+    assert_eq!(applies.get(), 1, "the set");
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 2, "the edit");
+    assert_eq!(state.get(), 2);
+}
+
+/// An `edit` that mutates and then panics still told of its write: readers hear it, and its
+/// version moved.
+#[test]
+fn an_edit_that_mutates_then_panics_is_a_change() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let requested = Rc::new(Cell::new(false));
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let flag = requested.clone();
+    composition.set_frame_requester(move || flag.set(true));
+    composition.set_content(move || {
+        handle.get();
+    });
+    let (applies, _sizes, _observer) = heard();
+    let (_, version) = compose_runtime::platform::state_records(state.handle());
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        handle.edit(|value| {
+            *value = 1;
+            panic!("in the edit");
+        });
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(state.get(), 1);
+    assert_ne!(compose_runtime::platform::state_records(state.handle()).1, version);
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1);
+    assert!(requested.get(), "its reader is invalidated");
+}

@@ -394,33 +394,51 @@ pub(crate) fn notify_read(id: StateId) {
     }
 }
 
-/// Records a write to `id`, made outside composition (`composing` false) or in it; `new_record`
-/// says it made a new record in the global snapshot (its readable one was older).
+/// What a write's record asks of the code after the borrow.
+struct Told {
+    wake: bool,
+    requested: bool,
+    observed: bool,
+    composing: bool,
+}
+
+/// Tells of a write to `id`, whose user code is over (an `edit`'s closure may have sent), in the
+/// runtime's borrow: marks its record with the global snapshot as it is now, records the change,
+/// and invalidates what's due now.
 #[inline]
-pub(crate) fn wrote(id: StateId, new_record: bool, composing: bool) {
-    let (wake, requested, observed) = with_runtime(|runtime| {
-        let snapshots = &mut runtime.snapshots;
-        let read_by_derived =
-            runtime.cells.record_write(id, new_record, !composing, &mut snapshots.modified);
-        // The first change since a send, outside any turn, asks the host for one.
-        let mut wake = new_record && snapshots.turns == 0 && !snapshots.woken;
-        snapshots.woken |= wake;
-        let observed = snapshots.writes_observed;
-        // In composition the write invalidated everything at once.
-        if composing {
-            return (wake, false, observed);
-        }
-        // Derived states reading it are marked now: no read is behind what it derives from.
-        if read_by_derived {
-            wake |= crate::state::invalidate_cell(
-                runtime,
-                id,
-                crate::scope::ScopeId::NONE,
-                crate::state::Invalidation::DERIVED,
-            );
-        }
-        (wake, frames_requested(runtime), observed)
-    });
+fn tell(runtime: &mut Runtime, id: StateId) -> Told {
+    let composing = runtime.is_composing();
+    let snapshots = &mut runtime.snapshots;
+    let version = snapshots.next_version();
+    let read_by_derived = runtime.cells.record_write(
+        id,
+        snapshots.global,
+        version,
+        !composing,
+        &mut snapshots.modified,
+    );
+    // The first change since a send, outside any turn, asks the host for one.
+    let mut wake = !snapshots.modified.is_empty() && snapshots.turns == 0 && !snapshots.woken;
+    snapshots.woken |= wake;
+    let observed = snapshots.writes_observed;
+    let scope = crate::scope::ScopeId::NONE;
+    if composing {
+        // In composition everything is invalidated at once (D703, D712), reader by reader; a
+        // frame request waits for the pass's end.
+        wake |= crate::state::invalidate_cell(runtime, id, scope, crate::state::Invalidation::ALL);
+    } else if read_by_derived {
+        // Derived states reading it are marked now: no read is behind what it derives from. The
+        // readers wait for the send (D751).
+        wake |=
+            crate::state::invalidate_cell(runtime, id, scope, crate::state::Invalidation::DERIVED);
+    }
+    Told { wake, requested: frames_requested(runtime), observed, composing }
+}
+
+/// A write to `id` ended: told, with what the host and the observers should hear of it.
+#[inline]
+pub(crate) fn wrote(id: StateId) {
+    let Told { wake, requested, observed, composing } = with_runtime(|runtime| tell(runtime, id));
     if wake {
         crate::executor::wake_host();
     }
@@ -430,6 +448,12 @@ pub(crate) fn wrote(id: StateId, new_record: bool, composing: bool) {
     if observed {
         notify_write(id, composing);
     }
+}
+
+/// An `edit` panicked: its write is recorded for the next send, with no user code while unwinding
+/// (no wake, frame request or write observer: those come with the next write or send).
+pub(crate) fn wrote_unwinding(id: StateId) {
+    let _ = try_with_runtime(|runtime| tell(runtime, id));
 }
 
 /// Calls the write observers of the frames, innermost first, and the global ones for a write
@@ -539,6 +563,18 @@ fn send_settled() {
 pub(crate) fn send_unsent_outside_turns() {
     if with_runtime(|runtime| runtime.snapshots.has_changes() && runtime.snapshots.turns == 0) {
         drop(Turn::begin());
+    }
+}
+
+/// What a host's tick does with no turn left open: recomputes the derived states read by layout
+/// or drawing that a write marked, whose readers nothing else would tell: the send doesn't, and
+/// no frame comes without them (D758). Step S2 replaces this, as derived states validate
+/// themselves.
+pub(crate) fn flush_derived_outside_turns() {
+    if crate::derived::has_pending_derived_states()
+        && with_runtime(|runtime| runtime.snapshots.turns == 0 && !runtime.is_busy())
+    {
+        crate::derived::flush_derived_states();
     }
 }
 

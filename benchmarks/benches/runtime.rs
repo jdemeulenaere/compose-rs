@@ -90,6 +90,14 @@ fn state_reads(c: &mut Criterion) {
     c.bench_function("state get outside composition", |b| b.iter(|| black_box(state.get())));
 }
 
+/// A host's tick with nothing to do: the executor's `run_ready` finding no task, no change to send
+/// and no derived state to flush.
+fn idle_tick(c: &mut Criterion) {
+    c.bench_function("run_ready with nothing ready", |b| {
+        b.iter(compose_runtime::platform::run_ready)
+    });
+}
+
 /// A write outside composition, nothing reading the state: in the same snapshot as the last
 /// (docs/parity/design/snapshots.md §3.16); and each write followed by the send a turn ends with,
 /// which makes it a new record in a new snapshot and invalidates what read it (nothing here).
@@ -158,6 +166,7 @@ criterion_group!(
     keyed_reorders,
     state_reads,
     state_writes,
+    idle_tick,
     many_readers
 );
 criterion_main!(benches);

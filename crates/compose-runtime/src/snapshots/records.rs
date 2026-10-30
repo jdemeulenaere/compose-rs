@@ -69,4 +69,7 @@ impl<R> Records<R> {
 pub(crate) trait StateObjectCell: Any {
     /// The number of records the object holds.
     fn record_count(&self) -> usize;
+    /// The write that just ended was write `version` in snapshot `id`: whether it made a new
+    /// record there. Runs in the runtime's borrow, once the write's user code is over.
+    fn wrote_in(&self, id: SnapshotId, version: u32) -> bool;
 }
