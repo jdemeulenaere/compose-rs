@@ -564,7 +564,10 @@ pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
 /// A text field's colors, as Compose's `TextFieldColors` (the roles used).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldColors {
+    /// Unfocused, as `unfocusedContainerColor`.
     pub container_color: Color,
+    pub focused_container_color: Color,
+    pub error_container_color: Color,
     pub text_color: Color,
     pub cursor_color: Color,
     pub focused_indicator_color: Color,
@@ -614,6 +617,8 @@ impl TextFieldDefaults {
         let scheme = MaterialTheme::color_scheme();
         TextFieldColors {
             container_color: scheme.surface_container_highest,
+            focused_container_color: scheme.surface_container_highest,
+            error_container_color: scheme.surface_container_highest,
             text_color: scheme.on_surface,
             cursor_color: scheme.primary,
             focused_indicator_color: scheme.primary,

@@ -32,7 +32,7 @@ StackMeasurePolicy [0,0 400x800]
   RowColumnMeasurePolicy [0,0 400x800] Modifier.fill_max_size(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
     RowColumnMeasurePolicy [0,0 368x56]
       BoxMeasurePolicy [0,0 298x56] Modifier.weight(1, true).test_tag("draft").semantics(merge = true).focus_on_tap.pointer_hover_icon {tag="draft" merged}
-        TextFieldDecoration [0,0 298x56] Modifier.size(280.dp.._ x 56.dp.._).on_focus_changed.background(#FFE6E0E9, Rounded([Dp(4.dp), Dp(4.dp), Dp(0.dp), Dp(0.dp)]))
+        TextFieldDecoration [0,0 298x56] Modifier.size(280.dp.._ x 56.dp.._).on_focus_changed.draw_behind
           EmptyMeasurePolicy [16,19 266x18] Modifier.TextField {editable_text="" editable focusable focused part_of_parent}
           EmptyMeasurePolicy [0,54 298x2] Modifier.size(_ x 2.dp).background(#FF6750A4, Rectangle)
       BoxMeasurePolicy [298,4 70x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}

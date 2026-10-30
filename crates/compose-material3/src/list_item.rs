@@ -173,7 +173,43 @@ impl compose_runtime::ComposeArg for ListItemShapes {
     }
 }
 
+/// For `key(shapes)`: equal shapes hash alike, a custom shape's by its kind alone.
+impl std::hash::Hash for ListItemShapes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for shape in self.all() {
+            std::mem::discriminant(shape).hash(state);
+            for corner in shape.corners().into_iter().flatten() {
+                let (kind, size) = match corner {
+                    CornerSize::Dp(size) => (0u8, size.0),
+                    CornerSize::Px(size) => (1u8, size),
+                    CornerSize::Percent(size) => (2u8, size),
+                };
+                kind.hash(state);
+                // Plus zero: minus zero is equal to it, and hashes alike then.
+                (size + 0.0).to_bits().hash(state);
+            }
+        }
+    }
+}
+
 impl ListItemShapes {
+    fn all(&self) -> [&Shape; 6] {
+        [
+            &self.shape,
+            &self.selected_shape,
+            &self.pressed_shape,
+            &self.focused_shape,
+            &self.hovered_shape,
+            &self.dragged_shape,
+        ]
+    }
+
+    /// Whether all its shapes have corners, which is what animates between them, as
+    /// `hasRoundedCornerShapes` and `hasCornerBasedShapes`.
+    fn corner_based(&self) -> bool {
+        self.all().into_iter().all(|shape| shape.corners().is_some())
+    }
+
     /// The shape for a state: pressed, then dragged, selected, focused, hovered, else the
     /// default, as Compose's `shapeForInteraction` (which also animates between them).
     fn for_state(&self, selected: bool, pressed: bool, focused: bool, hovered: bool) -> Shape {
@@ -515,9 +551,22 @@ struct Slots {
     content: Callback,
 }
 
-/// The body the list items share, as Compose's `InteractiveListItem`: its colors and shape for
-/// its state (snapped: Compose animates them, with its motion scheme), its shadow, its click,
-/// and the layout of its parts.
+/// The container's and the content's colors of an item, one value to animate.
+type ItemColors = [Color; 6];
+
+fn lerp_colors(start: ItemColors, stop: ItemColors, fraction: f32) -> ItemColors {
+    // Most don't change between states: no going through Oklab for those each frame.
+    std::array::from_fn(|index| {
+        if start[index] == stop[index] {
+            start[index]
+        } else {
+            Color::lerp(start[index], stop[index], fraction)
+        }
+    })
+}
+
+/// The body the list items share, as Compose's `InteractiveListItem`: its colors, shape and shadow
+/// for its state, on the theme's motion scheme, its click, and the layout of its parts.
 #[allow(clippy::too_many_arguments)]
 fn interactive_list_item(
     modifier: Modifier,
@@ -542,10 +591,38 @@ fn interactive_list_item(
     };
     // compose-rs has no drag interactions: an item is never dragged here.
     let dragged = false;
-    let shape = shapes.for_state(selected, pressed, focused, hovered);
-    let container = colors.container_color(enabled, selected, dragged);
-    let content_color = colors.content_color(enabled, selected, dragged);
-    let shadow = if dragged { elevation.dragged_elevation } else { elevation.elevation };
+    let motion = MaterialTheme::motion_scheme();
+    // Corners move from one state's to another's, one shape all the while; any other shape snaps.
+    // New shapes start over, snapping too, as `key(this)`; the group is there either way, so what's
+    // remembered next doesn't shift.
+    let target_shape = shapes.for_state(selected, pressed, focused, hovered);
+    let shape = compose_runtime::key(shapes.clone(), || {
+        if shapes.corner_based() {
+            crate::animated_shape::remember_animated_shape(target_shape, motion.fast_spatial_spec())
+        } else {
+            target_shape
+        }
+    });
+    // Each on `DefaultEffects`, as `InteractiveListItem`'s transition, though one animation, made
+    // when they first change: an item of a lazy list that never changes pays for none (D1036).
+    let [container, content_color, leading_color, trailing_color, overline_color, supporting_color] =
+        crate::lazy_animation::animate_lazily(
+            [
+                colors.container_color(enabled, selected, dragged),
+                colors.content_color(enabled, selected, dragged),
+                colors.leading_content_color(enabled, selected, dragged),
+                colors.trailing_content_color(enabled, selected, dragged),
+                colors.overline_content_color(enabled, selected, dragged),
+                colors.supporting_content_color(enabled, selected, dragged),
+            ],
+            motion.default_effects_spec(),
+            lerp_colors,
+        );
+    let shadow = crate::lazy_animation::animate_lazily(
+        if dragged { elevation.dragged_elevation } else { elevation.elevation },
+        motion.fast_spatial_spec(),
+        |start: Dp, stop: Dp, fraction| Dp(start.0 + (stop.0 - start.0) * fraction),
+    );
     let is_clickable = click.is_some();
     let modifier = modifier.semantics_with(true, move |config| match semantics {
         ItemSemantics::None => {
@@ -584,9 +661,14 @@ fn interactive_list_item(
         Some(click) => modifier.combined_clickable_with(
             ClickableOptions {
                 enabled,
-                // The ring in the focused shape, the one it shows on: Compose's animated shape is
-                // one object, and a factory changing with the state would make the node again.
-                indication: crate::ripple::shaped_ripple(shapes.focused_shape.clone()),
+                // The ring on the item's shape, as Compose's, where that's one object; where it
+                // isn't, in the focused shape: a factory changing with the state would make the
+                // node again.
+                indication: crate::ripple::shaped_ripple(if shapes.corner_based() {
+                    shape.clone()
+                } else {
+                    shapes.focused_shape.clone()
+                }),
                 interaction_source: Some(click.interaction_source),
                 ..ClickableOptions::DEFAULT
             },
@@ -598,10 +680,6 @@ fn interactive_list_item(
     };
     let modifier = modifier.padding(content_padding);
     let typography = MaterialTheme::typography();
-    let leading_color = colors.leading_content_color(enabled, selected, dragged);
-    let trailing_color = colors.trailing_content_color(enabled, selected, dragged);
-    let overline_color = colors.overline_content_color(enabled, selected, dragged);
-    let supporting_color = colors.supporting_content_color(enabled, selected, dragged);
     let vertical_padding = content_padding.top + content_padding.bottom;
     let policy = compose_runtime::remember_keyed(
         PolicyKey(

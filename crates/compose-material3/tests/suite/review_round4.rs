@@ -295,7 +295,7 @@ fn a_labelled_navigation_item_does_not_repeat_its_icon_description() {
 }
 
 /// Compose's `NavigationBarItem` is `selectable(…, indication = null)`: the press ripple shows
-/// only on the 64 by 32 dp indicator pill (`indicatorRipple`, clipped to the pill shape, its
+/// only on the 56 by 32 dp indicator pill (`indicatorRipple`, clipped to the pill shape, its
 /// interactions offset onto it), never across the item's whole share of the bar. Here the
 /// state layer of a pressed item fills the whole item (here the whole 400 by 80 dp bar).
 #[test]

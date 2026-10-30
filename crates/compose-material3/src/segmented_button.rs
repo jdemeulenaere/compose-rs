@@ -167,11 +167,52 @@ impl SegmentedButtonDefaults {
         );
     }
 
-    /// The active icon when `active`, as `Icon(active)` (shown at once, where Compose fades
-    /// and scales it in).
+    /// The active icon when `active`, as `Icon(active)`.
     pub fn icon(active: bool) {
-        if active {
-            SegmentedButtonDefaults::active_icon();
+        SegmentedButtonDefaults::icon_with(
+            active,
+            SegmentedButtonDefaults::active_icon,
+            None::<fn()>,
+        );
+    }
+
+    /// As `Icon(active, activeContent, inactiveContent)`: without inactive content, the active one
+    /// fading in and growing from its bottom start, gone at once; with it, a crossfade between
+    /// them.
+    pub fn icon_with(
+        active: bool,
+        active_content: impl Fn() + 'static,
+        inactive_content: Option<impl Fn() + 'static>,
+    ) {
+        let motion = MaterialTheme::motion_scheme();
+        match inactive_content {
+            None => compose_animation::AnimatedVisibility(
+                active,
+                Modifier,
+                Some(
+                    compose_animation::fade_in_with(motion.default_effects_spec(), 0.0)
+                        + compose_animation::scale_in_with(
+                            motion.fast_spatial_spec(),
+                            0.0,
+                            compose_ui::TransformOrigin {
+                                pivot_fraction_x: 0.0,
+                                pivot_fraction_y: 1.0,
+                            },
+                        ),
+                ),
+                Some(compose_animation::ExitTransition::NONE),
+                "SegmentedButtonIcon",
+                compose_runtime::callback(move |_| active_content()),
+            ),
+            Some(inactive_content) => compose_animation::Crossfade(
+                active,
+                Modifier,
+                motion.default_effects_spec(),
+                "SegmentedButtonIcon",
+                compose_runtime::callback(move |active: bool| {
+                    if active { active_content() } else { inactive_content() }
+                }),
+            ),
         }
     }
 }

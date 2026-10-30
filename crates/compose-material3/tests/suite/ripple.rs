@@ -967,7 +967,9 @@ fn a_navigation_items_ripple_starts_under_the_press() {
                     row,
                     false,
                     || {},
-                    {},
+                    {
+                        Box!(modifier = Modifier.size(24.dp()));
+                    },
                     modifier = Modifier.test_tag(TAG),
                     interaction_source = Some(item_source.clone())
                 );
@@ -975,8 +977,8 @@ fn a_navigation_items_ripple_starts_under_the_press() {
         });
     });
     let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
-    // The 64 by 32 dp pill is centered in the item, as `NavigationBarItemLayout` places it.
-    let pill_left = (bounds.width() - 64.0) / 2.0;
+    // The 56 by 32 dp pill is centered in the item, as `NavigationBarItemLayout` places it.
+    let pill_left = (bounds.width() - 56.0) / 2.0;
     let pill_top = (bounds.height() - 32.0) / 2.0;
     let at = Offset::new(pill_left + 7.0, pill_top + 5.0);
     press_at(&source, at);
@@ -984,7 +986,7 @@ fn a_navigation_items_ripple_starts_under_the_press() {
     ui.advance_time_by(Duration::from_millis(16));
     let early = one_circle(&mut ui);
     let moved = 16.0 / 225.0;
-    assert_near(early.center.0, 7.0 + (32.0 - 7.0) * moved);
+    assert_near(early.center.0, 7.0 + (28.0 - 7.0) * moved);
     assert_near(early.center.1, 5.0 + (16.0 - 5.0) * moved);
 }
 
@@ -1161,9 +1163,17 @@ fn a_focused_radio_button_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarScreenshotTest.kt, navigationBar_firstItem_focused_insetFocusRings
 #[test]
 fn a_focused_navigation_bar_item_shows_the_inset_ring() {
-    assert_rings_when_focused("it", outline(64.0, 32.0, 16.0), || {
+    assert_rings_when_focused("it", outline(56.0, 32.0, 16.0), || {
         NavigationBar!(|row: RowScope| {
-            NavigationBarItem!(row, false, || {}, {}, modifier = Modifier.test_tag("it"));
+            NavigationBarItem!(
+                row,
+                false,
+                || {},
+                {
+                    Box!(modifier = Modifier.size(24.dp()));
+                },
+                modifier = Modifier.test_tag("it")
+            );
         });
     });
 }
@@ -1174,7 +1184,14 @@ fn a_focused_navigation_rail_item_shows_the_inset_ring() {
     // Without a label, a circle: `NavigationRailItem`'s `indicatorShape`.
     assert_rings_when_focused("it", outline(56.0, 56.0, 28.0), || {
         NavigationRail!({
-            NavigationRailItem!(false, || {}, {}, modifier = Modifier.test_tag("it"));
+            NavigationRailItem!(
+                false,
+                || {},
+                {
+                    Box!(modifier = Modifier.size(24.dp()));
+                },
+                modifier = Modifier.test_tag("it")
+            );
         });
     });
 }

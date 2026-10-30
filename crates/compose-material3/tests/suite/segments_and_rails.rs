@@ -97,7 +97,7 @@ fn segmented_buttons_share_the_row_and_select_one() {
 }
 
 #[test]
-fn a_navigation_rail_is_80_dp_its_items_56_dp() {
+fn a_navigation_rail_and_its_items_are_80_dp_wide() {
     #[composable]
     fn Rail() {
         let selected = remember(|| mutable_state_of(0usize));
@@ -137,11 +137,12 @@ fn a_navigation_rail_is_80_dp_its_items_56_dp() {
     assert_eq!((fab.top, fab.left), (4.0, 12.0));
     let home = bounds(&mut ui, "Home");
     assert_eq!(home.top, fab.bottom + 4.0 + 8.0 + 4.0);
-    assert_eq!((home.width(), home.left), (56.0, 12.0));
+    // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationRailTest.kt, navigationRailItem_sizeAndPositions
+    assert_eq!((home.width(), home.left), (80.0, 0.0));
     // With a label: 4 + 32 + 4 + the label + 4 at least.
     assert!(home.height() >= 56.0, "{home:?}");
     let bare = bounds(&mut ui, "bare");
-    assert_eq!((bare.width(), bare.height()), (56.0, 56.0));
+    assert_eq!((bare.width(), bare.height()), (80.0, 56.0));
     let node = ui.on_node_with_tag("Home").fetch_semantics_node();
     assert_eq!(
         (
@@ -211,4 +212,167 @@ fn a_rails_items_are_a_traversal_group() {
     ui.on_node_with_tag("item")
         .on_parent()
         .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
+}
+
+/// A label shown only when selected: the icon moves between the center and its place above the
+/// label, the indicator with it, a progress at a time.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarTest.kt, navigationBarItemContent_withLabel_unselected_sizeAndPosition
+#[test]
+fn an_item_showing_its_label_when_selected_centers_its_icon_when_not() {
+    use compose_ui::UnitExt;
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            NavigationBar!(|row: RowScope| {
+                NavigationBarItem!(
+                    row,
+                    read.get(),
+                    || {},
+                    {
+                        Box!(modifier = Modifier.size(24.dp()).test_tag("icon"));
+                    },
+                    modifier = Modifier.test_tag("item"),
+                    label = Some(|| Text!("Label")),
+                    always_show_label = false
+                );
+            });
+        });
+    });
+    let rect = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    };
+    let (item, icon) = (rect(&mut ui, "item"), rect(&mut ui, "icon"));
+    assert_eq!(icon.top - item.top, (item.height() - 24.0) / 2.0);
+    // Not placed, as Compose's `assertIsNotDisplayed`, and taking no taps; still naming the tab.
+    ui.on_node_unmerged(has_text("Label")).assert_is_not_displayed();
+    ui.on_node_with_tag("item").assert(has_text("Label"));
+    selected.set(true);
+    ui.wait_for_idle();
+    // Selected, the icon's semantics are cleared: its place shows from the label's below it, 24 dp
+    // of icon and 4 + 4 dp of indicator and gap, centered with them in the bar.
+    let item = rect(&mut ui, "item");
+    let label = ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds;
+    let content = 24.0 + 8.0 + label.height();
+    assert_eq!(label.top - item.top, (item.height() - content) / 2.0 + 32.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarTest.kt, navigationBarItem_withLongLabel_automaticallyResizesHeight
+/// A tall label makes the bar taller: `defaultMinSize`, not a fixed height.
+#[test]
+fn a_tall_label_makes_the_bar_taller() {
+    use compose_ui::UnitExt;
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Box!({
+                NavigationBar!(modifier = Modifier.test_tag("bar"), |row: RowScope| {
+                    NavigationBarItem!(
+                        row,
+                        true,
+                        || {},
+                        {
+                            Box!(modifier = Modifier.size(24.dp()));
+                        },
+                        label = Some(|| {
+                            Box!(modifier = Modifier.size(100.dp()));
+                        })
+                    );
+                });
+            });
+        });
+    });
+    // 4 + 24 + 4 + 4 + 100 + 4.
+    assert_eq!(bounds(&mut ui, "bar").height(), 140.0);
+}
+
+/// Its row is a selectable group, its height 80 dp at least.
+#[test]
+fn a_bars_row_is_a_selectable_group() {
+    use compose_ui::UnitExt;
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Box!({
+                NavigationBar!(modifier = Modifier.test_tag("bar"), |row: RowScope| {
+                    NavigationBarItem!(row, true, || {}, {
+                        Box!(modifier = Modifier.size(24.dp()));
+                    });
+                });
+            });
+        });
+    });
+    assert_eq!(bounds(&mut ui, "bar").height(), 80.0);
+    let root = ui.host().semantics_tree(false);
+    fn has_group(node: &compose_ui::platform::SemanticsNode) -> bool {
+        node.config.contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
+            || node.children.iter().any(has_group)
+    }
+    assert!(has_group(&root));
+}
+
+/// As `NavigationBarDefaults`: no elevation, the label's selected color `Secondary`, a 56 dp pill.
+#[test]
+fn a_bars_tokens_are_the_tips() {
+    assert_eq!(NavigationBarDefaults::ELEVATION, compose_ui::Dp(0.0));
+    thread_local! {
+        static READ: std::cell::Cell<Option<NavigationBarItemColors>> = const { std::cell::Cell::new(None) };
+    }
+    let _ui = compose_test(|| {
+        MaterialTheme!({
+            READ.with(|it| it.set(Some(NavigationBarItemDefaults::colors())));
+        });
+    });
+    let colors = READ.with(std::cell::Cell::get).expect("composed");
+    assert_eq!(colors.selected_text_color, light_color_scheme().secondary);
+}
+
+/// At a fractional density, as Compose's float arithmetic rounds where it places: at 2.625, a bar
+/// with a 63 px icon and a 42 px label (24 dp and 16 dp).
+/// At 2.625 the paddings aren't whole pixels: Compose's float arithmetic, rounded where it places.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationBar.kt, placeLabelAndIcon
+#[test]
+fn a_bar_item_places_at_a_fractional_density() {
+    use compose_ui::platform::FixedTextMeasurer;
+    use compose_ui::{Density, IntSize, UnitExt};
+    let mut ui = compose_test_with(
+        IntSize::new(1080, 2400),
+        Density::new(2.625),
+        Box::new(FixedTextMeasurer::new()),
+        || {
+            MaterialTheme!({
+                Box!({
+                    NavigationBar!(modifier = Modifier.test_tag("bar"), |row: RowScope| {
+                        NavigationBarItem!(
+                            row,
+                            true,
+                            || {},
+                            {
+                                Box!(modifier = Modifier.size(24.dp()).background(Color::RED));
+                            },
+                            label = Some(|| {
+                                Box!(
+                                    modifier = Modifier.size((10.dp(), 16.dp())).test_tag("label")
+                                );
+                            })
+                        );
+                    });
+                });
+            });
+        },
+    );
+    let top = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.top
+    };
+    // Content 63 + 10.5 + 10.5 + 42 = 126; from 210 px: 42 of padding each side.
+    assert_eq!(ui.on_node_with_tag("bar").fetch_semantics_node().bounds.height(), 210.0);
+    assert_eq!(top(&mut ui, "label"), 42.0 + 63.0 + 21.0);
+    // The indicator's padding rounded to 11, so at 31, not 30; 63 + 21 tall, not 85.
+    let list = ui.dump_display_list();
+    let pill = list.lines().map(str::trim).collect::<Vec<_>>();
+    let at = pill.iter().position(|line| line.starts_with("round rect")).expect(&list);
+    assert_eq!(pill[at - 1], "translate 466 31", "{list}");
+    assert!(pill[at].starts_with("round rect 0,0 147x84"), "{list}");
+    // The icon at 42 (its padding), not 41.
+    assert_eq!(pill[at + 1], "translate 42 11", "{list}");
+    // The ripple, the next, at 32: 31.5 rounded, not 30.
+    assert_eq!(pill[at + 3], "translate -42 -10", "{list}");
 }
