@@ -66,3 +66,61 @@ fn a_menus_vertical_offset_is_in_dp() {
     // The menu's 8 dp top padding is inside its surface, around the tagged column's items.
     assert_eq!(menu.top, anchor.bottom + 60.0);
 }
+
+/// A plain menu has the same window: above the anchor when the keyboard is where it would go.
+#[test]
+fn a_menu_goes_above_its_anchor_when_the_keyboard_is_below() {
+    let mut ui = compose_test_with(
+        IntSize::new(600, 800),
+        Density { density: 1.0, font_scale: 1.0 },
+        Box::new(FixedTextMeasurer::new()),
+        move || {
+            MaterialTheme!({
+                Box!(modifier = Modifier.padding((0.dp(), 420.dp(), 0.dp(), 0.dp())), {
+                    Box!(modifier = Modifier.size((100.dp(), 56.dp())), {
+                        DropdownMenu!(true, || {}, modifier = Modifier.test_tag("menu"), |_| {
+                            for _ in 0..3 {
+                                Box!(modifier = Modifier.size(50.dp()));
+                            }
+                        });
+                    });
+                });
+            });
+        },
+    );
+    ui.wait_for_idle();
+    assert_eq!(bounds(&mut ui, "menu").top, 476.0);
+    ui.host().set_window_insets(compose_ui::platform::PlatformWindowInsets {
+        ime: compose_ui::platform::Insets { bottom: 300, ..Default::default() },
+        ..Default::default()
+    });
+    ui.wait_for_idle();
+    assert_eq!(bounds(&mut ui, "menu").top, 254.0);
+}
+
+/// And it's no taller than that window, as a popup's window is.
+#[test]
+fn a_menu_is_no_taller_than_what_the_keyboard_leaves() {
+    let mut ui = compose_test_with(
+        IntSize::new(600, 800),
+        Density { density: 1.0, font_scale: 1.0 },
+        Box::new(FixedTextMeasurer::new()),
+        move || {
+            MaterialTheme!({
+                DropdownMenu!(true, || {}, modifier = Modifier.test_tag("menu"), |_| {
+                    for _ in 0..40 {
+                        Box!(modifier = Modifier.size(50.dp()));
+                    }
+                });
+            });
+        },
+    );
+    ui.wait_for_idle();
+    ui.host().set_window_insets(compose_ui::platform::PlatformWindowInsets {
+        status_bars: compose_ui::platform::Insets { top: 24, ..Default::default() },
+        ime: compose_ui::platform::Insets { bottom: 300, ..Default::default() },
+        ..Default::default()
+    });
+    ui.wait_for_idle();
+    assert_eq!(bounds(&mut ui, "menu").height(), 476.0);
+}

@@ -190,7 +190,6 @@ fn editable_collapses_on_escape_after_tab_gave_the_menu_the_focus() {
     ui.on_node_with_tag(TF).request_focus();
     ui.on_node_with_tag(TF).assert_is_focused();
     ui.press_key(Key::Tab);
-    ui.on_node_with_tag(TF).assert_is_not_focused();
     ui.press_key(Key::Escape);
     ui.on_node_with_tag(TF).assert_is_displayed();
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
@@ -416,21 +415,32 @@ fn not_editable_expands_on_space() {
     assert!(expanded.get());
 }
 
-/// The arrow keys of what's typed in move to the menu, and any other key moves back.
+/// Types `text` where the keys go, and says if the field got it: what shows where the focus is,
+/// the field keeping its own window's focus when the menu takes the keys.
+fn field_takes_typing(ui: &mut ComposeTestRule, text: &str) -> bool {
+    ui.host().send_text(text);
+    ui.wait_for_idle();
+    ui.on_node_with_tag(TF)
+        .fetch_semantics_node()
+        .config
+        .get(&SemanticsProperties::EDITABLE_TEXT)
+        .is_some_and(|value| value.contains(text))
+}
+
+/// The arrow keys of what's typed in move the keys to the menu; closed, an arrow leaves them.
 #[test]
-fn editable_menu_takes_the_focus_on_an_arrow_and_gives_it_up_on_another_key() {
-    for key in [Key::DirectionDown, Key::DirectionUp] {
+fn editable_menu_takes_the_keys_on_an_arrow() {
+    for key in [Key::DirectionDown, Key::DirectionUp, Key::Tab] {
         let (mut ui, _) = rule(true, true);
         ui.on_node_with_tag(TF).request_focus();
-        ui.on_node_with_tag(TF).assert_is_focused();
+        assert!(field_takes_typing(&mut ui, "y"));
         ui.press_key(key);
-        ui.on_node_with_tag(TF).assert_is_not_focused();
+        assert!(!field_takes_typing(&mut ui, "z"), "{key:?}");
     }
-    // Closed, an arrow is the field's.
     let (mut ui, _) = rule(false, true);
     ui.on_node_with_tag(TF).request_focus();
     ui.press_key(Key::DirectionDown);
-    ui.on_node_with_tag(TF).assert_is_focused();
+    assert!(field_takes_typing(&mut ui, "z"));
 }
 
 // Compose: edm_doesNotRecomposeOnScroll
@@ -1187,14 +1197,14 @@ fn a_key_on_the_anchor_ends_the_menus_taking_the_focus() {
     let (mut ui, expanded) = rule(true, true);
     ui.on_node_with_tag(TF).request_focus();
     ui.press_key(Key::Tab);
-    ui.on_node_with_tag(TF).assert_is_not_focused();
+    assert!(!field_takes_typing(&mut ui, "y"));
     expanded.set(false);
     ui.wait_for_idle();
     ui.on_node_with_tag(TF).request_focus();
     ui.press_key(Key::Character('a'));
     expanded.set(true);
     ui.wait_for_idle();
-    ui.on_node_with_tag(TF).assert_is_focused();
+    assert!(field_takes_typing(&mut ui, "z"));
 }
 
 #[test]
@@ -1243,4 +1253,96 @@ fn the_text_field_colors() {
         });
     });
     ui.wait_for_idle();
+}
+
+/// A window with a keyboard or bars, an anchor at `anchor_top` and `items` items of 50: where the
+/// menu is. The insets come after the menu's open, so they also move and size it.
+fn menu_with_insets(
+    window: IntSize,
+    status_top: i32,
+    bottom: (i32, i32),
+    (anchor_top, anchor_height): (i32, i32),
+    items: usize,
+) -> Rect {
+    let mut ui = ComposeTestRule::sized(window, move || {
+        MaterialTheme!({
+            ExposedDropdownMenuBox!(
+                true,
+                |_: bool| {},
+                modifier = Modifier.offset(0.dp(), (anchor_top as f32).dp()),
+                |scope: ExposedDropdownMenuBoxScope| {
+                    Box!(
+                        modifier = Modifier
+                            .size((100.dp(), (anchor_height as f32).dp()))
+                            .menu_anchor(&scope, ExposedDropdownMenuAnchorType::PrimaryEditable)
+                    );
+                    ExposedDropdownMenu!(
+                        scope.clone(),
+                        true,
+                        || {},
+                        modifier = Modifier.test_tag(EDM),
+                        |_: ColumnScope| {
+                            for _ in 0..items {
+                                Box!(modifier = Modifier.size(50.dp()));
+                            }
+                        }
+                    );
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let (ime, navigation) = bottom;
+    let inset = |top, bottom| compose_ui::platform::Insets { top, bottom, ..Default::default() };
+    ui.host().set_window_insets(compose_ui::platform::PlatformWindowInsets {
+        status_bars: inset(status_top, 0),
+        navigation_bars: inset(0, navigation),
+        ime: inset(0, ime),
+        ..Default::default()
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag(EDM).fetch_semantics_node().bounds
+}
+
+/// An open menu of what's typed in goes above the anchor when the keyboard is where it would go.
+#[test]
+fn the_menu_goes_above_the_anchor_when_the_keyboard_is_below() {
+    let menu = menu_with_insets(IntSize::new(600, 800), 0, (300, 0), (420, 56), 3);
+    assert_eq!(menu.top, 254.0);
+    assert_eq!(menu.bottom, 420.0);
+}
+
+/// The status bars and the navigation bar leave the window Compose's popup has: the bars' 48 at
+/// the bottom have no room for the menu, the status bars' 24 being added back as anchors count
+/// from the very top.
+#[test]
+fn the_menu_goes_above_the_anchor_when_the_navigation_bar_is_below() {
+    let menu = menu_with_insets(IntSize::new(411, 891), 24, (0, 48), (700, 56), 2);
+    assert_eq!(menu.top, 584.0);
+    assert_eq!(menu.bottom, 700.0);
+}
+
+/// A keyboard over the navigation bar counts once, the larger.
+#[test]
+fn the_larger_of_the_keyboard_and_the_navigation_bar_counts() {
+    let menu = menu_with_insets(IntSize::new(600, 800), 0, (300, 48), (420, 56), 3);
+    assert_eq!(menu.top, 254.0);
+    let menu = menu_with_insets(IntSize::new(600, 800), 0, (10, 300), (420, 56), 3);
+    assert_eq!(menu.top, 254.0);
+}
+
+/// The height is of the same window: from the anchor's bottom to the margin above the bars.
+#[test]
+fn the_height_below_the_anchor_is_within_the_bars() {
+    let menu = menu_with_insets(IntSize::new(411, 891), 24, (0, 48), (100, 56), 30);
+    assert_eq!(menu.height(), 639.0);
+    assert_eq!(menu.top, 156.0);
+}
+
+/// And above the anchor: from the margin below the status bars.
+#[test]
+fn the_height_above_the_anchor_is_within_the_status_bars() {
+    let menu = menu_with_insets(IntSize::new(411, 891), 24, (0, 48), (780, 56), 30);
+    assert_eq!(menu.height(), 708.0);
+    assert_eq!(menu.top, 72.0);
 }

@@ -24,6 +24,9 @@ pub struct PopupProperties {
     pub dismiss_on_back_press: bool,
     /// A click outside dismisses it.
     pub dismiss_on_click_outside: bool,
+    /// Taking the whole window, the system bars and the keyboard's place too, as the full-screen
+    /// dialog of a `ModalBottomSheet`; a popup's is what's visible, as Android's display frame.
+    pub fills_window: bool,
 }
 
 impl Default for PopupProperties {
@@ -32,6 +35,7 @@ impl Default for PopupProperties {
             focusable: false,
             dismiss_on_back_press: true,
             dismiss_on_click_outside: true,
+            fills_window: false,
         }
     }
 }
@@ -141,7 +145,9 @@ pub fn PopupWithPositionProvider(
     content: impl Fn() + 'static,
 ) {
     let host = remember(|| Rc::new(HostLayout) as Rc<dyn MeasurePolicy>);
-    let stack = remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>);
+    let stack = compose_runtime::remember_keyed(properties.fills_window, || {
+        Rc::new(StackLayout { fills_window: properties.fills_window }) as Rc<dyn MeasurePolicy>
+    });
     let fill = remember(|| Rc::new(FillLayout) as Rc<dyn MeasurePolicy>);
     let window = remember(|| Rc::new(WindowPosition) as Rc<dyn PopupPositionProvider>);
     Layout(
@@ -216,7 +222,7 @@ pub fn Dialog(
     content: impl Fn() + 'static,
 ) {
     let host = remember(|| Rc::new(HostLayout) as Rc<dyn MeasurePolicy>);
-    let stack = remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>);
+    let stack = remember(|| Rc::new(StackLayout { fills_window: true }) as Rc<dyn MeasurePolicy>);
     let window = remember(|| Rc::new(WindowPosition) as Rc<dyn PopupPositionProvider>);
     let inside = remember(|| Rc::new(Cell::new(None::<Rect>)));
     let center = {
@@ -303,7 +309,9 @@ impl MeasurePolicy for HostLayout {
 }
 
 /// Children stacked at the top start, as large as the largest.
-struct StackLayout;
+struct StackLayout {
+    fills_window: bool,
+}
 
 impl MeasurePolicy for StackLayout {
     fn measure(
@@ -312,6 +320,17 @@ impl MeasurePolicy for StackLayout {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
+        // A popup's window is what's visible, as `PopupLayout`'s `displayHeight`.
+        let constraints = if self.fills_window {
+            constraints
+        } else {
+            let visible = scope.visible_window_bounds().height().round() as i32;
+            Constraints {
+                min_height: constraints.min_height.min(visible),
+                max_height: constraints.max_height.min(visible),
+                ..constraints
+            }
+        };
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&child| scope.measure(child, constraints)).collect();
         let size = placeables.iter().fold(

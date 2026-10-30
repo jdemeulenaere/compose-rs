@@ -54,7 +54,6 @@ struct Shared {
     anchor_type: OwnedState<ExposedDropdownMenuAnchorType>,
     always_focusable: OwnedState<bool>,
     focus_requester: FocusRequester,
-    ime: WindowInsets,
     // The latest of these, as the box last composed.
     on_expanded_change: RefCell<Callback<dyn Fn(bool)>>,
     keyboard: RefCell<Option<SoftwareKeyboardController>>,
@@ -108,7 +107,6 @@ pub fn ExposedDropdownMenuBox(
             anchor_type: mutable_state_of(ExposedDropdownMenuAnchorType::PrimaryNotEditable),
             always_focusable: mutable_state_of(false),
             focus_requester: FocusRequester::new(),
-            ime: WindowInsets::ime(),
             on_expanded_change: RefCell::new(on_expanded_change.clone()),
             keyboard: RefCell::new(None),
         })
@@ -398,16 +396,17 @@ impl SemanticsModifierNode for ExpandableNode {
     }
 }
 
-/// The largest height of a menu at `anchor` in a window down to `window_bottom`, as Compose's
-/// `calculateMaxHeight`: the larger space beside it, or the window if it's scrolled out.
-fn calculate_max_height(window_bottom: i32, anchor: Rect, vertical_margin: i32) -> i32 {
-    let (top, bottom) = (vertical_margin, window_bottom - vertical_margin);
-    let available = if anchor.top > window_bottom as f32 || anchor.bottom < 0.0 {
+/// The largest height of a menu at `anchor` in `window`, as Compose's `calculateMaxHeight`: the
+/// larger space beside it, or the window if it's scrolled out.
+fn calculate_max_height(window: Rect, anchor: Rect, vertical_margin: i32) -> i32 {
+    let margin = vertical_margin as f32;
+    let (top, bottom) = (window.top + margin, window.bottom - margin);
+    let available = if anchor.top > window.bottom || anchor.bottom < window.top {
         bottom - top
     } else {
-        (anchor.top - top as f32).max(bottom as f32 - anchor.bottom).round() as i32
+        (anchor.top - top).max(bottom - anchor.bottom)
     };
-    available.max(0)
+    (available.round() as i32).max(0)
 }
 
 struct SizeElement {
@@ -454,9 +453,9 @@ impl LayoutModifierNode for SizeNode {
         let density = scope.density();
         // Read here, not as it's composed: a scroll or the keyboard measures the menu again.
         let anchor = self.shared.anchor_bounds.get();
-        let window_bottom = scope.window_size().height - self.shared.ime.get_bottom(&density);
         let vertical_margin = density.round_to_px(MENU_VERTICAL_MARGIN);
-        let max_height = calculate_max_height(window_bottom, anchor, vertical_margin);
+        let max_height =
+            calculate_max_height(scope.visible_window_bounds(), anchor, vertical_margin);
         let menu_width = constraints.constrain_width((anchor.right - anchor.left) as i32);
         let placeable = scope.measure(
             content,
@@ -495,9 +494,11 @@ pub fn ExposedDropdownMenu(
     expanded_state.set_target_state(expanded);
     if expanded_state.current_state() || expanded_state.target_state() {
         let density = compose_ui::LOCAL_DENSITY.current();
-        let position = compose_runtime::remember_keyed(density, || {
-            // Not the status bars, unlike Compose's: here the window's height has them already.
-            Rc::new(ExposedDropdownMenuPositionProvider::new(density, 0))
+        // The window it's given is without them, but anchors count from the very top, as
+        // Compose's workaround of `b/256233441`.
+        let top_window_insets = WindowInsets::status_bars().get_top(&density);
+        let position = compose_runtime::remember_keyed((density, top_window_insets), || {
+            Rc::new(ExposedDropdownMenuPositionProvider::new(density, top_window_insets))
         });
         let shared = scope.shared.clone();
         let focus_kept = matches!(

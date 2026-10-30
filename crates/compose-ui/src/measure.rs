@@ -49,6 +49,26 @@ impl UiTree {
         true
     }
 
+    /// The window as a popup's is, Android's visible display frame: without the status bars
+    /// above, and without the larger of the keyboard and the navigation bars below. A read of
+    /// their states, so what measures with it is measured again when they change.
+    pub(crate) fn visible_window(&self) -> crate::unit::Rect {
+        use crate::configuration::InsetsType;
+        let insets = &self.window_insets;
+        let top = insets.insets(InsetsType::StatusBars).top;
+        let bottom = insets
+            .insets(InsetsType::Ime)
+            .bottom
+            .max(insets.insets(InsetsType::NavigationBars).bottom);
+        let window = self.window;
+        crate::unit::Rect::new(
+            0.0,
+            top as f32,
+            window.width as f32,
+            (window.height - bottom).max(top) as f32,
+        )
+    }
+
     /// Places the overlays in the root with their providers, from their anchors' bounds (inside
     /// the modifiers of the layout around the popup, the parent of its host, as Compose's
     /// `parentLayoutCoordinates`), and moves the focus into those that ask for it when they
@@ -76,7 +96,9 @@ impl UiTree {
                 let size = self.node(anchor).layers[inner].measured;
                 crate::unit::Rect::from_offset_size(origin, size.into())
             });
-            let window = self.window;
+            let window = self.visible_window();
+            let window =
+                IntSize::new(window.width().round() as i32, window.height().round() as i32);
             let Some((provider, focus)) = self.overlay_node(node).map(|overlay| {
                 (overlay.provider.clone(), overlay.focus_on_open && !overlay.focused_once)
             }) else {

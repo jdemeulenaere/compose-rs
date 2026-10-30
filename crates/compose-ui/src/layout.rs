@@ -301,6 +301,12 @@ impl IntrinsicMeasureScope<'_> {
         self.tree.window
     }
 
+    /// The window as a popup's is, in the root's coordinates, as `getWindowVisibleDisplayFrame`:
+    /// without the status bars and the larger of the keyboard and the navigation bars.
+    pub fn visible_window_bounds(&self) -> crate::unit::Rect {
+        self.tree.visible_window()
+    }
+
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
         &mut *self.tree.text_measurer
     }
