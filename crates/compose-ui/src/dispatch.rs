@@ -578,7 +578,33 @@ impl UiTree {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         let mut consumed = false;
-        for (node, index, delegate) in self.key_path() {
+        let path = self.key_path();
+        // The preview first, from the root down.
+        for &(node, index, delegate) in path.iter().rev() {
+            consumed = self
+                .with_event_context(
+                    node,
+                    index,
+                    delegate,
+                    &mut actions,
+                    &mut requests,
+                    None,
+                    false,
+                    |modifier_node, context| {
+                        modifier_node
+                            .as_key_input()
+                            .is_some_and(|handler| handler.on_pre_key_event(&event, context))
+                    },
+                )
+                .unwrap_or(false);
+            if consumed {
+                break;
+            }
+        }
+        for (node, index, delegate) in path {
+            if consumed {
+                break;
+            }
             consumed = self
                 .with_event_context(
                     node,
@@ -595,9 +621,6 @@ impl UiTree {
                     },
                 )
                 .unwrap_or(false);
-            if consumed {
-                break;
-            }
         }
         self.apply_requests(requests, &mut actions);
         // Tab everywhere; the others where the host says they move the focus (D230).

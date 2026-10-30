@@ -458,6 +458,56 @@ fn key_events_bubble_from_the_focused_node_until_consumed() {
     );
 }
 
+/// `onPreviewKeyEvent`: from the root down before anything hears it, and consumed there, nothing
+/// else does, not even the handler on the same node.
+#[test]
+fn a_preview_hears_a_key_first_from_the_root_down() {
+    let mut host = host(|| {
+        Stack!(
+            modifier = Modifier
+                .on_preview_key_event(|event: KeyEvent| {
+                    log(format!("outer preview {:?}", event.key));
+                    event.key == Key::Character('o')
+                })
+                .on_key_event(|event: KeyEvent| {
+                    log(format!("outer {:?}", event.key));
+                    false
+                }),
+            {
+                Leaf(
+                    Modifier
+                        .on_key_event(|event: KeyEvent| {
+                            log(format!("inner {:?}", event.key));
+                            false
+                        })
+                        .on_preview_key_event(|event: KeyEvent| {
+                            log(format!("inner preview {:?}", event.key));
+                            event.key == Key::Character('i')
+                        })
+                        .focusable()
+                        .size(10.dp()),
+                );
+            }
+        );
+    });
+    let leaf = host.with_tree(|tree| tree.focus_order()[0]);
+    host.request_focus(leaf);
+    host.send_key(KeyEvent::down(Key::Character('a')));
+    assert_eq!(
+        take_log(),
+        [
+            "outer preview Character('a')",
+            "inner preview Character('a')",
+            "inner Character('a')",
+            "outer Character('a')"
+        ]
+    );
+    host.send_key(KeyEvent::down(Key::Character('i')));
+    assert_eq!(take_log(), ["outer preview Character('i')", "inner preview Character('i')"]);
+    host.send_key(KeyEvent::down(Key::Character('o')));
+    assert_eq!(take_log(), ["outer preview Character('o')"]);
+}
+
 #[test]
 fn removing_the_focused_node_clears_focus() {
     let shown = mutable_state_of(true);

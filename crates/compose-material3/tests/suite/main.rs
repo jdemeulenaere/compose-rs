@@ -18,6 +18,7 @@ mod dismissible_permanent_drawer;
 mod divider;
 mod drag_handle;
 mod drawer;
+mod exposed_dropdown_menu;
 mod fab_elevation;
 mod fab_expressive;
 mod icon_toggle_button;

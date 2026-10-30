@@ -374,7 +374,7 @@ impl MeasurePolicy for ButtonsFlowRow {
 // ---- DropdownMenu ----------------------------------------------------------------------------
 
 /// How far a menu stays from the window's top and bottom, as Compose's `MenuVerticalMargin`.
-const MENU_VERTICAL_MARGIN: Dp = Dp(48.0);
+pub(crate) const MENU_VERTICAL_MARGIN: Dp = Dp(48.0);
 
 /// Places a menu as Compose's `DropdownMenuPositionProvider`: below its anchor at its start
 /// (moved by `offset`, in pixels: the menu's `DpOffset` rounded at the density), else ending
@@ -389,7 +389,7 @@ struct DropdownMenuPosition {
 
 /// The point of the menu nearest its anchor, as fractions of its size, as Compose's
 /// `calculateTransformOrigin`: the side facing the anchor, or the middle of their overlap.
-fn transform_origin(anchor: Rect, menu: Rect) -> TransformOrigin {
+pub(crate) fn transform_origin(anchor: Rect, menu: Rect) -> TransformOrigin {
     fn pivot(anchor: (f32, f32), menu: (f32, f32)) -> f32 {
         let size = menu.1 - menu.0;
         if menu.0 >= anchor.1 {
@@ -648,56 +648,81 @@ pub fn DropdownMenu(
             Some(on_dismiss_request),
             properties,
             compose_runtime::callback(move || {
-                let (modifier, content, scroll) = (modifier.clone(), content.clone(), scroll);
-                // The open and close animation, as Compose's `DropdownMenuContent`.
-                let transition = remember_transition(&expanded_state, "DropDownMenu");
-                let motion = MaterialTheme::motion_scheme();
-                let (scale_spec, alpha_spec) =
-                    (motion.fast_spatial_spec(), motion.fast_effects_spec());
-                let scale = transition.animate_float(
-                    move |_| scale_spec.clone(),
-                    |expanded| if *expanded { 1.0 } else { CLOSED_SCALE },
-                );
-                let alpha = transition.animate_float(
-                    move |_| alpha_spec.clone(),
-                    |expanded| if *expanded { 1.0 } else { CLOSED_ALPHA },
-                );
                 let position = position.clone();
-                let layer = Modifier.graphics_layer(move |layer| {
-                    let scale = scale.get();
-                    layer.scale_x = scale;
-                    layer.scale_y = scale;
-                    layer.alpha = alpha.get();
-                    layer.transform_origin = position.transform_origin.get();
-                });
-                Surface(
-                    layer,
-                    shape,
+                dropdown_menu_content(
+                    &expanded_state,
+                    move || position.transform_origin.get(),
+                    modifier.clone(),
+                    scroll,
+                    shape.clone(),
                     container_color,
-                    Color::UNSPECIFIED,
                     tonal_elevation,
                     shadow_elevation,
-                    border,
-                    compose_runtime::callback(move || {
-                        let content = content.clone();
-                        // The modifier on the items' column, its 8 dp padding outside the
-                        // scroll, as wide as its widest item, as Compose's
-                        // `DropdownMenuContent`.
-                        Column(
-                            modifier
-                                .clone()
-                                .padding((0.dp(), 8.dp()))
-                                .width(compose_ui::IntrinsicSize::Max)
-                                .vertical_scroll(scroll),
-                            Arrangement::TOP,
-                            Alignment::START,
-                            compose_runtime::callback(move |column| content(column)),
-                        );
-                    }),
+                    border.clone(),
+                    content.clone(),
                 );
             }),
         );
     }
+}
+
+/// A menu's surface and items, scaling and fading as `expanded_state` goes, from where
+/// `transform_origin` says, as Compose's `DropdownMenuContent`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dropdown_menu_content(
+    expanded_state: &MutableTransitionState<bool>,
+    transform_origin: impl Fn() -> TransformOrigin + 'static,
+    modifier: Modifier,
+    scroll: compose_foundation::ScrollState,
+    shape: Shape,
+    container_color: Color,
+    tonal_elevation: Dp,
+    shadow_elevation: Dp,
+    border: Option<BorderStroke>,
+    content: compose_runtime::Callback<dyn Fn(ColumnScope)>,
+) {
+    let transition = remember_transition(expanded_state, "DropDownMenu");
+    let motion = MaterialTheme::motion_scheme();
+    let (scale_spec, alpha_spec) = (motion.fast_spatial_spec(), motion.fast_effects_spec());
+    let scale = transition.animate_float(
+        move |_| scale_spec.clone(),
+        |expanded| if *expanded { 1.0 } else { CLOSED_SCALE },
+    );
+    let alpha = transition.animate_float(
+        move |_| alpha_spec.clone(),
+        |expanded| if *expanded { 1.0 } else { CLOSED_ALPHA },
+    );
+    let layer = Modifier.graphics_layer(move |layer| {
+        let scale = scale.get();
+        layer.scale_x = scale;
+        layer.scale_y = scale;
+        layer.alpha = alpha.get();
+        layer.transform_origin = transform_origin();
+    });
+    Surface(
+        layer,
+        shape,
+        container_color,
+        Color::UNSPECIFIED,
+        tonal_elevation,
+        shadow_elevation,
+        border,
+        compose_runtime::callback(move || {
+            let content = content.clone();
+            // The modifier on the items' column, its 8 dp padding outside the scroll, as wide
+            // as its widest item, as Compose's `DropdownMenuContent`.
+            Column(
+                modifier
+                    .clone()
+                    .padding((0.dp(), 8.dp()))
+                    .width(compose_ui::IntrinsicSize::Max)
+                    .vertical_scroll(scroll),
+                Arrangement::TOP,
+                Alignment::START,
+                content,
+            );
+        }),
+    );
 }
 
 #[derive(Clone, Copy, PartialEq)]

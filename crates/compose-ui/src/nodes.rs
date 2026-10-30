@@ -660,6 +660,39 @@ impl KeyInputModifierNode for OnKeyEventNode {
     }
 }
 
+/// `Modifier.on_preview_key_event`'s element.
+pub(crate) struct PreviewKeyEvent(pub(crate) Callback<dyn Fn(KeyEvent) -> bool>);
+
+impl ModifierNodeElement for PreviewKeyEvent {
+    type Node = PreviewKeyEventNode;
+    fn create(&self) -> PreviewKeyEventNode {
+        PreviewKeyEventNode(self.0.clone())
+    }
+    fn update(&self, node: &mut PreviewKeyEventNode) {
+        node.0 = self.0.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+    fn name(&self) -> &'static str {
+        "on_preview_key_event"
+    }
+}
+
+pub(crate) struct PreviewKeyEventNode(Callback<dyn Fn(KeyEvent) -> bool>);
+
+impl ModifierNode for PreviewKeyEventNode {
+    fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl KeyInputModifierNode for PreviewKeyEventNode {
+    fn on_pre_key_event(&mut self, event: &KeyEvent, _: &mut EventContext<'_>) -> bool {
+        (self.0)(*event)
+    }
+}
+
 struct TestTagNode(SharedString);
 
 impl ModifierNode for TestTagNode {

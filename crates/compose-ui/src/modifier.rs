@@ -499,6 +499,15 @@ impl Modifier {
         self.then_element(Element::OnKeyEvent(on_key_event.into_callback()))
     }
 
+    /// Hears a key before what's inside the focus does, the outermost first: returning true consumes
+    /// it, as `Modifier.onPreviewKeyEvent`.
+    pub fn on_preview_key_event(
+        self,
+        on_preview_key_event: impl IntoCallback<dyn Fn(KeyEvent) -> bool>,
+    ) -> Modifier {
+        self.then_custom(crate::nodes::PreviewKeyEvent(on_preview_key_event.into_callback()))
+    }
+
     // ---- Semantics --------------------------------------------------------------------------
 
     /// A tag tests find the element by, as `Modifier.testTag`.
@@ -1532,6 +1541,11 @@ pub trait FocusRequesterModifierNode {}
 /// `KeyInputModifierNode`. Returning true consumes the event.
 pub trait KeyInputModifierNode {
     fn on_key_event(&mut self, _event: &KeyEvent, _context: &mut EventContext<'_>) -> bool {
+        false
+    }
+    /// The event before any of those: from the root down to what has the focus, as
+    /// `onPreKeyEvent`. Returning true consumes it, and nothing's told it after.
+    fn on_pre_key_event(&mut self, _event: &KeyEvent, _context: &mut EventContext<'_>) -> bool {
         false
     }
     /// Committed text from the keyboard or an input method.

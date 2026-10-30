@@ -23,6 +23,7 @@ mod components;
 mod dialog;
 mod drag_handle;
 mod drawer;
+mod exposed_dropdown_menu;
 mod fab;
 mod icon;
 mod lazy_animation;
@@ -83,6 +84,11 @@ pub use drawer::{
     ModalDrawerSheet, ModalNavigationDrawer, NavigationDrawerItem, NavigationDrawerItemColors,
     NavigationDrawerItemDefaults, PermanentDrawerSheet, PermanentNavigationDrawer,
     remember_drawer_state,
+};
+pub use exposed_dropdown_menu::{
+    ExposedDropdownMenu, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
+    ExposedDropdownMenuBoxModifiers, ExposedDropdownMenuBoxScope, ExposedDropdownMenuDefaults,
+    ExposedDropdownMenuPositionProvider,
 };
 pub use fab::{
     ExtendedFloatingActionButton, ExtendedFloatingActionButtonContent, FloatingActionButton,

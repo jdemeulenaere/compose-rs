@@ -1229,7 +1229,15 @@ impl PointerInputModifierNode for TextFieldNode {
             }
             PointerEventType::Move if event.pressed => {
                 let Some(press) = &mut self.press else { return };
-                if !press.dragging && (at - press.at).x.abs() < 1.0 && (at - press.at).y.abs() < 1.0
+                // A finger's press wobbles: it's still a tap within the touch slop, for what's
+                // watching for one (a menu's anchor).
+                let slop = match event.pointer_type {
+                    compose_ui::PointerType::Touch => context.view_configuration().touch_slop,
+                    _ => 1.0,
+                };
+                if !press.dragging
+                    && (at - press.at).x.abs() < slop
+                    && (at - press.at).y.abs() < slop
                 {
                     return;
                 }
