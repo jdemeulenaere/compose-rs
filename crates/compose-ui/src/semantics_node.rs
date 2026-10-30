@@ -198,8 +198,7 @@ fn is_placed(node: SemanticsNode) -> bool {
 }
 
 /// Whether the node hides what's in it, as `hideFromAccessibility` on a merging node.
-fn hides_what_it_merges(node: SemanticsNode) -> bool {
-    let config = node.unmerged_config();
+fn hides_what_it_merges(config: &SemanticsConfiguration) -> bool {
     config.is_merging_semantics_of_descendants
         && config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
 }
@@ -208,10 +207,13 @@ fn hides_what_it_merges(node: SemanticsNode) -> bool {
 fn is_partly_past_its_scroller(node: SemanticsNode) -> bool {
     let mut parent = node.parent();
     while let Some(scroller) = parent {
-        let config = scroller.unmerged_config();
-        if config.contains(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
-            || config.contains(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
-        {
+        let scrolls = scroller.read(|tree, id| {
+            tree.own_semantics(id).is_some_and(|own| {
+                own.config.contains(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+                    || own.config.contains(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+            })
+        });
+        if scrolls == Some(true) {
             let (own, around) =
                 (node.unclipped_bounds_in_root(), scroller.unclipped_bounds_in_root());
             return own.left < around.left
@@ -244,10 +246,11 @@ fn visit_uncovered(
         visitor(node, fake_node_bounds(node), hidden);
         return;
     }
-    let touch = rounded(node.touch_bounds_in_root());
-    let clipped =
-        rounded(node.read(|tree, id| tree.semantics_touch_bounds(id, true)).unwrap_or(EMPTY));
-    let hidden = hidden || hides_what_it_merges(node);
+    let (touch, clipped) =
+        node.read(|tree, id| tree.semantics_touch_bounds_both(id)).unwrap_or((EMPTY, EMPTY));
+    let (touch, clipped) = (rounded(touch), rounded(clipped));
+    let config = node.unmerged_config();
+    let hidden = hidden || hides_what_it_merges(&config);
     // What's uncovered is decided inside what clips it, and a node left in is reported with all its
     // touch target: an overhang past a clip neither keeps it alone nor covers what's beside.
     let mut region = SemanticsRegion::of(clipped);
@@ -260,9 +263,8 @@ fn visit_uncovered(
     }
     visitor(node, region.bounds(), hidden);
     let mut children = Vec::new();
-    node.for_each_accessibility_child(|child| children.push(child));
-    let merges = node.unmerged_config().is_merging_semantics_of_descendants;
-    if merges && is_partly_past_its_scroller(node) {
+    node.for_each_accessibility_child_of(&config, |child| children.push(child));
+    if config.is_merging_semantics_of_descendants && is_partly_past_its_scroller(node) {
         // What's past the scroller is reported too, unclipped, for a screen reader to scroll to.
         let mut inside = SemanticsRegion::of(node.unclipped_bounds_in_root());
         for child in children.into_iter().rev() {
@@ -273,7 +275,7 @@ fn visit_uncovered(
             visit_uncovered(child, unaccounted, hidden, visitor);
         }
     }
-    if node.is_important_for_accessibility() {
+    if node.is_important_given(&config) {
         unaccounted.difference(clipped);
     }
 }
@@ -298,18 +300,19 @@ fn visit_uncovered_past_scroller(
     let touch = node.touch_bounds_in_root();
     let empty = touch.right <= touch.left || touch.bottom <= touch.top;
     let bounds = rounded(if empty { node.unclipped_bounds_in_root() } else { touch });
-    let hidden = hidden || hides_what_it_merges(node);
+    let config = node.unmerged_config();
+    let hidden = hidden || hides_what_it_merges(&config);
     let mut region = SemanticsRegion::of(bounds);
     if !region.intersect(unaccounted) {
         return;
     }
     visitor(node, region.bounds(), hidden);
     let mut children = Vec::new();
-    node.for_each_accessibility_child(|child| children.push(child));
+    node.for_each_accessibility_child_of(&config, |child| children.push(child));
     for child in children.into_iter().rev() {
         visit_uncovered_past_scroller(child, unaccounted, hidden, visitor);
     }
-    if node.is_important_for_accessibility() {
+    if node.is_important_given(&config) {
         unaccounted.difference(bounds);
     }
 }
@@ -723,11 +726,19 @@ impl SemanticsNode {
     /// Each child for the accessibility tree, as `forEachAccessibilityChild`: none under a node
     /// clearing its semantics, link markers left out; a merging node's own description and role as
     /// fake nodes around its children in the unmerged tree.
-    pub fn for_each_accessibility_child(&self, mut block: impl FnMut(SemanticsNode)) {
+    pub fn for_each_accessibility_child(&self, block: impl FnMut(SemanticsNode)) {
         if self.fake.is_some() {
             return;
         }
-        let config = self.unmerged_config();
+        self.for_each_accessibility_child_of(&self.unmerged_config(), block);
+    }
+
+    /// `for_each_accessibility_child`, its unmerged configuration at hand.
+    fn for_each_accessibility_child_of(
+        &self,
+        config: &SemanticsConfiguration,
+        mut block: impl FnMut(SemanticsNode),
+    ) {
         if config.is_clearing_semantics {
             return;
         }
@@ -896,15 +907,23 @@ impl SemanticsNode {
     /// Whether it means anything to accessibility, as `isImportantForAccessibility`: not hidden nor
     /// a link marker, and it merges or sets what accessibility reads.
     pub fn is_important_for_accessibility(&self) -> bool {
-        if self.is_hidden() {
+        self.is_important_given(&self.unmerged_config())
+    }
+
+    /// `is_important_for_accessibility`, its unmerged configuration at hand: what says so first, what
+    /// walks the layers around it last.
+    fn is_important_given(&self, config: &SemanticsConfiguration) -> bool {
+        if config.contains(&SemanticsProperties::LINK_TEST_MARKER)
+            || config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+        {
             return false;
         }
-        let config = self.unmerged_config();
-        if config.contains(&SemanticsProperties::LINK_TEST_MARKER) {
-            return false;
-        }
-        config.is_merging_semantics_of_descendants
-            || config.properties().any(|(key, _)| key.is_important_for_accessibility())
+        let says = config.is_merging_semantics_of_descendants
+            || config.properties().any(|(key, _)| key.is_important_for_accessibility());
+        says && !self
+            .owner_of_bounds()
+            .read(|tree, node| tree.semantics_is_transparent(node))
+            .unwrap_or(false)
     }
 
     /// Whether a click action makes `touch_bounds_in_root` the minimum touch target.
@@ -958,6 +977,20 @@ impl UiTree {
     /// target around it, each clip around it letting the target past as `rectInParent` does. With
     /// `clip_to_large_parents`, a clip at least the target's size stops it (`clippedTouchBoundsInRoot`):
     /// what's covered is decided inside such a clip.
+    /// `semantics_touch_bounds` both ways, for what's asked of every node of a tree: one without a
+    /// click has no target past its clips.
+    pub(crate) fn semantics_touch_bounds_both(&mut self, node: NodeId) -> (Rect, Rect) {
+        let clicks = self
+            .own_semantics(node)
+            .is_some_and(|own| own.config.contains(&SemanticsActions::ON_CLICK));
+        if clicks {
+            (self.semantics_touch_bounds(node, false), self.semantics_touch_bounds(node, true))
+        } else {
+            let clipped = self.semantics_geometry(node).0.clipped;
+            (clipped, clipped)
+        }
+    }
+
     pub(crate) fn semantics_touch_bounds(
         &mut self,
         node: NodeId,
