@@ -691,6 +691,7 @@ dependencies = [
  "compose-ui",
  "jni",
  "log",
+ "unicode-segmentation",
 ]
 
 [[package]]

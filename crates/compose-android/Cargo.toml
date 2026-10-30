@@ -12,6 +12,7 @@ log.workspace = true
 compose-runtime.workspace = true
 compose-ui.workspace = true
 jni = "0.22"
+unicode-segmentation = "1"
 
 [dev-dependencies]
 compose-navigation-event.workspace = true

@@ -23,6 +23,7 @@ mod image;
 pub mod input_method;
 pub mod serialize;
 pub mod text;
+pub mod text_segments;
 
 mod bridge;
 mod frame_time;
