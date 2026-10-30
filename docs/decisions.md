@@ -435,7 +435,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D716 | [runtime](decisions/runtime.md#d716) | current |
 | D717 | [runtime](decisions/runtime.md#d717) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
-| D801 | unused | (its test-clock rounding came in as [D900](decisions/api-and-tooling.md#d900)) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |
 | D804 | [ui-and-layout](decisions/ui-and-layout.md#d804) | current |
