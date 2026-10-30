@@ -1993,8 +1993,11 @@ fn a_scroll_behaviors_snap_spec_is_kept_until_it_changes() {
     let mut ui = themed(long_only(SlowSpatial), move || {
         let _ = tick_read.get();
         COMPOSED.with(|it| it.set(it.get() + 1));
-        let behavior =
-            TopAppBarDefaults::enter_always_scroll_behavior_with(Some(tween_of(millis_read.get())));
+        let behavior = TopAppBarDefaults::enter_always_scroll_behavior_with(
+            None,
+            Some(tween_of(millis_read.get())),
+            None,
+        );
         BEHAVIOR.with(|cell| *cell.borrow_mut() = Some(behavior.clone()));
         TopAppBar!({ Text!("Title") }, scroll_behavior = Some(behavior));
     });
@@ -2033,7 +2036,8 @@ fn a_scroll_behavior_without_a_snap_spec_stays_where_it_is() {
         static BEHAVIOR: RefCell<Option<TopAppBarScrollBehavior>> = const { RefCell::new(None) };
     }
     let mut ui = themed(MotionScheme::standard(), move || {
-        let behavior = TopAppBarDefaults::exit_until_collapsed_scroll_behavior_with(None);
+        let behavior =
+            TopAppBarDefaults::exit_until_collapsed_scroll_behavior_with(None, None, None);
         BEHAVIOR.with(|cell| *cell.borrow_mut() = Some(behavior.clone()));
         TopAppBar!({ Text!("Title") }, scroll_behavior = Some(behavior));
     });

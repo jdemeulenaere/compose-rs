@@ -1,22 +1,32 @@
 //! App bars, as Compose's Material 3: `TopAppBar`, `CenterAlignedTopAppBar`, `MediumTopAppBar`
-//! and `LargeTopAppBar` with their `TopAppBarState` and `TopAppBarScrollBehavior`s (pinned,
-//! enter-always, exit-until-collapsed), and `BottomAppBar`.
+//! and `LargeTopAppBar`, their flexible namesakes and `TwoRowsTopAppBar`, with their
+//! `TopAppBarState` and `TopAppBarScrollBehavior`s (pinned, enter-always, exit-until-collapsed), and
+//! `BottomAppBar` and `FlexibleBottomAppBar`, with `BottomAppBarState` and exit-always.
 
 use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
-use compose_animation::{Animatable, AnimationSpec, Easing, FAST_OUT_LINEAR_IN_EASING, Spring};
+use compose_animation::{
+    AnimationSpec, AnimationState, DecayAnimationSpec, Easing, FAST_OUT_LINEAR_IN_EASING, Spring,
+};
 use compose_foundation::layout::{
-    Arrangement, Box, Column, Row, RowScope, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
+    Arrangement, Box, Column, HorizontalArrangement, Row, RowScope, WindowInsets,
+    WindowInsetsModifiers, WindowInsetsSides,
 };
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, CoroutineScope, OwnedState, composable, derived_state_of,
     mutable_state_of, remember_coroutine_scope,
 };
 use compose_ui::{
-    Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier, Offset, PaddingValues, TextStyle, UnitExt,
+    Alignment, Color, Constraints, Dp, HorizontalAlignment, Layout, LayoutDirection, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, Offset, PaddingValues, TextStyle,
+    UnitExt,
 };
+
+use compose_foundation::gestures::{
+    DraggableModifier, DraggableOptions, Orientation, ScrollableState, remember_draggable_state,
+};
+use compose_runtime::Callback;
 
 use crate::motion::MotionScheme;
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
@@ -26,9 +36,10 @@ use compose_ui::{NestedScrollConnection, NestedScrollSource};
 
 struct TopAppBarStateInner {
     height_offset_limit: OwnedState<f32>,
-    /// Animated when it settles; snapped as the content scrolls.
-    height_offset: Animatable<f32>,
+    height_offset: OwnedState<f32>,
     content_offset: OwnedState<f32>,
+    /// As `isScrollingContentAtStart`: `None`, it's taken to be.
+    is_at_start: std::cell::RefCell<Option<Rc<dyn Fn() -> bool>>>,
 }
 
 /// How far a top app bar has collapsed and how far the content under it has scrolled, as
@@ -58,10 +69,11 @@ impl TopAppBarState {
         Owned::new(
             TopAppBarStateInner {
                 height_offset_limit: mutable_state_of(initial_height_offset_limit),
-                height_offset: Animatable::new(
+                height_offset: mutable_state_of(
                     initial_height_offset.clamp(initial_height_offset_limit.min(0.0), 0.0),
                 ),
                 content_offset: mutable_state_of(initial_content_offset),
+                is_at_start: Default::default(),
             },
             |object| TopAppBarState { object },
         )
@@ -80,16 +92,15 @@ impl TopAppBarState {
 
     /// How far it's collapsed, between the limit and 0, as `heightOffset`.
     pub fn height_offset(&self) -> f32 {
-        self.inner().map_or(0.0, |inner| inner.height_offset.value())
+        self.inner().map_or(0.0, |inner| inner.height_offset.get())
     }
 
     /// Collapses it to `offset`, kept between the limit and 0.
     pub fn set_height_offset(&self, offset: f32) {
         let limit = self.height_offset_limit().min(0.0);
         let offset = offset.clamp(limit, 0.0);
-        let Some(inner) = self.inner() else { return };
-        if offset != inner.height_offset.value() || inner.height_offset.is_running() {
-            inner.height_offset.snap_to(offset);
+        if let Some(inner) = self.inner() {
+            inner.height_offset.set(offset);
         }
     }
 
@@ -110,32 +121,72 @@ impl TopAppBarState {
         if limit != 0.0 { self.height_offset() / limit } else { 0.0 }
     }
 
-    /// How much content has scrolled under the bar, 0 to 1, as `overlappedFraction`.
+    /// How much content has scrolled under the bar, 0 to 1, as `overlappedFraction`: all of it, for
+    /// a scrollable known not to be at its start though nothing's been seen to scroll.
     pub fn overlapped_fraction(&self) -> f32 {
+        let at_start = self
+            .inner()
+            .and_then(|inner| inner.is_at_start.borrow().clone())
+            .is_none_or(|is_at_start| is_at_start());
         let limit = self.height_offset_limit();
-        if limit != 0.0 {
-            1.0 - (limit - self.content_offset()).clamp(limit, 0.0) / limit
+        if !at_start && self.content_offset() == 0.0 {
+            1.0
+        } else if limit != 0.0 {
+            1.0 - (limit + self.content_offset().abs()).clamp(limit, 0.0) / limit
         } else {
             0.0
         }
     }
 
-    /// Settles a collapse left halfway: to the nearer of expanded and collapsed, on `spec`, as
-    /// Compose's `settleAppBar` (without the fling's decay first).
-    async fn settle(&self, spec: AnimationSpec) {
-        let fraction = self.collapsed_fraction();
-        if !(0.01..1.0).contains(&fraction) {
-            return;
-        }
-        let offset = self.height_offset();
-        let limit = self.height_offset_limit();
-        if offset < 0.0 && offset > limit {
-            let target = if fraction < 0.5 { 0.0 } else { limit };
-            if let Some(inner) = self.inner() {
-                inner.height_offset.animate_to(target, spec).await;
-            }
+    fn set_is_at_start(&self, is_at_start: Option<Rc<dyn Fn() -> bool>>) {
+        if let Some(inner) = self.inner() {
+            inner.is_at_start.replace(is_at_start);
         }
     }
+}
+
+/// Settles a collapse left between its ends, as `settleAppBar`: on with what's left of the fling,
+/// on `fling`, then to the nearer end, on `snap`. Gives back the velocity left, along the axis.
+async fn settle_app_bar(
+    state: TopAppBarState,
+    velocity: f32,
+    fling: Option<DecayAnimationSpec>,
+    snap: Option<AnimationSpec>,
+) -> Offset {
+    let fraction = state.collapsed_fraction();
+    if fraction < 0.01 || fraction == 1.0 {
+        return Offset::ZERO;
+    }
+    let remaining = std::cell::Cell::new(velocity);
+    if let Some(fling) = fling
+        && velocity.abs() > 1.0
+    {
+        let last = std::cell::Cell::new(0.0f32);
+        AnimationState::with_velocity(0.0f32, velocity)
+            .animate_decay(&fling, false, |scope| {
+                let delta = scope.value() - last.get();
+                let before = state.height_offset();
+                state.set_height_offset(before + delta);
+                let consumed = (before - state.height_offset()).abs();
+                last.set(scope.value());
+                remaining.set(scope.velocity());
+                // Rounding errors aside, what's not taken ends it.
+                if (delta - consumed).abs() > 0.5 {
+                    scope.cancel_animation();
+                }
+            })
+            .await;
+    }
+    if let Some(snap) = snap {
+        let (offset, limit) = (state.height_offset(), state.height_offset_limit());
+        if offset < 0.0 && offset > limit {
+            let target = if state.collapsed_fraction() < 0.5 { 0.0 } else { limit };
+            AnimationState::new(offset)
+                .animate_to(target, snap, false, |scope| state.set_height_offset(scope.value()))
+                .await;
+        }
+    }
+    Offset::new(0.0, remaining.get())
 }
 
 impl TopAppBarState {
@@ -190,6 +241,8 @@ enum ScrollKind {
     Pinned,
     EnterAlways,
     ExitUntilCollapsed,
+    /// A bottom bar's.
+    ExitAlways,
 }
 
 /// How a top app bar follows the content's scrolling, as Compose's `TopAppBarScrollBehavior`:
@@ -201,6 +254,9 @@ pub struct TopAppBarScrollBehavior {
     kind: ScrollKind,
     scope: CoroutineScope,
     connection: Rc<dyn NestedScrollConnection>,
+    snap: Option<AnimationSpec>,
+    fling: Option<DecayAnimationSpec>,
+    can_scroll: Option<Callback<dyn Fn() -> bool>>,
 }
 
 impl TopAppBarScrollBehavior {
@@ -229,18 +285,68 @@ impl TopAppBarScrollBehavior {
         // These aren't composables: the standard scheme's, whatever the theme's
         // (`with_snap_animation_spec` says otherwise; `TopAppBarDefaults`' read the theme).
         let snap = Some(MotionScheme::standard().default_effects_spec());
-        let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
-        TopAppBarScrollBehavior { state, kind, scope, connection }
+        TopAppBarScrollBehavior::with(kind, state, scope, snap, None, None)
     }
 
-    /// For a behavior from a raw constructor, whose snap is the standard scheme's default effects
-    /// spec whatever the theme's: how the bar snaps to expanded or collapsed when a scroll leaves it
-    /// between them, as the behaviors' `snapAnimationSpec`; `None` leaves it there. It makes a new
-    /// connection: keep it (`remember`), or use `TopAppBarDefaults`' `_with` forms, which do.
+    fn with(
+        kind: ScrollKind,
+        state: TopAppBarState,
+        scope: CoroutineScope,
+        snap: Option<AnimationSpec>,
+        fling: Option<DecayAnimationSpec>,
+        can_scroll: Option<Callback<dyn Fn() -> bool>>,
+    ) -> Self {
+        let (snap, fling) = if kind == ScrollKind::Pinned { (None, None) } else { (snap, fling) };
+        let connection = Rc::new(ScrollConnection {
+            kind,
+            state,
+            snap: snap.clone(),
+            fling: fling.clone(),
+            can_scroll: can_scroll.clone(),
+        });
+        TopAppBarScrollBehavior { state, kind, scope, connection, snap, fling, can_scroll }
+    }
+
+    /// How the bar snaps to expanded or collapsed when a scroll leaves it between them, as the
+    /// behaviors' `snapAnimationSpec` (from a raw constructor, the standard scheme's default
+    /// effects whatever the theme's); `None` leaves it there. Each of these makes a new connection:
+    /// keep it (`remember`), or use `TopAppBarDefaults`' `_with` forms, which do.
     pub fn with_snap_animation_spec(self, snap: Option<AnimationSpec>) -> TopAppBarScrollBehavior {
-        let TopAppBarScrollBehavior { state, kind, scope, .. } = self;
-        let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
-        TopAppBarScrollBehavior { state, kind, scope, connection }
+        let TopAppBarScrollBehavior { state, kind, scope, fling, can_scroll, .. } = self;
+        TopAppBarScrollBehavior::with(kind, state, scope, snap, fling, can_scroll)
+    }
+
+    /// What's left of a fling carries the bar on, on this, as `flingAnimationSpec`: from a raw
+    /// constructor, none.
+    pub fn with_fling_animation_spec(
+        self,
+        fling: Option<DecayAnimationSpec>,
+    ) -> TopAppBarScrollBehavior {
+        let TopAppBarScrollBehavior { state, kind, scope, snap, can_scroll, .. } = self;
+        TopAppBarScrollBehavior::with(kind, state, scope, snap, fling, can_scroll)
+    }
+
+    /// Whether scrolls are handled now, as `canScroll`: by default, always.
+    pub fn with_can_scroll(
+        self,
+        can_scroll: impl Fn() -> bool + 'static,
+    ) -> TopAppBarScrollBehavior {
+        let TopAppBarScrollBehavior { state, kind, scope, snap, fling, .. } = self;
+        let can_scroll = Some(compose_runtime::Callback::new(can_scroll));
+        TopAppBarScrollBehavior::with(kind, state, scope, snap, fling, can_scroll)
+    }
+
+    /// The bar's color goes by where `scrollable` is, not only by what it's seen scroll, as the
+    /// overloads taking a `ScrollableState`: a list already scrolled, or reversed, starts scrolled.
+    pub fn with_scrollable_state(
+        self,
+        scrollable: &impl ScrollableState,
+    ) -> TopAppBarScrollBehavior {
+        self.state.set_is_at_start(scrollable.scroll_indicator_state().map(|indicator| {
+            let is_at_start: Rc<dyn Fn() -> bool> = Rc::new(move || indicator.scroll_offset() == 0);
+            is_at_start
+        }));
+        self
     }
 
     /// Its state, as `state`.
@@ -257,6 +363,16 @@ impl TopAppBarScrollBehavior {
     pub fn nested_scroll_connection(&self) -> Rc<dyn NestedScrollConnection> {
         self.connection.clone()
     }
+
+    /// As `snapAnimationSpec`.
+    pub fn snap_animation_spec(&self) -> Option<AnimationSpec> {
+        self.snap.clone()
+    }
+
+    /// As `flingAnimationSpec`.
+    pub fn fling_animation_spec(&self) -> Option<DecayAnimationSpec> {
+        self.fling.clone()
+    }
 }
 
 impl ComposeArg for TopAppBarScrollBehavior {
@@ -269,28 +385,27 @@ impl ComposeArg for TopAppBarScrollBehavior {
 struct ScrollConnection {
     kind: ScrollKind,
     state: TopAppBarState,
-    scope: CoroutineScope,
     snap: Option<AnimationSpec>,
+    fling: Option<DecayAnimationSpec>,
+    can_scroll: Option<Callback<dyn Fn() -> bool>>,
+}
+
+impl ScrollConnection {
+    fn can_scroll(&self) -> bool {
+        self.can_scroll.as_ref().is_none_or(|can_scroll| can_scroll())
+    }
 }
 
 impl NestedScrollConnection for ScrollConnection {
-    fn on_pre_scroll(&self, available: Offset, source: NestedScrollSource) -> Offset {
+    fn on_pre_scroll(&self, available: Offset, _source: NestedScrollSource) -> Offset {
         let state = &self.state;
-        // A new drag or wheel turn stops a settle going on, as Compose's (its fling's
-        // coroutine is cancelled).
-        if source == NestedScrollSource::UserInput
-            && let Some(inner) = state.inner()
-            && inner.height_offset.is_running()
-        {
-            inner.height_offset.stop();
-        }
         let collapses = match self.kind {
-            ScrollKind::Pinned => false,
+            ScrollKind::Pinned | ScrollKind::ExitAlways => false,
             ScrollKind::EnterAlways => true,
             // Not when scrolling back: the content goes first.
             ScrollKind::ExitUntilCollapsed => available.y <= 0.0,
         };
-        if !collapses {
+        if !collapses || !self.can_scroll() {
             return Offset::ZERO;
         }
         let before = state.height_offset();
@@ -305,61 +420,77 @@ impl NestedScrollConnection for ScrollConnection {
         available: Offset,
         _source: NestedScrollSource,
     ) -> Offset {
+        if !self.can_scroll() {
+            return Offset::ZERO;
+        }
         let state = &self.state;
+        state.set_content_offset(state.content_offset() + consumed.y);
         match self.kind {
-            ScrollKind::Pinned => {
-                if consumed.y == 0.0 && available.y > 0.0 {
-                    state.set_content_offset(0.0);
-                } else {
-                    state.set_content_offset(state.content_offset() + consumed.y);
-                }
-                Offset::ZERO
-            }
-            ScrollKind::EnterAlways => {
-                state.set_content_offset(state.content_offset() + consumed.y);
-                let at_end = state.height_offset() == 0.0
-                    || state.height_offset() == state.height_offset_limit();
-                if at_end && consumed.y == 0.0 && available.y > 0.0 {
-                    // Back at the start: no rounding errors left.
-                    state.set_content_offset(0.0);
-                }
-                state.set_height_offset(state.height_offset() + consumed.y);
-                Offset::ZERO
-            }
+            ScrollKind::Pinned | ScrollKind::EnterAlways => {}
+            ScrollKind::ExitAlways => state.set_height_offset(state.height_offset() + consumed.y),
             ScrollKind::ExitUntilCollapsed => {
-                state.set_content_offset(state.content_offset() + consumed.y);
                 if available.y < 0.0 || consumed.y < 0.0 {
                     let before = state.height_offset();
                     state.set_height_offset(before + consumed.y);
                     return Offset::new(0.0, state.height_offset() - before);
                 }
-                if consumed.y == 0.0 && available.y > 0.0 {
-                    state.set_content_offset(0.0);
-                }
                 if available.y > 0.0 {
-                    // What the content left (it's at its start) expands the bar.
+                    // What the pre-scroll left and the content didn't take expands the bar.
                     let before = state.height_offset();
                     state.set_height_offset(before + available.y);
                     return Offset::new(0.0, state.height_offset() - before);
                 }
-                Offset::ZERO
             }
         }
+        Offset::ZERO
     }
 
     fn on_post_fling(
         &self,
         _consumed: Offset,
-        _available: Offset,
+        available: Offset,
     ) -> compose_ui::LocalBoxFuture<'_, Offset> {
-        if self.kind != ScrollKind::Pinned
-            && let Some(spec) = self.snap.clone()
-        {
-            let state = self.state;
-            self.scope.launch(async move { state.settle(spec).await });
+        let state = self.state;
+        // All the way back: no rounding errors left.
+        let at_an_end = match self.kind {
+            ScrollKind::ExitAlways => {
+                state.height_offset() == 0.0 || state.height_offset() == state.height_offset_limit()
+            }
+            ScrollKind::Pinned | ScrollKind::EnterAlways | ScrollKind::ExitUntilCollapsed => true,
+        };
+        if available.y > 0.0 && at_an_end {
+            state.set_content_offset(0.0);
         }
-        Box::pin(async { Offset::ZERO })
+        if self.kind == ScrollKind::Pinned {
+            return Box::pin(async { Offset::ZERO });
+        }
+        let (fling, snap) = (self.fling.clone(), self.snap.clone());
+        Box::pin(async move { settle_app_bar(state, available.y, fling, snap).await })
     }
+}
+
+/// Dragging the bar itself moves it, and letting go settles it, as the bars' `draggable`.
+fn bar_drag(scroll_behavior: &Option<TopAppBarScrollBehavior>, sign: f32) -> Modifier {
+    let Some(behavior) = scroll_behavior.clone().filter(|behavior| !behavior.is_pinned()) else {
+        return Modifier;
+    };
+    let state = behavior.state;
+    let drag = remember_draggable_state!(move |delta: f32| {
+        state.set_height_offset(state.height_offset() + sign * delta);
+    });
+    let (fling, snap) = (behavior.fling.clone(), behavior.snap.clone());
+    let on_stopped: compose_foundation::gestures::OnDragStopped =
+        Rc::new(move |scope: CoroutineScope, velocity: f32| {
+            let (fling, snap) = (fling.clone(), snap.clone());
+            scope.launch(async move {
+                settle_app_bar(state, velocity, fling, snap).await;
+            });
+        });
+    Modifier.draggable_with(
+        drag,
+        Orientation::Vertical,
+        DraggableOptions { on_drag_stopped: Some(on_stopped), ..DraggableOptions::default() },
+    )
 }
 
 // ---- Top app bars ----------------------------------------------------------------------------
@@ -373,6 +504,7 @@ pub struct TopAppBarColors {
     pub navigation_icon_content_color: Color,
     pub title_content_color: Color,
     pub action_icon_content_color: Color,
+    pub subtitle_content_color: Color,
 }
 
 impl TopAppBarColors {
@@ -407,6 +539,18 @@ impl TopAppBarDefaults {
     pub const LARGE_APP_BAR_COLLAPSED_HEIGHT: Dp = Dp(64.0);
     /// As `LargeAppBarExpandedHeight`.
     pub const LARGE_APP_BAR_EXPANDED_HEIGHT: Dp = Dp(152.0);
+    /// As `MediumFlexibleAppBarWithoutSubtitleExpandedHeight`.
+    pub const MEDIUM_FLEXIBLE_APP_BAR_WITHOUT_SUBTITLE_EXPANDED_HEIGHT: Dp = Dp(112.0);
+    /// As `MediumFlexibleAppBarWithSubtitleExpandedHeight`.
+    pub const MEDIUM_FLEXIBLE_APP_BAR_WITH_SUBTITLE_EXPANDED_HEIGHT: Dp = Dp(136.0);
+    /// As `LargeFlexibleAppBarWithoutSubtitleExpandedHeight`.
+    pub const LARGE_FLEXIBLE_APP_BAR_WITHOUT_SUBTITLE_EXPANDED_HEIGHT: Dp = Dp(120.0);
+    /// As `LargeFlexibleAppBarWithSubtitleExpandedHeight`.
+    pub const LARGE_FLEXIBLE_APP_BAR_WITH_SUBTITLE_EXPANDED_HEIGHT: Dp = Dp(152.0);
+    /// As `ContentPadding`: none.
+    pub const CONTENT_PADDING: PaddingValues = PaddingValues::ZERO;
+    /// Compose's `titleHorizontalAlignment` by default: `Alignment.Start`.
+    pub const TITLE_START: HorizontalAlignment = Alignment::START;
 
     pub fn top_app_bar_colors() -> TopAppBarColors {
         let scheme = MaterialTheme::color_scheme();
@@ -416,6 +560,7 @@ impl TopAppBarDefaults {
             navigation_icon_content_color: scheme.on_surface,
             title_content_color: scheme.on_surface,
             action_icon_content_color: scheme.on_surface_variant,
+            subtitle_content_color: scheme.on_surface_variant,
         }
     }
 
@@ -447,54 +592,103 @@ impl TopAppBarDefaults {
         MaterialTheme::motion_scheme().default_effects_spec()
     }
 
+    /// What's left of a fling carries a bar on, on this, as `flingAnimationSpec`.
+    pub fn fling_animation_spec() -> DecayAnimationSpec {
+        compose_animation::remember_spline_based_decay()
+    }
+
     /// A pinned behavior with its state remembered here, as `pinnedScrollBehavior()`.
     pub fn pinned_scroll_behavior() -> TopAppBarScrollBehavior {
-        remembered_behavior(TopAppBarScrollBehavior::pinned)
+        remembered_behavior(ScrollKind::Pinned, None)
+    }
+
+    /// As `pinnedScrollBehavior(scrollableState)`: the color goes by where `scrollable` is.
+    pub fn pinned_scroll_behavior_for(
+        scrollable: &(impl ScrollableState + ComposeArg + Clone + 'static),
+    ) -> TopAppBarScrollBehavior {
+        remembered_behavior_for(ScrollKind::Pinned, scrollable)
     }
 
     /// As `enterAlwaysScrollBehavior()`.
     pub fn enter_always_scroll_behavior() -> TopAppBarScrollBehavior {
-        remembered_behavior(TopAppBarScrollBehavior::enter_always)
+        remembered_behavior(ScrollKind::EnterAlways, None)
     }
 
-    /// As `enterAlwaysScrollBehavior(snapAnimationSpec = snap)`: `None` leaves the bar where a
-    /// scroll does.
-    pub fn enter_always_scroll_behavior_with(
-        snap: Option<AnimationSpec>,
+    /// As `enterAlwaysScrollBehavior(scrollableState)`: the color goes by where `scrollable` is, a
+    /// reversed one too.
+    pub fn enter_always_scroll_behavior_for(
+        scrollable: &(impl ScrollableState + ComposeArg + Clone + 'static),
     ) -> TopAppBarScrollBehavior {
-        remembered_behavior_with(TopAppBarScrollBehavior::enter_always, snap)
+        remembered_behavior_for(ScrollKind::EnterAlways, scrollable)
+    }
+
+    /// As `enterAlwaysScrollBehavior(canScroll, snapAnimationSpec, flingAnimationSpec)`: `None`s
+    /// leave the bar where a scroll does.
+    pub fn enter_always_scroll_behavior_with(
+        can_scroll: Option<Callback<dyn Fn() -> bool>>,
+        snap: Option<AnimationSpec>,
+        fling: Option<DecayAnimationSpec>,
+    ) -> TopAppBarScrollBehavior {
+        remembered_behavior_with(ScrollKind::EnterAlways, can_scroll, snap, fling)
     }
 
     /// As `exitUntilCollapsedScrollBehavior()`.
     pub fn exit_until_collapsed_scroll_behavior() -> TopAppBarScrollBehavior {
-        remembered_behavior(TopAppBarScrollBehavior::exit_until_collapsed)
+        remembered_behavior(ScrollKind::ExitUntilCollapsed, None)
     }
 
-    /// As `exitUntilCollapsedScrollBehavior(snapAnimationSpec = snap)`: `None` leaves the bar where
-    /// a scroll does.
+    /// As `exitUntilCollapsedScrollBehavior(canScroll, snapAnimationSpec, flingAnimationSpec)`:
+    /// `None`s leave the bar where a scroll does.
     pub fn exit_until_collapsed_scroll_behavior_with(
+        can_scroll: Option<Callback<dyn Fn() -> bool>>,
         snap: Option<AnimationSpec>,
+        fling: Option<DecayAnimationSpec>,
     ) -> TopAppBarScrollBehavior {
-        remembered_behavior_with(TopAppBarScrollBehavior::exit_until_collapsed, snap)
+        remembered_behavior_with(ScrollKind::ExitUntilCollapsed, can_scroll, snap, fling)
     }
 }
 
 fn remembered_behavior(
-    make: fn(TopAppBarState, CoroutineScope) -> TopAppBarScrollBehavior,
+    kind: ScrollKind,
+    can_scroll: Option<Callback<dyn Fn() -> bool>>,
 ) -> TopAppBarScrollBehavior {
-    remembered_behavior_with(make, Some(TopAppBarDefaults::snap_animation_spec()))
+    remembered_behavior_with(
+        kind,
+        can_scroll,
+        Some(TopAppBarDefaults::snap_animation_spec()),
+        Some(TopAppBarDefaults::fling_animation_spec()),
+    )
 }
 
-/// Kept until `snap` changes, as Compose's `remember(state, canScroll, snapAnimationSpec, ...)`.
+fn remembered_behavior_for(
+    kind: ScrollKind,
+    scrollable: &(impl ScrollableState + ComposeArg + Clone + 'static),
+) -> TopAppBarScrollBehavior {
+    let behavior = remembered_behavior(kind, None);
+    let (state, scrollable) = (behavior.state, scrollable.clone());
+    compose_runtime::remember_keyed(scrollable.clone(), move || {
+        state.set_is_at_start(scrollable.scroll_indicator_state().map(|indicator| {
+            let is_at_start: Rc<dyn Fn() -> bool> = Rc::new(move || indicator.scroll_offset() == 0);
+            is_at_start
+        }));
+    });
+    behavior
+}
+
+/// Kept until what it's given changes, as Compose's `remember(state, canScroll, snapAnimationSpec,
+/// ...)`.
 fn remembered_behavior_with(
-    make: fn(TopAppBarState, CoroutineScope) -> TopAppBarScrollBehavior,
+    kind: ScrollKind,
+    can_scroll: Option<Callback<dyn Fn() -> bool>>,
     snap: Option<AnimationSpec>,
+    fling: Option<DecayAnimationSpec>,
 ) -> TopAppBarScrollBehavior {
     let state = remember_top_app_bar_state!();
     let scope = remember_coroutine_scope();
-    compose_runtime::remember_keyed(snap.clone(), move || {
-        make(state, scope).with_snap_animation_spec(snap)
-    })
+    compose_runtime::remember_keyed(
+        (snap.clone(), fling.is_some(), can_scroll.clone()),
+        move || TopAppBarScrollBehavior::with(kind, state, scope, snap, fling, can_scroll),
+    )
 }
 
 /// The padding around the navigation icon and the actions, as `TopAppBarHorizontalPadding`.
@@ -503,9 +697,15 @@ const HORIZONTAL_PADDING: Dp = Dp(4.0);
 /// `TopAppBarTitleInset`.
 const TITLE_INSET: Dp = Dp(12.0);
 
+/// Unspecified or infinite, the default, as Compose's bars.
+fn height_or(height: Dp, default: Dp) -> Dp {
+    if height.is_specified() && height.0.is_finite() { height } else { default }
+}
+
 /// A small top app bar, as Compose's `TopAppBar`: `expanded_height` (64 dp) high (less as its
 /// `scroll_behavior` collapses it), the navigation icon at the start, the title after it in
-/// the title-large style, the actions at the end; the container turns the scrolled color as
+/// the title-large style, with `subtitle` under it in label medium, aligned by
+/// `title_horizontal_alignment`, the actions at the end; the container turns the scrolled color as
 /// content scrolls under it.
 #[composable]
 pub fn TopAppBar(
@@ -517,18 +717,27 @@ pub fn TopAppBar(
     #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
     #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
+    #[default(crate::TopAppBarDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    #[default(None)] subtitle: Option<impl Fn() + 'static>,
+    #[default(crate::TopAppBarDefaults::TITLE_START)]
+    title_horizontal_alignment: HorizontalAlignment,
 ) {
-    single_row_top_app_bar(
+    let typography = MaterialTheme::typography();
+    single_row_top_app_bar(SingleRow {
         title,
+        title_style: typography.title_large.clone(),
+        subtitle,
+        subtitle_style: typography.label_medium.clone(),
+        title_horizontal_alignment,
         modifier,
         navigation_icon,
         actions,
-        expanded_height,
+        expanded_height: height_or(expanded_height, TopAppBarDefaults::TOP_APP_BAR_EXPANDED_HEIGHT),
+        content_padding,
         window_insets,
         colors,
         scroll_behavior,
-        false,
-    );
+    });
 }
 
 /// A top app bar with its title centered, as Compose's `CenterAlignedTopAppBar`.
@@ -543,18 +752,23 @@ pub fn CenterAlignedTopAppBar(
     #[default(crate::TopAppBarDefaults::center_aligned_top_app_bar_colors())]
     colors: TopAppBarColors,
     #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
+    #[default(crate::TopAppBarDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
 ) {
-    single_row_top_app_bar(
+    single_row_top_app_bar(SingleRow {
         title,
+        title_style: MaterialTheme::typography().title_large.clone(),
+        subtitle: None,
+        subtitle_style: TextStyle::DEFAULT,
+        title_horizontal_alignment: Alignment::CENTER_HORIZONTALLY,
         modifier,
         navigation_icon,
         actions,
-        expanded_height,
+        expanded_height: height_or(expanded_height, TopAppBarDefaults::TOP_APP_BAR_EXPANDED_HEIGHT),
+        content_padding,
         window_insets,
         colors,
         scroll_behavior,
-        true,
-    );
+    });
 }
 
 /// A medium top app bar, as Compose's `MediumTopAppBar`: a row of the navigation icon, the
@@ -574,15 +788,27 @@ pub fn MediumTopAppBar(
 ) {
     let typography = MaterialTheme::typography();
     two_rows_top_app_bar(TwoRows {
-        title,
+        title: title.clone(),
         title_style: typography.headline_small.clone(),
+        title_bottom_padding: MEDIUM_TITLE_BOTTOM_PADDING,
+        small_title: title,
         small_title_style: typography.title_large.clone(),
-        title_bottom_padding: Dp(24.0),
+        subtitle: None,
+        subtitle_style: TextStyle::DEFAULT,
+        small_subtitle: None,
+        small_subtitle_style: TextStyle::DEFAULT,
+        title_horizontal_alignment: Alignment::START,
         modifier,
         navigation_icon,
         actions,
-        collapsed_height,
-        expanded_height,
+        collapsed_height: height_or(
+            collapsed_height,
+            TopAppBarDefaults::MEDIUM_APP_BAR_COLLAPSED_HEIGHT,
+        ),
+        expanded_height: height_or(
+            expanded_height,
+            TopAppBarDefaults::MEDIUM_APP_BAR_EXPANDED_HEIGHT,
+        ),
         window_insets,
         colors,
         scroll_behavior,
@@ -605,47 +831,245 @@ pub fn LargeTopAppBar(
 ) {
     let typography = MaterialTheme::typography();
     two_rows_top_app_bar(TwoRows {
-        title,
+        title: title.clone(),
         title_style: typography.headline_medium.clone(),
+        title_bottom_padding: LARGE_TITLE_BOTTOM_PADDING,
+        small_title: title,
         small_title_style: typography.title_large.clone(),
-        title_bottom_padding: Dp(28.0),
+        subtitle: None,
+        subtitle_style: TextStyle::DEFAULT,
+        small_subtitle: None,
+        small_subtitle_style: TextStyle::DEFAULT,
+        title_horizontal_alignment: Alignment::START,
         modifier,
         navigation_icon,
         actions,
-        collapsed_height,
-        expanded_height,
+        collapsed_height: height_or(
+            collapsed_height,
+            TopAppBarDefaults::LARGE_APP_BAR_COLLAPSED_HEIGHT,
+        ),
+        expanded_height: height_or(
+            expanded_height,
+            TopAppBarDefaults::LARGE_APP_BAR_EXPANDED_HEIGHT,
+        ),
         window_insets,
         colors,
         scroll_behavior,
     });
 }
 
-/// Sets the state's limit to `limit` pixels after the pass, as Compose's bars' `SideEffect`.
-fn set_limit(scroll_behavior: &Option<TopAppBarScrollBehavior>, limit: f32) {
-    if let Some(state) = scroll_behavior.as_ref().map(TopAppBarScrollBehavior::state) {
-        compose_runtime::SideEffect(move || {
-            if state.height_offset_limit() != limit {
-                state.set_height_offset_limit(limit);
-            }
-        });
-    }
+/// The medium flexible bar, as Compose's `MediumFlexibleTopAppBar`: its title in headline medium,
+/// `subtitle` under it in label large; 112 dp high, or 136 dp with a subtitle, collapsing to 64 dp.
+/// By default `expanded_height` goes by the subtitle.
+#[composable]
+pub fn MediumFlexibleTopAppBar(
+    title: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] subtitle: Option<impl Fn() + 'static>,
+    #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
+    #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
+    #[default(crate::TopAppBarDefaults::TITLE_START)]
+    title_horizontal_alignment: HorizontalAlignment,
+    #[default(crate::TopAppBarDefaults::MEDIUM_APP_BAR_COLLAPSED_HEIGHT)] collapsed_height: Dp,
+    #[default(crate::Dp::UNSPECIFIED)] expanded_height: Dp,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
+    #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
+) {
+    let typography = MaterialTheme::typography();
+    let default_expanded = if subtitle.is_some() {
+        TopAppBarDefaults::MEDIUM_FLEXIBLE_APP_BAR_WITH_SUBTITLE_EXPANDED_HEIGHT
+    } else {
+        TopAppBarDefaults::MEDIUM_FLEXIBLE_APP_BAR_WITHOUT_SUBTITLE_EXPANDED_HEIGHT
+    };
+    let subtitle = subtitle.unwrap_or_else(|| compose_runtime::callback(|| {}));
+    two_rows_top_app_bar(TwoRows {
+        title: title.clone(),
+        title_style: typography.headline_medium.clone(),
+        title_bottom_padding: MEDIUM_TITLE_BOTTOM_PADDING,
+        small_title: title,
+        small_title_style: typography.title_large.clone(),
+        subtitle: Some(subtitle.clone()),
+        subtitle_style: typography.label_large.clone(),
+        small_subtitle: Some(subtitle),
+        small_subtitle_style: typography.label_medium.clone(),
+        title_horizontal_alignment,
+        modifier,
+        navigation_icon,
+        actions,
+        collapsed_height: height_or(
+            collapsed_height,
+            TopAppBarDefaults::MEDIUM_APP_BAR_COLLAPSED_HEIGHT,
+        ),
+        expanded_height: height_or(expanded_height, default_expanded),
+        window_insets,
+        colors,
+        scroll_behavior,
+    });
 }
 
-#[allow(clippy::too_many_arguments)]
-fn single_row_top_app_bar(
-    title: compose_runtime::Callback,
+/// The large flexible bar, as Compose's `LargeFlexibleTopAppBar`: its title in display small,
+/// `subtitle` under it in title medium; 120 dp high, or 152 dp with a subtitle, collapsing to 64 dp.
+/// By default `expanded_height` goes by the subtitle.
+#[composable]
+pub fn LargeFlexibleTopAppBar(
+    title: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] subtitle: Option<impl Fn() + 'static>,
+    #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
+    #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
+    #[default(crate::TopAppBarDefaults::TITLE_START)]
+    title_horizontal_alignment: HorizontalAlignment,
+    #[default(crate::TopAppBarDefaults::LARGE_APP_BAR_COLLAPSED_HEIGHT)] collapsed_height: Dp,
+    #[default(crate::Dp::UNSPECIFIED)] expanded_height: Dp,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
+    #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
+) {
+    let typography = MaterialTheme::typography();
+    let default_expanded = if subtitle.is_some() {
+        TopAppBarDefaults::LARGE_FLEXIBLE_APP_BAR_WITH_SUBTITLE_EXPANDED_HEIGHT
+    } else {
+        TopAppBarDefaults::LARGE_FLEXIBLE_APP_BAR_WITHOUT_SUBTITLE_EXPANDED_HEIGHT
+    };
+    let subtitle = subtitle.unwrap_or_else(|| compose_runtime::callback(|| {}));
+    two_rows_top_app_bar(TwoRows {
+        title: title.clone(),
+        title_style: typography.display_small.clone(),
+        title_bottom_padding: LARGE_TITLE_BOTTOM_PADDING,
+        small_title: title,
+        small_title_style: typography.title_large.clone(),
+        subtitle: Some(subtitle.clone()),
+        subtitle_style: typography.title_medium.clone(),
+        small_subtitle: Some(subtitle),
+        small_subtitle_style: typography.label_medium.clone(),
+        title_horizontal_alignment,
+        modifier,
+        navigation_icon,
+        actions,
+        collapsed_height: height_or(
+            collapsed_height,
+            TopAppBarDefaults::LARGE_APP_BAR_COLLAPSED_HEIGHT,
+        ),
+        expanded_height: height_or(expanded_height, default_expanded),
+        window_insets,
+        colors,
+        scroll_behavior,
+    });
+}
+
+/// A bar of two rows of your own, as Compose's public `TwoRowsTopAppBar`: `title` and `subtitle`
+/// are told whether they're the expanded row's (`true`) or the collapsed row's. By default it's as
+/// high as the medium flexible bar.
+#[composable]
+pub fn TwoRowsTopAppBar(
+    title: impl Fn(bool) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] subtitle: Option<impl Fn(bool) + 'static>,
+    #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
+    #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
+    #[default(crate::TopAppBarDefaults::TITLE_START)]
+    title_horizontal_alignment: HorizontalAlignment,
+    #[default(crate::Dp::UNSPECIFIED)] collapsed_height: Dp,
+    #[default(crate::Dp::UNSPECIFIED)] expanded_height: Dp,
+    #[default(crate::TopAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
+    #[default(None)] scroll_behavior: Option<TopAppBarScrollBehavior>,
+) {
+    let typography = MaterialTheme::typography();
+    let default_expanded = if subtitle.is_some() {
+        TopAppBarDefaults::MEDIUM_FLEXIBLE_APP_BAR_WITH_SUBTITLE_EXPANDED_HEIGHT
+    } else {
+        TopAppBarDefaults::MEDIUM_FLEXIBLE_APP_BAR_WITHOUT_SUBTITLE_EXPANDED_HEIGHT
+    };
+    let told = |slot: Option<Callback<dyn Fn(bool)>>, expanded: bool| {
+        compose_runtime::callback(move || {
+            if let Some(slot) = &slot {
+                slot(expanded);
+            }
+        })
+    };
+    let (big_title, small_title) = {
+        let (first, second) = (title.clone(), title);
+        (
+            compose_runtime::callback(move || first(true)),
+            compose_runtime::callback(move || second(false)),
+        )
+    };
+    two_rows_top_app_bar(TwoRows {
+        title: big_title,
+        title_style: typography.headline_medium.clone(),
+        title_bottom_padding: Dp(0.0),
+        small_title,
+        small_title_style: typography.title_large.clone(),
+        subtitle: Some(told(subtitle.clone(), true)),
+        subtitle_style: typography.label_large.clone(),
+        small_subtitle: Some(told(subtitle, false)),
+        small_subtitle_style: typography.label_medium.clone(),
+        title_horizontal_alignment,
+        modifier,
+        navigation_icon,
+        actions,
+        collapsed_height: height_or(
+            collapsed_height,
+            TopAppBarDefaults::MEDIUM_APP_BAR_COLLAPSED_HEIGHT,
+        ),
+        expanded_height: height_or(expanded_height, default_expanded),
+        window_insets,
+        colors,
+        scroll_behavior,
+    });
+}
+
+/// As `MediumTitleBottomPadding` and `LargeTitleBottomPadding`.
+const MEDIUM_TITLE_BOTTOM_PADDING: Dp = Dp(24.0);
+const LARGE_TITLE_BOTTOM_PADDING: Dp = Dp(28.0);
+
+/// As `adjustHeightOffsetLimit`: what collapses is what it's measured at.
+fn adjust_height_offset_limit(state: Option<TopAppBarState>) -> Modifier {
+    let Some(state) = state else { return Modifier };
+    compose_runtime::remember_keyed(state, move || {
+        Modifier.on_size_changed(move |size: compose_ui::IntSize| {
+            state.set_height_offset_limit(state.height_offset() - size.height as f32);
+        })
+    })
+}
+
+struct SingleRow {
+    title: Callback,
+    title_style: TextStyle,
+    subtitle: Option<Callback>,
+    subtitle_style: TextStyle,
+    title_horizontal_alignment: HorizontalAlignment,
     modifier: Modifier,
-    navigation_icon: Option<compose_runtime::Callback>,
-    actions: compose_runtime::Callback<dyn Fn(RowScope)>,
+    navigation_icon: Option<Callback>,
+    actions: Callback<dyn Fn(RowScope)>,
     expanded_height: Dp,
+    content_padding: PaddingValues,
     window_insets: WindowInsets,
     colors: TopAppBarColors,
     scroll_behavior: Option<TopAppBarScrollBehavior>,
-    centered: bool,
-) {
-    let density = compose_ui::LOCAL_DENSITY.current();
-    set_limit(&scroll_behavior, -density.to_px(expanded_height));
+}
+
+/// As Compose's `SingleRowTopAppBar`.
+fn single_row_top_app_bar(bar: SingleRow) {
+    let SingleRow {
+        title,
+        title_style,
+        subtitle,
+        subtitle_style,
+        title_horizontal_alignment,
+        modifier,
+        navigation_icon,
+        actions,
+        expanded_height,
+        content_padding,
+        window_insets,
+        colors,
+        scroll_behavior,
+    } = bar;
     let state = scroll_behavior.as_ref().map(TopAppBarScrollBehavior::state);
+    let drag = bar_drag(&scroll_behavior, 1.0);
     // The container turns the scrolled color once content is under the bar, animated, as
     // Compose's (the threshold read in a derived state: crossing it composes again only).
     let overlapped = {
@@ -662,42 +1086,53 @@ fn single_row_top_app_bar(
         "TopAppBarColor",
         None,
     );
-    let policy = compose_runtime::remember_keyed((state, expanded_height, centered), {
+    let policy = compose_runtime::remember_keyed(
+        (state, expanded_height, title_horizontal_alignment.bias.to_bits(), content_padding),
         move || {
             Rc::new(TopAppBarLayout {
                 height: expanded_height,
                 state,
-                centered,
-                title_bottom_padding: None,
+                title_horizontal_alignment,
+                title_at_bottom: false,
+                title_bottom_padding: Dp(0.0),
+                content_padding,
             }) as Rc<dyn MeasurePolicy>
-        }
-    });
-    let title_style = MaterialTheme::typography().title_large.clone();
+        },
+    );
     let actions = actions_row(actions);
+    let adjust = adjust_height_offset_limit(state);
     // Read while drawing: the transition draws again only.
     let container = Modifier.draw_behind(move |scope| {
         let color = colors.container_color(fraction.get());
         scope.draw_rect(scope.bounds(), compose_ui::Paint::fill(color));
     });
-    // Its `Surface` clips with a layer, as Compose's: a frame drawing what's around it again
-    // keeps the bar's drawing (D251, D522).
-    crate::components::surface(
-        modifier.then(container).semantics(|config| config.set_is_traversal_group(true)),
-        compose_ui::RECTANGLE_SHAPE,
-        Color::TRANSPARENT,
-        colors.title_content_color,
-        Dp(0.0),
-        Dp(0.0),
-        None,
-        None,
-        compose_runtime::callback(move || {
+    // The row clips with a layer, as Compose's: a frame drawing what's around it again keeps the
+    // bar's drawing (D251, D522). Pointers stop here, as `pointerInput(Unit) {}`.
+    Box(
+        modifier
+            .then(drag)
+            .then(container)
+            .semantics(|config| config.set_is_traversal_group(true))
+            .then_custom(crate::components::BlockPointer),
+        Alignment::TOP_START,
+        false,
+        compose_runtime::callback(move |_| {
             top_app_bar_row(
-                Modifier.window_insets_padding(window_insets.clone()),
+                Modifier
+                    .window_insets_padding(window_insets.clone())
+                    // After the padding: no title over the inset area.
+                    .clip_to_bounds()
+                    .then(adjust.clone()),
                 policy.clone(),
-                title.clone(),
-                title_style.clone(),
-                None,
-                false,
+                TitleSlot {
+                    title: title.clone(),
+                    style: title_style.clone(),
+                    subtitle: subtitle.clone(),
+                    subtitle_style: subtitle_style.clone(),
+                    alignment: title_horizontal_alignment,
+                    alpha: None,
+                    hide_semantics: false,
+                },
                 navigation_icon.clone(),
                 Some(actions.clone()),
                 colors,
@@ -707,13 +1142,19 @@ fn single_row_top_app_bar(
 }
 
 struct TwoRows {
-    title: compose_runtime::Callback,
+    title: Callback,
     title_style: TextStyle,
-    small_title_style: TextStyle,
     title_bottom_padding: Dp,
+    small_title: Callback,
+    small_title_style: TextStyle,
+    subtitle: Option<Callback>,
+    subtitle_style: TextStyle,
+    small_subtitle: Option<Callback>,
+    small_subtitle_style: TextStyle,
+    title_horizontal_alignment: HorizontalAlignment,
     modifier: Modifier,
-    navigation_icon: Option<compose_runtime::Callback>,
-    actions: compose_runtime::Callback<dyn Fn(RowScope)>,
+    navigation_icon: Option<Callback>,
+    actions: Callback<dyn Fn(RowScope)>,
     collapsed_height: Dp,
     expanded_height: Dp,
     window_insets: WindowInsets,
@@ -724,13 +1165,32 @@ struct TwoRows {
 /// The medium and large bars, as Compose's `TwoRowsTopAppBar`: a pinned row with the small
 /// title fading in as the bar collapses, over a row with the title fading out, shrinking.
 fn two_rows_top_app_bar(bar: TwoRows) {
-    let TwoRows { colors, collapsed_height, expanded_height, .. } = bar;
-    let density = compose_ui::LOCAL_DENSITY.current();
-    set_limit(
-        &bar.scroll_behavior,
-        density.to_px(collapsed_height) - density.to_px(expanded_height),
+    let TwoRows {
+        title,
+        title_style,
+        title_bottom_padding,
+        small_title,
+        small_title_style,
+        subtitle,
+        subtitle_style,
+        small_subtitle,
+        small_subtitle_style,
+        title_horizontal_alignment,
+        modifier,
+        navigation_icon,
+        actions,
+        collapsed_height,
+        expanded_height,
+        window_insets,
+        colors,
+        scroll_behavior,
+    } = bar;
+    assert!(
+        expanded_height.0 >= collapsed_height.0,
+        "The expandedHeight is expected to be greater or equal to the collapsedHeight"
     );
-    let state = bar.scroll_behavior.as_ref().map(TopAppBarScrollBehavior::state);
+    let state = scroll_behavior.as_ref().map(TopAppBarScrollBehavior::state);
+    let drag = bar_drag(&scroll_behavior, 1.0);
     let collapsed = { move || state.as_ref().map_or(0.0, TopAppBarState::collapsed_fraction) };
     // Which row's title screen readers see: crossing half way composes again only.
     let top_shown = {
@@ -740,26 +1200,34 @@ fn two_rows_top_app_bar(bar: TwoRows) {
     };
     let top_shown = top_shown.get();
     let policies = compose_runtime::remember_keyed(
-        (state, collapsed_height, expanded_height, bar.title_bottom_padding),
-        {
-            let bottom_padding = bar.title_bottom_padding;
-            move || {
-                let top: Rc<dyn MeasurePolicy> = Rc::new(TopAppBarLayout {
-                    height: collapsed_height,
-                    state: None,
-                    centered: false,
-                    title_bottom_padding: None,
-                });
-                let bottom: Rc<dyn MeasurePolicy> = Rc::new(TopAppBarLayout {
-                    height: Dp(expanded_height.0 - collapsed_height.0),
-                    state,
-                    centered: false,
-                    title_bottom_padding: Some(bottom_padding),
-                });
-                (top, bottom)
-            }
+        (
+            state,
+            collapsed_height,
+            expanded_height,
+            title_bottom_padding,
+            title_horizontal_alignment.bias.to_bits(),
+        ),
+        move || {
+            let top: Rc<dyn MeasurePolicy> = Rc::new(TopAppBarLayout {
+                height: collapsed_height,
+                state: None,
+                title_horizontal_alignment,
+                title_at_bottom: false,
+                title_bottom_padding: Dp(0.0),
+                content_padding: TopAppBarDefaults::CONTENT_PADDING,
+            });
+            let bottom: Rc<dyn MeasurePolicy> = Rc::new(TopAppBarLayout {
+                height: Dp(expanded_height.0 - collapsed_height.0),
+                state,
+                title_horizontal_alignment,
+                title_at_bottom: true,
+                title_bottom_padding,
+                content_padding: TopAppBarDefaults::CONTENT_PADDING,
+            });
+            (top, bottom)
         },
     );
+    let adjust = adjust_height_offset_limit(state);
     // The titles' alphas and the container's color, read while drawing.
     let (top_alpha, bottom_alpha, container) = {
         let (first, second, third) = (collapsed, collapsed, collapsed);
@@ -776,26 +1244,27 @@ fn two_rows_top_app_bar(bar: TwoRows) {
             )
         })
     };
-    let TwoRows { title, title_style, small_title_style, navigation_icon, actions, .. } = bar;
     let actions = actions_row(actions);
-    let window_insets = bar.window_insets;
-    // Its `Surface` clips with a layer, as the small bar's (D251, D522).
-    crate::components::surface(
-        bar.modifier.then(container).semantics(|config| config.set_is_traversal_group(true)),
-        compose_ui::RECTANGLE_SHAPE,
-        Color::TRANSPARENT,
-        colors.title_content_color,
-        Dp(0.0),
-        Dp(0.0),
-        None,
-        None,
-        compose_runtime::callback(move || {
-            let (title, navigation_icon, actions) =
-                (title.clone(), navigation_icon.clone(), actions.clone());
+    // Its rows clip with layers, as the small bar's (D251, D522).
+    Box(
+        modifier
+            .then(drag)
+            .then(container)
+            .semantics(|config| config.set_is_traversal_group(true))
+            .then_custom(crate::components::BlockPointer),
+        Alignment::TOP_START,
+        false,
+        compose_runtime::callback(move |_| {
+            let (title, small_title, navigation_icon, actions) =
+                (title.clone(), small_title.clone(), navigation_icon.clone(), actions.clone());
+            let (subtitle, small_subtitle) = (subtitle.clone(), small_subtitle.clone());
             let (policies, top_alpha, bottom_alpha) =
                 (policies.clone(), top_alpha.clone(), bottom_alpha.clone());
             let (title_style, small_title_style) = (title_style.clone(), small_title_style.clone());
+            let (subtitle_style, small_subtitle_style) =
+                (subtitle_style.clone(), small_subtitle_style.clone());
             let window_insets = window_insets.clone();
+            let adjust = adjust.clone();
             Column(
                 Modifier,
                 Arrangement::TOP,
@@ -804,10 +1273,15 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                     top_app_bar_row(
                         Modifier.window_insets_padding(window_insets.clone()).clip_to_bounds(),
                         policies.0.clone(),
-                        title.clone(),
-                        small_title_style.clone(),
-                        Some(top_alpha.clone()),
-                        !top_shown,
+                        TitleSlot {
+                            title: small_title.clone(),
+                            style: small_title_style.clone(),
+                            subtitle: small_subtitle.clone(),
+                            subtitle_style: small_subtitle_style.clone(),
+                            alignment: title_horizontal_alignment,
+                            alpha: Some(top_alpha.clone()),
+                            hide_semantics: !top_shown,
+                        },
                         navigation_icon.clone(),
                         Some(actions.clone()),
                         colors,
@@ -817,12 +1291,18 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                             .window_insets_padding(
                                 window_insets.clone().only(WindowInsetsSides::HORIZONTAL),
                             )
-                            .clip_to_bounds(),
+                            .clip_to_bounds()
+                            .then(adjust.clone()),
                         policies.1.clone(),
-                        title.clone(),
-                        title_style.clone(),
-                        Some(bottom_alpha.clone()),
-                        top_shown,
+                        TitleSlot {
+                            title: title.clone(),
+                            style: title_style.clone(),
+                            subtitle: subtitle.clone(),
+                            subtitle_style: subtitle_style.clone(),
+                            alignment: title_horizontal_alignment,
+                            alpha: Some(bottom_alpha.clone()),
+                            hide_semantics: top_shown,
+                        },
                         None,
                         None,
                         colors,
@@ -836,18 +1316,26 @@ fn two_rows_top_app_bar(bar: TwoRows) {
 /// The small title's fade, as Compose's `TopTitleAlphaEasing`.
 const TOP_TITLE_ALPHA_EASING: Easing = Easing::cubic_bezier(0.8, 0.0, 0.8, 0.15);
 
+/// A row's title, as `TopAppBarLayout` takes it.
+#[derive(Clone)]
+struct TitleSlot {
+    title: Callback,
+    style: TextStyle,
+    subtitle: Option<Callback>,
+    subtitle_style: TextStyle,
+    alignment: HorizontalAlignment,
+    alpha: Option<Modifier>,
+    hide_semantics: bool,
+}
+
 /// A row of a top app bar, as Compose's `TopAppBarLayout`: the navigation icon, the title and
 /// the actions, laid out by `policy`.
-#[allow(clippy::too_many_arguments)]
 fn top_app_bar_row(
     modifier: Modifier,
     policy: Rc<dyn MeasurePolicy>,
-    title: compose_runtime::Callback,
-    title_style: TextStyle,
-    title_alpha: Option<Modifier>,
-    hide_title_semantics: bool,
-    navigation_icon: Option<compose_runtime::Callback>,
-    actions: Option<compose_runtime::Callback>,
+    title: TitleSlot,
+    navigation_icon: Option<Callback>,
+    actions: Option<Callback>,
     colors: TopAppBarColors,
 ) {
     Layout(
@@ -861,21 +1349,49 @@ fn top_app_bar_row(
                 navigation_icon.clone(),
             );
             let mut title_modifier = Modifier.padding((HORIZONTAL_PADDING, 0.dp()));
-            if hide_title_semantics {
+            if title.hide_semantics {
                 title_modifier = title_modifier.clear_and_set_semantics(|_| {});
             } else {
                 title_modifier =
                     title_modifier.semantics(|config| config.set_is_traversal_group(true));
             }
-            if let Some(alpha) = &title_alpha {
+            if let Some(alpha) = &title.alpha {
                 title_modifier = title_modifier.then(alpha.clone());
             }
-            bar_slot(
-                title_modifier,
-                colors.title_content_color,
-                Some(title_style.clone()),
-                Some(title.clone()),
-            );
+            match title.subtitle.clone() {
+                None => bar_slot(
+                    title_modifier,
+                    colors.title_content_color,
+                    Some(title.style.clone()),
+                    Some(title.title.clone()),
+                ),
+                Some(subtitle) => {
+                    let (first, first_style, second_style) =
+                        (title.title.clone(), title.style.clone(), title.subtitle_style.clone());
+                    Column(
+                        title_modifier,
+                        Arrangement::TOP,
+                        title.alignment,
+                        compose_runtime::callback(move |_| {
+                            let (first, subtitle) = (first.clone(), subtitle.clone());
+                            CompositionLocalProvider(
+                                (
+                                    LOCAL_CONTENT_COLOR.provides(colors.title_content_color),
+                                    LOCAL_TEXT_STYLE.provides(first_style.clone()),
+                                ),
+                                &*first,
+                            );
+                            CompositionLocalProvider(
+                                (
+                                    LOCAL_CONTENT_COLOR.provides(colors.subtitle_content_color),
+                                    LOCAL_TEXT_STYLE.provides(second_style.clone()),
+                                ),
+                                &*subtitle,
+                            );
+                        }),
+                    );
+                }
+            }
             bar_slot(
                 Modifier.padding((Dp(0.0), Dp(0.0), HORIZONTAL_PADDING, Dp(0.0))),
                 colors.action_icon_content_color,
@@ -887,12 +1403,7 @@ fn top_app_bar_row(
 }
 
 /// A slot of a bar's row: `content` in a box of `modifier`, in `color` (and `style`).
-fn bar_slot(
-    modifier: Modifier,
-    color: Color,
-    style: Option<TextStyle>,
-    content: Option<compose_runtime::Callback>,
-) {
+fn bar_slot(modifier: Modifier, color: Color, style: Option<TextStyle>, content: Option<Callback>) {
     let body = move || {
         let content = content.clone();
         Box(
@@ -913,15 +1424,18 @@ fn bar_slot(
 }
 
 /// The navigation icon, the title and the actions of a bar's row, as Compose's
-/// `TopAppBarLayout`: `height` plus the state's (negative) height offset high, as wide as
-/// allowed; the icons centered down it at either end; the title after the navigation icon (at
-/// least 12 dp in), or centered between them, or (with a bottom padding) its baseline that far
-/// above the bottom.
+/// `TopAppBarMeasurePolicy`: `height`, or more for the title, plus the paddings and the state's
+/// (negative) height offset, as wide as allowed; the icons centered down it at either end; the
+/// title aligned over the whole width but clear of them, centered down it, or at its bottom, its
+/// baseline `title_bottom_padding` up (a line's baseline taken at 80 % of its height, as the text
+/// measurer puts it, until `alignment-lines` gives the real one).
 struct TopAppBarLayout {
     height: Dp,
     state: Option<TopAppBarState>,
-    centered: bool,
-    title_bottom_padding: Option<Dp>,
+    title_horizontal_alignment: HorizontalAlignment,
+    title_at_bottom: bool,
+    title_bottom_padding: Dp,
+    content_padding: PaddingValues,
 }
 
 impl MeasurePolicy for TopAppBarLayout {
@@ -935,45 +1449,68 @@ impl MeasurePolicy for TopAppBarLayout {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
         let density = scope.density();
-        let loose = Constraints::new(0, constraints.max_width, 0, constraints.max_height);
+        let mut loose = constraints;
+        loose.min_width = 0;
         let navigation = scope.measure(*navigation, loose);
         let actions = scope.measure(*actions, loose);
+        let padding = self.content_padding;
+        let start_padding = density.round_to_px(padding.start);
+        let end_padding = density.round_to_px(padding.end);
+        let title_start = density.round_to_px(TITLE_INSET).max(navigation.width);
         let width = constraints.max_width;
-        let title_width = if width == Constraints::INFINITY {
+        let max_title_width = if width == Constraints::INFINITY {
             width
         } else {
-            (width - navigation.width - actions.width).max(0)
+            (width - title_start - actions.width - start_padding - end_padding).max(0)
         };
-        let title =
-            scope.measure(*title, Constraints::new(0, title_width, 0, constraints.max_height));
+        let mut title_constraints = loose;
+        title_constraints.max_width = max_title_width;
+        let title = scope.measure(*title, title_constraints);
         // Read while measuring: collapsing measures the bar again only.
         let offset = self.state.as_ref().map_or(0.0, TopAppBarState::height_offset);
-        let height = (density.to_px(self.height) + offset).round().max(0.0) as i32;
-        scope.place_relative(&navigation, 0, (height - navigation.height) / 2);
-        let x = if self.centered {
-            let mut x = (width - title.width) / 2;
-            if x < navigation.width {
-                // A long title next to a wide navigation icon: more of the title shows.
-                x += navigation.width - x;
-            } else if x + title.width > width - actions.width {
-                x += (width - actions.width) - (x + title.width);
-            }
-            x
+        let height_offset = if offset.is_nan() { 0 } else { offset.round() as i32 };
+        let top_padding = density.round_to_px(padding.top);
+        let bottom_padding = density.round_to_px(padding.bottom);
+        let max_height =
+            density.round_to_px(self.height).max(title.height) + top_padding + bottom_padding;
+        let height = if constraints.max_height == Constraints::INFINITY {
+            max_height
         } else {
-            density.round_to_px(TITLE_INSET).max(navigation.width)
+            (max_height + height_offset).max(0)
         };
-        let y = match self.title_bottom_padding {
-            None => (height - title.height) / 2,
-            Some(padding) => {
-                // Its baseline `padding` above the bottom (a line's baseline taken at 80 % of
-                // its height, as the text measurer puts it).
-                let baseline = (title.height as f32 * 0.8).round() as i32;
-                let padding = density.round_to_px(padding);
-                height - title.height - (padding - title.height + baseline).max(0)
-            }
+        let content_height = height + top_padding - bottom_padding;
+        scope.place_relative(&navigation, start_padding, (content_height - navigation.height) / 2);
+        // Over the whole width, so a center is the bar's, not what's between the icons; then clear
+        // of them. Left to right: placed relative.
+        let mut x = self.title_horizontal_alignment.align(title.width, width, LayoutDirection::Ltr);
+        if x < title_start {
+            x += start_padding + (title_start - x);
+        } else if x + title.width > width - actions.width {
+            x += start_padding + ((width - actions.width) - (x + title.width));
+        }
+        let y = if !self.title_at_bottom {
+            (content_height - title.height) / 2
+        } else if self.title_bottom_padding.0 == 0.0 {
+            content_height - title.height
+        } else {
+            let baseline = (title.height as f32 * 0.8).round() as i32;
+            let from_bottom =
+                density.round_to_px(self.title_bottom_padding) - (title.height - baseline);
+            // Less when there's no room for it.
+            let with_padding = from_bottom + title.height;
+            let adjusted = if with_padding > max_height {
+                from_bottom - (with_padding - max_height)
+            } else {
+                from_bottom
+            };
+            content_height - title.height - adjusted.max(0)
         };
         scope.place_relative(&title, x, y);
-        scope.place_relative(&actions, width - actions.width, (height - actions.height) / 2);
+        scope.place_relative(
+            &actions,
+            width - actions.width - end_padding,
+            (content_height - actions.height) / 2,
+        );
         scope.layout(width, height)
     }
 
@@ -1023,15 +1560,136 @@ impl MeasurePolicy for TopAppBarLayout {
 
 // ---- Bottom app bar --------------------------------------------------------------------------
 
+/// How far a bottom app bar has collapsed, as Compose's `BottomAppBarState`: what a
+/// [`TopAppBarState`] holds, the same handle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BottomAppBarState(TopAppBarState);
+
+impl BottomAppBarState {
+    /// The state over `state`, which holds it (D240), as `BottomAppBarState(…)`: make one with
+    /// `TopAppBarState::new`, or use [`remember_bottom_app_bar_state`].
+    pub fn of(state: TopAppBarState) -> BottomAppBarState {
+        BottomAppBarState(state)
+    }
+
+    /// The most it collapses (negative), as `heightOffsetLimit`: the bar sets it.
+    pub fn height_offset_limit(&self) -> f32 {
+        self.0.height_offset_limit()
+    }
+
+    pub fn set_height_offset_limit(&self, limit: f32) {
+        self.0.set_height_offset_limit(limit);
+    }
+
+    /// How far it's collapsed, between the limit and 0, as `heightOffset`.
+    pub fn height_offset(&self) -> f32 {
+        self.0.height_offset()
+    }
+
+    pub fn set_height_offset(&self, offset: f32) {
+        self.0.set_height_offset(offset);
+    }
+
+    /// How far the content has scrolled, as `contentOffset`.
+    pub fn content_offset(&self) -> f32 {
+        self.0.content_offset()
+    }
+
+    pub fn set_content_offset(&self, offset: f32) {
+        self.0.set_content_offset(offset);
+    }
+
+    /// 0 expanded to 1 collapsed, as `collapsedFraction`.
+    pub fn collapsed_fraction(&self) -> f32 {
+        self.0.collapsed_fraction()
+    }
+}
+
+impl ComposeArg for BottomAppBarState {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// A bottom app bar state remembered here and saved, as `rememberBottomAppBarState`.
+#[composable(non_restartable)]
+pub fn remember_bottom_app_bar_state(
+    #[default(-f32::MAX)] initial_height_offset_limit: f32,
+    #[default(0.0)] initial_height_offset: f32,
+    #[default(0.0)] initial_content_offset: f32,
+) -> BottomAppBarState {
+    BottomAppBarState(compose_runtime::remember_saveable_with(TopAppBarState::saver(), || {
+        TopAppBarState::new(
+            initial_height_offset_limit,
+            initial_height_offset,
+            initial_content_offset,
+        )
+    }))
+}
+
+/// How a bottom app bar follows the content's scrolling, as Compose's
+/// `BottomAppBarScrollBehavior`: give its `nested_scroll_connection()` to `Modifier.nested_scroll`
+/// around the content, and the behavior to the bar.
+#[derive(Clone)]
+pub struct BottomAppBarScrollBehavior(TopAppBarScrollBehavior);
+
+impl BottomAppBarScrollBehavior {
+    /// Its state, as `state`.
+    pub fn state(&self) -> BottomAppBarState {
+        BottomAppBarState(self.0.state)
+    }
+
+    /// As `isPinned`: no.
+    pub fn is_pinned(&self) -> bool {
+        false
+    }
+
+    /// As `snapAnimationSpec`.
+    pub fn snap_animation_spec(&self) -> Option<AnimationSpec> {
+        self.0.snap.clone()
+    }
+
+    /// As `flingAnimationSpec`.
+    pub fn fling_animation_spec(&self) -> Option<DecayAnimationSpec> {
+        self.0.fling.clone()
+    }
+
+    /// What `Modifier.nested_scroll` takes, as `nestedScrollConnection`.
+    pub fn nested_scroll_connection(&self) -> Rc<dyn NestedScrollConnection> {
+        self.0.nested_scroll_connection()
+    }
+}
+
+impl ComposeArg for BottomAppBarScrollBehavior {
+    fn same(&self, other: &Self) -> bool {
+        self.0.same(&other.0)
+    }
+}
+
 /// As Compose's `BottomAppBarDefaults`.
 pub struct BottomAppBarDefaults;
 
 impl BottomAppBarDefaults {
     /// Its tonal elevation, as `ContainerElevation`.
-    pub const CONTAINER_ELEVATION: Dp = Dp(3.0);
+    pub const CONTAINER_ELEVATION: Dp = Dp(0.0);
     /// As `ContentPadding`: 4 dp at the sides and the top.
     pub const CONTENT_PADDING: PaddingValues =
         PaddingValues::new(Dp(4.0), Dp(4.0), Dp(4.0), Dp(0.0));
+    /// As `FlexibleContentPadding`: 16 dp at the sides.
+    pub const FLEXIBLE_CONTENT_PADDING: PaddingValues =
+        PaddingValues::new(Dp(16.0), Dp(0.0), Dp(16.0), Dp(0.0));
+    /// As `FlexibleBottomAppBarHeight`.
+    pub const FLEXIBLE_BOTTOM_APP_BAR_HEIGHT: Dp = Dp(64.0);
+
+    /// As `FlexibleHorizontalArrangement`.
+    pub fn flexible_horizontal_arrangement() -> HorizontalArrangement {
+        Arrangement::SPACE_BETWEEN.into()
+    }
+
+    /// As `FlexibleFixedHorizontalArrangement`: 32 dp apart, centered.
+    pub fn flexible_fixed_horizontal_arrangement() -> HorizontalArrangement {
+        Arrangement::spaced_by((Dp(32.0), Alignment::CENTER_HORIZONTALLY))
+    }
 
     /// As `containerColor`.
     pub fn container_color() -> Color {
@@ -1048,6 +1706,104 @@ impl BottomAppBarDefaults {
         crate::scaffold::system_bars_for_visual_components()
             .only(WindowInsetsSides::HORIZONTAL + WindowInsetsSides::BOTTOM)
     }
+
+    /// As `snapAnimationSpec`: the theme's fast spatial spec.
+    pub fn snap_animation_spec() -> AnimationSpec {
+        MaterialTheme::motion_scheme().fast_spatial_spec()
+    }
+
+    /// As `flingAnimationSpec`.
+    pub fn fling_animation_spec() -> DecayAnimationSpec {
+        compose_animation::remember_spline_based_decay()
+    }
+
+    /// The bar leaves as the content scrolls forward, back as it scrolls back, as
+    /// `exitAlwaysScrollBehavior()`.
+    pub fn exit_always_scroll_behavior() -> BottomAppBarScrollBehavior {
+        Self::exit_always_scroll_behavior_with(
+            remember_bottom_app_bar_state!(),
+            None,
+            Some(Self::snap_animation_spec()),
+            Some(Self::fling_animation_spec()),
+        )
+    }
+
+    /// As `exitAlwaysScrollBehavior(state, canScroll, snapAnimationSpec, flingAnimationSpec)`.
+    pub fn exit_always_scroll_behavior_with(
+        state: BottomAppBarState,
+        can_scroll: Option<Callback<dyn Fn() -> bool>>,
+        snap: Option<AnimationSpec>,
+        fling: Option<DecayAnimationSpec>,
+    ) -> BottomAppBarScrollBehavior {
+        let scope = remember_coroutine_scope();
+        compose_runtime::remember_keyed(
+            (state, snap.clone(), fling.is_some(), can_scroll.clone()),
+            move || {
+                BottomAppBarScrollBehavior(TopAppBarScrollBehavior::with(
+                    ScrollKind::ExitAlways,
+                    state.0,
+                    scope,
+                    snap,
+                    fling,
+                    can_scroll,
+                ))
+            },
+        )
+    }
+}
+
+/// As Compose's `BottomAppBarLayout`: a surface collapsing with the behavior, `content` in a row.
+#[allow(clippy::too_many_arguments)]
+fn bottom_app_bar_layout(
+    container_height: Dp,
+    horizontal_arrangement: HorizontalArrangement,
+    modifier: Modifier,
+    container_color: Color,
+    content_color: Color,
+    tonal_elevation: Dp,
+    content_padding: PaddingValues,
+    window_insets: WindowInsets,
+    scroll_behavior: Option<BottomAppBarScrollBehavior>,
+    content: Callback<dyn Fn(RowScope)>,
+) {
+    let behavior = scroll_behavior.map(|behavior| behavior.0);
+    let state = behavior.as_ref().map(TopAppBarScrollBehavior::state);
+    let drag = bar_drag(&behavior, -1.0);
+    // Collapses the whole height, read while measuring: a frame of it measures this only.
+    let collapsing = compose_runtime::remember_keyed(state, move || {
+        Modifier.layout(move |scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            let mut height = placeable.height as f32;
+            if let Some(state) = state {
+                state.set_height_offset_limit(-(placeable.height as f32));
+                height = (height + state.height_offset()).max(0.0);
+            }
+            scope.place(&placeable, 0, 0);
+            scope.layout(placeable.width, height.round() as i32)
+        })
+    });
+    crate::components::surface(
+        modifier.then(collapsing).then(drag),
+        compose_ui::RECTANGLE_SHAPE,
+        container_color,
+        content_color,
+        tonal_elevation,
+        Dp(0.0),
+        None,
+        None,
+        compose_runtime::callback(move || {
+            Row(
+                Modifier
+                    .fill_max_width()
+                    .window_insets_padding(window_insets.clone())
+                    .height(container_height)
+                    .padding(content_padding),
+                horizontal_arrangement.clone(),
+                Alignment::CENTER_VERTICALLY,
+                content.clone(),
+            );
+        }),
+    );
 }
 
 /// A bottom app bar, as Compose's `BottomAppBar(actions, …)`: 80 dp high, the actions in a row
@@ -1062,46 +1818,103 @@ pub fn BottomAppBar(
     #[default(crate::BottomAppBarDefaults::CONTAINER_ELEVATION)] tonal_elevation: Dp,
     #[default(crate::BottomAppBarDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     #[default(crate::BottomAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(None)] scroll_behavior: Option<BottomAppBarScrollBehavior>,
 ) {
-    crate::components::surface(
+    bottom_app_bar_layout(
+        BOTTOM_APP_BAR_HEIGHT,
+        Arrangement::START,
         modifier,
-        compose_ui::RECTANGLE_SHAPE,
         container_color,
         content_color,
         tonal_elevation,
-        Dp(0.0),
-        None,
-        None,
-        compose_runtime::callback(move || {
-            let (actions, fab) = (actions.clone(), floating_action_button.clone());
+        content_padding,
+        window_insets,
+        scroll_behavior,
+        compose_runtime::callback(move |row: RowScope| {
             Row(
-                Modifier
-                    .fill_max_width()
-                    .window_insets_padding(window_insets.clone())
-                    .height(80.dp())
-                    .padding(content_padding),
+                Modifier.fill_max_height().weight(row, 1.0),
                 Arrangement::START,
                 Alignment::CENTER_VERTICALLY,
-                compose_runtime::callback(move |row: RowScope| {
-                    Row(
-                        Modifier.fill_max_height().weight(row, 1.0),
-                        Arrangement::START,
-                        Alignment::CENTER_VERTICALLY,
-                        actions.clone(),
-                    );
-                    if let Some(fab) = fab.clone() {
-                        Box(
-                            // `FABVerticalPadding` and `FABHorizontalPadding`: 12 and 16 dp from
-                            // the bar's edges, its 4 dp content padding included.
-                            Modifier.fill_max_height().padding((Dp(0.0), 8.dp(), 12.dp(), Dp(0.0))),
-                            Alignment::TOP_START,
-                            false,
-                            compose_runtime::callback(move |_| fab()),
-                        );
-                    }
-                }),
+                actions.clone(),
             );
+            if let Some(fab) = floating_action_button.clone() {
+                Box(
+                    // `FABVerticalPadding` and `FABHorizontalPadding`: 12 and 16 dp from
+                    // the bar's edges, its 4 dp content padding included.
+                    Modifier.fill_max_height().padding((Dp(0.0), 8.dp(), 12.dp(), Dp(0.0))),
+                    Alignment::TOP_START,
+                    false,
+                    compose_runtime::callback(move |_| fab()),
+                );
+            }
         }),
+    );
+}
+
+/// As `BottomAppBarTokens.ContainerHeight`.
+const BOTTOM_APP_BAR_HEIGHT: Dp = Dp(80.0);
+
+/// A bottom app bar with `content` in its row, as Compose's `BottomAppBar(content)`.
+#[composable]
+pub fn ContentBottomAppBar(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::BottomAppBarDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::BottomAppBarDefaults::CONTAINER_ELEVATION)] tonal_elevation: Dp,
+    #[default(crate::BottomAppBarDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    #[default(crate::BottomAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(None)] scroll_behavior: Option<BottomAppBarScrollBehavior>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    bottom_app_bar_layout(
+        BOTTOM_APP_BAR_HEIGHT,
+        Arrangement::START,
+        modifier,
+        container_color,
+        content_color,
+        tonal_elevation,
+        content_padding,
+        window_insets,
+        scroll_behavior,
+        content,
+    );
+}
+
+/// The flexible bottom app bar, as Compose's `FlexibleBottomAppBar`: `expanded_height` (64 dp) high,
+/// `content` spaced by `horizontal_arrangement`.
+#[composable]
+pub fn FlexibleBottomAppBar(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::BottomAppBarDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::BottomAppBarDefaults::FLEXIBLE_CONTENT_PADDING)]
+    content_padding: PaddingValues,
+    #[default(crate::BottomAppBarDefaults::flexible_horizontal_arrangement())]
+    horizontal_arrangement: HorizontalArrangement,
+    #[default(crate::BottomAppBarDefaults::FLEXIBLE_BOTTOM_APP_BAR_HEIGHT)] expanded_height: Dp,
+    #[default(crate::BottomAppBarDefaults::window_insets())] window_insets: WindowInsets,
+    #[default(None)] scroll_behavior: Option<BottomAppBarScrollBehavior>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    let height = if expanded_height.is_specified()
+        && expanded_height.0.is_finite()
+        && expanded_height.0 > 0.0
+    {
+        expanded_height
+    } else {
+        BottomAppBarDefaults::FLEXIBLE_BOTTOM_APP_BAR_HEIGHT
+    };
+    bottom_app_bar_layout(
+        height,
+        horizontal_arrangement,
+        modifier,
+        container_color,
+        content_color,
+        Dp(0.0),
+        content_padding,
+        window_insets,
+        scroll_behavior,
+        content,
     );
 }
 

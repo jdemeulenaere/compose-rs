@@ -49,9 +49,11 @@ mod theme;
 mod tooltip;
 
 pub use app_bar::{
-    BottomAppBar, BottomAppBarDefaults, CenterAlignedTopAppBar, LargeTopAppBar, MediumTopAppBar,
-    TopAppBar, TopAppBarColors, TopAppBarDefaults, TopAppBarScrollBehavior, TopAppBarState,
-    remember_top_app_bar_state,
+    BottomAppBar, BottomAppBarDefaults, BottomAppBarScrollBehavior, BottomAppBarState,
+    CenterAlignedTopAppBar, ContentBottomAppBar, FlexibleBottomAppBar, LargeFlexibleTopAppBar,
+    LargeTopAppBar, MediumFlexibleTopAppBar, MediumTopAppBar, TopAppBar, TopAppBarColors,
+    TopAppBarDefaults, TopAppBarScrollBehavior, TopAppBarState, TwoRowsTopAppBar,
+    remember_bottom_app_bar_state, remember_top_app_bar_state,
 };
 pub use bottom_sheet_scaffold::{
     BottomSheetScaffold, BottomSheetScaffoldState, default_scaffold_snackbar_host,

@@ -458,9 +458,9 @@ pub static LOCAL_ABSOLUTE_TONAL_ELEVATION: compose_runtime::CompositionLocal<Dp>
 // ---- Pointer helpers --------------------------------------------------------------------------
 
 /// A pointer input node that does nothing: its node is hit, so siblings beneath aren't.
-struct BlockPointer;
+pub(crate) struct BlockPointer;
 
-struct BlockPointerNode;
+pub(crate) struct BlockPointerNode;
 
 impl ModifierNodeElement for BlockPointer {
     type Node = BlockPointerNode;
