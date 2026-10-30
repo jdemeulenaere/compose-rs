@@ -285,7 +285,7 @@ impl<E: ModifierNodeElement> AnyModifierNodeElement for E { /* downcasts once, h
 
 ### 3.7 Delegation
 
-As built (D1169, D1170, D1173, D1179; extras reach delegates since D1194, and a clickable and `Modifier.indication` delegate to their indication's node, D1193): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes); `delegate_attached(node, context)` attaches inside the call from a callback, `delegate` once the code returns; compose-rs's extras stay the chain's node's. The rest is as below.
+As built (D1169, D1170, D1173, D1179; extras reach delegates since D1194, and a clickable and `Modifier.indication` delegate to their indication's node, D1193): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes); `delegate_attached(node, context)` attaches inside the call from a callback, `delegate` once the code returns; compose-rs's extras reach delegates (D1194). The rest is as below.
 
 **Reaching the delegator.** Compose's delegate calls its `node`, or a sibling, through a field. Here a delegate can't reach its owner while either runs: the owner is out of its chain, its delegates inside it, and the borrow is the owner's. So what they share goes in an `Rc` they both hold (a `Cell` or `RefCell` of the clickable's interaction state), made in `create` before the delegate is, and what a delegate asks *of* its owner goes through a deferred handle:
 

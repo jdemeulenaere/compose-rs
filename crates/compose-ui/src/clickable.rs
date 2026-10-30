@@ -245,6 +245,10 @@ pub(crate) struct ClickableNode {
     shared: Rc<RefCell<Shared>>,
     /// What it delegates to: its indication's node.
     delegates: Delegates,
+    /// It turned to the local indication in an update: read when it has a context.
+    local_indication_unread: bool,
+    /// The indication's node went, and a new one comes when it has a context.
+    remake_indication: bool,
     /// The indication's node, made when first needed (with its own source) or as the node is
     /// attached (with a source given), as Compose's `indicationNode`.
     indication: Option<EntryId>,
@@ -279,6 +283,8 @@ impl ClickableNode {
             click_action: RefCell::default(),
             shared: Rc::new(RefCell::new(shared)),
             delegates: Delegates::new(),
+            local_indication_unread: false,
+            remake_indication: false,
             indication: None,
             local_indication: None,
             down: None,
@@ -314,7 +320,8 @@ impl ClickableNode {
         if spec.use_local_indication {
             spec.indication = self.local_indication.clone();
         }
-        if !crate::indication::same_factory(&self.spec.indication, &spec.indication) {
+        if turned_local || !crate::indication::same_factory(&self.spec.indication, &spec.indication)
+        {
             indication_dirty = true;
         }
         if self.spec.enabled != spec.enabled && !spec.enabled {
@@ -352,16 +359,17 @@ impl ClickableNode {
             indication_dirty = true;
         }
         if indication_dirty {
+            self.local_indication_unread = turned_local;
             self.recreate_indication();
-        }
-        if turned_local {
-            self.delegates.ask_for_context();
+            if turned_local {
+                self.delegates.ask_for_context();
+            }
         }
     }
 
-    /// Makes the indication's node (and, without a source given, the node's own source) if
-    /// there's an indication and it isn't made yet, as `initializeIndicationAndInteractionSource
-    /// IfNeeded`. Returns whether it made it.
+    /// The indication's node to delegate to (and, without a source given, the node's own source
+    /// made) if there's an indication and it isn't made yet, as
+    /// `initializeIndicationAndInteractionSourceIfNeeded`.
     fn indication_to_make(&mut self) -> Option<Box<dyn ModifierNode>> {
         if self.indication.is_some() {
             return None;
@@ -374,14 +382,6 @@ impl ClickableNode {
         Some(factory.create(source.as_source().clone()))
     }
 
-    /// Makes the indication's node where there's no context (an update): attached once that
-    /// code returns.
-    fn initialize_indication(&mut self) {
-        if let Some(node) = self.indication_to_make() {
-            self.indication = Some(self.delegates.delegate_boxed(node));
-        }
-    }
-
     /// Makes the indication's node, attached now if it can be.
     fn initialize_indication_in(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
         if let Some(node) = self.indication_to_make() {
@@ -391,12 +391,8 @@ impl ClickableNode {
 
     /// Reads `LOCAL_INDICATION` where the node is, if it uses it, observing it, as
     /// `onObservedReadsChanged`; a new one makes its node again if it was made (or is made
-    /// eagerly). `turned_local`: it just turned to it, nothing having been read.
-    fn read_local_indication(
-        &mut self,
-        context: &mut crate::node_context::NodeContext<'_>,
-        turned_local: bool,
-    ) {
+    /// eagerly).
+    fn read_local_indication(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
         if !self.spec.use_local_indication {
             return;
         }
@@ -410,20 +406,18 @@ impl ClickableNode {
         self.local_indication = factory.clone();
         self.spec.indication = factory;
         if had {
-            let made = self.forget_indication();
-            if made || self.spec.interaction_source.is_some() {
-                self.initialize_indication_in(context);
-            }
-        } else if turned_local && self.spec.interaction_source.is_some() {
-            self.initialize_indication_in(context);
+            self.recreate_indication();
         }
     }
 
-    /// The indication changed: its node is made again if it was made (or is made eagerly).
+    /// The indication changed, as `recreateIndicationIfNeeded`: if its node was made, or is made
+    /// eagerly, the old one goes and then a new one is made and comes, when the code running has
+    /// returned (`on_update_with_context`), in that order.
     fn recreate_indication(&mut self) {
         let made = self.forget_indication();
         if made || self.spec.interaction_source.is_some() {
-            self.initialize_indication();
+            self.remake_indication = true;
+            self.delegates.ask_for_context();
         }
     }
 
@@ -680,16 +674,26 @@ fn event_nanos(event: &PointerEvent) -> u64 {
 impl ModifierNode for ClickableNode {
     /// Attached, with a source given, its indication is made at once, as `onAttach`.
     fn on_attach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.read_local_indication(context, false);
+        self.local_indication_unread = false;
+        self.read_local_indication(context);
+        self.remake_indication = false;
         if self.spec.interaction_source.is_some() {
             self.initialize_indication_in(context);
         }
         self.shared.borrow_mut().handle = Some(context.handle());
     }
 
-    /// `update` turned it to the local indication, as `updateCommon`'s `onObservedReadsChanged`.
+    /// What `update`, or a new local indication, left to do: as `updateCommon`'s
+    /// `onObservedReadsChanged` and `recreateIndicationIfNeeded`.
     fn on_update_with_context(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.read_local_indication(context, true);
+        if std::mem::take(&mut self.local_indication_unread) {
+            self.read_local_indication(context);
+        }
+        if std::mem::take(&mut self.remake_indication)
+            && let Some(node) = self.indication_to_make()
+        {
+            self.indication = Some(self.delegates.delegate_boxed(node));
+        }
     }
 
     fn delegates(&mut self) -> Option<&mut Delegates> {
@@ -700,6 +704,8 @@ impl ModifierNode for ClickableNode {
     /// again if it comes back), as `onDetach`; what it queued to emit is dropped but its
     /// fallbacks, as its scope's coroutines are cancelled (D1057).
     fn on_detach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        self.local_indication_unread = false;
+        self.remake_indication = false;
         self.shared.borrow_mut().leave();
         self.dispose_interactions();
         self.dispose_focus();
@@ -739,8 +745,7 @@ impl ModifierNode for ClickableNode {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)
     }
-    /// Its indication draws what its listener writes (whatever indication an update gives it:
-    /// kinds are asked once).
+    /// A built-in node with a lifecycle: delegates, and what its observation reads.
     fn observes_reads(&self) -> bool {
         true
     }
@@ -756,7 +761,7 @@ impl crate::observer_node::ObserverModifierNode for ClickableNode {
     /// `LOCAL_INDICATION` changed where it is, as `onObservedReadsChanged`. Only this and an
     /// update turning to it read it again, as Compose's (D1184).
     fn on_observed_reads_changed(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.read_local_indication(context, false);
+        self.read_local_indication(context);
     }
 }
 
@@ -1179,6 +1184,44 @@ mod tests {
         assert!(!draws(&host));
         host.send_pointer(crate::input::PointerEvent::press(Offset::new(5.0, 5.0)));
         assert!(draws(&host));
+    }
+
+    /// `clickable().graphics_layer()`: a lifted layer (the group's own properties) at rest, as
+    /// the layer is the node's first drawing modifier; an inner layer once the indication is
+    /// a draw node before it. What's on screen is the same.
+    #[test]
+    fn a_layer_after_a_clickable_is_lifted_until_its_indication_draws() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            let options = ClickableOptions {
+                indication: crate::indication::Indication::new(Logging(l.clone())),
+                ..ClickableOptions::DEFAULT
+            };
+            crate::layout::emit_layout_node(
+                Modifier
+                    .clickable_with(options, || {})
+                    .graphics_layer(|layer| layer.alpha = 0.5)
+                    .size(crate::unit::UnitExt::dp(10)),
+                crate::layout::empty_measure_policy(),
+                || {},
+            );
+        });
+        host.frame();
+        let layers = |host: &UiHost| {
+            host.with_tree(|tree| {
+                let (node, _) = clickable_entry(tree);
+                let value = tree.node(node);
+                (
+                    value.retained.as_ref().and_then(|r| r.layer_entry).is_some(),
+                    value.inner_layers.len(),
+                )
+            })
+        };
+        assert_eq!(layers(&host), (true, 0));
+        host.send_pointer(crate::input::PointerEvent::press(Offset::new(5.0, 5.0)));
+        assert_eq!(layers(&host), (false, 1));
     }
 
     /// Made by the event that needs it, it's attached when the dispatch ends, as a delegate.

@@ -129,7 +129,9 @@ impl Delegates {
 
     /// Asks for `ModifierNode::on_update_with_context` once the code running returns, if the node
     /// is attached: what an element's `update`, which has no context, leaves to do with one
-    /// (Compose's `update` is the node's own code, with all it can reach).
+    /// (Compose's `update` is the node's own code, with all it can reach). compose-rs's, for its
+    /// own nodes; asked from `on_update_with_context`, it's dropped.
+    #[doc(hidden)]
     pub fn ask_for_context(&mut self) {
         self.wants_context = true;
         self.changed = true;
@@ -238,6 +240,13 @@ impl Delegates {
             }
         }
         pending
+    }
+
+    /// `refresh_kinds` for a chain's entry: with `DELEGATING` if it has delegates, which a hit
+    /// test asks for clips.
+    pub(crate) fn entry_kinds(&mut self, owner: NodeKinds) -> NodeKinds {
+        let union = self.refresh_kinds(owner);
+        if union.is_empty() { union } else { union | NodeKinds::DELEGATING }
     }
 
     /// The union of its delegates' kinds, theirs brought up to date first; `owner` is what the
@@ -549,6 +558,10 @@ pub(crate) fn run_on_delegates(
 /// even if its owner is leaving its chain. Each `on_detach` follows one `on_attach`.
 pub(crate) fn detach_with_delegates(node: &mut dyn ModifierNode, context: &mut NodeContext<'_>) {
     node.on_detach(context);
+    // What an update left to do with a context is over: attached again, it starts from nothing.
+    if let Some(delegates) = node.delegates() {
+        delegates.wants_context = false;
+    }
     sync_node(node, context.is_attached(), context);
     let Some(delegates) = node.delegates() else { return };
     for entry in delegates.entries.iter_mut().rev() {
@@ -657,7 +670,7 @@ impl UiTree {
         let entry = &mut self.node_mut(node).chain[index];
         let (id, own, before) = (entry.id, entry.own, entry.kinds);
         let (kinds, changes) = match entry.node.delegates() {
-            Some(delegates) => (own | delegates.refresh_kinds(own), delegates.take_pending()),
+            Some(delegates) => (own | delegates.entry_kinds(own), delegates.take_pending()),
             None => (own, NodeKinds::NONE),
         };
         entry.kinds = kinds;
@@ -682,7 +695,7 @@ impl UiTree {
         let entry = &mut self.node_mut(node).chain[index];
         let before = entry.kinds;
         if !before.all(kinds) {
-            entry.kinds |= kinds;
+            entry.kinds |= kinds | NodeKinds::DELEGATING;
             let after = entry.kinds;
             self.entry_kinds_changed(node, before, after);
         }
@@ -719,16 +732,18 @@ impl UiTree {
 fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeContext<'_>) {
     let Some(delegates) = node.delegates() else { return };
     delegates.changed = false;
-    if mem::take(&mut delegates.wants_context) && attached {
-        node.on_update_with_context(context);
-    }
-    let Some(delegates) = node.delegates() else { return };
     for mut gone in mem::take(&mut delegates.removed) {
         delegates.pending |= gone.kinds.without(NodeKinds::LAYOUT_AWARE);
         detach_delegate(&mut gone, context);
         context.tree.mark_delegate_detached(&mut gone);
         context.tree.release_delegate(gone);
     }
+    // Between: Compose's `update` undelegates, makes the new one and delegates to it, in order.
+    if delegates.wants_context && attached {
+        node.on_update_with_context(context);
+    }
+    let Some(delegates) = node.delegates() else { return };
+    delegates.wants_context = false;
     let requests = context.tree.focus_requests.clone();
     for entry in &mut delegates.entries {
         if attached && entry.state & entry_state::ATTACHED == 0 {

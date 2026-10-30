@@ -2356,6 +2356,45 @@ fn an_update_may_ask_for_its_context() {
     assert_eq!(*log.borrow(), ["attach", "update", "with context"]);
 }
 
+/// Asked for again from there, it's dropped: nothing to spin on.
+#[test]
+fn asking_for_a_context_from_it_is_dropped() {
+    struct AsksAgain(Delegates, Rc<Cell<u32>>);
+    impl ModifierNode for AsksAgain {
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+        fn on_update_with_context(&mut self, _: &mut NodeContext<'_>) {
+            self.1.set(self.1.get() + 1);
+            self.0.ask_for_context();
+        }
+    }
+    struct AsksAgainElement(i32, Rc<Cell<u32>>);
+    impl ModifierNodeElement for AsksAgainElement {
+        type Node = AsksAgain;
+        fn create(&self) -> AsksAgain {
+            AsksAgain(Delegates::new(), self.1.clone())
+        }
+        fn update(&self, node: &mut AsksAgain) {
+            node.0.ask_for_context();
+        }
+        fn same(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    let told = Rc::new(Cell::new(0));
+    let version = mutable_state_of(0);
+    let (v, t) = (version.handle(), told.clone());
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.then_custom(AsksAgainElement(v.get(), t.clone())));
+    });
+    host.frame();
+    version.set(1);
+    host.frame();
+    assert_eq!(told.get(), 1);
+}
+
 struct Consumes(&'static str, Rc<RefCell<Vec<&'static str>>>, Delegates);
 
 impl ModifierNode for Consumes {

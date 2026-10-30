@@ -404,20 +404,16 @@ struct IndicationElement {
 /// Compose's `IndicationModifierNode`.
 pub(crate) struct IndicationHostNode {
     delegates: crate::delegation::Delegates,
-    node: crate::node_chain::EntryId,
+    node: Option<crate::node_chain::EntryId>,
+    /// What an update asks for: made when it has a context, the old one gone by then.
+    next: Option<(Rc<dyn IndicationNodeFactory>, InteractionSource)>,
 }
 
 impl IndicationHostNode {
-    pub(crate) fn new(node: Box<dyn ModifierNode>) -> IndicationHostNode {
-        let mut delegates = crate::delegation::Delegates::new();
-        let node = delegates.delegate_boxed(node);
-        IndicationHostNode { delegates, node }
-    }
-
-    /// Delegates to `node` instead, as `IndicationModifierNode.update`.
-    fn replace(&mut self, node: Box<dyn ModifierNode>) {
-        self.delegates.undelegate_boxed(self.node);
-        self.node = self.delegates.delegate_boxed(node);
+    fn make_next(&mut self) {
+        if let Some((factory, source)) = self.next.take() {
+            self.node = Some(self.delegates.delegate_boxed(factory.create(source)));
+        }
     }
 }
 
@@ -425,11 +421,22 @@ impl ModifierNodeElement for IndicationElement {
     type Node = IndicationHostNode;
 
     fn create(&self) -> IndicationHostNode {
-        IndicationHostNode::new(self.factory.create(self.source.clone()))
+        let mut node = IndicationHostNode {
+            delegates: crate::delegation::Delegates::new(),
+            node: None,
+            next: Some((self.factory.clone(), self.source.clone())),
+        };
+        node.make_next();
+        node
     }
 
+    /// As `IndicationModifierNode.update`: undelegates, makes the new one and delegates to it.
     fn update(&self, node: &mut IndicationHostNode) {
-        node.replace(self.factory.create(self.source.clone()));
+        if let Some(old) = node.node.take() {
+            node.delegates.undelegate_boxed(old);
+        }
+        node.next = Some((self.factory.clone(), self.source.clone()));
+        node.delegates.ask_for_context();
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -445,6 +452,13 @@ impl ModifierNodeElement for IndicationElement {
 impl ModifierNode for IndicationHostNode {
     fn delegates(&mut self) -> Option<&mut crate::delegation::Delegates> {
         Some(&mut self.delegates)
+    }
+    fn on_update_with_context(&mut self, _: &mut NodeContext<'_>) {
+        self.make_next();
+    }
+    /// An update while it wasn't attached, or a reuse in its pass.
+    fn on_attach(&mut self, _: &mut NodeContext<'_>) {
+        self.make_next();
     }
 }
 
@@ -713,7 +727,9 @@ mod tests {
                         let host = node.downcast_mut::<IndicationHostNode>().expect("the host");
                         // A new one made and not yet attached, which hears a press.
                         let factory = state_layer_factory(Color::RED, None);
-                        host.replace(factory.create(source.as_source().clone()));
+                        host.delegates.undelegate_boxed(host.node.take().expect("its node"));
+                        let new = factory.create(source.as_source().clone());
+                        host.node = Some(host.delegates.delegate_boxed(new));
                         source.try_emit(PressInteraction::Press(Press::new(Offset::ZERO)));
                     });
                     return;

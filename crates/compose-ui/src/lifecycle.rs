@@ -410,7 +410,9 @@ impl UiTree {
                 .map_or(0, |entry| entry.state);
             let delegating = state & entry_state::DELEGATING != 0;
             if state & entry_state::ATTACH_RAN != 0 {
-                self.with_entry(node, index, |modifier_node, context| {
+                // Not synced after: what an update in its pass delegated goes with the detach,
+                // and what's left attaches with the new content.
+                self.with_entry_raw(node, index, |modifier_node, context| {
                     modifier_node.on_reset(context);
                     if delegating {
                         delegation::run_on_delegates(modifier_node, context, |node, context| {
@@ -497,6 +499,15 @@ impl UiTree {
     fn run_lifecycle_steps(&mut self) {
         while !self.lifecycle.is_empty() {
             let steps = mem::take(&mut self.lifecycle);
+            // Reset in this list: what their updates delegated attaches with the new content,
+            // not to be thrown away at once.
+            let reset: SmallVec<[NodeId; 2]> = steps
+                .iter()
+                .filter_map(|step| match step {
+                    Lifecycle::Reuse(node) | Lifecycle::Reset(node) => Some(*node),
+                    _ => None,
+                })
+                .collect();
             for step in steps {
                 match step {
                     Lifecycle::Attach(root) => {
@@ -529,7 +540,9 @@ impl UiTree {
                         self.run_attach(node);
                     }
                     Lifecycle::SyncDelegates(node, entry) => {
-                        if let Some(index) = self.entry_index(node, entry) {
+                        if !reset.contains(&node)
+                            && let Some(index) = self.entry_index(node, entry)
+                        {
                             self.sync_delegates(node, index);
                         }
                     }

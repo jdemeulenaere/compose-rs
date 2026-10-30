@@ -1135,8 +1135,10 @@ pub trait ModifierNode: Any {
         None
     }
     /// What it asked for with `Delegates::ask_for_context` in an element's `update`: runs with
-    /// its context when that code has returned, if it's attached. Told before what it delegated
-    /// or undelegated there is attached or detached.
+    /// its context when that code has returned, if it's attached: after what it undelegated is
+    /// detached, before what it delegates is attached. Dropped if it's detached first, as when
+    /// reused in the same pass. compose-rs's, for its own nodes.
+    #[doc(hidden)]
     fn on_update_with_context(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {}
     /// A text a `SelectionContainer` selects in.
     fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {

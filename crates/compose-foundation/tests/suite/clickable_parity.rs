@@ -778,6 +778,130 @@ fn seen_kinds(seen: &Seen) -> Vec<&'static str> {
     kinds(&recorded)
 }
 
+/// Turning to `Indication::LOCAL` with a node made and no source: the new one is made at once, as
+/// `recreateIndicationIfNeeded` (a node made wasn't lazily waiting any more).
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, recreateIndicationIfNeeded
+#[test]
+fn a_clickable_with_its_node_made_turning_local_makes_the_new_one_at_once() {
+    let (explicit, explicit_indication) = test_indication();
+    let (local_seen, local_indication) = test_indication();
+    let local = mutable_state_of(false);
+    let l = local.handle();
+    let mut ui = compose_test(move || {
+        let explicit = explicit_indication.clone();
+        CompositionLocalProvider(LOCAL_INDICATION.provides(local_indication.clone()), move || {
+            let options = ClickableOptions {
+                indication: if l.get() { Indication::LOCAL } else { explicit.clone() },
+                ..ClickableOptions::DEFAULT
+            };
+            Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}).test_tag(TAG));
+        });
+    });
+    let at = center(&mut ui, TAG);
+    touch_down(&mut ui, at);
+    touch_up(&mut ui, at);
+    assert_eq!((explicit.created(), local_seen.created()), (1, 0));
+    local.set(true);
+    ui.wait_for_idle();
+    assert_eq!(local_seen.created(), 1, "at once");
+    assert_eq!(explicit.detached.get(), 1);
+}
+
+/// Reused in the pass an update changed its indication: the node isn't made for what the reuse
+/// throws away at once.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onReset
+#[test]
+fn reused_as_it_turns_local_with_a_source_its_node_is_made_once() {
+    let (seen, indication) = test_indication();
+    let (flag, source) = (mutable_state_of(false), MutableInteractionSource::new());
+    let f = flag.handle();
+    let mut ui = compose_test(move || {
+        let (indication, source) = (indication.clone(), source.clone());
+        CompositionLocalProvider(LOCAL_INDICATION.provides(indication), move || {
+            let source = source.clone();
+            ReusableContent(f.get(), move || {
+                let options = ClickableOptions {
+                    indication: if f.get() { Indication::LOCAL } else { Indication::NONE },
+                    interaction_source: Some(source.clone()),
+                    ..ClickableOptions::DEFAULT
+                };
+                Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+            });
+        });
+    });
+    assert_eq!(seen.created(), 0);
+    flag.set(true);
+    ui.wait_for_idle();
+    assert_eq!((seen.created(), seen.detached.get()), (1, 0));
+}
+
+#[test]
+fn reused_with_a_new_source_its_node_is_made_once() {
+    let (seen, indication) = test_indication();
+    let flag = mutable_state_of(false);
+    let (first, second) = (MutableInteractionSource::new(), MutableInteractionSource::new());
+    let f = flag.handle();
+    let mut ui = compose_test(move || {
+        let (indication, first, second) = (indication.clone(), first.clone(), second.clone());
+        ReusableContent(f.get(), move || {
+            let options = ClickableOptions {
+                indication: indication.clone(),
+                interaction_source: Some(if f.get() { second.clone() } else { first.clone() }),
+                ..ClickableOptions::DEFAULT
+            };
+            Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+        });
+    });
+    assert_eq!(seen.created(), 1);
+    flag.set(true);
+    ui.wait_for_idle();
+    assert_eq!((seen.created(), seen.detached.get()), (2, 1));
+}
+
+/// A new source: the old node detached, the new one made, then attached, as Compose's `update`
+/// undelegates and makes the next.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, recreateIndicationIfNeeded
+#[test]
+fn a_replaced_indication_goes_before_the_next_is_made() {
+    struct Node(Rc<RefCell<Vec<&'static str>>>);
+    impl ModifierNode for Node {
+        fn on_attach(&mut self, _: &mut compose_ui::NodeContext<'_>) {
+            self.0.borrow_mut().push("attach");
+        }
+        fn on_detach(&mut self, _: &mut compose_ui::NodeContext<'_>) {
+            self.0.borrow_mut().push("detach");
+        }
+    }
+    struct Factory(Rc<RefCell<Vec<&'static str>>>);
+    impl IndicationNodeFactory for Factory {
+        fn create(&self, _: InteractionSource) -> Box<dyn ModifierNode> {
+            self.0.borrow_mut().push("create");
+            Box::new(Node(self.0.clone()))
+        }
+        fn same(&self, _: &dyn IndicationNodeFactory) -> bool {
+            true
+        }
+    }
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let flag = mutable_state_of(false);
+    let (first, second) = (MutableInteractionSource::new(), MutableInteractionSource::new());
+    let (f, l) = (flag.handle(), log.clone());
+    let indication = Indication::new(Factory(l));
+    let mut ui = compose_test(move || {
+        let options = ClickableOptions {
+            indication: indication.clone(),
+            interaction_source: Some(if f.get() { second.clone() } else { first.clone() }),
+            ..ClickableOptions::DEFAULT
+        };
+        Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+    });
+    assert_eq!(*log.borrow(), ["create", "attach"]);
+    log.borrow_mut().clear();
+    flag.set(true);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["detach", "create", "attach"]);
+}
+
 /// With a source given, `LOCAL_INDICATION`'s node is made at once.
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ClickableTest.kt, localIndication_interactionSource_eagerlyCreated
 #[test]
@@ -822,7 +946,7 @@ fn a_clickable_turning_to_the_local_indication_shows_it() {
     assert_eq!(seen_kinds(&seen), ["Press"]);
 }
 
-/// ... pressed before the task reading it ran too.
+/// ... at once with a source given.
 #[test]
 fn a_clickable_turning_to_the_local_indication_shows_it_at_once_with_a_source() {
     let (seen, indication) = test_indication();

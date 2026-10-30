@@ -45,7 +45,8 @@ impl NodeKinds {
     pub const ON_PLACED: NodeKinds = NodeKinds(1 << 20);
     pub const BEYOND_BOUNDS_LAYOUT: NodeKinds = NodeKinds(1 << 21);
     // compose-rs's own: what were capability bits or chain scans by downcast.
-    /// A node with delegates, which a hit test asks for clips though it draws nothing itself.
+    /// A node with delegates (now), which a hit test asks for clips though it draws nothing
+    /// itself.
     pub const DELEGATING: NodeKinds = NodeKinds(1 << 22);
     /// A user-defined element's node: its measuring and drawing are observed for state reads.
     pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
@@ -64,8 +65,8 @@ impl NodeKinds {
         NodeKinds(NodeKinds::ON_REMEASURED.0 | NodeKinds::ON_PLACED.0);
 
     /// The kinds a delegate gives its owner: those the tree dispatches to delegates. The rest
-    /// are the built-in elements' (which aren't delegated to) or answered by the chain's node
-    /// itself, which forwards them if it wants to (`ModifierNode::delegates`).
+    /// are the built-in elements' (which aren't delegated to). What aren't kinds (`hit_clip`,
+    /// `bring_into_view`, `as_selectable`) the tree asks the delegates too (D1194).
     const DELEGATED: NodeKinds = NodeKinds(
         NodeKinds::ANY.0
             | NodeKinds::LAYOUT.0
@@ -285,7 +286,7 @@ impl ChainEntry {
         fixed: Option<NodeKinds>,
         id: EntryId,
     ) -> ChainEntry {
-        let mut own = match fixed {
+        let own = match fixed {
             Some(kinds) => {
                 debug_assert_eq!(
                     kinds,
@@ -302,8 +303,7 @@ impl ChainEntry {
         if own.any(NodeKinds::OBSERVED)
             && let Some(delegates) = node.delegates()
         {
-            kinds |= delegates.refresh_kinds(own) | NodeKinds::DELEGATING;
-            own |= NodeKinds::DELEGATING;
+            kinds |= delegates.entry_kinds(own);
             state = entry_state::DELEGATING;
         }
         ChainEntry { node, kinds, aggregate: kinds, id, state, own }
@@ -332,7 +332,7 @@ impl ChainEntry {
         size: crate::unit::Size,
         density: crate::unit::Density,
     ) -> Option<crate::graphics::Shape> {
-        if self.state & entry_state::DELEGATING != 0 {
+        if self.kinds.any(NodeKinds::DELEGATING) {
             crate::delegation::hit_clip_of(&mut *self.node, size, density)
         } else {
             self.node.hit_clip_at(size, density)
@@ -386,7 +386,7 @@ impl ChainEntry {
         let own = self.own;
         let Some(delegates) = self.node.delegates() else { return updated };
         if delegates.needs_sync() {
-            let kinds = own | delegates.refresh_kinds(own);
+            let kinds = own | delegates.entry_kinds(own);
             updated.delegated = true;
             updated.layers = kinds.any(NodeKinds::LAYOUT) != self.kinds.any(NodeKinds::LAYOUT);
             self.kinds = kinds;
