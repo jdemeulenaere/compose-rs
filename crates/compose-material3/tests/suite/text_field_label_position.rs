@@ -392,10 +392,10 @@ fn a_filled_fields_container_is_cut_for_a_label_on_its_edge() {
     // And not at rest, nothing to cut for.
     let mut ui = rule(false, TextFieldLabelPosition::cutout());
     let ops = ui.host().display_list().ops.clone();
-    assert!(
-        !ops.iter()
-            .any(|op| matches!(op, DrawOp::DrawPath { path, .. } if !path.steps().is_empty()))
-    );
+    assert!(!ops.iter().any(|op| matches!(op, DrawOp::DrawPath { path, .. }
+            if path.steps().iter().any(|step| matches!(step,
+                compose_ui::PathStep::Combine(compose_ui::PathOperation::Difference)
+                | compose_ui::PathStep::CombineOr(compose_ui::PathOperation::Difference))))));
 }
 
 /// A label above with a supporting text: above, the field, below.

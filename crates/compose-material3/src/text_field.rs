@@ -2,14 +2,18 @@
 //! with a container (filled) or an outline, a label that rests in the field and floats up
 //! (animated) when it's focused or has text, and a placeholder.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use compose_animation::Animatable;
 use compose_foundation::layout::Box;
 use compose_foundation::{BasicTextField, KeyboardActions, KeyboardOptions, VisualTransformation};
 use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
 use compose_ui::{
-    Alignment, Color, Constraints, Dp, HorizontalAlignment, Measurable, MeasurePolicy,
-    MeasureResult, MeasureScope, Modifier, Paint, Path, Shape, SizeSpec, TextStyle, UnitExt,
+    Alignment, Color, Constraints, Dp, DrawModifierNode, HorizontalAlignment, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    MutableInteractionSource, NodeContext, PaddingValues, Paint, Path, Shape, SizeSpec, TextStyle,
+    UnitExt,
 };
 
 use crate::components::{TextFieldColors, TextFieldDefaults};
@@ -24,6 +28,37 @@ impl OutlinedTextFieldDefaults {
     /// The outline's width, as `UnfocusedBorderThickness` and `FocusedBorderThickness`.
     pub const UNFOCUSED_BORDER_THICKNESS: Dp = Dp(1.0);
     pub const FOCUSED_BORDER_THICKNESS: Dp = Dp(2.0);
+
+    /// As `contentPaddingWithLabel()`: the same as a filled field's.
+    pub const fn content_padding_with_label() -> PaddingValues {
+        TextFieldDefaults::content_padding_with_label()
+    }
+
+    /// As `contentPaddingWithoutLabel()`.
+    pub const fn content_padding_without_label() -> PaddingValues {
+        TextFieldDefaults::content_padding_without_label()
+    }
+
+    /// The expressive rounded shape, as `roundedShape`: `CornerMedium`.
+    pub fn rounded_shape() -> Shape {
+        MaterialTheme::shapes().medium.clone()
+    }
+
+    /// As `tonalColors()`: no container, the outline in `outline_variant`.
+    pub fn tonal_colors() -> TextFieldColors {
+        let scheme = MaterialTheme::color_scheme();
+        TextFieldColors {
+            container_color: Color::TRANSPARENT,
+            focused_container_color: Color::TRANSPARENT,
+            error_container_color: Color::TRANSPARENT,
+            disabled_container_color: Color::TRANSPARENT,
+            focused_indicator_color: scheme.outline_variant,
+            unfocused_indicator_color: scheme.outline_variant,
+            disabled_indicator_color: scheme.outline_variant,
+            error_indicator_color: scheme.error,
+            ..crate::components::tonal_text_colors()
+        }
+    }
 
     /// From the theme, as `OutlinedTextFieldDefaults.colors()`: no container, the indicator
     /// colors for the outline.
@@ -239,11 +274,21 @@ fn draw_cut_container(
     shown: f32,
     half_height: f32,
 ) {
-    let density = scope.density();
-    let size = scope.size();
-    let inner = density.to_px(4.dp());
+    let cut = label_room(scope, start, shown, half_height);
+    let whole = Path::new();
+    crate::tooltip::add_outline(
+        &whole,
+        shape.outline_in(scope.size(), &scope.density(), scope.layout_direction()),
+    );
+    let path = Path::combine(compose_ui::PathOperation::Difference, &whole, &cut);
+    scope.draw_path(&path, Paint::fill(color));
+}
+
+/// The room a label on the edge takes from its container, 4 dp either side of it.
+fn label_room(scope: &compose_ui::DrawScope<'_>, start: f32, shown: f32, half_height: f32) -> Path {
+    let inner = scope.density().to_px(4.dp());
     let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
-    let left = if rtl { size.width - start - shown } else { start };
+    let left = if rtl { scope.size().width - start - shown } else { start };
     let cut = Path::new();
     cut.add_rect(compose_ui::Rect::new(
         left - inner,
@@ -251,10 +296,23 @@ fn draw_cut_container(
         left + shown + inner,
         half_height,
     ));
-    let whole = Path::new();
-    crate::tooltip::add_outline(&whole, shape.outline_in(size, &density, scope.layout_direction()));
-    let path = Path::combine(compose_ui::PathOperation::Difference, &whole, &cut);
-    scope.draw_path(&path, Paint::fill(color));
+    cut
+}
+
+/// All a container of its own can draw in but the room for the label: as `ClipOp.Difference`.
+fn cut_container_path(
+    scope: &compose_ui::DrawScope<'_>,
+    start: f32,
+    shown: f32,
+    half_height: f32,
+) -> Path {
+    let cut = label_room(scope, start, shown, half_height);
+    let size = scope.size();
+    let around = Path::new();
+    // Past the bounds: a drawing outside them isn't cut by Compose's difference either.
+    let (far_x, far_y) = (size.width.max(size.height), size.width.max(size.height));
+    around.add_rect(compose_ui::Rect::new(-far_x, -far_y, size.width + far_x, size.height + far_y));
+    Path::combine(compose_ui::PathOperation::Difference, &around, &cut)
 }
 
 /// The label's content, skipped while a frame of the progress only changes its style, as the lambda
@@ -265,18 +323,539 @@ fn LabelContent(label: Callback) {
     label();
 }
 
-/// A filled field's indicator line: 1 dp, 2 dp focused, its animations read here.
+/// As `EasingEmphasizedAccelerateCubicBezier`.
+const LABEL_HEIGHT_EASING: compose_animation::Easing =
+    compose_animation::Easing::cubic_bezier(0.3, 0.0, 0.8, 0.15);
+
+/// The paddings by what a label takes: inside, 8 dp above and below; else 16, as
+/// `defaultContentPadding`.
+fn default_content_padding(has_label: bool, position: TextFieldLabelPosition) -> PaddingValues {
+    if has_label && position.is_inside() {
+        TextFieldDefaults::content_padding_with_label()
+    } else {
+        TextFieldDefaults::content_padding_without_label()
+    }
+}
+
+/// A filled field's decoration around a [`BasicTextField`]'s inner field, as
+/// `TextFieldDefaults.DecorationBox`: give it to its `decoration_box` for a custom field, with the
+/// same `value`, `enabled`, `single_line`, `visual_transformation` and `interaction_source`.
+/// `content_padding` by default goes by the label (`content_padding_with_label` with one inside,
+/// `content_padding_without_label` else); `container`, by default as [`TextFieldContainer`].
+/// As `decorator` too: without `TextFieldState`, the value is the state.
 #[composable]
 #[allow(non_snake_case)]
-fn IndicatorLine(
-    color: Option<compose_runtime::State<Color>>,
-    plain_color: Color,
-    thickness: Option<compose_runtime::State<Dp>>,
-    plain_thickness: Dp,
+pub fn TextFieldDecorationBox(
+    value: String,
+    inner_text_field: impl Fn() + 'static,
+    enabled: bool,
+    single_line: bool,
+    visual_transformation: impl Into<VisualTransformation>,
+    interaction_source: MutableInteractionSource,
+    #[default(false)] is_error: bool,
+    #[default(crate::TextFieldLabelPosition::inside())] label_position: TextFieldLabelPosition,
+    #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(None)] placeholder: Option<impl Fn() + 'static>,
+    #[default(None)] leading_icon: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
+    #[default(None)] prefix: Option<impl Fn() + 'static>,
+    #[default(None)] suffix: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_text: Option<impl Fn() + 'static>,
+    #[default(crate::TextFieldDefaults::shape())] shape: Shape,
+    #[default(crate::TextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(None)] content_padding: Option<PaddingValues>,
+    #[default(None)] container: Option<impl Fn() + 'static>,
 ) {
-    let color = color.map_or(plain_color, |state| state.get());
-    let thickness = thickness.map_or(plain_thickness, |state| state.get());
-    compose_foundation::layout::Spacer(Modifier.height(thickness).background(color));
+    standing_decoration(
+        Variant::Filled,
+        value,
+        inner_text_field,
+        (enabled, is_error, single_line),
+        visual_transformation,
+        interaction_source,
+        label_position,
+        Slots { label, placeholder, leading_icon, trailing_icon, prefix, suffix, supporting_text },
+        shape,
+        colors,
+        content_padding,
+        container,
+    );
+}
+
+/// An outlined field's decoration, as `OutlinedTextFieldDefaults.DecorationBox`: see
+/// [`TextFieldDecorationBox`], `container` by default as [`OutlinedTextFieldContainer`].
+#[composable]
+#[allow(non_snake_case)]
+pub fn OutlinedTextFieldDecorationBox(
+    value: String,
+    inner_text_field: impl Fn() + 'static,
+    enabled: bool,
+    single_line: bool,
+    visual_transformation: impl Into<VisualTransformation>,
+    interaction_source: MutableInteractionSource,
+    #[default(false)] is_error: bool,
+    #[default(crate::TextFieldLabelPosition::cutout())] label_position: TextFieldLabelPosition,
+    #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(None)] placeholder: Option<impl Fn() + 'static>,
+    #[default(None)] leading_icon: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
+    #[default(None)] prefix: Option<impl Fn() + 'static>,
+    #[default(None)] suffix: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_text: Option<impl Fn() + 'static>,
+    #[default(crate::OutlinedTextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(None)] content_padding: Option<PaddingValues>,
+    #[default(None)] container: Option<impl Fn() + 'static>,
+) {
+    standing_decoration(
+        Variant::Outlined,
+        value,
+        inner_text_field,
+        (enabled, is_error, single_line),
+        visual_transformation,
+        interaction_source,
+        label_position,
+        Slots { label, placeholder, leading_icon, trailing_icon, prefix, suffix, supporting_text },
+        OutlinedTextFieldDefaults::shape(),
+        colors,
+        content_padding,
+        container,
+    );
+}
+
+/// What the two decoration boxes have in common, as `CommonDecorationBox`: focused by the source.
+#[allow(clippy::too_many_arguments)]
+fn standing_decoration(
+    variant: Variant,
+    value: String,
+    inner_text_field: Callback,
+    (enabled, is_error, single_line): (bool, bool, bool),
+    visual_transformation: VisualTransformation,
+    interaction_source: MutableInteractionSource,
+    label_position: TextFieldLabelPosition,
+    slots: Slots,
+    shape: Shape,
+    colors: TextFieldColors,
+    content_padding: Option<PaddingValues>,
+    container: Option<Callback>,
+) {
+    let is_focused = interaction_source.collect_is_focused_as_state().get();
+    let empty = visual_transformation
+        .filter(&value)
+        .map_or(value.is_empty(), |transformed| transformed.text.is_empty());
+    let content_padding =
+        content_padding.unwrap_or(default_content_padding(slots.label.is_some(), label_position));
+    decoration_box(
+        DecorationParts {
+            variant,
+            empty,
+            is_focused,
+            focus_modifier: Modifier,
+            min_size: false,
+            enabled,
+            is_error,
+            single_line,
+            label_position,
+            slots,
+            colors,
+            content_padding,
+            shape,
+            container,
+        },
+        inner_text_field,
+    );
+}
+
+/// A filled field's container, as `TextFieldDefaults.Container`: its color animated, and an
+/// [`indicator_line`](TextFieldModifiers::indicator_line).
+#[composable]
+#[allow(non_snake_case)]
+pub fn TextFieldContainer(
+    enabled: bool,
+    is_error: bool,
+    interaction_source: MutableInteractionSource,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::TextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(crate::TextFieldDefaults::shape())] shape: Shape,
+    #[default(crate::TextFieldDefaults::FOCUSED_INDICATOR_THICKNESS)]
+    focused_indicator_line_thickness: Dp,
+    #[default(crate::TextFieldDefaults::UNFOCUSED_INDICATOR_THICKNESS)]
+    unfocused_indicator_line_thickness: Dp,
+) {
+    let focused = interaction_source.collect_is_focused_as_state().get();
+    let color = animated_container_color(&colors, enabled, is_error, focused);
+    let background_shape = shape.clone();
+    Box(
+        modifier
+            .draw_behind(move |scope| scope.draw_shape(&background_shape, color.get()))
+            .indicator_line(
+                enabled,
+                is_error,
+                &interaction_source,
+                Some(colors),
+                Some(shape),
+                focused_indicator_line_thickness,
+                unfocused_indicator_line_thickness,
+            ),
+        Alignment::TOP_START,
+        false,
+        compose_runtime::callback(|_| {}),
+    );
+}
+
+/// An outlined field's container, as `OutlinedTextFieldDefaults.Container`: its border and color
+/// animated.
+#[composable]
+#[allow(non_snake_case)]
+pub fn OutlinedTextFieldContainer(
+    enabled: bool,
+    is_error: bool,
+    interaction_source: MutableInteractionSource,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::OutlinedTextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(crate::OutlinedTextFieldDefaults::shape())] shape: Shape,
+    #[default(crate::OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS)]
+    focused_border_thickness: Dp,
+    #[default(crate::OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS)]
+    unfocused_border_thickness: Dp,
+) {
+    let focused = interaction_source.collect_is_focused_as_state().get();
+    let motion = MaterialTheme::motion_scheme();
+    let target = colors.indicator_color(enabled, is_error, focused);
+    let thickness =
+        if focused && enabled { focused_border_thickness } else { unfocused_border_thickness };
+    // As `animateBorderStrokeAsState`: disabled, it snaps.
+    let (color, thickness) = if enabled {
+        (
+            compose_animation::animate_color_as_state(
+                target,
+                motion.fast_effects_spec(),
+                "IndicatorColor",
+                None,
+            )
+            .get(),
+            compose_animation::animate_dp_as_state(
+                thickness,
+                motion.fast_spatial_spec(),
+                "IndicatorThickness",
+                None,
+            )
+            .get(),
+        )
+    } else {
+        (target, thickness)
+    };
+    let container_color = animated_container_color(&colors, enabled, is_error, focused);
+    let background_shape = shape.clone();
+    Box(
+        modifier
+            .border_with(thickness, color, shape)
+            .draw_behind(move |scope| scope.draw_shape(&background_shape, container_color.get())),
+        Alignment::TOP_START,
+        false,
+        compose_runtime::callback(|_| {}),
+    );
+}
+
+/// As `TextFieldDefaults.Container`'s: fast effects.
+fn animated_container_color(
+    colors: &TextFieldColors,
+    enabled: bool,
+    is_error: bool,
+    focused: bool,
+) -> compose_runtime::State<Color> {
+    compose_animation::animate_color_as_state(
+        pick(
+            enabled,
+            is_error,
+            focused,
+            [
+                colors.disabled_container_color,
+                colors.error_container_color,
+                colors.focused_container_color,
+                colors.container_color,
+            ],
+        ),
+        MaterialTheme::motion_scheme().fast_effects_spec(),
+        "ContainerColor",
+        None,
+    )
+}
+
+/// Modifiers for a custom text field.
+pub trait TextFieldModifiers {
+    /// A filled field's bottom line, as `Modifier.indicatorLine`: its color and width follow the
+    /// focus `interaction_source` tells, animated, and it's clipped to `shape`. `colors` by
+    /// default are `TextFieldDefaults::colors()`, `shape` is `TextFieldDefaults::shape()`.
+    #[allow(clippy::too_many_arguments)]
+    fn indicator_line(
+        self,
+        enabled: bool,
+        is_error: bool,
+        interaction_source: &MutableInteractionSource,
+        colors: Option<TextFieldColors>,
+        shape: Option<Shape>,
+        focused_indicator_line_thickness: Dp,
+        unfocused_indicator_line_thickness: Dp,
+    ) -> Modifier;
+}
+
+impl TextFieldModifiers for Modifier {
+    fn indicator_line(
+        self,
+        enabled: bool,
+        is_error: bool,
+        interaction_source: &MutableInteractionSource,
+        colors: Option<TextFieldColors>,
+        shape: Option<Shape>,
+        focused_indicator_line_thickness: Dp,
+        unfocused_indicator_line_thickness: Dp,
+    ) -> Modifier {
+        self.then_custom(IndicatorLineElement(IndicatorParams {
+            enabled,
+            is_error,
+            source: interaction_source.clone(),
+            colors,
+            shape,
+            focused_width: focused_indicator_line_thickness,
+            unfocused_width: unfocused_indicator_line_thickness,
+        }))
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct IndicatorParams {
+    enabled: bool,
+    is_error: bool,
+    source: MutableInteractionSource,
+    colors: Option<TextFieldColors>,
+    shape: Option<Shape>,
+    focused_width: Dp,
+    unfocused_width: Dp,
+}
+
+struct IndicatorLineElement(IndicatorParams);
+
+/// What the line's animations need, for its node and its collection of the source.
+struct IndicatorState {
+    params: RefCell<IndicatorParams>,
+    focused: Cell<bool>,
+    /// `colors` or the theme's, and the theme's motion: as the node last read them.
+    colors: Cell<Option<TextFieldColors>>,
+    motion: RefCell<Option<Rc<crate::motion::MotionScheme>>>,
+    scope: Cell<Option<compose_runtime::CoroutineScope>>,
+    color: RefCell<Option<Animatable<Color>>>,
+    width: Animatable<Dp>,
+}
+
+impl IndicatorState {
+    /// As `invalidateIndicator`: to the targets, at once when disabled.
+    fn invalidate(self: &Rc<Self>) {
+        let (Some(scope), Some(colors), Some(motion)) =
+            (self.scope.get(), self.colors.get(), self.motion.borrow().clone())
+        else {
+            return;
+        };
+        let Some(color) = self.color.borrow().clone() else { return };
+        let params = self.params.borrow();
+        let focused = self.focused.get();
+        let target = colors.indicator_color(params.enabled, params.is_error, focused);
+        let enabled = params.enabled;
+        let spec =
+            if enabled { motion.fast_effects_spec() } else { compose_animation::snap(0).into() };
+        scope.launch(async move {
+            color.animate_to(target, spec).await;
+        });
+        let width = self.width.clone();
+        let target = if focused && enabled { params.focused_width } else { params.unfocused_width };
+        let spec =
+            if enabled { motion.fast_spatial_spec() } else { compose_animation::snap(0).into() };
+        scope.launch(async move {
+            width.animate_to(target, spec).await;
+        });
+    }
+
+    fn read_theme(&self, context: &mut NodeContext<'_>) {
+        let colors = self.params.borrow().colors.unwrap_or_else(|| {
+            let scheme = context.current_value_of(&crate::theme::LOCAL_COLOR_SCHEME);
+            let selection =
+                context.current_value_of(&compose_foundation::LOCAL_TEXT_SELECTION_COLORS);
+            TextFieldDefaults::colors_of(&scheme, selection)
+        });
+        self.colors.set(Some(colors));
+        self.motion.replace(Some(context.current_value_of(&crate::motion::LOCAL_MOTION_SCHEME)));
+    }
+}
+
+struct IndicatorLineNode {
+    state: Rc<IndicatorState>,
+    listener: Option<Rc<compose_ui::Listener>>,
+    source_listened: Option<MutableInteractionSource>,
+    shapes: Option<Rc<crate::theme::Shapes>>,
+    path: IndicatorPath,
+    delegates: compose_ui::Delegates,
+}
+
+impl IndicatorLineNode {
+    /// As `trackFocusState`: not focused until told, without animating to that.
+    fn listen(&mut self) {
+        let state = self.state.clone();
+        let source = state.params.borrow().source.clone();
+        state.focused.set(false);
+        let mut ongoing = Vec::new();
+        let listener_state = state.clone();
+        self.listener = Some(source.listen(move |interaction| {
+            match interaction {
+                compose_ui::Interaction::Focus(compose_ui::FocusInteraction::Focus(focus)) => {
+                    ongoing.push(*focus);
+                }
+                compose_ui::Interaction::Focus(compose_ui::FocusInteraction::Unfocus(focus)) => {
+                    ongoing.retain(|it| it != focus);
+                }
+                _ => return,
+            }
+            let now = !ongoing.is_empty();
+            if listener_state.focused.replace(now) != now {
+                listener_state.invalidate();
+            }
+        }));
+        self.source_listened = Some(source);
+    }
+}
+
+impl ModifierNodeElement for IndicatorLineElement {
+    type Node = IndicatorLineNode;
+    fn create(&self) -> IndicatorLineNode {
+        IndicatorLineNode {
+            state: Rc::new(IndicatorState {
+                params: RefCell::new(self.0.clone()),
+                focused: Cell::new(false),
+                colors: Cell::new(None),
+                motion: RefCell::new(None),
+                scope: Cell::new(None),
+                color: RefCell::new(None),
+                width: Animatable::new(self.0.unfocused_width),
+            }),
+            listener: None,
+            source_listened: None,
+            shapes: None,
+            path: IndicatorPath::default(),
+            delegates: compose_ui::Delegates::new(),
+        }
+    }
+    fn update(&self, node: &mut IndicatorLineNode) {
+        node.state.params.replace(self.0.clone());
+        // A context to launch and read the theme with: `on_update_with_context`.
+        node.delegates.ask_for_context();
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+    fn name(&self) -> &'static str {
+        "indicatorLine"
+    }
+}
+
+impl ModifierNode for IndicatorLineNode {
+    fn delegates(&mut self) -> Option<&mut compose_ui::Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.state.scope.set(Some(context.coroutine_scope()));
+        self.state.read_theme(context);
+        self.shapes = Some(context.current_value_of(&crate::theme::LOCAL_SHAPES));
+        self.listen();
+        let mut color = self.state.color.borrow_mut();
+        if color.is_none() {
+            let params = self.state.params.borrow();
+            let colors = self.state.colors.get().expect("just read");
+            *color = Some(Animatable::new(colors.indicator_color(
+                params.enabled,
+                params.is_error,
+                false,
+            )));
+        }
+    }
+    fn on_detach(&mut self, _context: &mut NodeContext<'_>) {
+        self.listener = None;
+        self.source_listened = None;
+        self.state.scope.set(None);
+    }
+    fn on_update_with_context(&mut self, context: &mut NodeContext<'_>) {
+        self.state.read_theme(context);
+        self.shapes = Some(context.current_value_of(&crate::theme::LOCAL_SHAPES));
+        if self.source_listened.as_ref() != Some(&self.state.params.borrow().source) {
+            self.listen();
+        }
+        self.state.invalidate();
+        context.invalidate_draw();
+    }
+    fn on_composition_locals_changed(&mut self, context: &mut NodeContext<'_>) {
+        self.state.read_theme(context);
+        self.shapes = Some(context.current_value_of(&crate::theme::LOCAL_SHAPES));
+        self.state.invalidate();
+        context.invalidate_draw();
+    }
+}
+
+impl DrawModifierNode for IndicatorLineNode {
+    fn draw_after(&mut self, scope: &mut compose_ui::DrawScope<'_>) {
+        let Some(color) = self.state.color.borrow().as_ref().map(Animatable::value) else {
+            return;
+        };
+        let shape = self
+            .state
+            .params
+            .borrow()
+            .shape
+            .clone()
+            .or_else(|| self.shapes.as_ref().map(|shapes| TextFieldDefaults::shape_of(shapes)));
+        let Some(shape) = shape else { return };
+        draw_indicator(scope, &self.path, &shape, self.state.width.value(), color);
+    }
+}
+
+/// The line's path as last drawn, as `IndicatorLineNode`'s `CacheDrawModifierNode`: a draw that
+/// changes nothing of it (a keystroke's) combines nothing.
+#[derive(Default)]
+struct IndicatorPath(RefCell<Option<(IndicatorPathKey, Path)>>);
+
+type IndicatorPathKey = (compose_ui::Size, f32, compose_ui::LayoutDirection, Shape);
+
+/// The line at the bottom, within `shape`, as `IndicatorLineNode`'s drawing.
+fn draw_indicator(
+    scope: &mut compose_ui::DrawScope<'_>,
+    cache: &IndicatorPath,
+    shape: &Shape,
+    width: Dp,
+    color: Color,
+) {
+    let density = scope.density();
+    let size = scope.size();
+    let stroke = density.to_px(width);
+    let direction = scope.layout_direction();
+    let mut cached = cache.0.borrow_mut();
+    let fresh = matches!(&*cached, Some(((at, drawn, along, of), _))
+        if *at == size && *drawn == stroke && *along == direction && of == shape);
+    if !fresh {
+        let outline = Path::new();
+        crate::tooltip::add_outline(&outline, shape.outline_in(size, &density, direction));
+        let line = Path::new();
+        line.add_rect(compose_ui::Rect::new(0.0, size.height - stroke, size.width, size.height));
+        let clipped = Path::combine(compose_ui::PathOperation::Intersect, &line, &outline);
+        *cached = Some(((size, stroke, direction, shape.clone()), clipped));
+    }
+    if let Some((_, path)) = &*cached {
+        scope.draw_path(path, Paint::fill(color));
+    }
 }
 
 /// What a text field's animations follow, as `InputPhase`.
@@ -318,6 +897,9 @@ pub fn TextField(
     #[default(u32::MAX)] max_lines: u32,
     #[default(1)] min_lines: u32,
     #[default(crate::TextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(crate::TextFieldDefaults::shape())] shape: Shape,
+    #[default(None)] content_padding: Option<PaddingValues>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
     decorated_field(
         Variant::Filled,
@@ -344,6 +926,9 @@ pub fn TextField(
         single_line,
         (max_lines, min_lines),
         colors,
+        shape,
+        content_padding,
+        interaction_source,
     );
 }
 
@@ -375,6 +960,9 @@ pub fn OutlinedTextField(
     #[default(u32::MAX)] max_lines: u32,
     #[default(1)] min_lines: u32,
     #[default(crate::OutlinedTextFieldDefaults::colors())] colors: TextFieldColors,
+    #[default(crate::OutlinedTextFieldDefaults::shape())] shape: Shape,
+    #[default(None)] content_padding: Option<PaddingValues>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
     decorated_field(
         Variant::Outlined,
@@ -401,6 +989,9 @@ pub fn OutlinedTextField(
         single_line,
         (max_lines, min_lines),
         colors,
+        shape,
+        content_padding,
+        interaction_source,
     );
 }
 
@@ -433,31 +1024,46 @@ fn pick(enabled: bool, error: bool, focused: bool, colors: [Color; 4]) -> Color 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn decorated_field(
+/// What `decoration_box` decorates.
+struct DecorationParts {
     variant: Variant,
-    value: String,
-    on_value_change: Callback<dyn Fn(String)>,
-    modifier: Modifier,
+    /// The text as it shows is empty, as Compose's `visualText`.
+    empty: bool,
+    is_focused: bool,
+    /// What tells `is_focused`, on the container.
+    focus_modifier: Modifier,
+    /// At least `MIN_WIDTH` by `MIN_HEIGHT`: a field's, not a bare decoration box's.
+    min_size: bool,
     enabled: bool,
-    read_only: bool,
-    text_style: TextStyle,
+    is_error: bool,
+    single_line: bool,
     label_position: TextFieldLabelPosition,
     slots: Slots,
-    is_error: bool,
-    visual_transformation: VisualTransformation,
-    keyboard_options: KeyboardOptions,
-    keyboard_actions: KeyboardActions,
-    single_line: bool,
-    (max_lines, min_lines): (u32, u32),
     colors: TextFieldColors,
-) {
-    let focused = remember(|| mutable_state_of(false));
-    let is_focused = focused.get();
-    // Empty as it shows, as Compose's `visualText`.
-    let empty = visual_transformation
-        .filter(&value)
-        .map_or(value.is_empty(), |transformed| transformed.text.is_empty());
+    content_padding: PaddingValues,
+    shape: Shape,
+    /// `None`, the default container, drawn by the layout's node; else a slot behind the rest.
+    container: Option<Callback>,
+}
+
+/// The decoration of a field around its `inner_text_field`, as Compose's `CommonDecorationBox`.
+fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
+    let DecorationParts {
+        variant,
+        empty,
+        is_focused,
+        focus_modifier,
+        min_size,
+        enabled,
+        is_error,
+        single_line,
+        label_position,
+        slots,
+        colors,
+        content_padding,
+        shape,
+        container: container_slot,
+    } = parts;
     let has_label = slots.label.is_some();
     let shows_expanded = has_label && label_position.shows_expanded();
     // A label above is apart from the rest: to the layout, there's none.
@@ -553,7 +1159,10 @@ fn decorated_field(
         )
     });
     let (focused_thickness, unfocused_thickness) = match variant {
-        Variant::Filled => (2.dp(), 1.dp()),
+        Variant::Filled => (
+            TextFieldDefaults::FOCUSED_INDICATOR_THICKNESS,
+            TextFieldDefaults::UNFOCUSED_INDICATOR_THICKNESS,
+        ),
         Variant::Outlined => (
             OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS,
             OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS,
@@ -571,8 +1180,10 @@ fn decorated_field(
     let indicator_thickness =
         move || thickness_state.map_or(unfocused_thickness, |state| state.get());
     let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
-    let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
     let typography = MaterialTheme::typography();
+    // Body large around the text, whatever the text's own, as `CommonDecorationBox`.
+    let text_style = typography.body_large.clone();
+    let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
     let label_color = pick(
         enabled,
         is_error,
@@ -617,8 +1228,7 @@ fn decorated_field(
             colors.supporting_text_color,
         ],
     );
-    let cursor_color = if is_error { colors.error_cursor_color } else { colors.cursor_color };
-    // The prefix and suffix in the text's style.
+    // The prefix and suffix in it too.
     let prefix_style = TextStyle {
         color: if enabled { colors.prefix_color } else { colors.disabled_prefix_color },
         ..text_style.clone()
@@ -659,216 +1269,297 @@ fn decorated_field(
     // The outline's path, reset each time it's drawn, as Compose's drawing caches keep one
     // (`CheckDrawingCache`): an animated cut redefines it in place on Android (D532).
     let outline = remember(Path::new);
-    let decoration = {
+    let line_path = remember(|| Rc::new(IndicatorPath::default()));
+    let mut container = focus_modifier;
+    if min_size {
+        container = container.size_in(SizeSpec::bounds(
+            TextFieldDefaults::MIN_WIDTH,
+            TextFieldDefaults::MIN_HEIGHT,
+            Dp::UNSPECIFIED,
+            Dp::UNSPECIFIED,
+        ));
+    }
+    let cutout = label_in_field && label_position.is_cutout();
+    let notch_alignment = label_position.minimized_alignment();
+    // Where the cut goes, as `outlineCutout`: at the minimized label, as wide as it is yet,
+    // left to right (a right-to-left outline mirrors it).
+    let notch = {
         let label_width = label_width.clone();
-        let style = style.clone();
-        move |inner_text_field: Callback| {
-            let mut container = Modifier
-                .size_in(SizeSpec::bounds(
-                    TextFieldDefaults::MIN_WIDTH,
-                    TextFieldDefaults::MIN_HEIGHT,
-                    Dp::UNSPECIFIED,
-                    Dp::UNSPECIFIED,
-                ))
-                .on_focus_changed(move |now: compose_ui::FocusState| focused.set(now.is_focused()));
-            let cutout = label_in_field && label_position.is_cutout();
-            let notch_alignment = label_position.minimized_alignment();
-            // Where the cut goes, as `outlineCutout`: at the minimized label, as wide as it is yet,
-            // left to right (a right-to-left outline mirrors it).
-            let notch = {
-                let label_width = label_width.clone();
-                move |width: f32, density: compose_ui::Density| {
-                    if !cutout {
-                        return (0.0, 0.0);
-                    }
-                    let shown = label_width.get() * progress.map_or(0.0, |progress| progress.get());
-                    let padding = density.to_px(16.dp());
-                    let space = (width - 2.0 * padding).round() as i32;
-                    let x = notch_alignment.align(
-                        shown.round() as i32,
-                        space,
-                        compose_ui::LayoutDirection::Ltr,
-                    );
-                    (padding + x as f32, shown)
-                }
-            };
-            container = match variant {
-                Variant::Filled => {
-                    let shape = TextFieldDefaults::shape();
-                    container.draw_behind(move |scope| {
-                        let (start, shown) = notch(scope.size().width, scope.density());
-                        if shown <= 0.0 {
-                            scope.draw_shape(&shape, container_color.get());
-                            return;
-                        }
-                        // The container's cut as the outline's is, under the label.
-                        let half = scope.density().sp_to_px(floated_label_height) / 2.0;
-                        draw_cut_container(
-                            scope,
-                            &shape,
-                            container_color.get(),
-                            start,
-                            shown,
-                            half,
-                        );
-                    })
-                }
-                Variant::Outlined => {
-                    let shape = OutlinedTextFieldDefaults::shape();
-                    let outline = outline.clone();
-                    container.draw_behind(move |scope| {
-                        scope.draw_shape(&shape, container_color.get());
-                        let (start, shown) = notch(scope.size().width, scope.density());
-                        draw_notched_outline(
-                            scope,
-                            &outline,
-                            &shape,
-                            indicator_thickness(),
-                            indicator_color(),
-                            start,
-                            shown,
-                        )
-                    })
-                }
-            };
-            let layout = DecorationLayout {
-                variant,
-                has_leading: slots.leading_icon.is_some(),
-                has_trailing: slots.trailing_icon.is_some(),
-                has_label: label_in_field,
-                position: label_position,
-                has_placeholder: show_placeholder,
-                has_prefix,
-                has_suffix,
-                single_line,
-                progress,
-                floated_label_height,
-                label_width: label_width.clone(),
-            };
-            let policy =
-                compose_runtime::remember_keyed(LayoutKey(layout.key(), label_position), || {
-                    Rc::new(layout) as Rc<dyn MeasurePolicy>
-                });
-            let slots = slots.clone();
-            let supporting_text = slots.supporting_text.clone();
-            let above_alignment = is_above.then(|| label_position.minimized_alignment());
-            let around = compose_runtime::remember_keyed(
-                above_alignment.map(|it| it.bias.to_bits()),
-                || Rc::new(FieldColumn { above_alignment }) as Rc<dyn MeasurePolicy>,
-            );
-            let above_label = slots.label.clone().filter(|_| is_above);
-            let style = style.clone();
-            let (prefix_style, suffix_style) = (prefix_style.clone(), suffix_style.clone());
-            let content = compose_runtime::callback(move || {
-                // The text first: what focuses the field finds the first focus target below it,
-                // and Tab goes from the text to its icons, as Compose's, whose field's target
-                // is above them (D1298).
-                inner_text_field();
-                // Each icon in a 48 dp box, centered, as Compose's `IconDefaultSizeModifier`.
-                for (icon, color) in
-                    [(&slots.leading_icon, leading_color), (&slots.trailing_icon, trailing_color)]
-                {
-                    if let Some(icon) = icon.clone() {
-                        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-                            let icon = icon.clone();
-                            Box(
-                                Modifier.size_in(SizeSpec::bounds(
-                                    48.dp(),
-                                    48.dp(),
-                                    Dp::UNSPECIFIED,
-                                    Dp::UNSPECIFIED,
-                                )),
-                                Alignment::CENTER,
-                                false,
-                                compose_runtime::callback(move |_| icon()),
-                            );
-                        });
-                    }
-                }
-                if let (Some(label), Some(progress)) =
-                    (slots.label.clone().filter(|_| label_in_field), progress)
-                {
-                    FieldLabel(progress, label_color, is_focused, label);
-                }
-                if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
-                    let style = style.clone();
-                    let placeholder_modifier = Modifier.graphics_layer(move |layer| {
-                        layer.alpha = placeholder_alpha.map_or(0.0, |alpha| alpha.get());
-                    });
-                    Box!(modifier = placeholder_modifier, {
-                        CompositionLocalProvider(
-                            (
-                                LOCAL_CONTENT_COLOR.provides(placeholder_color),
-                                LOCAL_TEXT_STYLE.provides(style.clone()),
-                            ),
-                            &*placeholder,
-                        );
-                    });
-                }
-                // As Compose's `PrefixSuffixTextPadding`: 2 dp between them and the text.
-                for (content, shows, style, padding) in [
-                    (&slots.prefix, has_prefix, prefix_style.clone(), (0.dp(), 2.dp())),
-                    (&slots.suffix, has_suffix, suffix_style.clone(), (2.dp(), 0.dp())),
-                ] {
-                    if let Some(content) = content.clone().filter(|_| shows) {
-                        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
-                            let content = content.clone();
-                            Box(
-                                Modifier
-                                    .graphics_layer(move |layer| {
-                                        layer.alpha = affix_alpha.map_or(0.0, |alpha| alpha.get());
-                                    })
-                                    .padding((padding.0, 0.dp(), padding.1, 0.dp())),
-                                Alignment::TOP_START,
-                                false,
-                                compose_runtime::callback(move |_| content()),
-                            );
-                        });
-                    }
-                }
-                if variant == Variant::Filled {
-                    IndicatorLine(indicator_state, indicator, thickness_state, unfocused_thickness);
-                }
-            });
-            if above_label.is_none() && supporting_text.is_none() {
-                compose_ui::Layout(container, policy, content);
-                return;
+        move |width: f32, density: compose_ui::Density| {
+            if !cutout {
+                return (0.0, 0.0);
             }
-            let supporting_style = supporting_style.clone();
-            compose_ui::Layout(
-                Modifier,
-                around,
-                compose_runtime::callback(move || {
-                    // The label above, 4 dp from the field and its sides, as
-                    // `AboveLabelHorizontalPadding` and `AboveLabelBottomPadding`.
-                    if let (Some(label), Some(progress)) = (above_label.clone(), progress) {
-                        Box!(modifier = Modifier.padding((4.dp(), 0.dp(), 4.dp(), 4.dp())), {
-                            FieldLabel(progress, label_color, is_focused, label.clone());
-                        });
-                    }
-                    compose_ui::Layout(container.clone(), policy.clone(), content.clone());
-                    // The supporting text below the container, 16 dp in, 4 dp under it.
-                    if let Some(supporting_text) = supporting_text.clone() {
-                        let style = supporting_style.clone();
-                        CompositionLocalProvider(
-                            (
-                                LOCAL_CONTENT_COLOR.provides(supporting_color),
-                                LOCAL_TEXT_STYLE.provides(style),
-                            ),
-                            move || {
-                                let supporting_text = supporting_text.clone();
-                                Box(
-                                    Modifier.padding((16.dp(), 4.dp(), 16.dp(), 0.dp())),
-                                    Alignment::TOP_START,
-                                    false,
-                                    compose_runtime::callback(move |_| supporting_text()),
-                                );
-                            },
-                        );
-                    }
-                }),
+            let shown = label_width.get() * progress.map_or(0.0, |progress| progress.get());
+            let padding = density.to_px(content_padding.start);
+            let space = (width - padding - density.to_px(content_padding.end)).round() as i32;
+            let x = notch_alignment.align(
+                shown.round() as i32,
+                space,
+                compose_ui::LayoutDirection::Ltr,
             );
+            (padding + x as f32, shown)
         }
+    };
+    let custom_container = container_slot.is_some();
+    let slot_notch = notch.clone();
+    container = match variant {
+        _ if custom_container => container,
+        Variant::Filled => {
+            let shape = shape.clone();
+            let line_path = line_path.clone();
+            container.draw_behind(move |scope| {
+                let (start, shown) = notch(scope.size().width, scope.density());
+                if shown <= 0.0 {
+                    scope.draw_shape(&shape, container_color.get());
+                    draw_indicator(
+                        scope,
+                        &line_path,
+                        &shape,
+                        indicator_thickness(),
+                        indicator_color(),
+                    );
+                    return;
+                }
+                // The container's cut as the outline's is, under the label.
+                let half = scope.density().sp_to_px(floated_label_height) / 2.0;
+                draw_cut_container(scope, &shape, container_color.get(), start, shown, half);
+                draw_indicator(scope, &line_path, &shape, indicator_thickness(), indicator_color());
+            })
+        }
+        Variant::Outlined => {
+            let shape = shape.clone();
+            let outline = outline.clone();
+            container.draw_behind(move |scope| {
+                scope.draw_shape(&shape, container_color.get());
+                let (start, shown) = notch(scope.size().width, scope.density());
+                draw_notched_outline(
+                    scope,
+                    &outline,
+                    &shape,
+                    indicator_thickness(),
+                    indicator_color(),
+                    start,
+                    shown,
+                )
+            })
+        }
+    };
+    let layout = DecorationLayout {
+        variant,
+        has_leading: slots.leading_icon.is_some(),
+        has_trailing: slots.trailing_icon.is_some(),
+        has_container: custom_container,
+        content_padding,
+        has_label: label_in_field,
+        position: label_position,
+        has_placeholder: show_placeholder,
+        has_prefix,
+        has_suffix,
+        single_line,
+        progress,
+        floated_label_height,
+        label_width: label_width.clone(),
+    };
+    let policy = compose_runtime::remember_keyed(
+        LayoutKey(layout.key(), label_position, content_padding),
+        || Rc::new(layout) as Rc<dyn MeasurePolicy>,
+    );
+    let slots = slots.clone();
+    let supporting_text = slots.supporting_text.clone();
+    let above_alignment = is_above.then(|| label_position.minimized_alignment());
+    let around =
+        compose_runtime::remember_keyed(above_alignment.map(|it| it.bias.to_bits()), || {
+            Rc::new(FieldColumn { above_alignment }) as Rc<dyn MeasurePolicy>
+        });
+    let above_label = slots.label.clone().filter(|_| is_above);
+    let style = style.clone();
+    let (prefix_style, suffix_style) = (prefix_style.clone(), suffix_style.clone());
+    let content = compose_runtime::callback(move || {
+        // Behind everything, as big as it all, as Compose's `ContainerId`.
+        if let Some(container) = container_slot.clone() {
+            let notch = slot_notch.clone();
+            // The label's room out of it, as `outlineCutout`.
+            let cut = Modifier.draw_with_content(move |scope| {
+                let (start, shown) = notch(scope.size().width, scope.density());
+                if shown <= 0.0 {
+                    scope.draw_content();
+                    return;
+                }
+                let half = scope.density().sp_to_px(floated_label_height) / 2.0;
+                let path = cut_container_path(scope, start, shown, half);
+                scope.save();
+                scope.clip_outline(compose_ui::Outline::Generic(
+                    path.data(),
+                    compose_ui::Offset::ZERO,
+                ));
+                scope.draw_content();
+                scope.restore();
+            });
+            Box(cut, Alignment::TOP_START, true, compose_runtime::callback(move |_| container()));
+        }
+        // The text first: what focuses the field finds the first focus target below it, and Tab
+        // goes from the text to its icons, as Compose's, whose field's target is above them
+        // (D1298).
+        inner_text_field();
+        // Each icon in a 48 dp box, centered, as Compose's `IconDefaultSizeModifier`.
+        for (icon, color) in
+            [(&slots.leading_icon, leading_color), (&slots.trailing_icon, trailing_color)]
+        {
+            if let Some(icon) = icon.clone() {
+                CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+                    let icon = icon.clone();
+                    Box(
+                        Modifier.size_in(SizeSpec::bounds(
+                            48.dp(),
+                            48.dp(),
+                            Dp::UNSPECIFIED,
+                            Dp::UNSPECIFIED,
+                        )),
+                        Alignment::CENTER,
+                        false,
+                        compose_runtime::callback(move |_| icon()),
+                    );
+                });
+            }
+        }
+        if let (Some(label), Some(progress)) =
+            (slots.label.clone().filter(|_| label_in_field), progress)
+        {
+            FieldLabel(progress, label_color, is_focused, label);
+        }
+        if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
+            let style = style.clone();
+            let placeholder_modifier = Modifier.graphics_layer(move |layer| {
+                layer.alpha = placeholder_alpha.map_or(0.0, |alpha| alpha.get());
+            });
+            Box!(modifier = placeholder_modifier, {
+                CompositionLocalProvider(
+                    (
+                        LOCAL_CONTENT_COLOR.provides(placeholder_color),
+                        LOCAL_TEXT_STYLE.provides(style.clone()),
+                    ),
+                    &*placeholder,
+                );
+            });
+        }
+        // As Compose's `PrefixSuffixTextPadding`: 2 dp between them and the text.
+        for (content, shows, style, padding) in [
+            (&slots.prefix, has_prefix, prefix_style.clone(), (0.dp(), 2.dp())),
+            (&slots.suffix, has_suffix, suffix_style.clone(), (2.dp(), 0.dp())),
+        ] {
+            if let Some(content) = content.clone().filter(|_| shows) {
+                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+                    let content = content.clone();
+                    Box(
+                        Modifier
+                            .graphics_layer(move |layer| {
+                                layer.alpha = affix_alpha.map_or(0.0, |alpha| alpha.get());
+                            })
+                            .padding((padding.0, 0.dp(), padding.1, 0.dp())),
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(move |_| content()),
+                    );
+                });
+            }
+        }
+    });
+    if above_label.is_none() && supporting_text.is_none() {
+        compose_ui::Layout(container, policy, content);
+        return;
+    }
+    let supporting_style = supporting_style.clone();
+    compose_ui::Layout(
+        Modifier,
+        around,
+        compose_runtime::callback(move || {
+            // The label above, 4 dp from the field and its sides, as
+            // `AboveLabelHorizontalPadding` and `AboveLabelBottomPadding`.
+            if let (Some(label), Some(progress)) = (above_label.clone(), progress) {
+                Box!(modifier = Modifier.padding((4.dp(), 0.dp(), 4.dp(), 4.dp())), {
+                    FieldLabel(progress, label_color, is_focused, label.clone());
+                });
+            }
+            compose_ui::Layout(container.clone(), policy.clone(), content.clone());
+            // The supporting text below the container, 16 dp in, 4 dp under it.
+            if let Some(supporting_text) = supporting_text.clone() {
+                let style = supporting_style.clone();
+                CompositionLocalProvider(
+                    (
+                        LOCAL_CONTENT_COLOR.provides(supporting_color),
+                        LOCAL_TEXT_STYLE.provides(style),
+                    ),
+                    move || {
+                        let supporting_text = supporting_text.clone();
+                        Box(
+                            Modifier.padding((16.dp(), 4.dp(), 16.dp(), 0.dp())),
+                            Alignment::TOP_START,
+                            false,
+                            compose_runtime::callback(move |_| supporting_text()),
+                        );
+                    },
+                );
+            }
+        }),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decorated_field(
+    variant: Variant,
+    value: String,
+    on_value_change: Callback<dyn Fn(String)>,
+    modifier: Modifier,
+    enabled: bool,
+    read_only: bool,
+    text_style: TextStyle,
+    label_position: TextFieldLabelPosition,
+    slots: Slots,
+    is_error: bool,
+    visual_transformation: VisualTransformation,
+    keyboard_options: KeyboardOptions,
+    keyboard_actions: KeyboardActions,
+    single_line: bool,
+    (max_lines, min_lines): (u32, u32),
+    colors: TextFieldColors,
+    shape: Shape,
+    content_padding: Option<PaddingValues>,
+    interaction_source: Option<MutableInteractionSource>,
+) {
+    let focused = remember(|| mutable_state_of(false));
+    let is_focused = focused.get();
+    // Empty as it shows, as Compose's `visualText`.
+    let empty = visual_transformation
+        .filter(&value)
+        .map_or(value.is_empty(), |transformed| transformed.text.is_empty());
+    let has_label = slots.label.is_some();
+    let cursor_color = if is_error { colors.error_cursor_color } else { colors.cursor_color };
+    let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
+    let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
+    let content_padding =
+        content_padding.unwrap_or(default_content_padding(has_label, label_position));
+    let decoration = move |inner_text_field: Callback| {
+        decoration_box(
+            DecorationParts {
+                variant,
+                empty,
+                is_focused,
+                focus_modifier: Modifier.on_focus_changed(move |now: compose_ui::FocusState| {
+                    focused.set(now.is_focused())
+                }),
+                min_size: true,
+                enabled,
+                is_error,
+                single_line,
+                label_position,
+                slots: slots.clone(),
+                colors,
+                content_padding,
+                shape: shape.clone(),
+                container: None,
+            },
+            inner_text_field,
+        );
     };
     // Room above for a label on the edge, as `topPaddingForLabelCutout`.
     let modifier = if has_label && label_position.is_cutout() {
@@ -901,6 +1592,7 @@ fn decorated_field(
                 min_lines,
                 visual_transformation,
                 cursor_color,
+                interaction_source,
                 compose_runtime::callback(decoration),
             );
         },
@@ -908,7 +1600,7 @@ fn decorated_field(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct LayoutKey((Variant, [bool; 7]), TextFieldLabelPosition);
+struct LayoutKey((Variant, [bool; 8]), TextFieldLabelPosition, PaddingValues);
 
 impl compose_runtime::ComposeArg for LayoutKey {
     fn same(&self, other: &Self) -> bool {
@@ -927,6 +1619,8 @@ impl compose_runtime::ComposeArg for LayoutKey {
 /// would be (or at the top padding) and moves to its floated place with `progress`.
 struct DecorationLayout {
     variant: Variant,
+    has_container: bool,
+    content_padding: PaddingValues,
     has_leading: bool,
     has_trailing: bool,
     has_label: bool,
@@ -957,6 +1651,7 @@ impl DecorationLayout {
     fn slots(&self, measurables: &[Measurable]) -> DecorationSlots {
         let mut children = measurables.iter().copied();
         let mut next = |present: bool| if present { children.next() } else { None };
+        next(self.has_container);
         DecorationSlots {
             text: next(true),
             leading: next(self.has_leading),
@@ -968,25 +1663,32 @@ impl DecorationLayout {
         }
     }
 
-    /// The paddings `measure` puts around the content: (start, end, above and below, the
-    /// filled field's floated label's room), given which icons there are.
+    /// The paddings around the content, given which icons there are: (start, end, top, bottom),
+    /// less `HorizontalIconPadding` beside an icon.
     fn paddings(
         &self,
         density: compose_ui::Density,
-        slots: &DecorationSlots,
+        has_leading: bool,
+        has_trailing: bool,
     ) -> (i32, i32, i32, i32) {
-        let padding = density.round_to_px(16.dp());
-        let beside_icon = density.round_to_px(4.dp());
-        let inside = self.position.is_inside();
-        let vertical = density.round_to_px(if self.has_label && inside { 8.dp() } else { 16.dp() });
-        let start = if slots.leading.is_some() { beside_icon } else { padding };
-        let end = if slots.trailing.is_some() { beside_icon } else { padding };
-        let label_room = if self.has_label && inside {
+        let padding = self.content_padding;
+        let icon_padding = density.round_to_px(12.dp());
+        let beside = |px: i32, icon: bool| if icon { (px - icon_padding).max(0) } else { px };
+        (
+            beside(density.round_to_px(padding.start), has_leading),
+            beside(density.round_to_px(padding.end), has_trailing),
+            density.round_to_px(padding.top),
+            density.round_to_px(padding.bottom),
+        )
+    }
+
+    /// The floated label's room above the text, inside: for what's asked before there's a label.
+    fn label_room(&self, density: compose_ui::Density) -> i32 {
+        if self.has_label && self.position.is_inside() {
             density.sp_to_px(self.floated_label_height).round() as i32
         } else {
             0
-        };
-        (start, end, vertical, label_room)
+        }
     }
 
     /// As Compose's `intrinsicWidth`: the icons beside the widest of the text and the
@@ -1000,7 +1702,8 @@ impl DecorationLayout {
     ) -> i32 {
         let slots = self.slots(measurables);
         let Some(text) = slots.text else { return 0 };
-        let (start, end, _, _) = self.paddings(scope.density(), &slots);
+        let (start, end, _, _) =
+            self.paddings(scope.density(), slots.leading.is_some(), slots.trailing.is_some());
         let mut ask = |slot: Option<Measurable>| {
             slot.map_or(0, |slot| {
                 if max {
@@ -1028,7 +1731,10 @@ impl DecorationLayout {
     ) -> i32 {
         let slots = self.slots(measurables);
         let Some(text) = slots.text else { return 0 };
-        let (start, end, vertical, label_room) = self.paddings(scope.density(), &slots);
+        let density = scope.density();
+        let (start, end, top, bottom) =
+            self.paddings(density, slots.leading.is_some(), slots.trailing.is_some());
+        let label_room = self.label_room(density);
         let less = |width: i32, by: i32| {
             if width == Constraints::INFINITY { width } else { (width - by).max(0) }
         };
@@ -1060,13 +1766,14 @@ impl DecorationLayout {
         // The label floats in its room (filled) or on the edge (outlined), as `measure` has
         // it; resting, it's no higher than the text.
         let _ = label;
-        (vertical + label_room + content + vertical).max(icons)
+        (top + label_room + content + bottom).max(icons)
     }
 
-    fn key(&self) -> (Variant, [bool; 7]) {
+    fn key(&self) -> (Variant, [bool; 8]) {
         (
             self.variant,
             [
+                self.has_container,
                 self.has_leading,
                 self.has_trailing,
                 self.has_label,
@@ -1087,11 +1794,9 @@ impl MeasurePolicy for DecorationLayout {
         constraints: Constraints,
     ) -> MeasureResult {
         let density = scope.density();
-        let padding = density.round_to_px(16.dp());
-        let beside_icon = density.round_to_px(4.dp());
         let inside = self.position.is_inside();
-        let vertical = density.round_to_px(if self.has_label && inside { 8.dp() } else { 16.dp() });
         let mut children = measurables.iter().copied();
+        let container = if self.has_container { children.next() } else { None };
         let Some(text) = children.next() else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
@@ -1101,56 +1806,74 @@ impl MeasurePolicy for DecorationLayout {
         let placeholder = if self.has_placeholder { children.next() } else { None };
         let prefix = if self.has_prefix { children.next() } else { None };
         let suffix = if self.has_suffix { children.next() } else { None };
-        let indicator = children.next();
         let icon_constraints = constraints.loosen();
         let leading = leading.map(|icon| scope.measure(icon, icon_constraints));
         let trailing = trailing.map(|icon| scope.measure(icon, icon_constraints));
         let leading_width = leading.map_or(0, |icon| icon.width);
         let trailing_width = trailing.map_or(0, |icon| icon.width);
-        let start = leading_width + if leading.is_some() { beside_icon } else { padding };
-        let end = trailing_width + if trailing.is_some() { beside_icon } else { padding };
-        let loose = constraints.loosen().offset(-start - end, -2 * vertical);
+        let (start_padding, end_padding, top, bottom) =
+            self.paddings(density, leading.is_some(), trailing.is_some());
+        let start = leading_width + start_padding;
+        let end = trailing_width + end_padding;
+        let loose = constraints.loosen().offset(-start - end, -top - bottom);
         let label = label.map(|label| scope.measure(label, loose));
+        let label_height = label.map_or(0, |label| label.height);
         self.label_width.set(label.map_or(0, |label| label.width) as f32);
-        // Inside, the text sits below the floated label (16 sp lines); on the edge, the label
-        // takes no room.
-        let label_room = if self.has_label && inside {
-            density.sp_to_px(self.floated_label_height).round() as i32
-        } else {
-            0
-        };
-        let prefix = prefix.map(|prefix| scope.measure(prefix, loose.offset(0, -label_room)));
-        let suffix = suffix.map(|suffix| scope.measure(suffix, loose.offset(0, -label_room)));
+        // Inside, the text sits below the floated label; on the edge, it's below half of it.
+        let above_text = if inside { label_height } else { (label_height / 2 - top).max(0) };
+        let prefix = prefix.map(|prefix| scope.measure(prefix, loose.offset(0, -above_text)));
+        let suffix = suffix.map(|suffix| scope.measure(suffix, loose.offset(0, -above_text)));
         let prefix_width = prefix.map_or(0, |prefix| prefix.width);
         let suffix_width = suffix.map_or(0, |suffix| suffix.width);
         let mut text_constraints = constraints
-            .offset(-start - end - prefix_width - suffix_width, -2 * vertical - label_room);
+            .offset(-start - end - prefix_width - suffix_width, -top - bottom - above_text);
         text_constraints.min_height = 0;
         let text = scope.measure(text, text_constraints);
         let placeholder = placeholder.map(|placeholder| {
-            scope.measure(placeholder, loose.offset(-prefix_width - suffix_width, -label_room))
+            scope.measure(placeholder, loose.offset(-prefix_width - suffix_width, -above_text))
         });
         let content_width = (prefix_width
             + text.width.max(placeholder.map_or(0, |placeholder| placeholder.width))
             + suffix_width)
             .max(label.map_or(0, |label| label.width));
-        let content_height = text
+        let progress = self.progress.map_or(1.0, |progress| progress.get());
+        let lerp =
+            |from: i32, to: i32, along: f32| from + ((to - from) as f32 * along).round() as i32;
+        let input_height = text
             .height
             .max(placeholder.map_or(0, |placeholder| placeholder.height))
             .max(prefix.map_or(0, |prefix| prefix.height))
-            .max(suffix.map_or(0, |suffix| suffix.height));
+            .max(suffix.map_or(0, |suffix| suffix.height))
+            .max(lerp(label_height, 0, progress));
         let icons_height =
             leading.map_or(0, |icon| icon.height).max(trailing.map_or(0, |icon| icon.height));
-        let width = constraints.constrain_width(start + content_width + end);
-        let height = constraints.constrain_height(
-            (vertical + label_room + content_height + vertical).max(icons_height),
-        );
-        let text_y = if self.has_label && inside {
-            vertical + label_room
-        } else if self.single_line {
-            (height - text.height) / 2
+        // As `calculateHeight`: the label's part in it goes with its move, with a steady least
+        // inside so the height holds through the animation.
+        let middle = if !self.has_label {
+            top + input_height + bottom
+        } else if inside {
+            let eased = LABEL_HEIGHT_EASING.transform(progress);
+            let not_overlapped = density.round_to_px(16.dp()).max(lerp(0, label_height, eased));
+            top + not_overlapped + input_height + bottom
         } else {
-            vertical
+            lerp(top, top.max(label_height / 2), progress) + input_height + bottom
+        };
+        let width = constraints.constrain_width(start + content_width + end);
+        let height = constraints.constrain_height(middle.max(icons_height));
+        let container = container.map(|container| {
+            scope.measure(container, Constraints::new(width, width, height, height))
+        });
+        if let Some(container) = &container {
+            scope.place_relative(container, 0, 0);
+        }
+        // Inside with a label, below it; else centered on a single line, or at the top padding,
+        // and on the edge never under the label's half, as `calculateVerticalPosition`.
+        let y_of = |item_height: i32| {
+            if self.has_label && inside {
+                return top + label_height;
+            }
+            let default = if self.single_line { (height - item_height) / 2 } else { top };
+            if self.has_label { default.max(label_height / 2) } else { default }
         };
         if let Some(icon) = &leading {
             scope.place_relative(icon, 0, (height - icon.height) / 2);
@@ -1159,15 +1882,17 @@ impl MeasurePolicy for DecorationLayout {
             scope.place_relative(icon, width - icon.width, (height - icon.height) / 2);
         }
         if let Some(label) = &label {
-            // A single line centered; else at the field's 16 dp padding, as Compose's.
+            // A single line centered; else at the top padding (inside, with half the floated
+            // label's room).
             let resting = if self.single_line {
                 (height - label.height) / 2
+            } else if inside {
+                top + density.round_to_px(8.dp())
             } else {
-                density.round_to_px(16.dp())
+                top
             };
-            let floated = if inside { vertical } else { -label.height / 2 };
-            let progress = self.progress.map_or(1.0, |progress| progress.get());
-            let y = resting + ((floated - resting) as f32 * progress).round() as i32;
+            let floated = if inside { top } else { -label.height / 2 };
+            let y = lerp(resting, floated, progress);
             // Aligned between the icons' and paddings' room (resting); minimized too, inside,
             // while on the edge it's between the paddings alone, over a leading icon.
             let direction = scope.layout_direction();
@@ -1185,19 +1910,20 @@ impl MeasurePolicy for DecorationLayout {
                     direction,
                 ) + left
             } else {
+                let (outer_start, outer_end) = (
+                    density.round_to_px(self.content_padding.start),
+                    density.round_to_px(self.content_padding.end),
+                );
                 self.position.minimized_alignment().align(
                     label.width,
-                    width - 2 * padding,
+                    width - outer_start - outer_end,
                     direction,
-                ) + padding
+                ) + if ltr { outer_start } else { outer_end }
             };
-            let x = resting_x + ((floated_x - resting_x) as f32 * progress).round() as i32;
+            let x = lerp(resting_x, floated_x, progress);
             // Not relative: the alignment has the direction.
             scope.place(label, x, y);
         }
-        // Centered on a single line without a filled field's label, else where the text is.
-        let centered = !(self.has_label && inside) && self.single_line;
-        let y_of = |item_height: i32| if centered { (height - item_height) / 2 } else { text_y };
         if let Some(placeholder) = &placeholder {
             scope.place_relative(placeholder, start + prefix_width, y_of(placeholder.height));
         }
@@ -1207,11 +1933,7 @@ impl MeasurePolicy for DecorationLayout {
         if let Some(suffix) = &suffix {
             scope.place_relative(suffix, width - end - suffix.width, y_of(suffix.height));
         }
-        scope.place_relative(&text, start + prefix_width, text_y);
-        if let Some(indicator) = indicator {
-            let indicator = scope.measure(indicator, Constraints::new(width, width, 0, height));
-            scope.place_relative(&indicator, 0, height - indicator.height);
-        }
+        scope.place_relative(&text, start + prefix_width, y_of(text.height));
         scope.layout(width, height)
     }
 

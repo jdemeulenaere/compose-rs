@@ -57,6 +57,7 @@ pub fn BasicTextField(
     #[default(1)] min_lines: u32,
     #[default(crate::VisualTransformation::NONE)] visual_transformation: impl Into<VisualTransformation>,
     #[default(crate::Color::BLACK)] cursor_color: Color,
+    #[default(None)] interaction_source: Option<compose_ui::MutableInteractionSource>,
     #[default(crate::inner_text_field_only)] decoration_box: impl Fn(Callback) + 'static,
 ) {
     if single_line {
@@ -80,6 +81,7 @@ pub fn BasicTextField(
         keyboard_options,
         keyboard_actions,
         visual_transformation,
+        interaction_source,
     });
     let inner_text_field = Callback::new(move || {
         Layout(
@@ -122,6 +124,8 @@ pub(crate) struct TextFieldElement {
     pub keyboard_options: KeyboardOptions,
     pub keyboard_actions: KeyboardActions,
     pub visual_transformation: VisualTransformation,
+    /// Told when the field gains and loses the focus, as `interactionSource`.
+    pub interaction_source: Option<compose_ui::MutableInteractionSource>,
 }
 
 impl ModifierNodeElement for TextFieldElement {
@@ -170,6 +174,8 @@ impl ModifierNodeElement for TextFieldElement {
             keyboard_options: self.keyboard_options,
             keyboard_actions: self.keyboard_actions.clone(),
             visual_transformation: self.visual_transformation.clone(),
+            interaction_source: self.interaction_source.clone(),
+            focus_interaction: None,
             mapping: None,
             shown_text: None,
             before_edit: None,
@@ -217,6 +223,11 @@ impl ModifierNodeElement for TextFieldElement {
         node.selection_color = self.selection_color;
         node.keyboard_options = self.keyboard_options;
         node.keyboard_actions = self.keyboard_actions.clone();
+        if node.interaction_source != self.interaction_source {
+            // The focus told to the old source ends there, as `focusable`'s `update`.
+            node.tell_focus(false);
+            node.interaction_source = self.interaction_source.clone();
+        }
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -233,6 +244,7 @@ impl ModifierNodeElement for TextFieldElement {
             && other.keyboard_options == self.keyboard_options
             && other.keyboard_actions.same(&self.keyboard_actions)
             && other.visual_transformation.same(&self.visual_transformation)
+            && other.interaction_source == self.interaction_source
     }
 
     fn name(&self) -> &'static str {
@@ -389,6 +401,9 @@ pub(crate) struct TextFieldNode {
     keyboard_options: KeyboardOptions,
     keyboard_actions: KeyboardActions,
     visual_transformation: VisualTransformation,
+    interaction_source: Option<compose_ui::MutableInteractionSource>,
+    /// The focus told to `interaction_source`, to tell its end.
+    focus_interaction: Option<compose_ui::Focus>,
     /// How the paragraph's offsets map to the text's, when it's transformed.
     mapping: Option<Rc<dyn OffsetMapping>>,
     /// The transformed text shown, when it's transformed.
@@ -736,6 +751,9 @@ impl TextFieldNode {
 }
 
 impl ModifierNode for TextFieldNode {
+    fn on_detach(&mut self, _: &mut compose_ui::NodeContext<'_>) {
+        self.tell_focus(false);
+    }
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
@@ -1393,6 +1411,7 @@ impl FocusTargetModifierNode for TextFieldNode {
             return;
         }
         self.focused = focused;
+        self.tell_focus(focused);
         if focused {
             context.bring_into_view();
         }
@@ -1421,6 +1440,19 @@ fn is_macos() -> bool {
 }
 
 impl TextFieldNode {
+    /// Tells `interaction_source` the focus came or went, as `focusable`'s.
+    fn tell_focus(&mut self, focused: bool) {
+        use compose_ui::{Focus, FocusInteraction, Interaction};
+        let Some(source) = &self.interaction_source else { return };
+        if focused {
+            let focus = Focus::new();
+            self.focus_interaction = Some(focus);
+            source.try_emit(Interaction::Focus(FocusInteraction::Focus(focus)));
+        } else if let Some(focus) = self.focus_interaction.take() {
+            source.try_emit(Interaction::Focus(FocusInteraction::Unfocus(focus)));
+        }
+    }
+
     fn on_key_event_here(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
         if !self.enabled {
             return false;

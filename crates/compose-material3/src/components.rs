@@ -629,14 +629,61 @@ impl compose_runtime::ComposeArg for TextFieldColors {
     }
 }
 
+/// What `tonalColors()` have in common, filled or outlined: the text's and the other parts'.
+pub(crate) fn tonal_text_colors() -> TextFieldColors {
+    let scheme = MaterialTheme::color_scheme();
+    let disabled = scheme.on_surface_variant.with_alpha(0.38);
+    TextFieldColors {
+        focused_label_color: scheme.on_surface_variant,
+        error_leading_icon_color: scheme.on_surface_variant,
+        disabled_label_color: disabled,
+        disabled_leading_icon_color: disabled,
+        disabled_trailing_icon_color: disabled,
+        disabled_placeholder_color: disabled,
+        disabled_prefix_color: disabled,
+        disabled_suffix_color: disabled,
+        supporting_text_color: scheme.on_background,
+        disabled_supporting_text_color: scheme.on_background.with_alpha(0.38),
+        ..TextFieldDefaults::colors()
+    }
+}
+
+impl TextFieldColors {
+    /// The indicator's color by the state, as `indicatorColor`.
+    pub(crate) fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        if !enabled {
+            self.disabled_indicator_color
+        } else if is_error {
+            self.error_indicator_color
+        } else if focused {
+            self.focused_indicator_color
+        } else {
+            self.unfocused_indicator_color
+        }
+    }
+}
+
 pub struct TextFieldDefaults {}
 
 impl TextFieldDefaults {
     pub const MIN_WIDTH: Dp = Dp(280.0);
     pub const MIN_HEIGHT: Dp = Dp(56.0);
+    /// The line's width, as `UnfocusedIndicatorThickness` and `FocusedIndicatorThickness`.
+    pub const UNFOCUSED_INDICATOR_THICKNESS: Dp = Dp(1.0);
+    pub const FOCUSED_INDICATOR_THICKNESS: Dp = Dp(2.0);
 
     pub fn colors() -> TextFieldColors {
-        let scheme = MaterialTheme::color_scheme();
+        Self::colors_of(
+            &MaterialTheme::color_scheme(),
+            compose_foundation::LOCAL_TEXT_SELECTION_COLORS.current(),
+        )
+    }
+
+    /// `colors()` from these, for what's not composing.
+    pub(crate) fn colors_of(
+        scheme: &crate::ColorScheme,
+        text_selection_colors: compose_foundation::TextSelectionColors,
+    ) -> TextFieldColors {
         TextFieldColors {
             container_color: scheme.surface_container_highest,
             focused_container_color: scheme.surface_container_highest,
@@ -669,13 +716,55 @@ impl TextFieldDefaults {
             disabled_prefix_color: scheme.on_surface.with_alpha(0.38),
             suffix_color: scheme.on_surface_variant,
             disabled_suffix_color: scheme.on_surface.with_alpha(0.38),
-            text_selection_colors: compose_foundation::LOCAL_TEXT_SELECTION_COLORS.current(),
+            text_selection_colors,
+        }
+    }
+
+    /// A filled field's paddings with a label inside, as `contentPaddingWithLabel()`: 16 dp at the
+    /// sides, 8 above and below. Change them with struct update.
+    pub const fn content_padding_with_label() -> compose_ui::PaddingValues {
+        compose_ui::PaddingValues { start: Dp(16.0), top: Dp(8.0), end: Dp(16.0), bottom: Dp(8.0) }
+    }
+
+    /// Without one inside, as `contentPaddingWithoutLabel()`: 16 dp all round.
+    pub const fn content_padding_without_label() -> compose_ui::PaddingValues {
+        compose_ui::PaddingValues {
+            start: Dp(16.0),
+            top: Dp(16.0),
+            end: Dp(16.0),
+            bottom: Dp(16.0),
+        }
+    }
+
+    /// The expressive rounded shape, as `roundedShape`: `CornerMedium`.
+    pub fn rounded_shape() -> Shape {
+        MaterialTheme::shapes().medium.clone()
+    }
+
+    /// As `tonalColors()`: on the surface container, no indicator.
+    pub fn tonal_colors() -> TextFieldColors {
+        let scheme = MaterialTheme::color_scheme();
+        TextFieldColors {
+            container_color: scheme.surface_container,
+            focused_container_color: scheme.surface_container,
+            error_container_color: scheme.error_container,
+            disabled_container_color: scheme.surface_container.with_alpha(0.38),
+            focused_indicator_color: Color::TRANSPARENT,
+            unfocused_indicator_color: Color::TRANSPARENT,
+            disabled_indicator_color: Color::TRANSPARENT,
+            error_indicator_color: Color::TRANSPARENT,
+            ..tonal_text_colors()
         }
     }
 
     /// The filled field's shape: extra small, rounded at the top only.
     pub fn shape() -> Shape {
-        let radius = match MaterialTheme::shapes().extra_small.corners() {
+        Self::shape_of(&MaterialTheme::shapes())
+    }
+
+    /// `shape()` from these, for what's not composing.
+    pub(crate) fn shape_of(shapes: &crate::Shapes) -> Shape {
+        let radius = match shapes.extra_small.corners() {
             Some(corners) => corners[0],
             None => compose_ui::CornerSize::Dp(Dp(0.0)),
         };

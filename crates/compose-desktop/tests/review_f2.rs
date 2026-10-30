@@ -54,6 +54,7 @@ fn focused_field() -> UiHost {
             1,
             compose_foundation::VisualTransformation::NONE,
             compose_ui::Color::BLACK,
+            None,
             compose_runtime::callback(compose_foundation::inner_text_field_only),
         );
     });

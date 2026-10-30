@@ -1071,7 +1071,9 @@ fn a_disabled_fields_indicator_is_thin_and_snaps() {
     ui.advance_time_by(Duration::from_millis(2 * LONG));
     let line = |ui: &mut ComposeTestRule, color: Color| {
         ui.host().display_list().ops.iter().find_map(|op| match op {
-            DrawOp::DrawRect(rect, paint) if paint.color == color => Some(rect.height()),
+            DrawOp::DrawPath { path, paint, .. } if paint.color == color => {
+                Some(path.bounds().height())
+            }
             _ => None,
         })
     };
@@ -1079,6 +1081,29 @@ fn a_disabled_fields_indicator_is_thin_and_snaps() {
     enabled.set(false);
     ui.advance_time_by_frame();
     assert_eq!(line(&mut ui, Color::RED), Some(1.0), "at once");
+}
+
+/// Halfway to floating, the room for a label inside is still its least: the height goes by the
+/// emphasized accelerating easing, so it holds through most of the move.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, calculateHeight
+#[test]
+fn a_labels_room_grows_late_in_its_move() {
+    let mut ui = themed(long_only(FastSpatial), || {
+        TextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            label = Some(|| {
+                compose_foundation::layout::Spacer(Modifier.width(20.dp()).height(40.dp()));
+            }),
+            single_line = true
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    to_halfway(&mut ui);
+    let height = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds.height();
+    // 8 + 16 + the text, 24, or half the label + 8.
+    assert_eq!(height, 8.0 + 16.0 + 24.0 + 8.0);
 }
 
 /// An outlined one's too, its outline the unfocused width.

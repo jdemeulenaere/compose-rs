@@ -210,9 +210,9 @@ fn a_disabled_text_fields_decoration_is_dimmed() {
     if container != Some(expected) {
         wrong.push(format!("container: {container:?}, Compose {expected:?}"));
     }
-    // The indicator line: the last plain rectangle.
+    // The indicator line: the path of the line and the container's shape.
     let indicator = list.ops.iter().rev().find_map(|op| match op {
-        DrawOp::DrawRect(_, paint) => Some(paint.color),
+        DrawOp::DrawPath { path, paint, .. } if !path.steps().is_empty() => Some(paint.color),
         _ => None,
     });
     let expected = scheme.on_surface.with_alpha(0.38);
