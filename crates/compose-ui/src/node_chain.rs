@@ -10,64 +10,81 @@ use crate::modifier::ModifierNode;
 /// A node's kinds, as Compose's `NodeKind` masks (node/NodeKind.kt): what it implements, probed
 /// once when it's created, so walks look at bits instead of asking each node.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub(crate) struct NodeKinds(u32);
+pub struct NodeKinds(u32);
 
 // Compose's whole set, though not every kind has its nodes yet
 // (docs/parity/design/modifier-nodes.md).
 #[allow(dead_code)]
 impl NodeKinds {
-    pub(crate) const NONE: NodeKinds = NodeKinds(0);
+    pub const NONE: NodeKinds = NodeKinds(0);
+    /// Every node has it, as Compose's `Nodes.Any`.
+    pub const ANY: NodeKinds = NodeKinds(1 << 30);
     // Compose's kinds, in its order.
-    pub(crate) const LAYOUT: NodeKinds = NodeKinds(1 << 0);
-    pub(crate) const DRAW: NodeKinds = NodeKinds(1 << 1);
-    pub(crate) const SEMANTICS: NodeKinds = NodeKinds(1 << 2);
-    pub(crate) const POINTER_INPUT: NodeKinds = NodeKinds(1 << 3);
-    pub(crate) const LOCALS: NodeKinds = NodeKinds(1 << 4);
-    pub(crate) const PARENT_DATA: NodeKinds = NodeKinds(1 << 5);
-    pub(crate) const ON_REMEASURED: NodeKinds = NodeKinds(1 << 6);
-    pub(crate) const GLOBAL_POSITION_AWARE: NodeKinds = NodeKinds(1 << 7);
-    pub(crate) const APPROACH_MEASURE: NodeKinds = NodeKinds(1 << 8);
-    pub(crate) const FOCUS_TARGET: NodeKinds = NodeKinds(1 << 9);
-    pub(crate) const FOCUS_PROPERTIES: NodeKinds = NodeKinds(1 << 10);
-    pub(crate) const FOCUS_EVENT: NodeKinds = NodeKinds(1 << 11);
-    pub(crate) const KEY_INPUT: NodeKinds = NodeKinds(1 << 12);
-    pub(crate) const ROTARY_INPUT: NodeKinds = NodeKinds(1 << 13);
-    pub(crate) const COMPOSITION_LOCAL_CONSUMER: NodeKinds = NodeKinds(1 << 14);
-    pub(crate) const SOFT_KEYBOARD_KEY_INPUT: NodeKinds = NodeKinds(1 << 15);
-    pub(crate) const TRAVERSABLE: NodeKinds = NodeKinds(1 << 16);
-    pub(crate) const BRING_INTO_VIEW: NodeKinds = NodeKinds(1 << 17);
-    pub(crate) const UNPLACED: NodeKinds = NodeKinds(1 << 18);
-    pub(crate) const INDIRECT_POINTER_INPUT: NodeKinds = NodeKinds(1 << 19);
-    pub(crate) const ON_PLACED: NodeKinds = NodeKinds(1 << 20);
-    pub(crate) const BEYOND_BOUNDS_LAYOUT: NodeKinds = NodeKinds(1 << 21);
+    pub const LAYOUT: NodeKinds = NodeKinds(1 << 0);
+    pub const DRAW: NodeKinds = NodeKinds(1 << 1);
+    pub const SEMANTICS: NodeKinds = NodeKinds(1 << 2);
+    pub const POINTER_INPUT: NodeKinds = NodeKinds(1 << 3);
+    pub const LOCALS: NodeKinds = NodeKinds(1 << 4);
+    pub const PARENT_DATA: NodeKinds = NodeKinds(1 << 5);
+    pub const ON_REMEASURED: NodeKinds = NodeKinds(1 << 6);
+    pub const GLOBAL_POSITION_AWARE: NodeKinds = NodeKinds(1 << 7);
+    pub const APPROACH_MEASURE: NodeKinds = NodeKinds(1 << 8);
+    pub const FOCUS_TARGET: NodeKinds = NodeKinds(1 << 9);
+    pub const FOCUS_PROPERTIES: NodeKinds = NodeKinds(1 << 10);
+    pub const FOCUS_EVENT: NodeKinds = NodeKinds(1 << 11);
+    pub const KEY_INPUT: NodeKinds = NodeKinds(1 << 12);
+    pub const ROTARY_INPUT: NodeKinds = NodeKinds(1 << 13);
+    pub const COMPOSITION_LOCAL_CONSUMER: NodeKinds = NodeKinds(1 << 14);
+    pub const SOFT_KEYBOARD_KEY_INPUT: NodeKinds = NodeKinds(1 << 15);
+    pub const TRAVERSABLE: NodeKinds = NodeKinds(1 << 16);
+    pub const BRING_INTO_VIEW: NodeKinds = NodeKinds(1 << 17);
+    pub const UNPLACED: NodeKinds = NodeKinds(1 << 18);
+    pub const INDIRECT_POINTER_INPUT: NodeKinds = NodeKinds(1 << 19);
+    pub const ON_PLACED: NodeKinds = NodeKinds(1 << 20);
+    pub const BEYOND_BOUNDS_LAYOUT: NodeKinds = NodeKinds(1 << 21);
     // compose-rs's own: what were capability bits or chain scans by downcast.
     /// A user-defined element's node: its measuring and drawing are observed for state reads.
-    pub(crate) const OBSERVED: NodeKinds = NodeKinds(1 << 24);
+    pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
     /// A graphics layer (`graphics_layer`, `clip`, `alpha`, …).
-    pub(crate) const GRAPHICS_LAYER: NodeKinds = NodeKinds(1 << 25);
+    pub const GRAPHICS_LAYER: NodeKinds = NodeKinds(1 << 25);
     /// An overlay (`Modifier.overlay`: a popup's or a dialog's window).
-    pub(crate) const OVERLAY: NodeKinds = NodeKinds(1 << 26);
+    pub const OVERLAY: NodeKinds = NodeKinds(1 << 26);
     /// `Modifier.focus_requester`.
-    pub(crate) const FOCUS_REQUESTER: NodeKinds = NodeKinds(1 << 27);
+    pub const FOCUS_REQUESTER: NodeKinds = NodeKinds(1 << 27);
     /// A text a `SelectionContainer` selects in.
-    pub(crate) const SELECTABLE: NodeKinds = NodeKinds(1 << 28);
+    pub const SELECTABLE: NodeKinds = NodeKinds(1 << 28);
     /// `Modifier.repaint_boundary` and the nodes asking to be one.
-    pub(crate) const REPAINT_BOUNDARY: NodeKinds = NodeKinds(1 << 29);
+    pub const REPAINT_BOUNDARY: NodeKinds = NodeKinds(1 << 29);
+    /// The kinds a delegate gives its owner: those the tree dispatches to delegates. The rest
+    /// are the built-in elements' (which aren't delegated to) or answered by the chain's node
+    /// itself, which forwards them if it wants to (`ModifierNode::delegates`).
+    const DELEGATED: NodeKinds = NodeKinds(
+        NodeKinds::ANY.0
+            | NodeKinds::LAYOUT.0
+            | NodeKinds::DRAW.0
+            | NodeKinds::SEMANTICS.0
+            | NodeKinds::POINTER_INPUT.0
+            | NodeKinds::PARENT_DATA.0
+            | NodeKinds::GLOBAL_POSITION_AWARE.0
+            | NodeKinds::FOCUS_TARGET.0
+            | NodeKinds::KEY_INPUT.0
+            | NodeKinds::TRAVERSABLE.0,
+    );
 
     /// Whether it has any of `other`'s kinds.
     #[inline]
-    pub(crate) const fn any(self, other: NodeKinds) -> bool {
+    pub const fn any(self, other: NodeKinds) -> bool {
         self.0 & other.0 != 0
     }
 
     /// Whether it has every one of `other`'s kinds.
     #[inline]
-    pub(crate) const fn all(self, other: NodeKinds) -> bool {
+    pub const fn all(self, other: NodeKinds) -> bool {
         self.0 & other.0 == other.0
     }
 
     #[inline]
-    pub(crate) const fn is_empty(self) -> bool {
+    pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
@@ -76,6 +93,7 @@ impl NodeKinds {
     pub(crate) fn of(node: &mut dyn ModifierNode, observed: bool) -> NodeKinds {
         let mut kinds =
             if observed || node.observes_reads() { NodeKinds::OBSERVED } else { NodeKinds::NONE };
+        kinds |= NodeKinds::ANY;
         let mut add = |has: bool, kind: NodeKinds| {
             if has {
                 kinds |= kind;
@@ -108,6 +126,11 @@ impl NodeKinds {
         );
         kinds
     }
+
+    /// The kinds of `node`, which is delegated to: only what a delegate gives its owner.
+    pub(crate) fn of_delegate(node: &mut dyn ModifierNode) -> NodeKinds {
+        NodeKinds(NodeKinds::of(node, true).0 & NodeKinds::DELEGATED.0)
+    }
 }
 
 impl BitOr for NodeKinds {
@@ -135,6 +158,11 @@ impl fmt::Debug for NodeKinds {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct EntryId(pub(crate) u64);
 
+impl EntryId {
+    /// No delegate: the chain's own node, where a place names one (`HitEntry::delegate`).
+    pub(crate) const NO_DELEGATE: EntryId = EntryId(0);
+}
+
 /// A chain entry's lifecycle flags (`ChainEntry::state`).
 pub(crate) mod entry_state {
     /// Attached, as `Modifier.Node.isAttached`: marked as its layout node is attached (or the
@@ -148,12 +176,14 @@ pub(crate) mod entry_state {
     pub(crate) const HAS_HANDLE: u8 = 8;
     /// It observed reads (`NodeContext::observe_reads`): forgotten when it's dropped.
     pub(crate) const OBSERVES: u8 = 16;
+    /// Its node has delegates, or may get some (`ModifierNode::delegates` answers).
+    pub(crate) const DELEGATING: u8 = 32;
 }
 
 /// One modifier node of a layout node's chain.
 pub(crate) struct ChainEntry {
     pub(crate) node: Box<dyn ModifierNode>,
-    /// Its kinds (Compose's `kindSet`).
+    /// Its kinds and its delegates' (Compose's `kindSet`).
     pub(crate) kinds: NodeKinds,
     /// Its kinds and those of every entry after it (Compose's `aggregateChildKindSet`).
     pub(crate) aggregate: NodeKinds,
@@ -161,13 +191,53 @@ pub(crate) struct ChainEntry {
     pub(crate) id: EntryId,
     /// Its `entry_state` flags.
     pub(crate) state: u8,
+    /// What its node itself is, without its delegates (Compose's `selfKindSet`).
+    pub(crate) own: NodeKinds,
 }
 
 impl ChainEntry {
     /// An entry for `node`, its kinds probed now.
     pub(crate) fn new(mut node: Box<dyn ModifierNode>, observed: bool, id: EntryId) -> ChainEntry {
-        let kinds = NodeKinds::of(&mut *node, observed);
-        ChainEntry { node, kinds, aggregate: kinds, id, state: 0 }
+        let own = NodeKinds::of(&mut *node, observed);
+        let mut kinds = own;
+        let mut state = 0;
+        // Only a user-defined element's node may delegate.
+        if observed && let Some(delegates) = node.delegates() {
+            kinds |= delegates.refresh_kinds(own);
+            state = entry_state::DELEGATING;
+        }
+        ChainEntry { node, kinds, aggregate: kinds, id, state, own }
+    }
+
+    /// The node `delegate` names: a delegate of its node, or its node for `NO_DELEGATE`.
+    pub(crate) fn resolve(&mut self, delegate: EntryId) -> Option<&mut dyn ModifierNode> {
+        if delegate == EntryId::NO_DELEGATE {
+            return Some(&mut *self.node);
+        }
+        crate::delegation::find_delegate(&mut *self.node, delegate).map(|found| found.node_mut())
+    }
+
+    /// Its focus target: its node, or its first delegate that is one.
+    pub(crate) fn focus_target(
+        &mut self,
+    ) -> Option<&mut dyn crate::modifier::FocusTargetModifierNode> {
+        crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)?
+            .as_focus_target()
+    }
+
+    /// After its element updated its node: its kinds again if the update delegated or
+    /// undelegated, and whether it did (what's left of that runs when the pass ends).
+    pub(crate) fn after_update(&mut self) -> bool {
+        if self.state & entry_state::DELEGATING == 0 {
+            return false;
+        }
+        let own = self.own;
+        let Some(delegates) = self.node.delegates() else { return false };
+        if !delegates.needs_sync() {
+            return false;
+        }
+        self.kinds = own | delegates.refresh_kinds(own);
+        true
     }
 }
 

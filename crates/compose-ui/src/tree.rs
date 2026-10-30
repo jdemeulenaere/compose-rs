@@ -344,6 +344,11 @@ pub struct UiTree {
     /// Layout nodes whose modifier nodes asked `remeasure_sync` in a callback: measured once it
     /// returns, the entry back in its chain.
     pub(crate) remeasure_after: Vec<NodeId>,
+    /// The entries whose delegates changed in a measurement, a drawing or an event's dispatch,
+    /// looked at where the tree may change (`UiTree::sync_noted_delegates`).
+    pub(crate) delegates_noted: Vec<(NodeId, crate::node_chain::EntryId)>,
+    /// Inside a measurement: what a node's code delegated waits (`delegates_noted`).
+    pub(crate) delegates_wait: bool,
     /// The reads modifier nodes observe (`NodeContext::observe_reads`).
     pub(crate) observations: crate::observer_node::NodeObservations,
 }
@@ -412,6 +417,8 @@ impl UiTree {
             side_effects: Vec::new(),
             remeasure_allowed: false,
             remeasure_after: Vec::new(),
+            delegates_noted: Vec::new(),
+            delegates_wait: false,
             observations: Default::default(),
         }
     }
@@ -819,18 +826,26 @@ impl UiTree {
         // What the updated, inserted and removed nodes' kinds say to invalidate, as Compose's
         // `autoInvalidateUpdatedNode`, `…InsertedNode` and `…RemovedNode` (NodeKind.kt).
         let mut invalidated = NodeKinds::NONE;
+        // The entries whose updates delegated or undelegated.
+        let mut delegated: SmallVec<[EntryId; 1]> = SmallVec::new();
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
                 if !old.same(new) {
                     let entry = &mut value.chain[index];
                     nodes::update(new, &mut *entry.node);
+                    if entry.after_update() {
+                        delegated.push(entry.id);
+                    }
                     if entry.node.should_auto_invalidate() {
                         invalidated |= entry.kinds;
                     }
                 }
             }
             let previous = std::mem::replace(&mut value.modifier, modifier);
+            for &entry in &delegated {
+                self.queue_lifecycle(crate::lifecycle::Lifecycle::SyncDelegates(node, entry));
+            }
             let mut parent_data_changed = self.refresh_chain(node);
             // Updated parent data nodes tell the parent, as Compose's `invalidateParentData`.
             if invalidated.any(NodeKinds::PARENT_DATA) {
@@ -858,6 +873,9 @@ impl UiTree {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
                         nodes::update(element, &mut *entry.node);
+                        if entry.after_update() {
+                            delegated.push(entry.id);
+                        }
                         if entry.node.should_auto_invalidate() {
                             invalidated |= entry.kinds;
                         }
@@ -871,7 +889,7 @@ impl UiTree {
                     let mut entry =
                         ChainEntry::new(nodes::create(element), observed, EntryId(next_entry));
                     if attached {
-                        entry.state = entry_state::ATTACHED;
+                        entry.state |= entry_state::ATTACHED;
                         inserted = true;
                     }
                     invalidated |= entry.kinds;
@@ -895,6 +913,9 @@ impl UiTree {
         // A node attached in this pass attaches its whole subtree when it ends.
         let attaching = value.attaching;
         self.next_entry = next_entry;
+        for &entry in &delegated {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::SyncDelegates(node, entry));
+        }
         let mut parent_data_changed = self.refresh_chain(node);
         // Parent data nodes updated, inserted or removed tell the parent (`invalidated` has
         // the inserted and removed nodes' kinds too).
@@ -917,6 +938,9 @@ impl UiTree {
                     self.focus_requests.attached_entries.borrow_mut().remove(&removed.id.0);
                 }
                 self.forget_entry_reads(removed.id, removed.state);
+                if removed.state & entry_state::DELEGATING != 0 {
+                    self.release_delegates(&mut *removed.node);
+                }
                 let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
                 removed.node.on_release(&mut context);
             }
@@ -937,7 +961,7 @@ impl UiTree {
     /// stats; a pointer node come or gone has the resting mouse's hover refreshed (an
     /// `Enter` for one that came under it), as the layout does; focus is revalidated by the chain
     /// change itself.
-    fn auto_invalidate(
+    pub(crate) fn auto_invalidate(
         &mut self,
         node: NodeId,
         kinds: NodeKinds,
@@ -971,7 +995,7 @@ impl UiTree {
     /// Points the pointer captures of `node`'s modifier nodes at their new places in its
     /// chain, so a gesture in progress continues on a node that was kept; captures of removed
     /// nodes are dropped.
-    fn remap_captures(&mut self, node: NodeId, matched: &[Option<usize>]) {
+    pub(crate) fn remap_captures(&mut self, node: NodeId, matched: &[Option<usize>]) {
         if self.captures.is_empty() && self.hovered.is_empty() {
             return;
         }
@@ -1002,7 +1026,7 @@ impl UiTree {
 
     /// Recomputes what the chain's nodes can do, its layers and its parent data. Returns
     /// whether the parent data changed.
-    fn refresh_chain(&mut self, node: NodeId) -> bool {
+    pub(crate) fn refresh_chain(&mut self, node: NodeId) -> bool {
         let focus_requests = self.focus_requests.clone();
         // A node not in the tree yet (a paused composition's, until applied) or deactivated has
         // its requesters attached when it's attached or reused, as Compose's modifier nodes attach
@@ -1399,8 +1423,11 @@ impl UiTree {
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
             }
-            for entry in &value.chain {
+            for entry in &mut value.chain {
                 self.forget_entry_reads(entry.id, entry.state);
+                if entry.state & entry_state::DELEGATING != 0 {
+                    self.release_delegates(&mut *entry.node);
+                }
             }
             let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
             for entry in &mut value.chain {

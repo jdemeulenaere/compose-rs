@@ -285,6 +285,8 @@ impl<E: ModifierNodeElement> AnyModifierNodeElement for E { /* downcasts once, h
 
 ### 3.7 Delegation
 
+As built (D1169, D1170): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes), and compose-rs's own extras that aren't Compose kinds stay the chain's node's. The rest is as below.
+
 A delegating node owns a `Delegates` container and returns it from `ModifierNode::delegates`:
 
 ```rust

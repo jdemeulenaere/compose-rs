@@ -8,6 +8,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use smallvec::SmallVec;
 
+use crate::delegation;
 use crate::modifier::{ModifierNode, ReleaseContext};
 use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state};
 use crate::node_context::{Invalidation, NodeContext};
@@ -50,10 +51,18 @@ pub(crate) enum Lifecycle {
     /// the resume's end (before the content its later resumes compose); their `on_attach` waits
     /// for the apply (`AttachEntries`, held apart, D1162).
     Reset(NodeId),
+    /// An element's update delegated or undelegated: the delegates brought up to date.
+    SyncDelegates(NodeId, EntryId),
     /// A node's layout direction changed: its nodes' `on_layout_direction_change`.
     LayoutDirection(NodeId),
     /// The density changed: every attached node's `on_density_change`.
     Density,
+}
+
+/// A node's `on_detach`, then its delegates', as `DelegatingNode.runDetachLifecycle`.
+fn detach_with_delegates(node: &mut dyn ModifierNode, context: &mut NodeContext<'_>) {
+    node.on_detach(context);
+    delegation::run_on_delegates(node, context, |node, context| node.on_detach(context));
 }
 
 impl UiTree {
@@ -66,20 +75,19 @@ impl UiTree {
         index: usize,
         f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
     ) -> R {
-        let entry = &mut self.node_mut(node).chain[index];
-        let id = entry.id;
-        let mut taken = mem::replace(&mut entry.node, Box::new(Taken));
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut context =
-                NodeContext { tree: &mut *self, node, index: Some(index), entry: id, out_state: 0 };
-            f(&mut *taken, &mut context)
-        }));
-        if let Some(value) = self.get_mut(node)
-            && let Some(entry) = value.chain.get_mut(index)
+        let result = self.with_entry_raw(node, index, f);
+        // What it delegated or undelegated.
+        if self
+            .get(node)
+            .and_then(|value| value.chain.get(index))
+            .is_some_and(|entry| entry.state & entry_state::DELEGATING != 0)
         {
-            entry.node = taken;
+            if self.delegates_wait {
+                self.note_delegates_changed(node, index);
+            } else {
+                self.sync_delegates(node, index);
+            }
         }
-        let result = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         // What its `remeasure_sync` asked (where measuring is allowed: no entry is out of its
         // chain but this one), now that it's back in it.
         if !self.remeasure_after.is_empty() {
@@ -90,9 +98,76 @@ impl UiTree {
         result
     }
 
-    /// The index of entry `entry` in `node`'s chain, if it's there.
-    pub(crate) fn entry_index(&self, node: NodeId, entry: EntryId) -> Option<usize> {
-        self.get(node)?.chain.iter().position(|candidate| candidate.id == entry)
+    /// `with_entry` without what follows a node's code.
+    pub(crate) fn with_entry_raw<R>(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
+    ) -> R {
+        let entry = &mut self.node_mut(node).chain[index];
+        let id = entry.id;
+        let mut taken = mem::replace(&mut entry.node, Box::new(Taken));
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut context = NodeContext {
+                tree: &mut *self,
+                node,
+                index: Some(index),
+                entry: id,
+                out_state: 0,
+                delegated: false,
+            };
+            f(&mut *taken, &mut context)
+        }));
+        if let Some(value) = self.get_mut(node)
+            && let Some(entry) = value.chain.get_mut(index)
+        {
+            entry.node = taken;
+        }
+        result.unwrap_or_else(|panic| panic::resume_unwind(panic))
+    }
+
+    /// `with_entry` for the entry or delegate `id` that `entry_index` found at `index`.
+    pub(crate) fn with_entry_or_delegate<R>(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        id: EntryId,
+        f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
+    ) -> R {
+        self.with_entry(node, index, |modifier_node, context| {
+            match delegation::find_delegate(modifier_node, id) {
+                Some(delegate) => context.with_delegate(delegate, f),
+                None => f(modifier_node, context),
+            }
+        })
+    }
+
+    /// The index in `node`'s chain of entry `entry`, or of the entry `entry` is a delegate of, if
+    /// it's there.
+    pub(crate) fn entry_index(&mut self, node: NodeId, entry: EntryId) -> Option<usize> {
+        let chain = &mut self.get_mut(node)?.chain;
+        if let Some(index) = chain.iter().position(|candidate| candidate.id == entry) {
+            return Some(index);
+        }
+        chain.iter_mut().position(|candidate| {
+            candidate.state & entry_state::DELEGATING != 0
+                && delegation::find_delegate(&mut *candidate.node, entry).is_some()
+        })
+    }
+
+    /// The `entry_state` flags of entry `id` at `index` of `node`'s chain, or of its delegate `id`.
+    pub(crate) fn entry_or_delegate_state(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        id: EntryId,
+    ) -> u8 {
+        let entry = &mut self.node_mut(node).chain[index];
+        if entry.id == id {
+            return entry.state;
+        }
+        delegation::find_delegate(&mut *entry.node, id).map_or(0, |delegate| delegate.state())
     }
 
     /// Runs `callback` on `node`'s user-defined entries whose state has every flag of `with`,
@@ -168,6 +243,9 @@ impl UiTree {
                     requests.attached_entries.borrow_mut().insert(entry.id.0);
                 }
             }
+            if entry.state & entry_state::DELEGATING != 0 {
+                delegation::mark_delegates_attached(&mut *entry.node, &requests);
+            }
         }
     }
 
@@ -185,6 +263,7 @@ impl UiTree {
             {
                 continue;
             }
+            let delegating = entry.state & entry_state::DELEGATING != 0;
             // A built-in element's node has no `on_attach` (`for_custom_entries`).
             if !entry.kinds.any(NodeKinds::OBSERVED) {
                 entry.state |= entry_state::ATTACH_RAN;
@@ -193,7 +272,14 @@ impl UiTree {
                 });
                 continue;
             }
-            self.with_entry(node, index, |modifier_node, context| modifier_node.on_attach(context));
+            // Its delegates first, as `DelegatingNode.runAttachLifecycle`; what it delegates in
+            // its `on_attach` is attached as it returns.
+            self.with_entry(node, index, |modifier_node, context| {
+                if delegating {
+                    delegation::run_delegates_attach(modifier_node, context);
+                }
+                modifier_node.on_attach(context);
+            });
             if let Some(entry) = self.get_mut(node).and_then(|value| value.chain.get_mut(index)) {
                 entry.state |= entry_state::ATTACH_RAN;
             }
@@ -202,7 +288,7 @@ impl UiTree {
 
     /// Detaches `entry` (its `on_detach` ran or wasn't due): not attached, its scope cancelled,
     /// its handles told.
-    fn mark_entry_detached(&mut self, entry: EntryId, state: &mut u8) {
+    pub(crate) fn mark_entry_detached(&mut self, entry: EntryId, state: &mut u8) {
         // A handle may have made one too (`NodeHandle::coroutine_scope`).
         if *state & (entry_state::HAS_SCOPE | entry_state::HAS_HANDLE) != 0 {
             // Taken out first: cancelling drops its tasks, which may reach the requests.
@@ -228,6 +314,12 @@ impl UiTree {
             let (id, mut state) = (entry.id, entry.state);
             if state & entry_state::ATTACHED == 0 {
                 continue;
+            }
+            if state & entry_state::DELEGATING != 0 {
+                let entry = &mut self.node_mut(node).chain[index];
+                let mut taken = mem::replace(&mut entry.node, Box::new(Taken));
+                self.mark_delegates_detached(&mut *taken);
+                self.node_mut(node).chain[index].node = taken;
             }
             self.mark_entry_detached(id, &mut state);
             self.node_mut(node).chain[index].state = state;
@@ -267,12 +359,7 @@ impl UiTree {
     pub(crate) fn detach_subtree(&mut self, root: NodeId) {
         let nodes = self.subtree(root);
         for &node in &nodes {
-            self.for_custom_entries(
-                node,
-                entry_state::ATTACH_RAN,
-                true,
-                |modifier_node, context| modifier_node.on_detach(context),
-            );
+            self.for_custom_entries(node, entry_state::ATTACH_RAN, true, detach_with_delegates);
         }
         for &node in &nodes {
             self.mark_detached(node);
@@ -288,19 +375,23 @@ impl UiTree {
         let count = self.get(node).map_or(0, |value| value.chain.len());
         for step in 0..count {
             let index = count - 1 - step;
-            let resets = self
+            let state = self
                 .get(node)
                 .and_then(|value| value.chain.get(index))
-                .is_some_and(|entry| entry.state & entry_state::ATTACH_RAN != 0);
-            if resets {
+                .map_or(0, |entry| entry.state);
+            let delegating = state & entry_state::DELEGATING != 0;
+            if state & entry_state::ATTACH_RAN != 0 {
                 self.with_entry(node, index, |modifier_node, context| {
-                    modifier_node.on_reset(context)
+                    modifier_node.on_reset(context);
+                    if delegating {
+                        delegation::run_on_delegates(modifier_node, context, |node, context| {
+                            node.on_reset(context)
+                        });
+                    }
                 });
             }
         }
-        self.for_custom_entries(node, entry_state::ATTACH_RAN, true, |modifier_node, context| {
-            modifier_node.on_detach(context)
-        });
+        self.for_custom_entries(node, entry_state::ATTACH_RAN, true, detach_with_delegates);
         self.mark_detached(node);
     }
 
@@ -319,15 +410,18 @@ impl UiTree {
                     index: None,
                     entry: entry.id,
                     out_state: entry.state,
+                    delegated: false,
                 };
-                entry.node.on_detach(&mut context);
+                detach_with_delegates(&mut *entry.node, &mut context);
                 entry.state = context.out_state;
             }
         }
         for mut entry in entries {
             let mut state = entry.state;
+            self.mark_delegates_detached(&mut *entry.node);
             self.mark_entry_detached(entry.id, &mut state);
             self.forget_entry_reads(entry.id, state);
+            self.release_delegates(&mut *entry.node);
             let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
             entry.node.on_release(&mut context);
         }
@@ -395,6 +489,11 @@ impl UiTree {
                         self.mark_attached(node);
                         self.run_attach(node);
                     }
+                    Lifecycle::SyncDelegates(node, entry) => {
+                        if let Some(index) = self.entry_index(node, entry) {
+                            self.sync_delegates(node, index);
+                        }
+                    }
                     Lifecycle::LayoutDirection(node) => {
                         self.for_custom_entries(
                             node,
@@ -426,6 +525,7 @@ impl UiTree {
         let allowed = mem::replace(&mut self.remeasure_allowed, true);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             self.run_lifecycle();
+            self.sync_noted_delegates();
             // The observer nodes whose observed reads changed (`ObserverModifierNode`).
             self.notify_observer_nodes();
         }));
@@ -440,7 +540,7 @@ impl UiTree {
             let mut pending = mem::take(&mut *requests.node_invalidations.borrow_mut());
             for (node, entry, what) in pending.drain(..) {
                 if let Some(index) = self.entry_index(node, entry)
-                    && self.node(node).chain[index].state & entry_state::ATTACHED != 0
+                    && self.entry_or_delegate_state(node, index, entry) & entry_state::ATTACHED != 0
                 {
                     self.invalidate_entry_at(node, Some(index), what);
                 }
@@ -461,6 +561,7 @@ impl UiTree {
     pub(crate) fn has_node_requests(&self) -> bool {
         !self.focus_requests.node_invalidations.borrow().is_empty()
             || !self.focus_requests.measure_requests.borrow().is_empty()
+            || !self.delegates_noted.is_empty()
     }
 
     /// Applies `what` for entry `index` of `node`'s chain (`None`: an entry out of it).

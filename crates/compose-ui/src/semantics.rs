@@ -274,29 +274,39 @@ impl UiTree {
         // From the innermost to the outermost, so an outer modifier's values win, as Compose's
         // `collapsedSemantics` (`tailToHead`).
         for index in (0..value.chain.len()).rev() {
-            if value.chain[index].kinds.any(NodeKinds::SEMANTICS)
-                && let Some(semantics) = value.chain[index].node.as_semantics()
-            {
-                let mut own = SemanticsConfiguration::default();
-                own.is_merging_semantics_of_descendants =
-                    semantics.should_merge_descendant_semantics();
-                own.is_clearing_semantics = semantics.should_clear_descendant_semantics();
-                semantics.apply_semantics(&mut own);
-                // Clearing drops what the modifiers after it set, as Compose's
-                // `calculateSemanticsConfiguration`.
-                if own.is_clearing_semantics {
-                    config = SemanticsConfiguration::default();
-                }
-                config.apply(&own);
-                // The bounds: the outermost merging modifier's that is important for them, else
-                // the outermost important one's (Compose's `findCoordinatorToGetBounds`).
-                if semantics.is_important_for_bounds() {
-                    first_layer = Some(layers[index]);
-                    if own.is_merging_semantics_of_descendants {
-                        merging_layer = Some(layers[index]);
-                    }
-                }
+            let entry = &mut value.chain[index];
+            if !entry.kinds.any(NodeKinds::SEMANTICS) {
+                continue;
             }
+            // The node, or each of its delegates that adds semantics.
+            crate::delegation::dispatch_for_kind(
+                &mut *entry.node,
+                entry.own,
+                NodeKinds::SEMANTICS,
+                crate::node_chain::EntryId::NO_DELEGATE,
+                &mut |modifier_node, _| {
+                    let Some(semantics) = modifier_node.as_semantics() else { return };
+                    let mut own = SemanticsConfiguration::default();
+                    own.is_merging_semantics_of_descendants =
+                        semantics.should_merge_descendant_semantics();
+                    own.is_clearing_semantics = semantics.should_clear_descendant_semantics();
+                    semantics.apply_semantics(&mut own);
+                    // Clearing drops what the modifiers after it set, as Compose's
+                    // `calculateSemanticsConfiguration`.
+                    if own.is_clearing_semantics {
+                        config = SemanticsConfiguration::default();
+                    }
+                    config.apply(&own);
+                    // The bounds: the outermost merging modifier's that is important for them,
+                    // else the outermost important one's (Compose's `findCoordinatorToGetBounds`).
+                    if semantics.is_important_for_bounds() {
+                        first_layer = Some(layers[index]);
+                        if own.is_merging_semantics_of_descendants {
+                            merging_layer = Some(layers[index]);
+                        }
+                    }
+                },
+            );
         }
         self.bind_request_focus(node, &mut config);
         OwnSemantics { config, layer: merging_layer.or(first_layer).unwrap_or(0) }

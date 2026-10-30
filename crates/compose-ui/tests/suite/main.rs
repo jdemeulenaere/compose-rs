@@ -6,6 +6,7 @@ extern crate compose_runtime as compose;
 mod annotated_string;
 mod annotated_string_builder;
 mod dp_offset;
+mod delegating_nodes;
 mod intrinsics;
 mod modifier_nodes;
 mod mutable_paths;

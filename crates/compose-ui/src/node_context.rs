@@ -53,23 +53,47 @@ pub struct NodeContext<'a> {
     /// chain (removed by a chain change, detached before it's released).
     pub(crate) index: Option<usize>,
     pub(crate) entry: EntryId,
-    /// The `entry_state` flags of an entry out of its chain.
+    /// The `entry_state` flags of an entry out of its chain, or of a delegate.
     pub(crate) out_state: u8,
+    /// It's a delegate of entry `index`, named `entry` (its own id), its flags in `out_state`.
+    pub(crate) delegated: bool,
 }
 
 impl NodeContext<'_> {
     fn state(&self) -> u8 {
         match self.index {
-            Some(index) => self.tree.node(self.node).chain[index].state,
-            None => self.out_state,
+            Some(index) if !self.delegated => self.tree.node(self.node).chain[index].state,
+            _ => self.out_state,
         }
     }
 
     fn state_mut(&mut self) -> &mut u8 {
         match self.index {
-            Some(index) => &mut self.tree.node_mut(self.node).chain[index].state,
-            None => &mut self.out_state,
+            Some(index) if !self.delegated => &mut self.tree.node_mut(self.node).chain[index].state,
+            _ => &mut self.out_state,
         }
+    }
+
+    /// Runs `f` with the delegate `entry` and its context: this context's place in the tree (a
+    /// delegate draws and measures where its owner does, as Compose's coordinator), its own
+    /// lifecycle flags and identity.
+    pub(crate) fn with_delegate<R>(
+        &mut self,
+        entry: &mut crate::delegation::DelegateEntry,
+        f: impl FnOnce(&mut dyn ModifierNode, &mut NodeContext<'_>) -> R,
+    ) -> R {
+        let mut context = NodeContext {
+            tree: &mut *self.tree,
+            node: self.node,
+            index: self.index,
+            entry: entry.id(),
+            out_state: entry.state(),
+            delegated: true,
+        };
+        let result = f(entry.node_mut(), &mut context);
+        let state = context.out_state;
+        entry.set_state(state);
+        result
     }
 
     /// A handle naming this node from outside its callbacks.
@@ -413,9 +437,43 @@ impl NodeHandle {
         with_free_tree(self.tree, &mut |tree: &mut UiTree| {
             let Some(index) = tree.entry_index(node, entry) else { return };
             let Some(f) = f.take() else { return };
-            result = tree.with_entry(node, index, |modifier_node, context| {
+            result = tree.with_entry_or_delegate(node, index, entry, |modifier_node, context| {
                 modifier_node.downcast_mut::<N>().map(|typed| f(typed, context))
             });
+        });
+        result
+    }
+
+    /// What the node's chain entry says of its kinds: its and its delegates', then those of the
+    /// entries after it too (a delegate: only its own), as `kindSet` and `aggregateChildKindSet`.
+    /// `None` if the node is gone or the tree busy. For tests.
+    #[doc(hidden)]
+    pub fn kinds_for_test(
+        &self,
+    ) -> Option<(crate::node_chain::NodeKinds, crate::node_chain::NodeKinds)> {
+        let mut result = None;
+        let (node, entry) = (self.node, self.entry);
+        with_free_tree(self.tree, &mut |tree: &mut UiTree| {
+            let Some(index) = tree.entry_index(node, entry) else { return };
+            let chain_entry = &mut tree.node_mut(node).chain[index];
+            result = Some(match crate::delegation::find_delegate(&mut *chain_entry.node, entry) {
+                Some(delegate) => (delegate.kinds(), delegate.kinds()),
+                None => (chain_entry.kinds, chain_entry.aggregate),
+            });
+        });
+        result
+    }
+
+    /// Which layer of its layout node it measures and draws in, as `requireCoordinator`, and how
+    /// many it has. `None` if the node is gone or the tree busy. For tests.
+    #[doc(hidden)]
+    pub fn layer_for_test(&self) -> Option<(usize, usize)> {
+        let mut result = None;
+        let (node, entry) = (self.node, self.entry);
+        with_free_tree(self.tree, &mut |tree: &mut UiTree| {
+            let Some(index) = tree.entry_index(node, entry) else { return };
+            let value = tree.node(node);
+            result = Some((value.layer_of(index), value.layers.len()));
         });
         result
     }

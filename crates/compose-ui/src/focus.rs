@@ -34,10 +34,7 @@ impl UiTree {
         }
         (0..value.chain.len()).find(|&index| {
             value.chain[index].kinds.any(NodeKinds::FOCUS_TARGET)
-                && value.chain[index]
-                    .node
-                    .as_focus_target()
-                    .is_some_and(|target| target.can_focus())
+                && value.chain[index].focus_target().is_some_and(|target| target.can_focus())
         })
     }
 
@@ -151,8 +148,7 @@ impl UiTree {
         let density = self.density;
         let view_configuration = self.view_configuration();
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node)
-            && let Some(target) =
-                value.chain.get_mut(index).and_then(|entry| entry.node.as_focus_target())
+            && let Some(target) = value.chain.get_mut(index).and_then(|entry| entry.focus_target())
         {
             let mut context = EventContext {
                 node,
@@ -198,10 +194,8 @@ impl UiTree {
         let density = self.density;
         let view_configuration = self.view_configuration();
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(focus.node)
-            && let Some(target) = value
-                .chain
-                .get_mut(focus.index as usize)
-                .and_then(|entry| entry.node.as_focus_target())
+            && let Some(target) =
+                value.chain.get_mut(focus.index as usize).and_then(|entry| entry.focus_target())
         {
             let mut context = EventContext {
                 node: focus.node,
@@ -254,10 +248,7 @@ impl UiTree {
         });
         match target {
             Some(index)
-                if value.chain[index]
-                    .node
-                    .as_focus_target()
-                    .is_some_and(|target| target.can_focus()) =>
+                if value.chain[index].focus_target().is_some_and(|target| target.can_focus()) =>
             {
                 self.focus = Some(Focus { node, index: index as u16 });
             }

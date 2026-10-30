@@ -1,11 +1,13 @@
 //! The measure pass (docs/06-ui.md, "Layout"): from the root, measuring only what changed.
 
 use std::mem;
+use std::ops::ControlFlow;
 use std::panic::{self, AssertUnwindSafe};
 
 use crate::constraints::Constraints;
+use crate::delegation::{dispatch_with_context, first_of_kind};
 use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
-use crate::node_chain::NodeKinds;
+use crate::node_chain::{NodeKinds, entry_state};
 use crate::nodes::Taken;
 use crate::tree::{Layer, NodeId, Observation, UiTree, observation_key};
 use crate::unit::{IntOffset, IntSize};
@@ -324,11 +326,14 @@ impl UiTree {
         if layer < entry.layout_indices.len() {
             let index = entry.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can ask the rest of its own node.
+            let own = entry.chain[index].own;
             let mut modifier_node = mem::replace(&mut entry.chain[index].node, Box::new(Taken));
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
                 let content = Measurable { node, layer: layer as u32 + 1 };
-                let layout = modifier_node.as_layout().expect("compose-ui: a layout node");
+                let layout = first_of_kind(&mut *modifier_node, own, NodeKinds::LAYOUT)
+                    .and_then(|node| node.as_layout())
+                    .expect("compose-ui: a layout node");
                 match kind {
                     Intrinsic::MinWidth => layout.min_intrinsic_width(&mut scope, content, value),
                     Intrinsic::MinHeight => layout.min_intrinsic_height(&mut scope, content, value),
@@ -382,6 +387,8 @@ impl UiTree {
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
+            let own = value.chain[index].own;
+            let delegating = value.chain[index].state & entry_state::DELEGATING != 0;
             let mut modifier_node = mem::replace(&mut value.chain[index].node, Box::new(Taken));
             let custom = value.chain[index].kinds.any(NodeKinds::OBSERVED);
             let run = self.next_measure_run();
@@ -391,11 +398,10 @@ impl UiTree {
                 let mut scope = MeasureScope::new(&mut *self, node, run);
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let mut measure = || {
-                    modifier_node.as_layout().expect("compose-ui: a layout node").measure(
-                        &mut scope,
-                        content,
-                        constraints,
-                    )
+                    first_of_kind(&mut *modifier_node, own, NodeKinds::LAYOUT)
+                        .and_then(|node| node.as_layout())
+                        .expect("compose-ui: a layout node")
+                        .measure(&mut scope, content, constraints)
                 };
                 let result = match &observer {
                     Some(observer) => {
@@ -407,6 +413,9 @@ impl UiTree {
                 result
             }));
             self.node_mut(node).chain[index].node = modifier_node;
+            if delegating {
+                self.note_delegates_changed(node, index);
+            }
             let result = self.recover(node, result);
             self.mirror(relative, result.width);
             result
@@ -494,13 +503,25 @@ impl UiTree {
         for index in start..end {
             let Some(entry) = self.node(node).chain.get(index) else { return };
             let hears = NodeKinds::DRAW | NodeKinds::OBSERVED;
-            if entry.kinds.all(hears) && entry.state & crate::node_chain::entry_state::ATTACHED != 0
-            {
+            if entry.kinds.all(hears) && entry.state & entry_state::ATTACHED != 0 {
+                let own = entry.own;
+                let waited = mem::replace(&mut self.delegates_wait, true);
                 self.with_entry(node, index, |modifier_node, context| {
-                    if let Some(draw) = modifier_node.as_draw() {
-                        draw.on_measure_result_changed(context);
-                    }
+                    let _ = dispatch_with_context(
+                        modifier_node,
+                        own,
+                        NodeKinds::DRAW,
+                        false,
+                        context,
+                        &mut |modifier_node, context| {
+                            if let Some(draw) = modifier_node.as_draw() {
+                                draw.on_measure_result_changed(context);
+                            }
+                            ControlFlow::Continue(())
+                        },
+                    );
                 });
+                self.delegates_wait = waited;
             }
         }
     }

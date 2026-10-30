@@ -232,7 +232,7 @@ impl UiTree {
         let placed = self.is_placed_in_root(node);
         for index in 0..count {
             let value = self.node_mut(node);
-            if value.chain[index].node.as_global_position_aware().is_none() {
+            if !value.chain[index].kinds.any(NodeKinds::GLOBAL_POSITION_AWARE) {
                 continue;
             }
             any = true;
@@ -241,13 +241,24 @@ impl UiTree {
             }
             let layer = value.layer_of(index);
             let coordinates = self.coordinates(node, layer, index);
-            if let Some(action) = self.node_mut(node).chain[index]
-                .node
-                .as_global_position_aware()
-                .and_then(|aware| aware.on_globally_positioned(coordinates))
-            {
-                self.layout_callbacks.push(action);
-            }
+            let entry = &mut self.node_mut(node).chain[index];
+            let mut actions: smallvec::SmallVec<[Action; 1]> = smallvec::SmallVec::new();
+            // The node, or each of its delegates that wants to know.
+            crate::delegation::dispatch_for_kind(
+                &mut *entry.node,
+                entry.own,
+                NodeKinds::GLOBAL_POSITION_AWARE,
+                crate::node_chain::EntryId::NO_DELEGATE,
+                &mut |modifier_node, _| {
+                    if let Some(action) = modifier_node
+                        .as_global_position_aware()
+                        .and_then(|aware| aware.on_globally_positioned(coordinates))
+                    {
+                        actions.push(action);
+                    }
+                },
+            );
+            self.layout_callbacks.extend(actions);
         }
         any
     }

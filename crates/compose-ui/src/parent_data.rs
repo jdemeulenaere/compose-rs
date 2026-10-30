@@ -6,9 +6,10 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use crate::delegation::dispatch_for_kind;
 use crate::layout::{IntrinsicMeasureScope, Measurable, Placeable};
 use crate::modifier::{InspectorInfo, Modifier, ModifierNode, ModifierNodeElement};
-use crate::node_chain::NodeKinds;
+use crate::node_chain::{ChainEntry, EntryId, NodeKinds};
 use crate::tree::{NodeId, UiTree};
 use crate::unit::Density;
 
@@ -127,16 +128,25 @@ impl IntrinsicMeasureScope<'_> {
     }
 }
 
-/// `nodes`' parent data folded from the tail to the head, as `NodeCoordinator.parentData`.
-fn fold_parent_data<'a>(
-    nodes: impl DoubleEndedIterator<Item = &'a Box<dyn ModifierNode>>,
-    density: Density,
-) -> Option<Rc<dyn Any>> {
+/// `chain`'s parent data folded from the tail to the head, as `NodeCoordinator.parentData`: each
+/// node's, or each of its delegates' that gives some.
+fn fold_parent_data(chain: &mut [ChainEntry], density: Density) -> Option<Rc<dyn Any>> {
     let mut data = None;
-    for node in nodes.rev() {
-        if let Some(node) = node.as_parent_data() {
-            data = node.modify_parent_data(density, data);
+    for entry in chain.iter_mut().rev() {
+        if !entry.kinds.any(NodeKinds::PARENT_DATA) {
+            continue;
         }
+        dispatch_for_kind(
+            &mut *entry.node,
+            entry.own,
+            NodeKinds::PARENT_DATA,
+            EntryId::NO_DELEGATE,
+            &mut |node, _| {
+                if let Some(node) = node.as_parent_data() {
+                    data = node.modify_parent_data(density, data.take());
+                }
+            },
+        );
     }
     data
 }
@@ -150,14 +160,7 @@ impl UiTree {
         if !value.kinds.any(NodeKinds::PARENT_DATA) {
             return value.custom_parent_data.take().is_some();
         }
-        let data = fold_parent_data(
-            value
-                .chain
-                .iter()
-                .filter(|entry| entry.kinds.any(NodeKinds::PARENT_DATA))
-                .map(|entry| &entry.node),
-            density,
-        );
+        let data = fold_parent_data(&mut value.chain, density);
         let had = std::mem::replace(&mut value.custom_parent_data, data).is_some();
         had || value.custom_parent_data.is_some()
     }

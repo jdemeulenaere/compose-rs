@@ -1,11 +1,12 @@
 //! Input dispatch on the tree: pointer hit testing and passes, focus, and key and text events
 //! to the focused node (docs/06-ui.md, "Input, focus and semantics").
 
+use crate::delegation::dispatch_for_kind;
 use crate::input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass,
     PointerEventType, Requests,
 };
-use crate::node_chain::NodeKinds;
+use crate::node_chain::{EntryId, NodeKinds, entry_state};
 use crate::tree::{NodeId, UiTree};
 use crate::unit::{IntSize, Offset};
 
@@ -18,6 +19,18 @@ pub(crate) struct HitEntry {
     pub(crate) version: u32,
     /// An observer: on the path only if something inside it is hit.
     pub(crate) observer: bool,
+    /// The delegate of entry `index` it is, or `NO_DELEGATE`: the entry's node.
+    pub(crate) delegate: EntryId,
+}
+
+impl HitEntry {
+    /// Whether both are delegates of one chain entry.
+    fn is_delegate_with(&self, other: &HitEntry) -> bool {
+        self.delegate != EntryId::NO_DELEGATE
+            && other.delegate != EntryId::NO_DELEGATE
+            && self.node == other.node
+            && self.index == other.index
+    }
 }
 
 /// Whether the entries pushed from `start` hit anything but observers; if not, they're dropped.
@@ -60,7 +73,8 @@ impl UiTree {
     }
 
     fn hit_node(&mut self, node: NodeId, point: Offset, path: &mut Vec<HitEntry>) -> bool {
-        let value = self.node(node);
+        let density = self.density;
+        let value = self.node_mut(node);
         if !value.placed {
             return false;
         }
@@ -68,7 +82,6 @@ impl UiTree {
         // children placed outside), only clips do.
         let offset = value.layers[0].offset;
         let local = point - Offset::new(offset.x as f32, offset.y as f32);
-        let density = self.density;
         let start = path.len();
         // The node's layers are offset from each other: the hit test visits every node of a tree
         // (only clips stop it), so it adds them up as it goes, keeping nothing.
@@ -95,13 +108,31 @@ impl UiTree {
                 if bits.any(NodeKinds::POINTER_INPUT)
                     && contains(value.layers[layer].measured, local - origin)
                 {
-                    path.push(HitEntry {
-                        node,
-                        index: index as u16,
-                        layer: layer as u16,
-                        version: value.chain_version,
-                        observer: value.chain[index].node.is_pointer_observer(),
-                    });
+                    let version = value.chain_version;
+                    let entry = &mut value.chain[index];
+                    let mut push = |modifier_node: &mut dyn crate::modifier::ModifierNode,
+                                    delegate| {
+                        path.push(HitEntry {
+                            node,
+                            index: index as u16,
+                            layer: layer as u16,
+                            version,
+                            observer: modifier_node.is_pointer_observer(),
+                            delegate,
+                        });
+                    };
+                    if entry.state & entry_state::DELEGATING == 0 {
+                        push(&mut *entry.node, EntryId::NO_DELEGATE);
+                    } else {
+                        // The node, or each of its delegates that takes pointer input.
+                        dispatch_for_kind(
+                            &mut *entry.node,
+                            entry.own,
+                            NodeKinds::POINTER_INPUT,
+                            EntryId::NO_DELEGATE,
+                            &mut push,
+                        );
+                    }
                 }
                 if bits.any(NodeKinds::LAYOUT) {
                     layer += 1;
@@ -116,7 +147,7 @@ impl UiTree {
         let content = local - origin;
         // The last placed (drawn on top) first.
         let order = self.placement_order(node);
-        let count = order.as_ref().map_or(value.children.len(), |order| order.len());
+        let count = order.as_ref().map_or(self.node(node).children.len(), |order| order.len());
         for position in (0..count).rev() {
             let index = order.as_ref().map_or(position, |order| order[position] as usize);
             let child = self.node(node).children[index].node;
@@ -180,17 +211,27 @@ impl UiTree {
         };
         for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
             if pass == PointerEventPass::Main {
-                for (index, entry) in path.iter().enumerate().rev() {
-                    let waiting_parent = waiting.get(index).copied().unwrap_or(false);
-                    self.deliver_pointer(
-                        entry,
-                        &mut event,
-                        pass,
-                        position,
-                        waiting_parent,
-                        &mut actions,
-                        &mut requests,
-                    );
+                // From the inside out; but one node's delegates in delegation order, in every
+                // pass, as Compose's `dispatchForKind` in its hit path's node.
+                let mut end = path.len();
+                while end > 0 {
+                    let mut start = end - 1;
+                    while start > 0 && path[start].is_delegate_with(&path[start - 1]) {
+                        start -= 1;
+                    }
+                    for (index, entry) in path[start..end].iter().enumerate() {
+                        let waiting_parent = waiting.get(start + index).copied().unwrap_or(false);
+                        self.deliver_pointer(
+                            entry,
+                            &mut event,
+                            pass,
+                            position,
+                            waiting_parent,
+                            &mut actions,
+                            &mut requests,
+                        );
+                    }
+                    end = start;
                 }
             } else {
                 for entry in path.iter() {
@@ -220,7 +261,9 @@ impl UiTree {
         for entry in path {
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
-                && let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input()
+                && let Some(handler) = value.chain[entry.index as usize]
+                    .resolve(entry.delegate)
+                    .and_then(|node| node.as_pointer_input())
             {
                 handler.on_cancel_pointer_input();
             }
@@ -280,10 +323,14 @@ impl UiTree {
             layout_direction: value.layout_direction,
             waiting_parent,
         };
-        if let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input() {
+        if let Some(handler) = value.chain[entry.index as usize]
+            .resolve(entry.delegate)
+            .and_then(|node| node.as_pointer_input())
+        {
             handler.on_pointer_event(event, pass, bounds, &mut context);
         }
         event.position = position;
+        self.note_delegates_changed(entry.node, entry.index as usize);
     }
 
     /// Moves the mouse's hover to the entries of `now`: `Exit` to those it left, `Enter` to
@@ -348,7 +395,10 @@ impl UiTree {
             if value.chain_version != entry.version {
                 return None;
             }
-            value.chain[entry.index as usize].node.as_pointer_input()?.hover_icon()
+            value.chain[entry.index as usize]
+                .resolve(entry.delegate)?
+                .as_pointer_input()?
+                .hover_icon()
         });
         self.hovered = hovered;
         icon.unwrap_or_default()
@@ -384,7 +434,9 @@ impl UiTree {
             for entry in path {
                 if let Some(value) = self.get_mut(entry.node)
                     && value.chain_version == entry.version
-                    && let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input()
+                    && let Some(handler) = value.chain[entry.index as usize]
+                        .resolve(entry.delegate)
+                        .and_then(|node| node.as_pointer_input())
                 {
                     handler.on_cancel_pointer_input();
                     // A gesture's drawing (a press, a drag) ends without a context to say so.
@@ -395,6 +447,7 @@ impl UiTree {
     }
 
     pub(crate) fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {
+        self.sync_noted_delegates();
         for node in requests.draw {
             self.invalidate_draw_of(node);
         }
@@ -441,15 +494,24 @@ impl UiTree {
     ///
     /// The path ends at the overlay holding the focus, as a window's keys stay in it; with
     /// nothing focused, keys go to the topmost overlay that takes the focus (a dialog's Escape).
-    fn key_path(&mut self) -> Vec<(NodeId, usize)> {
+    fn key_path(&mut self) -> Vec<(NodeId, usize, EntryId)> {
         let mut path = Vec::new();
         let mut node = self.focused().or_else(|| self.modal_overlay());
         while let Some(id) = node {
-            let value = self.node(id);
+            let value = self.node_mut(id);
             for index in (0..value.chain.len()).rev() {
-                if value.chain[index].kinds.any(NodeKinds::KEY_INPUT) {
-                    path.push((id, index));
+                let entry = &mut value.chain[index];
+                if !entry.kinds.any(NodeKinds::KEY_INPUT) {
+                    continue;
                 }
+                // The node, or each of its delegates that takes keys.
+                dispatch_for_kind(
+                    &mut *entry.node,
+                    entry.own,
+                    NodeKinds::KEY_INPUT,
+                    EntryId::NO_DELEGATE,
+                    &mut |_, delegate| path.push((id, index, delegate)),
+                );
             }
             node = if value.overlay { None } else { value.parent };
         }
@@ -462,7 +524,7 @@ impl UiTree {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         let mut consumed = false;
-        for (node, index) in self.key_path() {
+        for (node, index, delegate) in self.key_path() {
             let density = self.density;
             let view_configuration = self.view_configuration();
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
@@ -480,10 +542,14 @@ impl UiTree {
                 layout_direction: value.layout_direction,
                 waiting_parent: false,
             };
-            if let Some(handler) = value.chain[index].node.as_key_input()
+            if let Some(handler) =
+                value.chain[index].resolve(delegate).and_then(|node| node.as_key_input())
                 && handler.on_key_event(&event, &mut context)
             {
                 consumed = true;
+            }
+            self.note_delegates_changed(node, index);
+            if consumed {
                 break;
             }
         }
@@ -533,11 +599,24 @@ impl UiTree {
                 if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
                     continue;
                 }
-                let handler = self.get_mut(node)?.chain[index].node.as_key_input();
-                if let Some(handler) = handler
-                    && handler.text_input_area().is_some()
-                {
-                    return Some(handler.ime_options().unwrap_or_default());
+                let entry = &mut self.get_mut(node)?.chain[index];
+                let mut options = None;
+                dispatch_for_kind(
+                    &mut *entry.node,
+                    entry.own,
+                    NodeKinds::KEY_INPUT,
+                    EntryId::NO_DELEGATE,
+                    &mut |modifier_node, _| {
+                        if options.is_none()
+                            && let Some(handler) = modifier_node.as_key_input()
+                            && handler.text_input_area().is_some()
+                        {
+                            options = Some(handler.ime_options().unwrap_or_default());
+                        }
+                    },
+                );
+                if options.is_some() {
+                    return options;
                 }
             }
         }
@@ -559,10 +638,19 @@ impl UiTree {
                     let value = self.node(node);
                     value.layer_of(index)
                 };
-                let area = self.get_mut(node)?.chain[index]
-                    .node
-                    .as_key_input()
-                    .and_then(|handler| handler.text_input_area());
+                let entry = &mut self.get_mut(node)?.chain[index];
+                let mut area = None;
+                dispatch_for_kind(
+                    &mut *entry.node,
+                    entry.own,
+                    NodeKinds::KEY_INPUT,
+                    EntryId::NO_DELEGATE,
+                    &mut |modifier_node, _| {
+                        if area.is_none() {
+                            area = modifier_node.as_key_input().and_then(|h| h.text_input_area());
+                        }
+                    },
+                );
                 if let Some(area) = area {
                     let origin = self.layer_origin(node, layer);
                     return Some(crate::unit::Rect::new(
@@ -587,7 +675,7 @@ impl UiTree {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         let mut consumed = false;
-        for (node, index) in self.key_path() {
+        for (node, index, delegate) in self.key_path() {
             let density = self.density;
             let view_configuration = self.view_configuration();
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
@@ -605,10 +693,14 @@ impl UiTree {
                 layout_direction: value.layout_direction,
                 waiting_parent: false,
             };
-            if let Some(handler) = value.chain[index].node.as_key_input()
+            if let Some(handler) =
+                value.chain[index].resolve(delegate).and_then(|node| node.as_key_input())
                 && send(handler, &mut context)
             {
                 consumed = true;
+            }
+            self.note_delegates_changed(node, index);
+            if consumed {
                 break;
             }
         }

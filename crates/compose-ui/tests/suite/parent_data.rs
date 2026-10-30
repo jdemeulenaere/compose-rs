@@ -104,6 +104,62 @@ fn a_placeable_has_its_measurable_s_parent_data() {
 }
 
 /// A node that lays out and gives parent data, as the Compose test's
+/// As the Compose test's `DelegatingNode` over a `LayoutIdModifier`.
+struct DelegatedParentData;
+
+struct DelegatedParentDataNode(Delegates);
+
+struct DelegateGivingData;
+
+impl ModifierNode for DelegateGivingData {
+    fn as_parent_data(&self) -> Option<&dyn ParentDataModifierNode> {
+        Some(self)
+    }
+}
+
+impl ParentDataModifierNode for DelegateGivingData {
+    fn modify_parent_data(&self, _: Density, _: Option<Rc<dyn Any>>) -> Option<Rc<dyn Any>> {
+        let layout_id: Rc<dyn Any> = Rc::new("data");
+        Some(Rc::new(LayoutIdParentData { layout_id }))
+    }
+}
+
+impl ModifierNodeElement for DelegatedParentData {
+    type Node = DelegatedParentDataNode;
+    fn create(&self) -> DelegatedParentDataNode {
+        let mut delegates = Delegates::new();
+        delegates.delegate(DelegateGivingData);
+        DelegatedParentDataNode(delegates)
+    }
+    fn update(&self, _: &mut DelegatedParentDataNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for DelegatedParentDataNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.0)
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ParentDataModifierTest.kt, delegatedParentData
+#[test]
+fn a_delegate_gives_its_owner_s_parent_data() {
+    let seen = Seen::default();
+    let policy = recording(&seen);
+    let _host = host(move || {
+        Layout(
+            Modifier,
+            policy.clone(),
+            callback(|| Leaf(Modifier.then_custom(DelegatedParentData))),
+        );
+    });
+    let seen = seen.borrow();
+    let id = id_of(&seen[0]).expect("the delegate's parent data");
+    assert_eq!((*id).downcast_ref::<&str>(), Some(&"data"));
+}
+
 /// `ParentDataAndLayoutNode`.
 struct ParentDataAndLayout(&'static str);
 

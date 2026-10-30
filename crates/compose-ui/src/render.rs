@@ -11,10 +11,11 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
+use crate::delegation::dispatch_for_kind;
 use crate::display_list::{Boundary, DisplayList, DrawGroup, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
-use crate::node_chain::NodeKinds;
+use crate::node_chain::{EntryId, NodeKinds, entry_state};
 use crate::tree::{NodeId, Observation, UiTree, observation_key};
 use crate::unit::Offset;
 
@@ -736,6 +737,14 @@ impl UiTree {
                         return;
                     }
                     let value = self.node_mut(node);
+                    if value.chain[index].state & entry_state::DELEGATING != 0 {
+                        let next_layer = layer + usize::from(bits.any(NodeKinds::LAYOUT));
+                        self.draw_delegating_entry(
+                            node, index, layer, next_layer, origins, list, observer,
+                        );
+                        self.draw_afters(node, &after, origins, list);
+                        return;
+                    }
                     let draws_content =
                         value.chain[index].node.as_draw().is_some_and(|draw| draw.draws_content());
                     let size = value.layers[layer].measured.into();
@@ -796,6 +805,62 @@ impl UiTree {
             translate(list, negate(content));
         }
         self.draw_afters(node, &after, origins, list);
+    }
+
+    /// Draws entry `index` of `node`, which has delegates, as Compose's `drawDirect` by
+    /// `dispatchForKind`: the node if it draws, else each delegate that does, in delegation
+    /// order, each with what's inside it as its content (so two drawing their content draw it
+    /// twice, as Compose's; one that doesn't hides it).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_delegating_entry(
+        &mut self,
+        node: NodeId,
+        index: usize,
+        layer: usize,
+        next_layer: usize,
+        origins: &[Offset],
+        list: &mut DisplayList,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
+    ) {
+        let density = self.density;
+        let value = self.node_mut(node);
+        let own = value.chain[index].own;
+        let size = value.layers[layer].measured.into();
+        let layout_direction = value.layout_direction;
+        // Out of the chain while it draws the rest of its node.
+        let mut entry = mem::replace(&mut value.chain[index].node, Box::new(crate::nodes::Taken));
+        dispatch_for_kind(
+            &mut *entry,
+            own,
+            NodeKinds::DRAW,
+            EntryId::NO_DELEGATE,
+            &mut |modifier_node, _| {
+                let Some(draw) = modifier_node.as_draw() else { return };
+                let mut scope = DrawScope {
+                    list: &mut *list,
+                    origin: origins[layer],
+                    size,
+                    density,
+                    layout_direction,
+                };
+                let mut content = |list: &mut DisplayList| {
+                    self.draw_chain(node, index + 1, next_layer, origins, list, observer)
+                };
+                if draw.draws_content() {
+                    let mut content_scope = crate::draw_modifiers::ContentDrawScope {
+                        scope: &mut scope,
+                        content: &mut content,
+                    };
+                    draw.draw_with_content(&mut content_scope);
+                } else {
+                    draw.draw(&mut scope);
+                    content(&mut *scope.list);
+                    draw.draw_after(&mut scope);
+                }
+            },
+        );
+        self.node_mut(node).chain[index].node = entry;
+        self.note_delegates_changed(node, index);
     }
 
     /// The `draw_after`s of `after`'s entries, innermost first.

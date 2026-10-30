@@ -21,6 +21,7 @@ mod clickable;
 mod clipboard;
 mod configuration;
 mod constraints;
+mod delegation;
 mod dispatch;
 mod display_list;
 mod draw;
@@ -89,6 +90,10 @@ pub mod platform {
     pub use crate::brush::{Gradient, Shader, ShaderIndex};
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::configuration::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets};
+    /// Node kinds and how a node's dispatch by kind goes, for tests of the visitors
+    /// (`NodeContext::visit_ancestors`, …), as Compose's internal `Nodes`: not for apps.
+    #[doc(hidden)]
+    pub use crate::delegation::dispatch_for_kind_of;
     pub use crate::display_list::{
         Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer, fits_in,
         single_drawing, single_drawing_extent,
@@ -103,6 +108,8 @@ pub mod platform {
     pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
+    #[doc(hidden)]
+    pub use crate::node_chain::NodeKinds;
     pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::paragraph::{
         CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,
@@ -149,6 +156,7 @@ pub use configuration::{
     PropValue, ScreenOrientation,
 };
 pub use constraints::Constraints;
+pub use delegation::{Delegate, Delegates};
 pub use draw::{DrawScope, SharedPath};
 pub use draw_modifiers::{CacheDrawScope, ContentDrawScope, DrawResult};
 pub use focus_manager::{

@@ -1044,6 +1044,19 @@ pub trait ModifierNode: Any {
     fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {
         None
     }
+    /// Its delegates, for a node made of several, as Compose's `DelegatingNode`: a node owning a
+    /// [`Delegates`](crate::delegation::Delegates) returns it here, always (it's asked once, when
+    /// the node is created). Each kind the node doesn't implement itself goes to its delegates of
+    /// that kind, in the order they were delegated to, and each delegate has its own lifecycle
+    /// (`on_attach`, `on_detach`, `on_reset`, `on_release`) and context.
+    ///
+    /// compose-rs's own extras that aren't kinds (`hit_clip`, `bring_into_view`,
+    /// `is_repaint_boundary`, `is_beyond_bounds_layout`, `as_selectable`) are the node's: it
+    /// forwards them to a delegate if it wants to. `is_pointer_observer` is each pointer input
+    /// node's, a delegate's too.
+    fn delegates(&mut self) -> Option<&mut crate::delegation::Delegates> {
+        None
+    }
     /// A text a `SelectionContainer` selects in.
     fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {
         None

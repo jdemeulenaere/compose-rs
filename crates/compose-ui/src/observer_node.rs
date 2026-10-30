@@ -97,10 +97,10 @@ impl UiTree {
             // Forgotten: a later write tells nothing until it observes again.
             observer.forget(key);
             let Some(index) = self.entry_index(node, entry) else { continue };
-            if self.node(node).chain[index].state & entry_state::ATTACHED == 0 {
+            if self.entry_or_delegate_state(node, index, entry) & entry_state::ATTACHED == 0 {
                 continue;
             }
-            self.with_entry(node, index, |modifier_node, context| {
+            self.with_entry_or_delegate(node, index, entry, |modifier_node, context| {
                 if let Some(observer) = modifier_node.as_observer() {
                     observer.on_observed_reads_changed(context);
                 }
