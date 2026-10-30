@@ -8,7 +8,7 @@
 
 use compose_ui::{
     Rect, Role, SemanticsActions as A, SemanticsProperties as P, SharedString, ToggleableState,
-    platform::{FrameStats, SemanticsNode, UiHost},
+    platform::{FrameStats, SemanticsSnapshot, UiHost},
 };
 
 use crate::serialize::Writer;
@@ -52,7 +52,7 @@ pub fn semantics_may_have_changed(stats: &FrameStats) -> bool {
 /// built when first asked after a frame that may have changed it, or a change since the last
 /// frame (a focus moved by an event), as they'd each build it otherwise (D1259).
 #[derive(Default)]
-pub struct KeptSemanticsTree(Option<SemanticsNode>);
+pub struct KeptSemanticsTree(Option<SemanticsSnapshot>);
 
 impl KeptSemanticsTree {
     /// A frame that did `stats` ran: returns whether the semantics may have changed
@@ -66,7 +66,7 @@ impl KeptSemanticsTree {
     }
 
     /// The tree, as it is now.
-    pub fn get(&mut self, ui: &UiHost) -> &SemanticsNode {
+    pub fn get(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
         if ui.semantics_changed_since_frame() {
             self.0 = None;
         }
@@ -75,12 +75,12 @@ impl KeptSemanticsTree {
 }
 
 /// A node's virtual view id: its semantics id, which no other node or content had (D1262).
-pub fn virtual_id(node: &SemanticsNode) -> i32 {
+pub fn virtual_id(node: &SemanticsSnapshot) -> i32 {
     node.semantics_id
 }
 
 /// Writes the merged tree `root` (its children: the root itself is the view).
-pub fn write_tree(root: &SemanticsNode, out: &mut Writer) {
+pub fn write_tree(root: &SemanticsSnapshot, out: &mut Writer) {
     out.bytes.clear();
     for child in &root.children {
         write_node(child, -1, root.bounds, out);
@@ -113,7 +113,7 @@ fn text_of(text: Option<&SharedString>) -> &str {
 
 /// The node's flags: its actions from its own configuration, as Compose's accessibility reads
 /// them (`unmergedConfig`), the rest from the merged one.
-fn flags(node: &SemanticsNode) -> u32 {
+fn flags(node: &SemanticsSnapshot) -> u32 {
     let config = &node.config;
     let mut flags = 0;
     let set = |flags: &mut u32, on: bool, bit: u32| {
@@ -152,7 +152,7 @@ fn flags(node: &SemanticsNode) -> u32 {
 /// description, error, pane title (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
 /// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
 /// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is.
-fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
+fn write_node(node: &SemanticsSnapshot, parent: i32, clip: Rect, out: &mut Writer) {
     let config = &node.config;
     let id = virtual_id(node);
     let visible = clipped(node.bounds, clip);
@@ -223,7 +223,7 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
 
 /// The scroll range of `node` along its axis (horizontal: `true`), from its own
 /// configuration, as Compose's accessibility reads it (D491): vertical first.
-fn scroll_range(node: &SemanticsNode) -> Option<(compose_ui::ScrollAxisRange, bool)> {
+fn scroll_range(node: &SemanticsSnapshot) -> Option<(compose_ui::ScrollAxisRange, bool)> {
     let own = node.unmerged_config();
     own.get(&P::VERTICAL_SCROLL_AXIS_RANGE)
         .map(|&range| (range, false))
@@ -231,7 +231,7 @@ fn scroll_range(node: &SemanticsNode) -> Option<(compose_ui::ScrollAxisRange, bo
 }
 
 /// The node of virtual id `id` in `root`'s tree.
-pub fn find(root: &SemanticsNode, id: i32) -> Option<&SemanticsNode> {
+pub fn find(root: &SemanticsSnapshot, id: i32) -> Option<&SemanticsSnapshot> {
     if virtual_id(root) == id {
         return Some(root);
     }
@@ -253,7 +253,7 @@ pub mod scroll_action {
 /// (D491): forward where it can scroll forward (towards its end, or its start if
 /// `reverse_scrolling`), paired with right (left when right to left) or down; backward and
 /// left (right) or up the other way.
-pub fn scroll_actions(node: &SemanticsNode) -> u8 {
+pub fn scroll_actions(node: &SemanticsSnapshot) -> u8 {
     use scroll_action::*;
     let forward = |range: compose_ui::ScrollAxisRange| {
         if range.reverse_scrolling { range.value > 0.0 } else { range.value < range.max_value }
@@ -284,8 +284,8 @@ pub fn scroll_actions(node: &SemanticsNode) -> u8 {
 
 /// The node of virtual id `id` in `root`'s tree, with its bounds as shown: clipped by the
 /// scrolling containers around it, as the record's.
-pub fn find_shown(root: &SemanticsNode, id: i32) -> Option<(&SemanticsNode, Rect)> {
-    fn visit(node: &SemanticsNode, id: i32, clip: Rect) -> Option<(&SemanticsNode, Rect)> {
+pub fn find_shown(root: &SemanticsSnapshot, id: i32) -> Option<(&SemanticsSnapshot, Rect)> {
+    fn visit(node: &SemanticsSnapshot, id: i32, clip: Rect) -> Option<(&SemanticsSnapshot, Rect)> {
         let shown = clipped(node.bounds, clip);
         if virtual_id(node) == id {
             return Some((node, shown.unwrap_or(node.bounds)));
@@ -305,7 +305,7 @@ pub fn find_shown(root: &SemanticsNode, id: i32) -> Option<(&SemanticsNode, Rect
 /// the `ScrollBy` amounts, as Compose's delegate works them out (a page, back for backward,
 /// left or up, the other way if `reverse_scrolling`, and for left or right when right to
 /// left); `None` if it can't scroll that way (D491).
-pub fn scroll_amount(node: &SemanticsNode, action: u8, page: Rect) -> Option<(f32, f32)> {
+pub fn scroll_amount(node: &SemanticsSnapshot, action: u8, page: Rect) -> Option<(f32, f32)> {
     use scroll_action::*;
     let can = |range: compose_ui::ScrollAxisRange, amount: f32| {
         (amount < 0.0 && range.value > 0.0) || (amount > 0.0 && range.value < range.max_value)

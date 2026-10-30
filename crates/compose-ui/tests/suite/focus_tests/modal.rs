@@ -425,6 +425,25 @@ fn attaching_on(flag: MutableState<bool>) {
 }
 
 #[test]
+fn a_request_behind_a_modal_whose_listener_moves_the_focus_there_answers_no() {
+    let scene = scene(|scene| {
+        Column!({
+            let moves = Modifier.on_focus_changed(move |state: FocusState| {
+                if state.is_focused() {
+                    scene.requester("second").request_focus();
+                }
+            });
+            Leaf(moves.then(scene.target("first")).size(10.dp()));
+            Leaf(scene.target("second").size(10.dp()));
+            modal_with_no_target(scene);
+        });
+    });
+    scene.set("modal", true);
+    assert!(!scene.request("first"), "its listener took the request's success");
+    assert_eq!(scene.state("second"), Active);
+}
+
+#[test]
 fn a_nodes_invalidation_asks_the_window_behind_a_modal_again() {
     let refused: &'static Cell<bool> = Box::leak(Box::default());
     let scene = scene(move |scene| {

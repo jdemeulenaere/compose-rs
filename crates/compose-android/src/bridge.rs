@@ -1253,7 +1253,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    fn password(node: &compose_ui::platform::SemanticsNode) -> Option<bool> {
+    fn password(node: &compose_ui::platform::SemanticsSnapshot) -> Option<bool> {
         use compose_ui::SemanticsProperties as P;
         let config = &node.config;
         if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {

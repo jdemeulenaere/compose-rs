@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use compose::runtime::platform;
-use compose::ui::platform::{FixedTextMeasurer, SemanticsNode, UiHost};
+use compose::ui::platform::{FixedTextMeasurer, SemanticsSnapshot, UiHost};
 use compose::ui::{
     Density, IntSize, Offset, PointerEvent, Role, SemanticsActions, SemanticsProperties,
 };
@@ -45,9 +45,9 @@ fn settle(host: &mut UiHost) {
 }
 
 fn find<'a>(
-    node: &'a SemanticsNode,
-    test: &dyn Fn(&SemanticsNode) -> bool,
-) -> Option<&'a SemanticsNode> {
+    node: &'a SemanticsSnapshot,
+    test: &dyn Fn(&SemanticsSnapshot) -> bool,
+) -> Option<&'a SemanticsSnapshot> {
     if test(node) {
         return Some(node);
     }
@@ -150,7 +150,7 @@ fn toggle_frames(reads: bool) -> (Duration, Duration) {
         settle(&mut host);
         host
     }
-    fn checkboxes(node: &SemanticsNode, out: &mut Vec<Offset>) {
+    fn checkboxes(node: &SemanticsSnapshot, out: &mut Vec<Offset>) {
         if node.config.get(&SemanticsProperties::ROLE) == Some(&Role::Checkbox) {
             let bounds = node.bounds;
             out.push(Offset::new(

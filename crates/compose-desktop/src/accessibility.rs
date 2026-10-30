@@ -4,7 +4,7 @@
 use accesskit::{Action, ActionRequest, Node, NodeId as AccessNodeId, Rect, Toggled, TreeUpdate};
 use compose_ui::{
     Role, SemanticsActions as A, SemanticsProperties as P, ToggleableState,
-    platform::{SemanticsNode, UiHost},
+    platform::{SemanticsSnapshot, UiHost},
 };
 
 /// The whole tree, as AccessKit asks for it: the window, then the merged semantics nodes, the
@@ -40,15 +40,15 @@ pub(crate) fn tree_update(host: &UiHost, title: &str) -> TreeUpdate {
 }
 
 /// A node's AccessKit id: its semantics id, which no other node or content had (D1262).
-fn id(node: &SemanticsNode) -> AccessNodeId {
+fn id(node: &SemanticsSnapshot) -> AccessNodeId {
     AccessNodeId(node.semantics_id as u64)
 }
 
 /// Adds `node` and its descendants to `nodes`, telling `visit` each id (parents first).
 fn add(
-    node: &SemanticsNode,
+    node: &SemanticsSnapshot,
     nodes: &mut Vec<(AccessNodeId, Node)>,
-    visit: &mut dyn FnMut(&SemanticsNode),
+    visit: &mut dyn FnMut(&SemanticsSnapshot),
 ) {
     visit(node);
     let config = &node.config;
@@ -172,7 +172,7 @@ fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
 pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
     let (node, disabled, range) = host.with_tree(|tree| {
         let root = tree.semantics_tree(true);
-        fn find(node: &SemanticsNode, target: AccessNodeId) -> Option<&SemanticsNode> {
+        fn find(node: &SemanticsSnapshot, target: AccessNodeId) -> Option<&SemanticsSnapshot> {
             if id(node) == target {
                 return Some(node);
             }

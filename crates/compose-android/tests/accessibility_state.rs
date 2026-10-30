@@ -442,9 +442,9 @@ fn kept_host(content: impl Fn() + 'static) -> UiHost {
 }
 
 fn node_with_tag<'a>(
-    node: &'a platform::SemanticsNode,
+    node: &'a platform::SemanticsSnapshot,
     tag: &str,
-) -> Option<&'a platform::SemanticsNode> {
+) -> Option<&'a platform::SemanticsSnapshot> {
     if node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| found.as_str() == tag) {
         return Some(node);
     }
@@ -461,9 +461,9 @@ fn the_kept_tree_follows_the_frames() {
         BasicText!(handle.get(), modifier = Modifier.test_tag("text"));
     });
     let mut kept = KeptSemanticsTree::default();
-    let first = kept.get(&host) as *const platform::SemanticsNode;
+    let first = kept.get(&host) as *const platform::SemanticsSnapshot;
     assert!(!kept.after_frame(&host.frame()), "an idle frame");
-    assert_eq!(kept.get(&host) as *const platform::SemanticsNode, first, "the same tree");
+    assert_eq!(kept.get(&host) as *const platform::SemanticsSnapshot, first, "the same tree");
     text.set("two");
     assert!(kept.after_frame(&host.frame()));
     let node = node_with_tag(kept.get(&host), "text").expect("the text");

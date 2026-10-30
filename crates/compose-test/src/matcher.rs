@@ -5,7 +5,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use compose_ui::platform::{NodeId, SemanticsNode};
+use compose_ui::platform::{NodeId, SemanticsSnapshot};
 use compose_ui::{
     ImeAction, ProgressBarRangeInfo, Rect, Role, SemanticsActions, SemanticsConfiguration,
     SemanticsProperties, SemanticsPropertyKey, SemanticsValue, SharedString, ToggleableState,
@@ -14,19 +14,19 @@ use compose_ui::{
 /// A semantics tree flattened in tree order (depth-first, a node before its children), with
 /// each node's parent and children: what finders and matchers walk.
 pub(crate) struct TreeView<'a> {
-    nodes: Vec<&'a SemanticsNode>,
+    nodes: Vec<&'a SemanticsSnapshot>,
     parents: Vec<Option<usize>>,
     children: Vec<Vec<usize>>,
 }
 
 impl<'a> TreeView<'a> {
-    pub(crate) fn new(root: &'a SemanticsNode) -> TreeView<'a> {
+    pub(crate) fn new(root: &'a SemanticsSnapshot) -> TreeView<'a> {
         let mut view = TreeView { nodes: Vec::new(), parents: Vec::new(), children: Vec::new() };
         view.add(root, None);
         view
     }
 
-    fn add(&mut self, node: &'a SemanticsNode, parent: Option<usize>) {
+    fn add(&mut self, node: &'a SemanticsSnapshot, parent: Option<usize>) {
         let index = self.nodes.len();
         self.nodes.push(node);
         self.parents.push(parent);
@@ -59,7 +59,7 @@ pub struct NodeRef<'a> {
 
 impl<'a> NodeRef<'a> {
     /// The node (with its subtree).
-    pub fn node(&self) -> &'a SemanticsNode {
+    pub fn node(&self) -> &'a SemanticsSnapshot {
         self.tree.nodes[self.index]
     }
 

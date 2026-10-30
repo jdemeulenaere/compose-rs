@@ -3,7 +3,7 @@
 //! their nodes again for every call, in the tree as it is then, after waiting for idle.
 
 use compose_ui::ImeAction;
-use compose_ui::platform::{NodeId, SemanticsNode};
+use compose_ui::platform::{NodeId, SemanticsSnapshot};
 use compose_ui::{
     AccessibilityAction, ActionFn, Key, ProgressBarRangeInfo, SemanticsActions,
     SemanticsProperties, SemanticsPropertyKey, SemanticsValue,
@@ -80,13 +80,13 @@ impl<'a> SemanticsNodeInteraction<'a> {
     }
 
     /// The node, or an error message.
-    fn find(&mut self) -> Result<SemanticsNode, String> {
+    fn find(&mut self) -> Result<SemanticsSnapshot, String> {
         self.with_node(|node| node.node().clone())
     }
 
     /// The node, as `fetchSemanticsNode`. Panics unless exactly one matches.
     #[track_caller]
-    pub fn fetch_semantics_node(&mut self) -> SemanticsNode {
+    pub fn fetch_semantics_node(&mut self) -> SemanticsSnapshot {
         self.find().unwrap_or_else(|message| panic!("compose-test: {message}"))
     }
 
@@ -234,7 +234,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
 
     /// Focuses the node and checks it took the focus, for the text actions.
     #[track_caller]
-    fn focus_for_text(&mut self, what: &str, require_editable: bool) -> SemanticsNode {
+    fn focus_for_text(&mut self, what: &str, require_editable: bool) -> SemanticsSnapshot {
         let node = self.fetch_semantics_node();
         assert!(
             !node.config.contains(&SemanticsProperties::DISABLED),
@@ -704,7 +704,7 @@ impl<'a> SemanticsNodeInteractionCollection<'a> {
 
     /// The nodes, as `fetchSemanticsNodes`.
     #[track_caller]
-    pub fn fetch_semantics_nodes(&mut self) -> Vec<SemanticsNode> {
+    pub fn fetch_semantics_nodes(&mut self) -> Vec<SemanticsSnapshot> {
         self.with_nodes(|nodes| nodes.iter().map(|node| node.node().clone()).collect())
     }
 

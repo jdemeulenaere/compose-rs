@@ -533,6 +533,39 @@ impl UiTree {
         Some((unclipped, coordinates.clipped_bounds))
     }
 
+    /// `node`'s outermost layer in the root, unclipped, through the graphics layers around it.
+    pub(crate) fn outer_bounds_in_root(&mut self, node: NodeId) -> Rect {
+        let size = self.node(node).layers[0].size;
+        self.rect_in_root(node, 0, Some(0), size)
+    }
+
+    /// The product of the graphics layers' alphas: `node`'s before its chain entry `before_entry`
+    /// and its ancestors', its window's only.
+    pub(crate) fn alpha_around(&self, node: NodeId, before_entry: Option<usize>) -> f32 {
+        let mut alpha = 1.0;
+        let (mut current, mut before) = (node, before_entry);
+        loop {
+            let value = self.node(current);
+            let end = before.unwrap_or(value.chain.len());
+            for index in 0..end {
+                if let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()
+                {
+                    alpha *= self.properties_of_layer(current, index, graphics).alpha;
+                }
+            }
+            if value.overlay {
+                return alpha;
+            }
+            match value.parent {
+                Some(parent) => {
+                    current = parent;
+                    before = None;
+                }
+                None => return alpha,
+            }
+        }
+    }
+
     /// Whether `node` and its ancestors are placed: laid out where the root shows it.
     pub(crate) fn is_placed_in_root(&self, node: NodeId) -> bool {
         let mut current = Some(node);

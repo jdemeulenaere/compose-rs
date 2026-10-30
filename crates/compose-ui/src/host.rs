@@ -11,7 +11,7 @@ use compose_runtime::Composition;
 use crate::display_list::FlatDisplayList;
 use crate::fixed_text::FixedTextMeasurer;
 use crate::input::{Action, KeyEvent, PointerEvent};
-use crate::semantics::SemanticsNode;
+use crate::semantics::SemanticsSnapshot;
 use crate::text::TextMeasurer;
 use crate::tree::{NodeId, UiTree};
 use crate::unit::{Density, IntSize};
@@ -1095,7 +1095,13 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
-    pub fn semantics_tree(&self, merged: bool) -> SemanticsNode {
+    /// The semantics tree as live handles, as `RootForTest.semanticsOwner`.
+    pub fn semantics_owner(&self) -> crate::semantics_node::SemanticsOwner {
+        let key = self.with_tree(|tree| tree.focus_requests.tree_key.get());
+        crate::semantics_node::SemanticsOwner::new(key)
+    }
+
+    pub fn semantics_tree(&self, merged: bool) -> SemanticsSnapshot {
         self.with_tree(|tree| tree.semantics_tree(merged))
     }
 

@@ -76,10 +76,11 @@ impl From<bool> for ToggleableState {
     }
 }
 
-/// A node of the semantics tree: a layout node with semantics, its bounds in the root (in
-/// pixels), and its configuration (merged, in the merged tree).
+/// A copy of a node of the semantics tree and what's below it: a layout node with semantics, its
+/// bounds in the root (in pixels), and its configuration (merged, in the merged tree). For what
+/// walks a tree at leisure, a bridge's frame, a test's matchers; `SemanticsNode` is the live handle.
 #[derive(Clone, Debug)]
-pub struct SemanticsNode {
+pub struct SemanticsSnapshot {
     pub id: NodeId,
     /// As Compose's `SemanticsNode.id`: its layout node's semantics id, another when the node is
     /// reused, what the accessibility bridges name the node by (D1262).
@@ -92,10 +93,10 @@ pub struct SemanticsNode {
     /// A merging node's own configuration, in the merged tree (`None`: the same as `config`):
     /// what Compose's accessibility reads actions and scrolls from (`unmergedConfig`, D491).
     pub own_config: Option<Box<SemanticsConfiguration>>,
-    pub children: Vec<SemanticsNode>,
+    pub children: Vec<SemanticsSnapshot>,
 }
 
-impl SemanticsNode {
+impl SemanticsSnapshot {
     /// The node's own configuration, unmerged, as Compose's `unmergedConfig`.
     pub fn unmerged_config(&self) -> &SemanticsConfiguration {
         self.own_config.as_deref().unwrap_or(&self.config)
@@ -110,7 +111,7 @@ impl SemanticsNode {
     }
 
     /// This node and its descendants, depth-first.
-    pub fn flatten(&self) -> Vec<&SemanticsNode> {
+    pub fn flatten(&self) -> Vec<&SemanticsSnapshot> {
         let mut out = Vec::new();
         let mut stack = vec![self];
         while let Some(node) = stack.pop() {
@@ -168,6 +169,10 @@ use std::rc::Rc;
 pub(crate) struct OwnSemantics {
     pub(crate) config: SemanticsConfiguration,
     pub(crate) layer: usize,
+    /// The chain entry giving those bounds.
+    pub(crate) bounds_entry: usize,
+    /// Whether a modifier here is important for bounds.
+    pub(crate) has_bounds: bool,
 }
 
 thread_local! {
@@ -187,7 +192,7 @@ impl UiTree {
     /// The semantics tree with deactivated content in it too (a lazy list's items kept for
     /// reuse), where they were last placed, as Compose's `skipDeactivatedNodes = false`: for
     /// tests' `assert_is_deactivated`.
-    pub fn semantics_tree_with_deactivated(&mut self, merged: bool) -> SemanticsNode {
+    pub fn semantics_tree_with_deactivated(&mut self, merged: bool) -> SemanticsSnapshot {
         /// Restores the flag however the build ends (a panic in it included).
         struct Restore(bool);
         impl Drop for Restore {
@@ -269,8 +274,8 @@ impl UiTree {
                 layer += 1;
             }
         }
-        let mut first_layer = None;
-        let mut merging_layer = None;
+        let mut first_bounds = None;
+        let mut merging_bounds = None;
         // From the innermost to the outermost, so an outer modifier's values win, as Compose's
         // `collapsedSemantics` (`tailToHead`).
         for index in (0..value.chain.len()).rev() {
@@ -300,16 +305,17 @@ impl UiTree {
                     // The bounds: the outermost merging modifier's that is important for them,
                     // else the outermost important one's (Compose's `findCoordinatorToGetBounds`).
                     if semantics.is_important_for_bounds() {
-                        first_layer = Some(layers[index]);
+                        first_bounds = Some((layers[index], index));
                         if own.is_merging_semantics_of_descendants {
-                            merging_layer = Some(layers[index]);
+                            merging_bounds = Some((layers[index], index));
                         }
                     }
                 },
             );
         }
         self.bind_request_focus(node, &mut config);
-        OwnSemantics { config, layer: merging_layer.or(first_layer).unwrap_or(0) }
+        let (layer, bounds_entry) = merging_bounds.or(first_bounds).unwrap_or((0, 0));
+        OwnSemantics { config, layer, bounds_entry, has_bounds: first_bounds.is_some() }
     }
 
     /// Checks every kept configuration of content in use against its modifiers' now: a stale
@@ -383,6 +389,12 @@ impl UiTree {
             }
             at = parent;
         }
+        self.own_with_parts(node)
+    }
+
+    /// `node`'s own configuration with what its parts set (`PART_OF_PARENT`), placed or not.
+    pub(crate) fn own_with_parts(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
+        let own = self.own_semantics(node)?;
         let mut config = own.config.clone();
         if !config.is_clearing_semantics {
             let mut stack: SmallVec<[NodeId; 8]> =
@@ -408,6 +420,36 @@ impl UiTree {
         Some(config)
     }
 
+    /// `node` with what it merges, as `mergeConfig`.
+    pub(crate) fn merged_config_of(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
+        let mut own = self.own_with_parts(node)?;
+        let mut config = own.clone();
+        if !config.is_clearing_semantics {
+            let mut merging = Vec::new();
+            for child in self.z_sorted_children(node) {
+                self.merge_into(child, &mut config, Some(&mut own), &mut merging);
+            }
+        }
+        Some(config)
+    }
+
+    /// `node`'s children in drawing order, as `zSortedChildren`: by `z_index`, then placed, those
+    /// not placed last.
+    pub(crate) fn z_sorted_children(&self, node: NodeId) -> SmallVec<[NodeId; 8]> {
+        let children = &self.node(node).children;
+        let mut out: SmallVec<[NodeId; 8]> = SmallVec::with_capacity(children.len());
+        match self.placement_order(node) {
+            Some(order) => out.extend(order.iter().map(|&index| children[index as usize].node)),
+            None => {
+                out.extend(
+                    children.iter().map(|child| child.node).filter(|&id| self.node(id).placed),
+                );
+            }
+        }
+        out.extend(children.iter().map(|child| child.node).filter(|&id| !self.node(id).placed));
+        out
+    }
+
     /// Binds a `RequestFocus` offered without an action (`request_focus_of_node`) to `node`:
     /// performing it asks the tree to focus the node's focus target, as a `FocusRequester`
     /// does: at once where the tree is free (D1251, D1268).
@@ -431,16 +473,14 @@ impl UiTree {
     /// The semantics tree, as Compose's: merged (`merged`), a node merging its descendants
     /// takes their properties and hides them, unless they merge themselves; unmerged, every
     /// node with semantics appears. Nodes not placed are left out.
-    pub fn semantics_tree(&mut self, merged: bool) -> SemanticsNode {
+    pub fn semantics_tree(&mut self, merged: bool) -> SemanticsSnapshot {
         if CHECK_CACHE.with(std::cell::Cell::get) {
             self.check_semantics_cache();
         }
         let root = self.root_id();
         let mut children = Vec::new();
         let mut config = SemanticsConfiguration::default();
-        let count = self.node(root).children.len();
-        for index in 0..count {
-            let child = self.node(root).children[index].node;
+        for child in self.z_sorted_children(root) {
             self.semantics_of(child, merged, &mut config, &mut children);
         }
         // Overlays (popups, dialogs) are roots of their own, as Compose's windows: after the
@@ -453,7 +493,7 @@ impl UiTree {
             }
         }
         let rtl = self.node(root).layout_direction == crate::alignment::LayoutDirection::Rtl;
-        SemanticsNode {
+        SemanticsSnapshot {
             id: root,
             semantics_id: self.node(root).semantics_id,
             bounds: self.bounds_in_root(root),
@@ -471,7 +511,7 @@ impl UiTree {
         node: NodeId,
         merged: bool,
         parent: &mut SemanticsConfiguration,
-        out: &mut Vec<SemanticsNode>,
+        out: &mut Vec<SemanticsSnapshot>,
     ) {
         self.semantics_of_node(node, merged, parent, out);
     }
@@ -481,7 +521,7 @@ impl UiTree {
         node: NodeId,
         merged: bool,
         parent: &mut SemanticsConfiguration,
-        out: &mut Vec<SemanticsNode>,
+        out: &mut Vec<SemanticsSnapshot>,
     ) {
         // Overlays are visited as roots of their own.
         if self.node(node).overlay {
@@ -495,17 +535,13 @@ impl UiTree {
         node: NodeId,
         merged: bool,
         parent: &mut SemanticsConfiguration,
-        out: &mut Vec<SemanticsNode>,
+        out: &mut Vec<SemanticsSnapshot>,
     ) {
         if self.left_out(node) {
             return;
         }
         let own = self.own_semantics(node).filter(|own| !own.config.is_empty());
-        let children_of = |tree: &mut UiTree| {
-            (0..tree.node(node).children.len())
-                .map(|index| tree.node(node).children[index].node)
-                .collect::<SmallVec<[NodeId; 8]>>()
-        };
+        let children_of = |tree: &mut UiTree| tree.z_sorted_children(node);
         match own {
             None => {
                 for child in children_of(self) {
@@ -544,7 +580,7 @@ impl UiTree {
                 let size = self.node(node).layers[layer].measured;
                 let rtl =
                     self.node(node).layout_direction == crate::alignment::LayoutDirection::Rtl;
-                out.push(SemanticsNode {
+                out.push(SemanticsSnapshot {
                     id: node,
                     semantics_id: self.node(node).semantics_id,
                     bounds: Rect::from_offset_size(origin, size.into()),
@@ -566,7 +602,7 @@ impl UiTree {
         node: NodeId,
         config: &mut SemanticsConfiguration,
         mut own: Option<&mut SemanticsConfiguration>,
-        children: &mut Vec<SemanticsNode>,
+        children: &mut Vec<SemanticsSnapshot>,
     ) {
         // Only deactivated content is skipped, as `fillOneLayerOfSemanticsWrappers`
         // (`isAttached && !isDeactivated`): what's merely unplaced still merges (a navigation
@@ -597,9 +633,7 @@ impl UiTree {
                 return;
             }
         }
-        let count = self.node(node).children.len();
-        for index in 0..count {
-            let child = self.node(node).children[index].node;
+        for child in self.z_sorted_children(node) {
             self.merge_into(child, config, own.as_deref_mut(), children);
         }
     }

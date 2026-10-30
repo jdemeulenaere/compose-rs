@@ -12,10 +12,10 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::platform::{FixedTextMeasurer, SemanticsNode, UiHost};
+use compose_ui::platform::{FixedTextMeasurer, SemanticsSnapshot, UiHost};
 use compose_ui::*;
 
-fn own_text(node: &SemanticsNode) -> Vec<String> {
+fn own_text(node: &SemanticsSnapshot) -> Vec<String> {
     node.config
         .get(&SemanticsProperties::TEXT)
         .into_iter()
@@ -186,7 +186,7 @@ fn focus_shows_in_the_semantics_at_each_change() {
 
 // ---- Scrolling ----------------------------------------------------------------------------------
 
-fn vertical_range(node: &SemanticsNode) -> ScrollAxisRange {
+fn vertical_range(node: &SemanticsSnapshot) -> ScrollAxisRange {
     *node.unmerged_config().get(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE).expect("a range")
 }
 
@@ -266,7 +266,7 @@ fn a_lazy_lists_range_follows_its_scroll_and_items() {
 
 // ---- Text fields --------------------------------------------------------------------------------
 
-fn editable_text(node: &SemanticsNode) -> String {
+fn editable_text(node: &SemanticsSnapshot) -> String {
     node.config
         .get(&SemanticsProperties::EDITABLE_TEXT)
         .map_or(String::new(), |text| text.as_str().to_string())
@@ -545,7 +545,7 @@ fn host(content: impl Fn() + 'static) -> UiHost {
     host
 }
 
-fn find_by_tag<'a>(node: &'a SemanticsNode, tag: &str) -> Option<&'a SemanticsNode> {
+fn find_by_tag<'a>(node: &'a SemanticsSnapshot, tag: &str) -> Option<&'a SemanticsSnapshot> {
     if node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| found.as_str() == tag) {
         return Some(node);
     }

@@ -302,7 +302,7 @@ fn a_bars_row_is_a_selectable_group() {
     });
     assert_eq!(bounds(&mut ui, "bar").height(), 80.0);
     let root = ui.host().semantics_tree(false);
-    fn has_group(node: &compose_ui::platform::SemanticsNode) -> bool {
+    fn has_group(node: &compose_ui::platform::SemanticsSnapshot) -> bool {
         node.config.contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
             || node.children.iter().any(has_group)
     }

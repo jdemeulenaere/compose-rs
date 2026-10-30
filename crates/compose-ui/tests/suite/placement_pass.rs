@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_runtime::*;
-use compose_ui::platform::{SemanticsNode, UiHost};
+use compose_ui::platform::{SemanticsSnapshot, UiHost};
 use compose_ui::*;
 use support::*;
 
@@ -49,7 +49,7 @@ fn placing(
 
 /// The bounds of the node tagged `tag`, if it's in the semantics (placed).
 fn bounds_of(host: &UiHost, tag: &str) -> Option<Rect> {
-    fn find(node: &SemanticsNode, tag: &str) -> Option<Rect> {
+    fn find(node: &SemanticsSnapshot, tag: &str) -> Option<Rect> {
         let tagged = node.config.get(&SemanticsProperties::TEST_TAG);
         if tagged.is_some_and(|tagged| tagged.as_str() == tag) {
             return Some(node.bounds);

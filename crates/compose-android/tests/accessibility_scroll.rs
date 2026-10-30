@@ -127,13 +127,13 @@ fn page() -> compose_ui::Rect {
 }
 
 /// The scrolling node of `content`'s merged semantics tree.
-fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsNode {
+fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsSnapshot {
     let mut host = UiHost::headless(200, 200);
     host.set_content(content);
     host.settle(10);
     fn find(
-        node: &compose_ui::platform::SemanticsNode,
-    ) -> Option<compose_ui::platform::SemanticsNode> {
+        node: &compose_ui::platform::SemanticsSnapshot,
+    ) -> Option<compose_ui::platform::SemanticsSnapshot> {
         if node
             .config
             .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
@@ -273,8 +273,8 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
     host.settle(10);
     let root = host.semantics_tree(true);
     fn find(
-        node: &compose_ui::platform::SemanticsNode,
-    ) -> Option<&compose_ui::platform::SemanticsNode> {
+        node: &compose_ui::platform::SemanticsSnapshot,
+    ) -> Option<&compose_ui::platform::SemanticsSnapshot> {
         if node
             .config
             .get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
@@ -420,10 +420,10 @@ fn accessible_grid(config: GridConfig, first: usize, offset: i32) -> UiHost {
     host
 }
 
-fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsNode {
+fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsSnapshot {
     fn find(
-        node: &compose_ui::platform::SemanticsNode,
-    ) -> Option<compose_ui::platform::SemanticsNode> {
+        node: &compose_ui::platform::SemanticsSnapshot,
+    ) -> Option<compose_ui::platform::SemanticsSnapshot> {
         let config = &node.config;
         if config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE).is_some()
             || config.get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE).is_some()
@@ -436,7 +436,7 @@ fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsNode {
 }
 
 fn shows_text(host: &UiHost, text: &str) -> bool {
-    fn find(node: &compose_ui::platform::SemanticsNode, text: &str) -> bool {
+    fn find(node: &compose_ui::platform::SemanticsSnapshot, text: &str) -> bool {
         node.config
             .get(&compose_ui::SemanticsProperties::TEXT)
             .is_some_and(|texts| texts.iter().any(|it| it.as_str() == text))

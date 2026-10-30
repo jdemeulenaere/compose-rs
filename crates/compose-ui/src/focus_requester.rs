@@ -151,7 +151,7 @@ pub(crate) fn on_free_tree<R>(key: u32, f: impl FnOnce(&mut UiTree) -> R) -> Opt
 }
 
 /// Reads the tree of `key` if it's free.
-fn read_free_tree<R>(key: u32, read: impl FnOnce(&mut UiTree) -> R) -> Option<R> {
+pub(crate) fn read_free_tree<R>(key: u32, read: impl FnOnce(&mut UiTree) -> R) -> Option<R> {
     let mut read = Some(read);
     let mut result = None;
     with_free_tree(key, &mut |tree: &mut UiTree| {
@@ -506,15 +506,22 @@ impl FocusRequester {
         let requester = *self;
         let performed = on_free_tree(key, |tree| {
             let done = requester.perform_on_tree(tree, operation);
-            (done, tree.focus.active)
+            (done, tree.active_of_each_window())
         });
         match performed {
             Some((done, focused)) => {
                 // Its callbacks ran as it returned: one that moved the focus took the request's
                 // success, as it stops a Compose transaction.
                 if done && matches!(operation, RequesterOperation::Request(_)) {
-                    let now = read_free_tree(key, |tree| tree.focus.active);
-                    return now.is_none_or(|now| now == focused);
+                    let now = read_free_tree(key, |tree| tree.active_of_each_window());
+                    // The window a callback opened has nothing to say of this request.
+                    return now.is_none_or(|now| {
+                        focused.iter().all(|(window, active)| {
+                            now.iter()
+                                .find(|(other, _)| other == window)
+                                .is_none_or(|(_, now)| now == active)
+                        })
+                    });
                 }
                 done
             }

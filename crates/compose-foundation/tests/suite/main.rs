@@ -124,6 +124,7 @@ mod semantics_actions;
 mod semantics_invalidation;
 mod semantics_modifier_node;
 mod semantics_properties;
+mod semantics_tree;
 mod shadow;
 mod shape_parity;
 mod snapping;

@@ -1133,7 +1133,7 @@ fn the_focus_goes_to_the_first_focus_target_delegate_and_keys_to_each_key_delega
 fn a_delegate_s_semantics_are_its_owner_s() {
     let host = layout(vec![element(|| Mod::wrapping("owner", Mod::semantics("tagged")))]);
     let tree = host.semantics_tree(false);
-    fn has_tag(node: &SemanticsNode, tag: &str) -> bool {
+    fn has_tag(node: &SemanticsSnapshot, tag: &str) -> bool {
         node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| &**found == tag)
             || node.children.iter().any(|child| has_tag(child, tag))
     }
@@ -2572,7 +2572,7 @@ fn invalidating_a_subtree_computes_its_semantics_again() {
         });
     });
     host.frame();
-    fn find(node: &SemanticsNode, tag: &str) -> bool {
+    fn find(node: &SemanticsSnapshot, tag: &str) -> bool {
         node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| &**found == tag)
             || node.children.iter().any(|child| find(child, tag))
     }

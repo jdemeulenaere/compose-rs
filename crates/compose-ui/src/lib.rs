@@ -73,6 +73,7 @@ mod prefetch;
 mod remeasurement;
 mod render;
 mod semantics;
+mod semantics_node;
 mod semantics_properties;
 mod span_style;
 mod text;
@@ -134,7 +135,7 @@ pub mod platform {
     /// A semantics value of an application's own type, as `ValueSlot` holds it: not for apps.
     #[doc(hidden)]
     pub use crate::semantics::{OtherSlot, OtherValue};
-    pub use crate::semantics::{SemanticsNode, set_semantics_cache_check};
+    pub use crate::semantics::{SemanticsSnapshot, set_semantics_cache_check};
     pub use crate::text::{
         DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer,
         TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,
@@ -267,6 +268,10 @@ pub use semantics::{
     ScrollToIndexFn, SemanticsActions, SemanticsConfiguration, SemanticsProperties,
     SemanticsPropertyKey, SemanticsValue, SetProgressFn, SetSelectionFn, ShowTextSubstitutionFn,
     StringList, TextActionFn, ToggleableState, ValueSlot,
+};
+pub use semantics_node::{
+    CONTENT_DESCRIPTION_FAKE_NODE_ID_OFFSET, LayoutInfo, ROLE_FAKE_NODE_ID_OFFSET, SemanticsNode,
+    SemanticsOwner,
 };
 pub use span_style::SpanStyle;
 pub use text::{SharedString, TextLayoutResult};

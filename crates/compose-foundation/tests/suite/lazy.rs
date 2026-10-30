@@ -401,7 +401,7 @@ fn tab_moves_through_a_grid_past_the_lines_laid_out() {
 // ---- Scroll semantics (D478) -------------------------------------------------------------------
 
 /// The semantics node of the list tagged `tag` (its scroll's, outermost).
-fn scroll_node(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::platform::SemanticsNode {
+fn scroll_node(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::platform::SemanticsSnapshot {
     ui.on_node_with_tag(tag).fetch_semantics_node()
 }
 

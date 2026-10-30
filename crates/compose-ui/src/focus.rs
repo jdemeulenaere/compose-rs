@@ -450,6 +450,15 @@ impl UiTree {
         self.in_window(window, f)
     }
 
+    /// Each window with its active target.
+    pub(crate) fn active_of_each_window(
+        &self,
+    ) -> SmallVec<[(Option<NodeId>, Option<FocusTargetRef>); 2]> {
+        let focus = &self.focus;
+        let below = focus.other_windows.iter().map(|other| (other.window, other.active));
+        std::iter::once((focus.window, focus.active)).chain(below).collect()
+    }
+
     /// Whether the active target of a window, any window, is one `matches` says.
     pub(crate) fn a_window_has_active(&self, matches: impl Fn(FocusTargetRef) -> bool) -> bool {
         self.focus.active.is_some_and(&matches)
