@@ -8,7 +8,9 @@ mod observer;
 mod records;
 
 pub use global::{ChangeSet, ObserverHandle, Snapshot, StateObserverFn, Turn};
-pub(crate) use global::{Snapshots, global_id, notify_read, pass_composed, wrote};
+pub(crate) use global::{
+    Snapshots, global_id, notify_read, pass_composed, send_unsent_outside_turns, wrote,
+};
 pub use observer::SnapshotStateObserver;
 pub(crate) use records::{Records, SnapshotId, StateObjectCell};
 

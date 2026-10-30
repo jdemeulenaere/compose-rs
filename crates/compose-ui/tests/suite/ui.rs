@@ -753,3 +753,210 @@ fn an_events_writes_ask_for_a_frame_by_the_time_it_returns() {
         host.frame();
     }
 }
+
+// ---- Turns and their sends (D751, D755) --------------------------------------------------------
+
+/// A node hearing every event a host's entry points dispatch, each writing `count`.
+struct EveryEvent {
+    count: MutableState<i32>,
+}
+
+struct EveryEventNode {
+    count: MutableState<i32>,
+}
+
+impl EveryEventNode {
+    fn write(&self) {
+        self.count.update(|count| count + 1);
+    }
+}
+
+impl ModifierNodeElement for EveryEvent {
+    type Node = EveryEventNode;
+    fn create(&self) -> EveryEventNode {
+        EveryEventNode { count: self.count }
+    }
+    fn update(&self, _node: &mut EveryEventNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for EveryEventNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        Some(self)
+    }
+    fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for EveryEventNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        _pass: PointerEventPass,
+        _bounds: IntSize,
+        _context: &mut EventContext<'_>,
+    ) {
+        if event.kind == PointerEventType::Exit {
+            self.write();
+        }
+    }
+}
+
+impl FocusTargetModifierNode for EveryEventNode {
+    fn on_focus_changed(&mut self, _focused: bool, _context: &mut EventContext<'_>) {
+        self.write();
+    }
+}
+
+impl KeyInputModifierNode for EveryEventNode {
+    fn on_text_input(&mut self, _text: &str, _context: &mut EventContext<'_>) -> bool {
+        self.write();
+        true
+    }
+    fn on_preedit(
+        &mut self,
+        _text: &str,
+        _cursor: Option<(usize, usize)>,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        self.write();
+        true
+    }
+    fn on_ime_action(&mut self, _action: ImeAction, _context: &mut EventContext<'_>) -> bool {
+        self.write();
+        true
+    }
+}
+
+/// What a host hears: its frame waker's calls, and the wake handler's (a tick asked of the
+/// platform, as Android's `ComposeRsNative.wake`).
+struct HostCalls {
+    frames: Rc<Cell<u32>>,
+    wakes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl HostCalls {
+    fn of(host: &UiHost) -> HostCalls {
+        let frames = Rc::new(Cell::new(0));
+        let counted = frames.clone();
+        host.set_frame_waker(move || counted.set(counted.get() + 1));
+        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = wakes.clone();
+        set_wake_handler(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        HostCalls { frames, wakes }
+    }
+
+    fn wakes(&self) -> usize {
+        self.wakes.swap(0, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Android's tick: what the platform runs when woken (`ComposeRsNative.tick`).
+fn tick() {
+    fire_timers();
+    run_ready();
+}
+
+/// A write outside any turn (Android's `setProp`) asks the host for a tick, and the tick sends
+/// it, though no task is ready: the frame waker runs, and the frame shows the value.
+#[test]
+fn a_write_outside_a_turn_is_sent_by_the_tick_it_asks_for() {
+    let shown = Rc::new(Cell::new(0.0));
+    let seen = shown.clone();
+    let mut host = host(move || {
+        let number = LOCAL_HOST_PROPS.current().number("tab");
+        seen.set(number.unwrap_or(0.0));
+    });
+    let calls = HostCalls::of(&host);
+    host.frame();
+    calls.frames.set(0);
+    host.props().set("tab", Some(PropValue::Number(2.0)));
+    assert_eq!(calls.wakes(), 1, "the write asks for a tick");
+    assert_eq!(calls.frames.get(), 0, "nothing is invalidated yet");
+    tick();
+    assert!(calls.frames.get() > 0, "the tick sends, which asks for a frame");
+    host.frame();
+    assert_eq!(shown.get(), 2.0);
+}
+
+/// Each of the host's entry points is a turn: what it wrote, itself or through a handler, has
+/// asked for a frame by the time it returns, with no tick to wait for. Without its turn, the
+/// write would ask the platform for a tick, and show one tick later.
+#[test]
+fn every_entry_point_of_the_host_is_a_turn() {
+    let count = mutable_state_of(0);
+    let handle = count.handle();
+    let mut host = host(move || {
+        handle.get();
+        BackHandler!(on_back = move || handle.update(|count| count + 1));
+        Leaf(Modifier.size(20.dp()).then_custom(EveryEvent { count: handle }));
+    });
+    let calls = HostCalls::of(&host);
+    let node = host.with_tree(|tree| tree.focus_order()[0]);
+    host.frame();
+    let density = Density::new(2.0);
+    type Event<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
+    let events: [Event; 13] = [
+        ("send_pointer_left", &|host| {
+            host.send_pointer(PointerEvent::moved(Offset::new(5.0, 5.0), false));
+            host.frame();
+            calls.frames.set(0);
+            calls.wakes();
+            host.send_pointer_left();
+        }),
+        ("resize", &|host| host.resize(IntSize::new(190, 90))),
+        ("set_layout_direction", &|host| host.set_layout_direction(LayoutDirection::Rtl)),
+        ("set_view_configuration", &|host| {
+            host.set_view_configuration(Some(ViewConfiguration::at(density)));
+        }),
+        ("set_density", &|host| host.set_density(density)),
+        ("set_configuration", &|host| {
+            host.set_configuration(Configuration::from_window(
+                IntSize::new(190, 90),
+                density,
+                true,
+            ));
+        }),
+        ("set_window_insets", &|host| {
+            host.set_window_insets(PlatformWindowInsets {
+                status_bars: Insets::new(1, 2, 3, 4),
+                ..Default::default()
+            });
+        }),
+        ("request_focus", &|host| host.request_focus(node)),
+        ("send_text", &|host| {
+            host.send_text("x");
+        }),
+        ("send_preedit", &|host| {
+            host.send_preedit("x", None);
+        }),
+        ("perform_ime_action", &|host| {
+            host.perform_ime_action(ImeAction::Done);
+        }),
+        ("clear_focus", &|host| host.clear_focus()),
+        ("on_back_pressed", &|host| {
+            host.on_back_pressed();
+        }),
+    ];
+    for (name, event) in events {
+        calls.frames.set(0);
+        calls.wakes();
+        let before = count.get();
+        event(&mut host);
+        assert_eq!(calls.wakes(), 0, "{name}: a write outside a turn asked for a tick");
+        assert!(calls.frames.get() > 0, "{name} asked for a frame");
+        // The handlers' events write `count` (the setters write the host's own states).
+        if !name.starts_with("set_") && name != "resize" {
+            assert_ne!(count.get(), before, "{name} reached its handler");
+        }
+        host.frame();
+    }
+}

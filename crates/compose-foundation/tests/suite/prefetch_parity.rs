@@ -473,3 +473,56 @@ fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
     assert!(!ui.host().prefetch(later()));
     assert!(live_items().contains(&0), "{:?}", live_items());
 }
+
+/// Prefetching and drawing ahead are turns, as the host's other entry points (D751, D755): what
+/// an item's effect writes, or its drawing, asks for no tick of the platform. Without their
+/// turns the write would, and show one tick later.
+#[test]
+fn prefetching_and_drawing_ahead_are_turns() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let written = mutable_state_of(0);
+    let handle = written.handle();
+    let writes = std::rc::Rc::new(Cell::new(0));
+    // Writes without reading: a drawing that read it would invalidate itself.
+    let write = move || {
+        writes.set(writes.get() + 1);
+        handle.set(writes.get());
+    };
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    use_optimizations(with(Optimization::DRAW_PREFETCHED_AHEAD));
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let write = write.clone();
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                let write = write.clone();
+                scope.items(1000, move |_| {
+                    let (effect, draw) = (write.clone(), write.clone());
+                    SideEffect(move || effect());
+                    Box!(
+                        modifier = Modifier.size((100.dp(), 20.dp())).draw_behind(move |_| draw()),
+                        {}
+                    );
+                });
+            }
+        );
+    });
+    state.dispatch_raw_delta(30.0);
+    ui.wait_for_idle();
+    let wakes = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = wakes.clone();
+    compose_runtime::platform::set_wake_handler(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let before = written.get();
+    ui.host().prefetch(later());
+    assert_ne!(written.get(), before, "an item's effect ran");
+    assert_eq!(wakes.swap(0, Ordering::SeqCst), 0, "prefetching is a turn");
+    assert!(ui.host().has_draw_ahead_work());
+    let before = written.get();
+    assert!(ui.host().draw_ahead().is_some());
+    assert_ne!(written.get(), before, "an item was drawn");
+    assert_eq!(wakes.swap(0, Ordering::SeqCst), 0, "drawing ahead is a turn");
+}

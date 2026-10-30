@@ -525,6 +525,15 @@ fn send_settled() {
     crate::executor::wake_host();
 }
 
+/// What a host's tick does with no task to run: if writes made outside any turn wait, a turn, so
+/// they're sent and what apply observers write in turn settles too (D755). Those writes asked
+/// for this tick, and nothing else would send them until an unrelated frame.
+pub(crate) fn send_unsent_outside_turns() {
+    if with_runtime(|runtime| runtime.snapshots.has_changes() && runtime.snapshots.turns == 0) {
+        drop(Turn::begin());
+    }
+}
+
 /// A turn of a host's loop (a run of the executor's tasks, an event, a frame): writes made in it
 /// don't wake the host, and the outermost turn sends the changes when it ends and advances the
 /// global snapshot.

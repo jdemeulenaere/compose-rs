@@ -296,6 +296,10 @@ pub fn run_ready() -> bool {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .append(&mut deferred);
             }
+            // No task ran: a write outside any turn still has this one to send it (D755).
+            if _turn.is_none() {
+                crate::snapshots::send_unsent_outside_turns();
+            }
             return ran;
         }
         _turn.get_or_insert_with(crate::snapshots::Turn::begin);
