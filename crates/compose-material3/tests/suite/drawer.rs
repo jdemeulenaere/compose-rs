@@ -16,15 +16,19 @@ fn App(state: DrawerState) {
     MaterialTheme!({
         ModalNavigationDrawer!(
             {
-                ModalDrawerSheet!(modifier = Modifier.test_tag("sheet"), {
-                    NavigationDrawerItem!(
-                        { Text!("Inbox") },
-                        true,
-                        || {},
-                        modifier = Modifier.test_tag("inbox")
-                    );
-                    NavigationDrawerItem!({ Text!("Outbox") }, false, || {});
-                });
+                ModalDrawerSheet!(
+                    drawer_state = Some(state),
+                    modifier = Modifier.test_tag("sheet"),
+                    {
+                        NavigationDrawerItem!(
+                            { Text!("Inbox") },
+                            true,
+                            || {},
+                            modifier = Modifier.test_tag("inbox")
+                        );
+                        NavigationDrawerItem!({ Text!("Outbox") }, false, || {});
+                    }
+                );
             },
             drawer_state = state,
             {
@@ -142,9 +146,13 @@ fn AppWithBackHandler(state: DrawerState, log: MutableState<u32>) {
     MaterialTheme!({
         ModalNavigationDrawer!(
             {
-                ModalDrawerSheet!(modifier = Modifier.test_tag("sheet"), {
-                    Text!("Inbox");
-                });
+                ModalDrawerSheet!(
+                    drawer_state = Some(state),
+                    modifier = Modifier.test_tag("sheet"),
+                    {
+                        Text!("Inbox");
+                    }
+                );
             },
             drawer_state = state,
             {
@@ -221,4 +229,32 @@ fn the_scrims_semantics_follow_the_drawer() {
     ui.advance_time_by(std::time::Duration::from_secs(1));
     assert_eq!(state.current_value(), DrawerValue::Closed);
     ui.on_node_with_content_description(scrim).assert_does_not_exist();
+}
+
+/// A plain sheet doesn't take back, drawer or no drawer: only one given its `drawer_state` does,
+/// as Compose's `ModalDrawerSheet` overloads.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationDrawer.kt, ModalDrawerSheet
+#[test]
+fn a_plain_sheet_leaves_back_alone() {
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || {
+        MaterialTheme!({
+            ModalNavigationDrawer!(
+                {
+                    ModalDrawerSheet!({
+                        Text!("Inbox");
+                    });
+                },
+                drawer_state = given,
+                {
+                    Box!(modifier = Modifier.fill_max_size());
+                }
+            );
+        });
+    });
+    assert!(!ui.host().has_enabled_back_handlers());
+    assert!(!ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    assert!(state.is_open());
 }

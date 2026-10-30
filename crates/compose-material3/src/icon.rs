@@ -657,6 +657,7 @@ pub fn IconButton(
         },
         on_click,
     );
+    modifier = modifier.then_custom(crate::parent_semantics::ChildSemantics);
     // The provider inside: the ripple's in the content color around the button, as Compose's.
     Box(
         modifier,

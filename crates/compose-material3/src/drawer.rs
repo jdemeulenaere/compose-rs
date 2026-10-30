@@ -398,8 +398,8 @@ fn drawer_motion_and_focus(state: DrawerState) -> compose_ui::FocusRequester {
 /// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`, filling the space it's
 /// given: while it's open (or sliding), `drawer_content` slides in from the start edge over a
 /// scrim. With `gestures_enabled`, a click on the scrim closes it, and a drag across the drawer
-/// opens or closes it (settling by how far it went, or by the release's speed). Back (Android's
-/// back, Escape on desktop) closes it while it's open.
+/// opens or closes it (settling by how far it went, or by the release's speed). Back closes it
+/// only if `ModalDrawerSheet` is given its `drawer_state`, as in Compose.
 #[composable]
 #[allow(non_snake_case)]
 pub fn ModalNavigationDrawer(
@@ -468,16 +468,6 @@ pub fn ModalNavigationDrawer(
                     Alignment::TOP_START,
                     false,
                     compose_runtime::callback(|_| {}),
-                );
-                // Back closes it while it's open or opening, as Compose's
-                // `DrawerPredictiveBackHandler` (enabled while its target is open): registered
-                // after the content's handlers (so it goes before them) and before the sheet's
-                // (which go before it).
-                compose_ui::BackHandler(
-                    state.target_value() == DrawerValue::Open,
-                    compose_runtime::callback(move || {
-                        scope.launch(async move { state.close().await });
-                    }),
                 );
             }
             // The sheet's pane, composed and measured even while closed, as Compose's: its width
@@ -1224,6 +1214,7 @@ pub fn NavigationDrawerItem(
             },
             on_click,
         )
+        .then_custom(crate::parent_semantics::ChildSemantics)
         .semantics(move |config| config.set_selected(selected))
         .padding((16.dp(), 0.dp(), 24.dp(), 0.dp()));
     let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());

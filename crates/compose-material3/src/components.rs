@@ -416,7 +416,8 @@ pub(crate) fn surface(
                         ..ClickableOptions::DEFAULT
                     },
                     click.on_click,
-                );
+                )
+                .then_custom(crate::parent_semantics::ChildSemantics);
             let modifier = match click.selected {
                 Some(selected) => modifier.semantics(move |config| config.set_selected(selected)),
                 None => modifier,

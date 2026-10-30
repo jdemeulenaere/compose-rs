@@ -612,3 +612,37 @@ fn an_overshooting_sheet_scales_up_and_its_content_back_down() {
     assert!(overflowed > 0.0, "it never went past its top anchor");
     assert_eq!(sheet.require_offset(), 300.0);
 }
+
+/// A sheet of a button alone rests with half of it showing, its handle and not its button, as the
+/// tip's default state does (`isBottomSheetPartiallyExpandedDeterministicEnabled`, D1019): to show
+/// a short sheet whole, its state has no half way. It's nothing to do with its window.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/BottomSheet.kt, calculatePartiallyExpandedOffset
+#[test]
+fn a_short_sheet_rests_half_way_unless_its_state_has_none() {
+    let run = |values: &'static [SheetValue]| {
+        let owned = sheet_state(values);
+        let sheet = *owned;
+        let mut ui = ComposeTestRule::sized(compose_ui::IntSize::new(400, 800), move || {
+            MaterialTheme!({
+                ModalBottomSheet!(
+                    || {},
+                    sheet_state = sheet,
+                    modifier = Modifier.test_tag("sheet"),
+                    |_: ColumnScope| {
+                        Button!(|| {}, modifier = Modifier.test_tag("button"), {
+                            Text!("Close");
+                        });
+                    }
+                );
+            });
+        });
+        ui.wait_for_idle();
+        let bounds = ui.on_node_with_tag_unmerged("sheet").fetch_semantics_node().bounds;
+        (sheet.current_value(), bounds.top, bounds.height())
+    };
+    assert_eq!(run(&SheetValue::ALL), (SheetValue::PartiallyExpanded, 752.0, 96.0));
+    assert_eq!(
+        run(&[SheetValue::Hidden, SheetValue::Expanded]),
+        (SheetValue::Expanded, 704.0, 96.0)
+    );
+}

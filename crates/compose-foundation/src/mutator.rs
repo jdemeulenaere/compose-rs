@@ -47,12 +47,27 @@ impl std::error::Error for MutationInterrupted {}
 ///
 /// An interrupted mutation's block is never polled again: its `mutate` returns
 /// [`MutationInterrupted`] when its task next runs, and the block is dropped then. The new
-/// mutation doesn't wait for that, as it can't run meanwhile (D850).
+/// mutation doesn't wait for that, as it can't run meanwhile (D850). So, unlike Compose's, whose
+/// `mutex.withLock` waits for the old block's `finally`, a guard in a block drops after the next
+/// mutation has started: what it undoes must be its own still (a generation, a job's identity).
 ///
 /// Clones share the mutex.
 #[derive(Clone, Default)]
 pub struct MutatorMutex {
     inner: Rc<RefCell<MutexState>>,
+}
+
+/// The same mutex, as Kotlin's identity for a class with no `equals`.
+impl PartialEq for MutatorMutex {
+    fn eq(&self, other: &MutatorMutex) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl compose_runtime::ComposeArg for MutatorMutex {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
 }
 
 #[derive(Default)]

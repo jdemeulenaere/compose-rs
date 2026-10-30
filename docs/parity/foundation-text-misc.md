@@ -747,6 +747,7 @@ Sizes: S under a day, M a few days, L a week or two, XL multi-week. "Other area"
 - **Size:** L. **Experimental:** no (behind `ComposeFoundationFlags.isBasicTextFieldStyledTextEnabled`).
 
 ### touch-text-selection
+- **Next here, when foundation text starts:** a finger's long press selecting a word and dragging from it (`touchSelectionFirstPress`). Since D1047 a finger's first press only taps, so a finger selects by a double tap alone until this is done.
 - **What:** touch selection in `SelectionContainer` and fields: long press selects a word (and places the cursor in an empty region), selection and cursor handles (drawn in popups, at least 48 dp to touch, dragged with word acceleration), the text toolbar shown after a selection or a handle tap and hidden on edits, scrolls and keys, back clearing the selection, auto-scroll while dragging past a scrollable's edge, haptics on selection change.
 - **Tests:** `TextFieldCursorHandleTest`, `TextFieldSelectionHandlesTest`, `TextFieldLongPressTest`, `TextFieldTextToolbarTest`, `TextFieldScrolledSelectionGestureTest`, `SelectionHandlesTest`, `SelectionHandlePopupPositionTest`, `MultiWidgetSelectionDelegateTest`, `SelectionManagerGetSelectedRegionRectTest`, `TextFieldToolbarTest`, and the touch parts of `SelectionContainerTest`, `SelectionContainerFocusTest`, `TextFieldDoubleTapTest`.
 - **Depends on:** other areas: ui `TextToolbar`, ui-text `TextLayoutResult` queries (bounding boxes, line queries); `magnifier`; `text-field-state`; `selection-state`.

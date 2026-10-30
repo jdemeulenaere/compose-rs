@@ -15,11 +15,15 @@ fn AppWithSheetHandler(state: DrawerState, log: MutableState<u32>) {
     MaterialTheme!({
         ModalNavigationDrawer!(
             {
-                ModalDrawerSheet!(modifier = Modifier.test_tag("sheet"), {
-                    // E.g. a search field or nested navigation inside the drawer.
-                    BackHandler!(on_back = move || log.update(|count| count + 1));
-                    Text!("Inbox");
-                });
+                ModalDrawerSheet!(
+                    drawer_state = Some(state),
+                    modifier = Modifier.test_tag("sheet"),
+                    {
+                        // E.g. a search field or nested navigation inside the drawer.
+                        BackHandler!(on_back = move || log.update(|count| count + 1));
+                        Text!("Inbox");
+                    }
+                );
             },
             drawer_state = state,
             {
@@ -54,9 +58,13 @@ fn OwnDrawer() {
     MaterialTheme!({
         ModalNavigationDrawer!(
             {
-                ModalDrawerSheet!(modifier = Modifier.test_tag("sheet"), {
-                    Text!("Inbox");
-                });
+                ModalDrawerSheet!(
+                    drawer_state = Some(state),
+                    modifier = Modifier.test_tag("sheet"),
+                    {
+                        Text!("Inbox");
+                    }
+                );
             },
             drawer_state = state,
             {

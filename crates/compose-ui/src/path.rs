@@ -809,6 +809,11 @@ impl Path {
         Path { contents: Rc::new(RefCell::new(Arc::new(data))) }
     }
 
+    /// A path of contents `data` gave: an outline's, say.
+    pub fn from_shared_data(data: Arc<PathData>) -> Path {
+        Path { contents: Rc::new(RefCell::new(data)) }
+    }
+
     /// Its contents now, shared: what drawing it records. They never change; the path's later
     /// changes are new contents.
     pub fn data(&self) -> Arc<PathData> {

@@ -12,9 +12,19 @@ use std::rc::Rc;
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement};
 use crate::unit::{IntOffset, IntSize, Rect};
 
-/// Where an overlay goes, as Compose's `PopupPositionProvider`: from its anchor's bounds and the
-/// window's size (both in the root's pixels) and its own size.
-pub trait PopupPositionProvider: 'static {
+/// Where an overlay goes, as Compose's `PopupPositionProvider`: from its anchor's bounds, the
+/// window's size and its own size, in pixels.
+///
+/// **The rule for a provider comparing them:** `anchor` counts from the root's very top, while
+/// `window` is the visible frame's size, as Android's: its height less the status bars and less
+/// the larger of the keyboard and the navigation bars (`UiTree::visible_window`). So a provider
+/// that keeps a popup in the window takes one of Compose's three ways: adding
+/// `WindowInsets.statusBars`'s top back to `window`'s height (`ExposedDropdownMenuPositionProvider`,
+/// Compose's `b/256233441`), going by the whole window instead (`TooltipPositionProvider`, with
+/// `WindowInfo::container_size`, as `windowContainerSize`), or Compose's own quirk of neither
+/// (`DropdownMenu`'s provider, whose popup in Compose is also its own window of that size). A new
+/// one says which.
+pub trait PopupPositionProvider: std::any::Any {
     /// As `calculatePosition(anchorBounds, windowSize, layoutDirection, popupContentSize)`.
     fn position(
         &self,

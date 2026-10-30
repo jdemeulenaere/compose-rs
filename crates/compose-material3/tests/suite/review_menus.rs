@@ -102,7 +102,7 @@ fn MenuInDrawer(drawer: DrawerState, expanded: MutableState<bool>) {
     MaterialTheme!({
         ModalNavigationDrawer!(
             {
-                ModalDrawerSheet!({
+                ModalDrawerSheet!(drawer_state = Some(drawer), {
                     Box!({
                         DropdownMenu!(expanded.get(), move || expanded.set(false), {
                             DropdownMenuItem!({ Text!("Rename") }, || {});

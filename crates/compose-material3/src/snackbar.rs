@@ -17,7 +17,7 @@ use compose_foundation::layout::{Box, RowScope};
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, LaunchedEffect, OwnedState, composable, remember,
 };
-use compose_ui::{Alignment, Color, Dp, Modifier, Shape, SizeSpec, UnitExt};
+use compose_ui::{Alignment, Color, Dp, Modifier, Shape, UnitExt};
 
 use crate::components::Surface;
 use crate::icon::{Icon, IconButton, icons};
@@ -774,46 +774,5 @@ fn themed_text(text: SharedString) {
         true,
         u32::MAX,
         1,
-    );
-}
-
-/// A tooltip's look, as Compose's `PlainTooltip`: its content in the small body text on the
-/// inverse surface, 8 dp across and 4 dp down from its edges, 40 to 200 dp wide, at least
-/// 24 dp high. Show it with foundation's `TooltipArea`.
-#[composable]
-#[allow(non_snake_case)]
-pub fn PlainTooltip(
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::MaterialTheme::color_scheme().inverse_on_surface)] content_color: Color,
-    #[default(crate::MaterialTheme::color_scheme().inverse_surface)] container_color: Color,
-    #[default(crate::MaterialTheme::shapes().extra_small.clone())] shape: Shape,
-    content: impl Fn() + 'static,
-) {
-    let typography = MaterialTheme::typography();
-    Surface(
-        modifier,
-        shape,
-        container_color,
-        content_color,
-        Dp(0.0),
-        Dp(0.0),
-        None,
-        compose_runtime::callback(move || {
-            let content = content.clone();
-            CompositionLocalProvider(
-                LOCAL_TEXT_STYLE.provides(typography.body_small.clone()),
-                || {
-                    let content = content.clone();
-                    Box(
-                        Modifier
-                            .size_in(SizeSpec::bounds(40.dp(), 24.dp(), 200.dp(), Dp::UNSPECIFIED))
-                            .padding((8.dp(), 4.dp())),
-                        Alignment::CENTER_START,
-                        false,
-                        compose_runtime::callback(move |_| content()),
-                    );
-                },
-            );
-        }),
     );
 }

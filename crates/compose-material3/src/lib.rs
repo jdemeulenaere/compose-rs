@@ -30,7 +30,9 @@ mod lazy_animation;
 mod list_item;
 mod motion;
 mod navigation;
+mod parent_semantics;
 mod progress;
+mod pull_to_refresh;
 mod range_slider;
 mod ripple;
 mod scaffold;
@@ -44,6 +46,7 @@ mod swipe_to_dismiss;
 mod tabs;
 mod text_field;
 mod theme;
+mod tooltip;
 
 pub use app_bar::{
     BottomAppBar, BottomAppBarDefaults, CenterAlignedTopAppBar, LargeTopAppBar, MediumTopAppBar,
@@ -119,6 +122,11 @@ pub use progress::{
     CircularProgressIndicator, DrawStopIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
 };
+pub use pull_to_refresh::{
+    PullToRefreshBox, PullToRefreshDefaults, PullToRefreshIndicator, PullToRefreshIndicatorBox,
+    PullToRefreshModifiers, PullToRefreshState, pull_to_refresh_state,
+    remember_pull_to_refresh_state,
+};
 pub use range_slider::{RangeSlider, RangeSliderState, remember_range_slider_state};
 pub use ripple::{
     LOCAL_RIPPLE_CONFIGURATION, LOCAL_RIPPLE_THEME_CONFIGURATION, RippleConfiguration,
@@ -147,8 +155,8 @@ pub use slider::{
     VerticalSlider, remember_slider_state,
 };
 pub use snackbar::{
-    ContentSnackbar, PlainTooltip, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration,
-    SnackbarHost, SnackbarHostState, SnackbarResult, SnackbarVisuals,
+    ContentSnackbar, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration, SnackbarHost,
+    SnackbarHostState, SnackbarResult, SnackbarVisuals,
 };
 pub use swipe_to_dismiss::{
     SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,
@@ -168,6 +176,11 @@ pub use theme::{
     ProvideTextStyle, ShapeDefaults, Shapes, ThemeValue, TypeScaleToken, TypeScaleTokens,
     Typography, content_color_for, dark_color_scheme, expressive_light_color_scheme,
     light_color_scheme,
+};
+pub use tooltip::{
+    DefaultTooltipCaretShape, Label, PlainTooltip, RichTooltip, RichTooltipColors,
+    TooltipAnchorPosition, TooltipBox, TooltipDefaults, TooltipPositionProvider, TooltipScope,
+    TooltipState, caret_x, remember_tooltip_state,
 };
 
 // What the defaults of the composables name through `crate::`.

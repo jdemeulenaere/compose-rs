@@ -83,8 +83,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## Animation and Material
 
 - **Material 3 lacks**, among others:
-  - dismissible and permanent navigation drawers;
-  - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
+  - input chips, date and time pickers, search bars, multi-choice segmented buttons;
   - the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
 - **The theme** is three composition locals (`LOCAL_COLOR_SCHEME`, `LOCAL_TYPOGRAPHY`, `LOCAL_SHAPES`), not one: `MaterialTheme::values()` stands for `MaterialTheme.LocalMaterialTheme.current`. The color scheme, the typography and the shapes are read as `Rc`s, compared by value, standing for Kotlin's shared objects (D1021, D1106, D1107). `Typography(fontFamily, …)` is `Typography::from_font_family(family)` with struct update, then `with_default_font_family(family)` for the styles given without one (D1008).
 - **Progress indicators** take their progress as a lambda, as Compose's non-deprecated overloads (the `Float` ones are gone); `drawStopIndicator` is a `DrawStopIndicator` value, as a composable's callbacks take their arguments by value (D1003).
@@ -94,4 +93,4 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **A `SeekableTransitionState` call can end a frame before Compose's**, as a task waiting for a frame resumes before that frame's composition (D821, D817; a runtime parity item). One interrupted by another cancels its task, as Compose's `CancellationException` does (D823).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
-- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`).
+- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`).
