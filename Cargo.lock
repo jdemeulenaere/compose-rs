@@ -684,6 +684,7 @@ dependencies = [
  "compose-animation",
  "compose-foundation",
  "compose-lifecycle",
+ "compose-material3",
  "compose-navigation-event",
  "compose-runtime",
  "compose-test",

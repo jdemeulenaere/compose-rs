@@ -136,6 +136,8 @@ pub(crate) struct GraphicsLayerNode {
     /// How it transformed when a node under it last asked where it is, as Compose's
     /// `layerPositionalProperties`, with `UiTree::position_listeners` then; `None` if none did.
     positional: Cell<Option<(u32, LayerTransform)>>,
+    /// Its alpha was none when last drawn.
+    transparent: Cell<bool>,
 }
 
 /// What of a layer moves what's in it, as Compose's `LayerPositionalProperties`.
@@ -182,6 +184,7 @@ impl GraphicsLayerNode {
             layer: Layer::Fixed(GraphicsLayerScope { shape, clip: true, ..Default::default() }),
             outline: Default::default(),
             positional: Cell::new(None),
+            transparent: Cell::new(false),
         }
     }
 
@@ -206,6 +209,13 @@ impl GraphicsLayerNode {
                 ..Default::default()
             },
         }
+    }
+
+    /// Keeps whether `properties` leave it with no alpha: whether that changed, which hides what's
+    /// under it from a service or shows it, so the semantics changed (D1293).
+    pub(crate) fn note_transparency(&self, properties: &LayerProperties) -> bool {
+        let transparent = properties.alpha <= 0.0;
+        self.transparent.replace(transparent) != transparent
     }
 
     /// Keeps how `properties` transform, which a node under it was just told.
@@ -421,6 +431,7 @@ impl ModifierNodeElement for GraphicsLayerElement {
             layer: self.0.clone(),
             outline: Default::default(),
             positional: Cell::new(None),
+            transparent: Cell::new(false),
         }
     }
 

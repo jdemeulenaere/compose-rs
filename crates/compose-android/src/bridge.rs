@@ -454,6 +454,7 @@ struct Host {
     /// The merged semantics tree, for the record, the actions and the input method's options.
     semantics_tree: crate::accessibility::KeptSemanticsTree,
     semantics_changes: crate::accessibility::KeptForChanges,
+    custom_actions: crate::accessibility::KeptCustomActions,
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
@@ -697,6 +698,7 @@ fn create(
         semantics: Writer::default(),
         semantics_tree: Default::default(),
         semantics_changes: Default::default(),
+        custom_actions: Default::default(),
         first: true,
         ime_options: None,
         hint: false,
@@ -972,6 +974,8 @@ mod flags {
     pub const OWNER_FOCUS: i64 = 512;
     /// `clear_focus`: the view gives it up (`clearOwnerFocus`).
     pub const OWNER_CLEAR: i64 = 1024;
+    /// A property changed: a service hears at once, not within 100 ms (`tell_at_once`).
+    pub const SEMANTICS_AT_ONCE: i64 = 2048;
     /// Where the timer's milliseconds start.
     pub const TIMER_SHIFT: u32 = 16;
 }
@@ -1028,6 +1032,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     }
     if host.semantics_tree.after_frame(&stats) {
         result |= flags::SEMANTICS;
+    }
+    if crate::accessibility::tell_at_once(&stats) {
+        result |= flags::SEMANTICS_AT_ONCE;
     }
     if host.ui.has_enabled_back_handlers() {
         result |= flags::BACK;
@@ -1407,7 +1414,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics<'local>
 ) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    crate::accessibility::write_tree(host.semantics_tree.get(&host.ui), &mut host.semantics);
+    crate::accessibility::write_tree(
+        host.semantics_tree.get(&host.ui),
+        &mut host.custom_actions,
+        &mut host.semantics,
+    );
     host.semantics.bytes.reserve(1);
     let bytes = &mut host.semantics.bytes;
     with_env(&mut env, |env| {
@@ -1432,7 +1443,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsChanges<
     if forget {
         host.semantics_changes.forget();
     }
-    let changes = host.semantics_changes.changes(host.semantics_tree.get(&host.ui));
+    let tree = host.semantics_tree.get(&host.ui);
+    let changes = host.semantics_changes.changes(&host.ui, tree);
     crate::accessibility::write_changes(&changes, &mut host.semantics);
     host.semantics.bytes.reserve(1);
     let bytes = &mut host.semantics.bytes;
@@ -1457,56 +1469,30 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let tree = host.semantics_tree.get(&host.ui);
-    let Some((found, shown)) = crate::accessibility::find_shown(tree, id) else { return false };
-    let node = found.id;
-    use crate::accessibility::action as code;
-    use compose_ui::SemanticsActions as A;
-    let Ok(action) = u8::try_from(action) else { return false };
-    match action {
-        code::CLICK => host.ui.perform_semantics_action(node, &A::ON_CLICK),
-        code::FOCUS => {
-            // The view has left touch mode by then (`performSemanticsAction`).
-            host.ui.perform_semantics_action(node, &A::REQUEST_FOCUS)
-        }
-        code::SET_PROGRESS => {
-            host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value))
-        }
-        code::SCROLL_FIRST..=8 => {
-            let direction = 1u8 << (action - code::SCROLL_FIRST);
-            let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, shown) else {
-                return false;
-            };
-            host.ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
-        }
-        code::LONG_CLICK => host.ui.perform_semantics_action(node, &A::ON_LONG_CLICK),
-        code::EXPAND => host.ui.perform_semantics_action(node, &A::EXPAND),
-        code::COLLAPSE => host.ui.perform_semantics_action(node, &A::COLLAPSE),
-        code::DISMISS => host.ui.perform_semantics_action(node, &A::DISMISS),
-        code::PAGE_UP => host.ui.perform_semantics_action(node, &A::PAGE_UP),
-        code::PAGE_DOWN => host.ui.perform_semantics_action(node, &A::PAGE_DOWN),
-        code::PAGE_LEFT => host.ui.perform_semantics_action(node, &A::PAGE_LEFT),
-        code::PAGE_RIGHT => host.ui.perform_semantics_action(node, &A::PAGE_RIGHT),
-        code::STEP_FORWARD | code::STEP_BACKWARD => {
-            let Some(&range) =
-                found.config.get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
-            else {
-                return false;
-            };
-            let step = crate::accessibility::progress_step(range);
-            let moved = if action == code::STEP_FORWARD { step } else { -step };
-            let to = (range.current + moved).clamp(range.range.0, range.range.1);
-            host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(to))
-        }
-        code::CUSTOM_FIRST.. => {
-            let custom = found.unmerged_config().get(&A::CUSTOM_ACTIONS);
-            let index = (action - code::CUSTOM_FIRST) as usize;
-            let Some(custom) = custom.and_then(|all| all.get(index)).cloned() else {
-                return false;
-            };
-            (custom.action)()
-        }
-        _ => false,
-    }
+    crate::accessibility::perform_action(
+        &mut host.ui,
+        tree,
+        &host.custom_actions,
+        id,
+        action,
+        value,
+    )
+}
+
+/// `ComposeRsNative.nodeAt(host, x, y)`: the virtual view a touch there finds (`accessibility::
+/// node_at`), -1 for none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nodeAt(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    x: jfloat,
+    y: jfloat,
+) -> jint {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    crate::accessibility::node_at(tree, x, y).unwrap_or(-1)
 }
 
 /// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes

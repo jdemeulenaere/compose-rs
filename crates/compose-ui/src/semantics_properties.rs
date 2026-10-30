@@ -569,6 +569,8 @@ impl<F: ?Sized + 'static> SemanticsValue for AccessibilityAction<F> {
 
 impl SemanticsValue for ColorProducer {}
 
+impl SemanticsValue for crate::text_range::TextRange {}
+
 impl SemanticsValue for IndexForKey {
     fn into_slot(self) -> ValueSlot {
         ValueSlot::Other(OtherSlot::action(self))
@@ -826,6 +828,9 @@ pub mod SemanticsProperties {
         SemanticsPropertyKey::new("InputTextSuggestionState").for_accessibility();
     pub static PASSWORD: SemanticsPropertyKey<()> =
         SemanticsPropertyKey::new("Password").for_accessibility();
+    /// The selection in what `EDITABLE_TEXT` shows, in its UTF-8 bytes (D1100).
+    pub static TEXT_SELECTION_RANGE: SemanticsPropertyKey<crate::text_range::TextRange> =
+        SemanticsPropertyKey::new("TextSelectionRange").for_accessibility();
     pub static IS_PASSWORD_OBFUSCATED: SemanticsPropertyKey<bool> =
         SemanticsPropertyKey::new("IsPasswordObfuscated").for_accessibility();
     pub static ERROR: SemanticsPropertyKey<SharedString> =
@@ -1208,6 +1213,10 @@ impl SemanticsConfiguration {
 
     pub fn set_input_text_suggestion_state(&mut self, state: InputTextSuggestionState) {
         self.set(&SemanticsProperties::INPUT_TEXT_SUGGESTION_STATE, state);
+    }
+
+    pub fn set_text_selection_range(&mut self, range: crate::text_range::TextRange) {
+        self.set(&SemanticsProperties::TEXT_SELECTION_RANGE, range);
     }
 
     pub fn set_is_editable(&mut self, editable: bool) {

@@ -774,6 +774,10 @@ The log is split by area into the files below, one table each, rows in number or
 | D1290 | [ui-and-layout](decisions/ui-and-layout.md#d1290) | current |
 | D1291 | [ui-and-layout](decisions/ui-and-layout.md#d1291) | current |
 | D1292 | [ui-and-layout](decisions/ui-and-layout.md#d1292) | current |
+| D1293 | [ui-and-layout](decisions/ui-and-layout.md#d1293) | current |
+| D1294 | [ui-and-layout](decisions/ui-and-layout.md#d1294) | current |
+| D1295 | [ui-and-layout](decisions/ui-and-layout.md#d1295) | current |
+| D1296 | [ui-and-layout](decisions/ui-and-layout.md#d1296) | current |
 | D1350 | [ui-and-layout](decisions/ui-and-layout.md#d1350) | current |
 | D1351 | [ui-and-layout](decisions/ui-and-layout.md#d1351) | current |
 | D1352 | [ui-and-layout](decisions/ui-and-layout.md#d1352) | current |

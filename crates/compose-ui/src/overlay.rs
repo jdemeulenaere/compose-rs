@@ -46,6 +46,7 @@ pub(crate) struct OverlayElement {
     focus_on_open: bool,
     pass_through: bool,
     window: Option<crate::focus_manager::WindowToken>,
+    shuts_out: bool,
 }
 
 pub(crate) struct OverlayNode {
@@ -57,6 +58,9 @@ pub(crate) struct OverlayNode {
     pub(crate) pass_through: bool,
     /// What its content's focus manager and window info find its window by.
     pub(crate) window: Option<crate::focus_manager::WindowToken>,
+    /// What's behind it takes no touch while it shows, so a service doesn't read it: `false`, a
+    /// popup with `pass_through_outside` (D1290).
+    pub(crate) shuts_out: bool,
 }
 
 impl ModifierNodeElement for OverlayElement {
@@ -68,6 +72,7 @@ impl ModifierNodeElement for OverlayElement {
             focused_once: false,
             pass_through: self.pass_through,
             window: self.window.clone(),
+            shuts_out: self.shuts_out,
         }
     }
     fn update(&self, node: &mut OverlayNode) {
@@ -79,11 +84,13 @@ impl ModifierNodeElement for OverlayElement {
         node.focus_on_open = self.focus_on_open;
         node.pass_through = self.pass_through;
         node.window = self.window.clone();
+        node.shuts_out = self.shuts_out;
     }
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&other.provider, &self.provider)
             && other.focus_on_open == self.focus_on_open
             && other.pass_through == self.pass_through
+            && other.shuts_out == self.shuts_out
     }
     fn name(&self) -> &'static str {
         "overlay"
@@ -110,6 +117,7 @@ impl Modifier {
             focus_on_open,
             pass_through: false,
             window: None,
+            shuts_out: true,
         })
     }
 
@@ -118,12 +126,14 @@ impl Modifier {
         self,
         provider: Rc<dyn PopupPositionProvider>,
         token: crate::focus_manager::WindowToken,
+        shuts_out: bool,
     ) -> Modifier {
         self.then_custom(OverlayElement {
             provider,
             focus_on_open: true,
             pass_through: false,
             window: Some(token),
+            shuts_out,
         })
     }
 
@@ -137,6 +147,7 @@ impl Modifier {
             focus_on_open: false,
             pass_through: true,
             window: None,
+            shuts_out: true,
         })
     }
 }

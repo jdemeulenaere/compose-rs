@@ -33,6 +33,20 @@ pub fn is_screen_reader_focusable(node: &SemanticsSnapshot) -> bool {
         .all(|child| child.unmerged_config().contains(&SemanticsProperties::LINK_TEST_MARKER))
 }
 
+/// Whether it means anything to a service, as `isImportantForAccessibility`, for a node of the
+/// merged tree: not hidden nor a link marker, and it merges or sets what accessibility reads.
+pub fn is_important_for_accessibility(node: &SemanticsSnapshot) -> bool {
+    if node.hidden {
+        return false;
+    }
+    let own = node.unmerged_config();
+    if own.contains(&SemanticsProperties::LINK_TEST_MARKER) {
+        return false;
+    }
+    own.is_merging_semantics_of_descendants
+        || own.properties().any(|(key, _)| key.is_important_for_accessibility())
+}
+
 /// `bounds` within `clip`, if they overlap.
 pub fn clipped_by(bounds: Rect, clip: Rect) -> Option<Rect> {
     let rect = Rect::new(
@@ -58,6 +72,8 @@ struct Placed<'a> {
     node: &'a SemanticsSnapshot,
     /// As shown: empty when clipped away.
     bounds: Rect,
+    /// Not clipped away.
+    shown: bool,
     clip: Rect,
 }
 
@@ -67,6 +83,7 @@ impl<'a> Placed<'a> {
         Placed {
             node,
             bounds: shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+            shown: shown.is_some(),
             clip: clip_inside(node, shown, clip),
         }
     }
@@ -84,7 +101,7 @@ impl<'a> Placed<'a> {
 /// The nodes under `root` a service focuses on, `root` left out unless it's one, in the order it
 /// reads them, as `subtreeSortedByGeometryGrouping`.
 pub fn sorted_for_accessibility(root: &SemanticsSnapshot) -> Vec<&SemanticsSnapshot> {
-    let place = Placed { node: root, bounds: root.bounds, clip: root.bounds };
+    let place = Placed { node: root, bounds: root.bounds, shown: true, clip: root.bounds };
     sorted_subtree(place, std::slice::from_ref(&place)).iter().map(|place| place.node).collect()
 }
 
@@ -110,7 +127,10 @@ fn depth_first<'a>(
 ) {
     let own = place.node.unmerged_config();
     let is_group = own.get(&SemanticsProperties::IS_TRAVERSAL_GROUP) == Some(&true);
-    if (is_group || is_screen_reader_focusable(place.node)) && !place.node.hidden {
+    // Clipped away, it's not in the tree a service is given; what's in it may be shown, a list's
+    // sticky item. Hidden, a group still orders what's in it: `is_screen_reader_focusable` says
+    // no for itself, as `isVisible` only asks whether it's in the tree.
+    if (is_group || is_screen_reader_focusable(place.node)) && place.shown {
         geometry.push(place);
     }
     if is_group {

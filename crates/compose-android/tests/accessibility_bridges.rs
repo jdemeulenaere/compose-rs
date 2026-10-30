@@ -10,7 +10,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_android::accessibility::{
-    Change, ChangeKind, KeptForChanges, action, actions_of, class_and_role, flag, write_tree,
+    Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, class_and_role,
+    flag, perform_action, spoken, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -86,17 +87,17 @@ fn a_nodes_class_and_role_come_from_its_own_configuration() {
         let node = tagged(&host, tag);
         class_and_role(&node)
     };
-    assert_eq!(of("button"), ("android.widget.Button", ""));
-    assert_eq!(of("checkbox"), ("android.widget.CheckBox", ""));
-    assert_eq!(of("radio"), ("android.widget.RadioButton", ""));
-    assert_eq!(of("image"), ("android.widget.ImageView", ""));
-    assert_eq!(of("dropdown"), ("android.widget.Spinner", ""));
-    assert_eq!(of("picker"), ("android.widget.NumberPicker", ""));
-    assert_eq!(of("tab"), ("android.view.View", "Tab"));
-    assert_eq!(of("switch"), ("android.view.View", "Switch"));
-    assert_eq!(of("over a child"), ("android.view.View", ""));
-    assert_eq!(of("text"), ("android.widget.TextView", ""));
-    assert_eq!(of("plain"), ("android.view.View", ""));
+    assert_eq!(of("button"), ("android.widget.Button", spoken::NONE));
+    assert_eq!(of("checkbox"), ("android.widget.CheckBox", spoken::NONE));
+    assert_eq!(of("radio"), ("android.widget.RadioButton", spoken::NONE));
+    assert_eq!(of("image"), ("android.widget.ImageView", spoken::NONE));
+    assert_eq!(of("dropdown"), ("android.widget.Spinner", spoken::NONE));
+    assert_eq!(of("picker"), ("android.widget.NumberPicker", spoken::NONE));
+    assert_eq!(of("tab"), ("android.view.View", spoken::TAB));
+    assert_eq!(of("switch"), ("android.view.View", spoken::SWITCH));
+    assert_eq!(of("over a child"), ("android.view.View", spoken::NONE));
+    assert_eq!(of("text"), ("android.widget.TextView", spoken::NONE));
+    assert_eq!(of("plain"), ("android.view.View", spoken::NONE));
 }
 
 // ---- Actions ------------------------------------------------------------------------------------
@@ -131,7 +132,9 @@ fn a_service_is_offered_what_a_node_says_with_its_labels_and_none_when_disabled(
         Box!(modifier = disabled.test_tag("disabled"), {});
     });
     let enabled = tagged(&host, "enabled");
-    let offered = actions_of(&enabled);
+    let mut custom = KeptCustomActions::default();
+    custom.assign(&enabled);
+    let offered = actions_of(&enabled, &custom);
     let labelled: Vec<_> = offered
         .iter()
         .map(|(code, label)| (*code, label.as_ref().map(|it| it.to_string())))
@@ -147,7 +150,9 @@ fn a_service_is_offered_what_a_node_says_with_its_labels_and_none_when_disabled(
     ] {
         assert!(labelled.contains(&wanted), "{wanted:?} in {labelled:?}");
     }
-    assert!(actions_of(&tagged(&host, "disabled")).is_empty());
+    let disabled = tagged(&host, "disabled");
+    custom.assign(&disabled);
+    assert!(actions_of(&disabled, &custom).is_empty());
 
     assert!(host.perform_semantics_action(enabled.id, &SemanticsActions::EXPAND));
     assert_eq!(dismissed.get(), 1);
@@ -173,7 +178,10 @@ fn a_value_steps_only_where_it_can_and_a_scroller_where_it_can() {
         Box!(modifier = at(1.0, "at the end"), {});
     });
     let codes = |tag| -> Vec<u8> {
-        actions_of(&tagged(&host, tag)).iter().map(|(code, _)| *code).collect()
+        actions_of(&tagged(&host, tag), &KeptCustomActions::default())
+            .iter()
+            .map(|(code, _)| *code)
+            .collect()
     };
     assert!(codes("at the start").contains(&action::STEP_FORWARD));
     assert!(!codes("at the start").contains(&action::STEP_BACKWARD));
@@ -201,7 +209,7 @@ fn a_live_region_and_a_heading_show_in_the_flags() {
     });
     let root = host.accessibility_tree();
     let mut out = Writer::default();
-    write_tree(&root, &mut out);
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let flags = read_flags(&out.bytes);
     let of = |tag| flags.iter().find(|(id, _)| *id == tagged(&host, tag).semantics_id).unwrap().1;
     assert_ne!(of("polite") & LIVE_POLITE, 0);
@@ -239,8 +247,10 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
             at += 13;
         }
         let before = read_u32(&mut at) as i32;
+        // Its drawing order, class, role, state and percent.
+        at += 4;
         skip_string(&mut at);
-        skip_string(&mut at);
+        at += 3;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -465,37 +475,216 @@ fn where_a_node_is_shown_decides_not_its_z_index_nor_when_it_was_composed() {
     }
 }
 
-// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityTraversalTest.kt, testMergedDescendants_respectsTraversalIndex
-#[test]
-fn a_nodes_children_are_written_by_their_traversal_index() {
-    let host = host_of(|| {
-        Row!({
-            let child = |tag: &'static str, index: f32| {
-                Modifier.size(20.dp()).semantics(move |config| {
-                    says(config);
-                    config.set_traversal_index(index);
-                    config.set_test_tag(tag);
-                })
-            };
-            Box!(modifier = child("second", 2.0), {});
-            Box!(modifier = child("first", 1.0), {});
-        });
-    });
+fn ids_written(host: &UiHost) -> Vec<i32> {
     let root = host.accessibility_tree();
     let mut out = Writer::default();
-    write_tree(&root, &mut out);
-    let ids: Vec<i32> = records(&out.bytes).iter().map(|record| record.0).collect();
-    assert_eq!(ids, [tagged(&host, "first").semantics_id, tagged(&host, "second").semantics_id],);
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    records(&out.bytes).iter().map(|record| record.0).collect()
+}
+
+/// Two children by their traversal index, the second in place with the lower.
+fn indexed_children() {
+    let child = |tag: &'static str, index: f32| {
+        Modifier.size(20.dp()).semantics_with(true, move |config| {
+            says(config);
+            config.set_traversal_index(index);
+            config.set_test_tag(tag);
+        })
+    };
+    Box!(modifier = child("second", 2.0), {});
+    Box!(modifier = child("first", 1.0), {});
+}
+
+// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityTraversalTest.kt, testMergedDescendants_respectsTraversalIndex
+#[test]
+fn a_merging_traversal_groups_children_are_written_by_their_traversal_index() {
+    let host = host_of(|| {
+        let group = Modifier.semantics_with(true, |config| {
+            config.set_is_traversal_group(true);
+            config.set_test_tag("group");
+        });
+        Row!(modifier = group, {
+            indexed_children();
+        });
+    });
+    let (group, first, second) = (
+        tagged(&host, "group").semantics_id,
+        tagged(&host, "first").semantics_id,
+        tagged(&host, "second").semantics_id,
+    );
+    assert_eq!(ids_written(&host), [group, first, second]);
 }
 
 #[test]
-fn a_node_saying_something_over_another_is_not_read_for_itself() {
+fn anything_else_keeps_its_children_in_drawing_order_whatever_their_index() {
     let host = host_of(|| {
-        Box!(modifier = at(0.0, 0.0, 50.0, "over a child"), {
-            Box!(modifier = Modifier.size(10.dp()).semantics(says).test_tag("child"), {});
+        Row!({
+            indexed_children();
         });
     });
-    assert_eq!(order(&host), ["child"]);
+    let (first, second) =
+        (tagged(&host, "first").semantics_id, tagged(&host, "second").semantics_id);
+    assert_eq!(ids_written(&host), [second, first]);
+}
+
+#[test]
+fn a_rows_cover_narrows_to_what_overlapped_it_so_what_is_past_that_starts_another() {
+    let host = host_of(|| {
+        Box!({
+            // Tall first; then at its top; then at its bottom, to its left.
+            let tall = Modifier.offset(100.dp(), 0.dp()).size((50.dp(), 100.dp()));
+            Box!(modifier = tall.semantics(says).test_tag("tall"), {});
+            let top = Modifier.offset(200.dp(), 0.dp()).size((50.dp(), 50.dp()));
+            Box!(modifier = top.semantics(says).test_tag("at its top"), {});
+            let bottom = Modifier.offset(0.dp(), 60.dp()).size((50.dp(), 40.dp()));
+            Box!(modifier = bottom.semantics(says).test_tag("at its bottom"), {});
+        });
+    });
+    assert_eq!(order(&host), ["tall", "at its top", "at its bottom"]);
+}
+
+#[test]
+fn what_is_clipped_away_is_not_read_and_does_not_come_first() {
+    let host = host_of(|| {
+        Column!({
+            let bar = Modifier.size(50.dp()).semantics(says).test_tag("app bar");
+            Box!(modifier = bar, {});
+            let state = compose_foundation::remember_scroll_state!(0);
+            Column!(modifier = Modifier.height(100.dp()).vertical_scroll(state), {
+                for index in 0..6 {
+                    let item =
+                        Modifier.size(50.dp()).semantics(says).test_tag(format!("item {index}"));
+                    Box!(modifier = item, {});
+                }
+            });
+        });
+    });
+    assert_eq!(order(&host), ["app bar", "item 0", "item 1"]);
+}
+
+#[test]
+fn what_a_hidden_group_holds_is_still_read_if_it_is_not_hidden_itself() {
+    let host = host_of(|| {
+        Column!({
+            let group = Modifier.semantics(|config| {
+                config.set_is_traversal_group(true);
+                config.hide_from_accessibility();
+            });
+            Column!(modifier = group, {
+                Box!(modifier = Modifier.size(20.dp()).semantics(says).test_tag("in it"), {});
+            });
+            Box!(modifier = Modifier.size(20.dp()).semantics(says).test_tag("below"), {});
+        });
+    });
+    assert_eq!(order(&host), ["in it", "below"]);
+}
+
+// ---- Dispatch -----------------------------------------------------------------------------------
+
+/// What was done, as a node with every action records it.
+fn acting(done: &'static std::cell::RefCell<Vec<&'static str>>) -> Modifier {
+    let did = move |what: &'static str| {
+        move || {
+            done.borrow_mut().push(what);
+            true
+        }
+    };
+    Modifier.size(20.dp()).test_tag("acting").semantics(move |config| {
+        config.on_click(None, did("click"));
+        config.on_long_click(None, did("long click"));
+        config.expand(None, did("expand"));
+        config.collapse(None, did("collapse"));
+        config.dismiss(None, did("dismiss"));
+        config.page_up(None, did("page up"));
+        config.page_down(None, did("page down"));
+        config.page_left(None, did("page left"));
+        config.page_right(None, did("page right"));
+        config.set_custom_actions(vec![
+            CustomAccessibilityAction::new("custom one", did("custom one")),
+            CustomAccessibilityAction::new("custom two", did("custom two")),
+        ]);
+    })
+}
+
+#[test]
+fn each_code_a_service_asks_with_does_what_it_says() {
+    let done: &'static std::cell::RefCell<Vec<&'static str>> = Box::leak(Box::default());
+    let mut host = host_of(move || {
+        Box!(modifier = acting(done), {});
+    });
+    let tree = host.accessibility_tree();
+    let mut custom = KeptCustomActions::default();
+    custom.assign(&tree);
+    let id = tagged(&host, "acting").semantics_id;
+    for (code, what) in [
+        (action::CLICK, "click"),
+        (action::LONG_CLICK, "long click"),
+        (action::EXPAND, "expand"),
+        (action::COLLAPSE, "collapse"),
+        (action::DISMISS, "dismiss"),
+        (action::PAGE_UP, "page up"),
+        (action::PAGE_DOWN, "page down"),
+        (action::PAGE_LEFT, "page left"),
+        (action::PAGE_RIGHT, "page right"),
+        (action::CUSTOM_FIRST, "custom one"),
+        (action::CUSTOM_FIRST + 1, "custom two"),
+    ] {
+        done.borrow_mut().clear();
+        assert!(perform_action(&mut host, &tree, &custom, id, code as i32, 0.0), "{what}");
+        assert_eq!(*done.borrow(), [what]);
+    }
+    done.borrow_mut().clear();
+    assert!(!perform_action(&mut host, &tree, &custom, id, action::CUSTOM_FIRST as i32 + 2, 0.0));
+    assert!(!perform_action(&mut host, &tree, &custom, -5, action::CLICK as i32, 0.0));
+    assert!(!perform_action(&mut host, &tree, &custom, id, 500, 0.0));
+    assert!(done.borrow().is_empty());
+}
+
+// As `labelToActionId`: what was shown a service stays that action, or nothing.
+#[test]
+fn a_custom_action_keeps_its_id_as_others_come_and_go_and_a_label_gone_does_nothing() {
+    let done: &'static std::cell::RefCell<Vec<&'static str>> = Box::leak(Box::default());
+    let labels = Box::leak(Box::new(mutable_state_of(vec!["one", "two"]))).handle();
+    let mut host = host_of(move || {
+        let modifier = Modifier.size(20.dp()).test_tag("node").semantics(move |config| {
+            let actions = labels.get();
+            config.set_custom_actions(
+                actions
+                    .into_iter()
+                    .map(|label| {
+                        CustomAccessibilityAction::new(label, move || {
+                            done.borrow_mut().push(label);
+                            true
+                        })
+                    })
+                    .collect(),
+            );
+        });
+        Box!(modifier = modifier, {});
+    });
+    let mut custom = KeptCustomActions::default();
+    custom.assign(&host.accessibility_tree());
+    let id = tagged(&host, "node").semantics_id;
+    let (one, two) = (action::CUSTOM_FIRST as i32, action::CUSTOM_FIRST as i32 + 1);
+
+    // A service was shown "two" as its code; "one" goes, "three" comes.
+    labels.set(vec!["two", "three"]);
+    frames(&mut host);
+    let tree = host.accessibility_tree();
+    custom.assign(&tree);
+    assert!(perform_action(&mut host, &tree, &custom, id, two, 0.0));
+    assert_eq!(*done.borrow(), ["two"], "not what's second now");
+    done.borrow_mut().clear();
+    assert!(perform_action(&mut host, &tree, &custom, id, one, 0.0));
+    assert_eq!(*done.borrow(), ["three"], "the id that came free");
+    done.borrow_mut().clear();
+
+    // Asked before the tree was read again: the label's gone.
+    labels.set(vec!["three"]);
+    frames(&mut host);
+    let tree = host.accessibility_tree();
+    assert!(!perform_action(&mut host, &tree, &custom, id, two, 0.0), "\"two\" is gone");
+    assert!(done.borrow().is_empty());
 }
 
 #[test]
@@ -516,7 +705,7 @@ fn what_is_hidden_or_says_nothing_is_not_read_and_each_record_names_the_next() {
 
     let root = host.accessibility_tree();
     let mut out = Writer::default();
-    write_tree(&root, &mut out);
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let read = records(&out.bytes);
     let of = |tag| {
         let id = tagged(&host, tag).semantics_id;
@@ -570,6 +759,13 @@ fn a_service_reads_the_dialog_and_nothing_behind_it_until_it_closes() {
 
 // ---- What changed -------------------------------------------------------------------------------
 
+/// As a service turning on: told only what changes from now.
+fn kept_from_now() -> KeptForChanges {
+    let mut kept = KeptForChanges::default();
+    kept.forget();
+    kept
+}
+
 fn changes_after(
     host: &mut UiHost,
     kept: &mut KeptForChanges,
@@ -577,7 +773,8 @@ fn changes_after(
 ) -> Vec<(i32, ChangeKind, String)> {
     change();
     frames(host);
-    let changes: Vec<Change> = kept.changes(&host.accessibility_tree());
+    let tree = host.accessibility_tree();
+    let changes: Vec<Change> = kept.changes(host, &tree);
     changes.into_iter().map(|it| (it.id, it.kind, it.text)).collect()
 }
 
@@ -595,7 +792,7 @@ fn a_property_with_no_change_type_of_its_own_tells_one_change_with_none() {
         });
         Box!(modifier = modifier, {});
     });
-    let mut kept = KeptForChanges::default();
+    let mut kept = kept_from_now();
     assert!(changes_after(&mut host, &mut kept, || {}).is_empty(), "nothing the first time");
     assert!(changes_after(&mut host, &mut kept, || {}).is_empty(), "nothing changed");
     let id = tagged(&host, "node").semantics_id;
@@ -633,7 +830,7 @@ fn an_actions_label_changing_tells_one_change_with_no_type_and_the_same_label_no
     for custom in [false, true] {
         label.set("one");
         let mut host = host_with(custom);
-        let mut kept = KeptForChanges::default();
+        let mut kept = kept_from_now();
         changes_after(&mut host, &mut kept, || {});
         let id = tagged(&host, "node").semantics_id;
         let same = changes_after(&mut host, &mut kept, || again.set(again.get() + 1));
@@ -665,7 +862,7 @@ fn state_toggle_error_description_and_text_each_tell_their_kind() {
         });
         Box!(modifier = modifier, {});
     });
-    let mut kept = KeptForChanges::default();
+    let mut kept = kept_from_now();
     changes_after(&mut host, &mut kept, || {});
     let id = tagged(&host, "node").semantics_id;
     let kinds = |changes: Vec<(i32, ChangeKind, String)>| {
@@ -683,7 +880,8 @@ fn state_toggle_error_description_and_text_each_tell_their_kind() {
     assert_eq!(kinds(changes_after(&mut host, &mut kept, || step.set(3))), [ChangeKind::Error]);
     let described = changes_after(&mut host, &mut kept, || step.set(4));
     assert_eq!(described, [(id, ChangeKind::ContentDescription, "changed".to_string())]);
-    assert_eq!(kinds(changes_after(&mut host, &mut kept, || step.set(5))), [ChangeKind::Text]);
+    // A plain text has no type of its own.
+    assert_eq!(kinds(changes_after(&mut host, &mut kept, || step.set(5))), [ChangeKind::Undefined]);
 }
 
 #[test]
@@ -697,7 +895,7 @@ fn a_pane_tells_it_appears_changes_its_title_and_disappears() {
             }
         });
     });
-    let mut kept = KeptForChanges::default();
+    let mut kept = kept_from_now();
     changes_after(&mut host, &mut kept, || {});
 
     let appeared = changes_after(&mut host, &mut kept, || title.set(Some("Menu")));
@@ -705,8 +903,8 @@ fn a_pane_tells_it_appears_changes_its_title_and_disappears() {
     assert_eq!(
         appeared,
         [
+            (-1, ChangeKind::Subtree, String::new()),
             (id, ChangeKind::PaneAppeared, "Menu".to_string()),
-            (-1, ChangeKind::Subtree, String::new())
         ]
     );
     assert_eq!(
@@ -716,8 +914,8 @@ fn a_pane_tells_it_appears_changes_its_title_and_disappears() {
     assert_eq!(
         changes_after(&mut host, &mut kept, || title.set(None)),
         [
+            (-1, ChangeKind::Subtree, String::new()),
             (id, ChangeKind::PaneDisappeared, "Sheet".to_string()),
-            (-1, ChangeKind::Subtree, String::new())
         ]
     );
 }
@@ -733,7 +931,7 @@ fn a_tab_selected_tells_it_with_its_text_and_one_left_with_no_type() {
         });
         Box!(modifier = tab, {});
     });
-    let mut kept = KeptForChanges::default();
+    let mut kept = kept_from_now();
     changes_after(&mut host, &mut kept, || {});
     let id = tagged(&host, "tab").semantics_id;
     assert_eq!(
@@ -753,7 +951,7 @@ fn what_moved_or_came_tells_a_subtree_and_forgetting_tells_nothing_of_before() {
         let moving = Modifier.offset(moved.get().dp(), 0.dp());
         Box!(modifier = moving.size(10.dp()).semantics(says), {});
     });
-    let mut kept = KeptForChanges::default();
+    let mut kept = kept_from_now();
     changes_after(&mut host, &mut kept, || {});
     assert_eq!(
         changes_after(&mut host, &mut kept, || moved.set(5.0)),
@@ -761,4 +959,341 @@ fn what_moved_or_came_tells_a_subtree_and_forgetting_tells_nothing_of_before() {
     );
     kept.forget();
     assert!(changes_after(&mut host, &mut kept, || moved.set(10.0)).is_empty());
+}
+
+#[test]
+fn the_first_tell_with_no_service_turning_on_tells_the_content_from_an_empty_root() {
+    let mut host = host_of(|| {
+        let pane = Modifier.size(5.dp()).semantics(|config| config.set_pane_title("Menu"));
+        Box!(modifier = pane.test_tag("pane"), {});
+    });
+    let mut kept = KeptForChanges::default();
+    let id = tagged(&host, "pane").semantics_id;
+    assert_eq!(
+        changes_after(&mut host, &mut kept, || {}),
+        [
+            (-1, ChangeKind::Subtree, String::new()),
+            (id, ChangeKind::PaneAppeared, "Menu".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn a_pane_title_added_to_a_node_there_tells_it_appears() {
+    let title = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = host_of(move || {
+        let pane = Modifier.size(5.dp()).test_tag("node").semantics(|config| {
+            if title.get() {
+                config.set_pane_title("Menu");
+            }
+        });
+        Box!(modifier = pane, {});
+    });
+    let mut kept = kept_from_now();
+    changes_after(&mut host, &mut kept, || {});
+    let id = tagged(&host, "node").semantics_id;
+    let added = changes_after(&mut host, &mut kept, || title.set(true));
+    assert!(added.contains(&(id, ChangeKind::PaneAppeared, "Menu".to_string())), "{added:?}");
+    let gone = changes_after(&mut host, &mut kept, || title.set(false));
+    assert!(gone.contains(&(id, ChangeKind::PaneDisappeared, "Menu".to_string())), "{gone:?}");
+}
+
+fn all_changes(host: &UiHost, kept: &mut KeptForChanges) -> Vec<Change> {
+    let tree = host.accessibility_tree();
+    kept.changes(host, &tree)
+}
+
+fn field_of(value: MutableState<String>, masked: MutableState<bool>) -> UiHost {
+    host_of(move || {
+        let transformation = if masked.get() {
+            PasswordVisualTransformation::default().into()
+        } else {
+            VisualTransformation::NONE
+        };
+        BasicTextField!(
+            value.get(),
+            move |it| value.set(it),
+            visual_transformation = transformation,
+            modifier = Modifier.size(100.dp()).test_tag("field")
+        );
+    })
+}
+
+// A service echoes what's typed from this, and reads the cursor; `password` keeps a password's
+// from being read out.
+#[test]
+fn typing_tells_the_edit_and_the_cursor_and_a_password_says_it_is_one() {
+    for masked in [false, true] {
+        let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+        let masked_state = Box::leak(Box::new(mutable_state_of(masked))).handle();
+        let mut host = field_of(value, masked_state);
+        let id = tagged(&host, "field").semantics_id;
+        let field = tagged(&host, "field").id;
+        host.request_focus(field);
+        host.send_key(KeyEvent::down(Key::MoveEnd));
+        frames(&mut host);
+        let mut kept = kept_from_now();
+        all_changes(&host, &mut kept);
+
+        host.send_text("!");
+        frames(&mut host);
+        let changes = all_changes(&host, &mut kept);
+        let edit = changes
+            .iter()
+            .find(|change| change.kind == ChangeKind::TextChanged)
+            .unwrap_or_else(|| panic!("{changes:?}"));
+        assert_eq!(edit.id, id);
+        assert_eq!((edit.from, edit.removed, edit.added), (5, 0, 1));
+        assert_eq!(edit.password, masked, "the event says it's a password");
+        let cursor = changes
+            .iter()
+            .find(|change| change.kind == ChangeKind::TextSelection)
+            .unwrap_or_else(|| panic!("{changes:?}"));
+        assert_eq!((cursor.from, cursor.removed, cursor.added), (6, 6, 6));
+        assert_eq!(cursor.password, masked);
+        if masked {
+            assert!(!edit.text.contains('!') && !edit.before.contains("hello"), "{edit:?}");
+        } else {
+            assert_eq!((edit.before.as_str(), edit.text.as_str()), ("hello", "hello!"));
+        }
+    }
+}
+
+#[test]
+fn an_edit_in_the_middle_counts_in_utf16_from_the_common_start_and_end() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("a😀b")))).handle();
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = field_of(value, masked);
+    let mut kept = kept_from_now();
+    all_changes(&host, &mut kept);
+    value.set(String::from("a😀xyb"));
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    let edit = changes.iter().find(|it| it.kind == ChangeKind::TextChanged).expect("told");
+    assert_eq!((edit.from, edit.removed, edit.added), (3, 0, 2));
+}
+
+#[test]
+fn a_password_shown_or_masked_tells_two_cursors_and_no_edit() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("secret")))).handle();
+    let masked = Box::leak(Box::new(mutable_state_of(true))).handle();
+    let mut host = field_of(value, masked);
+    let mut kept = kept_from_now();
+    all_changes(&host, &mut kept);
+    masked.set(false);
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    assert!(!changes.iter().any(|it| it.kind == ChangeKind::TextChanged), "{changes:?}");
+    let cursors: Vec<_> =
+        changes.iter().filter(|it| it.kind == ChangeKind::TextSelection).collect();
+    assert_eq!(cursors.len(), 2, "{changes:?}");
+    assert_eq!(cursors[0].from, 0);
+}
+
+#[test]
+fn a_cursor_moved_by_keys_tells_its_selection() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = field_of(value, masked);
+    let field = tagged(&host, "field").id;
+    host.request_focus(field);
+    frames(&mut host);
+    host.send_key(KeyEvent::down(Key::MoveEnd));
+    frames(&mut host);
+    let mut kept = kept_from_now();
+    all_changes(&host, &mut kept);
+    host.send_key(KeyEvent::down(Key::DirectionLeft));
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    let cursor = changes.iter().find(|it| it.kind == ChangeKind::TextSelection).expect("told");
+    assert_eq!((cursor.from, cursor.removed, cursor.added), (4, 4, 5));
+}
+
+#[test]
+fn a_cursor_moved_by_a_key_or_a_tap_is_told_at_once() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = field_of(value, masked);
+    let field = tagged(&host, "field");
+    host.request_focus(field.id);
+    frames(&mut host);
+    host.send_key(KeyEvent::down(Key::MoveEnd));
+    assert!(host.frame().semantics_changed, "a key");
+    let start = Offset::new(field.bounds.left + 1.0, field.bounds.top + 1.0);
+    host.send_pointer(PointerEvent::press(start));
+    host.send_pointer(PointerEvent::release(start));
+    assert!(host.frame().semantics_changed, "a tap");
+}
+
+#[test]
+fn a_touch_looks_through_what_says_nothing_to_what_is_around_it_not_what_is_under_it() {
+    let host = host_of(|| {
+        let parent = Modifier.size(50.dp()).semantics(says).test_tag("parent");
+        Box!(modifier = parent, {
+            let under = Modifier.size(20.dp()).semantics(says).test_tag("under");
+            Box!(modifier = under, {});
+            Box!(modifier = Modifier.size(20.dp()).test_tag("says nothing"), {});
+        });
+    });
+    let root = host.accessibility_tree();
+    assert_eq!(
+        compose_android::accessibility::node_at(&root, 5.0, 5.0),
+        Some(tagged(&host, "parent").semantics_id)
+    );
+}
+
+#[test]
+fn a_custom_action_is_written_with_the_id_its_label_kept() {
+    let labels = Box::leak(Box::new(mutable_state_of(vec!["one", "two"]))).handle();
+    let mut host = host_of(move || {
+        let modifier = Modifier.size(20.dp()).test_tag("node").semantics(move |config| {
+            config.set_custom_actions(
+                labels
+                    .get()
+                    .into_iter()
+                    .map(|label| CustomAccessibilityAction::new(label, || true))
+                    .collect(),
+            );
+        });
+        Box!(modifier = modifier, {});
+    });
+    let mut custom = KeptCustomActions::default();
+    custom.assign(&host.accessibility_tree());
+    labels.set(vec!["two"]);
+    frames(&mut host);
+    custom.assign(&host.accessibility_tree());
+    let offered = actions_of(&tagged(&host, "node"), &custom);
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0].0, action::CUSTOM_FIRST + 1, "what it was, not its place");
+}
+
+#[test]
+fn the_focus_coming_to_a_node_tells_it_and_a_focused_node_offers_to_clear_it() {
+    let mut host = host_of(|| {
+        Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("node"), {});
+    });
+    let mut kept = kept_from_now();
+    all_changes(&host, &mut kept);
+    let node = tagged(&host, "node");
+    let codes = |node: &SemanticsSnapshot| -> Vec<u8> {
+        actions_of(node, &KeptCustomActions::default()).iter().map(|it| it.0).collect()
+    };
+    assert!(codes(&node).contains(&action::FOCUS));
+    let tree = host.accessibility_tree();
+    let custom = KeptCustomActions::default();
+    assert!(perform_action(
+        &mut host,
+        &tree,
+        &custom,
+        node.semantics_id,
+        action::FOCUS as i32,
+        0.0
+    ));
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    assert!(
+        changes.iter().any(|it| it.id == node.semantics_id && it.kind == ChangeKind::Focused),
+        "{changes:?}"
+    );
+    let node = tagged(&host, "node");
+    assert!(codes(&node).contains(&action::CLEAR_FOCUS));
+    assert!(!codes(&node).contains(&action::FOCUS));
+    let tree = host.accessibility_tree();
+    assert!(perform_action(
+        &mut host,
+        &tree,
+        &custom,
+        node.semantics_id,
+        action::CLEAR_FOCUS as i32,
+        0.0
+    ));
+    frames(&mut host);
+    assert!(codes(&tagged(&host, "node")).contains(&action::FOCUS));
+}
+
+#[test]
+fn a_window_opening_or_closing_tells_it_even_with_no_pane_title() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = field_and_dialog(open);
+    let mut kept = kept_from_now();
+    all_changes(&host, &mut kept);
+    open.set(true);
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    let window = changes.iter().find(|it| it.kind == ChangeKind::Window).expect("told");
+    assert_ne!(window.id, -1, "from the window's root");
+    open.set(false);
+    frames(&mut host);
+    let changes = all_changes(&host, &mut kept);
+    let window = changes.iter().find(|it| it.kind == ChangeKind::Window).expect("told");
+    assert_eq!(window.id, -1, "the main window's root is the view");
+}
+
+#[test]
+fn a_popup_letting_touches_through_hides_nothing_from_a_service() {
+    let host = host_of(|| {
+        Column!({
+            Box!(modifier = Modifier.size(10.dp()).semantics(says).test_tag("behind"), {});
+            Popup!(
+                properties = PopupProperties {
+                    focusable: true,
+                    pass_through_outside: true,
+                    ..Default::default()
+                },
+                {
+                    Box!(modifier = Modifier.size(10.dp()).semantics(says).test_tag("inside"), {});
+                }
+            );
+        });
+    });
+    let root = host.accessibility_tree();
+    assert!(by_tag(&root, "behind").is_some());
+    assert!(by_tag(&root, "inside").is_some());
+}
+
+#[test]
+fn a_records_long_click_importance_and_drawing_order_are_written() {
+    let host = host_of(|| {
+        Row!({
+            let plain = Modifier.size(20.dp()).test_tag("tag only");
+            Box!(modifier = plain, {});
+            let long = Modifier.size(20.dp()).test_tag("long").semantics(|config| {
+                says(config);
+                config.on_long_click(None, || true);
+            });
+            Box!(modifier = long, {});
+        });
+    });
+    let root = host.accessibility_tree();
+    let mut out = Writer::default();
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    let read = records(&out.bytes);
+    let of = |tag| {
+        let id = tagged(&host, tag).semantics_id;
+        *read.iter().find(|record| record.0 == id).expect("written")
+    };
+    assert_ne!(of("long").1 & flag::LONG_CLICKABLE, 0);
+    assert_ne!(of("long").1 & flag::IMPORTANT, 0);
+    assert_eq!(of("tag only").1 & flag::IMPORTANT, 0);
+    assert_eq!(of("tag only").1 & flag::LONG_CLICKABLE, 0);
+}
+
+#[test]
+fn the_kotlin_says_what_rust_chose() {
+    let path = format!(
+        "{}/../../android/compose-rs/src/main/java/rs/compose/android/Accessibility.kt",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let kotlin = std::fs::read_to_string(&path).expect("there");
+    for line in [
+        // uiautomator's dump is no service to send events to.
+        "manager\n                .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)",
+        "info.drawingOrder = node.drawingOrder",
+        "info.isImportantForAccessibility = node.flags and IMPORTANT != 0",
+        "info.isLongClickable = node.flags and LONG_CLICKABLE != 0",
+        "val found = view.semanticsNodeAt(x, y)",
+        "view.post(changed)",
+    ] {
+        assert!(kotlin.contains(line), "Accessibility.kt lacks {line:?}");
+    }
 }

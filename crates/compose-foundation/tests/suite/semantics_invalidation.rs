@@ -667,7 +667,7 @@ fn a_write_during_a_prefetch_only_semantics_read_asks_for_a_frame() {
 /// (under a parent not placed, under a clearing one, itself gone), though its own configuration
 /// is kept. Gone, it answers rather than panics: a panic across JNI aborts the app.
 #[test]
-fn a_node_out_of_the_tree_offers_no_action() {
+fn a_node_not_placed_or_gone_offers_no_action_and_a_cleared_one_still_does() {
     let placed = mutable_state_of(true);
     let cleared = mutable_state_of(false);
     let present = mutable_state_of(true);
@@ -711,6 +711,7 @@ fn a_node_out_of_the_tree_offers_no_action() {
     host.settle(10);
     assert!(find_by_tag(&host.semantics_tree(true), "inner").is_none());
     assert!(find_by_tag(&host.semantics_tree(false), "inner").is_some());
+    assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_some(), "cleared");
     cleared.set(false);
     host.settle(10);
     assert!(find_by_tag(&host.semantics_tree(true), "inner").is_some());

@@ -550,6 +550,7 @@ impl TextFieldNode {
         self.cursor = cursor;
         self.anchor = anchor;
         self.awaiting_value = true;
+        context.invalidate_semantics();
         self.invalidate_paragraph();
         context.invalidate_measure();
         let callback = self.on_value_change.clone();
@@ -1176,10 +1177,8 @@ impl DrawModifierNode for TextFieldNode {
     }
 }
 
-impl PointerInputModifierNode for TextFieldNode {
-    /// A tap focuses the field and puts the cursor where it landed; a drag selects from the
-    /// press to the pointer; a double-click selects a word.
-    fn on_pointer_event(
+impl TextFieldNode {
+    fn on_pointer_event_here(
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
@@ -1318,6 +1317,24 @@ impl PointerInputModifierNode for TextFieldNode {
             _ => {}
         }
     }
+}
+
+impl PointerInputModifierNode for TextFieldNode {
+    /// A tap focuses the field and puts the cursor where it landed; a drag selects from the
+    /// press to the pointer; a double-click selects a word.
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+        context: &mut EventContext<'_>,
+    ) {
+        let selection = (self.anchor, self.cursor);
+        self.on_pointer_event_here(event, pass, bounds, context);
+        if selection != (self.anchor, self.cursor) {
+            context.invalidate_semantics();
+        }
+    }
 
     fn on_cancel_pointer_input(&mut self) {
         self.press = None;
@@ -1379,6 +1396,7 @@ impl FocusTargetModifierNode for TextFieldNode {
             self.anchor = end;
             self.preferred_x = None;
             context.invalidate_measure();
+            context.invalidate_semantics();
         }
         context.invalidate_draw();
     }
@@ -1393,8 +1411,8 @@ fn is_macos() -> bool {
     cfg!(target_os = "macos")
 }
 
-impl KeyInputModifierNode for TextFieldNode {
-    fn on_key_event(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
+impl TextFieldNode {
+    fn on_key_event_here(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
         if !self.enabled {
             return false;
         }
@@ -1568,6 +1586,17 @@ impl KeyInputModifierNode for TextFieldNode {
             _ => false,
         }
     }
+}
+
+impl KeyInputModifierNode for TextFieldNode {
+    fn on_key_event(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
+        let selection = (self.anchor, self.cursor);
+        let consumed = self.on_key_event_here(event, context);
+        if selection != (self.anchor, self.cursor) {
+            context.invalidate_semantics();
+        }
+        consumed
+    }
 
     fn on_text_input(&mut self, text: &str, context: &mut EventContext<'_>) -> bool {
         if !self.enabled || self.read_only {
@@ -1638,10 +1667,22 @@ impl SemanticsModifierNode for TextFieldNode {
         config.part_of_parent();
         // What's shown: a password's mask, as Compose's.
         let text = self.display_text();
-        config.set_editable_text(match self.visual_transformation.filter(&text) {
-            Some(transformed) => compose_ui::SharedString::from(transformed.text),
+        let shown: compose_ui::SharedString = match self.visual_transformation.filter(&text) {
+            Some(transformed) => transformed.text.into(),
             None => text.into_owned().into(),
-        });
+        };
+        // In what's shown: a character for a character, under a mask or a composition's own.
+        let in_shown = |offset: usize| {
+            let offset = floor_char_boundary(&self.text, offset);
+            let characters = self.text[..offset].chars().count();
+            let shown = shown.as_str();
+            shown.char_indices().nth(characters).map_or(shown.len(), |(at, _)| at)
+        };
+        config.set_text_selection_range(compose_ui::TextRange::new(
+            in_shown(self.anchor),
+            in_shown(self.cursor),
+        ));
+        config.set_editable_text(shown.clone());
         if self.visual_transformation.is_password() {
             config.password();
         }

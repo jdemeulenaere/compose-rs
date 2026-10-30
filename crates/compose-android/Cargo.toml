@@ -18,6 +18,7 @@ compose-navigation-event.workspace = true
 compose-animation.workspace = true
 compose-foundation.workspace = true
 compose-test.workspace = true
+compose-material3.workspace = true
 
 [lints]
 workspace = true

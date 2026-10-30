@@ -1016,6 +1016,27 @@ impl UiHost {
         done
     }
 
+    /// The custom action of `node` labelled `label`, if it still has one, as Compose's delegate
+    /// finds it by its label: whether it did something.
+    pub fn perform_custom_action(&mut self, node: NodeId, label: &str) -> bool {
+        let _turn = compose_runtime::platform::Turn::begin();
+        let config = self.with_tree(|tree| tree.unmerged_semantics_config(node));
+        let action = config.and_then(|config| {
+            let all = config.get(&crate::semantics::SemanticsActions::CUSTOM_ACTIONS)?;
+            Some(all.iter().find(|action| action.label.as_str() == label)?.action.clone())
+        });
+        let Some(action) = action else { return false };
+        let done = action();
+        self.handle_focus_requests();
+        self.wake_if_dirty();
+        done
+    }
+
+    /// The window taking the keys, the main one's `None`.
+    pub fn focused_window(&self) -> Option<NodeId> {
+        self.with_tree(|tree| tree.focus.window)
+    }
+
     /// The input mode, as `LOCAL_INPUT_MODE_MANAGER`'s `input_mode`: `Keyboard` unless the host
     /// says otherwise.
     pub fn input_mode(&self) -> crate::input_mode::InputMode {

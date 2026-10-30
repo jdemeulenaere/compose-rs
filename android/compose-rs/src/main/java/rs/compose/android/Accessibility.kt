@@ -1,5 +1,6 @@
 package rs.compose.android
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +28,18 @@ internal class Accessibility(private val view: ComposeRsView) :
     AccessibilityManager.TouchExplorationStateChangeListener {
     private val manager = view.context.getSystemService(AccessibilityManager::class.java)
 
+    /** The services on, as Compose's: uiautomator isn't among them, and has no events sent. */
+    private var enabledServices: List<AccessibilityServiceInfo>? = null
+
+    private val isEnabled: Boolean
+        get() {
+            if (!manager.isEnabled) return false
+            val services = enabledServices ?: manager
+                .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .also { enabledServices = it }
+            return services.isNotEmpty()
+        }
+
     private class Node(
         val id: Int,
         val parent: Int,
@@ -44,9 +57,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         val scroll: FloatArray?,
         /** Who a service reads it before, -1 for none. */
         val before: Int,
+        val drawingOrder: Int,
         /** Chosen in Rust, as Compose's delegate does (`accessibility::class_and_role`). */
         val className: String,
-        val roleDescription: String,
+        val roleDescription: String?,
+        /** The state's words, the library's where the application gives none. */
+        val spokenState: String?,
         /** What a service may ask (`accessibility::action`'s codes), with their labels. */
         val actionCodes: IntArray,
         val actionLabels: Array<String>,
@@ -77,9 +93,15 @@ internal class Accessibility(private val view: ComposeRsView) :
      * next asked, whether or not a service is on now (one connecting later reads the current
      * tree, D630). Nothing else is done with no service on, as Compose's `onSemanticsChange`.
      */
-    fun semanticsChanged() {
+    fun semanticsChanged(atOnce: Boolean) {
         stale = true
-        if (!changePosted && manager.isEnabled) {
+        if (!isEnabled) return
+        if (atOnce) {
+            // A property: said now; where things are can wait (Compose's bounds' batches).
+            view.removeCallbacks(changed)
+            changePosted = true
+            view.post(changed)
+        } else if (!changePosted) {
             changePosted = true
             view.postDelayed(changed, 100)
         }
@@ -87,6 +109,7 @@ internal class Accessibility(private val view: ComposeRsView) :
 
     /** The view is attached: services turned on later are told the content. */
     fun attach() {
+        enabledServices = null
         manager.addAccessibilityStateChangeListener(this)
         manager.addTouchExplorationStateChangeListener(this)
     }
@@ -99,10 +122,12 @@ internal class Accessibility(private val view: ComposeRsView) :
     }
 
     override fun onAccessibilityStateChanged(enabled: Boolean) {
+        enabledServices = null
         if (enabled) turnedOn()
     }
 
     override fun onTouchExplorationStateChanged(enabled: Boolean) {
+        enabledServices = null
         if (manager.isEnabled) turnedOn()
     }
 
@@ -117,12 +142,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         tell()
         // The content as it is, to read from.
         val parent = view.parent ?: return
-        tellChange(parent, -1, CHANGE_SUBTREE, "")
+        tellChange(parent, -1, CHANGE_SUBTREE, false, "", "", 0, 0, 0)
     }
 
     /** Tells the services on that the content changed, and each scroll since last told. */
     private fun tell() {
-        if (!manager.isEnabled) return
+        if (!isEnabled) return
         val parent = view.parent ?: return
         // A scroll (by an action, a drag, a fling) is told once laid out, with how far, as
         // Compose's `sendScrollEventIfNeeded` (D491).
@@ -157,41 +182,98 @@ internal class Accessibility(private val view: ComposeRsView) :
         while (buffer.hasRemaining()) {
             val id = buffer.getInt()
             val kind = buffer.get().toInt()
+            val password = buffer.get().toInt() != 0
             val text = buffer.readString()
-            tellChange(parent, id, kind, text)
+            val before = buffer.readString()
+            val from = buffer.getInt()
+            val removed = buffer.getInt()
+            val added = buffer.getInt()
+            tellChange(parent, id, kind, password, text, before, from, removed, added)
         }
     }
 
     /** One of `accessibility::ChangeKind`'s, with what Compose's delegate sends for it. */
     @android.annotation.SuppressLint("InlinedApi")
-    private fun tellChange(parent: android.view.ViewParent, id: Int, kind: Int, text: String) {
+    private fun tellChange(
+        parent: android.view.ViewParent,
+        id: Int,
+        kind: Int,
+        password: Boolean,
+        text: String,
+        before: String,
+        from: Int,
+        removed: Int,
+        added: Int,
+    ) {
         val type = when (kind) {
-            CHANGE_PANE_APPEARED, CHANGE_PANE_DISAPPEARED, CHANGE_PANE_TITLE ->
+            CHANGE_PANE_APPEARED, CHANGE_PANE_DISAPPEARED, CHANGE_PANE_TITLE, CHANGE_WINDOW ->
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             CHANGE_TAB_SELECTED -> AccessibilityEvent.TYPE_VIEW_SELECTED
+            CHANGE_TEXT_CHANGED -> AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+            CHANGE_TEXT_SELECTION -> AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+            CHANGE_FOCUSED -> AccessibilityEvent.TYPE_VIEW_FOCUSED
             else -> AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         }
         val event = AccessibilityEvent.obtain(type)
         event.packageName = view.context.packageName
+        event.isEnabled = true
+        // Never read out: a service's echo of a key typed in a password goes by this.
+        event.isPassword = password
+        event.className = when (kind) {
+            CHANGE_TEXT_CHANGED, CHANGE_TEXT_SELECTION -> "android.widget.EditText"
+            else -> "android.view.View"
+        }
         if (id == -1) event.setSource(view) else event.setSource(view, id)
-        event.contentChangeTypes = when (kind) {
-            CHANGE_SUBTREE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
-            CHANGE_TEXT -> AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
-            CHANGE_CONTENT_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
-            CHANGE_STATE_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION
-            CHANGE_ERROR ->
-                AccessibilityEvent.CONTENT_CHANGE_TYPE_ERROR or
-                    AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_INVALID
-            CHANGE_CHECKED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CHECKED
-            CHANGE_PANE_APPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED
-            CHANGE_PANE_DISAPPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED
-            CHANGE_PANE_TITLE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_TITLE
-            else -> AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED
+        when (kind) {
+            CHANGE_TEXT_CHANGED -> {
+                event.fromIndex = from
+                event.removedCount = removed
+                event.addedCount = added
+                event.beforeText = before
+            }
+            CHANGE_TEXT_SELECTION -> {
+                event.fromIndex = from
+                event.toIndex = removed
+                event.itemCount = added
+            }
+            CHANGE_TAB_SELECTED -> if (before.isNotEmpty()) event.contentDescription = before
+            else -> event.contentChangeTypes = when (kind) {
+                CHANGE_SUBTREE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
+                CHANGE_TEXT -> AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
+                CHANGE_CONTENT_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
+                CHANGE_STATE_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION
+                CHANGE_ERROR ->
+                    AccessibilityEvent.CONTENT_CHANGE_TYPE_ERROR or
+                        AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_INVALID
+                CHANGE_CHECKED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CHECKED
+                CHANGE_PANE_APPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED
+                CHANGE_PANE_DISAPPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED
+                CHANGE_PANE_TITLE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_TITLE
+                else -> AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED
+            }
         }
         if (text.isNotEmpty()) {
             if (kind == CHANGE_CONTENT_DESCRIPTION) event.contentDescription = text else event.text.add(text)
         }
         parent.requestSendAccessibilityEvent(view, event)
+    }
+
+    /** The library's words for `accessibility::spoken`'s [code]. */
+    private fun spokenWords(code: Int, percent: Int): String? {
+        val resources = view.context.resources
+        return when (code) {
+            1 -> resources.getString(R.string.compose_rs_state_on)
+            2 -> resources.getString(R.string.compose_rs_state_off)
+            3 -> resources.getString(R.string.compose_rs_state_partially_checked)
+            4 -> resources.getString(R.string.compose_rs_state_selected)
+            5 -> resources.getString(R.string.compose_rs_state_not_selected)
+            6 -> resources.getString(R.string.compose_rs_state_percent, percent)
+            7 -> resources.getString(R.string.compose_rs_state_in_progress)
+            8 -> resources.getString(R.string.compose_rs_state_empty)
+            9 -> resources.getString(R.string.compose_rs_role_tab)
+            10 -> resources.getString(R.string.compose_rs_role_switch)
+            else -> null
+        }
     }
 
     private fun refresh() {
@@ -235,8 +317,11 @@ internal class Accessibility(private val view: ComposeRsView) :
             }
             if (flags and SCROLL != 0) buffer.get()
             val before = buffer.getInt()
+            val drawingOrder = buffer.getInt()
             val className = buffer.readString()
-            val roleDescription = buffer.readString()
+            val roleDescription = spokenWords(buffer.get().toInt(), 0)
+            val stateCode = buffer.get().toInt()
+            val spokenState = spokenWords(stateCode, buffer.get().toInt() and 0xFF)
             val actionCount = buffer.get().toInt() and 0xFF
             val actionCodes = IntArray(actionCount)
             val actionLabels = Array(actionCount) {
@@ -245,8 +330,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             }
             val node = Node(
                 id, parent, bounds, flags, role, text, description, editableText, state, error,
-                paneTitle, range, scroll, before, className, roleDescription, actionCodes,
-                actionLabels,
+                paneTitle, range, scroll, before, drawingOrder, className, roleDescription,
+                spokenState, actionCodes, actionLabels,
             )
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
@@ -282,9 +367,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         // Clipped away by a scrolling container around it: TalkBack scrolls that instead.
         info.isVisibleToUser = node.flags and HIDDEN == 0
         info.className = node.className
-        if (node.roleDescription.isNotEmpty()) {
-            info.extras.putCharSequence("AccessibilityNodeInfo.roleDescription", node.roleDescription)
+        node.roleDescription?.let {
+            info.extras.putCharSequence("AccessibilityNodeInfo.roleDescription", it)
         }
+        info.drawingOrder = node.drawingOrder
+        info.isImportantForAccessibility = node.flags and IMPORTANT != 0
+        info.isLongClickable = node.flags and LONG_CLICKABLE != 0
         if (Build.VERSION.SDK_INT >= 28) {
             info.isScreenReaderFocusable = node.flags and SCREEN_READER_FOCUSABLE != 0
             info.isHeading = node.flags and HEADING != 0
@@ -306,11 +394,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         // A state description: `setStateDescription` from API 30; before, in the extras, under
         // the key AndroidX's `AccessibilityNodeInfoCompat.setStateDescription` uses, which
         // accessibility services read back through the compat class, as Compose's.
-        if (node.state.isNotEmpty()) {
+        val state = node.spokenState ?: node.state.ifEmpty { null }
+        if (state != null) {
             if (Build.VERSION.SDK_INT >= 30) {
-                info.stateDescription = node.state
+                info.stateDescription = state
             } else {
-                info.extras.putCharSequence(STATE_DESCRIPTION_KEY, node.state)
+                info.extras.putCharSequence(STATE_DESCRIPTION_KEY, state)
             }
         }
         if (node.error.isNotEmpty()) {
@@ -404,6 +493,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         CODE_CLICK -> AccessibilityNodeInfo.ACTION_CLICK
         CODE_FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
         CODE_SET_PROGRESS -> android.R.id.accessibilityActionSetProgress
+        CODE_CLEAR_FOCUS -> AccessibilityNodeInfo.ACTION_CLEAR_FOCUS
         3, 17 -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
         4, 18 -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         5 -> android.R.id.accessibilityActionScrollUp
@@ -429,21 +519,11 @@ internal class Accessibility(private val view: ComposeRsView) :
         parent.requestSendAccessibilityEvent(view, event)
     }
 
-    /** The deepest node under ([x], [y]) in the view, for explore-by-touch. */
+    /** The node under ([x], [y]) in the view, for explore-by-touch (`accessibility::node_at`). */
     fun nodeAt(x: Float, y: Float): Int {
         refresh()
-        var found = View.NO_ID
-        fun visit(ids: List<Int>) {
-            for (id in ids) {
-                val node = nodes.get(id) ?: continue
-                if (node.flags and HIDDEN == 0 && node.bounds.contains(x.toInt(), y.toInt())) {
-                    found = id
-                    visit(node.children)
-                }
-            }
-        }
-        visit(roots)
-        return found
+        val found = view.semanticsNodeAt(x, y)
+        return if (found == -1) View.NO_ID else found
     }
 
     private var hovered = View.NO_ID
@@ -485,12 +565,15 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val SCREEN_READER_FOCUSABLE = 1 shl 17
         const val LIVE_POLITE = 1 shl 18
         const val LIVE_ASSERTIVE = 1 shl 19
+        const val LONG_CLICKABLE = 1 shl 20
+        const val IMPORTANT = 1 shl 21
         const val CLICKABLE = 1
 
         // `accessibility::action`'s, those treated apart here.
         const val CODE_CLICK = 0
         const val CODE_FOCUS = 1
         const val CODE_SET_PROGRESS = 2
+        const val CODE_CLEAR_FOCUS = 19
 
         /** Custom actions' ids: in no package's resources (`0x7f` an application's own). */
         const val CUSTOM_ACTION_BASE = 0x7fff0000
@@ -506,6 +589,10 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val CHANGE_PANE_DISAPPEARED = 8
         const val CHANGE_PANE_TITLE = 9
         const val CHANGE_TAB_SELECTED = 10
+        const val CHANGE_TEXT_CHANGED = 11
+        const val CHANGE_TEXT_SELECTION = 12
+        const val CHANGE_FOCUSED = 13
+        const val CHANGE_WINDOW = 14
     }
 }
 

@@ -181,7 +181,7 @@ pub fn PopupWithPositionProvider(
             }
             let token = remember(crate::focus_manager::WindowToken::default);
             let mut modifier = if properties.focusable {
-                Modifier.overlay_window(position_provider.clone(), token.clone())
+                Modifier.overlay_window(position_provider.clone(), token.clone(), modal)
             } else {
                 Modifier.overlay(position_provider.clone(), false)
             };
@@ -241,7 +241,7 @@ pub fn Dialog(
             let dismiss = on_dismiss_request.clone();
             let token = remember(crate::focus_manager::WindowToken::default);
             let modifier = Modifier
-                .overlay_window(window.clone(), token.clone())
+                .overlay_window(window.clone(), token.clone(), true)
                 .background(SCRIM)
                 .then_custom(DismissOnClick {
                     on_dismiss: if properties.dismiss_on_click_outside {

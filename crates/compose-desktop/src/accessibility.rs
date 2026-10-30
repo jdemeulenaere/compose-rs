@@ -67,8 +67,17 @@ fn children_in_order(node: &SemanticsSnapshot, order: &HashMap<i32, usize>) -> V
 }
 
 /// The id of a node's dismiss action among its custom actions: AccessKit has no action of its own
-/// for it, and Compose's custom actions count up from 0.
+/// for it, and the others' are never negative.
 const DISMISS_CUSTOM_ACTION: i32 = -1;
+
+/// A custom action's id, from its label: what a screen reader was shown it as finds it, or nothing
+/// once it's gone, whatever came and went around it (D1295).
+fn custom_action_id(label: &str) -> i32 {
+    let hash = label
+        .bytes()
+        .fold(0x811c_9dc5_u32, |hash, byte| (hash ^ byte as u32).wrapping_mul(0x0100_0193));
+    (hash & i32::MAX as u32) as i32
+}
 
 /// Adds `node` and its descendants to `nodes`, telling `visit` each id (parents first).
 fn add(
@@ -201,9 +210,9 @@ fn add(
             });
         }
         if let Some(actions) = own.get(&A::CUSTOM_ACTIONS) {
-            for (index, action) in actions.iter().enumerate() {
+            for action in actions.iter() {
                 custom.push(accesskit::CustomAction {
-                    id: index as i32,
+                    id: custom_action_id(action.label.as_str()),
                     description: action.label.as_str().into(),
                 });
             }
@@ -263,10 +272,11 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
             if action == DISMISS_CUSTOM_ACTION {
                 return host.perform_semantics_action(node, &A::DISMISS);
             }
-            let found = usize::try_from(action)
-                .ok()
-                .and_then(|index| custom.as_ref().and_then(|all| all.get(index)));
-            return found.is_some_and(|custom| (custom.action)());
+            let found = custom.as_ref().and_then(|all| {
+                all.iter().find(|custom| custom_action_id(custom.label.as_str()) == action)
+            });
+            let Some(found) = found else { return false };
+            return host.perform_custom_action(node, found.label.as_str());
         }
         Action::Increment | Action::Decrement => {
             let Some(info) = progress() else { return false };
@@ -293,6 +303,134 @@ mod tests {
     use compose_ui::{
         ClickableOptions, Density, IntSize, Modifier, UnitExt, platform::FixedTextMeasurer,
     };
+
+    /// A host of `content`, settled.
+    fn host_of(content: impl Fn() + 'static) -> UiHost {
+        let mut host = UiHost::new(
+            IntSize::new(400, 400),
+            Density::default(),
+            Box::new(FixedTextMeasurer::default()),
+        );
+        host.set_content(content);
+        host.settle(20);
+        host
+    }
+
+    fn says(config: &mut compose_ui::SemanticsConfiguration) {
+        config.set_content_description("says");
+    }
+
+    /// The node saying `tag` as its test tag, in a tree update.
+    fn access_id(host: &UiHost, tag: &str) -> AccessNodeId {
+        host.with_tree(|tree| {
+            fn find(node: &SemanticsSnapshot, tag: &str) -> Option<AccessNodeId> {
+                if node.config.get(&P::TEST_TAG).is_some_and(|it| it.as_str() == tag) {
+                    return Some(id(node));
+                }
+                node.children.iter().find_map(|child| find(child, tag))
+            }
+            find(&tree.accessibility_tree(), tag).expect("tagged")
+        })
+    }
+
+    fn node_of(update: &TreeUpdate, id: AccessNodeId) -> &Node {
+        &update.nodes.iter().find(|(it, _)| *it == id).expect("in the update").1
+    }
+
+    #[test]
+    fn a_nodes_children_are_given_in_the_order_they_are_read() {
+        let host = host_of(|| {
+            use compose_foundation::layout::*;
+            let parent = Modifier.size(400.dp()).test_tag("parent");
+            Box!(modifier = parent, {
+                let lower = Modifier.offset(0.dp(), 100.dp()).size(10.dp());
+                Box!(modifier = lower.semantics(says).test_tag("lower"), {});
+                let upper = Modifier.size(10.dp());
+                Box!(modifier = upper.semantics(says).test_tag("upper"), {});
+            });
+        });
+        let update = tree_update(&host, "title");
+        let children = node_of(&update, access_id(&host, "parent")).children();
+        assert_eq!(children, [access_id(&host, "upper"), access_id(&host, "lower")]);
+    }
+
+    #[test]
+    fn a_live_region_expand_collapse_and_custom_actions_reach_the_tree() {
+        let host = host_of(|| {
+            let node = Modifier.size(10.dp()).test_tag("node").semantics(|config| {
+                config.set_live_region(LiveRegionMode::Assertive);
+                config.expand(None, || true);
+                config.collapse(None, || true);
+                config.dismiss(Some("Close".into()), || true);
+                config.set_custom_actions(vec![compose_ui::CustomAccessibilityAction::new(
+                    "Archive",
+                    || true,
+                )]);
+            });
+            compose_foundation::layout::Box(
+                node,
+                compose_ui::Alignment::TOP_START,
+                false,
+                compose_runtime::callback(|_| {}),
+            );
+        });
+        let update = tree_update(&host, "title");
+        let node = node_of(&update, access_id(&host, "node"));
+        assert_eq!(node.live(), Some(accesskit::Live::Assertive));
+        assert!(node.supports_action(Action::Expand));
+        assert!(node.supports_action(Action::Collapse));
+        assert!(node.supports_action(Action::CustomAction));
+        let labels: Vec<_> = node.custom_actions().iter().map(|it| &*it.description).collect();
+        assert_eq!(labels, ["Close", "Archive"]);
+    }
+
+    #[test]
+    fn a_custom_action_is_found_by_what_a_screen_reader_was_shown_or_not_at_all() {
+        use std::cell::RefCell;
+        let done: &'static RefCell<Vec<&'static str>> = Box::leak(Box::default());
+        let labels = Box::leak(Box::new(compose_runtime::mutable_state_of(vec!["one", "two"])));
+        let labels = labels.handle();
+        let mut host = host_of(move || {
+            use compose_foundation::layout::*;
+            let node = Modifier.size(10.dp()).test_tag("node").semantics(move |config| {
+                config.set_custom_actions(
+                    labels
+                        .get()
+                        .into_iter()
+                        .map(|label| {
+                            compose_ui::CustomAccessibilityAction::new(label, move || {
+                                done.borrow_mut().push(label);
+                                true
+                            })
+                        })
+                        .collect(),
+                );
+            });
+            Box!(modifier = node, {});
+        });
+        let target = access_id(&host, "node");
+        let update = tree_update(&host, "title");
+        let shown = node_of(&update, target).custom_actions()[1].id;
+        let ask = |host: &mut UiHost, action| {
+            perform(
+                host,
+                &ActionRequest {
+                    action: Action::CustomAction,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: target,
+                    data: Some(accesskit::ActionData::CustomAction(action)),
+                },
+            )
+        };
+        labels.set(vec!["zero", "one", "two"]);
+        host.settle(20);
+        assert!(ask(&mut host, shown), "what it was shown, wherever that is now");
+        assert_eq!(*done.borrow(), ["two"]);
+        labels.set(vec!["zero"]);
+        host.settle(20);
+        assert!(!ask(&mut host, shown), "it's gone");
+        assert_eq!(*done.borrow(), ["two"]);
+    }
 
     #[test]
     fn the_tree_has_the_window_its_nodes_and_their_actions() {

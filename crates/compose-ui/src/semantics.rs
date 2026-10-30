@@ -510,17 +510,25 @@ impl UiTree {
         }
     }
 
-    /// The merged tree an accessibility service reads: the top window that takes the keys and what's
-    /// over it (D1290). What's behind a dialog is another window's, which a service doesn't read
-    /// while the dialog's is active, as Compose's `Dialog` in a window of its own.
+    /// The merged tree an accessibility service reads: the top window shutting out what's behind it
+    /// and what's over it (D1290). What's behind a dialog is another window's, which a service
+    /// doesn't read while the dialog's is active, as Compose's `Dialog` in a window of its own; a
+    /// popup letting touches through doesn't shut anything out. With a window not among the
+    /// overlays (laid out next frame), the whole tree.
     pub fn accessibility_tree(&mut self) -> SemanticsSnapshot {
-        let Some(top) = self.focus.window else { return self.semantics_tree(true) };
         let mut root = self.semantics_tree(true);
-        let first = self.overlays.iter().position(|&overlay| overlay == top);
-        let shown: SmallVec<[NodeId; 4]> = match first {
-            Some(first) => self.overlays[first..].iter().copied().collect(),
-            None => SmallVec::new(),
+        let below = self.focus.other_windows.iter().rev().map(|other| other.window);
+        let windows: SmallVec<[Option<NodeId>; 2]> =
+            std::iter::once(self.focus.window).chain(below).collect();
+        let shutting_out = windows
+            .iter()
+            .flatten()
+            .find(|&&window| self.overlay_node(window).is_some_and(|it| it.shuts_out));
+        let Some(&top) = shutting_out else { return root };
+        let Some(first) = self.overlays.iter().position(|&overlay| overlay == top) else {
+            return root;
         };
+        let shown: SmallVec<[NodeId; 4]> = self.overlays[first..].iter().copied().collect();
         root.children
             .retain(|child| shown.iter().any(|&overlay| self.is_at_or_below(child.id, overlay)));
         root

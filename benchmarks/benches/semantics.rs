@@ -208,7 +208,7 @@ fn semantics(c: &mut Criterion) {
             name,
             "tree_and_record",
             fastest(|| {
-                write_tree(&host.semantics_tree(true), &mut writer);
+                write_tree(&host.semantics_tree(true), &mut Default::default(), &mut writer);
             }),
         );
         if let Some(node) = clickable {
@@ -237,7 +237,7 @@ fn semantics(c: &mut Criterion) {
         c.bench_function(&format!("semantics/{name}/record"), |b| {
             b.iter(|| {
                 let tree = host.semantics_tree(true);
-                write_tree(&tree, &mut writer);
+                write_tree(&tree, &mut Default::default(), &mut writer);
                 writer.bytes.len()
             })
         });

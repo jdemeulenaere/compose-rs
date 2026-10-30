@@ -505,6 +505,9 @@ impl UiTree {
         // Its size (the pivot, the clip) may have changed with its content.
         if dirty || layer_dirty {
             let layer = self.layer_ahead(node).or_else(|| self.layer_properties(node, observer));
+            if let Some(properties) = &layer {
+                self.note_layer_transparency(node, properties);
+            }
             if let Some(retained) = self.node_mut(node).retained.as_mut() {
                 retained.layer = layer;
             }
@@ -678,12 +681,14 @@ impl UiTree {
                 let graphics =
                     value.chain[entry].node.downcast_ref::<GraphicsLayerNode>().expect("a layer");
                 let properties = graphics.properties(density, direction, origins[layer], size);
+                let transparency_changed = graphics.note_transparency(&properties);
                 let inner = &mut value.inner_layers[slot];
                 // Recorded in place: the frames that shared it are gone (`draw` clears the
                 // last).
                 let mut recording =
                     Arc::get_mut(&mut inner.recording).map(mem::take).unwrap_or_default();
                 recording.clear();
+                tree.semantics_changed |= transparency_changed;
                 tree.draw_chain(node, entry + 1, layer, origins, &mut recording, observer);
                 let inner = &mut tree.node_mut(node).inner_layers[slot];
                 match Arc::get_mut(&mut inner.recording) {
@@ -704,6 +709,19 @@ impl UiTree {
         // Its group's operations stay its own.
         list.merge_floor = list.ops.len();
         true
+    }
+
+    /// `node`'s group layer drawn with `properties`: a service hears of its alpha coming to or
+    /// leaving none, which hides what's under it or shows it (D1293).
+    fn note_layer_transparency(&mut self, node: NodeId, properties: &LayerProperties) {
+        let value = self.node(node);
+        let Some(index) = value.retained.as_ref().and_then(|retained| retained.layer_entry) else {
+            return;
+        };
+        let graphics = value.chain[index as usize].node.downcast_ref::<GraphicsLayerNode>();
+        if graphics.is_some_and(|graphics| graphics.note_transparency(properties)) {
+            self.semantics_changed = true;
+        }
     }
 
     /// The properties computed ahead for `node`'s layer, if they're for what it is now.

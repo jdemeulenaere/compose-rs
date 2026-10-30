@@ -150,6 +150,9 @@ internal object ComposeRsNative {
     /** What changed since a service was last told; [forget]: it just turned on, none is told. */
     @JvmStatic external fun semanticsChanges(host: Long, forget: Boolean): ByteBuffer
 
+    /** The virtual view a touch at ([x], [y]) in the view finds for a service, -1 for none. */
+    @JvmStatic external fun nodeAt(host: Long, x: Float, y: Float): Int
+
     /** An accessibility action on virtual view [id]: 0 click, 1 focus, 2 set progress. */
     @JvmStatic external fun performAction(host: Long, id: Int, action: Int, value: Float): Boolean
 
@@ -238,6 +241,7 @@ internal object Frame {
     const val HIDE_KEYBOARD = 256L
     const val OWNER_FOCUS = 512L
     const val OWNER_CLEAR = 1024L
+    const val SEMANTICS_AT_ONCE = 2048L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 16) - 1

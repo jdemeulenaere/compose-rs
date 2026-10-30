@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What an accessibility service says of a node's state or role, as Compose's: chosen in Rust
+         (accessibility::spoken), found here so they can be translated. -->
+    <string name="compose_rs_state_on">On</string>
+    <string name="compose_rs_state_off">Off</string>
+    <string name="compose_rs_state_partially_checked">Partially checked</string>
+    <string name="compose_rs_state_selected">Selected</string>
+    <string name="compose_rs_state_not_selected">Not selected</string>
+    <string name="compose_rs_state_percent">%1$d percent</string>
+    <string name="compose_rs_state_in_progress">In progress</string>
+    <string name="compose_rs_state_empty">Empty</string>
+    <string name="compose_rs_role_tab">Tab</string>
+    <string name="compose_rs_role_switch">Switch</string>
+</resources>

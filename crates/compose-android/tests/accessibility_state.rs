@@ -18,8 +18,8 @@ extern crate compose_runtime as compose;
 use std::collections::HashMap;
 
 use compose_android::accessibility::{
-    KeptForChanges, KeptSemanticsTree, find_shown, flag, semantics_may_have_changed, virtual_id,
-    write_tree,
+    KeptCustomActions, KeptForChanges, KeptSemanticsTree, find_shown, flag,
+    semantics_may_have_changed, virtual_id, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -67,12 +67,10 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 9;
             value
         });
-        // Who it's read before, its class and role description, its actions.
-        at += 4;
-        for _ in 0..2 {
-            let length = u32_at(&mut at) as usize;
-            at += length;
-        }
+        // Who it's read before, its drawing order, its class, role, state and percent, its actions.
+        at += 8;
+        let length = u32_at(&mut at) as usize;
+        at += length + 3;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -208,7 +206,7 @@ impl Kotlin {
         }
         self.scrolled_to = offsets;
         // What changed: told once here, each with its own type there.
-        if !self.kept.changes(&self.host.accessibility_tree()).is_empty() {
+        if !self.kept.changes(&self.host, &self.host.accessibility_tree()).is_empty() {
             self.events.push(Event::ContentChanged);
         }
     }
@@ -221,7 +219,7 @@ impl Kotlin {
         self.stale = false;
         self.reads += 1;
         let mut writer = Writer::default();
-        write_tree(&self.host.accessibility_tree(), &mut writer);
+        write_tree(&self.host.accessibility_tree(), &mut KeptCustomActions::default(), &mut writer);
         self.nodes = records(&writer.bytes);
     }
 
@@ -378,7 +376,7 @@ fn the_frame_switching_screens_reports_a_semantics_change() {
     assert!(semantics_may_have_changed(&host.frame()));
     host.settle(10);
     let mut writer = Writer::default();
-    write_tree(&host.semantics_tree(true), &mut writer);
+    write_tree(&host.semantics_tree(true), &mut KeptCustomActions::default(), &mut writer);
     let texts: Vec<String> = records(&writer.bytes).into_iter().map(|record| record.text).collect();
     assert!(texts.iter().any(|text| text == "Heavy row 0"), "{texts:?}");
     assert!(!texts.iter().any(|text| text == "Open" || text == "Navigation"), "{texts:?}");
@@ -396,22 +394,24 @@ fn the_kotlin_is_the_model() {
     };
     let accessibility = kotlin("Accessibility.kt");
     for line in [
-        "    fun semanticsChanged() {\n        stale = true\n        if (!changePosted && manager.isEnabled) {",
+        "    fun semanticsChanged(atOnce: Boolean) {\n        stale = true\n        if (!isEnabled) return",
         "manager.addAccessibilityStateChangeListener(this)",
         "manager.addTouchExplorationStateChangeListener(this)",
-        "    override fun onAccessibilityStateChanged(enabled: Boolean) {\n        if (enabled) turnedOn()",
+        "    override fun onAccessibilityStateChanged(enabled: Boolean) {\n        enabledServices = null\n        if (enabled) turnedOn()",
         "    private fun turnedOn() {\n        stale = true\n        scrolledTo = SparseArray()\n        forgetChanges = true\n        tell()",
-        "    private fun tell() {\n        if (!manager.isEnabled) return",
+        "    private fun tell() {\n        if (!isEnabled) return",
         "CHANGE_SUBTREE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE",
         // The record's strings in its order, the pane title last, and where it goes.
         "val error = buffer.readString()\n            val paneTitle = buffer.readString()",
+        // A service's echo of a password goes by this.
+        "event.isPassword = password",
         "info.paneTitle = node.paneTitle",
     ] {
         assert!(accessibility.contains(line), "Accessibility.kt lacks {line:?}");
     }
     let view = kotlin("ComposeRsView.kt");
     for line in [
-        "if (result and Frame.SEMANTICS != 0L) accessibility.semanticsChanged()",
+        "accessibility.semanticsChanged(result and Frame.SEMANTICS_AT_ONCE != 0L)",
         "accessibility.attach()",
         "accessibility.detach()",
     ] {
@@ -433,7 +433,7 @@ fn a_panes_title_is_in_its_record() {
     });
     let root = host.semantics_tree(true);
     let mut out = Writer::default();
-    write_tree(&root, &mut out);
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let read = records(&out.bytes);
     let panes: Vec<&str> = read.iter().map(|record| record.pane_title.as_str()).collect();
     assert!(panes.contains(&"Navigation menu"), "{read:?}");

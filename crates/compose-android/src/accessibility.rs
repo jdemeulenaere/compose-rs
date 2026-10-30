@@ -8,7 +8,7 @@
 
 use compose_ui::{
     Rect, Role, SemanticsActions as A, SemanticsProperties as P, SharedString, ToggleableState,
-    platform::{FrameStats, SemanticsSnapshot, UiHost},
+    platform::{FrameStats, NodeId, SemanticsSnapshot, UiHost},
 };
 
 use std::collections::HashMap;
@@ -46,6 +46,26 @@ pub mod flag {
     /// A live region, as `liveRegion`: a service says a change to it on its own.
     pub const LIVE_POLITE: u32 = 1 << 18;
     pub const LIVE_ASSERTIVE: u32 = 1 << 19;
+    pub const LONG_CLICKABLE: u32 = 1 << 20;
+    /// It means something to a service, as `isImportantForAccessibility`.
+    pub const IMPORTANT: u32 = 1 << 21;
+}
+
+/// What a service reads that isn't the application's words, which `Accessibility.kt` finds in the
+/// library's resources, so that they can be translated (D1294): a state or a role description.
+pub mod spoken {
+    pub const NONE: u8 = 0;
+    pub const ON: u8 = 1;
+    pub const OFF: u8 = 2;
+    pub const PARTIALLY_CHECKED: u8 = 3;
+    pub const SELECTED: u8 = 4;
+    pub const NOT_SELECTED: u8 = 5;
+    /// A percent follows.
+    pub const PERCENT: u8 = 6;
+    pub const IN_PROGRESS: u8 = 7;
+    pub const EMPTY: u8 = 8;
+    pub const TAB: u8 = 9;
+    pub const SWITCH: u8 = 10;
 }
 
 /// The actions of a node's record, what `ComposeRsNative.performAction` takes: `Accessibility.kt`
@@ -67,7 +87,8 @@ pub mod action {
     /// A step of a value, forward and backward.
     pub const STEP_FORWARD: u8 = 17;
     pub const STEP_BACKWARD: u8 = 18;
-    /// `CUSTOM_FIRST + i`: its `i`th custom action.
+    pub const CLEAR_FOCUS: u8 = 19;
+    /// `CUSTOM_FIRST + i`: its custom action kept as `i` (`KeptCustomActions`).
     pub const CUSTOM_FIRST: u8 = 100;
 }
 
@@ -78,6 +99,12 @@ pub mod action {
 /// `currentSemanticsNodesInvalidated`), and tells the services on, if any (D630).
 pub fn semantics_may_have_changed(stats: &FrameStats) -> bool {
     stats.recomposed || stats.measured || stats.semantics_changed
+}
+
+/// Whether a service should hear it at once, not within 100 ms: a frame where a property changed,
+/// as Compose's `onSemanticsChange`; only where things are waits, as its bounds' batches.
+pub fn tell_at_once(stats: &FrameStats) -> bool {
+    stats.semantics_changed
 }
 
 /// The merged tree the bridge keeps, for the record, the actions and the input method's options:
@@ -111,23 +138,153 @@ pub fn virtual_id(node: &SemanticsSnapshot) -> i32 {
     node.semantics_id
 }
 
-/// Writes the merged tree `root` (its children: the root itself is the view).
-pub fn write_tree(root: &SemanticsSnapshot, out: &mut Writer) {
-    out.bytes.clear();
-    let before = compose_ui::traversal_before(root);
-    for child in sorted_children(root) {
-        write_node(child, -1, root.bounds, &before, out);
+/// The ids a node's custom actions have, by label: each keeps its own across the builds of a tree,
+/// so that a service asking for what it was shown gets that, or nothing if it's gone, as Compose's
+/// `labelToActionId` (D1295).
+#[derive(Default)]
+pub struct KeptCustomActions(HashMap<i32, Vec<(SharedString, u8)>>);
+
+impl KeptCustomActions {
+    /// Gives each custom action in `root`'s tree an id: a label's kept, the free ones for the rest.
+    pub fn assign(&mut self, root: &SemanticsSnapshot) {
+        let mut kept = HashMap::new();
+        self.assign_under(root, &mut kept);
+        self.0 = kept;
+    }
+
+    fn assign_under(
+        &self,
+        node: &SemanticsSnapshot,
+        kept: &mut HashMap<i32, Vec<(SharedString, u8)>>,
+    ) {
+        if let Some(actions) = node.unmerged_config().get(&A::CUSTOM_ACTIONS) {
+            let before = self.0.get(&virtual_id(node));
+            let mut ids: Vec<(SharedString, u8)> = Vec::new();
+            for custom in actions.iter() {
+                if ids.iter().any(|(label, _)| *label == custom.label) {
+                    continue;
+                }
+                let had = before.and_then(|before| {
+                    before.iter().find(|(label, _)| *label == custom.label).map(|(_, id)| *id)
+                });
+                if let Some(id) = had {
+                    ids.push((custom.label.clone(), id));
+                }
+            }
+            for custom in actions.iter() {
+                if ids.iter().any(|(label, _)| *label == custom.label) {
+                    continue;
+                }
+                let free = (0..MOST_CUSTOM_ACTIONS).find(|id| ids.iter().all(|(_, it)| it != id));
+                if let Some(id) = free {
+                    ids.push((custom.label.clone(), id));
+                }
+            }
+            kept.insert(virtual_id(node), ids);
+        }
+        for child in &node.children {
+            self.assign_under(child, kept);
+        }
+    }
+
+    /// `node`'s custom actions, with their ids, in the order it has them.
+    fn of(&self, node: &SemanticsSnapshot) -> Vec<(u8, SharedString)> {
+        let Some(actions) = node.unmerged_config().get(&A::CUSTOM_ACTIONS) else {
+            return Vec::new();
+        };
+        let ids = self.0.get(&virtual_id(node));
+        actions
+            .iter()
+            .filter_map(|custom| {
+                let ids = ids?;
+                let (_, id) = ids.iter().find(|(label, _)| *label == custom.label)?;
+                Some((*id, custom.label.clone()))
+            })
+            .collect()
+    }
+
+    /// The label of `id` among `node`'s, if it still has it.
+    pub fn label_of(&self, node: i32, id: u8) -> Option<SharedString> {
+        let ids = self.0.get(&node)?;
+        ids.iter().find(|(_, it)| *it == id).map(|(label, _)| label.clone())
     }
 }
 
-/// Children in `traversal_index` order, as Compose's `getSortedChildren`.
-fn sorted_children(node: &SemanticsSnapshot) -> Vec<&SemanticsSnapshot> {
-    let index = |child: &SemanticsSnapshot| {
-        child.unmerged_config().get(&P::TRAVERSAL_INDEX).copied().unwrap_or(0.0)
-    };
-    let mut children: Vec<_> = node.children.iter().collect();
-    children.sort_by(|a, b| index(a).total_cmp(&index(b)));
+/// As Compose's 32 `accessibility_custom_action_` ids.
+const MOST_CUSTOM_ACTIONS: u8 = 32;
+
+/// Writes the merged tree `root` (its children: the root itself is the view).
+pub fn write_tree(root: &SemanticsSnapshot, custom: &mut KeptCustomActions, out: &mut Writer) {
+    out.bytes.clear();
+    custom.assign(root);
+    let before = compose_ui::traversal_before(root);
+    for (order, child) in in_written_order(root) {
+        write_node(child, -1, root.bounds, &before, custom, order, out);
+    }
+}
+
+/// Children with their drawing order, as a node has them: by `traversal_index` for a merging
+/// traversal group, as Compose's (`isTraversalGroup && isMerging && childrenSize > 1`), a scrim's
+/// index otherwise leaving it in its place under the sheet.
+fn in_written_order(node: &SemanticsSnapshot) -> Vec<(usize, &SemanticsSnapshot)> {
+    let own = node.unmerged_config();
+    let mut children: Vec<_> = node.children.iter().enumerate().collect();
+    let sorts = own.get(&P::IS_TRAVERSAL_GROUP) == Some(&true)
+        && own.is_merging_semantics_of_descendants
+        && children.len() > 1;
+    if sorts {
+        let index = |child: &SemanticsSnapshot| {
+            child.unmerged_config().get(&P::TRAVERSAL_INDEX).copied().unwrap_or(0.0)
+        };
+        children.sort_by(|a, b| index(a.1).total_cmp(&index(b.1)));
+    }
     children
+}
+
+/// The node a touch at `(x, y)` in the root finds for a service, as Compose's
+/// `hitTestSemanticsAndInteropAt`: front to back, in drawing order, those not important looked
+/// through to what's around them; a sibling under one hit isn't looked at.
+pub fn node_at(root: &SemanticsSnapshot, x: f32, y: f32) -> Option<i32> {
+    enum Hit {
+        Nothing,
+        /// Something's here, that a service doesn't read, so what's around it is asked.
+        LookedThrough,
+        Found(i32),
+    }
+    fn visit(node: &SemanticsSnapshot, x: f32, y: f32, clip: Rect) -> Hit {
+        let shown = clipped(node.bounds, clip);
+        let scrolls = scroll_range(node).is_some();
+        let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
+        let mut hit = Hit::Nothing;
+        for child in node.children.iter().rev() {
+            match visit(child, x, y, inner) {
+                Hit::Nothing => continue,
+                found @ Hit::Found(_) => return found,
+                Hit::LookedThrough => {
+                    hit = Hit::LookedThrough;
+                    break;
+                }
+            }
+        }
+        let on_it = shown.is_some_and(|shown| {
+            x >= shown.left && x < shown.right && y >= shown.top && y < shown.bottom
+        });
+        if !on_it {
+            return hit;
+        }
+        if compose_ui::is_important_for_accessibility(node) {
+            return Hit::Found(virtual_id(node));
+        }
+        Hit::LookedThrough
+    }
+    for child in root.children.iter().rev() {
+        match visit(child, x, y, root.bounds) {
+            Hit::Nothing => continue,
+            Hit::Found(id) => return Some(id),
+            Hit::LookedThrough => return None,
+        }
+    }
+    None
 }
 
 use compose_ui::clipped_by as clipped;
@@ -155,15 +312,17 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
             *flags |= bit;
         }
     };
-    set(&mut flags, node.unmerged_config().contains(&A::ON_CLICK), flag::CLICKABLE);
+    set(&mut flags, is_clickable(node), flag::CLICKABLE);
+    set(&mut flags, node.unmerged_config().contains(&A::ON_LONG_CLICK), flag::LONG_CLICKABLE);
+    set(&mut flags, compose_ui::is_important_for_accessibility(node), flag::IMPORTANT);
     // Focusable as Compose's `isFocusable`, from the node's own configuration.
     set(&mut flags, node.unmerged_config().contains(&P::FOCUSED), flag::FOCUSABLE);
     set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
     set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
-    set(&mut flags, config.contains(&P::PASSWORD), flag::PASSWORD);
+    set(&mut flags, is_password(node), flag::PASSWORD);
     set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
     set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
-    set(&mut flags, config.contains(&P::PROGRESS_BAR_RANGE_INFO), flag::RANGE);
+    set(&mut flags, determinate_range(node).is_some(), flag::RANGE);
     set(&mut flags, config.contains(&P::HEADING), flag::HEADING);
     set(&mut flags, compose_ui::is_screen_reader_focusable(node), flag::SCREEN_READER_FOCUSABLE);
     match node.unmerged_config().get(&P::LIVE_REGION) {
@@ -176,15 +335,82 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
         set(&mut flags, state == ToggleableState::On, flag::CHECKED);
     }
     if let Some(&selected) = config.get(&P::SELECTED) {
-        // A radio button's selection is its checked state, as Android's.
-        if config.get(&P::ROLE) == Some(&Role::RadioButton) {
+        // A tab's is the platform's selected; anything else's is checked, its state saying
+        // "selected", as Compose's (`getInfoIsCheckable`).
+        if config.get(&P::ROLE) == Some(&Role::Tab) {
+            set(&mut flags, selected, flag::SELECTED);
+        } else {
             flags |= flag::CHECKABLE;
             set(&mut flags, selected, flag::CHECKED);
-        } else {
-            set(&mut flags, selected, flag::SELECTED);
         }
     }
     flags
+}
+
+/// Whether a click is offered: a selected tab or radio button can't be selected again.
+fn is_clickable(node: &SemanticsSnapshot) -> bool {
+    let own = node.unmerged_config();
+    let one_of = matches!(own.get(&P::ROLE), Some(Role::Tab | Role::RadioButton));
+    own.contains(&A::ON_CLICK) && !(one_of && own.get(&P::SELECTED) == Some(&true))
+}
+
+/// A password shown masked, as Compose's `isPassword`.
+fn is_password(node: &SemanticsSnapshot) -> bool {
+    node.config.contains(&P::PASSWORD)
+        && node.config.get(&P::IS_PASSWORD_OBFUSCATED) != Some(&false)
+}
+
+/// The node's range, an indeterminate one having none.
+fn determinate_range(node: &SemanticsSnapshot) -> Option<compose_ui::ProgressBarRangeInfo> {
+    let range = node.config.get(&P::PROGRESS_BAR_RANGE_INFO)?;
+    (*range != compose_ui::ProgressBarRangeInfo::INDETERMINATE).then_some(*range)
+}
+
+/// What a service says of the node's state, as Compose's `getInfoStateDescriptionOrNull`: the
+/// application's words first, then what its state says; a field that says nothing is "empty",
+/// for a service not to step over it. Returns a `spoken` code and a percent.
+pub fn state_description_of(node: &SemanticsSnapshot) -> (u8, u8) {
+    let config = &node.config;
+    let role = config.get(&P::ROLE).copied();
+    if config.contains(&P::EDITABLE_TEXT) {
+        let silent = |text: Option<&compose_ui::StringList>| text.is_none_or(|all| all.is_empty());
+        let empty = silent(config.get(&P::CONTENT_DESCRIPTION))
+            && silent(config.get(&P::TEXT))
+            && config.get(&P::EDITABLE_TEXT).is_none_or(|text| text.as_str().is_empty())
+            && config.get(&P::HINT_TEXT).is_none_or(|text| text.as_str().is_empty());
+        return (if empty { spoken::EMPTY } else { spoken::NONE }, 0);
+    }
+    if config.contains(&P::STATE_DESCRIPTION) {
+        return (spoken::NONE, 0);
+    }
+    match config.get(&P::TOGGLEABLE_STATE) {
+        // A switch: a service's own "checked" is wrong for it, as Compose says of TalkBack.
+        Some(ToggleableState::On) if role == Some(Role::Switch) => return (spoken::ON, 0),
+        Some(ToggleableState::Off) if role == Some(Role::Switch) => return (spoken::OFF, 0),
+        Some(ToggleableState::Indeterminate) => return (spoken::PARTIALLY_CHECKED, 0),
+        _ => {}
+    }
+    if let Some(&selected) = config.get(&P::SELECTED)
+        && role != Some(Role::Tab)
+    {
+        return (if selected { spoken::SELECTED } else { spoken::NOT_SELECTED }, 0);
+    }
+    if config.contains(&P::PROGRESS_BAR_RANGE_INFO) {
+        let Some(range) = determinate_range(node) else { return (spoken::IN_PROGRESS, 0) };
+        let length = range.range.1 - range.range.0;
+        let progress = if length == 0.0 { 0.0 } else { (range.current - range.range.0) / length };
+        let progress = progress.clamp(0.0, 1.0);
+        // 0 % and 100 % only when it's exactly that.
+        let percent = if progress == 0.0 {
+            0
+        } else if progress == 1.0 {
+            100
+        } else {
+            ((progress * 100.0).round() as u8).clamp(1, 99)
+        };
+        return (spoken::PERCENT, percent);
+    }
+    (spoken::NONE, 0)
 }
 
 /// Record: id (i32), parent (i32), bounds (4 × f32, clipped by the scrolling containers around:
@@ -193,13 +419,16 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
 /// description, error, pane title (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
 /// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
 /// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is; then
-/// who a service reads it before (i32, -1 for none), its class name and role description (each a
-/// length and UTF-8 bytes), and its actions (a count: u8; each `action`'s u8 and a label).
+/// who a service reads it before (i32, -1 for none), its drawing order (u32), its class name (a
+/// length and UTF-8 bytes), its role description, its state and that state's percent (three
+/// `spoken`-code u8s), and its actions (a count: u8; each `action`'s u8 and a label).
 fn write_node(
     node: &SemanticsSnapshot,
     parent: i32,
     clip: Rect,
     before: &HashMap<i32, i32>,
+    custom: &KeptCustomActions,
+    drawing_order: usize,
     out: &mut Writer,
 ) {
     let config = &node.config;
@@ -249,7 +478,7 @@ fn write_node(
     write_string(out, text_of(config.get(&P::ERROR)));
     // From its own configuration, as Compose's delegate.
     write_string(out, text_of(node.unmerged_config().get(&P::PANE_TITLE)));
-    if let Some(info) = config.get(&P::PROGRESS_BAR_RANGE_INFO) {
+    if let Some(info) = determinate_range(node) {
         out.f32(info.current);
         out.f32(info.range.0);
         out.f32(info.range.1);
@@ -263,10 +492,14 @@ fn write_node(
         out.u8(scroll_actions(node));
     }
     out.u32(before.get(&id).copied().unwrap_or(-1) as u32);
+    out.u32(drawing_order as u32);
     let (class_name, role_description) = class_and_role(node);
     write_string(out, class_name);
-    write_string(out, role_description);
-    let actions = actions_of(node);
+    out.u8(role_description);
+    let (state, percent) = state_description_of(node);
+    out.u8(state);
+    out.u8(percent);
+    let actions = actions_of(node, custom);
     out.u8(actions.len() as u8);
     for (action, label) in &actions {
         out.u8(*action);
@@ -275,18 +508,18 @@ fn write_node(
     // A scrolling container clips what's in it.
     let inner =
         if scroll.is_some() { visible.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
-    for child in sorted_children(node) {
-        write_node(child, id, inner, before, out);
+    for (order, child) in in_written_order(node) {
+        write_node(child, id, inner, before, custom, order, out);
     }
 }
 
 /// The class name and role description a service reads, from the node's own configuration, as
 /// Compose's delegate: a field's or a text's, a role's where nothing's below it (an image's only
 /// if it's what's focused on), a scrolling container's so a service scrolls it.
-pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, &'static str) {
+pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, u8) {
     let own = node.unmerged_config();
     let mut class = "android.view.View";
-    let mut role_description = "";
+    let mut role_description = spoken::NONE;
     if own.contains(&P::EDITABLE_TEXT) {
         class = "android.widget.EditText";
     }
@@ -295,8 +528,8 @@ pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, &'static str) 
     }
     if let Some(role) = own.get(&P::ROLE).filter(|_| node.children.is_empty()) {
         match role {
-            Role::Tab => role_description = "Tab",
-            Role::Switch => role_description = "Switch",
+            Role::Tab => role_description = spoken::TAB,
+            Role::Switch => role_description = spoken::SWITCH,
             Role::Button => class = "android.widget.Button",
             Role::Checkbox => class = "android.widget.CheckBox",
             Role::RadioButton => class = "android.widget.RadioButton",
@@ -307,8 +540,12 @@ pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, &'static str) 
             _ => {}
         }
     }
-    if own.contains(&P::PROGRESS_BAR_RANGE_INFO) && own.contains(&A::SET_PROGRESS) {
-        class = "android.widget.SeekBar";
+    if own.contains(&P::PROGRESS_BAR_RANGE_INFO) {
+        class = if own.contains(&A::SET_PROGRESS) {
+            "android.widget.SeekBar"
+        } else {
+            "android.widget.ProgressBar"
+        };
     }
     let has_collection = own.contains(&P::COLLECTION_INFO);
     if own.contains(&A::SCROLL_BY) && !has_collection {
@@ -324,7 +561,21 @@ pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, &'static str) 
 
 /// What a service may ask of `node`, from its own configuration, as Compose's delegate: nothing
 /// but the accessibility focus (which `Accessibility.kt` keeps) when it's disabled.
-pub fn actions_of(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
+pub fn actions_of(
+    node: &SemanticsSnapshot,
+    custom: &KeptCustomActions,
+) -> Vec<(u8, Option<SharedString>)> {
+    let mut actions = standard_actions(node);
+    if !node.config.contains(&P::DISABLED) {
+        for (id, label) in custom.of(node) {
+            actions.push((action::CUSTOM_FIRST + id, Some(label)));
+        }
+    }
+    actions
+}
+
+/// `actions_of` but the custom ones.
+fn standard_actions(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
     let own = node.unmerged_config();
     let mut actions = Vec::new();
     if node.config.contains(&P::DISABLED) {
@@ -336,7 +587,9 @@ pub fn actions_of(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
             actions.push((action, found.label.clone()));
         }
     };
-    labelled(&A::ON_CLICK, action::CLICK);
+    if is_clickable(node) {
+        labelled(&A::ON_CLICK, action::CLICK);
+    }
     labelled(&A::ON_LONG_CLICK, action::LONG_CLICK);
     labelled(&A::PAGE_UP, action::PAGE_UP);
     labelled(&A::PAGE_DOWN, action::PAGE_DOWN);
@@ -345,9 +598,10 @@ pub fn actions_of(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
     labelled(&A::EXPAND, action::EXPAND);
     labelled(&A::COLLAPSE, action::COLLAPSE);
     labelled(&A::DISMISS, action::DISMISS);
-    let focusable = own.contains(&P::FOCUSED);
-    if focusable && node.config.get(&P::FOCUSED) != Some(&true) {
-        actions.push((action::FOCUS, None));
+    match own.get(&P::FOCUSED) {
+        Some(true) => actions.push((action::CLEAR_FOCUS, None)),
+        Some(false) => actions.push((action::FOCUS, None)),
+        None => {}
     }
     if let Some(range) = node.config.get(&P::PROGRESS_BAR_RANGE_INFO) {
         if own.contains(&A::SET_PROGRESS) {
@@ -368,11 +622,6 @@ pub fn actions_of(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
             }
         }
     }
-    if let Some(custom) = own.get(&A::CUSTOM_ACTIONS) {
-        for (index, custom) in custom.iter().enumerate().take(32) {
-            actions.push((action::CUSTOM_FIRST + index as u8, Some(custom.label.clone())));
-        }
-    }
     actions
 }
 
@@ -385,14 +634,16 @@ pub fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
 
 // ---- What changed -------------------------------------------------------------------------------
 
-/// A change a service hears, as `Accessibility.kt` sends it (`CONTENT_CHANGE_TYPE`s, D1291).
+/// A change a service hears, as `Accessibility.kt` sends it (D1291, D1296).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ChangeKind {
     /// `TYPE_WINDOW_CONTENT_CHANGED`, `CONTENT_CHANGE_TYPE_UNDEFINED`.
     Undefined = 0,
-    /// `CONTENT_CHANGE_TYPE_SUBTREE`, from the view: what's in the tree or where it is changed.
+    /// `CONTENT_CHANGE_TYPE_SUBTREE`: what's below the node changed, or from the view (its id -1),
+    /// what's at the top or only where things are.
     Subtree = 1,
+    /// A field's text that a service can't set.
     Text = 2,
     ContentDescription = 3,
     StateDescription = 4,
@@ -402,16 +653,52 @@ pub enum ChangeKind {
     PaneAppeared = 7,
     PaneDisappeared = 8,
     PaneTitle = 9,
-    /// `TYPE_VIEW_SELECTED` of a tab selected, with its merged text.
+    /// `TYPE_VIEW_SELECTED` of a tab selected, with its merged text and description.
     TabSelected = 10,
+    /// `TYPE_VIEW_TEXT_CHANGED`: `from`, `removed` and `added` are in UTF-16 units of `before`
+    /// and `text`.
+    TextChanged = 11,
+    /// `TYPE_VIEW_TEXT_SELECTION_CHANGED`: `from` to `removed`, of `added` units, in `text`.
+    TextSelection = 12,
+    /// `TYPE_VIEW_FOCUSED`.
+    Focused = 13,
+    /// `TYPE_WINDOW_STATE_CHANGED` of the root of the window now taking the keys.
+    Window = 14,
 }
 
-/// One change: the node's id (-1: the view), its kind, a text for some.
+/// One change: the node's id (-1: the view), its kind, and what it says.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Change {
     pub id: i32,
     pub kind: ChangeKind,
     pub text: String,
+    /// The text before a `TextChanged`; a `TabSelected`'s description.
+    pub before: String,
+    pub from: i32,
+    pub removed: i32,
+    pub added: i32,
+    /// A password's: a service doesn't echo it, as `event.isPassword`.
+    pub password: bool,
+}
+
+impl Change {
+    fn of(id: i32, kind: ChangeKind) -> Change {
+        Change {
+            id,
+            kind,
+            text: String::new(),
+            before: String::new(),
+            from: 0,
+            removed: 0,
+            added: 0,
+            password: false,
+        }
+    }
+
+    fn saying(mut self, text: &str) -> Change {
+        self.text = text.to_string();
+        self
+    }
 }
 
 /// What a change is looked for in, as Compose's `SemanticsNodeCopy`.
@@ -427,19 +714,68 @@ struct KeptNode {
     selected: Option<bool>,
     error: Option<SharedString>,
     editable: Option<SharedString>,
+    settable: bool,
+    selection: Option<compose_ui::TextRange>,
+    focused: Option<bool>,
+    password: bool,
     range: Option<(u32, u32, u32)>,
     role: Option<Role>,
     hidden: bool,
     flags: u32,
     actions: Vec<(u8, Option<SharedString>)>,
+    custom_labels: Vec<SharedString>,
 }
 
 /// The tree when a service was last told, to tell it what changed since (D1291).
-#[derive(Default)]
-pub struct KeptForChanges(Option<HashMap<i32, KeptNode>>);
+pub struct KeptForChanges {
+    nodes: HashMap<i32, KeptNode>,
+    window: Option<NodeId>,
+    /// A service just turned on: the next tree is what it starts from, nothing told of it.
+    forgotten: bool,
+}
+
+impl Default for KeptForChanges {
+    /// From an empty root, as Compose's first `previousSemanticsRoot`: what's there at the first
+    /// tell is told, with no service turning on since.
+    fn default() -> KeptForChanges {
+        let mut nodes = HashMap::new();
+        nodes.insert(ROOT_KEPT, kept_root(Rect::new(0.0, 0.0, 0.0, 0.0), Vec::new()));
+        KeptForChanges { nodes, window: None, forgotten: false }
+    }
+}
+
+fn kept_root(bounds: Rect, children: Vec<i32>) -> KeptNode {
+    KeptNode {
+        bounds,
+        children,
+        pane_title: None,
+        text: String::new(),
+        description: String::new(),
+        state: None,
+        toggle: None,
+        selected: None,
+        error: None,
+        editable: None,
+        settable: false,
+        selection: None,
+        focused: None,
+        password: false,
+        range: None,
+        role: None,
+        hidden: false,
+        flags: 0,
+        actions: Vec::new(),
+        custom_labels: Vec::new(),
+    }
+}
 
 fn kept_of(node: &SemanticsSnapshot, out: &mut HashMap<i32, KeptNode>) {
     let (config, own) = (&node.config, node.unmerged_config());
+    let mut custom_labels: Vec<SharedString> = own
+        .get(&A::CUSTOM_ACTIONS)
+        .map_or(Vec::new(), |all| all.iter().map(|it| it.label.clone()).collect());
+    custom_labels.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    custom_labels.dedup();
     out.insert(
         virtual_id(node),
         KeptNode {
@@ -453,13 +789,18 @@ fn kept_of(node: &SemanticsSnapshot, out: &mut HashMap<i32, KeptNode>) {
             selected: config.get(&P::SELECTED).copied(),
             error: config.get(&P::ERROR).cloned(),
             editable: config.get(&P::EDITABLE_TEXT).cloned(),
+            settable: own.contains(&A::SET_TEXT),
+            selection: config.get(&P::TEXT_SELECTION_RANGE).copied(),
+            focused: own.get(&P::FOCUSED).copied(),
+            password: is_password(node),
             range: config
                 .get(&P::PROGRESS_BAR_RANGE_INFO)
                 .map(|it| (it.current.to_bits(), it.range.0.to_bits(), it.range.1.to_bits())),
             role: config.get(&P::ROLE).copied(),
             hidden: node.hidden,
             flags: flags(node),
-            actions: actions_of(node),
+            actions: standard_actions(node),
+            custom_labels,
         },
     );
     for child in &node.children {
@@ -467,135 +808,302 @@ fn kept_of(node: &SemanticsSnapshot, out: &mut HashMap<i32, KeptNode>) {
     }
 }
 
+/// `text`'s length in the UTF-16 units Android counts in.
+fn utf16_length(text: &str) -> i32 {
+    text.encode_utf16().count() as i32
+}
+
+/// A selection event's change: `range` is in `text`'s bytes.
+fn selection_change(id: i32, text: &str, range: compose_ui::TextRange, password: bool) -> Change {
+    let at = |offset: usize| {
+        let offset = offset.min(text.len());
+        if text.is_char_boundary(offset) { utf16_length(&text[..offset]) } else { 0 }
+    };
+    let (one, other) = (at(range.start), at(range.end));
+    Change {
+        from: one.min(other),
+        removed: one.max(other),
+        added: utf16_length(text),
+        password,
+        ..Change::of(id, ChangeKind::TextSelection).saying(text)
+    }
+}
+
+/// The edit between `old` and `new`, by their common start and end, as Compose's: in UTF-16 units.
+fn text_change(id: i32, old: &str, new: &str, password: bool) -> Change {
+    let (before, after): (Vec<u16>, Vec<u16>) =
+        (old.encode_utf16().collect(), new.encode_utf16().collect());
+    let shortest = before.len().min(after.len());
+    let start = (0..shortest).take_while(|&at| before[at] == after[at]).count();
+    let end = (0..shortest - start)
+        .take_while(|&at| before[before.len() - 1 - at] == after[after.len() - 1 - at])
+        .count();
+    Change {
+        before: old.to_string(),
+        from: start as i32,
+        removed: (before.len() - end - start) as i32,
+        added: (after.len() - end - start) as i32,
+        password,
+        ..Change::of(id, ChangeKind::TextChanged).saying(new)
+    }
+}
+
+/// `Subtree`s of the nodes whose children changed, from the top, as Compose's
+/// `sendAccessibilitySemanticsStructureChangeEvents`: nothing below one that did. Returns
+/// whether the root's was.
+fn structure_changes(
+    before: &HashMap<i32, KeptNode>,
+    now: &HashMap<i32, KeptNode>,
+    id: i32,
+    changes: &mut Vec<Change>,
+) {
+    let (Some(old), Some(new)) = (before.get(&id), now.get(&id)) else { return };
+    if old.children != new.children {
+        let source = if id == ROOT_KEPT { -1 } else { id };
+        changes.push(Change::of(source, ChangeKind::Subtree));
+        return;
+    }
+    for &child in &new.children {
+        structure_changes(before, now, child, changes);
+    }
+}
+
 impl KeptForChanges {
     /// A service turned on: it reads the tree anew, hearing no change from before.
     pub fn forget(&mut self) {
-        self.0 = None;
+        self.forgotten = true;
     }
 
     /// What changed between the tree kept and `root`, as Compose's `checkForSemanticsChanges`:
-    /// one for each property said apart, one with no type for the rest; a subtree for what's in
-    /// the tree, or where, changing; panes coming and going. Nothing the first time.
-    pub fn changes(&mut self, root: &SemanticsSnapshot) -> Vec<Change> {
+    /// subtrees, then each property with a type of its own, one with no type for the rest, then
+    /// panes coming and going, then the window.
+    pub fn changes(&mut self, ui: &UiHost, root: &SemanticsSnapshot) -> Vec<Change> {
         let mut now = HashMap::new();
         for child in &root.children {
             kept_of(child, &mut now);
         }
-        let roots: Vec<i32> = root.children.iter().map(virtual_id).collect();
         now.insert(
             ROOT_KEPT,
-            KeptNode {
-                bounds: root.bounds,
-                children: roots,
-                pane_title: None,
-                text: String::new(),
-                description: String::new(),
-                state: None,
-                toggle: None,
-                selected: None,
-                error: None,
-                editable: None,
-                range: None,
-                role: None,
-                hidden: false,
-                flags: 0,
-                actions: Vec::new(),
-            },
+            kept_root(root.bounds, root.children.iter().map(virtual_id).collect()),
         );
-        let Some(before) = self.0.replace(now) else { return Vec::new() };
-        let now = self.0.as_ref().expect("just kept");
-        let mut changes = Vec::new();
-        let mut change = |id, kind, text: &str| {
-            changes.push(Change { id, kind, text: text.to_string() });
-        };
-        fn title_of(node: &KeptNode) -> &str {
-            node.pane_title.as_ref().map_or("", |it| it.as_str())
+        let window = ui.focused_window();
+        let before = std::mem::replace(&mut self.nodes, now);
+        let window_before = std::mem::replace(&mut self.window, window);
+        if std::mem::take(&mut self.forgotten) {
+            return Vec::new();
         }
-        let mut subtree = false;
+        let now = &self.nodes;
+        let mut changes = Vec::new();
+
+        structure_changes(&before, now, ROOT_KEPT, &mut changes);
+        let told_from_the_view = changes.iter().any(|change| change.id == -1);
+        let moved = before.iter().any(|(id, old)| {
+            *id != ROOT_KEPT && now.get(id).is_some_and(|new| new.bounds != old.bounds)
+        });
+        if moved && !told_from_the_view {
+            changes.push(Change::of(-1, ChangeKind::Subtree));
+        }
+
         // By id, so that what's told doesn't depend on a map's order.
         let mut ids: Vec<i32> = before.keys().chain(now.keys()).copied().collect();
         ids.sort_unstable();
         ids.dedup();
-        for id in ids {
-            match (before.get(&id), now.get(&id)) {
-                (Some(old), None) => {
-                    subtree = true;
-                    if old.pane_title.is_some() {
-                        change(id, ChangeKind::PaneDisappeared, title_of(old));
-                    }
-                }
-                (None, Some(new)) => {
-                    subtree = true;
-                    if new.pane_title.is_some() {
-                        change(id, ChangeKind::PaneAppeared, title_of(new));
-                    }
-                }
-                (Some(old), Some(new)) if old != new => {
-                    subtree |= old.bounds != new.bounds || old.children != new.children;
-                    match (&old.pane_title, &new.pane_title) {
-                        (None, Some(_)) => change(id, ChangeKind::PaneAppeared, title_of(new)),
-                        (Some(_), None) => change(id, ChangeKind::PaneDisappeared, title_of(old)),
-                        (Some(a), Some(b)) if a != b => {
-                            change(id, ChangeKind::PaneTitle, title_of(new));
-                        }
-                        _ => {}
-                    }
-                    if old.state != new.state || old.range != new.range {
-                        change(id, ChangeKind::StateDescription, "");
-                        change(id, ChangeKind::Undefined, "");
-                    }
-                    if old.toggle != new.toggle {
-                        change(id, ChangeKind::Checked, "");
-                        change(id, ChangeKind::Undefined, "");
-                    }
-                    if old.error != new.error {
-                        change(id, ChangeKind::Error, "");
-                    }
-                    if old.selected != new.selected {
-                        if new.role == Some(Role::Tab) && new.selected == Some(true) {
-                            change(id, ChangeKind::TabSelected, &new.text);
-                        } else if new.role == Some(Role::Tab) {
-                            change(id, ChangeKind::Undefined, "");
-                        } else {
-                            change(id, ChangeKind::StateDescription, "");
-                            change(id, ChangeKind::Undefined, "");
-                        }
-                    }
-                    if old.description != new.description {
-                        change(id, ChangeKind::ContentDescription, &new.description);
-                    }
-                    if old.text != new.text || old.editable != new.editable {
-                        change(id, ChangeKind::Text, "");
-                    }
-                    if (old.flags != new.flags || old.actions != new.actions)
-                        && old.state == new.state
-                        && old.toggle == new.toggle
-                        && old.selected == new.selected
-                        && old.range == new.range
-                    {
-                        change(id, ChangeKind::Undefined, "");
-                    }
-                }
-                _ => {}
+        for &id in &ids {
+            if let (Some(old), Some(new)) = (before.get(&id), now.get(&id))
+                && old != new
+            {
+                property_changes(id, old, new, &mut changes);
             }
         }
-        if subtree {
-            change(-1, ChangeKind::Subtree, "");
+
+        fn title_of(node: &KeptNode) -> &str {
+            node.pane_title.as_ref().map_or("", |it| it.as_str())
+        }
+        for &id in &ids {
+            let (old, new) = (before.get(&id), now.get(&id));
+            let (had, has) = (
+                old.is_some_and(|it| it.pane_title.is_some()),
+                new.is_some_and(|it| it.pane_title.is_some()),
+            );
+            if had && !has {
+                let title = old.map_or("", title_of);
+                changes.push(Change::of(id, ChangeKind::PaneDisappeared).saying(title));
+            } else if !had && has {
+                let title = new.map_or("", title_of);
+                changes.push(Change::of(id, ChangeKind::PaneAppeared).saying(title));
+            }
+        }
+
+        if window != window_before {
+            let first = root.children.first().filter(|_| window.is_some()).map_or(-1, virtual_id);
+            changes.push(Change::of(first, ChangeKind::Window));
         }
         changes
+    }
+}
+
+/// What changed of a node still there, as Compose's `sendSemanticsPropertyChangeEvents`.
+fn property_changes(id: i32, old: &KeptNode, new: &KeptNode, changes: &mut Vec<Change>) {
+    // Each of these says so itself, then asks `ViewRootImpl` to read it again (Compose's
+    // b/192295060).
+    let mut undefined = false;
+    if let (Some(a), Some(b)) = (&old.pane_title, &new.pane_title)
+        && a != b
+    {
+        changes.push(Change::of(id, ChangeKind::PaneTitle).saying(b.as_str()));
+    }
+    let mut change = |kind| changes.push(Change::of(id, kind));
+    if old.state != new.state || old.range != new.range {
+        change(ChangeKind::StateDescription);
+        change(ChangeKind::Undefined);
+    }
+    if old.toggle != new.toggle {
+        change(ChangeKind::Checked);
+        change(ChangeKind::Undefined);
+    }
+    if old.error != new.error {
+        change(ChangeKind::Error);
+    }
+    if old.selected != new.selected {
+        if new.role == Some(Role::Tab) && new.selected == Some(true) {
+            changes.push(Change {
+                before: new.description.clone(),
+                ..Change::of(id, ChangeKind::TabSelected).saying(&new.text)
+            });
+        } else if new.role == Some(Role::Tab) {
+            changes.push(Change::of(id, ChangeKind::Undefined));
+        } else {
+            changes.push(Change::of(id, ChangeKind::StateDescription));
+            changes.push(Change::of(id, ChangeKind::Undefined));
+        }
+    }
+    if old.description != new.description {
+        changes.push(Change::of(id, ChangeKind::ContentDescription).saying(&new.description));
+    }
+    if old.focused != new.focused {
+        if new.focused == Some(true) {
+            changes.push(Change::of(id, ChangeKind::Focused));
+        }
+        changes.push(Change::of(id, ChangeKind::Undefined));
+    }
+    // A plain text: no type of its own.
+    undefined |= old.text != new.text;
+    if let Some(shown) = &new.editable {
+        let was = old.editable.as_ref().map_or("", |it| it.as_str());
+        let shown = shown.as_str();
+        let became = old.editable.is_some() && old.password != new.password;
+        if became {
+            // A password shown or masked: a change of cursor, as Compose's two events, or a
+            // service would read the text as edited (b/247891690).
+            let reset = compose_ui::TextRange::new(0, 0);
+            changes.push(selection_change(id, shown, reset, new.password));
+            let range = new.selection.unwrap_or(reset);
+            changes.push(selection_change(id, shown, range, new.password));
+        } else if was != shown {
+            if new.settable {
+                changes.push(text_change(id, was, shown, new.password));
+            } else {
+                changes.push(Change::of(id, ChangeKind::Text));
+            }
+        }
+        if !became
+            && old.selection != new.selection
+            && let Some(range) = new.selection
+        {
+            changes.push(selection_change(id, shown, range, new.password));
+        }
+    }
+    undefined |= old.custom_labels != new.custom_labels || old.actions != new.actions;
+    undefined |= old.flags != new.flags
+        && old.state == new.state
+        && old.toggle == new.toggle
+        && old.selected == new.selected
+        && old.range == new.range
+        && old.focused == new.focused;
+    undefined |= old.hidden != new.hidden;
+    if undefined {
+        changes.push(Change::of(id, ChangeKind::Undefined));
     }
 }
 
 /// The root's place among the kept, an id no layout node has.
 const ROOT_KEPT: i32 = i32::MIN;
 
-/// Writes `changes`: each its id (i32), its kind (u8), its text (a length and UTF-8 bytes).
+/// Writes `changes`: each its id (i32), its kind (u8), whether it's a password's (u8), its text
+/// and what was before (each a length and UTF-8 bytes), `from`, `removed` and `added` (3 × i32).
 pub fn write_changes(changes: &[Change], out: &mut Writer) {
     out.bytes.clear();
     for change in changes {
         out.u32(change.id as u32);
         out.u8(change.kind as u8);
+        out.u8(change.password as u8);
         write_string(out, &change.text);
+        write_string(out, &change.before);
+        out.u32(change.from as u32);
+        out.u32(change.removed as u32);
+        out.u32(change.added as u32);
+    }
+}
+
+/// An accessibility service's action on virtual view `id` (`ComposeRsNative.performAction`), one of
+/// `action`'s: a scroll a page (the viewport as shown), as Compose's delegate works them out
+/// (`scroll_amount`, D491, D496); a custom one by the label it was given (D1295).
+pub fn perform_action(
+    ui: &mut UiHost,
+    tree: &SemanticsSnapshot,
+    custom: &KeptCustomActions,
+    id: i32,
+    code: i32,
+    value: f32,
+) -> bool {
+    let Some((found, shown)) = find_shown(tree, id) else { return false };
+    let node = found.id;
+    let Ok(code) = u8::try_from(code) else { return false };
+    match code {
+        action::CLICK => ui.perform_semantics_action(node, &A::ON_CLICK),
+        // The view has left touch mode by then (`performSemanticsAction`).
+        action::FOCUS => ui.perform_semantics_action(node, &A::REQUEST_FOCUS),
+        action::CLEAR_FOCUS => {
+            let focused = found.unmerged_config().get(&P::FOCUSED) == Some(&true);
+            if focused {
+                ui.clear_focus();
+            }
+            focused
+        }
+        action::SET_PROGRESS => {
+            ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value))
+        }
+        action::SCROLL_FIRST..=8 => {
+            let direction = 1u8 << (code - action::SCROLL_FIRST);
+            let Some((x, y)) = scroll_amount(found, direction, shown) else {
+                return false;
+            };
+            ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
+        }
+        action::LONG_CLICK => ui.perform_semantics_action(node, &A::ON_LONG_CLICK),
+        action::EXPAND => ui.perform_semantics_action(node, &A::EXPAND),
+        action::COLLAPSE => ui.perform_semantics_action(node, &A::COLLAPSE),
+        action::DISMISS => ui.perform_semantics_action(node, &A::DISMISS),
+        action::PAGE_UP => ui.perform_semantics_action(node, &A::PAGE_UP),
+        action::PAGE_DOWN => ui.perform_semantics_action(node, &A::PAGE_DOWN),
+        action::PAGE_LEFT => ui.perform_semantics_action(node, &A::PAGE_LEFT),
+        action::PAGE_RIGHT => ui.perform_semantics_action(node, &A::PAGE_RIGHT),
+        action::STEP_FORWARD | action::STEP_BACKWARD => {
+            let Some(&range) = found.config.get(&P::PROGRESS_BAR_RANGE_INFO) else {
+                return false;
+            };
+            let step = progress_step(range);
+            let moved = if code == action::STEP_FORWARD { step } else { -step };
+            let to = (range.current + moved).clamp(range.range.0, range.range.1);
+            ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(to))
+        }
+        action::CUSTOM_FIRST.. => {
+            let Some(label) = custom.label_of(id, code - action::CUSTOM_FIRST) else {
+                return false;
+            };
+            ui.perform_custom_action(node, label.as_str())
+        }
+        _ => false,
     }
 }
 

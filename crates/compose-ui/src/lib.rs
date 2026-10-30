@@ -275,7 +275,8 @@ pub use semantics_node::{
     SemanticsOwner,
 };
 pub use semantics_sort::{
-    clipped_by, is_screen_reader_focusable, sorted_for_accessibility, traversal_before,
+    clipped_by, is_important_for_accessibility, is_screen_reader_focusable,
+    sorted_for_accessibility, traversal_before,
 };
 pub use span_style::SpanStyle;
 pub use text::{SharedString, TextLayoutResult};

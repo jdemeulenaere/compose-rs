@@ -55,12 +55,10 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 1;
             (value, max, page)
         });
-        // Who it's read before, its class and role description, its actions.
-        at += 4;
-        for _ in 0..2 {
-            let length = u32_at(&mut at) as usize;
-            at += length;
-        }
+        // Who it's read before, its drawing order, its class, role, state and percent, its actions.
+        at += 8;
+        let length = u32_at(&mut at) as usize;
+        at += length + 3;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -78,7 +76,11 @@ fn written(content: fn()) -> Vec<Record> {
     host.set_content(content);
     host.settle(10);
     let mut writer = Writer::default();
-    write_tree(&host.semantics_tree(true), &mut writer);
+    write_tree(
+        &host.semantics_tree(true),
+        &mut compose_android::accessibility::KeptCustomActions::default(),
+        &mut writer,
+    );
     records(&writer.bytes)
 }
 
@@ -349,7 +351,11 @@ fn a_card_around_a_scrolling_row_offers_no_scroll() {
         card.config
     );
     let mut writer = Writer::default();
-    write_tree(&root, &mut writer);
+    write_tree(
+        &root,
+        &mut compose_android::accessibility::KeptCustomActions::default(),
+        &mut writer,
+    );
     let records = records(&writer.bytes);
     let record = records.iter().find(|record| record.flags & flag::CLICKABLE != 0).unwrap();
     assert_eq!(record.flags & flag::SCROLL, 0, "{record:?}");

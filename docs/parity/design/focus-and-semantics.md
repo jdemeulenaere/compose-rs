@@ -237,8 +237,8 @@ impl SemanticsOwner {
 pub struct SemanticsNode { tree: TreeKey, node: NodeId, merging_enabled: bool, fake: Option<FakeKind> }
 impl SemanticsNode {
     pub fn id(&self) -> i32;
-    pub fn config(&self) -> Rc<SemanticsConfiguration>;                  // merged when merging is enabled
-    pub fn unmerged_config(&self) -> Rc<SemanticsConfiguration>;
+    pub fn config(&self) -> SemanticsConfiguration;                      // merged when merging is enabled (an owned copy, D1287)
+    pub fn unmerged_config(&self) -> SemanticsConfiguration;
     pub fn children(&self) -> Vec<SemanticsNode>;                        // z order (placement_order)
     pub fn parent(&self) -> Option<SemanticsNode>;
     pub fn is_root(&self) -> bool;
@@ -250,7 +250,8 @@ impl SemanticsNode {
     pub fn is_merging_semantics_of_descendants(&self) -> bool;
     pub fn is_hidden(&self) -> bool;                                     // alpha 0 on the path
     pub fn is_important_for_accessibility(&self) -> bool;
-    pub fn snapshot(&self) -> SemanticsSnapshot;                         // today's owned tree, for bridges and dumps
+    // The snapshot isn't asked of a node: `UiHost::semantics_tree` and `accessibility_tree` give one,
+    // under `platform`, for the bridges and dumps.
 }
 ```
 
@@ -291,7 +292,7 @@ Queries go through the registry (modifier-nodes §3.3) outside passes. The merge
 | SE-1 | Keys, `ValueSlot`, typed `SemanticsConfiguration` with policies, the receiver API, `AccessibilityAction`/`CustomAccessibilityAction`, actions as closures; every component, both bridges and the harness moved over (no new behaviour) | `MergedSemanticsConfigurationTest`; the property cases of `SemanticsTests` (pane title, content type, action labels, text substitution, traversal properties); `CollectionInfoTest` (with foundation's lazy lists and `selectable_group` setting `CollectionInfo`); the harness's `expect_value` users across areas |
 | SE-2 | `SemanticsModifierNode` flags, per-node cache with `Observation::Semantics` and `invalidate_semantics`, semantics ids renewed on reuse | `SemanticsModifierNodeTest` |
 | SE-3 | `SemanticsOwner`, `SemanticsNode` handles, z-ordered children, bounds from live coordinates, transparency, fake nodes, touch bounds, the host-experimental queries | `SemanticsInfoTest`, `SemanticsHostApiTest`, the tree cases of `SemanticsTests` (z order, bounds in parent, ids, fake nodes) |
-| SE-4 | Harness: matchers over handles, key matchers, tree navigation, generic actions | ui-text-and-test's `semantics-matchers` rows: `HasParentTest`, `HasAnyAncestorTest`, `HasAnyChildTest`, `HasAnyDescendantTest`, `HasAnySiblingTest`, `CallSemanticsActionTest`, `CustomAccessibilityActionsTest` |
+| SE-4 | Harness: matchers over handles, key matchers, tree navigation, generic actions (matchers, navigation and actions done over snapshots; `fetch_semantics_node` to a handle is the step left: `fetch_semantics_snapshot` for what wants a copy, and no mechanical rewrite, `bounds_in_root` being clipped where a snapshot's `bounds` isn't) | ui-text-and-test's `semantics-matchers` rows: `HasParentTest`, `HasAnyAncestorTest`, `HasAnyChildTest`, `HasAnyDescendantTest`, `HasAnySiblingTest`, `CallSemanticsActionTest`, `CustomAccessibilityActionsTest` |
 | SE-5 | Traversal order (`SemanticsSort` port), Android record v2 with class names and actions in Rust, per-node change events, desktop ordering | `AndroidComposeViewAccessibilityTraversalTest`, the Rust-testable parts of `AndroidAccessibilityTest` and `AndroidComposeViewAccessibilityDelegateCompatTest` (class names, actions, traversal, transparency), `WindowContentChangeTest` |
 
 ## Order, dependencies and parallelism

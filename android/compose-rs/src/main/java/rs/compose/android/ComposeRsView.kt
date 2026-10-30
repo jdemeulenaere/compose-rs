@@ -356,7 +356,7 @@ class ComposeRsView @JvmOverloads constructor(
         ComposeRsNative.destroy(host)
         host = 0L
         // Its nodes are gone (a host composed again has others).
-        accessibility.semanticsChanged()
+        accessibility.semanticsChanged(false)
         drawing = null
         measurer.clear()
         replayer.clear()
@@ -678,7 +678,9 @@ class ComposeRsView @JvmOverloads constructor(
             if (isFocused) clearFocus()
         }
         // Read again when next asked, service or not (D630); the services on hear it.
-        if (result and Frame.SEMANTICS != 0L) accessibility.semanticsChanged()
+        if (result and Frame.SEMANTICS != 0L) {
+            accessibility.semanticsChanged(result and Frame.SEMANTICS_AT_ONCE != 0L)
+        }
     }
 
     /** Prefetches once the frame is done (a message after the Choreographer's callbacks). */
@@ -849,6 +851,9 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     internal fun semantics() = if (host != 0L) ComposeRsNative.semantics(host) else null
+
+    internal fun semanticsNodeAt(x: Float, y: Float) =
+        if (host != 0L) ComposeRsNative.nodeAt(host, x, y) else -1
 
     internal fun semanticsChanges(forget: Boolean) =
         if (host != 0L) ComposeRsNative.semanticsChanges(host, forget) else null
