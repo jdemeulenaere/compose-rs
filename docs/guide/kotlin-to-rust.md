@@ -1728,7 +1728,7 @@ pub fn Photo() {
 }
 ```
 
-`Modifier.draggable` takes a `DraggableState` and every one of Compose's parameters:
+`Modifier.draggable` takes a `DraggableState` and what's most often given; `draggable_with` takes every one of Compose's parameters, as `DraggableOptions`, and `draggable_2d` drags any way:
 
 ```kotlin
 var offset by remember { mutableFloatStateOf(0f) }

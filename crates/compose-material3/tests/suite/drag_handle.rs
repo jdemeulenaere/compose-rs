@@ -433,3 +433,37 @@ fn a_press_a_parent_takes_on_the_initial_pass_doesnt_show() {
     press(&mut ui);
     assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
 }
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt: a drag from the app's draggable shows on the handle
+#[test]
+fn a_draggable_given_the_handles_source_shows_dragged() {
+    use compose_foundation::gestures::{
+        DraggableModifier, DraggableOptions, DraggableState, Orientation,
+    };
+    use compose_ui::MutableInteractionSource;
+    let mut ui = handle_rule(move || {
+        let drag = remember(|| DraggableState::new(|_| {}));
+        let source = remember(MutableInteractionSource::new);
+        VerticalDragHandle!(
+            modifier = Modifier.test_tag(TAG).draggable_with(
+                drag,
+                Orientation::Horizontal,
+                DraggableOptions {
+                    interaction_source: Some(source.clone()),
+                    ..DraggableOptions::default()
+                }
+            ),
+            interaction_source = Some(source)
+        );
+    });
+    let center = center_of(&mut ui);
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| {
+        touch.down(center);
+        touch.move_by(Offset::new(20.0, 0.0));
+    });
+    ui.wait_for_idle();
+    assert_draws(&mut ui, (12.0, 52.0), pressed_color(), Some(6.0));
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| touch.up());
+    ui.wait_for_idle();
+    assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
+}

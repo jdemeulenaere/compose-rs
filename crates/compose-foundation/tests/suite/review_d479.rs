@@ -47,7 +47,9 @@ fn left_y(records: &Records) -> f32 {
 /// A press, one move past the slop by `by`, a release; then one frame.
 fn drag_one_frame(ui: &mut ComposeTestRule, from: Offset, by: Offset) {
     let slop = 8.0;
-    let unit = Offset::new(by.x.signum() * slop, by.y.signum() * slop);
+    // Past the slop along the drag only: 0's sign is 1, and across it'd be a slop of its own.
+    let along = |by: f32| if by == 0.0 { 0.0 } else { by.signum() * slop };
+    let unit = Offset::new(along(by.x), along(by.y));
     ui.host().send_pointer(touch(PointerEvent::press(from)));
     ui.host().send_pointer(touch(PointerEvent::moved(from + unit + by, true)));
     ui.host().send_pointer(touch(PointerEvent::release(from + unit + by)));

@@ -1126,7 +1126,7 @@ impl DragScroller {
                 // How far it is from the press (a tremor going back and forth isn't a drag).
                 let moved = position - drag.start;
                 let along = if vertical { moved.y } else { moved.x };
-                if along.abs() > slop {
+                if along.abs() >= slop {
                     drag.scrolling = true;
                     event.consume();
                     Self::begin_scroll(&mut self.session, &mut self.dragged, driver);

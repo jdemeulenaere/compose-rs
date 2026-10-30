@@ -1,7 +1,6 @@
 //! `VerticalDragHandle`, as Compose's: a capsule a user drags to resize panes, growing when pressed
 //! or dragged (D1032). It only shows the gesture: what moves anything is the app's own
-//! `Modifier.draggable` on it. That takes no interaction source yet, so a drag shows if the app
-//! emits it on the handle's `interaction_source`.
+//! `Modifier.draggable_with` on it, given the handle's `interaction_source`, whose drags show.
 
 use compose_foundation::layout::Box;
 use compose_runtime::{MutableState, composable, mutable_state_of, remember};
@@ -134,8 +133,7 @@ impl VerticalDragHandleDefaults {
 
 /// A capsule that can be dragged to change a component's size or place, as Compose's
 /// `VerticalDragHandle`, meant for moving sideways (between panes). It only shows the gesture, a
-/// press on its own and a drag from `interaction_source`, where the app emits it (`Modifier.draggable`
-/// takes no interaction source yet).
+/// press on its own and a drag from `interaction_source`, the app's `Modifier.draggable_with`'s.
 #[composable]
 #[allow(non_snake_case)]
 pub fn VerticalDragHandle(

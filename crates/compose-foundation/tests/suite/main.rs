@@ -5,6 +5,8 @@ extern crate compose_runtime as compose;
 
 mod clickable_parity;
 mod combined_clickable_parity;
+mod draggable;
+mod draggable_2d;
 mod draw_modifiers;
 mod drawing_api;
 mod effects;

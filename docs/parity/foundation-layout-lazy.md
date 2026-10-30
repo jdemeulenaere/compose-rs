@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 31 | 584 |
+| `ported` | 32 | 613 |
 | `port` | 9 | 33 |
 | `partial` | 23 | 811 |
-| `feature:<name>` | 99 | 1,436 |
+| `feature:<name>` | 98 | 1,407 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -231,9 +231,9 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 
 | Path | Tests | Covers | Status |
 |---|---|---|---|
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt | 29 | `draggable2D` and `Draggable2DState` | feature:draggable |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt | 29 | `draggable2D` and `Draggable2DState` | ported (`draggable_2d.rs`, with `draggable.rs` for the node they share: D1458. Left: `gestureState`'s two tests read Compose's internals; the inspector's) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableInteropTest.kt | 1 | Velocity is right while a hosting `ComposeView` translates | n/a: Android View-hierarchy interop; compose-rs takes window coordinates from its host view |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableTest.kt | 71 | `draggable`: axes, start/stop, velocity, reverse, enabled, interaction source, `startDragImmediately`, nested drags, indirect pointer, newest callbacks | partial (`draggable` exists: `pointer_input.rs::draggable_reports_deltas_along_its_axis_past_the_slop`, `review_round7.rs` draggable tests. Missing: `interactionSource`, `startDragImmediately`, suspend `onDragStarted`/`onDragStopped` with `CoroutineScope`, `DraggableState.drag {}`; indirect-pointer tests need feature:pointer-input-types) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableTest.kt | 71 | `draggable`: axes, start/stop, velocity, reverse, enabled, interaction source, `startDragImmediately`, nested drags, indirect pointer, newest callbacks | partial (`draggable.rs`, 49 tests porting 52 of its 71, on the port of `DragGestureNode` (D1458). Left: the 14 indirect-pointer tests (feature:pointer-input-types), `gestureState`'s two reading Compose's internals, the inspector's, the modifier's equality and a mouse's secondary button (events here don't say which button)) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/LazyListFocusableInteractionTest.kt | 19 | A focused item stays in view when the list's viewport shrinks | partial (focus brings items into view: `review_rtl.rs`, `lazy_api.rs::a_reversed_list_brings_a_focused_item_into_view`; keeping the focused item in view on a viewport resize is missing (feature:keep-focused-in-view); AndroidView cases n/a) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/MouseWheelScrollable2DTest.kt | 2 | Wheel on `scrollable2D`, velocity | feature:scrollable2d |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt | 40 | `Modifier.overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, overscroll on scrollables (drag, fling, reverse, nested) | feature:overscroll |
@@ -354,9 +354,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **scroll-indicator-state:** `ScrollIndicatorState` (`scrollOffset`, `contentSize`, `viewportSize`) on `ScrollState`, the lazy states and `PagerState`.
 - **scrollable2d:** `Scrollable2DState`, `rememberScrollable2DState`, `Scroll2DScope`, `Modifier.scrollable2D`, and the `Offset` forms of `scrollBy`/`animateScrollBy`/`stopScroll`.
 - **overscroll:** `OverscrollEffect` (`applyToScroll`, `applyToFling`, `isInProgress`, `node`), `OverscrollFactory`, `LocalOverscrollFactory`, `rememberOverscrollEffect`, `Modifier.overscroll`, `withoutVisualEffect`, `withoutEventHandling`, `rememberPlatformOverscrollFactory` (Android glow and stretch).
-- **draggable:**
-  - `draggable(state, orientation, enabled, interactionSource, startDragImmediately, onDragStarted: suspend CoroutineScope.(Offset), onDragStopped: suspend CoroutineScope.(Float), reverseDirection)`, `DraggableState.drag(priority) { dragBy }`, `DragScope`;
-  - `draggable2D`, `Draggable2DState`, `rememberDraggable2DState`, `Drag2DScope`.
+- **draggable:** done (D1458).
 - **gesture-detectors:**
   - `awaitEachGesture`, `awaitFirstDown(requireUnconsumed, pass)`, `waitForUpOrCancellation(pass)`;
   - the drag detectors: `detectDragGestures(orientationLock, onDragStart(down, slop, offset), …)`, `detectHorizontalDragGestures`, `detectVerticalDragGestures`, `detectDragGesturesAfterLongPress`;
@@ -447,7 +445,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 8. **grid-parity.** **Done** but for `overscrollEffect` and `animateItem`, which come with their features (D1451).
    - API: grids' `reverse_layout`, `sticky_header`, `GridCells::FixedSize`, `GridCells::Custom` for `calculateCrossAxisCellSizes`, the cross-axis arrangement, `LazyGridItemScope::cross_axis_cell_count`, `LazyGridItemInfo::UNKNOWN_ROW`/`UNKNOWN_COLUMN`.
    - Tests: LazyGridsReverseLayoutTest, LazyGridHeadersTest, LazyGridTest, LazyArrangementsTest (grid), LazyGridSpanTest, LazyGridsContentPaddingTest, LazyGridLayoutInfoTest, LazyGridRequestScrollTest.
-9. **draggable.**
+9. **draggable.** Done (D1458).
    - API: the full `draggable` signature, `DraggableState.drag`, `draggable2D`.
    - Tests: DraggableTest (rest), Draggable2DTest.
    - Depends on: mutator-mutex; interaction (misc ledger); Tip differences 7.

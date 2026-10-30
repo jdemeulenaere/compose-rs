@@ -10,7 +10,9 @@ use compose_foundation::{ScrollModifiers, remember_scroll_state};
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{IntSize, Key, Modifier, Offset, PointerEvent, UnitExt};
+use compose_ui::{IntSize, Key, Modifier, Offset, PointerEvent, PointerId, PointerType, UnitExt};
+
+const FINGER: PointerId = PointerId(1);
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
     ui.on_node_with_tag(tag).fetch_semantics_node().bounds
@@ -259,36 +261,57 @@ fn the_contents_scrolls_drag_the_sheet_first() {
     };
     assert_eq!(first(&mut ui), 300.0 + 48.0);
     // Up 100 past the slop on the content: the sheet goes up, the content doesn't scroll.
-    ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 500.0)));
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(200.0, 500.0)).with_pointer(FINGER, PointerType::Touch),
+    );
     for y in [492.0, 450.0, 420.0, 392.0] {
-        ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));
+        ui.host().send_pointer(
+            PointerEvent::moved(Offset::new(200.0, y), true)
+                .with_pointer(FINGER, PointerType::Touch),
+        );
         ui.advance_time_by(Duration::from_millis(100));
     }
     assert_eq!(first(&mut ui), 200.0 + 48.0);
-    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 392.0)));
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(200.0, 392.0)).with_pointer(FINGER, PointerType::Touch),
+    );
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::Expanded);
     assert_eq!(first(&mut ui), 48.0);
     // Down on the content at its top: the sheet comes down.
-    ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 300.0)));
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(200.0, 300.0)).with_pointer(FINGER, PointerType::Touch),
+    );
     for y in [308.0, 350.0, 400.0] {
-        ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));
+        ui.host().send_pointer(
+            PointerEvent::moved(Offset::new(200.0, y), true)
+                .with_pointer(FINGER, PointerType::Touch),
+        );
         ui.advance_time_by(Duration::from_millis(100));
     }
     assert_eq!(first(&mut ui), 48.0 + 92.0);
-    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 400.0)));
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(200.0, 400.0)).with_pointer(FINGER, PointerType::Touch),
+    );
 }
 
 #[test]
 fn a_dragged_sheet_follows_the_finger() {
     let (mut ui, _state, _shown, _owner) =
         sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
-    ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 450.0)));
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(200.0, 450.0)).with_pointer(FINGER, PointerType::Touch),
+    );
     for y in [470.0, 500.0, 550.0] {
-        ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));
+        ui.host().send_pointer(
+            PointerEvent::moved(Offset::new(200.0, y), true)
+                .with_pointer(FINGER, PointerType::Touch),
+        );
         ui.advance_time_by(Duration::from_millis(100));
     }
     // 100 down, less the 8 dp touch slop: the sheet moving under the finger doesn't count.
     assert_eq!(bounds(&mut ui, "content").top, 400.0 + 92.0);
-    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 550.0)));
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(200.0, 550.0)).with_pointer(FINGER, PointerType::Touch),
+    );
 }

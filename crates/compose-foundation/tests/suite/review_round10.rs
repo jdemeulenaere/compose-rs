@@ -9,7 +9,7 @@ use std::rc::Rc;
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
-use compose_ui::{IntSize, Offset, PointerEvent, UnitExt};
+use compose_ui::{IntSize, Offset, PointerEvent, PointerId, PointerType, UnitExt};
 
 fn send(ui: &mut ComposeTestRule, event: PointerEvent) {
     ui.host().send_pointer(event);
@@ -42,7 +42,8 @@ fn drag_started_is_where_the_slop_was_crossed() {
             )
         );
     });
-    send(&mut ui, PointerEvent::press(Offset::new(10.0, 10.0)));
-    send(&mut ui, PointerEvent::moved(Offset::new(10.0, 40.0), true));
+    let finger = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
+    send(&mut ui, finger(PointerEvent::press(Offset::new(10.0, 10.0))));
+    send(&mut ui, finger(PointerEvent::moved(Offset::new(10.0, 40.0), true)));
     assert_eq!(*log.borrow(), vec!["started 18", "delta 22"]);
 }

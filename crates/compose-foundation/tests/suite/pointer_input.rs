@@ -186,10 +186,11 @@ fn draggable_reports_deltas_along_its_axis_past_the_slop() {
     drag_to(&mut ui, 10.0, 15.0);
     assert_eq!(offset.get(), 0.0);
     drag_to(&mut ui, 30.0, 15.0);
-    // 20 px past the press, less the 8 px slop.
-    assert_eq!(offset.get(), 12.0);
+    // 20 px past the press, less a mouse's slop (8 px / 144, as `pointerSlop`).
+    let slop = 8.0 / 144.0;
+    assert_eq!(offset.get(), 20.0 - slop);
     drag_to(&mut ui, 50.0, 15.0);
-    assert_eq!(offset.get(), 32.0);
+    assert_eq!(offset.get(), 40.0 - slop);
     release(&mut ui, 50.0, 15.0);
     assert!(stopped.get());
 }

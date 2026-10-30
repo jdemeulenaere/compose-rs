@@ -333,12 +333,12 @@ fn a_child_drag_gives_up_once_its_parent_took_the_drag() {
     });
     press(&mut ui, 20.0, 20.0);
     drag_to(&mut ui, 20.0, 60.0);
-    assert_eq!(parent.get(), 32.0);
+    assert_eq!(parent.get(), 40.0 - 8.0 / 144.0);
     drag_to(&mut ui, 60.0, 60.0);
     drag_to(&mut ui, 60.0, 80.0);
     release(&mut ui, 60.0, 80.0);
     assert_eq!(child.get(), 0.0, "the child gave up the gesture");
-    assert_eq!(parent.get(), 52.0, "the parent's drag went on");
+    assert_eq!(parent.get(), 60.0 - 8.0 / 144.0, "the parent's drag went on");
 }
 
 /// A horizontal `draggable` dragged by finger 1 (x 10 to 40: 22 px past the slop), then
