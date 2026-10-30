@@ -1,4 +1,6 @@
-//! Navigation, as Navigation Compose (`androidx.navigation.compose`): a [`NavController`]
+//! Navigation. Navigation 3's runtime (`androidx.navigation3.runtime`, D1400), which replaces what
+//! follows when `NavDisplay` is in (D704), and Navigation Compose (`androidx.navigation.compose`): a
+//! [`NavController`]
 //! holds a back stack of the app's destinations, values of its own type (an enum, typically,
 //! rather than string routes), and a [`NavHost`] shows the top one, each entry's saveable state
 //! kept while it's on the stack. Back pops the stack. The stack is saved across the host's
@@ -13,9 +15,11 @@ extern crate compose_runtime as compose;
 
 mod controller;
 mod host;
+mod runtime;
 
 pub use controller::{NavBackStackEntry, NavController, NavOptions, remember_nav_controller};
 pub use host::NavHost;
+pub use runtime::*;
 
 #[doc(hidden)]
 pub use compose_animation::{EnterTransition, ExitTransition};
