@@ -4,9 +4,10 @@
 
 use compose_runtime::{ObjectHandle, Owned};
 use compose_ui::ClickableOptions;
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use compose_animation::{Animatable, tween};
+use compose_animation::{Animatable, AnimationSpec, tween};
 use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
 use compose_foundation::layout::{
     Box, Column, ColumnScope, Row, Spacer, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
@@ -21,6 +22,7 @@ use compose_ui::{
 };
 
 use crate::components::Surface;
+use crate::motion::MotionScheme;
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 
 /// Whether a drawer is open, as Compose's `DrawerValue`.
@@ -57,6 +59,12 @@ struct DrawerInner {
     width: std::cell::Cell<f32>,
     /// Whether it may settle at a value, as `confirmStateChange`.
     confirm_state_change: Box<dyn Fn(DrawerValue) -> bool>,
+    /// What it opens and closes with, and what a drag let go settles with, as
+    /// `openDrawerMotionSpec`, `closeDrawerMotionSpec` and `anchoredDraggableMotionSpec`: the
+    /// drawer sets them from the theme.
+    open_spec: RefCell<AnimationSpec>,
+    close_spec: RefCell<AnimationSpec>,
+    settle_spec: RefCell<AnimationSpec>,
 }
 
 impl DrawerInner {
@@ -104,6 +112,9 @@ impl DrawerState {
                 animating: mutable_state_of(false),
                 width: std::cell::Cell::new(f32::NAN),
                 confirm_state_change: Box::new(confirm_state_change),
+                open_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
+                close_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
+                settle_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
             },
             |object| DrawerState { object },
         )
@@ -149,12 +160,33 @@ impl DrawerState {
 
     /// Opens it, animating, as `open()`.
     pub async fn open(&self) {
-        self.animate_to(DrawerValue::Open).await;
+        let Some(spec) = self.inner().map(|inner| inner.open_spec.borrow().clone()) else { return };
+        self.animate_to(DrawerValue::Open, spec).await;
     }
 
     /// Closes it, animating, as `close()`.
     pub async fn close(&self) {
-        self.animate_to(DrawerValue::Closed).await;
+        let Some(spec) = self.inner().map(|inner| inner.close_spec.borrow().clone()) else {
+            return;
+        };
+        self.animate_to(DrawerValue::Closed, spec).await;
+    }
+
+    /// A drag let go, to `value`, as the anchored draggable's fling.
+    async fn settle_to(&self, value: DrawerValue) {
+        let Some(spec) = self.inner().map(|inner| inner.settle_spec.borrow().clone()) else {
+            return;
+        };
+        self.animate_to(value, spec).await;
+    }
+
+    /// Sets what it animates with, as Compose's drawer does from the motion scheme.
+    fn set_motion(&self, motion: &MotionScheme) {
+        if let Some(inner) = self.inner() {
+            *inner.open_spec.borrow_mut() = motion.default_spatial_spec();
+            *inner.close_spec.borrow_mut() = motion.fast_effects_spec();
+            *inner.settle_spec.borrow_mut() = motion.default_spatial_spec();
+        }
     }
 
     /// Opens or closes it at once, as `snapTo`: settled there if `confirm_state_change` lets
@@ -170,15 +202,14 @@ impl DrawerState {
         }
     }
 
-    async fn animate_to(&self, value: DrawerValue) {
+    async fn animate_to(&self, value: DrawerValue, spec: AnimationSpec) {
         let open = value == DrawerValue::Open;
         // Kept across the animation: it ends even if the drawer's owner went meanwhile.
         let Some(inner) = self.inner() else { return };
         inner.target.set(value);
         inner.shown.set(true);
         inner.animating.set(true);
-        let result =
-            inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
+        let result = inner.open.animate_to(if open { 1.0 } else { 0.0 }, spec).await;
         if result.end_reason == compose_animation::AnimationEndReason::Finished {
             inner.animating.set(false);
             // Settled there only if `confirm_state_change` lets it, as Compose's
@@ -350,10 +381,14 @@ pub fn ModalNavigationDrawer(
                 // Compose's `settle`.
                 let target =
                     if state.confirm_state_change(target) { target } else { state.current_value() };
-                if target == DrawerValue::Open { state.open().await } else { state.close().await }
+                state.settle_to(target).await;
             });
         }
     };
+    {
+        let (state, motion) = (drawer_state, MaterialTheme::motion_scheme());
+        compose_runtime::SideEffect(move || state.set_motion(&motion));
+    }
     let focus_requester = remember(compose_ui::FocusRequester::new);
     {
         let is_open = drawer_state.is_open();

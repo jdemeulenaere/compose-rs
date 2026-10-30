@@ -21,6 +21,7 @@ use compose_ui::{
 use compose_ui::{NestedScrollConnection, NestedScrollSource, Offset};
 
 use crate::anchored::Anchored;
+use crate::motion::MotionScheme;
 use crate::theme::MaterialTheme;
 
 /// Where a sheet rests, as Compose's `SheetValue`.
@@ -286,13 +287,13 @@ impl SheetState {
     }
 
     /// Sets what it animates with, as Compose's sheets do from the motion scheme: showing and
-    /// expanding with the default spatial spring, hiding with the fast effects one, drags
-    /// settling with the default spatial one.
-    pub(crate) fn set_motion(&self) {
+    /// expanding with the default spatial spec, hiding with the fast effects one, drags settling
+    /// with the default spatial one.
+    pub(crate) fn set_motion(&self, motion: &MotionScheme) {
         if let Some(inner) = self.inner() {
-            *inner.show_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL);
-            *inner.hide_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::FAST_EFFECTS);
-            inner.anchored.set_spec(AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL));
+            *inner.show_spec.borrow_mut() = motion.default_spatial_spec();
+            *inner.hide_spec.borrow_mut() = motion.fast_effects_spec();
+            inner.anchored.set_spec(motion.default_spatial_spec());
         }
     }
 }
@@ -641,7 +642,8 @@ pub fn ModalBottomSheet(
     // The motion scheme's springs, as Compose's `BottomSheet` sets them.
     {
         let state = sheet_state;
-        compose_runtime::SideEffect(move || state.set_motion());
+        let motion = MaterialTheme::motion_scheme();
+        compose_runtime::SideEffect(move || state.set_motion(&motion));
     }
     {
         // Shown on entering once laid out, if it can rest expanded (an empty sheet can't),
@@ -680,7 +682,7 @@ pub fn ModalBottomSheet(
     // spring.
     let scrim_alpha = compose_animation::animate_float_as_state(
         if sheet_state.target_value() != SheetValue::Hidden { 1.0 } else { 0.0 },
-        AnimationSpec::Spring(crate::motion::DEFAULT_EFFECTS),
+        MaterialTheme::motion_scheme().default_effects_spec(),
         Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
         "ScrimAlpha",
         None,
@@ -778,7 +780,8 @@ pub fn BottomSheet(
 ) {
     let scope = remember_coroutine_scope();
     let density = compose_ui::LOCAL_DENSITY.current();
-    compose_runtime::SideEffect(move || state.set_motion());
+    let motion = MaterialTheme::motion_scheme();
+    compose_runtime::SideEffect(move || state.set_motion(&motion));
     let SheetParts { back, modifier: sheet_modifier, handle_click, handle_semantics, .. } =
         sheet_parts(state, on_dismiss_request, modifier, gestures_enabled, scope, density);
     compose_ui::BackHandler(back_handler_enabled && state.is_visible(), back);

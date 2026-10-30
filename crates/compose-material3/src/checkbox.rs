@@ -3,7 +3,6 @@
 //! standard motion scheme's effects springs, its check mark drawn in as it's checked and moved
 //! to a line when indeterminate.
 
-use compose_animation::AnimationSpec;
 use compose_runtime::composable;
 use compose_ui::{
     ClickableOptions, Color, DrawScope, Modifier, MutableInteractionSource, Offset, Rect, Role,
@@ -256,14 +255,15 @@ fn checkbox(
     // The check mark draws in from an unchecked box; it goes 100 ms after an unchecking; it
     // gravitates to a line for the indeterminate state, as Compose's transition.
     let transition = compose_animation::update_transition(state, "Checkbox");
-    fn spatial() -> AnimationSpec {
-        AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL)
-    }
+    let motion = MaterialTheme::motion_scheme();
+    let spatial = motion.default_spatial_spec();
     let check_fraction = transition.animate_float(
-        move |segment| match (&segment.initial_state, &segment.target_state) {
-            (ToggleableState::Off, _) => spatial(),
-            (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
-            _ => spatial(),
+        {
+            let spatial = spatial.clone();
+            move |segment| match (&segment.initial_state, &segment.target_state) {
+                (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
+                _ => spatial.clone(),
+            }
         },
         |state| if *state == ToggleableState::Off { 0.0 } else { 1.0 },
     );
@@ -271,16 +271,16 @@ fn checkbox(
         move |segment| match (&segment.initial_state, &segment.target_state) {
             (ToggleableState::Off, _) => compose_animation::snap(0).into(),
             (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
-            _ => spatial(),
+            _ => spatial.clone(),
         },
         |state| if *state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },
     );
-    // The box comes in with the default effects spring, goes with the fast one.
-    let color_spec = AnimationSpec::Spring(if state == ToggleableState::Off {
-        crate::motion::FAST_EFFECTS
+    // The box comes in with the default effects spec, goes with the fast one.
+    let color_spec = if state == ToggleableState::Off {
+        motion.fast_effects_spec()
     } else {
-        crate::motion::DEFAULT_EFFECTS
-    });
+        motion.default_effects_spec()
+    };
     let animate = |target: Color, label| {
         compose_animation::animate_color_as_state(target, color_spec.clone(), label, None)
     };

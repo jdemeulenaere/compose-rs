@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use compose_animation::{animate_float_as_state, tween};
+use compose_animation::animate_float_as_state;
 use compose_foundation::layout::Box;
 use compose_foundation::{BasicTextField, KeyboardActions, KeyboardOptions, VisualTransformation};
 use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
@@ -15,9 +15,6 @@ use compose_ui::{
 
 use crate::components::{TextFieldColors, TextFieldDefaults};
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
-
-/// As Compose's `TextFieldAnimationDuration`: the label's float.
-const LABEL_ANIMATION_MILLIS: u32 = 150;
 
 /// As Compose's `OutlinedTextFieldDefaults`.
 pub struct OutlinedTextFieldDefaults;
@@ -215,7 +212,7 @@ fn decorated_field(
     let floated = is_focused || !empty;
     let progress = animate_float_as_state(
         if floated { 1.0 } else { 0.0 },
-        tween(LABEL_ANIMATION_MILLIS),
+        crate::theme::MaterialTheme::motion_scheme().fast_spatial_spec(),
         0.01,
         "LabelProgress",
         None,

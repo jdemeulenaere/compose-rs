@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use compose_animation::{AnimationSpec, MutableTransitionState, remember_transition};
+use compose_animation::{MutableTransitionState, remember_transition};
 use compose_foundation::BorderStroke;
 use compose_foundation::ScrollModifiers as _;
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope};
@@ -650,12 +650,15 @@ pub fn DropdownMenu(
                 let (modifier, content, scroll) = (modifier.clone(), content.clone(), scroll);
                 // The open and close animation, as Compose's `DropdownMenuContent`.
                 let transition = remember_transition(&expanded_state, "DropDownMenu");
+                let motion = MaterialTheme::motion_scheme();
+                let (scale_spec, alpha_spec) =
+                    (motion.fast_spatial_spec(), motion.fast_effects_spec());
                 let scale = transition.animate_float(
-                    |_| AnimationSpec::Spring(crate::motion::FAST_SPATIAL),
+                    move |_| scale_spec.clone(),
                     |expanded| if *expanded { 1.0 } else { CLOSED_SCALE },
                 );
                 let alpha = transition.animate_float(
-                    |_| AnimationSpec::Spring(crate::motion::FAST_EFFECTS),
+                    move |_| alpha_spec.clone(),
                     |expanded| if *expanded { 1.0 } else { CLOSED_ALPHA },
                 );
                 let position = position.clone();

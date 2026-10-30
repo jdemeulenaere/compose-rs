@@ -14,7 +14,7 @@ use compose_ui::{
 
 use crate::sheet::{SheetConnection, SheetState, SheetValue};
 use crate::snackbar::SnackbarHostState;
-use crate::theme::LOCAL_CONTENT_COLOR;
+use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
 /// A scaffold's state, as Compose's `BottomSheetScaffoldState`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,7 +172,8 @@ fn standard_bottom_sheet(
     content: compose_runtime::Callback<dyn Fn(ColumnScope)>,
 ) {
     let scope = remember_coroutine_scope();
-    compose_runtime::SideEffect(move || state.set_motion());
+    let motion = MaterialTheme::motion_scheme();
+    compose_runtime::SideEffect(move || state.set_motion(&motion));
     let settle: Rc<dyn Fn(f32)> = Rc::new(move |velocity: f32| {
         scope.launch(async move {
             if let Some(inner) = state.inner() {

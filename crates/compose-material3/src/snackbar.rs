@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use compose_animation::{
-    AnimatedVisibility, Spring, fade_in_with, fade_out_with, scale_in_with, spring_with, tween,
+    AnimatedVisibility, fade_in_with, fade_out_with, scale_in_with, scale_out_with,
 };
 use compose_foundation::layout::{Box, RowScope};
 use compose_runtime::{
@@ -366,19 +366,28 @@ pub fn SnackbarHost(
         *last.borrow_mut() = current.clone();
     }
     let shown = last.borrow().clone();
+    let motion = crate::theme::MaterialTheme::motion_scheme();
     AnimatedVisibility(
         current.is_some(),
         modifier,
-        // `scaleIn(initialScale = 0.8f)`: its default spring.
+        // As `FadeInFadeOutWithScale`: its opacity on the fast effects spec, its scale between
+        // 0.8 and 1 on the fast spatial one.
         Some(
-            fade_in_with(tween(150), 0.0)
+            fade_in_with(motion.fast_effects_spec(), 0.0)
                 + scale_in_with(
-                    spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW).visibility_threshold(0.002f32),
+                    motion.fast_spatial_spec(),
                     0.8,
                     compose_ui::TransformOrigin::CENTER,
                 ),
         ),
-        Some(fade_out_with(tween(75), 0.0)),
+        Some(
+            fade_out_with(motion.fast_effects_spec(), 0.0)
+                + scale_out_with(
+                    motion.fast_spatial_spec(),
+                    0.8,
+                    compose_ui::TransformOrigin::CENTER,
+                ),
+        ),
         "SnackbarHost",
         compose_runtime::callback(move |_| {
             let Some(data) = shown.clone() else { return };

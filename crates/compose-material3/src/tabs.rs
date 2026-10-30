@@ -21,7 +21,6 @@ use compose_ui::{
 };
 
 use crate::components::Surface;
-use crate::motion;
 use crate::scaffold::HorizontalDivider;
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 
@@ -143,7 +142,7 @@ impl TabIndicatorScope {
 pub trait TabIndicatorModifiers {
     /// Under the selected tab, as `Modifier.tabIndicatorOffset(selectedTabIndex,
     /// matchContentSize)`: as wide as the tab (or its content), moving and resizing to a new
-    /// selection with the standard motion scheme's spatial spring.
+    /// selection with the motion scheme's default spatial spec.
     fn tab_indicator_offset(
         self,
         scope: &TabIndicatorScope,
@@ -177,6 +176,7 @@ impl TabIndicatorModifiers for Modifier {
             positions: scope.positions.clone(),
             selected_tab_index,
             match_content_size,
+            spec: MaterialTheme::motion_scheme().default_spatial_spec(),
         })
     }
 
@@ -203,6 +203,7 @@ struct TabIndicatorOffset {
     positions: Rc<RefCell<Vec<TabPosition>>>,
     selected_tab_index: usize,
     match_content_size: bool,
+    spec: AnimationSpec,
 }
 
 impl ModifierNodeElement for TabIndicatorOffset {
@@ -212,6 +213,7 @@ impl ModifierNodeElement for TabIndicatorOffset {
             positions: self.positions.clone(),
             selected_tab_index: self.selected_tab_index,
             match_content_size: self.match_content_size,
+            spec: self.spec.clone(),
             offset: None,
             width: None,
             initial: None,
@@ -223,12 +225,14 @@ impl ModifierNodeElement for TabIndicatorOffset {
         node.positions = self.positions.clone();
         node.selected_tab_index = self.selected_tab_index;
         node.match_content_size = self.match_content_size;
+        node.spec = self.spec.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&other.positions, &self.positions)
             && other.selected_tab_index == self.selected_tab_index
             && other.match_content_size == self.match_content_size
+            && other.spec == self.spec
     }
 
     fn name(&self) -> &'static str {
@@ -242,6 +246,7 @@ struct TabIndicatorOffsetNode {
     positions: Rc<RefCell<Vec<TabPosition>>>,
     selected_tab_index: usize,
     match_content_size: bool,
+    spec: AnimationSpec,
     offset: Option<Animatable<f32>>,
     width: Option<Animatable<f32>>,
     /// The first left and width, before any animation.
@@ -267,9 +272,9 @@ impl TabIndicatorOffsetNode {
     fn follow(&self, animatable: &Option<Animatable<f32>>, target: f32) -> Option<f32> {
         let animatable = animatable.as_ref()?;
         if animatable.target_value() != target {
-            let animatable = animatable.clone();
+            let (animatable, spec) = (animatable.clone(), self.spec.clone());
             self.scope.launch(async move {
-                animatable.animate_to(target, AnimationSpec::Spring(motion::DEFAULT_SPATIAL)).await;
+                animatable.animate_to(target, spec).await;
             });
         }
         Some(animatable.value())
@@ -591,10 +596,11 @@ fn scrollable_tab_row(
     let scope = remember(|| TabIndicatorScope { positions: Rc::new(RefCell::new(Vec::new())) });
     let coroutines = compose_runtime::remember_coroutine_scope();
     let last_selected = remember(|| Rc::new(Cell::new(None::<usize>)));
+    let scroll_spec = MaterialTheme::motion_scheme().default_spatial_spec();
     let policy = {
         let positions = scope.positions.clone();
         compose_runtime::remember_keyed(
-            (selected_tab_index, edge_padding, min_tab_width, scroll_state),
+            (selected_tab_index, edge_padding, min_tab_width, scroll_state, scroll_spec.clone()),
             move || {
                 Rc::new(ScrollableTabRowLayout {
                     positions,
@@ -604,6 +610,7 @@ fn scrollable_tab_row(
                     scroll_state,
                     coroutines,
                     last_selected,
+                    scroll_spec,
                 }) as Rc<dyn MeasurePolicy>
             },
         )
@@ -661,6 +668,8 @@ struct ScrollableTabRowLayout {
     coroutines: CoroutineScope,
     /// The selection the row last scrolled to (none before the first layout).
     last_selected: Rc<Cell<Option<usize>>>,
+    /// The scheme's default spatial spec, as `ScrollableTabData`'s `animationSpec`.
+    scroll_spec: AnimationSpec,
 }
 
 impl MeasurePolicy for ScrollableTabRowLayout {
@@ -736,14 +745,13 @@ impl MeasurePolicy for ScrollableTabRowLayout {
                 let tab_offset = density.round_to_px(selected.left);
                 let tab_width = density.round_to_px(selected.width);
                 let scroll = self.scroll_state;
+                let spec = self.scroll_spec.clone();
                 self.coroutines.launch(async move {
                     compose_runtime::with_frame_nanos(|_| ()).await;
                     let visible = total - scroll.max_value();
                     let centered = tab_offset - (visible / 2 - tab_width / 2);
                     let target = centered.clamp(0, (total - visible).max(0));
                     if scroll.value() != target {
-                        // The standard spatial spring, as `ScrollableTabData`'s `animationSpec`.
-                        let spec = AnimationSpec::Spring(motion::DEFAULT_SPATIAL);
                         let _ = scroll.animate_scroll_to(target, spec).await;
                     }
                 });
@@ -763,15 +771,15 @@ const SMALL_TAB_HEIGHT: Dp = Dp(48.0);
 const LARGE_TAB_HEIGHT: Dp = Dp(72.0);
 
 /// A tab's content color, following its selection, as Compose's `TabTransition`: towards the
-/// selected color with the standard default-effects spring, away from it with the fast one.
+/// selected color with the scheme's default effects spec, away from it with the fast one.
 fn tab_color(selected: bool, selected_color: Color, unselected_color: Color) -> Color {
+    let motion = MaterialTheme::motion_scheme();
     let (target, spec) = if selected {
-        (selected_color, motion::DEFAULT_EFFECTS)
+        (selected_color, motion.default_effects_spec())
     } else {
-        (unselected_color, motion::FAST_EFFECTS)
+        (unselected_color, motion.fast_effects_spec())
     };
-    compose_animation::animate_color_as_state(target, AnimationSpec::Spring(spec), "TabColor", None)
-        .get()
+    compose_animation::animate_color_as_state(target, spec, "TabColor", None).get()
 }
 
 /// A tab's click: selectable, a tab's role, the state layer in the selected color.

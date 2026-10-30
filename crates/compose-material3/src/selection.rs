@@ -1,6 +1,6 @@
 //! Selection controls, as Compose's: `Switch` and `RadioButton` (the slider is `slider.rs`).
 
-use compose_animation::{Animatable, tween};
+use compose_animation::Animatable;
 use compose_runtime::{CoroutineScope, composable};
 use compose_ui::ClickableOptions;
 use compose_ui::{
@@ -198,6 +198,7 @@ pub fn Switch(
     } else {
         modifier
     };
+    let spec = MaterialTheme::motion_scheme().fast_spatial_spec();
     compose_foundation::layout::Box(
         modifier,
         compose_ui::Alignment::TOP_START,
@@ -210,6 +211,7 @@ pub fn Switch(
                     source: interaction_source.clone(),
                     checked,
                     has_content,
+                    spec: spec.clone(),
                 })
                 .indication(interaction_source.clone(), thumb_ripple.clone())
                 .background_with(thumb_color, compose_foundation::CIRCLE_SHAPE);
@@ -235,14 +237,16 @@ struct ThumbElement {
     source: MutableInteractionSource,
     checked: bool,
     has_content: bool,
+    spec: compose_animation::AnimationSpec,
 }
 
-/// As Compose's `ThumbNode`: the thumb's size and offset animated (the standard scheme's fast
-/// spatial spring) to its state's, snapping while pressed.
+/// As Compose's `ThumbNode`: the thumb's size and offset animated (the scheme's fast spatial spec)
+/// to its state's, snapping while pressed.
 struct ThumbNode {
     source: MutableInteractionSource,
     checked: bool,
     has_content: bool,
+    spec: compose_animation::AnimationSpec,
     size: Option<Animatable<f32>>,
     offset: Option<Animatable<f32>>,
     /// The first size and offset (pixels), which the animations start from.
@@ -257,6 +261,7 @@ impl ModifierNodeElement for ThumbElement {
             source: self.source.clone(),
             checked: self.checked,
             has_content: self.has_content,
+            spec: self.spec.clone(),
             size: None,
             offset: None,
             initial: None,
@@ -268,12 +273,14 @@ impl ModifierNodeElement for ThumbElement {
         node.source = self.source.clone();
         node.checked = self.checked;
         node.has_content = self.has_content;
+        node.spec = self.spec.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
         other.source == self.source
             && other.checked == self.checked
             && other.has_content == self.has_content
+            && other.spec == self.spec
     }
 
     fn name(&self) -> &'static str {
@@ -309,11 +316,7 @@ impl ThumbNode {
         let animatable = animatable.as_ref()?;
         if animatable.target_value() != target {
             let animatable = animatable.clone();
-            let spec = if pressed {
-                compose_animation::snap(0).into()
-            } else {
-                compose_animation::AnimationSpec::Spring(crate::motion::FAST_SPATIAL)
-            };
+            let spec = if pressed { compose_animation::snap(0).into() } else { self.spec.clone() };
             self.scope.launch(async move {
                 animatable.animate_to(target, spec).await;
             });
@@ -446,11 +449,28 @@ pub fn RadioButton(
         }
         None => modifier,
     };
+    let motion = MaterialTheme::motion_scheme();
+    // Disabled, it snaps: there's no animating between enabled and disabled, as Compose's.
+    let color = enabled.then(|| {
+        let target = if selected { colors.selected_color } else { colors.unselected_color };
+        compose_animation::animate_color_as_state(
+            target,
+            motion.default_effects_spec(),
+            "RadioButtonColor",
+            None,
+        )
+    });
     let modifier = modifier
         .semantics(move |config| config.set_selected(selected))
         .padding(2.dp())
         .required_size((20.dp(), 20.dp()))
-        .then_custom(RadioElement { selected, enabled, colors });
+        .then_custom(RadioElement {
+            selected,
+            enabled,
+            colors,
+            color,
+            dot_spec: motion.fast_spatial_spec(),
+        });
     compose_foundation::layout::Spacer(modifier);
 }
 
@@ -458,12 +478,17 @@ struct RadioElement {
     selected: bool,
     enabled: bool,
     colors: RadioButtonColors,
+    /// Its animated color, while enabled.
+    color: Option<compose_runtime::State<Color>>,
+    dot_spec: compose_animation::AnimationSpec,
 }
 
 struct RadioNode {
     selected: bool,
     enabled: bool,
     colors: RadioButtonColors,
+    color: Option<compose_runtime::State<Color>>,
+    dot_spec: compose_animation::AnimationSpec,
     /// The dot's radius in dp: 5 selected (Compose's 6 dp less half the 2 dp stroke), 0 not.
     dot: Animatable<f32>,
     scope: compose_runtime::Owned<CoroutineScope>,
@@ -478,6 +503,8 @@ impl ModifierNodeElement for RadioElement {
             selected: self.selected,
             enabled: self.enabled,
             colors: self.colors,
+            color: self.color,
+            dot_spec: self.dot_spec.clone(),
             dot: Animatable::new(if self.selected { 5.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
             animate: false,
@@ -488,11 +515,15 @@ impl ModifierNodeElement for RadioElement {
         node.selected = self.selected;
         node.enabled = self.enabled;
         node.colors = self.colors;
+        node.color = self.color;
+        node.dot_spec = self.dot_spec.clone();
     }
     fn same(&self, other: &Self) -> bool {
         other.selected == self.selected
             && other.enabled == self.enabled
             && other.colors == self.colors
+            && other.color == self.color
+            && other.dot_spec == self.dot_spec
     }
     fn name(&self) -> &'static str {
         "radio_button"
@@ -521,19 +552,18 @@ impl DrawModifierNode for RadioNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         if std::mem::take(&mut self.animate) {
             let (dot, target) = (self.dot.clone(), if self.selected { 5.0 } else { 0.0 });
-            // As Compose's `RadioAnimationDuration`.
+            let spec = self.dot_spec.clone();
             self.scope.launch(async move {
-                dot.animate_to(target, tween(100)).await;
+                dot.animate_to(target, spec).await;
             });
         }
         let size = scope.size();
         let density = scope.density();
         let colors = &self.colors;
-        let color = match (self.enabled, self.selected) {
-            (true, true) => colors.selected_color,
-            (true, false) => colors.unselected_color,
-            (false, true) => colors.disabled_selected_color,
-            (false, false) => colors.disabled_unselected_color,
+        let color = match (self.color, self.selected) {
+            (Some(color), _) => color.get(),
+            (None, true) => colors.disabled_selected_color,
+            (None, false) => colors.disabled_unselected_color,
         };
         let stroke = density.to_px(2.dp());
         let center = Offset::new(size.width / 2.0, size.height / 2.0);

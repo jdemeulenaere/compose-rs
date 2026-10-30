@@ -11,13 +11,14 @@ use compose_foundation::layout::{
 };
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, CoroutineScope, OwnedState, composable, derived_state_of,
-    mutable_state_of, remember, remember_coroutine_scope,
+    mutable_state_of, remember_coroutine_scope,
 };
 use compose_ui::{
     Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
     MeasureScope, Modifier, Offset, PaddingValues, TextStyle, UnitExt,
 };
 
+use crate::motion::MotionScheme;
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 use compose_ui::{NestedScrollConnection, NestedScrollSource};
 
@@ -119,9 +120,9 @@ impl TopAppBarState {
         }
     }
 
-    /// Settles a collapse left halfway: to the nearer of expanded and collapsed, on a spring,
-    /// as Compose's `settleAppBar` (without the fling's decay first).
-    async fn settle(&self) {
+    /// Settles a collapse left halfway: to the nearer of expanded and collapsed, on `spec`, as
+    /// Compose's `settleAppBar` (without the fling's decay first).
+    async fn settle(&self, spec: AnimationSpec) {
         let fraction = self.collapsed_fraction();
         if !(0.01..1.0).contains(&fraction) {
             return;
@@ -130,9 +131,8 @@ impl TopAppBarState {
         let limit = self.height_offset_limit();
         if offset < 0.0 && offset > limit {
             let target = if fraction < 0.5 { 0.0 } else { limit };
-            let spring = compose_animation::spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW);
             if let Some(inner) = self.inner() {
-                inner.height_offset.animate_to(target, spring).await;
+                inner.height_offset.animate_to(target, spec).await;
             }
         }
     }
@@ -199,6 +199,7 @@ enum ScrollKind {
 pub struct TopAppBarScrollBehavior {
     state: TopAppBarState,
     kind: ScrollKind,
+    scope: CoroutineScope,
     connection: Rc<dyn NestedScrollConnection>,
 }
 
@@ -225,8 +226,19 @@ impl TopAppBarScrollBehavior {
     }
 
     fn new(kind: ScrollKind, state: TopAppBarState, scope: CoroutineScope) -> Self {
-        let connection = Rc::new(ScrollConnection { kind, state, scope });
-        TopAppBarScrollBehavior { state, kind, connection }
+        // The standard scheme's, until `with_snap_animation_spec`: these aren't composables.
+        let snap = Some(MotionScheme::standard().default_effects_spec());
+        let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
+        TopAppBarScrollBehavior { state, kind, scope, connection }
+    }
+
+    /// How the bar snaps to expanded or collapsed when a scroll leaves it between them, as the
+    /// behaviors' `snapAnimationSpec` (by default, `TopAppBarDefaults::snap_animation_spec()`);
+    /// `None` leaves it there.
+    pub fn with_snap_animation_spec(self, snap: Option<AnimationSpec>) -> TopAppBarScrollBehavior {
+        let TopAppBarScrollBehavior { state, kind, scope, .. } = self;
+        let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
+        TopAppBarScrollBehavior { state, kind, scope, connection }
     }
 
     /// Its state, as `state`.
@@ -256,6 +268,7 @@ struct ScrollConnection {
     kind: ScrollKind,
     state: TopAppBarState,
     scope: CoroutineScope,
+    snap: Option<AnimationSpec>,
 }
 
 impl NestedScrollConnection for ScrollConnection {
@@ -337,9 +350,11 @@ impl NestedScrollConnection for ScrollConnection {
         _consumed: Offset,
         _available: Offset,
     ) -> compose_ui::LocalBoxFuture<'_, Offset> {
-        if self.kind != ScrollKind::Pinned {
+        if self.kind != ScrollKind::Pinned
+            && let Some(spec) = self.snap.clone()
+        {
             let state = self.state;
-            self.scope.launch(async move { state.settle().await });
+            self.scope.launch(async move { state.settle(spec).await });
         }
         Box::pin(async { Offset::ZERO })
     }
@@ -424,6 +439,12 @@ impl TopAppBarDefaults {
             .only(WindowInsetsSides::HORIZONTAL + WindowInsetsSides::TOP)
     }
 
+    /// How a bar snaps when a scroll leaves it between expanded and collapsed, as
+    /// `snapAnimationSpec`: the theme's default effects spec.
+    pub fn snap_animation_spec() -> AnimationSpec {
+        MaterialTheme::motion_scheme().default_effects_spec()
+    }
+
     /// A pinned behavior with its state remembered here, as `pinnedScrollBehavior()`.
     pub fn pinned_scroll_behavior() -> TopAppBarScrollBehavior {
         remembered_behavior(TopAppBarScrollBehavior::pinned)
@@ -445,7 +466,10 @@ fn remembered_behavior(
 ) -> TopAppBarScrollBehavior {
     let state = remember_top_app_bar_state!();
     let scope = remember_coroutine_scope();
-    remember(move || make(state, scope))
+    let snap = TopAppBarDefaults::snap_animation_spec();
+    compose_runtime::remember_keyed(snap.clone(), move || {
+        make(state, scope).with_snap_animation_spec(Some(snap))
+    })
 }
 
 /// The padding around the navigation icon and the actions, as `TopAppBarHorizontalPadding`.
@@ -608,7 +632,7 @@ fn single_row_top_app_bar(
     };
     let fraction = compose_animation::animate_float_as_state(
         if overlapped.get() { 1.0 } else { 0.0 },
-        AnimationSpec::Spring(compose_animation::spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW)),
+        MaterialTheme::motion_scheme().default_effects_spec(),
         Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
         "TopAppBarColor",
         None,

@@ -3,8 +3,10 @@
 
 use std::rc::Rc;
 
+use crate::motion::{LOCAL_MOTION_SCHEME, MotionScheme};
 use compose_foundation::{LOCAL_TEXT_SELECTION_COLORS, TextSelectionColors};
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
+
 use compose_ui::{
     Color, CornerSize, Dp, FontFamily, FontWeight, LineHeightAlignment, LineHeightStyle,
     LineHeightTrim, Shape, TextStyle, TextUnit,
@@ -596,17 +598,19 @@ pub const DEFAULT_TEXT_STYLE: TextStyle =
 #[composable]
 pub fn MaterialTheme(
     #[default(crate::MaterialTheme::color_scheme())] color_scheme: impl Into<ThemeValue<ColorScheme>>,
+    #[default(crate::MaterialTheme::motion_scheme())] motion_scheme: impl Into<ThemeValue<MotionScheme>>,
     #[default(crate::MaterialTheme::shapes())] shapes: impl Into<ThemeValue<Shapes>>,
     #[default(crate::MaterialTheme::typography())] typography: impl Into<ThemeValue<Typography>>,
     content: impl Fn() + 'static,
 ) {
-    // Compared by value, as Compose's: a scheme, shapes or typography made anew but equal skip the
+    // Compared by value, as Compose's: schemes, shapes or typography made anew but equal skip the
     // theme, and the locals' policy recomposes no reader for them (D1021, D1107).
     let selection_colors = text_selection_colors(&color_scheme);
     let body_large = typography.body_large.clone();
     CompositionLocalProvider(
         (
             LOCAL_COLOR_SCHEME.provides(color_scheme.0.clone()),
+            LOCAL_MOTION_SCHEME.provides(motion_scheme.0.clone()),
             LOCAL_SHAPES.provides(shapes.0.clone()),
             LOCAL_TYPOGRAPHY.provides(typography.0.clone()),
             LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
@@ -659,13 +663,13 @@ pub fn ProvideTextStyle(value: TextStyle, content: impl Fn() + 'static) {
     CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(merged), || content());
 }
 
-/// An expressive theme, as Compose's `MaterialExpressiveTheme` (without its motion scheme,
-/// which compose-rs's theme doesn't carry yet): outside another expressive theme, what isn't
-/// given is `expressive_light_color_scheme()`, `Shapes::default()` and `Typography::default()`;
-/// inside one, the enclosing theme's.
+/// An expressive theme, as Compose's `MaterialExpressiveTheme`: outside another expressive theme,
+/// what isn't given is `expressive_light_color_scheme()`, `MotionScheme::expressive()`,
+/// `Shapes::default()` and `Typography::default()`; inside one, the enclosing theme's.
 #[composable]
 pub fn MaterialExpressiveTheme(
     #[default(None)] color_scheme: Option<ColorScheme>,
+    #[default(None)] motion_scheme: Option<MotionScheme>,
     #[default(None)] shapes: Option<Shapes>,
     #[default(None)] typography: Option<Typography>,
     content: impl Fn() + 'static,
@@ -673,6 +677,7 @@ pub fn MaterialExpressiveTheme(
     if LOCAL_USING_EXPRESSIVE_THEME.current() {
         MaterialTheme(
             color_scheme.map_or_else(|| MaterialTheme::color_scheme().into(), ThemeValue::from),
+            motion_scheme.map_or_else(|| MaterialTheme::motion_scheme().into(), ThemeValue::from),
             shapes.map_or_else(|| MaterialTheme::shapes().into(), ThemeValue::from),
             typography.map_or_else(|| MaterialTheme::typography().into(), ThemeValue::from),
             content,
@@ -681,6 +686,10 @@ pub fn MaterialExpressiveTheme(
         CompositionLocalProvider(LOCAL_USING_EXPRESSIVE_THEME.provides(true), || {
             MaterialTheme(
                 ThemeValue::from(color_scheme.unwrap_or_else(expressive_light_color_scheme)),
+                motion_scheme.map_or_else(
+                    || crate::motion::expressive_motion_scheme().into(),
+                    ThemeValue::from,
+                ),
                 ThemeValue::from(shapes.unwrap_or_default()),
                 ThemeValue::from(typography.unwrap_or_default()),
                 content.clone(),
@@ -714,6 +723,7 @@ pub struct MaterialTheme {}
 #[derive(Clone, PartialEq, Debug)]
 pub struct MaterialThemeValues {
     pub color_scheme: Rc<ColorScheme>,
+    pub motion_scheme: Rc<MotionScheme>,
     pub typography: Rc<Typography>,
     pub shapes: Rc<Shapes>,
 }
@@ -722,6 +732,7 @@ impl Default for MaterialThemeValues {
     fn default() -> Self {
         MaterialThemeValues {
             color_scheme: default_color_scheme(),
+            motion_scheme: crate::motion::default_motion_scheme(),
             typography: default_typography(),
             shapes: default_shapes(),
         }
@@ -733,6 +744,7 @@ impl MaterialTheme {
     pub fn values() -> MaterialThemeValues {
         MaterialThemeValues {
             color_scheme: LOCAL_COLOR_SCHEME.current(),
+            motion_scheme: LOCAL_MOTION_SCHEME.current(),
             typography: LOCAL_TYPOGRAPHY.current(),
             shapes: LOCAL_SHAPES.current(),
         }
@@ -742,6 +754,11 @@ impl MaterialTheme {
     /// without copying the others.
     pub fn color_scheme() -> Rc<ColorScheme> {
         LOCAL_COLOR_SCHEME.current()
+    }
+
+    /// The theme's motion scheme, shared, as `MaterialTheme.motionScheme`.
+    pub fn motion_scheme() -> Rc<MotionScheme> {
+        LOCAL_MOTION_SCHEME.current()
     }
 
     /// The theme's text styles, shared (D1106): `MaterialTheme::typography().body_large`

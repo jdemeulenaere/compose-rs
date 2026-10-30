@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use compose_foundation::BorderStroke;
 use compose_foundation::layout::Box;
-use compose_runtime::{CompositionLocalProvider, composable, remember};
+use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::{
     Alignment, Color, Constraints, CornerSize, Dp, Layout, Measurable, MeasurePolicy,
     MeasureResult, MeasureScope, Modifier, MutableInteractionSource, Role, Shape, UnitExt,
@@ -400,8 +400,9 @@ fn segmented_button(
     let mut click = Some(click);
     let label_style = MaterialTheme::typography().label_large.clone();
     let coroutines = compose_runtime::remember_coroutine_scope();
-    let policy = remember(move || {
-        Rc::new(IconLabelLayout { scope: coroutines, offset: Default::default() })
+    let label_spec = MaterialTheme::motion_scheme().fast_spatial_spec();
+    let policy = compose_runtime::remember_keyed(label_spec.clone(), move || {
+        Rc::new(IconLabelLayout { scope: coroutines, spec: label_spec, offset: Default::default() })
             as Rc<dyn MeasurePolicy>
     });
     let modifier = modifier.z_index(z_index).size_in(compose_ui::SizeSpec::bounds(
@@ -468,10 +469,10 @@ const CHECKED_Z_INDEX_FACTOR: f32 = 5.0;
 
 /// The icon's room (the icon or `ICON_SIZE`, whichever is wider), 8 dp, then the label, as
 /// Compose's `SegmentedButtonContentMeasurePolicy`: without an icon, the label moves back by
-/// half that room (the standard scheme's fast spatial spring when it changes), so it's
-/// centered.
+/// half that room (the scheme's fast spatial spec when it changes), so it's centered.
 struct IconLabelLayout {
     scope: compose_runtime::CoroutineScope,
+    spec: compose_animation::AnimationSpec,
     /// The label's animated offset, and the first offset it starts from.
     offset: std::cell::RefCell<(Option<compose_animation::Animatable<f32>>, Option<f32>)>,
 }
@@ -507,11 +508,8 @@ impl MeasurePolicy for IconLabelLayout {
                         .get_or_insert_with(|| compose_animation::Animatable::new(initial))
                         .clone();
                     if animatable.target_value() != target {
-                        let running = animatable.clone();
+                        let (running, spec) = (animatable.clone(), self.spec.clone());
                         self.scope.launch(async move {
-                            let spec = compose_animation::AnimationSpec::Spring(
-                                crate::motion::FAST_SPATIAL,
-                            );
                             running.animate_to(target, spec).await;
                         });
                     }

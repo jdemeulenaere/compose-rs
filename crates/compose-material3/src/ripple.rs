@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::task::Waker;
 
-use compose_animation::{Animatable, AnimationSpec};
+use compose_animation::Animatable;
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalMap, CoroutineScope};
 use compose_ui::{
     BorderRenderer, Brush, Color, Dp, DragInteraction, DragStart, DrawModifierNode, DrawScope,
@@ -706,15 +706,13 @@ impl Shared {
         });
     }
 
-    /// The ring in or out, on the motion scheme's fast spatial and effects springs.
+    /// The ring in or out, on the motion scheme's fast spatial and effects specs, as
+    /// `calculateRippleNodeConfiguration`. A state layer's tweens are constants in Compose too.
     fn animate_focus_ring(self: &Rc<Self>, focused: bool) {
         let Some(scope) = self.scope() else { return };
         let ring = self.focus_ring.borrow_mut().get_or_insert_with(|| Animatable::new(0.0)).clone();
-        let spec = AnimationSpec::Spring(if focused {
-            crate::motion::FAST_SPATIAL
-        } else {
-            crate::motion::FAST_EFFECTS
-        });
+        let motion = self.factory().locals.get(&crate::motion::LOCAL_MOTION_SCHEME);
+        let spec = if focused { motion.fast_spatial_spec() } else { motion.fast_effects_spec() };
         let target = if focused { 1.0 } else { 0.0 };
         scope.launch(async move {
             let _ = ring.animate_to(target, spec).await;
