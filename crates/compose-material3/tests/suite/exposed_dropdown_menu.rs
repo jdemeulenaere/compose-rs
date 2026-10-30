@@ -1248,13 +1248,16 @@ fn the_text_field_colors() {
                 colors.disabled_container_color,
                 MaterialTheme::color_scheme().surface_container_highest
             );
-            assert_eq!(colors.container_color, TextFieldDefaults::colors().container_color);
+            assert_eq!(
+                colors.unfocused_container_color,
+                TextFieldDefaults::colors().unfocused_container_color
+            );
             // Opaque, `FilledAutocompleteTokens.FieldDisabledLabelTextColor`.
             assert_eq!(colors.disabled_label_color, MaterialTheme::color_scheme().on_surface);
             let outlined = ExposedDropdownMenuDefaults::outlined_text_field_colors();
             assert_eq!(
-                outlined.container_color,
-                OutlinedTextFieldDefaults::colors().container_color
+                outlined.unfocused_container_color,
+                OutlinedTextFieldDefaults::colors().unfocused_container_color
             );
         });
     });

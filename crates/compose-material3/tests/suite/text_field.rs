@@ -241,7 +241,7 @@ fn a_fields_container_follows_focus_and_error() {
     use compose_ui::Color;
     let field = |is_error: bool| {
         let colors = TextFieldColors {
-            container_color: Color::RED,
+            unfocused_container_color: Color::RED,
             focused_container_color: Color::GREEN,
             error_container_color: Color::BLUE,
             ..TextFieldDefaults::colors()

@@ -583,44 +583,230 @@ pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
 
 // ---- TextField -------------------------------------------------------------------------------
 
-/// A text field's colors, as Compose's `TextFieldColors` (the roles used).
+/// A text field's colors, as Compose's `TextFieldColors`: each part's focused, unfocused, disabled
+/// and in error, as its methods pick (with struct update syntax to change some).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldColors {
-    /// Unfocused, as `unfocusedContainerColor`.
-    pub container_color: Color,
-    pub focused_container_color: Color,
-    pub error_container_color: Color,
-    pub text_color: Color,
-    pub cursor_color: Color,
-    pub focused_indicator_color: Color,
-    pub unfocused_indicator_color: Color,
-    pub label_color: Color,
-    pub focused_label_color: Color,
-    pub placeholder_color: Color,
+    pub focused_text_color: Color,
+    pub unfocused_text_color: Color,
     pub disabled_text_color: Color,
+    pub error_text_color: Color,
+    pub focused_container_color: Color,
+    pub unfocused_container_color: Color,
     pub disabled_container_color: Color,
-    pub disabled_indicator_color: Color,
-    pub disabled_label_color: Color,
-    pub disabled_placeholder_color: Color,
+    pub error_container_color: Color,
+    pub cursor_color: Color,
     pub error_cursor_color: Color,
-    pub error_indicator_color: Color,
-    pub error_label_color: Color,
-    pub leading_icon_color: Color,
-    pub disabled_leading_icon_color: Color,
-    pub error_leading_icon_color: Color,
-    pub trailing_icon_color: Color,
-    pub disabled_trailing_icon_color: Color,
-    pub error_trailing_icon_color: Color,
-    pub supporting_text_color: Color,
-    pub disabled_supporting_text_color: Color,
-    pub error_supporting_text_color: Color,
-    pub prefix_color: Color,
-    pub disabled_prefix_color: Color,
-    pub suffix_color: Color,
-    pub disabled_suffix_color: Color,
     /// The selection's colors in the field, as `textSelectionColors` (by default the theme's,
     /// `LOCAL_TEXT_SELECTION_COLORS`).
     pub text_selection_colors: compose_foundation::TextSelectionColors,
+    pub focused_indicator_color: Color,
+    pub unfocused_indicator_color: Color,
+    pub disabled_indicator_color: Color,
+    pub error_indicator_color: Color,
+    pub focused_leading_icon_color: Color,
+    pub unfocused_leading_icon_color: Color,
+    pub disabled_leading_icon_color: Color,
+    pub error_leading_icon_color: Color,
+    pub focused_trailing_icon_color: Color,
+    pub unfocused_trailing_icon_color: Color,
+    pub disabled_trailing_icon_color: Color,
+    pub error_trailing_icon_color: Color,
+    pub focused_label_color: Color,
+    pub unfocused_label_color: Color,
+    pub disabled_label_color: Color,
+    pub error_label_color: Color,
+    pub focused_placeholder_color: Color,
+    pub unfocused_placeholder_color: Color,
+    pub disabled_placeholder_color: Color,
+    pub error_placeholder_color: Color,
+    pub focused_supporting_text_color: Color,
+    pub unfocused_supporting_text_color: Color,
+    pub disabled_supporting_text_color: Color,
+    pub error_supporting_text_color: Color,
+    pub focused_prefix_color: Color,
+    pub unfocused_prefix_color: Color,
+    pub disabled_prefix_color: Color,
+    pub error_prefix_color: Color,
+    pub focused_suffix_color: Color,
+    pub unfocused_suffix_color: Color,
+    pub disabled_suffix_color: Color,
+    pub error_suffix_color: Color,
+}
+
+/// The color for a field's state: disabled first, then in error, then focused.
+fn field_color(
+    enabled: bool,
+    is_error: bool,
+    focused: bool,
+    [disabled, error, focused_color, unfocused]: [Color; 4],
+) -> Color {
+    if !enabled {
+        disabled
+    } else if is_error {
+        error
+    } else if focused {
+        focused_color
+    } else {
+        unfocused
+    }
+}
+
+impl TextFieldColors {
+    /// As `textColor`.
+    pub fn text_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_text_color,
+                self.error_text_color,
+                self.focused_text_color,
+                self.unfocused_text_color,
+            ],
+        )
+    }
+
+    /// As `containerColor`.
+    pub fn container_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_container_color,
+                self.error_container_color,
+                self.focused_container_color,
+                self.unfocused_container_color,
+            ],
+        )
+    }
+
+    /// As `indicatorColor`.
+    pub fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_indicator_color,
+                self.error_indicator_color,
+                self.focused_indicator_color,
+                self.unfocused_indicator_color,
+            ],
+        )
+    }
+
+    /// As `leadingIconColor`.
+    pub fn leading_icon_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_leading_icon_color,
+                self.error_leading_icon_color,
+                self.focused_leading_icon_color,
+                self.unfocused_leading_icon_color,
+            ],
+        )
+    }
+
+    /// As `trailingIconColor`.
+    pub fn trailing_icon_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_trailing_icon_color,
+                self.error_trailing_icon_color,
+                self.focused_trailing_icon_color,
+                self.unfocused_trailing_icon_color,
+            ],
+        )
+    }
+
+    /// As `labelColor`.
+    pub fn label_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_label_color,
+                self.error_label_color,
+                self.focused_label_color,
+                self.unfocused_label_color,
+            ],
+        )
+    }
+
+    /// As `placeholderColor`.
+    pub fn placeholder_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_placeholder_color,
+                self.error_placeholder_color,
+                self.focused_placeholder_color,
+                self.unfocused_placeholder_color,
+            ],
+        )
+    }
+
+    /// As `supportingTextColor`.
+    pub fn supporting_text_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_supporting_text_color,
+                self.error_supporting_text_color,
+                self.focused_supporting_text_color,
+                self.unfocused_supporting_text_color,
+            ],
+        )
+    }
+
+    /// As `prefixColor`.
+    pub fn prefix_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_prefix_color,
+                self.error_prefix_color,
+                self.focused_prefix_color,
+                self.unfocused_prefix_color,
+            ],
+        )
+    }
+
+    /// As `suffixColor`.
+    pub fn suffix_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
+        field_color(
+            enabled,
+            is_error,
+            focused,
+            [
+                self.disabled_suffix_color,
+                self.error_suffix_color,
+                self.focused_suffix_color,
+                self.unfocused_suffix_color,
+            ],
+        )
+    }
+
+    /// As `cursorColor`.
+    pub fn cursor_color(&self, is_error: bool) -> Color {
+        if is_error { self.error_cursor_color } else { self.cursor_color }
+    }
 }
 
 impl compose_runtime::ComposeArg for TextFieldColors {
@@ -634,32 +820,28 @@ pub(crate) fn tonal_text_colors() -> TextFieldColors {
     let scheme = MaterialTheme::color_scheme();
     let disabled = scheme.on_surface_variant.with_alpha(0.38);
     TextFieldColors {
+        focused_text_color: scheme.on_background,
+        unfocused_text_color: scheme.on_surface,
+        disabled_text_color: scheme.on_surface.with_alpha(0.38),
+        error_text_color: scheme.on_background,
         focused_label_color: scheme.on_surface_variant,
-        error_leading_icon_color: scheme.on_surface_variant,
+        unfocused_label_color: scheme.on_surface_variant,
         disabled_label_color: disabled,
+        error_label_color: scheme.error,
         disabled_leading_icon_color: disabled,
+        error_leading_icon_color: scheme.on_surface_variant,
         disabled_trailing_icon_color: disabled,
+        error_trailing_icon_color: scheme.error,
         disabled_placeholder_color: disabled,
+        focused_supporting_text_color: scheme.on_background,
+        unfocused_supporting_text_color: scheme.on_background,
+        disabled_supporting_text_color: scheme.on_background.with_alpha(0.38),
+        error_supporting_text_color: scheme.error,
+        focused_prefix_color: scheme.on_background,
+        focused_suffix_color: scheme.on_background,
         disabled_prefix_color: disabled,
         disabled_suffix_color: disabled,
-        supporting_text_color: scheme.on_background,
-        disabled_supporting_text_color: scheme.on_background.with_alpha(0.38),
         ..TextFieldDefaults::colors()
-    }
-}
-
-impl TextFieldColors {
-    /// The indicator's color by the state, as `indicatorColor`.
-    pub(crate) fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> Color {
-        if !enabled {
-            self.disabled_indicator_color
-        } else if is_error {
-            self.error_indicator_color
-        } else if focused {
-            self.focused_indicator_color
-        } else {
-            self.unfocused_indicator_color
-        }
     }
 }
 
@@ -684,39 +866,52 @@ impl TextFieldDefaults {
         scheme: &crate::ColorScheme,
         text_selection_colors: compose_foundation::TextSelectionColors,
     ) -> TextFieldColors {
+        let disabled = scheme.on_surface.with_alpha(0.38);
+        let disabled_affix = scheme.on_surface_variant.with_alpha(0.38);
         TextFieldColors {
-            container_color: scheme.surface_container_highest,
+            focused_text_color: scheme.on_surface,
+            unfocused_text_color: scheme.on_surface,
+            disabled_text_color: disabled,
+            error_text_color: scheme.on_surface,
             focused_container_color: scheme.surface_container_highest,
+            unfocused_container_color: scheme.surface_container_highest,
+            disabled_container_color: scheme.surface_container_highest,
             error_container_color: scheme.surface_container_highest,
-            text_color: scheme.on_surface,
             cursor_color: scheme.primary,
+            error_cursor_color: scheme.error,
+            text_selection_colors,
             focused_indicator_color: scheme.primary,
             unfocused_indicator_color: scheme.on_surface_variant,
-            label_color: scheme.on_surface_variant,
-            focused_label_color: scheme.primary,
-            placeholder_color: scheme.on_surface_variant,
-            disabled_text_color: scheme.on_surface.with_alpha(0.38),
-            disabled_container_color: scheme.surface_container_highest,
-            disabled_indicator_color: scheme.on_surface.with_alpha(0.38),
-            disabled_label_color: scheme.on_surface.with_alpha(0.38),
-            disabled_placeholder_color: scheme.on_surface.with_alpha(0.38),
-            error_cursor_color: scheme.error,
+            disabled_indicator_color: disabled,
             error_indicator_color: scheme.error,
-            error_label_color: scheme.error,
-            leading_icon_color: scheme.on_surface_variant,
-            disabled_leading_icon_color: scheme.on_surface.with_alpha(0.38),
+            focused_leading_icon_color: scheme.on_surface_variant,
+            unfocused_leading_icon_color: scheme.on_surface_variant,
+            disabled_leading_icon_color: disabled,
             error_leading_icon_color: scheme.on_surface_variant,
-            trailing_icon_color: scheme.on_surface_variant,
-            disabled_trailing_icon_color: scheme.on_surface.with_alpha(0.38),
+            focused_trailing_icon_color: scheme.on_surface_variant,
+            unfocused_trailing_icon_color: scheme.on_surface_variant,
+            disabled_trailing_icon_color: disabled,
             error_trailing_icon_color: scheme.error,
-            supporting_text_color: scheme.on_surface_variant,
-            disabled_supporting_text_color: scheme.on_surface.with_alpha(0.38),
+            focused_label_color: scheme.primary,
+            unfocused_label_color: scheme.on_surface_variant,
+            disabled_label_color: disabled,
+            error_label_color: scheme.error,
+            focused_placeholder_color: scheme.on_surface_variant,
+            unfocused_placeholder_color: scheme.on_surface_variant,
+            disabled_placeholder_color: disabled,
+            error_placeholder_color: scheme.on_surface_variant,
+            focused_supporting_text_color: scheme.on_surface_variant,
+            unfocused_supporting_text_color: scheme.on_surface_variant,
+            disabled_supporting_text_color: disabled,
             error_supporting_text_color: scheme.error,
-            prefix_color: scheme.on_surface_variant,
-            disabled_prefix_color: scheme.on_surface.with_alpha(0.38),
-            suffix_color: scheme.on_surface_variant,
-            disabled_suffix_color: scheme.on_surface.with_alpha(0.38),
-            text_selection_colors,
+            focused_prefix_color: scheme.on_surface_variant,
+            unfocused_prefix_color: scheme.on_surface_variant,
+            disabled_prefix_color: disabled_affix,
+            error_prefix_color: scheme.on_surface_variant,
+            focused_suffix_color: scheme.on_surface_variant,
+            unfocused_suffix_color: scheme.on_surface_variant,
+            disabled_suffix_color: disabled_affix,
+            error_suffix_color: scheme.on_surface_variant,
         }
     }
 
@@ -745,7 +940,7 @@ impl TextFieldDefaults {
     pub fn tonal_colors() -> TextFieldColors {
         let scheme = MaterialTheme::color_scheme();
         TextFieldColors {
-            container_color: scheme.surface_container,
+            unfocused_container_color: scheme.surface_container,
             focused_container_color: scheme.surface_container,
             error_container_color: scheme.error_container,
             disabled_container_color: scheme.surface_container.with_alpha(0.38),

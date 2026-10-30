@@ -875,7 +875,7 @@ fn the_tonal_colors_and_the_rounded_shape_come_from_the_theme() {
         MaterialTheme!({
             let scheme = MaterialTheme::color_scheme();
             let tonal = TextFieldDefaults::tonal_colors();
-            assert_eq!(tonal.container_color, scheme.surface_container);
+            assert_eq!(tonal.unfocused_container_color, scheme.surface_container);
             assert_eq!(tonal.focused_container_color, scheme.surface_container);
             assert_eq!(tonal.error_container_color, scheme.error_container);
             assert_eq!(tonal.disabled_container_color, scheme.surface_container.with_alpha(0.38));
@@ -883,14 +883,22 @@ fn the_tonal_colors_and_the_rounded_shape_come_from_the_theme() {
             assert_eq!(tonal.unfocused_indicator_color, Color::TRANSPARENT);
             assert_eq!(tonal.error_indicator_color, Color::TRANSPARENT);
             assert_eq!(tonal.focused_label_color, scheme.on_surface_variant);
-            assert_eq!(tonal.supporting_text_color, scheme.on_background);
+            assert_eq!(tonal.focused_text_color, scheme.on_background);
+            assert_eq!(tonal.unfocused_text_color, scheme.on_surface);
+            assert_eq!(tonal.error_text_color, scheme.on_background);
+            assert_eq!(tonal.focused_prefix_color, scheme.on_background);
+            assert_eq!(tonal.unfocused_prefix_color, scheme.on_surface_variant);
+            assert_eq!(tonal.focused_suffix_color, scheme.on_background);
+            assert_eq!(tonal.focused_supporting_text_color, scheme.on_background);
+            assert_eq!(tonal.disabled_label_color, scheme.on_surface_variant.with_alpha(0.38));
+            assert_eq!(tonal.unfocused_supporting_text_color, scheme.on_background);
             let outlined = OutlinedTextFieldDefaults::tonal_colors();
-            assert_eq!(outlined.container_color, Color::TRANSPARENT);
+            assert_eq!(outlined.unfocused_container_color, Color::TRANSPARENT);
             assert_eq!(outlined.focused_indicator_color, scheme.outline_variant);
             assert_eq!(outlined.unfocused_indicator_color, scheme.outline_variant);
             assert_eq!(outlined.disabled_indicator_color, scheme.outline_variant);
             assert_eq!(outlined.error_indicator_color, scheme.error);
-            assert_eq!(outlined.supporting_text_color, scheme.on_background);
+            assert_eq!(outlined.unfocused_supporting_text_color, scheme.on_background);
             assert_eq!(TextFieldDefaults::rounded_shape(), MaterialTheme::shapes().medium.clone());
             assert_eq!(
                 OutlinedTextFieldDefaults::rounded_shape(),
@@ -1207,7 +1215,7 @@ fn a_boxs_own_container_replaces_the_default() {
                 VisualTransformation::NONE,
                 source.clone(),
                 colors = TextFieldColors {
-                    container_color: Color::RED,
+                    unfocused_container_color: Color::RED,
                     unfocused_indicator_color: Color::GREEN,
                     ..TextFieldDefaults::colors()
                 },

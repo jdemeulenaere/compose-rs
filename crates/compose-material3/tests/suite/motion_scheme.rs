@@ -1119,7 +1119,7 @@ fn a_cut_grows_with_the_label() {
                 compose_foundation::layout::Spacer(Modifier.width(100.dp()).height(40.dp()));
             }),
             colors = TextFieldColors {
-                container_color: Color::RED,
+                unfocused_container_color: Color::RED,
                 focused_container_color: Color::RED,
                 ..OutlinedTextFieldDefaults::colors()
             }
@@ -1540,7 +1540,7 @@ fn a_text_fields_container_animates_with_the_scheme() {
         let read = enabled.handle();
         let mut ui = themed(scheme, move || {
             let colors = TextFieldColors {
-                container_color: Color::BLUE,
+                unfocused_container_color: Color::BLUE,
                 disabled_container_color: Color::RED,
                 ..TextFieldDefaults::colors()
             };
@@ -1595,7 +1595,7 @@ fn a_focused_text_fields_parts_animate_with_the_scheme() {
         |scheme| {
             let mut ui = themed(scheme, move || {
                 let colors = TextFieldColors {
-                    label_color: Color::BLUE,
+                    unfocused_label_color: Color::BLUE,
                     focused_label_color: Color::RED,
                     unfocused_indicator_color: Color::BLUE,
                     focused_indicator_color: Color::RED,

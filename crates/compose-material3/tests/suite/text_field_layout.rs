@@ -390,9 +390,9 @@ fn the_slots_color_is_the_content_color() {
                 prefix = Some(|| Probe("prefix")),
                 suffix = Some(|| Probe("suffix")),
                 colors = TextFieldColors {
-                    placeholder_color: Color::RED,
-                    prefix_color: Color::GREEN,
-                    suffix_color: Color::BLUE,
+                    unfocused_placeholder_color: Color::RED,
+                    unfocused_prefix_color: Color::GREEN,
+                    unfocused_suffix_color: Color::BLUE,
                     ..TextFieldDefaults::colors()
                 }
             );
@@ -419,7 +419,7 @@ fn the_filled_containers_are_all_of_the_highest_surface() {
             let scheme = MaterialTheme::color_scheme();
             let colors = TextFieldDefaults::colors();
             for color in [
-                colors.container_color,
+                colors.unfocused_container_color,
                 colors.focused_container_color,
                 colors.error_container_color,
                 colors.disabled_container_color,
@@ -541,7 +541,7 @@ fn a_cut_is_as_high_as_the_label_and_clips_the_fill() {
                 modifier = Modifier.width(300.dp()),
                 label = Some(|| Spacer(Modifier.width(20.dp()).height(40.dp()))),
                 colors = TextFieldColors {
-                    container_color: Color::RED,
+                    unfocused_container_color: Color::RED,
                     ..OutlinedTextFieldDefaults::colors()
                 }
             );
@@ -574,7 +574,7 @@ fn right_to_left_the_cut_is_on_the_right() {
                             bottom: 16.dp(),
                         }),
                         colors = TextFieldColors {
-                            container_color: Color::RED,
+                            unfocused_container_color: Color::RED,
                             ..OutlinedTextFieldDefaults::colors()
                         }
                     );
@@ -1044,4 +1044,221 @@ fn the_text_is_at_least_a_line_high() {
     });
     settle(&mut ui);
     assert_eq!(bounds(&mut ui, FIELD).height(), 24.0);
+}
+
+/// Each part's color by the state: disabled first, then in error, then focused.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TextFieldDefaults.kt, TextFieldColors
+#[test]
+fn the_colors_go_by_the_state() {
+    let (red, green, blue, black) = (Color::RED, Color::GREEN, Color::BLUE, Color::BLACK);
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        MaterialTheme!({
+            let given = TextFieldColors {
+                disabled_text_color: red,
+                error_text_color: green,
+                focused_text_color: blue,
+                unfocused_text_color: black,
+                disabled_container_color: red,
+                error_container_color: green,
+                focused_container_color: blue,
+                unfocused_container_color: black,
+                disabled_indicator_color: red,
+                error_indicator_color: green,
+                focused_indicator_color: blue,
+                unfocused_indicator_color: black,
+                disabled_leading_icon_color: red,
+                error_leading_icon_color: green,
+                focused_leading_icon_color: blue,
+                unfocused_leading_icon_color: black,
+                disabled_trailing_icon_color: red,
+                error_trailing_icon_color: green,
+                focused_trailing_icon_color: blue,
+                unfocused_trailing_icon_color: black,
+                disabled_label_color: red,
+                error_label_color: green,
+                focused_label_color: blue,
+                unfocused_label_color: black,
+                disabled_placeholder_color: red,
+                error_placeholder_color: green,
+                focused_placeholder_color: blue,
+                unfocused_placeholder_color: black,
+                disabled_supporting_text_color: red,
+                error_supporting_text_color: green,
+                focused_supporting_text_color: blue,
+                unfocused_supporting_text_color: black,
+                disabled_prefix_color: red,
+                error_prefix_color: green,
+                focused_prefix_color: blue,
+                unfocused_prefix_color: black,
+                disabled_suffix_color: red,
+                error_suffix_color: green,
+                focused_suffix_color: blue,
+                unfocused_suffix_color: black,
+                cursor_color: blue,
+                error_cursor_color: green,
+                ..TextFieldDefaults::colors()
+            };
+            type Pick = fn(&TextFieldColors, bool, bool, bool) -> Color;
+            let parts: [(&str, Pick); 10] = [
+                ("text", TextFieldColors::text_color),
+                ("container", TextFieldColors::container_color),
+                ("indicator", TextFieldColors::indicator_color),
+                ("leading", TextFieldColors::leading_icon_color),
+                ("trailing", TextFieldColors::trailing_icon_color),
+                ("label", TextFieldColors::label_color),
+                ("placeholder", TextFieldColors::placeholder_color),
+                ("supporting", TextFieldColors::supporting_text_color),
+                ("prefix", TextFieldColors::prefix_color),
+                ("suffix", TextFieldColors::suffix_color),
+            ];
+            for (name, pick) in parts {
+                assert_eq!(pick(&given, false, true, true), red, "{name} disabled");
+                assert_eq!(pick(&given, true, true, true), green, "{name} in error");
+                assert_eq!(pick(&given, true, false, true), blue, "{name} focused");
+                assert_eq!(pick(&given, true, false, false), black, "{name} unfocused");
+            }
+            assert_eq!(given.cursor_color(false), blue);
+            assert_eq!(given.cursor_color(true), green);
+        });
+    });
+    ui.wait_for_idle();
+}
+
+/// A field goes by them: an icon in its focused color, its text in its error color.
+#[test]
+fn a_field_takes_the_focused_and_error_colors() {
+    SEEN.with(|seen| seen.borrow_mut().clear());
+    let is_error_state = mutable_state_of(false);
+    let is_error = is_error_state.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 800), move || {
+        let error = is_error.get();
+        MaterialTheme!({
+            TextField!(
+                String::new(),
+                |_: String| {},
+                modifier = Modifier.test_tag(FIELD),
+                is_error = error,
+                placeholder = Some(|| Probe("placeholder")),
+                leading_icon = Some(|| Probe("leading")),
+                trailing_icon = Some(|| Probe("trailing")),
+                supporting_text = Some(|| Probe("supporting")),
+                prefix = Some(|| Probe("prefix")),
+                suffix = Some(|| Probe("suffix")),
+                colors = TextFieldColors {
+                    focused_placeholder_color: Color::RED,
+                    focused_leading_icon_color: Color::RED,
+                    focused_trailing_icon_color: Color::RED,
+                    focused_supporting_text_color: Color::RED,
+                    focused_prefix_color: Color::RED,
+                    focused_suffix_color: Color::RED,
+                    error_placeholder_color: Color::GREEN,
+                    error_prefix_color: Color::GREEN,
+                    error_suffix_color: Color::GREEN,
+                    ..TextFieldDefaults::colors()
+                }
+            );
+        });
+    });
+    settle(&mut ui);
+    ui.on_node_with_tag(FIELD).request_focus();
+    settle(&mut ui);
+    let last = |name: &str| {
+        SEEN.with(|seen| seen.borrow().iter().rfind(|probe| probe.0 == name).unwrap().1)
+    };
+    for name in ["placeholder", "leading", "trailing", "supporting", "prefix", "suffix"] {
+        assert_eq!(last(name), Color::RED, "{name} focused");
+    }
+    is_error_state.set(true);
+    settle(&mut ui);
+    for name in ["placeholder", "prefix", "suffix"] {
+        assert_eq!(last(name), Color::GREEN, "{name} in error");
+    }
+}
+
+/// A text measurer recording the color of each text laid out.
+struct Recording {
+    inner: compose_ui::platform::FixedTextMeasurer,
+    log: std::rc::Rc<std::cell::RefCell<Vec<Color>>>,
+}
+
+impl compose_ui::platform::TextMeasurer for Recording {
+    fn layout(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        options: compose_ui::platform::TextLayoutOptions,
+        constraints: compose_ui::Constraints,
+        density: &Density,
+    ) -> compose_ui::platform::ParagraphHandle {
+        self.log.borrow_mut().push(style.color);
+        self.inner.layout(text, style, options, constraints, density)
+    }
+    fn metrics(
+        &self,
+        paragraph: compose_ui::platform::ParagraphHandle,
+    ) -> compose_ui::platform::ParagraphMetrics {
+        self.inner.metrics(paragraph)
+    }
+    fn hit_test(
+        &self,
+        paragraph: compose_ui::platform::ParagraphHandle,
+        position: compose_ui::Offset,
+    ) -> compose_ui::platform::TextPosition {
+        self.inner.hit_test(paragraph, position)
+    }
+    fn cursor_rect(
+        &self,
+        paragraph: compose_ui::platform::ParagraphHandle,
+        offset: usize,
+    ) -> compose_ui::Rect {
+        self.inner.cursor_rect(paragraph, offset)
+    }
+    fn text(&self, paragraph: compose_ui::platform::ParagraphHandle) -> &str {
+        self.inner.text(paragraph)
+    }
+    fn release(&mut self, paragraph: compose_ui::platform::ParagraphHandle) {
+        self.inner.release(paragraph)
+    }
+}
+
+/// The text in the state's color: focused, in error.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TextField.kt, TextField
+#[test]
+fn the_text_takes_the_focused_and_error_colors() {
+    let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let state = mutable_state_of(false);
+    let handle = state.handle();
+    let mut ui = compose_test_with(
+        IntSize::new(800, 800),
+        Density::default(),
+        Box::new(Recording {
+            inner: compose_ui::platform::FixedTextMeasurer::new(),
+            log: log.clone(),
+        }),
+        move || {
+            let is_error = handle.get();
+            MaterialTheme!({
+                TextField!(
+                    "Text".to_string(),
+                    |_: String| {},
+                    modifier = Modifier.test_tag(FIELD),
+                    is_error = is_error,
+                    colors = TextFieldColors {
+                        unfocused_text_color: Color::BLUE,
+                        focused_text_color: Color::RED,
+                        error_text_color: Color::GREEN,
+                        ..TextFieldDefaults::colors()
+                    }
+                );
+            });
+        },
+    );
+    settle(&mut ui);
+    assert_eq!(log.borrow().last(), Some(&Color::BLUE));
+    ui.on_node_with_tag(FIELD).request_focus();
+    settle(&mut ui);
+    assert_eq!(log.borrow().last(), Some(&Color::RED));
+    state.set(true);
+    settle(&mut ui);
+    assert_eq!(log.borrow().last(), Some(&Color::GREEN));
 }

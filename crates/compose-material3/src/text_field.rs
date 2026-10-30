@@ -48,7 +48,7 @@ impl OutlinedTextFieldDefaults {
     pub fn tonal_colors() -> TextFieldColors {
         let scheme = MaterialTheme::color_scheme();
         TextFieldColors {
-            container_color: Color::TRANSPARENT,
+            unfocused_container_color: Color::TRANSPARENT,
             focused_container_color: Color::TRANSPARENT,
             error_container_color: Color::TRANSPARENT,
             disabled_container_color: Color::TRANSPARENT,
@@ -65,7 +65,7 @@ impl OutlinedTextFieldDefaults {
     pub fn colors() -> TextFieldColors {
         let scheme = MaterialTheme::color_scheme();
         TextFieldColors {
-            container_color: Color::TRANSPARENT,
+            unfocused_container_color: Color::TRANSPARENT,
             focused_container_color: Color::TRANSPARENT,
             error_container_color: Color::TRANSPARENT,
             disabled_container_color: Color::TRANSPARENT,
@@ -516,17 +516,7 @@ fn animated_container_color(
     focused: bool,
 ) -> compose_runtime::State<Color> {
     compose_animation::animate_color_as_state(
-        pick(
-            enabled,
-            is_error,
-            focused,
-            [
-                colors.disabled_container_color,
-                colors.error_container_color,
-                colors.focused_container_color,
-                colors.container_color,
-            ],
-        ),
+        colors.container_color(enabled, is_error, focused),
         MaterialTheme::motion_scheme().fast_effects_spec(),
         "ContainerColor",
         None,
@@ -953,17 +943,6 @@ struct Slots {
     supporting_text: Option<Callback>,
 }
 
-/// The color for the field's state: disabled, in error, focused, or neither.
-fn pick(enabled: bool, error: bool, focused: bool, colors: [Color; 4]) -> Color {
-    let [disabled, error_color, focused_color, unfocused] = colors;
-    match (enabled, error, focused) {
-        (false, _, _) => disabled,
-        (true, true, _) => error_color,
-        (true, false, true) => focused_color,
-        (true, false, false) => unfocused,
-    }
-}
-
 /// What `decoration_box` decorates.
 struct DecorationParts {
     variant: Variant,
@@ -1121,17 +1100,7 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
         })
     });
     let custom_container = container_slot.is_some();
-    let indicator = pick(
-        enabled,
-        is_error,
-        is_focused,
-        [
-            colors.disabled_indicator_color,
-            colors.error_indicator_color,
-            colors.focused_indicator_color,
-            colors.unfocused_indicator_color,
-        ],
-    );
+    let indicator = colors.indicator_color(enabled, is_error, is_focused);
     // As `animateBorderStrokeAsState`: disabled, it snaps. With the default container alone: one of
     // its own has its own.
     let indicator_state = (enabled && !custom_container).then(|| {
@@ -1164,68 +1133,17 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
     let indicator_thickness =
         move || thickness_state.map_or(unfocused_thickness, |state| state.get());
     let typography = MaterialTheme::typography();
-    let label_color = pick(
-        enabled,
-        is_error,
-        is_focused,
-        [
-            colors.disabled_label_color,
-            colors.error_label_color,
-            colors.focused_label_color,
-            colors.label_color,
-        ],
-    );
-    let leading_color = pick(
-        enabled,
-        is_error,
-        is_focused,
-        [
-            colors.disabled_leading_icon_color,
-            colors.error_leading_icon_color,
-            colors.leading_icon_color,
-            colors.leading_icon_color,
-        ],
-    );
-    let trailing_color = pick(
-        enabled,
-        is_error,
-        is_focused,
-        [
-            colors.disabled_trailing_icon_color,
-            colors.error_trailing_icon_color,
-            colors.trailing_icon_color,
-            colors.trailing_icon_color,
-        ],
-    );
-    let supporting_color = pick(
-        enabled,
-        is_error,
-        is_focused,
-        [
-            colors.disabled_supporting_text_color,
-            colors.error_supporting_text_color,
-            colors.supporting_text_color,
-            colors.supporting_text_color,
-        ],
-    );
-    let prefix_color = if enabled { colors.prefix_color } else { colors.disabled_prefix_color };
-    let suffix_color = if enabled { colors.suffix_color } else { colors.disabled_suffix_color };
-    let placeholder_color =
-        if enabled { colors.placeholder_color } else { colors.disabled_placeholder_color };
+    let label_color = colors.label_color(enabled, is_error, is_focused);
+    let leading_color = colors.leading_icon_color(enabled, is_error, is_focused);
+    let trailing_color = colors.trailing_icon_color(enabled, is_error, is_focused);
+    let supporting_color = colors.supporting_text_color(enabled, is_error, is_focused);
+    let prefix_color = colors.prefix_color(enabled, is_error, is_focused);
+    let suffix_color = colors.suffix_color(enabled, is_error, is_focused);
+    let placeholder_color = colors.placeholder_color(enabled, is_error, is_focused);
     // As `TextFieldDefaults.Container`: the color read as it draws (`textFieldBackground`).
     let container_color = (!custom_container).then(|| {
         compose_animation::animate_color_as_state(
-            pick(
-                enabled,
-                is_error,
-                is_focused,
-                [
-                    colors.disabled_container_color,
-                    colors.error_container_color,
-                    colors.focused_container_color,
-                    colors.container_color,
-                ],
-            ),
+            colors.container_color(enabled, is_error, is_focused),
             motion.fast_effects_spec(),
             "ContainerColor",
             None,
@@ -1535,8 +1453,8 @@ fn decorated_field(
     let is_focused = interaction_source.collect_is_focused_as_state().get();
     let visual_text = visual_text_of(&visual_transformation, &value);
     let has_label = slots.label.is_some();
-    let cursor_color = if is_error { colors.error_cursor_color } else { colors.cursor_color };
-    let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
+    let cursor_color = colors.cursor_color(is_error);
+    let text_color = colors.text_color(enabled, is_error, is_focused);
     let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
     let content_padding =
         content_padding.unwrap_or(default_content_padding(has_label, label_position));
