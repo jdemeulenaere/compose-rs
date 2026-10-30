@@ -881,6 +881,9 @@ class ComposeRsView @JvmOverloads constructor(
         return ComposeRsNative.performAction(host, id, action, value)
     }
 
+    internal fun semanticsShape(id: Int) =
+        if (host != 0L) ComposeRsNative.semanticsShape(host, id) else null
+
     internal fun showSemanticsOnScreen(id: Int): Int =
         if (host != 0L) ComposeRsNative.showOnScreen(host, id) else 0
 

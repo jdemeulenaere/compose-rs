@@ -63,6 +63,8 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         at += length + 12;
         let tag = u32_at(&mut at) as usize;
         at += tag;
+        // No extras in these scenes.
+        at += 1;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {

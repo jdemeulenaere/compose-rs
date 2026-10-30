@@ -1876,6 +1876,30 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_characterLocation
     .unwrap_or_default()
 }
 
+/// `ComposeRsNative.semanticsShape(host, id)`: virtual view `id`'s shape
+/// (`accessibility::write_shape_extra`), null with none; read before the next call about semantics.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsShape<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    id: jint,
+) -> JByteBuffer<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    let extra = crate::accessibility::find(tree, id)
+        .and_then(|node| crate::accessibility::shape_extra(&host.ui, node));
+    let Some(extra) = extra else { return JByteBuffer::default() };
+    crate::accessibility::write_shape_extra(&extra, &mut host.semantics);
+    host.semantics.bytes.reserve(1);
+    let bytes = &mut host.semantics.bytes;
+    with_env(&mut env, |env| {
+        // SAFETY: as `semantics`' buffer: read before the next call.
+        unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.len()) }.unwrap_or_default()
+    })
+}
+
 /// `ComposeRsNative.showOnScreen(host, id)`: `accessibility::show_on_screen`: 1 scrolled, 0 not, -1
 /// nothing around it scrolls.
 #[unsafe(no_mangle)]

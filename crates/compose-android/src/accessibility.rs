@@ -59,6 +59,8 @@ pub mod flag {
     pub const TEXT_LAID_OUT: u32 = 1 << 24;
     /// Its text can be changed, as `IsEditable`: `EDITABLE` says it's a field.
     pub const CAN_EDIT: u32 = 1 << 25;
+    /// It says its shape (`shape_extra`).
+    pub const HAS_SHAPE: u32 = 1 << 26;
 }
 
 /// What a service reads that isn't the application's words, which `Accessibility.kt` finds in the
@@ -285,6 +287,130 @@ fn tags_are_resource_ids(node: &SemanticsSnapshot, around: bool) -> bool {
     node.unmerged_config().get(&P::TEST_TAGS_AS_RESOURCE_ID).copied().unwrap_or(around)
 }
 
+/// What a key with an `accessibilityExtraKey` holds, as a service gets it. Compose's are whatever is
+/// `Serializable` or `Parcelable`; here, what a `Bundle` holds of what Rust has (D1656).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ExtraValue<'a> {
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    Text(&'a str),
+    /// What can't be sent: asked for, `Accessibility.kt` throws, as Compose's.
+    Unsendable,
+}
+
+/// `node`'s extras, by the keys a service asks for them by, from its own configuration.
+pub fn extras_of(node: &SemanticsSnapshot) -> Vec<(&'static str, ExtraValue<'_>)> {
+    let own = node.unmerged_config();
+    let mut extras = Vec::new();
+    for (key, value) in own.properties() {
+        let Some(extra) = key.accessibility_extra_key() else { continue };
+        let value = match value {
+            compose_ui::ValueSlot::Int(it) => ExtraValue::Int(*it),
+            compose_ui::ValueSlot::Float(it) => ExtraValue::Float(*it),
+            compose_ui::ValueSlot::Bool(it) => ExtraValue::Bool(*it),
+            compose_ui::ValueSlot::String(it) => ExtraValue::Text(it.as_str()),
+            _ => ExtraValue::Unsendable,
+        };
+        extras.push((extra, value));
+    }
+    extras
+}
+
+/// An extra's kind (u8: 0 an integer, 1 a float, 2 a boolean, 3 a text, 4 nothing that can be sent),
+/// then its value.
+fn write_extra(out: &mut Writer, value: &ExtraValue<'_>) {
+    match value {
+        ExtraValue::Int(it) => {
+            out.u8(0);
+            out.u32(*it as u32);
+        }
+        ExtraValue::Float(it) => {
+            out.u8(1);
+            out.f32(*it);
+        }
+        ExtraValue::Bool(it) => {
+            out.u8(2);
+            out.u8(*it as u8);
+        }
+        ExtraValue::Text(it) => {
+            out.u8(3);
+            write_string(out, it);
+        }
+        ExtraValue::Unsendable => out.u8(4),
+    }
+}
+
+/// `node`'s shape as a service asks for it, as Compose's `ExtraDataShape*`: its outline, relative to
+/// the node's bounds in its record.
+pub enum ShapeExtra {
+    Rectangle(Rect),
+    /// With its corners' radii: x and y of the top left, top right, bottom right and bottom left.
+    Rounded(Rect, [f32; 8]),
+    /// With where its path's moved to, and the bounds of that.
+    Generic(std::sync::Arc<compose_ui::PathData>, compose_ui::Offset, Rect),
+}
+
+pub fn shape_extra(ui: &UiHost, node: &SemanticsSnapshot) -> Option<ShapeExtra> {
+    let shape = node.unmerged_config().get(&P::SHAPE)?;
+    let density = ui.with_tree(|tree| tree.density());
+    let around = ui.semantics_shape_bounds(node.id);
+    let reported = node.uncovered_bounds.unwrap_or(node.bounds);
+    let (left, top) = (around.left - reported.left, around.top - reported.top);
+    let direction =
+        if node.rtl { compose_ui::LayoutDirection::Rtl } else { compose_ui::LayoutDirection::Ltr };
+    let size = compose_ui::Size::new(around.width(), around.height());
+    let moved = |rect: Rect| {
+        Rect::new(rect.left + left, rect.top + top, rect.right + left, rect.bottom + top)
+    };
+    Some(match shape.outline_in(size, &density, direction) {
+        compose_ui::Outline::Rectangle(rect) => ShapeExtra::Rectangle(moved(rect)),
+        compose_ui::Outline::Rounded(rect, [a, b, c, d]) => {
+            ShapeExtra::Rounded(moved(rect), [a, a, b, b, c, c, d, d])
+        }
+        compose_ui::Outline::Generic(path, offset) => {
+            let bounds = path.bounds();
+            let (x, y) = (offset.x + left, offset.y + top);
+            let bounds =
+                Rect::new(bounds.left + x, bounds.top + y, bounds.right + x, bounds.bottom + y);
+            ShapeExtra::Generic(path, compose_ui::Offset::new(x, y), bounds)
+        }
+    })
+}
+
+/// Writes a `ShapeExtra`, as `Accessibility.kt` reads it: its kind (u8: 0 a rectangle, 1 rounded, 2
+/// any path), its bounds (4 × f32), then the eight radii, or where the path's moved (2 × f32) and its
+/// contents (`serialize::write_path_contents`).
+pub fn write_shape_extra(extra: &ShapeExtra, out: &mut Writer) {
+    out.bytes.clear();
+    let rect = |out: &mut Writer, rect: &Rect| {
+        out.f32(rect.left);
+        out.f32(rect.top);
+        out.f32(rect.right);
+        out.f32(rect.bottom);
+    };
+    match extra {
+        ShapeExtra::Rectangle(bounds) => {
+            out.u8(0);
+            rect(out, bounds);
+        }
+        ShapeExtra::Rounded(bounds, radii) => {
+            out.u8(1);
+            rect(out, bounds);
+            for radius in radii {
+                out.f32(*radius);
+            }
+        }
+        ShapeExtra::Generic(path, offset, bounds) => {
+            out.u8(2);
+            rect(out, bounds);
+            out.f32(offset.x);
+            out.f32(offset.y);
+            crate::serialize::write_path_contents(out, path);
+        }
+    }
+}
+
 /// As Compose's `ParcelSafeTextLength`: what goes in a node or an event, at most so many UTF-16 units.
 const PARCEL_SAFE_LENGTH: usize = 100_000;
 
@@ -416,6 +542,7 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
     set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
     set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
     set(&mut flags, config.get(&P::IS_EDITABLE) == Some(&true), flag::CAN_EDIT);
+    set(&mut flags, node.unmerged_config().contains(&P::SHAPE), flag::HAS_SHAPE);
     set(&mut flags, is_password(node), flag::PASSWORD);
     set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
     set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
@@ -525,8 +652,9 @@ pub fn state_description_of(node: &SemanticsSnapshot) -> (u8, u8) {
 /// who a service reads it before (i32, -1 for none), its drawing order (u32), its class name (a
 /// length and UTF-8 bytes), its role description, its state and that state's percent (three
 /// `spoken`-code u8s), its selection (2 × i32, -1 for none) and how it's moved through (u8, 0:
-/// it isn't, `movement_granularities`), its test tag (a length and UTF-8 bytes), and its actions
-/// (a count: u8; each `action`'s u8 and a label).
+/// it isn't, `movement_granularities`), its test tag (a length and UTF-8 bytes), its extras (a
+/// count: u8; each a key and `ExtraValue`'s kind and value, `write_extra`), and its actions (a
+/// count: u8; each `action`'s u8 and a label).
 #[allow(clippy::too_many_arguments)]
 fn write_node(
     node: &SemanticsSnapshot,
@@ -619,6 +747,12 @@ fn write_node(
     out.u32(selection_end as u32);
     out.u8(movement_granularities(node) as u8);
     write_string(out, text_of(node.unmerged_config().get(&P::TEST_TAG)));
+    let extras = extras_of(node);
+    out.u8(extras.len() as u8);
+    for (key, value) in &extras {
+        write_string(out, key);
+        write_extra(out, value);
+    }
     let actions = actions_of(node, custom);
     out.u8(actions.len() as u8);
     for (action, label) in &actions {

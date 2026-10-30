@@ -10,8 +10,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_android::accessibility::{
-    Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, character_locations,
-    class_and_role, flag, perform_action, read_as, spoken, write_tree,
+    Change, ChangeKind, ExtraValue, KeptCustomActions, KeptForChanges, ShapeExtra, action,
+    actions_of, character_locations, class_and_role, extras_of, flag, perform_action, read_as,
+    shape_extra, spoken, write_shape_extra, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -258,6 +259,20 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
         skip_string(&mut at);
         at += 12;
         skip_string(&mut at);
+        // Its extras.
+        let extras = bytes[at] as usize;
+        at += 1;
+        for _ in 0..extras {
+            skip_string(&mut at);
+            let kind = bytes[at];
+            at += 1;
+            match kind {
+                0 | 1 => at += 4,
+                2 => at += 1,
+                3 => skip_string(&mut at),
+                _ => {}
+            }
+        }
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -1314,6 +1329,12 @@ fn the_kotlin_says_what_rust_chose() {
         "if (code == CODE_PASTE && !clipboardHasText()) continue",
         "?.hasMimeType(\"text/*\") == true",
         "info.isEditable = node.flags and CAN_EDIT != 0",
+        // A key for what this shape hasn't sets nothing, as Compose's.
+        "if (key != EXTRA_SHAPE_TYPE_KEY && key != EXTRA_SHAPE_REGION_KEY) return",
+        "if (key == EXTRA_SHAPE_REGION_KEY || (key == EXTRA_SHAPE_CORNERS_KEY && kind == 0)) return",
+        "if (key != EXTRA_SHAPE_CORNERS_KEY) extras.putParcelable(EXTRA_SHAPE_RECT_KEY, bounds)",
+        "if (kind == 1 && key != EXTRA_SHAPE_RECT_KEY) {",
+        "region.setPath(path, Region(bounds))",
     ] {
         assert!(kotlin.contains(line), "Accessibility.kt lacks {line:?}");
     }
@@ -1884,4 +1905,207 @@ fn what_a_scroller_clips_all_of_away_is_left_out() {
     let root = host.accessibility_tree();
     assert!(by_tag(&root, "shown").is_some());
     assert!(by_tag(&root, "past it").is_none());
+}
+
+// ---- A node's shape and its own extras (D1656) ----------------------------------------------------
+
+fn shaped(shape: Shape) -> UiHost {
+    host_of(move || {
+        let shape = shape.clone();
+        Box!(
+            modifier = Modifier
+                .padding(4.dp())
+                .size(10.dp())
+                .test_tag("shaped")
+                .semantics(move |it| it.set_shape(shape.clone()))
+        );
+    })
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_rectangle, testPopulateShapeExtras_requestShapeExtra_rectangle, testPopulateShapeExtras_shapeSet_setsAllAvailableShapeExtraKeys
+#[test]
+fn a_rectangles_extra_is_its_bounds() {
+    let host = shaped(compose_ui::RECTANGLE_SHAPE);
+    let node = uncovered(&host, "shaped");
+    assert_ne!(flags_of(&node) & flag::HAS_SHAPE, 0);
+    let Some(ShapeExtra::Rectangle(rect)) = shape_extra(&host, &node) else {
+        panic!("a rectangle")
+    };
+    assert_eq!(rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_roundedCornerRectangle, testPopulateShapeExtras_requestShapeExtras_roundedCornerRectangle
+#[test]
+fn a_rounded_rectangles_extra_says_its_corners_in_order() {
+    let host = shaped(RoundedCornerShape((1.dp(), 2.dp(), 3.dp(), 4.dp())));
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Rounded(rect, radii)) = shape_extra(&host, &node) else {
+        panic!("rounded")
+    };
+    assert_eq!(rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(radii, [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]);
+}
+
+/// A triangle in its box.
+struct Triangle;
+
+impl CustomShape for Triangle {
+    fn create_outline(
+        &self,
+        size: Size,
+        _direction: LayoutDirection,
+        _density: &Density,
+    ) -> Outline {
+        let path = Path::new();
+        path.move_to(size.width / 2.0, 0.0);
+        path.line_to(size.width, size.height);
+        path.line_to(0.0, size.height);
+        path.close();
+        Outline::Generic(path.data(), Offset::ZERO)
+    }
+
+    fn same(&self, other: &dyn CustomShape) -> bool {
+        (other as &dyn std::any::Any).downcast_ref::<Self>().is_some()
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_genericShape, testPopulateShapeExtras_requestShapeExtra_genericShape
+#[test]
+fn any_other_shapes_extra_is_its_path_where_it_shows() {
+    let host = shaped(Shape::custom(Triangle));
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Generic(path, offset, bounds)) = shape_extra(&host, &node) else {
+        panic!("a path")
+    };
+    assert_eq!(offset, Offset::ZERO);
+    assert_eq!(bounds, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(path.bounds(), Rect::new(0.0, 0.0, 10.0, 10.0));
+    let mut out = Writer::default();
+    write_shape_extra(&ShapeExtra::Generic(path, offset, bounds), &mut out);
+    assert_eq!(out.bytes[0], 2);
+}
+
+#[test]
+fn a_shape_set_inside_what_is_around_it_is_placed_from_the_node() {
+    let host = host_of(|| {
+        Box!(
+            modifier = Modifier
+                .size(50.dp())
+                .test_tag("around")
+                .semantics_with(true, |_| {})
+                .padding(5.dp())
+                .semantics(|it| it.set_shape(compose_ui::RECTANGLE_SHAPE))
+        );
+    });
+    let node = uncovered(&host, "around");
+    let Some(ShapeExtra::Rectangle(rect)) = shape_extra(&host, &node) else {
+        panic!("a rectangle")
+    };
+    assert_eq!(rect, Rect::new(5.0, 5.0, 45.0, 45.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_shapeUnset_doesNotSetShapeExtraKeys
+#[test]
+fn no_shape_is_no_extra() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.size(10.dp()).test_tag("plain").semantics(|it| it.set_text("a")));
+    });
+    let node = uncovered(&host, "plain");
+    assert_eq!(flags_of(&node) & flag::HAS_SHAPE, 0);
+    assert!(shape_extra(&host, &node).is_none());
+}
+
+static COUNT_EXTRA: SemanticsPropertyKey<i32> =
+    SemanticsPropertyKey::with_accessibility_extra("Count", "count.key");
+static NAME_EXTRA: SemanticsPropertyKey<SharedString> =
+    SemanticsPropertyKey::with_accessibility_extra("Name", "name.key");
+static FLAG_EXTRA: SemanticsPropertyKey<bool> =
+    SemanticsPropertyKey::with_accessibility_extra("Flag", "flag.key");
+
+#[derive(Clone, PartialEq, Debug)]
+struct NoBundleHoldsThis;
+
+impl SemanticsValue for NoBundleHoldsThis {}
+
+static INVALID_EXTRA: SemanticsPropertyKey<NoBundleHoldsThis> =
+    SemanticsPropertyKey::with_accessibility_extra("Invalid", "invalid.key");
+
+fn with_extras(modifier: Modifier) -> UiHost {
+    host_of(move || {
+        Box!(modifier = modifier.clone().size(10.dp()).test_tag("node"));
+    })
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData
+#[test]
+fn a_keys_extra_goes_by_its_own_key_with_its_value() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 123);
+        it.set(&NAME_EXTRA, "test".into());
+        it.set(&FLAG_EXTRA, true);
+    }));
+    let node = uncovered(&host, "node");
+    let extras = extras_of(&node);
+    assert!(extras.contains(&("count.key", ExtraValue::Int(123))));
+    assert!(extras.contains(&("name.key", ExtraValue::Text("test"))));
+    assert!(extras.contains(&("flag.key", ExtraValue::Bool(true))));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_sameExtraSetMultipleTimes_sameModifier_lastOneWins
+#[test]
+fn set_twice_in_one_modifier_the_last_wins() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 1);
+        it.set(&COUNT_EXTRA, 2);
+    }));
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("count.key", ExtraValue::Int(2))]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_sameExtraSetMultipleTimes_twoModifiers_outerOneWins
+#[test]
+fn set_by_two_modifiers_the_outer_wins() {
+    let host = with_extras(
+        Modifier.semantics(|it| it.set(&COUNT_EXTRA, 1)).semantics(|it| it.set(&COUNT_EXTRA, 2)),
+    );
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("count.key", ExtraValue::Int(1))]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_multipleSemanticsModifiers_mergesExtras
+#[test]
+fn extras_of_several_modifiers_are_all_there() {
+    let host = with_extras(
+        Modifier
+            .semantics(|it| it.set(&COUNT_EXTRA, 123))
+            .semantics(|it| it.set(&NAME_EXTRA, "test".into())),
+    );
+    assert_eq!(extras_of(&uncovered(&host, "node")).len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getInvalidExtraFromExtraData_throws
+#[test]
+fn what_no_bundle_holds_is_refused_when_asked_for() {
+    let host = with_extras(Modifier.semantics(|it| it.set(&INVALID_EXTRA, NoBundleHoldsThis)));
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("invalid.key", ExtraValue::Unsendable)]);
+    let kotlin = include_str!(
+        "../../../android/compose-rs/src/main/java/rs/compose/android/Accessibility.kt"
+    );
+    assert!(
+        kotlin
+            .contains("\"Accessibility extra values must be either Serializable or Parcelable.\"")
+    );
+    assert!(kotlin.contains("keys.addAll(node.extras.keys)"));
+}
+
+#[test]
+fn a_records_extras_are_read_past_for_the_rest_of_it() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 7);
+        it.set(&NAME_EXTRA, "seven".into());
+    }));
+    let node = uncovered(&host, "node");
+    let mut out = Writer::default();
+    let root = SemanticsSnapshot { children: vec![node], ..host.accessibility_tree() };
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    // Once through, its bytes all accounted for.
+    assert_eq!(records(&out.bytes).len(), 1);
 }

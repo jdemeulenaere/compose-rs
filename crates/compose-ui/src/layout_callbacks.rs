@@ -533,6 +533,40 @@ impl UiTree {
         Some((unclipped, coordinates.clipped_bounds))
     }
 
+    /// Where the modifier that set `node`'s `Shape` is in the root, unclipped; its node's outermost
+    /// layer if none of its own did.
+    pub(crate) fn semantics_shape_bounds(&mut self, node: NodeId) -> Rect {
+        let mut layer = 0;
+        for index in 0..self.node(node).chain.len() {
+            let value = self.node_mut(node);
+            let entry = &mut value.chain[index];
+            let is_layout = entry.kinds.any(NodeKinds::LAYOUT);
+            let mut sets_shape = false;
+            if entry.kinds.any(NodeKinds::SEMANTICS) {
+                crate::delegation::dispatch_for_kind(
+                    &mut *entry.node,
+                    entry.own,
+                    NodeKinds::SEMANTICS,
+                    crate::node_chain::EntryId::NO_DELEGATE,
+                    &mut |modifier_node, _| {
+                        let Some(semantics) = modifier_node.as_semantics() else { return };
+                        let mut own = crate::semantics::SemanticsConfiguration::default();
+                        semantics.apply_semantics(&mut own);
+                        sets_shape |= own.contains(&crate::semantics::SemanticsProperties::SHAPE);
+                    },
+                );
+            }
+            if sets_shape {
+                let size = self.node(node).layers[layer].size;
+                return self.rect_in_root(node, layer, Some(index), size);
+            }
+            if is_layout {
+                layer += 1;
+            }
+        }
+        self.outer_bounds_in_root(node)
+    }
+
     /// The clips around `node`'s semantics in the root, nearest first.
     pub(crate) fn clips_around_semantics(&mut self, node: NodeId) -> Vec<Rect> {
         let mut clips = Vec::new();

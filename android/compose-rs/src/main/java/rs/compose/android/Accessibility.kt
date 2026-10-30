@@ -2,8 +2,10 @@ package rs.compose.android
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipboardManager
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Region
 import android.os.Build
 import android.os.Bundle
 import android.util.SparseArray
@@ -70,6 +72,8 @@ internal class Accessibility(private val view: ComposeRsView) :
         val selectionEnd: Int,
         val granularities: Int,
         val testTag: String,
+        /** What a service asks for by key (`accessibility::extras_of`); [Unsendable] throws. */
+        val extras: Map<String, Any>,
         /** What a service may ask (`accessibility::action`'s codes), with their labels. */
         val actionCodes: IntArray,
         val actionLabels: Array<String>,
@@ -349,6 +353,17 @@ internal class Accessibility(private val view: ComposeRsView) :
             val selectionEnd = buffer.getInt()
             val granularities = buffer.get().toInt()
             val testTag = buffer.readString()
+            val extras = HashMap<String, Any>()
+            repeat(buffer.get().toInt() and 0xFF) {
+                val key = buffer.readString()
+                extras[key] = when (buffer.get().toInt()) {
+                    0 -> buffer.getInt()
+                    1 -> buffer.getFloat()
+                    2 -> buffer.get().toInt() != 0
+                    3 -> buffer.readString()
+                    else -> Unsendable
+                }
+            }
             val actionCount = buffer.get().toInt() and 0xFF
             val actionCodes = IntArray(actionCount)
             val actionLabels = Array(actionCount) {
@@ -358,7 +373,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             val node = Node(
                 id, parent, bounds, flags, role, text, description, editableText, state, error,
                 paneTitle, range, scroll, before, drawingOrder, className, roleDescription,
-                spokenState, selectionStart, selectionEnd, granularities, testTag, actionCodes,
+                spokenState, selectionStart, selectionEnd, granularities, testTag, extras, actionCodes,
                 actionLabels,
             )
             read.put(id, node)
@@ -412,6 +427,13 @@ internal class Accessibility(private val view: ComposeRsView) :
                 keys.add(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
             }
             if (node.testTag.isNotEmpty()) keys.add(EXTRA_TEST_TAG_KEY)
+            if (node.flags and HAS_SHAPE != 0) {
+                keys.add(EXTRA_SHAPE_TYPE_KEY)
+                keys.add(EXTRA_SHAPE_RECT_KEY)
+                keys.add(EXTRA_SHAPE_CORNERS_KEY)
+                keys.add(EXTRA_SHAPE_REGION_KEY)
+            }
+            keys.addAll(node.extras.keys)
             info.availableExtraData = keys
         }
         val location = IntArray(2)
@@ -539,6 +561,54 @@ internal class Accessibility(private val view: ComposeRsView) :
                 }
                 info.extras.putParcelableArray(extraDataKey, rects)
             }
+            EXTRA_SHAPE_TYPE_KEY, EXTRA_SHAPE_RECT_KEY, EXTRA_SHAPE_CORNERS_KEY, EXTRA_SHAPE_REGION_KEY ->
+                if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, extraDataKey)
+            else -> when (val value = node.extras[extraDataKey]) {
+                null -> {}
+                is Int -> info.extras.putInt(extraDataKey, value)
+                is Float -> info.extras.putFloat(extraDataKey, value)
+                is Boolean -> info.extras.putBoolean(extraDataKey, value)
+                is String -> info.extras.putString(extraDataKey, value)
+                else -> throw IllegalStateException(
+                    "Accessibility extra values must be either Serializable or Parcelable.",
+                )
+            }
+        }
+    }
+
+    /**
+     * The shape's extras (`accessibility::write_shape_extra`), as Compose's: its type comes with what
+     * it describes, as it had to make the outline for it; a key for what this shape hasn't sets nothing.
+     */
+    private fun addShapeExtra(id: Int, info: AccessibilityNodeInfo, key: String) {
+        val buffer = view.semanticsShape(id) ?: return
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        buffer.position(0)
+        val kind = buffer.get().toInt()
+        val left = buffer.getFloat()
+        val top = buffer.getFloat()
+        val right = buffer.getFloat()
+        val bottom = buffer.getFloat()
+        val bounds = Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
+        val extras = info.extras
+        if (kind == 2) {
+            if (key != EXTRA_SHAPE_TYPE_KEY && key != EXTRA_SHAPE_REGION_KEY) return
+            val offsetX = buffer.getFloat()
+            val offsetY = buffer.getFloat()
+            val path = Path()
+            PathReader().read(buffer, path)
+            path.offset(offsetX, offsetY)
+            val region = Region()
+            region.setPath(path, Region(bounds))
+            if (key == EXTRA_SHAPE_TYPE_KEY) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)
+            extras.putParcelable(EXTRA_SHAPE_REGION_KEY, region)
+            return
+        }
+        if (key == EXTRA_SHAPE_REGION_KEY || (key == EXTRA_SHAPE_CORNERS_KEY && kind == 0)) return
+        if (key == EXTRA_SHAPE_TYPE_KEY) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)
+        if (key != EXTRA_SHAPE_CORNERS_KEY) extras.putParcelable(EXTRA_SHAPE_RECT_KEY, bounds)
+        if (kind == 1 && key != EXTRA_SHAPE_RECT_KEY) {
+            extras.putFloatArray(EXTRA_SHAPE_CORNERS_KEY, FloatArray(8) { buffer.getFloat() })
         }
     }
 
@@ -731,10 +801,18 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val TAG_IS_RESOURCE_ID = 1 shl 23
         const val TEXT_LAID_OUT = 1 shl 24
         const val CAN_EDIT = 1 shl 25
+        const val HAS_SHAPE = 1 shl 26
 
         // As Compose's delegate, which services and tests read by name.
         const val EXTRA_ID_KEY = "androidx.compose.ui.semantics.id"
         const val EXTRA_TEST_TAG_KEY = "androidx.compose.ui.semantics.testTag"
+        const val EXTRA_SHAPE_TYPE_KEY = "androidx.compose.ui.semantics.shapeType"
+        const val EXTRA_SHAPE_RECT_KEY = "androidx.compose.ui.semantics.shapeRect"
+        const val EXTRA_SHAPE_CORNERS_KEY = "androidx.compose.ui.semantics.shapeCorners"
+        const val EXTRA_SHAPE_REGION_KEY = "androidx.compose.ui.semantics.shapeRegion"
+
+        /** An extra of what can't go in a `Bundle`: asking for it throws, as Compose's. */
+        val Unsendable = Any()
         const val CLICKABLE = 1
 
         // `accessibility::action`'s, those treated apart here.

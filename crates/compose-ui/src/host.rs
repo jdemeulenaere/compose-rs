@@ -1120,6 +1120,11 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// Where the modifier that set `node`'s `Shape` is in the root, as Compose's `getShapeBounds`.
+    pub fn semantics_shape_bounds(&self, node: NodeId) -> crate::unit::Rect {
+        self.with_tree(|tree| tree.semantics_shape_bounds(node))
+    }
+
     /// Where the first text laid out at or below `node` is in the root: what its semantics'
     /// `GetTextLayoutResult` is relative to.
     pub fn text_layout_origin(&self, node: NodeId) -> Option<crate::unit::Offset> {
