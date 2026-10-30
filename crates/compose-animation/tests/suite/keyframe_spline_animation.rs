@@ -65,7 +65,7 @@ fn a_spline_passes_through_its_keyframes_following_the_end_values() {
 // Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt, interpolatedValues_periodic
 #[test]
 fn a_periodic_bias_gives_both_ends_one_velocity() {
-    let frames = |frames: &mut KeyframesBuilder<f32>| {
+    let frames = |frames: &mut KeyframesWithSplineBuilder<f32>| {
         frames.duration_millis = 1000;
         frames.at(500, 1.0).using(LINEAR_EASING);
     };
@@ -190,7 +190,7 @@ fn splines_built_alike_are_equal() {
     assert_eq!(spec(), reversed);
     // With another bias, or none: not.
     let periodic = |bias| {
-        periodic_keyframes_with_spline(bias, |frames: &mut KeyframesBuilder<Offset>| {
+        periodic_keyframes_with_spline(bias, |frames: &mut KeyframesWithSplineBuilder<Offset>| {
             frames.duration_millis = 100;
             frames.at(30, Offset::new(1.0, 1.0));
             frames.at(50, Offset::new(2.0, 2.0));
@@ -226,7 +226,7 @@ fn splines_differing_in_duration_values_times_or_count_differ() {
 /// Where it plays: as a spec of `Animatable` and in a repeatable, a duration-based spec.
 #[test]
 fn a_spline_plays_as_any_duration_based_spec() {
-    let spec = keyframes_with_spline(|frames: &mut KeyframesBuilder<f32>| {
+    let spec = keyframes_with_spline(|frames: &mut KeyframesWithSplineBuilder<f32>| {
         frames.duration_millis = 100;
         frames.delay_millis = 20;
         frames.at(50, 0.25);
@@ -241,4 +241,38 @@ fn a_spline_plays_as_any_duration_based_spec() {
     let value = |time| repeated.value_from_millis(time, zero, AnimationVector::from(1.0), zero)[0];
     assert_eq!(value(70), 0.25);
     assert_eq!(value(190), 0.25, "the second time");
+}
+
+/// A shared spec's splines are kept by start and end values: another end, with the same start,
+/// isn't the last one's (D846).
+#[test]
+fn a_spec_read_with_another_end_value_follows_it() {
+    let spec = keyframes_with_spline(|frames: &mut KeyframesWithSplineBuilder<Offset>| {
+        frames.duration_millis = 500;
+        frames.at(250, Offset::new(1.0, 1.0));
+    });
+    let (start, near, far) = (Offset::ZERO, Offset::new(2.0, 2.0), Offset::new(10.0, 10.0));
+    let at_near = value_at(&spec, 375, start, near);
+    let at_far = value_at(&spec, 375, start, far);
+    assert_ne!(at_near, at_far);
+    // And back, with more in between than it keeps.
+    for end in [3.0, 4.0, 5.0, 6.0, 7.0] {
+        value_at(&spec, 375, start, Offset::new(end, end));
+    }
+    assert_eq!(value_at(&spec, 375, start, near), at_near);
+    assert_eq!(value_at(&spec, 375, start, far), at_far);
+}
+
+/// The same with another start value and the same end.
+#[test]
+fn a_spec_read_with_another_start_value_follows_it() {
+    let spec = keyframes_with_spline(|frames: &mut KeyframesWithSplineBuilder<Offset>| {
+        frames.duration_millis = 500;
+        frames.at(250, Offset::new(1.0, 1.0));
+    });
+    let end = Offset::new(2.0, 2.0);
+    let first = value_at(&spec, 125, Offset::ZERO, end);
+    let second = value_at(&spec, 125, Offset::new(-4.0, -4.0), end);
+    assert_ne!(first, second);
+    assert_eq!(value_at(&spec, 125, Offset::ZERO, end), first);
 }

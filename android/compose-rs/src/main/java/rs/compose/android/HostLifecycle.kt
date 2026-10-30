@@ -146,6 +146,10 @@ internal object AndroidXPresence {
         return viewModelIds != 0
     }
 
+    /** Back goes through an activity's dispatcher (`AndroidXBack.kt`), so the activity tells. */
+    fun ofBackDispatcher(activity: Activity): Boolean =
+        activity.implements("androidx.activity.OnBackPressedDispatcherOwner")
+
     @SuppressLint("DiscouragedApi")
     private fun View.resourceId(name: String): Int =
         resources.getIdentifier(name, "id", context.packageName)

@@ -21,6 +21,11 @@ pub static LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER: CompositionLocal<
     Option<NavigationEventDispatcher>,
 > = CompositionLocal::new("LocalNavigationEventDispatcherOwner", || None);
 
+/// How many dialogs or focusable popups the content is in: their handlers go first, a dialog here
+/// not being a window with a dispatcher of its own (D845).
+#[doc(hidden)]
+pub static LOCAL_BACK_LAYER: CompositionLocal<u32> = CompositionLocal::new("LocalBackLayer", || 0);
+
 /// A dispatcher of this place in the composition, as `rememberNavigationEventDispatcherOwner`: a
 /// child of `parent` (the local one by default; `None`: a root), disposed when it leaves.
 #[composable]
@@ -265,6 +270,7 @@ pub fn NavigationEventHandler<T: Clone + PartialEq + fmt::Debug + 'static>(
     });
     let held = state.clone();
     let added = source_handler;
+    let layer = LOCAL_BACK_LAYER.current();
     DisposableEffect(state, move |scope| {
         let previous = held.inner.source_handler.borrow().clone();
         assert!(
@@ -273,7 +279,7 @@ pub fn NavigationEventHandler<T: Clone + PartialEq + fmt::Debug + 'static>(
              '{added:?}'."
         );
         *held.inner.source_handler.borrow_mut() = Some(added.clone());
-        dispatcher.add_handler(&added);
+        dispatcher.add_handler_in_layer(&added, layer);
         scope.on_dispose(move || {
             added.remove();
             *held.inner.source_handler.borrow_mut() = None;

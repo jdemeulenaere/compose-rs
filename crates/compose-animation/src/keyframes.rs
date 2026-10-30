@@ -53,15 +53,55 @@ struct Entry {
     initial_arc_mode: ArcMode,
     /// Whether some stretch isn't a line, as `requiresArcSpline`.
     requires_arcs: bool,
-    /// The arcs of the last start and end values, as `VectorizedKeyframesSpec`'s fields.
-    arcs: RefCell<Option<CachedArcs>>,
+    /// The arcs of recent start and end values, as `VectorizedKeyframesSpec`'s fields.
+    arcs: RecentSplines<ArcSpline>,
 }
 
-#[derive(Debug)]
-struct CachedArcs {
-    initial_value: AnimationVector,
-    target_value: AnimationVector,
-    spline: Rc<ArcSpline>,
+/// How many start and end values a spec keeps the spline of: a spec is shared, where Compose
+/// vectorizes one for each animation, so animations with other values don't rebuild it at each read
+/// (D846).
+const RECENT_SPLINES: usize = 4;
+
+/// The splines of the last start and end values, the last used first.
+struct RecentSplines<T> {
+    entries: RefCell<Vec<(AnimationVector, AnimationVector, Rc<T>)>>,
+}
+
+impl<T> Default for RecentSplines<T> {
+    fn default() -> RecentSplines<T> {
+        RecentSplines { entries: RefCell::new(Vec::new()) }
+    }
+}
+
+impl<T> std::fmt::Debug for RecentSplines<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "RecentSplines({})", self.entries.borrow().len())
+    }
+}
+
+impl<T> RecentSplines<T> {
+    fn get_or_make(
+        &self,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        make: impl FnOnce() -> T,
+    ) -> Rc<T> {
+        let mut entries = self.entries.borrow_mut();
+        let found = entries
+            .iter()
+            .position(|(initial, target, _)| *initial == initial_value && *target == target_value);
+        if let Some(index) = found {
+            if index != 0 {
+                let entry = entries.remove(index);
+                entries.insert(0, entry);
+            }
+            return entries[0].2.clone();
+        }
+        let spline = Rc::new(make());
+        entries.truncate(RECENT_SPLINES - 1);
+        entries.insert(0, (initial_value, target_value, spline.clone()));
+        spline
+    }
 }
 
 impl PartialEq for Entry {
@@ -133,22 +173,17 @@ impl Entry {
         initial_value: AnimationVector,
         target_value: AnimationVector,
     ) -> Rc<ArcSpline> {
-        let mut cached = self.arcs.borrow_mut();
-        if let Some(cached) = &*cached
-            && cached.initial_value == initial_value
-            && cached.target_value == target_value
-        {
-            return cached.spline.clone();
-        }
-        let modes: Vec<ArcMode> = self
-            .timestamps
-            .iter()
-            .map(|time| self.frame_at(*time).map_or(self.initial_arc_mode, |frame| frame.arc_mode))
-            .collect();
-        let values = self.values_with(initial_value, target_value);
-        let spline = Rc::new(ArcSpline::new(&modes, &self.times_in_seconds(), &values));
-        *cached = Some(CachedArcs { initial_value, target_value, spline: spline.clone() });
-        spline
+        self.arcs.get_or_make(initial_value, target_value, || {
+            let modes: Vec<ArcMode> = self
+                .timestamps
+                .iter()
+                .map(|time| {
+                    self.frame_at(*time).map_or(self.initial_arc_mode, |frame| frame.arc_mode)
+                })
+                .collect();
+            let values = self.values_with(initial_value, target_value);
+            ArcSpline::new(&modes, &self.times_in_seconds(), &values)
+        })
     }
 }
 
@@ -176,8 +211,7 @@ impl KeyframeEntry<'_> {
     }
 
     /// Goes from this keyframe to the next along `arc_mode` (a line by default), as Compose's
-    /// `using` of an `ArcMode`: for `keyframes`; `keyframes_with_spline`'s curve is across them all,
-    /// and ignores it, where Compose's config doesn't offer it.
+    /// `using` of an `ArcMode`.
     pub fn using_arc(self, arc_mode: ArcMode) -> Self {
         self.frame.arc_mode = arc_mode;
         self
@@ -188,23 +222,7 @@ impl<T: Animate> KeyframesBuilder<T> {
     /// `value` at `time_millis`, as `value at time`. A later one at the same time replaces it;
     /// times outside 0 to the duration are ignored.
     pub fn at(&mut self, time_millis: i32, value: T) -> KeyframeEntry<'_> {
-        let frame = Keyframe {
-            time_millis,
-            value: value.to_vector(),
-            easing: LINEAR_EASING,
-            arc_mode: ArcMode::ArcLinear,
-        };
-        let index = match self.frames.iter().position(|old| old.time_millis == time_millis) {
-            Some(index) => {
-                self.frames[index] = frame;
-                index
-            }
-            None => {
-                self.frames.push(frame);
-                self.frames.len() - 1
-            }
-        };
-        KeyframeEntry { frame: &mut self.frames[index] }
+        KeyframeEntry { frame: put_frame(&mut self.frames, time_millis, value.to_vector()) }
     }
 
     /// `value` at `fraction` of the duration set so far, rounded to a millisecond, as
@@ -215,18 +233,32 @@ impl<T: Animate> KeyframesBuilder<T> {
     }
 }
 
+/// A keyframe at `time_millis`, replacing one there.
+fn put_frame(
+    frames: &mut Vec<Keyframe>,
+    time_millis: i32,
+    value: AnimationVector,
+) -> &mut Keyframe {
+    let frame =
+        Keyframe { time_millis, value, easing: LINEAR_EASING, arc_mode: ArcMode::ArcLinear };
+    let index = match frames.iter().position(|old| old.time_millis == time_millis) {
+        Some(index) => {
+            frames[index] = frame;
+            index
+        }
+        None => {
+            frames.push(frame);
+            frames.len() - 1
+        }
+    };
+    &mut frames[index]
+}
+
 /// An animation through the values `build` sets at times within its duration, as Compose's
 /// `keyframes { durationMillis = …; value at time using easing }`: from the start value (at 0,
 /// unless a keyframe sets it) to the target (at the end, unless one sets it), each stretch
 /// eased by the easing of the keyframe it starts at (linear by default).
 pub fn keyframes<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> KeyframesSpec {
-    let entry = Rc::new(built(build));
-    let (duration_millis, delay_millis) = (entry.duration_millis, entry.delay_millis);
-    KeyframesSpec { entry, duration_millis, delay_millis }
-}
-
-/// What `build` sets, sorted, with the times of its stretches.
-fn built<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> Entry {
     let mut builder = KeyframesBuilder {
         duration_millis: crate::spec::DEFAULT_DURATION_MILLIS,
         delay_millis: 0,
@@ -234,7 +266,13 @@ fn built<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> Entry {
         _type: std::marker::PhantomData,
     };
     build(&mut builder);
-    let KeyframesBuilder { duration_millis, delay_millis, mut frames, .. } = builder;
+    let KeyframesBuilder { duration_millis, delay_millis, frames, .. } = builder;
+    let entry = Rc::new(built(duration_millis, delay_millis, frames));
+    KeyframesSpec { entry, duration_millis, delay_millis }
+}
+
+/// What a builder set, sorted, with the times of its stretches.
+fn built(duration_millis: u32, delay_millis: u32, mut frames: Vec<Keyframe>) -> Entry {
     frames.sort_by_key(|frame| frame.time_millis);
     let duration = duration_millis.min(i32::MAX as u32) as i32;
     let mut timestamps: Vec<i32> = frames.iter().map(|frame| frame.time_millis).collect();
@@ -253,7 +291,7 @@ fn built<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> Entry {
         default_easing: LINEAR_EASING,
         initial_arc_mode: ArcMode::ArcLinear,
         requires_arcs,
-        arcs: RefCell::new(None),
+        arcs: RecentSplines::default(),
     }
 }
 
@@ -368,16 +406,49 @@ struct SplineInner {
     entry: Entry,
     /// How much the first and last velocities change to be the same, or NaN: not periodic.
     periodic_bias: f32,
-    /// The spline of the last start and end values, which are part of it unless keyframes set them,
-    /// as `VectorizedMonoSplineKeyframesSpec`'s fields.
-    spline: RefCell<Option<CachedSpline>>,
+    /// The splines of recent start and end values, which are part of them unless keyframes set
+    /// them, as `VectorizedMonoSplineKeyframesSpec`'s fields.
+    splines: RecentSplines<MonoSpline>,
 }
 
-#[derive(Debug)]
-struct CachedSpline {
-    initial_value: AnimationVector,
-    target_value: AnimationVector,
-    spline: Rc<MonoSpline>,
+/// What `keyframes_with_spline`'s builder is given, as Compose's `KeyframesWithSplineSpecConfig`:
+/// [`KeyframesBuilder`] without an arc for each stretch, the curve going across them all.
+pub struct KeyframesWithSplineBuilder<T: Animate> {
+    /// How long the keyframes play, as `durationMillis` (300 by default).
+    pub duration_millis: u32,
+    /// How long they wait first, as `delayMillis`.
+    pub delay_millis: u32,
+    frames: Vec<Keyframe>,
+    _type: std::marker::PhantomData<T>,
+}
+
+/// A keyframe just added to a spline: `.using(easing)` eases the time of the stretch from it.
+pub struct KeyframeWithSplineEntry<'a> {
+    frame: &'a mut Keyframe,
+}
+
+impl KeyframeWithSplineEntry<'_> {
+    /// Eases the stretch from this keyframe to the next along `easing` (linear by default).
+    pub fn using(self, easing: Easing) -> Self {
+        self.frame.easing = easing;
+        self
+    }
+}
+
+impl<T: Animate> KeyframesWithSplineBuilder<T> {
+    /// `value` at `time_millis`, as `value at time`. A later one at the same time replaces it.
+    pub fn at(&mut self, time_millis: i32, value: T) -> KeyframeWithSplineEntry<'_> {
+        KeyframeWithSplineEntry {
+            frame: put_frame(&mut self.frames, time_millis, value.to_vector()),
+        }
+    }
+
+    /// `value` at `fraction` of the duration set so far, rounded to a millisecond, as
+    /// `value atFraction fraction`.
+    pub fn at_fraction(&mut self, fraction: f32, value: T) -> KeyframeWithSplineEntry<'_> {
+        let time = (f64::from(self.duration_millis as f32 * fraction) + 0.5).floor() as i32;
+        self.at(time, value)
+    }
 }
 
 impl PartialEq for KeyframesWithSplineSpec {
@@ -392,7 +463,7 @@ impl PartialEq for KeyframesWithSplineSpec {
 /// `keyframesWithSpline { … }`: a monotonic spline, each stretch's time eased by the easing of the
 /// keyframe it starts at (linear by default). The initial velocity is ignored.
 pub fn keyframes_with_spline<T: Animate>(
-    build: impl FnOnce(&mut KeyframesBuilder<T>),
+    build: impl FnOnce(&mut KeyframesWithSplineBuilder<T>),
 ) -> KeyframesWithSplineSpec {
     spline_spec(f32::NAN, build)
 }
@@ -402,18 +473,26 @@ pub fn keyframes_with_spline<T: Animate>(
 /// 1 only the last to the first's, at 0.5 both to their average.
 pub fn periodic_keyframes_with_spline<T: Animate>(
     periodic_bias: f32,
-    build: impl FnOnce(&mut KeyframesBuilder<T>),
+    build: impl FnOnce(&mut KeyframesWithSplineBuilder<T>),
 ) -> KeyframesWithSplineSpec {
     spline_spec(periodic_bias, build)
 }
 
 fn spline_spec<T: Animate>(
     periodic_bias: f32,
-    build: impl FnOnce(&mut KeyframesBuilder<T>),
+    build: impl FnOnce(&mut KeyframesWithSplineBuilder<T>),
 ) -> KeyframesWithSplineSpec {
-    let entry = built(build);
+    let mut builder = KeyframesWithSplineBuilder {
+        duration_millis: crate::spec::DEFAULT_DURATION_MILLIS,
+        delay_millis: 0,
+        frames: Vec::new(),
+        _type: std::marker::PhantomData,
+    };
+    build(&mut builder);
+    let KeyframesWithSplineBuilder { duration_millis, delay_millis, frames, .. } = builder;
+    let entry = built(duration_millis, delay_millis, frames);
     KeyframesWithSplineSpec {
-        inner: Rc::new(SplineInner { entry, periodic_bias, spline: RefCell::new(None) }),
+        inner: Rc::new(SplineInner { entry, periodic_bias, splines: RecentSplines::default() }),
     }
 }
 
@@ -441,19 +520,11 @@ impl KeyframesWithSplineSpec {
         target_value: AnimationVector,
     ) -> Rc<MonoSpline> {
         let inner = &*self.inner;
-        let mut cached = inner.spline.borrow_mut();
-        if let Some(cached) = &*cached
-            && cached.initial_value == initial_value
-            && cached.target_value == target_value
-        {
-            return cached.spline.clone();
-        }
-        let entry = &inner.entry;
-        let values = entry.values_with(initial_value, target_value);
-        let times = entry.times_in_seconds();
-        let spline = Rc::new(MonoSpline::new(times, values, inner.periodic_bias));
-        *cached = Some(CachedSpline { initial_value, target_value, spline: spline.clone() });
-        spline
+        inner.splines.get_or_make(initial_value, target_value, || {
+            let entry = &inner.entry;
+            let values = entry.values_with(initial_value, target_value);
+            MonoSpline::new(entry.times_in_seconds(), values, inner.periodic_bias)
+        })
     }
 }
 
@@ -517,6 +588,13 @@ pub struct ArcAnimationSpec {
     keyframes: KeyframesSpec,
 }
 
+impl Default for ArcAnimationSpec {
+    /// `ArcBelow`, as `ArcAnimationSpec()`.
+    fn default() -> ArcAnimationSpec {
+        ArcAnimationSpec::new(ArcMode::ArcBelow)
+    }
+}
+
 impl ArcAnimationSpec {
     /// `mode` over 300 ms, eased by `FAST_OUT_SLOW_IN_EASING`, with no delay: `ArcAnimationSpec(mode)`.
     pub fn new(mode: ArcMode) -> ArcAnimationSpec {
@@ -534,7 +612,7 @@ impl ArcAnimationSpec {
             default_easing: easing.clone(),
             initial_arc_mode: mode,
             requires_arcs: mode != ArcMode::ArcLinear,
-            arcs: RefCell::new(None),
+            arcs: RecentSplines::default(),
         });
         let keyframes = KeyframesSpec { entry, duration_millis, delay_millis };
         ArcAnimationSpec { mode, duration_millis, delay_millis, easing, keyframes }

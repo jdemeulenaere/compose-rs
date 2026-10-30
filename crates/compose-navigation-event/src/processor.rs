@@ -252,6 +252,13 @@ impl NavigationEventProcessor {
         }
     }
 
+    /// Whether a back's end would go to a handler: the one in a gesture, enabled or not, or the
+    /// first enabled.
+    pub(crate) fn takes_back(&self) -> bool {
+        self.in_progress_handler.borrow().is_some()
+            || self.resolve_enabled_handler(State::TRANSITIONING_BACK).is_some()
+    }
+
     fn is_in_progress(&self, input: &NavigationEventInput, direction: i32) -> bool {
         self.in_progress_input.borrow().as_ref() == Some(input)
             && self.in_progress_direction.get() == direction

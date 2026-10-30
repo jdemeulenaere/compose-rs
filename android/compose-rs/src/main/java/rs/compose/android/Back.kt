@@ -36,7 +36,7 @@ internal interface BackRegistration {
         /** A registration for [view], telling [gesture] of back while enabled (initially not). */
         fun create(view: View, gesture: BackGesture): BackRegistration {
             val activity = view.context.activity()
-            if (activity != null && androidXPresent) {
+            if (activity != null && androidXPresent && AndroidXPresence.ofBackDispatcher(activity)) {
                 try {
                     AndroidXBack.register(activity, gesture)?.let { return it }
                 } catch (_: LinkageError) {

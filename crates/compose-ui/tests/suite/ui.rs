@@ -8,6 +8,10 @@ use crate::support;
 use std::cell::Cell;
 use std::rc::Rc;
 
+use compose_navigation_event::{
+    LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER, NavigationEventDispatcher,
+    remember_navigation_event_dispatcher_owner,
+};
 use compose_runtime::platform::*;
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -1079,4 +1083,155 @@ fn a_nested_derived_state_drawing_reads_can_be_read_after_a_write() {
     }
     host.frame();
     assert_eq!(drawn.get(), 5);
+}
+
+/// A handler enabled outside composition: the platform, which learns of handlers from a frame,
+/// must get one (D845).
+#[test]
+fn a_back_handler_a_lifecycle_enables_asks_for_a_frame() {
+    let mut host = host(|| BackHandler!(on_back = || {}));
+    let calls = HostCalls::of(&host);
+    host.frame();
+    assert!(host.has_enabled_back_handlers());
+    host.set_lifecycle_state(compose_lifecycle::LifecycleState::Created);
+    host.frame();
+    assert!(!host.has_enabled_back_handlers());
+    calls.frames.set(0);
+    host.set_lifecycle_state(compose_lifecycle::LifecycleState::Started);
+    assert!(host.has_enabled_back_handlers());
+    assert!(calls.frames.get() > 0, "a frame tells the platform");
+    assert!(host.has_pending_work());
+}
+
+#[composable]
+fn UnderChildOwner(enabled: MutableState<bool>) {
+    let owner = remember_navigation_event_dispatcher_owner!(enabled = enabled.get());
+    CompositionLocalProvider(LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.provides(Some(owner)), || {
+        BackHandler!(on_back = || {})
+    });
+}
+
+/// A child owner's `enabled` is applied by its `LaunchedEffect`, whose first step is in the frame:
+/// that frame tells it, and none other's needed.
+#[test]
+fn a_back_handler_a_child_owner_enables_is_told_by_the_frame() {
+    let enabled = mutable_state_of(false);
+    let read = enabled.handle();
+    let mut host = host(move || UnderChildOwner!(read));
+    let calls = HostCalls::of(&host);
+    host.frame();
+    tick();
+    host.frame();
+    assert!(!host.has_enabled_back_handlers());
+    enabled.set(true);
+    tick();
+    calls.frames.set(0);
+    host.frame();
+    assert!(host.has_enabled_back_handlers());
+    tick();
+    assert!(!host.has_pending_work());
+    assert_eq!(calls.frames.get(), 0);
+}
+
+/// Enabled by a task, or by anything else outside a frame, it asks for one.
+#[test]
+fn a_back_handler_its_dispatcher_enables_outside_a_frame_asks_for_one() {
+    let child = Rc::new(std::cell::RefCell::new(None));
+    let held = child.clone();
+    let mut host = host(move || {
+        let owner = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current().unwrap();
+        let child = remember(|| NavigationEventDispatcher::with_parent(&owner));
+        *held.borrow_mut() = Some(child.clone());
+        CompositionLocalProvider(
+            LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.provides(Some(child)),
+            || BackHandler!(on_back = || {}),
+        );
+    });
+    let calls = HostCalls::of(&host);
+    host.frame();
+    tick();
+    host.frame();
+    let child: NavigationEventDispatcher = child.borrow().clone().unwrap();
+    child.set_enabled(false);
+    assert!(!host.has_enabled_back_handlers());
+    host.frame();
+    calls.frames.set(0);
+    child.set_enabled(true);
+    assert!(host.has_enabled_back_handlers());
+    assert!(calls.frames.get() > 0, "a frame tells the platform");
+}
+
+/// The gesture's entry points tell of a tree a handler dirtied, as the press's does.
+#[test]
+fn a_back_gesture_s_entry_points_wake_for_a_dirty_tree() {
+    let handle = Rc::new(std::cell::RefCell::new(None));
+    let held = handle.clone();
+    let mut host = host(move || {
+        BackHandler!(on_back = || {});
+        Leaf(Modifier.size(20.dp()).then_custom(HoldingHandle(held.clone())));
+    });
+    let calls = HostCalls::of(&host);
+    host.frame();
+    let event = BackEventCompat::default();
+    type Step<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
+    let steps: [Step; 3] = [
+        ("on_back_started", &|host| host.on_back_started(event)),
+        ("on_back_progressed", &|host| host.on_back_progressed(event)),
+        ("on_back_cancelled", &|host| host.on_back_cancelled()),
+    ];
+    for (name, step) in steps {
+        host.frame();
+        let node: NodeHandle = handle.borrow().expect("attached");
+        // As a handler's callback reaching a node does.
+        node.with_node(|_: &mut HoldingHandleNode, context| context.invalidate_draw());
+        calls.frames.set(0);
+        step(&mut host);
+        assert!(calls.frames.get() > 0, "{name} asked for a frame");
+    }
+}
+
+struct HoldingHandle(Rc<std::cell::RefCell<Option<NodeHandle>>>);
+
+struct HoldingHandleNode(Rc<std::cell::RefCell<Option<NodeHandle>>>);
+
+impl ModifierNodeElement for HoldingHandle {
+    type Node = HoldingHandleNode;
+    fn create(&self) -> HoldingHandleNode {
+        HoldingHandleNode(self.0.clone())
+    }
+    fn update(&self, _node: &mut HoldingHandleNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl ModifierNode for HoldingHandleNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        *self.0.borrow_mut() = Some(context.handle());
+    }
+}
+
+/// A frame reporting the change doesn't need another.
+#[test]
+fn a_back_handler_composed_in_a_frame_asks_for_no_other() {
+    let show = mutable_state_of(false);
+    let read = show.handle();
+    let mut host = host(move || ShownHandler!(read));
+    let calls = HostCalls::of(&host);
+    host.frame();
+    host.frame();
+    show.set(true);
+    tick();
+    calls.frames.set(0);
+    host.frame();
+    assert!(host.has_enabled_back_handlers());
+    assert_eq!(calls.frames.get(), 0);
+    assert!(!host.has_pending_work());
+}
+
+#[composable]
+fn ShownHandler(show: MutableState<bool>) {
+    if show.get() {
+        BackHandler!(on_back = || {});
+    }
 }

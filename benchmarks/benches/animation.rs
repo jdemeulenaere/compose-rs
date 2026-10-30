@@ -289,5 +289,45 @@ fn animated_visibility_first_frame(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, frame_awaiters, infinite_transitions, animated_visibility_first_frame);
+/// A read of a shared spec, with the start and end values of one animation or of two in turns: its
+/// splines are kept by those values, Compose vectorizing a spec for each animation (D846).
+fn shared_specs(criterion: &mut Criterion) {
+    let arc = KeyframesSpec::from(ArcAnimationSpec::new(ArcMode::ArcBelow));
+    let spline = keyframes_with_spline(|frames: &mut KeyframesWithSplineBuilder<Offset>| {
+        frames.at(150, Offset::new(50.0, 80.0));
+    });
+    let zero = AnimationVector::zero(2);
+    let ends = [Offset::new(100.0, 100.0).to_vector(), Offset::new(200.0, 50.0).to_vector()];
+    let start = Offset::ZERO.to_vector();
+    let mut group = criterion.benchmark_group("shared_specs");
+    group.bench_function("arc_one_animation", |b| {
+        b.iter(|| black_box(arc.value_from_millis(150, start, ends[0], zero)))
+    });
+    group.bench_function("arc_two_animations", |b| {
+        let mut turn = 0;
+        b.iter(|| {
+            turn = (turn + 1) % 2;
+            black_box(arc.value_from_millis(150, start, ends[turn], zero))
+        })
+    });
+    group.bench_function("spline_one_animation", |b| {
+        b.iter(|| black_box(spline.value_from_millis(75, start, ends[0], zero)))
+    });
+    group.bench_function("spline_two_animations", |b| {
+        let mut turn = 0;
+        b.iter(|| {
+            turn = (turn + 1) % 2;
+            black_box(spline.value_from_millis(75, start, ends[turn], zero))
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    frame_awaiters,
+    infinite_transitions,
+    animated_visibility_first_frame,
+    shared_specs
+);
 criterion_main!(benches);

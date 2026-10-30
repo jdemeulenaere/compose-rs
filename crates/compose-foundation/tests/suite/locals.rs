@@ -12,7 +12,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Dialog, IntSize, Popup, UnitExt};
+use compose_ui::{BackHandler, Dialog, IntSize, Popup, UnitExt};
 
 static LOCAL_LABEL: CompositionLocal<&'static str> =
     CompositionLocal::new("locals::LocalLabel", || "default");
@@ -134,4 +134,37 @@ fn content_composed_again_once_measured_sees_the_providers_around_it() {
     set_label(&mut ui, "second");
     let tick = tick(&mut ui);
     ui.on_node_with_text(&format!("box 150: second ({tick})")).assert_exists();
+}
+
+/// A prefetched item's back handler: no frame reports it, and the platform has to hear (D845).
+#[test]
+fn a_prefetched_item_s_back_handler_asks_for_a_frame() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = compose_test(move || {
+        LazyColumn!(
+            modifier = Modifier.size((200.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(1000, HandlingFrom6);
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert!(!ui.host().has_enabled_back_handlers());
+    state.dispatch_raw_delta(1.0);
+    // Not `wait_for_idle`, which prefetches and draws.
+    ui.host().frame();
+    assert!(!ui.host().has_enabled_back_handlers());
+    while ui.host().prefetch(std::time::Instant::now() + std::time::Duration::from_secs(1)) {}
+    assert!(ui.host().has_enabled_back_handlers());
+    assert!(ui.host().has_pending_work());
+}
+
+#[composable(non_restartable)]
+fn HandlingFrom6(index: usize) {
+    if index >= 6 {
+        BackHandler!(on_back = || {});
+    }
+    Box!(modifier = Modifier.size((200.dp(), 20.dp())), {});
 }

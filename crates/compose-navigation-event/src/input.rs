@@ -226,7 +226,14 @@ impl Deref for DirectNavigationEventInput {
 
 impl DirectNavigationEventInput {
     pub fn new() -> DirectNavigationEventInput {
-        DirectNavigationEventInput { input: NavigationEventInput::new(NoCallbacks) }
+        DirectNavigationEventInput::with_callbacks(NoCallbacks)
+    }
+
+    /// One that hears what an input does, as a subclass of AndroidX's would.
+    pub fn with_callbacks(
+        callbacks: impl NavigationEventInputCallbacks + 'static,
+    ) -> DirectNavigationEventInput {
+        DirectNavigationEventInput { input: NavigationEventInput::new(callbacks) }
     }
 
     pub fn back_started(&self, event: NavigationEvent) {

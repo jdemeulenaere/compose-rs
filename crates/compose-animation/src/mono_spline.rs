@@ -233,6 +233,19 @@ mod tests {
         assert_eq!(crate::text_graph::draw_text_graph(60, 15, &times, &values), expected);
     }
 
+    /// Its tangents are limited where a slope is much steeper than the next: no overshoot, which a
+    /// plain Hermite spline would have before the step.
+    #[test]
+    fn a_steep_step_does_not_overshoot() {
+        let spline = spline(&[0.0, 1.0, 2.0], &[[0.0, 0.0], [0.01, 0.0], [10.0, 0.0]]);
+        for i in 0..=100 {
+            let at_first = at(&spline, i as f32 / 100.0, 0);
+            assert!((0.0..=0.01001).contains(&at_first), "{i}: {at_first}");
+            let at_second = at(&spline, 1.0 + i as f32 / 100.0, 0);
+            assert!((0.00999..=10.0).contains(&at_second), "{i}: {at_second}");
+        }
+    }
+
     /// Past the ends: on the slope there, as `MonoSplineIsExtrapolate`.
     #[test]
     fn beyond_its_ends_a_spline_extrapolates() {

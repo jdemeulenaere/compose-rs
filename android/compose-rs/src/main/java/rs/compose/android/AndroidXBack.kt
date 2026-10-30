@@ -23,7 +23,7 @@ internal object AndroidXBack {
                     backEvent.progress,
                     backEvent.touchX,
                     backEvent.touchY,
-                    backEvent.frameTimeMillis,
+                    frameTime(backEvent),
                 )
             }
 
@@ -33,7 +33,7 @@ internal object AndroidXBack {
                     backEvent.progress,
                     backEvent.touchX,
                     backEvent.touchY,
-                    backEvent.frameTimeMillis,
+                    frameTime(backEvent),
                 )
             }
 
@@ -55,6 +55,20 @@ internal object AndroidXBack {
                 callback.isEnabled = false
                 dispatcher.onBackPressed()
             }
+        }
+    }
+
+    /** Whether the app's `androidx.activity` is one before 1.11, with no `frameTimeMillis`. */
+    private var frameTimeMissing = false
+
+    /** Its frame's time, or 0: the library compiles against 1.13, the app has its own. */
+    private fun frameTime(event: BackEventCompat): Long {
+        if (frameTimeMissing) return 0L
+        return try {
+            event.frameTimeMillis
+        } catch (_: NoSuchMethodError) {
+            frameTimeMissing = true
+            0L
         }
     }
 }

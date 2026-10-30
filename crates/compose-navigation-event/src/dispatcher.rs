@@ -185,6 +185,14 @@ impl NavigationEventDispatcher {
         self.inner.shared_processor.history()
     }
 
+    /// Whether a back's end would go to a handler, for a platform to tell if it's taken: not
+    /// [`NavigationEventInput::has_enabled_back_handlers`], as a gesture's handler has it to the end
+    /// even disabled.
+    #[doc(hidden)]
+    pub fn takes_back(&self) -> bool {
+        self.inner.shared_processor.takes_back()
+    }
+
     /// Adds `handler` at [`PRIORITY_DEFAULT`](Self::PRIORITY_DEFAULT).
     #[track_caller]
     pub fn add_handler(&self, handler: &NavigationEventHandler) {
@@ -341,6 +349,22 @@ impl NavigationEventDispatcher {
             // Its own fallbacks go with it, as its parent's did.
             current.inner.local_back_fallback.borrow_mut().take();
             current.inner.local_forward_fallback.borrow_mut().take();
+        }
+    }
+}
+
+/// Dropped without `dispose`, it takes its own off the processor its parent shares, and off its
+/// parent: nothing stays behind it.
+impl Drop for DispatcherInner {
+    fn drop(&mut self) {
+        for input in std::mem::take(&mut *self.inputs.borrow_mut()) {
+            self.shared_processor.remove_input(&input);
+        }
+        for handler in std::mem::take(&mut *self.handlers.borrow_mut()) {
+            self.shared_processor.remove_handler(&handler);
+        }
+        if let Some(parent) = self.parent.borrow_mut().take() {
+            parent.inner.child_dispatchers.borrow_mut().retain(|child| child.strong_count() > 0);
         }
     }
 }

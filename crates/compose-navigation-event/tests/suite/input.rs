@@ -27,6 +27,8 @@ fn an_input_with_no_dispatcher_does_nothing() {
     input.forward_progressed();
     input.forward_cancelled();
     input.forward_completed();
+    assert_eq!(input.heard.added.get(), 0);
+    assert!(input.heard.order.borrow().is_empty());
 }
 
 struct EnabledCalls(Rc<RefCell<Vec<(&'static str, bool)>>>);

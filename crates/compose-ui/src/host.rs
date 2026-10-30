@@ -120,6 +120,22 @@ impl UiHost {
                 }
             })
         };
+        // An enabled back handler changing outside a frame (a lifecycle's start, a task): the platform
+        // learns of it from a frame. One changing in a frame is told by that frame.
+        let handlers_changed = {
+            let (requested, framing, wake) =
+                (frame_requested.clone(), framing.clone(), waker.clone());
+            move || {
+                if framing.get() {
+                    return;
+                }
+                requested.set(true);
+                let waker = wake.borrow().clone();
+                if let Some(waker) = waker {
+                    waker();
+                }
+            }
+        };
         let requester = request.clone();
         composition.set_frame_requester(move || requester());
         // `FocusRequester`s ask for a frame, which moves the focus.
@@ -159,7 +175,10 @@ impl UiHost {
             window_size: compose_runtime::mutable_state_of(size),
             prefetch_scheduler: crate::prefetch::PrefetchScheduler::default(),
             navigation_events: navigation_events.clone(),
-            back_dispatcher: crate::back::OnBackPressedDispatcher::new(&navigation_events),
+            back_dispatcher: crate::back::OnBackPressedDispatcher::new(
+                &navigation_events,
+                handlers_changed,
+            ),
             saveable_registry: compose_runtime::SaveableStateRegistry::new(None),
             configuration: compose_runtime::mutable_state_of(
                 crate::configuration::Configuration::from_window(size, density, false),
@@ -384,22 +403,25 @@ impl UiHost {
     pub fn on_back_started(&mut self, event: crate::back::BackEventCompat) {
         let _turn = compose_runtime::platform::Turn::begin();
         self.back_dispatcher.dispatch_on_back_started(event);
+        self.wake_if_dirty();
     }
 
     /// It goes on.
     pub fn on_back_progressed(&mut self, event: crate::back::BackEventCompat) {
         let _turn = compose_runtime::platform::Turn::begin();
         self.back_dispatcher.dispatch_on_back_progressed(event);
+        self.wake_if_dirty();
     }
 
     /// It's given up.
     pub fn on_back_cancelled(&mut self) {
         let _turn = compose_runtime::platform::Turn::begin();
         self.back_dispatcher.dispatch_on_back_cancelled();
+        self.wake_if_dirty();
     }
 
-    /// Whether a `BackHandler` is enabled: the platform intercepts back only then. It changes
-    /// with composition: platforms ask after each frame.
+    /// Whether a `BackHandler` is enabled: the platform intercepts back only then. Platforms ask
+    /// after each frame, and a change outside one asks for a frame.
     pub fn has_enabled_back_handlers(&self) -> bool {
         self.back_dispatcher.has_enabled_callbacks()
     }
@@ -684,6 +706,7 @@ impl UiHost {
         let _prefetch = crate::trace::section(c"compose-rs: prefetch");
         // The requests' writes are composed here: they wake nothing.
         self.framing.set(true);
+        let back_handlers = self.has_enabled_back_handlers();
         let more = self.prefetch_scheduler.run(&self.composition, deadline, unbounded_first);
         self.run_side_effects();
         // The items composed aren't placed, and those disposed weren't: unless measuring wrote
@@ -700,7 +723,9 @@ impl UiHost {
             !tree.needs_draw && !tree.semantics_changed
         });
         self.framing.set(false);
-        if quiet && !self.composition.has_invalidations() {
+        // An item's back handler: no frame's here to tell the platform.
+        let back_handlers_same = back_handlers == self.has_enabled_back_handlers();
+        if quiet && back_handlers_same && !self.composition.has_invalidations() {
             self.frame_requested.set(false);
         } else {
             self.with_tree(|tree| tree.needs_draw = true);

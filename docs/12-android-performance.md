@@ -332,6 +332,8 @@ Startup doesn't depend on the optimizations: with all of them, 113 and 171 ms (C
 
 After start compose-rs holds 36 % less: its code is a native library rather than Compose's dex and runtime, and its graphics memory is 10 MB smaller (the icons drawn from masks, D190, as Compose's `VectorPainter` caches them, need no path atlas). After the flings both are dominated by the render thread's caches (56 to 57 MB each); with every optimization on, 79.2 MB (Compose 88.8 MB in that session), its native heap 11.1 MB against 10.3 MB at parity. The APKs are 2,034,154 and 1,948,185 bytes: compose-rs's grew with pausable composition (44.7 KB, D590–D599), to 86 KB more than Compose's.
 
+Since round 14, `compose-navigation-event` and the predictive back on it (D845) added 63,080 B to the `.so`, +2.16 % of the APK.
+
 ### Every optimization on (`all`)
 
 compose-rs with every optimization on, against Compose measured in the same session, run right after the parity round (`results/2026-10-25-pixel-8-pro-round-15-all.json`); the parity column is the parity round's, for reference.

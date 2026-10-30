@@ -80,8 +80,9 @@ pub use easing::{
 };
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{
-    ArcAnimationSpec, KeyframeEntry, KeyframesBuilder, KeyframesSpec, KeyframesWithSplineSpec,
-    keyframes, keyframes_with_spline, periodic_keyframes_with_spline,
+    ArcAnimationSpec, KeyframeEntry, KeyframeWithSplineEntry, KeyframesBuilder, KeyframesSpec,
+    KeyframesWithSplineBuilder, KeyframesWithSplineSpec, keyframes, keyframes_with_spline,
+    periodic_keyframes_with_spline,
 };
 pub use seekable::SeekableTransitionState;
 pub use shared::{

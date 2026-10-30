@@ -170,6 +170,12 @@ fn arcs_of_other_parameters_differ() {
     assert_ne!(linear().easing(EASE_IN_OUT), linear().easing(FAST_OUT_SLOW_IN_EASING));
 }
 
+/// `ArcAnimationSpec()`: below, by default.
+#[test]
+fn an_arc_by_default_is_below() {
+    assert_eq!(ArcAnimationSpec::default(), ArcAnimationSpec::new(ArcMode::ArcBelow));
+}
+
 /// As a spec of what plays specs, and repeated: `DurationBasedAnimationSpec`.
 #[test]
 fn an_arc_plays_as_a_duration_based_spec() {
@@ -198,6 +204,11 @@ fn other_start_and_end_values_give_other_arcs() {
     let doubled = middle(0.0, 600.0);
     close(doubled[0], first[0] * 2.0, 0.01);
     assert_eq!(middle(0.0, 300.0), first);
+    // Read in turns by two animations, a shared spec keeps both (D846).
+    for _ in 0..3 {
+        assert_eq!(middle(0.0, 300.0), first);
+        assert_eq!(middle(0.0, 600.0), doubled);
+    }
 }
 
 const KEYFRAME_MILLIS: u32 = 3000;

@@ -194,7 +194,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 105 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/RememberNavigationEventStateTest.kt` | 3 | `rememberNavigationEventState` | ported | `composition.rs` |
 | 106 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/LocalNavigationEventDispatcherOwnerTest.kt` | 2 | the local's fallback to the context and the view tree | n/a: a host provides its dispatcher |  |
 | 107 | `activity/activity-compose/src/androidTest/java/androidx/activity/compose/BackHandlerTest.kt` | 4 | `BackHandler` | ported | `predictive_back.rs` |
-| 108 | `activity/activity-compose/src/androidTest/java/androidx/activity/compose/PredictiveBackHandlerTest.kt` | 18 | `PredictiveBackHandler`: start, progress, completion, cancellation, order, lifecycle | ported | `predictive_back.rs`; a task's cancelled wait as D845 says |
+| 108 | `activity/activity-compose/src/androidTest/java/androidx/activity/compose/PredictiveBackHandlerTest.kt` | 18 | `PredictiveBackHandler`: start, progress, completion, cancellation, order, lifecycle | ported | `predictive_back.rs`; a task's cancelled wait as D845 says, its task's end as D847 |
 
 ## Public API surface
 
@@ -266,7 +266,7 @@ Deprecated and left out:
 | `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponentialDecay`, `FloatExponentialDecaySpec`, `generateDecayAnimationSpec`, `calculateTargetValue` (both), `DecayAnimation` (3 ctors), `DecayAnimation(FloatDecayAnimationSpec, …)` | present (D807) | decay-animation |
 | `ArcAnimationSpec` (experimental), `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), `KeyframesSpecConfig.using(entity, ArcMode)` | present: `ArcAnimationSpec::new`, `ArcMode`, `using_arc` (D844) | arc-animation |
 | `KeyframesSpecBaseConfig.atFraction`, `using(entity, easing)`, `durationMillis` settable in the builder | present (`at_fraction`, `using`, `duration_millis` settable) | spec-gaps |
-| `KeyframesWithSplineSpec`, `keyframesWithSpline(init)`, `keyframesWithSpline(periodicBias, init)` | present: `keyframes_with_spline`, `periodic_keyframes_with_spline` (D843) | keyframes-with-spline |
+| `KeyframesWithSplineSpec`, `keyframesWithSpline(init)`, `keyframesWithSpline(periodicBias, init)` | present: `keyframes_with_spline`, `periodic_keyframes_with_spline`, `KeyframesWithSplineBuilder` (D843, D846) | keyframes-with-spline |
 | `StartOffset`, `StartOffsetType` (`Delay`, `FastForward`); `initialStartOffset` on `repeatable`, `infiniteRepeatable`, `RepeatableSpec`, `InfiniteRepeatableSpec` | present (`repeatable_with`, `infinite_repeatable_with`) | spec-gaps |
 | `SnapSpec` as a `DurationBasedAnimationSpec` (so `repeatable(snap())` works) | present (D800) | spec-gaps |
 | `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | present (D809) | interruption-aware-spec |
@@ -629,7 +629,7 @@ One entry per feature. Sizes:
 
 ### Navigation
 
-#### predictive-back (L, not exp.): the host's side done (D845)
+#### predictive-back (L, not exp.): the host's side done (D845, D847, D848)
 
 - **Done:** `compose-navigation-event` (`NavigationEventDispatcher`, `NavigationEventHandler`, `NavigationBackHandler`, `NavigationEventState`, inputs), `BackHandler` and `PredictiveBackHandler` on it, and the Android host's back progress (`OnBackAnimationCallback`, `OnBackPressedCallback`).
 - **Left:** `NavDisplay` seeking its transition by it: `predictivePopTransitionSpec`, and Navigation 3's `NavigationBackHandler(sceneState, …)` and `rememberNavigationEventState(sceneState)`, in nav3-ui, with their tests (`NavDisplayPredictiveBackTest`, `NavDisplayInfoTest`, `NavigationBackHandlerTest`, `RememberNavigationEventStateTest`). Material 3's own use of the progress is in its ledger.

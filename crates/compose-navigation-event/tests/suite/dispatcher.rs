@@ -598,6 +598,9 @@ fn an_input_added_twice_does_not_panic() {
     let dispatcher = Dispatcher::new();
     let input = added_to(&dispatcher);
     dispatcher.add_input(&input);
+    assert_eq!(input.heard.added.get(), 1);
+    dispatcher.remove_input(&input);
+    assert_eq!(input.heard.removed.get(), 1);
 }
 
 // Compose: navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventDispatcherTest.kt, removeInput_onRemove_callsOnDetach
@@ -898,11 +901,85 @@ fn a_grandparent_disposed_disposes_them_all() {
 #[test]
 fn disposing_with_many_inputs_and_handlers_does_not_panic() {
     let dispatcher = Dispatcher::new();
+    let (mut inputs, mut handlers) = (Vec::new(), Vec::new());
     for _ in 0..10 {
-        dispatcher.add_input(&TestInput::new());
-        dispatcher.add_handler(&TestHandler::new());
+        let (input, handler) = (TestInput::new(), TestHandler::new());
+        dispatcher.add_input(&input);
+        dispatcher.add_handler(&handler);
+        inputs.push(input);
+        handlers.push(handler);
     }
     dispatcher.dispose();
+    for input in &inputs {
+        assert_eq!(input.heard.removed.get(), 1);
+    }
+    // Each is free to go on another.
+    let other = Dispatcher::new();
+    for handler in &handlers {
+        other.add_handler(handler);
+    }
+}
+
+/// A child dropped without `dispose`: nothing it had stays in the processor it shared, and its
+/// parent hears as if it had been disposed (D845).
+#[test]
+fn a_child_dropped_leaves_nothing_behind() {
+    let parent = Dispatcher::new();
+    let input = added_to(&parent);
+    let held = Rc::new(());
+    let removed = Rc::new(Cell::new(0));
+    // Not a `TestInput`, which holds on to its dispatcher.
+    let child_input = DirectNavigationEventInput::with_callbacks(CountingRemovals(removed.clone()));
+    let handler = TestHandler::new();
+    {
+        let child = Dispatcher::with_parent(&parent);
+        child.add_input(&child_input);
+        let kept = held.clone();
+        let captured = TestHandler::on_back_started(move |_, _| {
+            let _ = &kept;
+        });
+        child.add_handler(&captured);
+        drop(captured);
+        child.add_handler(&handler);
+        assert!(input.has_enabled_back_handlers());
+    }
+    assert_eq!(Rc::strong_count(&held), 1, "the handler went with the child");
+    assert_eq!(removed.get(), 1);
+    assert!(!input.has_enabled_back_handlers());
+    input.back_completed();
+    assert_eq!(handler.on_back_completed_invocations(), 0);
+    // It can go elsewhere: nothing says it's registered.
+    parent.add_handler(&handler);
+    input.back_completed();
+    assert_eq!(handler.on_back_completed_invocations(), 1);
+}
+
+struct CountingRemovals(Rc<Cell<u32>>);
+
+impl NavigationEventInputCallbacks for CountingRemovals {
+    fn on_removed(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+/// One in its gesture is told, as by `dispose`.
+#[test]
+fn a_child_dropped_gives_up_its_handler_s_gesture() {
+    let parent = Dispatcher::new();
+    let input = added_to(&parent);
+    let handler = TestHandler::new();
+    {
+        let child = Dispatcher::with_parent(&parent);
+        child.add_handler(&handler);
+        input.back_started();
+    }
+    assert_eq!(handler.on_back_cancelled_invocations(), 1);
+    // And a new gesture starts, once its input's is over.
+    input.back_cancelled();
+    let next = TestHandler::new();
+    parent.add_handler(&next);
+    input.back_started();
+    assert_eq!(next.on_back_started_invocations(), 1);
 }
 
 // Compose: navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventDispatcherTest.kt, isEnabled_whenTrue_dispatchesEvents

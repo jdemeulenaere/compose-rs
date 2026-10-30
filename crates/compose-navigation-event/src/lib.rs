@@ -18,9 +18,9 @@ mod processor;
 mod testing;
 
 pub use composition::{
-    LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER, NavigationBackHandler, NavigationEventHandler,
-    NavigationEventState, NavigationForwardHandler, remember_navigation_event_dispatcher_owner,
-    remember_navigation_event_state,
+    LOCAL_BACK_LAYER, LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER, NavigationBackHandler,
+    NavigationEventHandler, NavigationEventState, NavigationForwardHandler,
+    remember_navigation_event_dispatcher_owner, remember_navigation_event_state,
 };
 pub use dispatcher::{
     NavigationEventDispatcher, OnBackCompletedFallback, OnForwardCompletedFallback,

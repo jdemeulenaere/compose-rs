@@ -500,8 +500,10 @@ fn a_gesture_given_up_ends_a_task_that_goes_on_waiting() {
                     logged.borrow_mut().push("start");
                     let seen = logged.clone();
                     let _ = progress.collect(|_| seen.borrow_mut().push("progress")).await;
-                    // What a cancelled coroutine's next suspension doesn't come back from.
-                    delay(Duration::from_millis(1)).await;
+                    // Unlike a cancelled coroutine, which `collect` doesn't return to, this runs
+                    // up to its next wait (D845).
+                    logged.borrow_mut().push("to its next wait");
+                    delay(Duration::from_millis(100)).await;
                     logged.borrow_mut().push("completed");
                 }
             }
@@ -512,7 +514,39 @@ fn a_gesture_given_up_ends_a_task_that_goes_on_waiting() {
     ui.wait_for_idle();
     ui.host().on_back_cancelled();
     ui.wait_for_idle();
-    assert_eq!(*log.borrow(), ["start", "progress"]);
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start", "progress", "to its next wait"]);
+}
+
+/// The control of the last: with the gesture completed, not given up, the wait's over and it goes
+/// on, so the test is telling what a cancellation ends.
+#[test]
+fn a_gesture_completed_lets_a_task_go_on_waiting() {
+    let log = Log::default();
+    let logged = log.clone();
+    let mut ui = rule(move || {
+        let logged = logged.clone();
+        PredictiveBackHandler!(
+            on_back = move |progress: BackProgress| {
+                let logged = logged.clone();
+                async move {
+                    logged.borrow_mut().push("start");
+                    let _ = progress.collect(|_| {}).await;
+                    delay(Duration::from_millis(100)).await;
+                    logged.borrow_mut().push("completed");
+                }
+            }
+        );
+    });
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    ui.host().on_back_pressed();
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start"]);
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start", "completed"]);
 }
 
 // Compose: activity/activity-compose/src/androidTest/java/androidx/activity/compose/PredictiveBackHandlerTest.kt, testRestartCancelledBack
@@ -539,30 +573,47 @@ fn a_gesture_after_one_given_up_completes() {
 // Compose: activity/activity-compose/src/androidTest/java/androidx/activity/compose/PredictiveBackHandlerTest.kt, testOnBackCancelledCancelsAsyncJob
 #[test]
 fn a_gesture_given_up_ends_what_the_task_waits_for() {
-    let (log, started) = (Log::default(), Rc::new(Cell::new(false)));
-    let (logged, seen) = (log.clone(), started.clone());
-    let mut ui = rule(move || {
-        let (logged, seen) = (logged.clone(), seen.clone());
-        PredictiveBackHandler!(
-            on_back = move |progress: BackProgress| {
-                let (logged, seen) = (logged.clone(), seen.clone());
-                async move {
-                    logged.borrow_mut().push("start");
-                    seen.set(true);
-                    delay(Duration::from_millis(300)).await;
-                    logged.borrow_mut().push("async");
-                    let _ = progress.collect(|_| {}).await;
-                }
-            }
-        );
-    });
+    let log = Log::default();
+    let logged = log.clone();
+    let mut ui = rule(move || Waiting(logged.clone()));
     ui.host().on_back_started(fake_event());
-    ui.wait_until(|_| started.get());
-    ui.host().on_back_cancelled();
-    ui.wait_for_idle();
-    std::thread::sleep(Duration::from_millis(350));
     ui.wait_for_idle();
     assert_eq!(*log.borrow(), ["start"]);
+    ui.host().on_back_cancelled();
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start"]);
+}
+
+/// The control of the last: no cancel, the wait ends, under the same clock.
+#[test]
+fn a_gesture_not_given_up_reaches_the_end_of_what_the_task_waits_for() {
+    let log = Log::default();
+    let logged = log.clone();
+    let mut ui = rule(move || Waiting(logged.clone()));
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start"]);
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start", "async"]);
+}
+
+/// Waits before it collects.
+#[composable(non_restartable)]
+fn Waiting(log: Log) {
+    PredictiveBackHandler!(
+        on_back = move |progress: BackProgress| {
+            let log = log.clone();
+            async move {
+                log.borrow_mut().push("start");
+                delay(Duration::from_millis(300)).await;
+                log.borrow_mut().push("async");
+                let _ = progress.collect(|_| {}).await;
+            }
+        }
+    );
 }
 
 /// Where it goes in the layers: a dialog's first, and the gesture goes to it to the end.
@@ -596,10 +647,47 @@ fn a_handler_leaving_during_its_gesture_ends_its_task() {
     assert_eq!(*log.borrow(), ["start"]);
     show.set(false);
     ui.wait_for_idle();
+    // Compose's `catch` and `finally` run: its wait says so, and it's over.
+    assert_eq!(*log.borrow(), ["start", "cancelled"]);
     ui.host().on_back_pressed();
     ui.wait_for_idle();
-    assert_eq!(*log.borrow(), ["start"]);
+    assert_eq!(*log.borrow(), ["start", "cancelled"]);
     assert!(!ui.host().has_enabled_back_handlers());
+}
+
+/// A task past its gesture ends with the place too, as a task of its scope.
+#[test]
+fn a_handler_leaving_after_its_gesture_ends_its_task() {
+    let (log, show) = (Log::default(), mutable_state_of(true));
+    let (logged, read) = (log.clone(), show.handle());
+    let mut ui = rule(move || ShownGoingOn!(read, logged.clone()));
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    ui.host().on_back_pressed();
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["completed"]);
+    show.set(false);
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["completed"]);
+}
+
+#[composable]
+fn ShownGoingOn(show: MutableState<bool>, log: Log) {
+    if show.get() {
+        PredictiveBackHandler!(
+            on_back = move |progress: BackProgress| {
+                let log = log.clone();
+                async move {
+                    let _ = progress.collect(|_| {}).await;
+                    log.borrow_mut().push("completed");
+                    delay(Duration::from_millis(100)).await;
+                    log.borrow_mut().push("after the wait");
+                }
+            }
+        );
+    }
 }
 
 #[composable]
@@ -610,11 +698,206 @@ fn Shown(show: MutableState<bool>, log: Log) {
                 let log = log.clone();
                 async move {
                     log.borrow_mut().push("start");
-                    if progress.collect(|_| {}).await.is_ok() {
-                        log.borrow_mut().push("completed");
+                    match progress.collect(|_| {}).await {
+                        Ok(()) => log.borrow_mut().push("completed"),
+                        Err(_) => log.borrow_mut().push("cancelled"),
                     }
                 }
             }
         );
     }
+}
+
+/// A handler disabled during its gesture still takes its end (`processor`), so the platform must
+/// not be told back wasn't taken: it would act on it too.
+#[test]
+fn back_taken_by_a_gesture_s_disabled_handler_is_taken() {
+    let (log, enabled) = (Log::default(), mutable_state_of(true));
+    let (logged, read) = (log.clone(), enabled.handle());
+    let mut ui = rule(move || Collecting(logged.clone(), "on_back", read.get()));
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    enabled.set(false);
+    ui.wait_for_idle();
+    assert!(!ui.host().has_enabled_back_handlers());
+    assert!(ui.host().on_back_pressed());
+    // Its end taken, nothing's left to take the next.
+    assert!(!ui.host().on_back_pressed());
+}
+
+/// A press with no handler isn't taken.
+#[test]
+fn back_with_no_handler_is_not_taken() {
+    let mut ui = rule(|| {});
+    assert!(!ui.host().on_back_pressed());
+}
+
+/// A dialog's composable handler goes before the dialog's own back, as `BackHandler`'s.
+#[test]
+fn a_dialog_s_navigation_handler_takes_back_before_the_dialog() {
+    let (log, dismissed) = (Log::default(), Rc::new(Cell::new(false)));
+    let (logged, told) = (log.clone(), dismissed.clone());
+    let mut ui = rule(move || {
+        let (logged, told) = (logged.clone(), told.clone());
+        Dialog!(
+            on_dismiss_request = move || told.set(true),
+            content = move || {
+                let logged = logged.clone();
+                let state = remember_navigation_event_state!(0);
+                NavigationBackHandler!(
+                    state,
+                    on_back_completed = move || logged.borrow_mut().push("handler")
+                );
+            }
+        );
+    });
+    assert!(ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["handler"]);
+    assert!(!dismissed.get());
+}
+
+/// As Kotlin's `launch { progress.collect {} }`: the collector's another task than the one waiting
+/// on something else, polled again meanwhile, and each event reaches it.
+#[test]
+fn a_task_collecting_in_another_task_hears_each_event() {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let seen = heard.clone();
+    let mut ui = rule(move || {
+        let seen = seen.clone();
+        PredictiveBackHandler!(
+            on_back = move |progress: BackProgress| {
+                let seen = seen.clone();
+                async move {
+                    compose_runtime::platform::launch(async move {
+                        let _ =
+                            progress.collect(|event| seen.borrow_mut().push(event.progress)).await;
+                    });
+                    delay(Duration::from_millis(100)).await;
+                    delay(Duration::from_secs(60)).await;
+                }
+            }
+        );
+    });
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    ui.host().on_back_progressed(BackEventCompat { progress: 0.25, ..fake_event() });
+    ui.wait_for_idle();
+    // The gesture's task runs again, and waits again.
+    ui.advance_time_by(Duration::from_millis(200));
+    ui.wait_for_idle();
+    ui.host().on_back_progressed(BackEventCompat { progress: 0.5, ..fake_event() });
+    ui.wait_for_idle();
+    assert_eq!(*heard.borrow(), [0.25, 0.5]);
+}
+
+/// A task given up before it collected isn't told it must have: Compose's cancelled wait never
+/// comes back to the check.
+#[test]
+fn a_task_given_up_before_it_collects_does_not_panic() {
+    let log = Log::default();
+    let logged = log.clone();
+    let mut ui = rule(move || {
+        let logged = logged.clone();
+        PredictiveBackHandler!(
+            on_back = move |progress: BackProgress| {
+                let logged = logged.clone();
+                async move {
+                    logged.borrow_mut().push("start");
+                    let _held = progress;
+                    // A wait that ends with the cancellation, not by it.
+                    pending_once().await;
+                }
+            }
+        );
+    });
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    ui.host().on_back_cancelled();
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["start"]);
+}
+
+/// Pending at its first poll, done at the next.
+async fn pending_once() {
+    let mut polled = false;
+    std::future::poll_fn(move |_| {
+        if polled {
+            return std::task::Poll::Ready(());
+        }
+        polled = true;
+        std::task::Poll::Pending
+    })
+    .await;
+}
+
+/// A handler disabled between the gesture's start and its task's first step: it's not run, as
+/// `launchNewGesture`'s check.
+#[test]
+fn a_gesture_s_task_does_not_start_once_its_handler_is_disabled() {
+    let log = Log::default();
+    let logged = log.clone();
+    let mut ui = rule(move || Collecting(logged.clone(), "on_back", true));
+    ui.host().on_back_started(fake_event());
+    ui.host().set_lifecycle_state(LifecycleState::Created);
+    ui.wait_for_idle();
+    assert!(log.borrow().is_empty());
+}
+
+/// Its setter: disabled once its task is over, what's left of the gesture goes, and the next back
+/// runs a new task.
+#[test]
+fn a_handler_disabled_after_its_task_ended_clears_the_gesture() {
+    let (runs, enabled) = (Rc::new(Cell::new(0)), mutable_state_of(true));
+    let (counted, read) = (runs.clone(), enabled.handle());
+    let mut ui = rule(move || {
+        let counted = counted.clone();
+        PredictiveBackHandler!(
+            enabled = read.get(),
+            on_back = move |mut progress: BackProgress| {
+                let counted = counted.clone();
+                async move {
+                    counted.set(counted.get() + 1);
+                    // Over at its first event, the gesture going on.
+                    let _ = progress.next().await;
+                }
+            }
+        );
+    });
+    ui.host().on_back_started(fake_event());
+    ui.wait_for_idle();
+    ui.host().on_back_progressed(fake_event());
+    ui.wait_for_idle();
+    assert_eq!(runs.get(), 1);
+    enabled.set(false);
+    ui.wait_for_idle();
+    enabled.set(true);
+    ui.wait_for_idle();
+    ui.host().on_back_pressed();
+    ui.wait_for_idle();
+    assert_eq!(runs.get(), 2);
+}
+
+/// 64 events wait for the task, the rest are dropped, as `Channel.BUFFERED` and `trySend`.
+#[test]
+fn events_past_the_buffer_are_dropped() {
+    let heard = Rc::new(Cell::new(0));
+    let seen = heard.clone();
+    let mut ui = rule(move || {
+        let seen = seen.clone();
+        PredictiveBackHandler!(
+            on_back = move |progress: BackProgress| {
+                let seen = seen.clone();
+                async move {
+                    let _ = progress.collect(|_| seen.set(seen.get() + 1)).await;
+                }
+            }
+        );
+    });
+    ui.host().on_back_started(fake_event());
+    for _ in 0..100 {
+        ui.host().on_back_progressed(fake_event());
+    }
+    ui.wait_for_idle();
+    assert_eq!(heard.get(), 64);
 }
