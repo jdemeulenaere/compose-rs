@@ -139,6 +139,10 @@ D148 and D230 queue focus requests and return "a tree was asked", because the re
 
 The geometry-only 2D tests (`TwoDimensionalFocusTraversalTwoItemsTest`, `…ThreeItemsTest`, `…InitialFocusTest`) are portable before FO-1 (the ledger's `port` rows) and should be, as regression guards for FO-4.
 
+## A.6 What the implementation settled
+
+FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1279). Where they differ from the text above: `FocusState` is one enum (D1267); a block's `requester.request_focus()` acts as the block returns, its scope's at once (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
+
 # Part B: semantics
 
 ## B.1 What Compose does

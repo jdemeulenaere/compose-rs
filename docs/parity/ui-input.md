@@ -13,10 +13,10 @@ This ledger maps Jetpack Compose UI's tests and public API in input, focus, sema
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 5 | 39 |
-| `ported` | 3 | 67 |
-| `port` | 15 | 302 |
-| `partial` | 36 | 1,185 |
-| `feature:*` | 130 | 1,476 |
+| `ported` | 23 | 266 |
+| `port` | 8 | 56 |
+| `partial` | 48 | 1,505 |
+| `feature:*` | 105 | 1,203 |
 | `n/a` | 50 | 456 |
 | **Total** | **239** | **3,525** |
 
@@ -27,17 +27,15 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | host-view-interop | 23 | 294 |
 | autofill | 11 | 166 |
 | indirect-pointer-input | 7 | 123 |
-| focus-hierarchy | 6 | 97 |
+| focus-hierarchy | 1 | 4 |
 | velocity-tracker | 3 | 23 |
-| focus-properties | 9 | 79 |
 | platform-text-input | 7 | 76 |
-| focus-requester-api | 8 | 62 |
+| focus-requester-api | 1 | 1 |
 | pointer-icon-api | 1 | 59 |
 | pointer-event-model | 3 | 45 |
 | scroll-capture | 3 | 44 |
 | semantics-tree-api | 2 | 21 |
 | media-query | 2 | 42 |
-| focus-search-tree | 3 | 39 |
 | nested-scroll-dispatcher | 1 | 34 |
 | clipboard-api | 2 | 30 |
 | platform-window-modifiers | 4 | 25 |
@@ -49,7 +47,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | semantics-properties | 1 | 17 |
 | sound-effects | 3 | 16 |
 | rotary-input | 1 | 14 |
-| input-mode | 3 | 13 |
+| input-mode | 2 | 12 |
 | key-focus-navigation | 1 | 13 |
 | drag-and-drop | 1 | 12 |
 | view-configuration | 2 | 9 |
@@ -67,56 +65,56 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 
 | Path | `@Test` | Covers | Status | Detail |
 |---|---|---|---|---|
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CancelFocusMoveTest.kt` | 11 | `focusProperties { next = FocusRequester.Cancel }` and friends stop moves per direction | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CaptureFocusTest.kt` | 8 | `captureFocus` and the resulting `FocusState` | `feature:focus-requester-api` | Needs focus-hierarchy states too. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ClearFocusExitTest.kt` | 11 | `clearFocus` runs `onExit` on ancestors, which can cancel or redirect it | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CombinedFocusModifierNodeTest.kt` | 7 | One node delegating to focus target, requester and properties nodes; `canFocus` changes | `feature:focus-hierarchy` | Public focus node API (`FocusTargetModifierNode`, `FocusRequesterModifierNode`, `FocusPropertiesModifierNode`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CancelFocusMoveTest.kt` | 11 | `focusProperties { next = FocusRequester.Cancel }` and friends stop moves per direction | ported (`compose-ui/tests/suite/focus_tests/cancel_focus_move_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CaptureFocusTest.kt` | 8 | `captureFocus` and the resulting `FocusState` | ported (`compose-ui/tests/suite/focus_tests/capture_focus_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ClearFocusExitTest.kt` | 11 | `clearFocus` runs `onExit` on ancestors, which can cancel or redirect it | partial: 10 of 11 ported (`compose-ui/tests/suite/focus_tests/clear_focus_exit_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CombinedFocusModifierNodeTest.kt` | 7 | One node delegating to focus target, requester and properties nodes; `canFocus` changes | ported (`compose-ui/tests/suite/focus_tests/hand_ported.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ComposeViewKeyEventInteropTest.kt` | 5 | A `ComposeView` consumes a key only when focus moved; Back leaving to the root isn't consumed | `feature:host-view-interop` | compose-rs always consumes an unconsumed Tab, even with nothing to focus (see notes). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ComposeWithinAndroidViewsInteropTest.kt` | 2 | Focus moves between composables in embedded cousin views | `feature:host-view-interop` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CustomFocusRectTest.kt` | 8 | `focusProperties { focusRect }` and ancestors' rects | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CustomFocusTraversalTest.kt` | 15 | `focusProperties` custom next/previous/up/down/left/right/start/end/enter/exit, outermost wins, state-driven changes | `feature:focus-properties` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CustomFocusRectTest.kt` | 8 | `focusProperties { focusRect }` and ancestors' rects | partial: 5 of 8 ported (`compose-ui/tests/suite/focus_tests/custom_focus_rect_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/CustomFocusTraversalTest.kt` | 15 | `focusProperties` custom next/previous/up/down/left/right/start/end/enter/exit, outermost wins, state-driven changes | partial: 14 of 15 ported (`compose-ui/tests/suite/focus_tests/custom_focus_traversal_test.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/DeactivatedFocusNodeTest.kt` | 4 | Focus events of deactivated (`canFocus = false`) nodes | `feature:focus-hierarchy` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusAggregationTest.kt` | 14 | A parent's `FocusState` aggregates its children's (hasFocus, isFocused, isCaptured) | `partial` | `hasFocus` aggregation exists and is tested (`ui/review_d.rs` `on_focus_changed_observes_a_focused_child`); `isFocused`/`isCaptured` need focus-hierarchy. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedCountTest.kt` | 8 | How often `onFocusChanged` is called: initially, on gain, loss, removal, re-request | `port` | Reported on attach and on change (D85); partly covered by `ui/review_d.rs` (`on_focus_changed_reports_the_initial_state`, `losing_the_focus_target_from_the_chain_notifies_on_focus_changed`). Assert `hasFocus` values until focus-hierarchy brings `FocusState`. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedTest.kt` | 19 | `FocusState` transitions on `requestFocus` for each state; interaction barriers block focus search and keys | `feature:focus-hierarchy` | The barrier tests use the internal `interactionBarrier()`; their scenario (content under a modal blocks focus and keys) maps onto compose-rs's modal overlays (`fnd/review_overlay.rs`, `fnd/review_overlay2.rs`). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusEventCountTest.kt` | 25 | How often `onFocusEvent` is called, with delegating nodes and `focusProperties` changes | `feature:focus-hierarchy` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusAggregationTest.kt` | 14 | A parent's `FocusState` aggregates its children's (hasFocus, isFocused, isCaptured) | ported (`compose-ui/tests/suite/focus_tests/focus_aggregation_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedCountTest.kt` | 8 | How often `onFocusChanged` is called: initially, on gain, loss, removal, re-request | partial: 5 of 8 ported (`compose-ui/tests/suite/focus_tests/focus_changed_count_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedTest.kt` | 19 | `FocusState` transitions on `requestFocus` for each state; interaction barriers block focus search and keys | partial: 11 of 19 ported (`compose-ui/tests/suite/focus_tests/focus_changed_test.rs`, `hand_ported.rs`) | The geometric `interactionBarrier` is internal to Compose: its cases are modal overlays' here (`hand_ported.rs`, D1269); the others left, a barrier by bounds not being a public API. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusEventCountTest.kt` | 25 | How often `onFocusEvent` is called, with delegating nodes and `focusProperties` changes | partial: 21 of 25 ported (`compose-ui/tests/suite/focus_tests/focus_event_count_test.rs`) | Left: two with handlers kept in a local, two on delegating nodes. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusListenerTest.kt` | 5 | The focus owner's listener sees previous/current focused nodes | n/a: internal `FocusListener` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusManagerCompositionLocalTest.kt` | 10 | `LocalFocusManager.clearFocus`: whole hierarchy cleared, captured focus and `force`, inactive root, nested views | `partial` | `clear_focus` exists (`fnd/forms.rs` `the_focus_manager_clears_the_focus`, `fnd/review_forms.rs`); captured focus/`force` need focus-requester-api; nested `ComposeView` cases are host-view-interop. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRequesterTest.kt` | 23 | `requestFocus` on nodes without a target, targets below, first child, deactivated parents with implicit enter, removed children | `partial` | Focusing the node's target or the first one below exists (D90; `fnd/focus_requester.rs`, `fnd/review_round12.rs`, `fnd/review_reuse_d434.rs`); deactivated parents and enter need focus-hierarchy and focus-properties. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusManagerCompositionLocalTest.kt` | 10 | `LocalFocusManager.clearFocus`: whole hierarchy cleared, captured focus and `force`, inactive root, nested views | partial: 6 of 10 ported (`compose-ui/tests/suite/focus_tests/focus_manager_composition_local_test.rs`) | The touch-mode arm of each (no owner focus: the keyboard arm's initial focus is host-view-interop); left: nested `ComposeView`s and `View` focus. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRequesterTest.kt` | 23 | `requestFocus` on nodes without a target, targets below, first child, deactivated parents with implicit enter, removed children | partial: 20 of 23 ported (`compose-ui/tests/suite/focus_tests/focus_requester_test.rs`) | Left: `DisposableEffect` removal, a Cancel custom enter, `View`. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerConfigurationChangeTest.kt` | 1 | `focusRestorer` restores after activity recreation | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt` | 13 | `Modifier.focusRestorer(fallback)` restores the last focused child, in lazy lists too | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusSearchNonPlacedItemsTest.kt` | 15 | Focus moves skip items that aren't placed, in every direction | `port` | `focus_order` skips unplaced nodes (`crates/compose-ui/src/focus.rs`); the `Enter` case needs focus-properties (`FocusDirection::Enter`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt` | 13 | `Modifier.focusRestorer(fallback)` restores the last focused child, in lazy lists too | partial: 7 of 13 ported (`compose-ui/tests/suite/focus_tests/focus_restorer_test.rs`) | Left: lazy lists and recreation by hand (foundation; `DeviceConfigurationOverride`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusSearchNonPlacedItemsTest.kt` | 15 | Focus moves skip items that aren't placed, in every direction | ported (`compose-ui/tests/suite/focus_tests/focus_search_non_placed_items_test.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusSoundInteropTest.kt` | 3 | No Compose sound when Tab crosses `ComposeView`s | `feature:sound-effects` | Also host-view-interop. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusSoundTest.kt` | 8 | D-pad, cluster and Tab navigation play the navigation sound | `feature:sound-effects` | Needs key-focus-navigation. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTargetAttachDetachTest.kt` | 49 | Focus states as focus targets are added, removed and reordered in focused and inactive hierarchies | `partial` | Losing a removed target and keeping focus when one is inserted before it are tested (`ui/ui.rs` `removing_the_focused_node_clears_focus`, `ui/review_d.rs`); parent states (`ActiveParent`, deactivated) need focus-hierarchy. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTargetModifierNodeTest.kt` | 17 | `FocusTargetModifierNode(focusability, onFocusChange)`, `Focusability` in touch and keyboard modes, focused rect | `feature:focus-hierarchy` | Needs input-mode for `SystemDefined`. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTransactionsTest.kt` | 5 | Re-entrant `requestFocus` from `onFocusChanged`, cancelling a take of focus | `partial` | Requests from callbacks are queued until the tree is free (D148), so re-entrancy is portable now; cancelling through `onEnter` needs focus-properties. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTargetAttachDetachTest.kt` | 49 | Focus states as focus targets are added, removed and reordered in focused and inactive hierarchies | partial: 33 of 49 ported (`compose-ui/tests/suite/focus_tests/focus_target_attach_detach_test.rs`) | Left: key, soft-keyboard and rotary nodes as targets (key-input-api, rotary), `movableContentOf`, `ReusableContentHost`, the owner's internal `activeFocusTargetNode`, two delegating event nodes. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTargetModifierNodeTest.kt` | 17 | `FocusTargetModifierNode(focusability, onFocusChange)`, `Focusability` in touch and keyboard modes, focused rect | partial: 11 of 17 ported (`compose-ui/tests/suite/focus_tests/focus_target_modifier_node_test.rs`, `hand_ported.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusTransactionsTest.kt` | 5 | Re-entrant `requestFocus` from `onFocusChanged`, cancelling a take of focus | partial: 4 of 5 ported (`compose-ui/tests/suite/focus_tests/focus_transactions_test.rs`, `hand_ported.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusViewInteropTest.kt` | 22 | `getFocusedRect` and focus moves between `ComposeView`s and Views | `feature:host-view-interop` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FreeFocusTest.kt` | 5 | `freeFocus` from each state | `feature:focus-requester-api` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FreeFocusTest.kt` | 5 | `freeFocus` from each state | ported (`compose-ui/tests/suite/focus_tests/free_focus_test.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/InitialFocusTest.kt` | 7 | The owner assigns initial focus to the top-left item in keyboard mode | `feature:input-mode` | Also host-view-interop (owner focus). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/KeyEventToFocusDirectionTest.kt` | 13 | Arrow, page, Tab, D-pad center, Enter, Back and Escape keys map to focus directions | `feature:key-focus-navigation` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OneDimensionalFocusSearchNextTest.kt` | 21 | `moveFocus(Next)` order: initial focus, deactivated items, parents before children, wrap-around | `partial` | Tab order and wrap exist (`ui/ui.rs` `tab_moves_focus_through_clickables_and_enter_clicks`, `fnd/review_overlay2.rs`, `fnd/review_round12.rs`); deactivated items need focus-properties (`canFocus`), parent/child order across nested targets needs focus-search-tree; `moveFocus`'s returned value differs (notes). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OneDimensionalFocusSearchPreviousTest.kt` | 24 | `moveFocus(Previous)` order, mirror of the above | `partial` | As the row above; `fnd/review_forms.rs` `previous_from_no_focus_goes_to_the_last`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OneDimensionalFocusSearchNextTest.kt` | 21 | `moveFocus(Next)` order: initial focus, deactivated items, parents before children, wrap-around | ported (`compose-ui/tests/suite/focus_tests/one_dimensional_focus_search_next_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OneDimensionalFocusSearchPreviousTest.kt` | 24 | `moveFocus(Previous)` order, mirror of the above | ported (`compose-ui/tests/suite/focus_tests/one_dimensional_focus_search_previous_test.rs`) |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OwnerFocusTest.kt` | 10 | The Android view's focus and window focus drive Compose's root focus | `feature:host-view-interop` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestChildFocusTest.kt` | 18 | `requestFocusForChildInLocalBounds/RootBounds` pick the child overlapping a rect | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusEnterExitTest.kt` | 7 | Which `onEnter`/`onExit` properties can stop a focus change | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusEnterTest.kt` | 13 | Gaining focus runs ancestors' `onEnter`, which can cancel or redirect | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusExitTest.kt` | 1 | Redirecting an exit calls `onExit` | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusTest.kt` | 25 | `requestFocus` from every state and relation, with a direction, and the event sequence | `feature:focus-hierarchy` | The single-node cases are portable now (`fnd/semantics_actions.rs` `request_focus_focuses_the_node`). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RestoreFocusTest.kt` | 5 | `saveFocusedChild`/`restoreFocusedChild` | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterCaptureFocusTest.kt` | 6 | `captureFocus` on a requester attached to several targets | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterFreeFocusTest.kt` | 6 | `freeFocus` on a requester attached to several targets | `feature:focus-requester-api` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterTest.kt` | 3 | One requester on several targets: the last one requested keeps focus | `port` | A requester on several nodes exists, but compose-rs focuses the first attached where Compose ends on the last (notes). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalEnterTest.kt` | 10 | `moveFocus(Enter)` into children: top-left child, deactivated children, custom enter | `feature:focus-search-tree` | Needs `FocusDirection::Enter` (focus-properties). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalExitTest.kt` | 21 | `moveFocus(Exit)` to parents; 2D moves leaving a parent | `feature:focus-search-tree` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalImplicitEnterTest.kt` | 5 | Implicit enter through custom `enter` during 2D moves | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalImplicitExitTest.kt` | 8 | Implicit exit through custom `exit` during 2D moves | `feature:focus-properties` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalInitialFocusTest.kt` | 5 | 2D moves with nothing focused pick the first item from the corner | `port` | Implemented (`crates/compose-ui/src/focus_manager.rs` `two_dimensional_search_in`); deactivated items map to `focusable_with(false)`. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalTest.kt` | 8 | 2D moves in hierarchies: siblings before closer ancestors, leaving parents, deactivated parents | `feature:focus-search-tree` | compose-rs searches all focus targets flat (except lazy-list groups, D483). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalThreeItemsTest.kt` | 71 | Candidate choice among three items: in-beam beats closer, valid beats closer | `port` | Flat sibling boxes at absolute offsets; the beam and weighted-distance rules exist (`fnd/forms.rs` `the_focus_manager_moves_the_focus_in_two_dimensions`, `fnd/review_forms.rs`). Parameterized over 4 directions (284 cases). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalTwoItemsTest.kt` | 134 | Whether one candidate is valid in each direction: overlapping, adjacent, common boundaries | `port` | As above; parameterized over 4 directions (536 cases). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/WrapAroundFocusTest.kt` | 10 | `Next`/`Previous` wrap around rows, or not (the owner's internal wrap flag), in touch and keyboard modes | `port` | Tab wraps (`fnd/review_overlay2.rs` `tab_from_the_last_focusable_of_a_dialog_wraps_to_its_first`): the wrapping half ports now; the non-wrapping half is how an embedded view lets focus leave (host-view-interop). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/InputModeTest.kt` | 1 | Switching to touch mode programmatically | `feature:input-mode` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestChildFocusTest.kt` | 18 | `requestFocusForChildInLocalBounds/RootBounds` pick the child overlapping a rect | partial: 6 of 18 ported (`compose-ui/tests/suite/focus_tests/hand_ported.rs`) | Six by hand (`hand_ported.rs`); left: the `border`-based and custom-layout variants, with the same logic. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusEnterExitTest.kt` | 7 | Which `onEnter`/`onExit` properties can stop a focus change | ported (`compose-ui/tests/suite/focus_tests/hand_ported.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusEnterTest.kt` | 13 | Gaining focus runs ancestors' `onEnter`, which can cancel or redirect | ported (`compose-ui/tests/suite/focus_tests/request_focus_enter_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusExitTest.kt` | 1 | Redirecting an exit calls `onExit` | ported (`compose-ui/tests/suite/focus_tests/request_focus_exit_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RequestFocusTest.kt` | 25 | `requestFocus` from every state and relation, with a direction, and the event sequence | partial: 23 of 25 ported (`compose-ui/tests/suite/focus_tests/request_focus_test.rs`) | Left: `AndroidView`, and a key-press direction through tags. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/RestoreFocusTest.kt` | 5 | `saveFocusedChild`/`restoreFocusedChild` | partial: 4 of 5 ported (`compose-ui/tests/suite/focus_tests/restore_focus_test.rs`) | The flag-off cases; the flag on is off by default in Compose. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterCaptureFocusTest.kt` | 6 | `captureFocus` on a requester attached to several targets | ported (`compose-ui/tests/suite/focus_tests/reused_focus_requester_capture_focus_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterFreeFocusTest.kt` | 6 | `freeFocus` on a requester attached to several targets | ported (`compose-ui/tests/suite/focus_tests/reused_focus_requester_free_focus_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/ReusedFocusRequesterTest.kt` | 3 | One requester on several targets: the last one requested keeps focus | ported (`compose-ui/tests/suite/focus_tests/reused_focus_requester_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalEnterTest.kt` | 10 | `moveFocus(Enter)` into children: top-left child, deactivated children, custom enter | ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_enter_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalExitTest.kt` | 21 | `moveFocus(Exit)` to parents; 2D moves leaving a parent | ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_exit_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalImplicitEnterTest.kt` | 5 | Implicit enter through custom `enter` during 2D moves | partial: 4 of 5 ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_implicit_enter_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalImplicitExitTest.kt` | 8 | Implicit exit through custom `exit` during 2D moves | ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_implicit_exit_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalInitialFocusTest.kt` | 5 | 2D moves with nothing focused pick the first item from the corner | partial: 4 of 5 ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_initial_focus_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalTest.kt` | 8 | 2D moves in hierarchies: siblings before closer ancestors, leaving parents, deactivated parents | ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalThreeItemsTest.kt` | 71 | Candidate choice among three items: in-beam beats closer, valid beats closer | partial: 70 of 71 ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_three_items_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalTwoItemsTest.kt` | 134 | Whether one candidate is valid in each direction: overlapping, adjacent, common boundaries | partial: 133 of 134 ported (`compose-ui/tests/suite/focus_tests/two_dimensional_focus_traversal_two_items_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/WrapAroundFocusTest.kt` | 10 | `Next`/`Previous` wrap around rows, or not (the owner's internal wrap flag), in touch and keyboard modes | ported (`compose-ui/tests/suite/focus_tests/wrap_around_focus_test.rs`) |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/InputModeTest.kt` | 1 | Switching to touch mode programmatically | ported (`compose-foundation/tests/suite/focus_model.rs`) | Keyboard-mode host: the request is granted (D1272). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/focus/FocusAwareEventPropagationTest.kt` | 13 | Focus-aware events (keys, rotary, soft-keyboard interception) go from the focused node up, preview pass first | `partial` | Key bubbling exists (`ui/ui.rs` `key_events_bubble_from_the_focused_node_until_consumed`, `ui/review_d.rs` `on_key_event_after_focusable_receives_keys`); preview pass and interception need key-input-api, rotary needs rotary-input. Parameterized over 3 node types. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/focus/FocusChangedModifierTest.kt` | 1 | Inspector value of `onFocusChanged` | n/a: `InspectorInfo` (tooling) has no analogue |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/focus/FocusEventModifierTest.kt` | 1 | Inspector value of `onFocusEvent` | n/a: `InspectorInfo` (tooling) has no analogue |  |
@@ -438,6 +436,7 @@ Kept out because compose-rs content isn't an Android View tree (D226, D282, docs
 Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests" lists the section 2 rows the feature unblocks (as their status or as what a `partial` row misses).
 
 ### focus-hierarchy (L)
+- **Done** (FO-1, D1267-D1269, D1271, D1273-D1276).
 - **Compose API:** `FocusState`, `onFocusChanged(FocusState)`, `onFocusEvent`, `FocusEventModifierNode`, `Modifier.focusTarget()`, `FocusTargetModifierNode` factory (`Focusability`, `onFocusChange(previous, current)`, `focusState`, `requestFocus(direction)`, `getFocusedRect`).
 - **What:** Compose's focus tree: nested focus targets with the states Active, ActiveParent, Captured, Inactive; a target that can't focus (deactivated) stays in the tree and passes requests to its children; focus events reach every event node between targets. compose-rs keeps one focused node and reports `hasFocus` only (D76, D85).
 - **Tests:** CombinedFocusModifierNodeTest, DeactivatedFocusNodeTest, FocusChangedTest, FocusEventCountTest, FocusTargetModifierNodeTest, RequestFocusTest; and the missing parts of FocusAggregationTest, FocusChangedCountTest, FocusRequesterTest, FocusTargetAttachDetachTest.
@@ -445,6 +444,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** no.
 
 ### focus-properties (L)
+- **Done** (FO-2, D1270). The experimental `enter` and `exit` are left out: their getters answer the default and their setters are deprecated.
 - **Compose API:** `Modifier.focusProperties`, `FocusProperties`, `FocusEnterExitScope`, `FocusPropertiesModifierNode`, `invalidateFocusProperties`, `FocusRequester.Default`/`Cancel`, `FocusDirection.Enter`/`Exit`.
 - **What:** per-target `canFocus`, custom destinations per direction (or cancel), `onEnter`/`onExit` that can cancel or redirect a change, a custom focus rect.
 - **Tests:** CancelFocusMoveTest, ClearFocusExitTest, CustomFocusRectTest, CustomFocusTraversalTest, RequestFocusEnterExitTest, RequestFocusEnterTest, RequestFocusExitTest, TwoDimensionalFocusTraversalImplicitEnterTest, TwoDimensionalFocusTraversalImplicitExitTest; parts of FocusRequesterTest, FocusTransactionsTest, OneDimensionalFocusSearch{Next,Previous}Test, FocusSearchNonPlacedItemsTest.
@@ -452,6 +452,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** the `enter`/`exit` properties are (their setters deprecated); the rest is stable.
 
 ### focus-requester-api (M)
+- **Done** (FO-3, D1268, D1277): `request_focus_with(direction)` is `requestFocus(direction)`; the `FocusRequesterModifierNode` and `FocusTargetModifierNode` functions are on `NodeContext` and `NodeHandle`.
 - **Compose API:** `captureFocus`, `freeFocus`, `saveFocusedChild`, `restoreFocusedChild`, `requestFocus(direction): Boolean`, `createRefs`, `FocusRequesterModifierNode` functions, `Modifier.focusRestorer`, `requestFocusForChildInLocalBounds`/`RootBounds`, `clearFocus(force)` honouring capture, `moveFocus`'s result.
 - **What:** capture and its effect on clear/request, saved children, restoring focus into a group (lazy lists), and synchronous results. The results need a decision on D148/D230 (requests apply when the tree is free): apply them at once when called outside dispatch, or return a pending result.
 - **Tests:** CaptureFocusTest, FreeFocusTest, FocusRestorerTest, FocusRestorerConfigurationChangeTest, RequestChildFocusTest, RestoreFocusTest, ReusedFocusRequesterCaptureFocusTest, ReusedFocusRequesterFreeFocusTest; parts of FocusManagerCompositionLocalTest.
@@ -459,6 +460,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** no (the deprecated `focusRestorer(onRestoreFailed)` overload was experimental).
 
 ### focus-search-tree (M)
+- **Done** (FO-4, D477 at Compose's hook).
 - **Compose API:** behaviour of `moveFocus` (`Next`, `Previous`, `Up`…, `Enter`, `Exit`) over the focus tree.
 - **What:** Compose's one-dimensional order (a focusable parent before its children, children of deactivated parents) and two-dimensional search among the focused node's siblings first, then out of its parent; `Enter` picks the top-left child, `Exit` the parent. compose-rs searches all targets flat, with lazy lists as the only groups (D483).
 - **Tests:** TwoDimensionalFocusTraversalEnterTest, TwoDimensionalFocusTraversalExitTest, TwoDimensionalFocusTraversalTest; parts of OneDimensionalFocusSearch{Next,Previous}Test.
@@ -480,6 +482,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** no.
 
 ### input-mode (S)
+- **Done** (D1272): `InputMode`, `InputModeManager`, `LOCAL_INPUT_MODE_MANAGER`, `UiHost::set_input_mode`; Android's says touch at its start and on a touch, keyboard on a key or an accessibility focus (a device has to check it); `InitialFocusTest` waits for host-view-interop.
 - **Compose API:** `InputMode`, `InputModeManager`, `LocalInputModeManager`.
 - **What:** touch vs keyboard mode from the host (Android's touch mode; desktop: keyboard), switching on input, gating `Focusability.SystemDefined` (clickables focusable only in keyboard mode on Android) and initial focus.
 - **Tests:** InputModeTest, AccessibilityTouchModeTest, InitialFocusTest; parts of FocusTargetModifierNodeTest.
@@ -717,13 +720,13 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 
 ### Behaviour that may differ from Compose (check when porting)
 
-1. **Tab is always consumed** (`crates/compose-ui/src/dispatch.rs` `dispatch_key`: an unconsumed Tab key-down moves focus and returns consumed, even with nothing focusable). Compose doesn't consume a key that moved nothing, so an embedding View can take focus out. Caught by `ComposeViewKeyEventInteropTest.composeView_doesNotConsumesKeyEvent_ifTheContentIsNotFocusable` and `composeView_doesNotConsumesKeyEvent_ifFocusIsNotMoved`. In a `ComposeRsView` inside a Kotlin screen, Tab never leaves the view.
+1. *(Ended by FO-1, D1275: a Tab is consumed only if the focus moved.)* **Tab was always consumed** (`crates/compose-ui/src/dispatch.rs` `dispatch_key`: an unconsumed Tab key-down moved focus and returned consumed, even with nothing focusable). Compose doesn't consume a key that moved nothing, so an embedding View can take focus out. Caught by `ComposeViewKeyEventInteropTest.composeView_doesNotConsumesKeyEvent_ifTheContentIsNotFocusable` and `composeView_doesNotConsumesKeyEvent_ifFocusIsNotMoved`. In a `ComposeRsView` inside a Kotlin screen, Tab never leaves the view.
 2. **Key-ups without their key-down are delivered.** Compose drops them. Caught by `ProcessKeyInputTest.onKeyEvent_ignoresUpWithoutDown` and `onPreviewKeyEvent_ignoresUpWithoutDown`.
 3. **Shift changes the key.** Android and desktop send `Key::Character` of the typed character, so Shift+A is `Character('A')`, where Compose's `Key.A` is the same key with `isShiftPressed`. Caught by `KeyTest.androidKeyCode_to_composeKey`, `MetaKeyTest.shiftIsPressed`.
-4. **A `FocusRequester` on several targets focuses the first attached; Compose ends on the last** (it requests each in turn). Caught by `ReusedFocusRequesterTest.twoComponents` and `focusRequesterUsedWithThreeComponent`.
-5. **`move_focus`/`request_focus` return whether they were queued, not whether focus moved** (D148, D230). Caught by `OneDimensionalFocusSearchNextTest.moveFocus_noFocusableItem` (expects `false`) and every 1D/2D search test asserting the returned value; port them by checking the focus after `wait_for_idle()`.
+4. *(Ended by FO-3.)* **A `FocusRequester` on several targets focused the first attached; Compose ends on the last** (it requests each in turn). Caught by `ReusedFocusRequesterTest.twoComponents` and `focusRequesterUsedWithThreeComponent`.
+5. *(Ended by FO-3, D1268, where the tree is free.)* **`move_focus`/`request_focus` returned whether they were queued, not whether focus moved** (D148, D230). Caught by `OneDimensionalFocusSearchNextTest.moveFocus_noFocusableItem` (expects `false`) and every 1D/2D search test asserting the returned value; port them by checking the focus after `wait_for_idle()`.
 6. **Arrow and D-pad keys don't move focus on Android** (D230 follows desktop Compose); Compose on Android does. Caught by `KeyEventToFocusDirectionTest.left`/`right`/`up`/`down`, `FocusSoundTest.dpadNavigation_playsSoundEffect`.
-7. **Clickables are focusable in touch mode on Android** (compose-rs follows desktop: enabled clickables are always focus targets, D76); Compose's are `Focusability.SystemDefined`. Caught by `FocusTargetModifierNodeTest.requestFocus_focusabilitySystemDefined_touchMode`, `InitialFocusTest.itemFocusedOnAppearing` (touch mode).
+7. *(Ended, D1272; needs a device to check.)* **Clickables were focusable in touch mode on Android** (compose-rs follows desktop: enabled clickables are always focus targets, D76); Compose's are `Focusability.SystemDefined`. Caught by `FocusTargetModifierNodeTest.requestFocus_focusabilitySystemDefined_touchMode`, `InitialFocusTest.itemFocusedOnAppearing` (touch mode).
 8. **Hit testing ignores graphics-layer transforms** (D121) and has **no minimum-touch-target expansion**. Caught by `LayerTouchTransformTest.testTransformTouchEventConsumed`, `InputInLayerTest.reusedLayerIsReset`, `AndroidPointerInputTest.inputOnNestedBoxesLargerThanMinTouchPlacedViaGraphicsLayer_simpleInput_properlyTriggers`, `RestrictedSizeTest.clippedTouchInMinimumTouchTarget`, `AndroidPointerInputTest.unclippedTakesPrecedenceWithMinimumTouchTarget`.
 9. **A cancelled gesture restarts the `pointer_input` block** (`PointerInputDriver::stop`); Compose keeps the coroutine and sends it synthetic up events (consumed), so code after `awaitPointerEvent` still runs. Caught by `SuspendingPointerInputFilterTest.testSyntheticCancelEvent`, `testSyntheticMouseCancelEvent`, `SuspendingPointerInputFilterCoroutineJobTest.isPointerInputJobStillActive_cancelPointerEvent_assertsTrue`.
 10. **One change per pointer event.** A second finger's press is its own event, so a block never sees two changes in one `PointerEvent` (D75). Caught by `PointerInputEventProcessorTest.process_2DownOn2DifferentPointerNodes_hitAndDispatchInfoAreCorrect` and the multi-pointer `HitPathTrackerTest` cases.
