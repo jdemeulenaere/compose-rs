@@ -2204,8 +2204,9 @@ fn a_delegate_may_lay_out_beyond_bounds_for_a_focus_search() {
     let mut host = UiHost::headless(200, 100);
     host.set_content(move || {
         let a = a.clone();
+        // A group's search asks what's around it, as a scrolling container's.
         Stack(
-            over(move || BeyondBounds(a.clone())).size(50.dp()),
+            over(move || BeyondBounds(a.clone())).size(50.dp()).focus_group(),
             callback(move || {
                 Leaf(Modifier.focus_requester(requester).focusable().size(10.dp()));
             }),

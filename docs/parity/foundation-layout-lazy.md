@@ -378,7 +378,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **grid-parity:** done but for `overscrollEffect` (with overscroll) and `LazyGridItemScope`'s `animateItem` (with animate-item), D1451.
 - **cache-window:** done for lists and grids (D892). Left: `LazyStaggeredGridDefaults.cacheWindow(state)`, with staggered grids.
 - **lazy-semantics:** items in lazy layouts expose `CollectionInfo`/`CollectionItemInfo`, `ScrollToIndex`, `IndexForKey` and `scrollByOffset` (ui semantics properties), so `performScrollToIndex`/`performScrollToKey` work.
-- **pinnable:** `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
+- **pinnable:** (Started, D1282: `LOCAL_PINNABLE_CONTAINER`, `PinnableContainer` and `PinnedHandle` in ui, lazy items pinned one at a time by what's focusable; the rest of this waits.) `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
 - **beyond-bounds-api:** ui's `BeyondBoundsLayout` (`ModifierLocalBeyondBoundsLayout`, `layout(direction) {}`) answered by lazy layouts. compose-rs answers focus searches only.
 - **animate-item:** `LazyItemScope.animateItem(fadeInSpec, placementSpec, fadeOutSpec)`, `LazyGridItemScope.animateItem`, `LazyStaggeredGridItemScope.animateItem`.
 - **lazy-layout-public:**

@@ -75,7 +75,7 @@ pub(crate) struct FocusOwner {
 - **States are derived**, as Compose's: `focus_state(target)` is `Active`/`Captured` if it is the active one, `ActiveParent` if the active one is below it (`visit_ancestors(FOCUS_TARGET)` from the active one), else `Inactive`. Asked for one node, it costs the active node's depth.
 - **Properties** are folded on demand: `fetch_focus_properties(target)` starts from `can_focus = focusability.can_focus(input mode)` and applies each `FOCUS_PROPERTIES` entry before the target in its chain and up its ancestors until the next target (`visit_ancestors` with a stop at `FOCUS_TARGET`, modifier-nodes §3.8). `Modifier.focus_properties(|properties| …)` is its element; `FocusProperties` is a struct of Compose's fields (`next`…`end` as `FocusRequester`, with `FocusRequester::DEFAULT`, `CANCEL` constants and a private `REDIRECT`; `on_enter`/`on_exit` as `Callback<dyn Fn(&mut FocusEnterExitScope)>`; `focus_rect: Rect`, `UNSET_FOCUS_RECT`). `invalidate_focus_properties` (and auto-invalidation of a `focus_properties` update that sets `can_focus`, `NodeKind.kt:394-399`) re-checks the active target: one that can no longer focus loses it.
 - **`Focusability::SYSTEM_DEFINED`** reads the input mode (ui-input's `input-mode` feature: `LOCAL_INPUT_MODE_MANAGER`, read through `current_value_of`, modifier-nodes §3.9).
-- **Modal overlays as windows.** compose-rs's dialogs and focusable popups are overlays in one tree (D130), where Compose's are windows with their own owners. While a modal overlay shows, what's behind it is out of searches, which start from the overlay's subtree as a root, its own target no stop; a request behind it answers yes and has the focus when it closes, as the other window's owner would (`isOccludedByInteractionBarrier` only knows `Modifier.interactionBarrier`, D1269).
+- **Modal overlays as windows.** compose-rs's dialogs and focusable popups are overlays in one tree (D130), where Compose's are windows with their own owners. While a modal overlay shows, what's behind it is out of searches, which start from the overlay's subtree as a root, its own target no stop; a request behind it answers yes and has the focus when it closes, kept by the lowest overlay not containing it (`isOccludedByInteractionBarrier` only knows `Modifier.interactionBarrier`). It's a window only in part: see D1269.
 
 ### A.3.2 Transactions
 
@@ -141,7 +141,7 @@ The geometry-only 2D tests (`TwoDimensionalFocusTraversalTwoItemsTest`, `…Thre
 
 ## A.6 What the implementation settled
 
-FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1282). Where they differ from the text above: `FocusState` is one enum (D1267); a block's requests act at once, the tree set aside for it (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
+FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1283). Where they differ from the text above: `FocusState` is one enum (D1267); a block's requests act at once, the tree set aside for it (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
 
 # Part B: semantics
 

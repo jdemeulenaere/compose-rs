@@ -278,3 +278,97 @@ fn leaving_touch_mode_the_view_asking_lights_the_first_clickable() {
     assert!(take(*scene, Down));
     assert_eq!(scene.focused(), ["first"]);
 }
+
+// ---- A node whose being a target comes and goes -------------------------------------------------------------
+
+/// A node holding a delegate that clips hits, a focus target while it's enabled.
+struct Flipping(bool);
+
+struct ClipsHits;
+
+impl ModifierNode for ClipsHits {
+    fn hit_clip(&self) -> Option<Shape> {
+        Some(RECTANGLE_SHAPE)
+    }
+}
+
+struct FlippingNode {
+    enabled: bool,
+    is_target: bool,
+    delegates: Delegates,
+}
+
+impl ModifierNodeElement for Flipping {
+    type Node = FlippingNode;
+    fn create(&self) -> FlippingNode {
+        let mut delegates = Delegates::new();
+        delegates.delegate(ClipsHits);
+        FlippingNode { enabled: self.0, is_target: self.0, delegates }
+    }
+    fn update(&self, node: &mut FlippingNode) {
+        node.enabled = self.0;
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+    fn name(&self) -> &'static str {
+        "flipping"
+    }
+}
+
+impl ModifierNode for FlippingNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        if self.is_target { Some(self) } else { None }
+    }
+    fn focus_target_wanted(&self) -> Option<bool> {
+        Some(self.enabled)
+    }
+    fn set_is_focus_target(&mut self, is_target: bool) {
+        self.is_target = is_target;
+    }
+}
+
+impl FocusTargetModifierNode for FlippingNode {}
+
+/// What its update changes is the target alone: the delegate's clip stays heard.
+#[test]
+fn a_delegating_node_turning_into_a_target_and_back_keeps_its_delegates_clip() {
+    let clicks = cell(0);
+    let scene = scene(move |scene| {
+        let enabled = !scene.flag("off").get();
+        // Its child is placed past its bounds: only outside the clip does a press miss it.
+        Stack!(
+            modifier = Modifier
+                .required_size((50.dp(), 50.dp()))
+                .then_custom(Flipping(enabled))
+                .then(scene.req("x")),
+            {
+                Leaf(
+                    Modifier
+                        .offset(40.dp(), 0.dp())
+                        .required_size((40.dp(), 40.dp()))
+                        .clickable(move || clicks.set(clicks.get() + 1)),
+                );
+            }
+        );
+    });
+    let press_at = |x: f32| {
+        scene.with_host(|host| click(host, x, 10.0));
+        scene.idle();
+    };
+    press_at(45.0);
+    assert_eq!(clicks.get(), 1, "inside");
+    press_at(70.0);
+    assert_eq!(clicks.get(), 1, "outside its clip");
+    scene.set("off", true);
+    press_at(70.0);
+    assert_eq!(clicks.get(), 1, "still clipped, not a target");
+    press_at(45.0);
+    assert_eq!(clicks.get(), 2);
+    scene.set("off", false);
+    press_at(70.0);
+    assert_eq!(clicks.get(), 2, "still clipped, a target again");
+}
