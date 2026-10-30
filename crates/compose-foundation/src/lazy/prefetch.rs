@@ -251,7 +251,8 @@ impl Units for ItemUnits {
 /// `visibleItemsInfo` (a sticking header first, D895), how far the first starts before the
 /// viewport and the last ends, with its spacing, past it (or short of it).
 pub(super) struct Laid {
-    pub(super) first: usize,
+    /// -1 while a grid's header sticks: it has no line (`UnknownRow`).
+    pub(super) first: i32,
     pub(super) last: usize,
     pub(super) start_overflow: i32,
     pub(super) end_overflow: i32,
@@ -600,7 +601,7 @@ impl Prefetch {
             }
             match laid {
                 Some(laid) => {
-                    shown.first = laid.first as i32;
+                    shown.first = laid.first;
                     shown.last = laid.last as i32;
                     shown.start_overflow = laid.start_overflow;
                     shown.end_overflow = laid.end_overflow;

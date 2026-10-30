@@ -211,13 +211,9 @@ mod wheel_tests {
     fn a_line_is_the_platforms_step_and_pixels_are_pixels() {
         let bounds = IntSize::new(100, 400);
         let line = wheel_event(Offset::ZERO, &MouseScrollDelta::LineDelta(0.0, -2.0));
-        let step = if cfg!(target_os = "macos") {
-            10.0 * 2.0
-        } else if cfg!(target_os = "windows") {
-            400.0 / 20.0 * 3.0
-        } else {
-            20.0 * 3.0
-        };
+        // 10 dp on macOS; 3 lines of the height over 20 on Windows and of its root on Linux, which
+        // a height of 400 makes the same.
+        let step = if cfg!(target_os = "macos") { 10.0 * 2.0 } else { 20.0 * 3.0 };
         assert_eq!(line.wheel_pixels(2.0, bounds), Offset::new(0.0, 2.0 * step));
         let pixels = wheel_event(
             Offset::ZERO,

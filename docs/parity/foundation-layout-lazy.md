@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 24 | 481 |
-| `port` | 12 | 79 |
-| `partial` | 25 | 847 |
-| `feature:<name>` | 101 | 1,457 |
+| `ported` | 31 | 584 |
+| `port` | 9 | 33 |
+| `partial` | 23 | 811 |
+| `feature:<name>` | 99 | 1,436 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -131,31 +131,31 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 
 | Path | Tests | Covers | Status |
 |---|---|---|---|
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyArrangementsTest.kt | 33 | Grid main-axis arrangements, spacing, RTL | port (main axis exists; cross-axis arrangement other than spacing needs feature:grid-parity) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyArrangementsTest.kt | 33 | Grid main-axis arrangements, spacing, RTL | ported (`lazy_grid_arrangements.rs`: all 33, both orientations, the arrangement across too) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyCustomKeysTest.kt | 21 | Keyed grid items keep state through edits | covered (`review_round6.rs::a_keyed_grid_keeps_each_items_state_by_its_key`, `lazy_grid_reuse.rs` reorder and insert tests; port the remaining edit cases) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridBeyondBoundsTest.kt | 10 | `BeyondBoundsLayout` requests on grids | feature:beyond-bounds-api |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowParityTest.kt | 12 | Grid cache window configured like the old strategy | ported (`lazy_cache_window.rs`: 11, `grid_parity_*`, in both orientations; `prefetchingForwardAndBackwardReverseLayout` waits for grids' `reverseLayout`, feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowTest.kt | 8 | Grid cache window fill and keep | ported (`lazy_cache_window.rs`: all 8, in both orientations) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridHeadersTest.kt | 14 | `LazyGridScope.stickyHeader` | feature:grid-parity |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridHeadersTest.kt | 14 | `LazyGridScope.stickyHeader` | partial (`lazy_grid_headers.rs`: 10 of 14. Left: `lazyVerticalGridwithPinnedItem` and the three focus tests, which pin each item: feature:pinnable) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemAppearanceAnimationTest.kt | 10 | Grid `animateItem` fade-in | feature:animate-item |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemDisappearanceAnimationTest.kt | 13 | Grid `animateItem` fade-out | feature:animate-item |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemPlacementAnimationTest.kt | 51 | Grid `animateItem` placement | feature:animate-item |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt | 17 | Grid `layoutInfo` (rows/columns/spans, viewport) | partial (`lazy_grid_layout_info.rs`: 14 tests, the 17 not reversed; the reversed configurations need feature:grid-parity) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt | 17 | Grid `layoutInfo` (rows/columns/spans, viewport) | ported (`lazy_grid_layout_info.rs`: all 17, the four configurations) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridNestedPrefetchingTest.kt | 6 | Nested prefetch from grid items | port (as the list's; one test uses a deprecated strategy: n/a) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPinnableContainerTest.kt | 13 | Pinning grid items | feature:pinnable |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetchPrecedenceTest.kt | 4 | Grid default is the cache window | ported (`lazy_cache_window.rs`: 2; the other 2 are n/a, as the list's) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetchStrategyTest.kt | 6 | Custom `LazyGridPrefetchStrategy` callbacks | n/a: `@Deprecated` at tip |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetcherTest.kt | 12 | Grid line prefetch (1.12.1's default strategy) | covered (`prefetch.rs::a_grid_prefetches_its_next_rows`, `prefetch_parity.rs::a_grid_prefetches_the_next_line…`, `review_grid_d450.rs`, at the default window now; deprecated at tip, as the list's) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridRequestScrollTest.kt | 9 | `requestScrollToItem` on grids | partial (`lazy_request_scroll.rs`: 8 of 9; the reversed one after feature:grid-parity) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridRequestScrollTest.kt | 9 | `requestScrollToItem` on grids | ported (`lazy_request_scroll.rs`: all 9) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridScrollIndicatorTest.kt | 11 | Grid `scrollIndicatorState` | feature:scroll-indicator-state (+ grid-parity for the sticky case) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSlotsReuseTest.kt | 10 | Grid slot reuse | covered (`lazy_grid_reuse.rs`: 13 tests) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt | 16 | Spans, line breaks, horizontal spacing, `maxLineSpan` per cell kind | covered (`lazy_grid_reuse.rs::spans_lay_items_out_in_lines_as_compose`, `review_grid_d450.rs` span tests; the `FixedSize` cases need feature:grid-parity) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridTest.kt | 60 | Grids at large: fixed/adaptive/fixed-size cells, spacing, scrolling, RTL, state, wrap content | partial (`grid.rs`, `review_grid_d450.rs`, `review_grid_d455.rs`. Missing: `GridCells.FixedSize`, cross-axis arrangement, `userScrollEnabled`, reverse (feature:grid-parity)) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt | 24 | Grid content padding | partial (`lazy_grid_content_padding.rs`: 11 tests porting 22; they found D865 in grids too. Left: the two reversed cases (feature:grid-parity: grids have no `reverse_layout`)) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt | 16 | Spans, line breaks, horizontal spacing, `maxLineSpan` per cell kind | covered (`lazy_grid_reuse.rs::spans_lay_items_out_in_lines_as_compose`, `review_grid_d450.rs` span tests; `lazy_grid.rs`: the `crossAxisCellCount` tests and `spansCalculationDoesntCrash`, an item knowing the cells once measured, D1451) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridTest.kt | 60 | Grids at large: fixed/adaptive/fixed-size cells, spacing, scrolling, RTL, state, wrap content | partial (`lazy_grid.rs`: 39 of 60, both orientations, with `grid.rs`, `review_grid_d450.rs`, `review_grid_d455.rs`. Left: 16 of lookahead, `customOverscroll` (feature:overscroll), `zIndexOnItemAffectsDrawingOrder` (pixels), `onlyOneInitialMeasurePass` (rounds, D125), `passingNegativeItemsCountIsNotAllowed` (a `usize`), `recomposingWithNewComposedModifierObjectIsNotCausingRemeasure`: a grid recomposed at its call site has new items, a closure not comparing as Compose compares its content lambda) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt | 24 | Grid content padding | ported (`lazy_grid_content_padding.rs`: 13 tests porting all 24; they found D865 in grids too) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsIndexedTest.kt | 2 | Indexed grid items | covered (`lazy_grid_reuse.rs::the_list_and_indexed_forms_take_keys_spans_and_content_types`) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsReverseLayoutTest.kt | 7 | Grid `reverseLayout` | feature:grid-parity |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyNestedScrollingTest.kt | 4 | Nested scroll from a grid at its edges | port (`review_d479.rs::a_nested_grid_passing_its_estimated_start_offers_the_rest`) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollAccessibilityTest.kt | 9 | Accessibility scroll actions on grids | port (grids share the list's scroll node and semantics) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsReverseLayoutTest.kt | 7 | Grid `reverseLayout` | ported (`lazy_grid_arrangements.rs`: all 7) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyNestedScrollingTest.kt | 4 | Nested scroll from a grid at its edges | ported (`lazy_grid.rs`: all 4, both orientations; `review_d479.rs::a_nested_grid_passing_its_estimated_start_offers_the_rest`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollAccessibilityTest.kt | 9 | Accessibility scroll actions on grids | ported (`compose-android/tests/accessibility_scroll.rs`: all 9, the eight configurations) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollTest.kt | 34 | Grid `scrollToItem` / `animateScrollToItem` / `animateScrollBy` | ported (`lazy_grid_scroll.rs`: 11 tests, all 34) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazySemanticsTest.kt | 2 | Grid item semantics (`ScrollToIndex`, collection info) | feature:lazy-semantics |
 
@@ -375,10 +375,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `isScrollInProgress`, `interactionSource`, `lastScrolledForward`/`Backward`;
   - `LazyLayoutScrollScope` (and `LazyLayoutScrollScope(state, scrollScope)` for each state), the `Saver` as a value.
 - **lazy-list-params:** `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect`. `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
-- **grid-parity:** on `LazyVerticalGrid`/`LazyHorizontalGrid`:
-  - parameters: `reverseLayout`, `userScrollEnabled`, `flingBehavior`, `overscrollEffect` (`cacheWindow` exists);
-  - the cross-axis arrangement beyond its spacing;
-  - `GridCells.FixedSize`, a public `GridCells` interface (`calculateCrossAxisCellSizes`) for custom cells, `LazyGridScope.stickyHeader`, `LazyGridItemScope` (for `animateItem`), the `LazyGridItemInfo.UnknownRow/Column` constants.
+- **grid-parity:** done but for `overscrollEffect` (with overscroll) and `LazyGridItemScope`'s `animateItem` (with animate-item), D1451.
 - **cache-window:** done for lists and grids (D892). Left: `LazyStaggeredGridDefaults.cacheWindow(state)`, with staggered grids.
 - **lazy-semantics:** items in lazy layouts expose `CollectionInfo`/`CollectionItemInfo`, `ScrollToIndex`, `IndexForKey` and `scrollByOffset` (ui semantics properties), so `performScrollToIndex`/`performScrollToKey` work.
 - **pinnable:** `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
@@ -446,11 +443,9 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
    - Tests: VisibleTest, parts of OffsetTest, PaddingTest, PaddingValuesTest, SizeTest, BoxTest and RowColumnTest.
    - Depends on: none (`visible` needs a node that skips drawing, hit testing and focus).
    - Size: M. Experimental: no.
-8. **grid-parity.**
-   - API: grids' `reverseLayout`, `userScrollEnabled`, `stickyHeader`, `GridCells.FixedSize`, the cross-axis arrangement, a public `GridCells` interface, the `flingBehavior`/`overscrollEffect`/`cacheWindow` parameters.
-   - Tests: LazyGridsReverseLayoutTest, LazyGridHeadersTest, parts of LazyGridTest, LazyArrangementsTest (grid), LazyGridSpanTest and LazyGridsContentPaddingTest.
-   - Depends on: the list's sticky header and reverse code; lazy-list-params for the last three.
-   - Size: M. Experimental: no.
+8. **grid-parity.** **Done** but for `overscrollEffect` and `animateItem`, which come with their features (D1451).
+   - API: grids' `reverse_layout`, `sticky_header`, `GridCells::FixedSize`, `GridCells::Custom` for `calculateCrossAxisCellSizes`, the cross-axis arrangement, `LazyGridItemScope::cross_axis_cell_count`, `LazyGridItemInfo::UNKNOWN_ROW`/`UNKNOWN_COLUMN`.
+   - Tests: LazyGridsReverseLayoutTest, LazyGridHeadersTest, LazyGridTest, LazyArrangementsTest (grid), LazyGridSpanTest, LazyGridsContentPaddingTest, LazyGridLayoutInfoTest, LazyGridRequestScrollTest.
 9. **draggable.**
    - API: the full `draggable` signature, `DraggableState.drag`, `draggable2D`.
    - Tests: DraggableTest (rest), Draggable2DTest.

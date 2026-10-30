@@ -33,8 +33,8 @@ pub use cache_window::{
     lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
 };
 pub use grid::{
-    GridCells, GridItemSpan, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
-    LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
+    CrossAxisCells, GridCells, GridItemSpan, LazyGridItemScope, LazyGridItemSpanScope,
+    LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
 };
 pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, LazyListLayoutInfo};
 
@@ -188,6 +188,9 @@ struct LazyListInner {
     /// than kept for reuse (no scroll brought them, D482).
     beyond_ended: Cell<bool>,
     dispose_leaving: Cell<bool>,
+    /// The cells across a grid, as last measured: what its items' scope says.
+    cross_cells: OwnedState<usize>,
+    cross_cells_written: Cell<usize>,
     /// The sticky header to keep composed (over the first visible item), as last laid out.
     sticky: OwnedState<Option<usize>>,
     /// What was last written to `sticky`, read without observing it.
@@ -299,6 +302,8 @@ impl LazyListInner {
             overshoot: RefCell::new(None),
             prefetch: Prefetch::new(),
             parent_size: Rc::default(),
+            cross_cells: mutable_state_of(0),
+            cross_cells_written: Cell::new(0),
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
             beyond_bounds: mutable_state_of((0, 0)),
@@ -2659,7 +2664,7 @@ impl MeasurePolicy for LazyListLayout {
         if !missing && wanted_before == 0 && (headers.is_none() || sticking.is_some()) {
             let laid = match (placed.first(), placed.last()) {
                 (Some((_, first_main)), Some((last, last_main))) => Some(Laid {
-                    first: sticking.map_or(lead, |(header, _, _)| header),
+                    first: sticking.map_or(lead, |(header, _, _)| header) as i32,
                     last: end_index - 1,
                     start_overflow: (-sticking.map_or(*first_main, |(_, _, at)| at)).max(0),
                     end_overflow: (last_main + main_of(last) + spacing - main_max).abs(),

@@ -347,3 +347,193 @@ fn a_card_around_a_scrolling_row_offers_no_scroll() {
         assert_eq!(scroll_amount(found, action, shown), None);
     }
 }
+
+// ---- Compose's grids' `LazyScrollAccessibilityTest` --------------------------------------------
+
+/// Compose's `TestConfig`.
+#[derive(Clone, Copy, Debug)]
+struct GridConfig {
+    horizontal: bool,
+    rtl: bool,
+    reversed: bool,
+}
+
+fn grid_configs() -> Vec<GridConfig> {
+    let mut configs = Vec::new();
+    for horizontal in [false, true] {
+        for rtl in [false, true] {
+            for reversed in [false, true] {
+                configs.push(GridConfig { horizontal, rtl, reversed });
+            }
+        }
+    }
+    configs
+}
+
+/// A 200 px grid, padded by 50, of 100 items of 21 px with their indices: the viewport's 100 px, the
+/// content's 2,100 px, from the position given.
+fn accessible_grid(config: GridConfig, first: usize, offset: i32) -> UiHost {
+    let mut host = UiHost::headless(200, 200);
+    let owned = LazyGridState::new(first, offset);
+    let state = *owned;
+    host.set_content(move || {
+        let _ = &owned;
+        let direction = if config.rtl {
+            compose_ui::LayoutDirection::Rtl
+        } else {
+            compose_ui::LayoutDirection::Ltr
+        };
+        compose_runtime::CompositionLocalProvider(
+            compose_ui::LOCAL_LAYOUT_DIRECTION.provides(direction),
+            move || {
+                let content = |scope: LazyGridScope| {
+                    scope.items(100, |index| {
+                        Box!(modifier = Modifier.required_size(21.dp()), {
+                            BasicText!("{}", index);
+                        });
+                    });
+                };
+                let modifier = Modifier.size(200.dp());
+                if config.horizontal {
+                    LazyHorizontalGrid!(
+                        GridCells::Fixed(1),
+                        modifier = modifier,
+                        state = state,
+                        content_padding = PaddingValues::all(50.dp()),
+                        reverse_layout = config.reversed,
+                        content = content
+                    );
+                } else {
+                    LazyVerticalGrid!(
+                        GridCells::Fixed(1),
+                        modifier = modifier,
+                        state = state,
+                        content_padding = PaddingValues::all(50.dp()),
+                        reverse_layout = config.reversed,
+                        content = content
+                    );
+                }
+            },
+        );
+    });
+    host.settle(10);
+    host
+}
+
+fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsNode {
+    fn find(
+        node: &compose_ui::platform::SemanticsNode,
+    ) -> Option<compose_ui::platform::SemanticsNode> {
+        let config = &node.config;
+        if config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE).is_some()
+            || config.get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE).is_some()
+        {
+            return Some(node.clone());
+        }
+        node.children.iter().find_map(find)
+    }
+    find(&host.semantics_tree(true)).expect("a scrolling node")
+}
+
+fn shows_text(host: &UiHost, text: &str) -> bool {
+    fn find(node: &compose_ui::platform::SemanticsNode, text: &str) -> bool {
+        node.config
+            .get(&compose_ui::SemanticsProperties::TEXT)
+            .is_some_and(|texts| texts.iter().any(|it| it.as_str() == text))
+            || node.children.iter().any(|child| find(child, text))
+    }
+    find(&host.semantics_tree(true), text)
+}
+
+/// Compose's `testScrollAction`, from the middle: 47 items and 13 px in, 1,000 px either side.
+fn grid_action_reaches(config: GridConfig, action: u8, target: usize, succeeds: bool) {
+    let mut host = accessible_grid(config, 47, 13);
+    assert!(!shows_text(&host, &target.to_string()), "{config:?}: {target} before");
+    let node = the_scrolling_node(&host);
+    let amount = scroll_amount(&node, action, node.bounds);
+    assert_eq!(amount.is_some(), succeeds, "{config:?}");
+    if let Some((x, y)) = amount {
+        let scrolled = host.perform_semantics_action_with(
+            node.id,
+            &compose_ui::SemanticsActions::SCROLL_BY,
+            |scroll| scroll(x, y),
+        );
+        assert!(scrolled, "{config:?}");
+        host.settle(10);
+    }
+    assert_eq!(shows_text(&host, &target.to_string()), succeeds, "{config:?}: {target} after");
+}
+
+/// `testRelativeDirection`: forward and backward, whatever the direction, the reversal mirrors.
+fn grid_relative(canonical: usize, action: u8) {
+    for config in grid_configs() {
+        let target = if config.reversed { 100 - canonical - 1 } else { canonical };
+        grid_action_reaches(config, action, target, true);
+    }
+}
+
+/// `testAbsoluteDirection`: on the axis it scrolls, an absolute direction, mirrored right to left
+/// on a horizontal grid and when reversed; on the other, nothing.
+fn grid_absolute(canonical: usize, action: u8, horizontal_action: bool) {
+    for config in grid_configs() {
+        let mut target = canonical;
+        if config.horizontal && config.rtl {
+            target = 100 - target - 1;
+        }
+        if config.reversed {
+            target = 100 - target - 1;
+        }
+        grid_action_reaches(config, action, target, config.horizontal == horizontal_action);
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollAccessibilityTest.kt, scrollForward, scrollBackward
+#[test]
+fn a_grid_scrolls_forward_and_backward_by_its_actions() {
+    grid_relative(58, scroll_action::FORWARD);
+    grid_relative(41, scroll_action::BACKWARD);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollAccessibilityTest.kt, scrollRight, scrollLeft, scrollDown, scrollUp
+#[test]
+fn a_grid_scrolls_in_absolute_directions_on_its_axis() {
+    grid_absolute(58, scroll_action::RIGHT, true);
+    grid_absolute(41, scroll_action::LEFT, true);
+    grid_absolute(58, scroll_action::DOWN, false);
+    grid_absolute(41, scroll_action::UP, false);
+}
+
+/// Compose's `verifyNodeInfoScrollActions`.
+fn verify_grid_actions(
+    config: GridConfig,
+    first: usize,
+    offset: i32,
+    forward: bool,
+    backward: bool,
+) {
+    use scroll_action::*;
+    let host = accessible_grid(config, first, offset);
+    let actions = scroll_actions(&the_scrolling_node(&host));
+    assert_eq!(actions & FORWARD != 0, forward, "{config:?}");
+    assert_eq!(actions & BACKWARD != 0, backward, "{config:?}");
+    if config.horizontal {
+        let (left, right) = if config.rtl { (forward, backward) } else { (backward, forward) };
+        assert_eq!(actions & LEFT != 0, left, "{config:?}");
+        assert_eq!(actions & RIGHT != 0, right, "{config:?}");
+        assert_eq!(actions & (UP | DOWN), 0, "{config:?}");
+    } else {
+        assert_eq!(actions & (LEFT | RIGHT), 0, "{config:?}");
+        assert_eq!(actions & DOWN != 0, forward, "{config:?}");
+        assert_eq!(actions & UP != 0, backward, "{config:?}");
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyScrollAccessibilityTest.kt, verifyScrollActionsAtStart, verifyScrollActionsInMiddle, verifyScrollActionsAtEnd
+#[test]
+fn a_grid_offers_the_actions_its_position_has() {
+    for config in grid_configs() {
+        verify_grid_actions(config, 0, 0, !config.reversed, config.reversed);
+        verify_grid_actions(config, 47, 13, true, true);
+        verify_grid_actions(config, 95, 5, config.reversed, !config.reversed);
+    }
+}

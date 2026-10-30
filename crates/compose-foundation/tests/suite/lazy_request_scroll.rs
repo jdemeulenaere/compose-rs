@@ -561,3 +561,61 @@ fn after_a_grid_request_the_position_follows_the_first_items_key_again() {
         assert_eq!(grid_keys(&state), keys((13..=20).chain([3])), "{lazy:?}");
     }
 }
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridRequestScrollTest.kt, requestScrollToItem_withStartOfNewFirstItem_prependedItems_scrollsToStartOfNewFirstItem
+#[test]
+fn a_request_with_a_negative_offset_shows_the_start_of_a_grids_new_first_item() {
+    for lazy in Lazy::grids() {
+        let state = LazyGridState::new(0, 0);
+        let handle = *state;
+        let items = mutable_state_of((3..=30).collect::<Vec<u32>>());
+        let items_handle = items.handle();
+        let list_size = ITEM * 6 / 10;
+        let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+            let list = items_handle.get();
+            let first = list.first().copied();
+            let modifier = Modifier.size(px(list_size));
+            let cells = GridCells::FixedSize(px(ITEM));
+            let content = move |scope: LazyGridScope| {
+                scope.items_list_keyed(
+                    list.clone(),
+                    |item: &u32| *item,
+                    |_: &u32| {
+                        Spacer(Modifier.size(px(ITEM)));
+                    },
+                );
+            };
+            if lazy.vertical {
+                LazyVerticalGrid!(
+                    cells,
+                    modifier = modifier,
+                    state = handle,
+                    reverse_layout = true,
+                    content = content
+                );
+            } else {
+                LazyHorizontalGrid!(
+                    cells,
+                    modifier = modifier,
+                    state = handle,
+                    reverse_layout = true,
+                    content = content
+                );
+            }
+            SideEffect(move || {
+                let first_key =
+                    handle.layout_info().visible_items_info.first().map(|item| item.key);
+                let changed = first_key != first.map(|first| hash_key(&first));
+                if !handle.can_scroll_backward() && changed {
+                    // The start of the first item.
+                    handle.request_scroll_to_item(1, -list_size);
+                }
+            });
+        });
+        let _ = run(&mut ui, async move { handle.scroll_to_item(0, 0).await });
+        items.set((0..=30).collect());
+        ui.wait_for_idle();
+        assert_eq!(state.first_visible_item_index(), 0);
+        assert_eq!(state.first_visible_item_scroll_offset(), ITEM - list_size);
+    }
+}
