@@ -53,6 +53,11 @@ pub use gestures::{
     scrollable_state,
 };
 pub use image::{ContentScale, Image};
+pub use lazy::pager::{
+    HorizontalPager, PageInfo, PageSize, PagerDefaults, PagerLayoutInfo, PagerScope,
+    PagerSnapDistance, PagerState, VerticalPager, pager_key, pager_snap_distance_at_most,
+    remember_pager_fling_behavior, remember_pager_state,
+};
 pub use lazy::{
     CrossAxisCells, GridCells, GridItemSpan, LazyColumn, LazyGridDefaults, LazyGridItemInfo,
     LazyGridItemScope, LazyGridItemSpanScope, LazyGridLayoutInfo, LazyGridScope, LazyGridState,

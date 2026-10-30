@@ -24,6 +24,7 @@ mod animate_scroll;
 mod cache_window;
 mod grid;
 mod layout_info;
+pub(crate) mod pager;
 mod prefetch;
 
 pub use animate_scroll::LazyLayoutScrollScope;
@@ -183,6 +184,11 @@ struct LazyListInner {
     /// and after them, until it's over (D477); and whether there are any more that way, as
     /// last laid out.
     beyond_bounds: OwnedState<(usize, usize)>,
+    /// Items composed and placed beyond those in view at all times, a pager's
+    /// `beyondViewportPageCount`.
+    beyond_viewport: Cell<usize>,
+    /// Told of each measurement: a pager (D1467).
+    observer: RefCell<Option<Rc<dyn ListObserver>>>,
     beyond_more: Cell<(bool, bool)>,
     /// A search that laid items out beyond the bounds ended: the next layout leaves the
     /// items composed for it, but those next to the ones wanted, and they're disposed rather
@@ -220,7 +226,30 @@ struct LazyListInner {
 /// pointer, and the delta's source.
 type Outer = (compose_ui::platform::NestedScrollChain, bool, bool, compose_ui::NestedScrollSource);
 
+/// What's told of a list's measurements: a pager, whose pages and position depend on its size.
+trait ListObserver {
+    /// With the sizes known, before the position is read.
+    fn before_measure(
+        &self,
+        list: &LazyListInner,
+        density: compose_ui::Density,
+        viewport: i32,
+        before: i32,
+        after: i32,
+        spacing: i32,
+    );
+    /// With what's laid out known.
+    fn after_measure(&self);
+}
+
 impl LazyListInner {
+    /// Goes to `index`, `offset` pixels past its start, in this measurement.
+    fn jump_to(&self, index: usize, offset: f32) {
+        self.position.set((index, offset));
+        self.pending.set(0.0);
+        self.first_key.set(None);
+    }
+
     /// `can_scroll_*` after a measurement found how far it can scroll: their readers hear when they
     /// change, and only then.
     fn publish_can_scroll(&self) {
@@ -317,6 +346,8 @@ impl LazyListInner {
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
             beyond_bounds: mutable_state_of((0, 0)),
+            beyond_viewport: Cell::new(0),
+            observer: RefCell::new(None),
             beyond_more: Cell::new((false, false)),
             beyond_ended: Cell::new(false),
             dispose_leaving: Cell::new(false),
@@ -441,6 +472,63 @@ impl LazyListState {
     /// What's scrolled since the last layout, for what reads its offsets before the next.
     pub(crate) fn pending_scroll(&self) -> f32 {
         self.inner().map_or(0.0, |inner| inner.pending.get())
+    }
+
+    /// `scroll_boxed`, the future holding what it needs.
+    fn scroll_owned<'a>(
+        self,
+        priority: MutatePriority,
+        block: ScrollBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
+        let Some(inner) = self.inner() else { return Box::pin(async { Ok(()) }) };
+        let state = self;
+        // A drag's or a fling's deltas learn the parents around from the node (D479).
+        let consume = Rc::new(move |delta: f32| {
+            let outer = state.inner().and_then(|inner| inner.scroll_outer.borrow().clone());
+            state.dispatch(delta, outer)
+        });
+        Box::pin(async move { inner.core.scroll(priority, consume, block).await })
+    }
+
+    fn set_observer(&self, observer: Rc<dyn ListObserver>) {
+        if let Some(inner) = self.inner() {
+            *inner.observer.borrow_mut() = Some(observer);
+        }
+    }
+
+    fn set_beyond_viewport(&self, count: usize) {
+        if let Some(inner) = self.inner()
+            && inner.beyond_viewport.replace(count) != count
+        {
+            inner.request_remeasure();
+        }
+    }
+
+    fn clear_scroll_position_key(&self) {
+        if let Some(inner) = self.inner() {
+            inner.first_key.set(None);
+        }
+    }
+
+    /// Its first item and pixels past its start, read without subscribing.
+    fn position_untracked(&self) -> (usize, f32) {
+        self.inner().map_or((0, 0.0), |inner| inner.position.get())
+    }
+
+    fn is_scroll_in_progress_untracked(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.core.is_scroll_in_progress_untracked())
+    }
+
+    fn can_scroll_forward_untracked(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.can_scroll_written.get().0)
+    }
+
+    fn can_scroll_backward_untracked(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.can_scroll_written.get().1)
+    }
+
+    fn layout_info_untracked(&self) -> LazyListLayoutInfo {
+        compose_runtime::snapshots::Snapshot::without_read_observation(|| self.layout_info())
     }
 
     /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, without
@@ -634,14 +722,7 @@ impl ScrollableState for LazyListState {
         priority: MutatePriority,
         block: ScrollBlock<'a>,
     ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
-        let Some(inner) = self.inner() else { return Box::pin(async { Ok(()) }) };
-        let state = *self;
-        // A drag's or a fling's deltas learn the parents around from the node (D479).
-        let consume = Rc::new(move |delta: f32| {
-            let outer = state.inner().and_then(|inner| inner.scroll_outer.borrow().clone());
-            state.dispatch(delta, outer)
-        });
-        Box::pin(async move { inner.core.scroll(priority, consume, block).await })
+        self.scroll_owned(priority, block)
     }
 
     /// Scrolls by up to `delta` pixels (positive: towards the end) at the next layout, as far
@@ -1845,6 +1926,7 @@ pub fn LazyColumn(
         overscroll_effect,
         user_scroll_enabled,
         cache_window,
+        Modifier,
         content,
     );
 }
@@ -1888,6 +1970,7 @@ pub fn LazyRow(
         overscroll_effect,
         user_scroll_enabled,
         cache_window,
+        Modifier,
         content,
     );
 }
@@ -1906,6 +1989,7 @@ fn LazyList(
     overscroll_effect: Option<Rc<dyn crate::OverscrollEffect>>,
     user_scroll_enabled: bool,
     cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
+    inner_modifier: Modifier,
     content: impl Fn(LazyListScope) + 'static,
 ) {
     let inner = state.inner_or_detached();
@@ -1948,7 +2032,8 @@ fn LazyList(
             overscroll: overscroll_effect,
         })
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
-        .focus_group();
+        .focus_group()
+        .then(inner_modifier);
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away, as Compose's
     // `LazySaveableStateHolder` (D290).
@@ -2396,6 +2481,11 @@ impl MeasurePolicy for LazyListLayout {
         let measure: &mut MeasureItem<'_> = &mut measure_child;
         // The position, with the scrolling asked for; the first visible item found again by
         // its key if items came or went before it.
+        if let Some(observer) = state.observer.borrow().clone() {
+            compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                observer.before_measure(state, density, main_max, before, after, spacing);
+            });
+        }
         let (mut index, offset) = state.position.get();
         let scrolled = state.pending.replace(0.0);
         let mut offset = offset + scrolled;
@@ -2689,6 +2779,10 @@ impl MeasurePolicy for LazyListLayout {
         // (D477), and as many more as the room left would take if items were missing.
         let average = sizes.average();
         let (beyond_before, beyond_after) = state.beyond_bounds.get();
+        let (beyond_before, beyond_after) = (
+            beyond_before + state.beyond_viewport.get(),
+            beyond_after + state.beyond_viewport.get(),
+        );
         let wanted_start = lead.saturating_sub(beyond_before + wanted_before);
         let mut wanted_end = (end_index + beyond_after).min(count);
         if missing {
@@ -3053,6 +3147,11 @@ impl MeasurePolicy for LazyListLayout {
             },
             keys_changed,
         );
+        if let Some(observer) = state.observer.borrow().clone() {
+            compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                observer.after_measure();
+            });
+        }
         if let Some(post_scroll) = post_scroll {
             scope.run_after_layout(post_scroll);
         }

@@ -1008,6 +1008,19 @@ pub(crate) struct ScrollTarget {
     detached: Rc<Cell<bool>>,
 }
 
+thread_local! {
+    /// A connection asked the fling whose delta it's told of to end, by
+    /// [`cancel_fling_scroll`].
+    static FLING_SCROLL_CANCELLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// In a connection's `on_post_scroll` of a fling's delta, ends that fling where it is, its velocity
+/// left for its `on_post_fling`, as Compose's `CancellationException` from `scrollBy`, which
+/// `DefaultFlingBehavior` catches.
+pub(crate) fn cancel_fling_scroll() {
+    FLING_SCROLL_CANCELLED.set(true);
+}
+
 /// Clears `is_flinging` however a fling ends.
 struct Flinging(Rc<Cell<bool>>);
 
@@ -1066,6 +1079,7 @@ impl ScrollTarget {
                             cancelled.set(true);
                             return 0.0;
                         }
+                        FLING_SCROLL_CANCELLED.set(false);
                         let delta = if reverse { -state_delta } else { state_delta };
                         let mut own = |delta: f32| {
                             let delta = if reverse { -delta } else { delta };
@@ -1093,6 +1107,9 @@ impl ScrollTarget {
                                 )
                             },
                         );
+                        if FLING_SCROLL_CANCELLED.take() {
+                            cancelled.set(true);
+                        }
                         if reverse { -used } else { used }
                     },
                     saw_cancelled.clone(),

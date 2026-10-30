@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 47 | 733 |
+| `ported` | 51 | 742 |
 | `port` | 1 | 1 |
-| `partial` | 27 | 885 |
-| `feature:<name>` | 87 | 1,245 |
+| `partial` | 40 | 1,044 |
+| `feature:<name>` | 70 | 1,077 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -201,31 +201,31 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 
 | Path | Tests | Covers | Status |
 |---|---|---|---|
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageCountTest.kt | 5 | Zero pages, `Int.MAX_VALUE` pages | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageLayoutPositionOnScrollingTest.kt | 2 | Page positions while swiping and dragging | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageSizeTest.kt | 3 | `PageSize.Fill` / custom / 0 dp | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageCountTest.kt | 5 | Zero pages, `Int.MAX_VALUE` pages | partial (`pager.rs`: 4 of 5; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageLayoutPositionOnScrollingTest.kt | 2 | Page positions while swiping and dragging | partial (`pager.rs`: 1 of 2; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PageSizeTest.kt | 3 | `PageSize.Fill` / custom / 0 dp | ported (`pager.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerAccessibilityTest.kt | 21 | Accessibility paging and scroll actions | feature:pager (+ lazy-semantics) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCacheWindowTest.kt | 7 | Pager cache window | feature:pager (+ cache-window) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerContentPaddingTest.kt | 23 | Content padding | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerContentTest.kt | 3 | Outer and inner modifiers; scrollable while changing pages | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCrossAxisTest.kt | 1 | Wraps content across an infinite cross axis | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerContentPaddingTest.kt | 23 | Content padding | partial (`pager.rs`: 4 of 23; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerContentTest.kt | 3 | Outer and inner modifiers; scrollable while changing pages | partial (`pager.rs`: 2 of 3; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCrossAxisTest.kt | 1 | Wraps content across an infinite cross axis | ported (`pager.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerCustomKeyTest.kt | 1 | The key lambda is called once | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerGestureTest.kt | 2 | A low-velocity swipe bounces back; small content | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLayoutInfoTest.kt | 12 | `layoutInfo.visiblePagesInfo` | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerGestureTest.kt | 2 | A low-velocity swipe bounces back; small content | partial (`pager.rs`: 1 of 2; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLayoutInfoTest.kt | 12 | `layoutInfo.visiblePagesInfo` | partial (`pager.rs`: 8 of 12; the API is there for the rest, D1467) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerLazyLayoutScrollScopeTest.kt | 1 | `LazyLayoutScrollScope.calculateDistanceTo` capped | feature:pager (+ lazy-state-api) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerNestedPrefetchingTest.kt | 3 | Nested prefetch in pages | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerNestedScrollContentTest.kt | 10 | Nested scrollables in pages: flings, edges, cross axis | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerOffscreenPageLimitPlacingTest.kt | 4 | `beyondViewportPageCount` placement | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerNestedScrollContentTest.kt | 10 | Nested scrollables in pages: flings, edges, cross axis | partial (`pager.rs`: 6 of 10; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerOffscreenPageLimitPlacingTest.kt | 4 | `beyondViewportPageCount` placement | partial (`pager.rs`: 3 of 4; the API is there for the rest, D1467) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerPinnableContainerTest.kt | 13 | Pinning pages | feature:pager (+ pinnable) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerPrefetcherTest.kt | 15 | Page prefetch | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerRequestScrollTest.kt | 8 | `requestScrollToPage` | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerRequestScrollTest.kt | 8 | `requestScrollToPage` | partial (`pager.rs`: 4 of 8; the API is there for the rest, D1467) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerScrollIndicatorTest.kt | 10 | `scrollIndicatorState` | feature:pager (+ scroll-indicator-state) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerScrollingTest.kt | 19 | Positional and velocity thresholds, `PagerSnapDistance`, RTL | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSnapPositionTest.kt | 2 | `snapPosition` vs the max scroll | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerStateNonGestureScrollingTest.kt | 24 | `PagerState` before attach, `scrollToPage`, offset fractions, restoration | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerStateTest.kt | 24 | `scrollToPage` / `animateScrollToPage` / `currentPage` / `targetPage` / `settledPage` | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSwipeEdgeTest.kt | 3 | Swiping at the edges | feature:pager |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt | 23 | `userScrollEnabled`, mouse wheel, page count, keys, sizes, RTL | feature:pager |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerScrollingTest.kt | 19 | Positional and velocity thresholds, `PagerSnapDistance`, RTL | partial (`pager.rs`: 8 of 19; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSnapPositionTest.kt | 2 | `snapPosition` vs the max scroll | ported (`pager.rs`) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerStateNonGestureScrollingTest.kt | 24 | `PagerState` before attach, `scrollToPage`, offset fractions, restoration | partial (`pager.rs`: 17 of 24; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerStateTest.kt | 24 | `scrollToPage` / `animateScrollToPage` / `currentPage` / `targetPage` / `settledPage` | partial (`pager.rs`: 20 of 24; the API is there for the rest, D1467) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerSwipeEdgeTest.kt | 3 | Swiping at the edges | ported (`pager.rs`) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/pager/PagerTest.kt | 23 | `userScrollEnabled`, mouse wheel, page count, keys, sizes, RTL | partial (`pager.rs`: 13 of 23; the API is there for the rest, D1467) |
 
 ### Gestures, scrolling, overscroll, anchored drag, snapping, relocation
 
@@ -385,7 +385,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - prefetch: `LazyLayoutPrefetchState` (`schedulePrecomposition`, `schedulePrecompositionAndPremeasure`, `PrefetchHandle.cancel`/`markAsUrgent`, `PrefetchResultScope`), the `onNestedPrefetch` constructor (*exp*), `NestedPrefetchScope` (*exp*);
   - content: `LazyLayoutIntervalContent`, `IntervalList`/`MutableIntervalList`, `LazyLayoutKeyIndexMap`, `getDefaultLazyLayoutKey`.
 - **staggered-grid:** `LazyVerticalStaggeredGrid`, `LazyHorizontalStaggeredGrid`, `StaggeredGridCells` (Fixed, Adaptive, FixedSize), `StaggeredGridItemSpan` (FullLine, SingleLane), `LazyStaggeredGridScope` (`item`, `items`, list and indexed forms), `LazyStaggeredGridState` (`rememberLazyStaggeredGridState`, all the scroll API, `layoutInfo`), `LazyStaggeredGridItemInfo`/`LayoutInfo`, `LazyStaggeredGridItemScope`.
-- **pager:**
+- **pager:** Done (D1467) but for `PagerDefaults.bringIntoViewSpec`, `scrollIndicatorState` and `PagerState` as an abstract class:
   - composables: `HorizontalPager`, `VerticalPager`;
   - state: `PagerState` (abstract) and `PagerState(…, pageCount)`, `rememberPagerState`;
   - `PageSize` (Fill, Fixed), `PagerDefaults` (`flingBehavior`, `pageNestedScrollConnection`, `bringIntoViewSpec`, `BeyondViewportPageCount`), `PagerSnapDistance.atMost`;
@@ -530,7 +530,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: the 3 list, 3 grid and 3 staggered animation files.
     - Depends on: lazy-layout-info (tests), animation (exists); ui lookahead for the lookahead variants (ui ledger).
     - Size: L. Experimental: no.
-26. **pager.**
+26. **pager.** The API is done (D1467), on compose-rs's lazy list; 100 of the 239 tests ported. Left: the files on prefetch, the cache window, pinning, accessibility and the scroll indicator, and the rest of those marked partial.
     - API: `HorizontalPager`, `VerticalPager`, `PagerState` and the rest of the pager API.
     - Tests: all 25 pager files.
     - Depends on: scrollable, lazy-state-api, snapping, cache-window, bring-into-view, pinnable, lazy-semantics, scroll-indicator-state. Built on compose-rs's lazy list internals.

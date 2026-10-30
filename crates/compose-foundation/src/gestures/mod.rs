@@ -35,6 +35,7 @@ pub use snapping::{
     list_snap_layout_info_provider, remember_grid_snap_fling_behavior,
     remember_list_snap_fling_behavior, remember_snap_fling_behavior, snap_fling_behavior,
 };
+pub(crate) use snapping::{FinalSnappingItem, distance_to_snap_position, final_snapping_item};
 
 use compose_runtime::ComposeArg;
 

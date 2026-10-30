@@ -285,6 +285,11 @@ impl VerticalArrangement {
 }
 
 impl HorizontalOrVerticalArrangement {
+    /// What a lazy layout arranges by.
+    pub(crate) fn main_axis(&self) -> MainAxisArrangement {
+        self.0.clone()
+    }
+
     /// The space between adjacent children, as `Arrangement.HorizontalOrVertical.spacing`.
     pub fn spacing(&self) -> Dp {
         spacing_of(&self.0)
