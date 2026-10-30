@@ -128,6 +128,7 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldNode;
     fn create(&self) -> TextFieldNode {
         TextFieldNode {
+            pin: Default::default(),
             is_focus_target: self.enabled,
             // At the start, as Compose's `TextFieldValue` with no selection given.
             cursor: 0,
@@ -314,6 +315,8 @@ struct Press {
 }
 
 pub(crate) struct TextFieldNode {
+    /// The container around it, pinned while it has the focus.
+    pin: compose_ui::FocusPin,
     /// Disabled, it isn't a focus target, as `undelegate(textFieldFocusableNode)` (D1274).
     is_focus_target: bool,
     /// The text shown: `value`, with the edits made since the last frame.
@@ -1309,6 +1312,7 @@ impl FocusTargetModifierNode for TextFieldNode {
         context: &mut EventContext<'_>,
     ) {
         let focused = current.is_focused();
+        self.pin.focus_changed(focused, context);
         if self.focused == focused {
             return;
         }

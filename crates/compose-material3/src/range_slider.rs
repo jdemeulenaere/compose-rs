@@ -552,6 +552,10 @@ struct RangeThumb {
 }
 
 struct RangeThumbNode {
+    /// Disabled, it isn't a focus target (D1274).
+    is_focus_target: bool,
+    /// The container around it, pinned while it has the focus.
+    pin: compose_ui::FocusPin,
     state: RangeSliderState,
     is_start: bool,
     on_value_change: Callback<dyn Fn((f32, f32))>,
@@ -566,6 +570,8 @@ impl ModifierNodeElement for RangeThumb {
     type Node = RangeThumbNode;
     fn create(&self) -> RangeThumbNode {
         RangeThumbNode {
+            is_focus_target: self.enabled,
+            pin: Default::default(),
             state: self.state,
             is_start: self.is_start,
             on_value_change: self.on_value_change.clone(),
@@ -636,7 +642,13 @@ impl ModifierNode for RangeThumbNode {
         self.emit_focus(false);
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
-        Some(self)
+        if self.is_focus_target { Some(self) } else { None }
+    }
+    fn focus_target_wanted(&self) -> Option<bool> {
+        Some(self.enabled)
+    }
+    fn set_is_focus_target(&mut self, is_target: bool) {
+        self.is_focus_target = is_target;
     }
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)
@@ -658,13 +670,14 @@ impl FocusTargetModifierNode for RangeThumbNode {
         &mut self,
         _previous: compose_ui::FocusState,
         current: compose_ui::FocusState,
-        _context: &mut EventContext<'_>,
+        context: &mut EventContext<'_>,
     ) {
         let focused = current.is_focused();
         if self.focused == focused {
             return;
         }
         self.focused = focused;
+        self.pin.focus_changed(focused, context);
         self.emit_focus(focused);
     }
 }

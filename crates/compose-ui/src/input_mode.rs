@@ -22,6 +22,9 @@ pub struct InputModeManager {
     mode: Rc<OwnedState<InputMode>>,
     /// The system decides: asking for touch mode answers whether it's in it.
     system_decides: Rc<std::cell::Cell<bool>>,
+    /// What asks the system for keyboard mode (Android's `requestFocusFromTouch`), which then says
+    /// so as it does.
+    keyboard_request: Rc<std::cell::RefCell<Option<Rc<dyn Fn() -> bool>>>>,
 }
 
 impl InputModeManager {
@@ -29,6 +32,7 @@ impl InputModeManager {
         InputModeManager {
             mode: Rc::new(compose_runtime::mutable_state_of(InputMode::Keyboard)),
             system_decides: Rc::default(),
+            keyboard_request: Rc::default(),
         }
     }
 
@@ -40,14 +44,26 @@ impl InputModeManager {
     /// Asks for a mode, as `requestInputMode`: whether it's the mode now (a host decides: a
     /// headless or desktop one always grants it; Android has no way into touch mode from code).
     pub fn request_input_mode(&self, mode: InputMode) -> bool {
-        if self.system_decides.get() && mode == InputMode::Touch {
-            return self.mode.get() == InputMode::Touch;
+        if self.system_decides.get() {
+            if mode == InputMode::Touch {
+                return self.mode.get() == InputMode::Touch;
+            }
+            let request = self.keyboard_request.borrow().clone();
+            if let Some(request) = request {
+                return request();
+            }
         }
         self.mode.set(mode);
         true
     }
 
-    pub(crate) fn set_system_input_mode(&self, mode: InputMode) {
+    /// Who asks the system for keyboard mode.
+    pub(crate) fn set_keyboard_request(&self, request: Rc<dyn Fn() -> bool>) {
+        *self.keyboard_request.borrow_mut() = Some(request);
+    }
+
+    /// What the system says the mode is: from now on it decides.
+    pub fn set_system_input_mode(&self, mode: InputMode) {
         self.system_decides.set(true);
         self.mode.set(mode);
     }

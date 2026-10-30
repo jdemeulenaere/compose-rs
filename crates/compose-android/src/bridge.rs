@@ -436,6 +436,7 @@ impl compose_ui::ClipboardManager for JniClipboard {
 /// A `ComposeRsView`'s composition, and the buffers its frames are drawn from.
 struct Host {
     ui: UiHost,
+    input_mode: compose_ui::InputModeManager,
     resources: Resources,
     /// The last frame's display list.
     list: Writer,
@@ -597,6 +598,25 @@ fn create(
     let view_ref = Rc::new(env.new_global_ref(view).expect("compose-android: a global ref"));
     let mut ui = UiHost::new(size, density, Box::new(AndroidTextMeasurer::new(text)));
     ui.with_tree(|tree| tree.set_clipboard(Rc::new(JniClipboard { view: view_ref.clone() })));
+    // Asked for keyboard mode, the view system decides and tells it (`setInputMode`).
+    let keyboard_view = view_ref.clone();
+    ui.set_keyboard_mode_request(move || {
+        with_main_env(|env| {
+            let granted = env
+                .call_method(
+                    &**keyboard_view,
+                    jni_str!("requestKeyboardMode"),
+                    jni_sig!("()Z"),
+                    &[],
+                )
+                .and_then(|value| value.z());
+            check(env, "ComposeRsView.requestKeyboardMode");
+            granted.unwrap_or(false)
+        })
+    });
+    let input_mode = ui.input_mode_manager();
+    // Unconsumed navigation keys move the focus, as on Android (D230).
+    ui.set_keys_navigate(true);
     // The replayer keeps a render node per group: those of unplaced items too (D380).
     ui.set_keep_unplaced_groups(true);
     let optimizations = Optimizations::from_bits(optimizations as u64);
@@ -665,6 +685,7 @@ fn create(
     }
     ui.set_content(content);
     let host = Box::new(Host {
+        input_mode,
         ui,
         resources: Resources::default(),
         list: Writer::default(),
@@ -746,11 +767,57 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setInputMode(
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    host.ui.set_system_input_mode(if touch {
+    host.input_mode.set_system_input_mode(if touch {
         compose_ui::InputMode::Touch
     } else {
         compose_ui::InputMode::Keyboard
     });
+}
+
+/// `ComposeRsNative.ownerRequestedFocus(host, direction, hasRect, left, top, right, bottom)`: the
+/// view asks the content for the focus (`View.FOCUS_*`, a rectangle it comes from if any), as
+/// `AndroidComposeView.requestFocus`: whether the content has it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_ownerRequestedFocus(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    direction: jint,
+    has_rect: jboolean,
+    left: jfloat,
+    top: jfloat,
+    right: jfloat,
+    bottom: jfloat,
+) -> jboolean {
+    use compose_ui::FocusDirection as Direction;
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    // `View.FOCUS_*`, as `toFocusDirection`.
+    let direction = match direction {
+        1 => Direction::Previous,
+        2 => Direction::Next,
+        17 => Direction::Left,
+        33 => Direction::Up,
+        66 => Direction::Right,
+        130 => Direction::Down,
+        _ => Direction::Enter,
+    };
+    let previous = has_rect.then(|| compose_ui::Rect::new(left, top, right, bottom));
+    let taken = host.ui.owner_requested_focus(direction, previous);
+    host.ui.take_owner_focus_request();
+    taken
+}
+
+/// `ComposeRsNative.ownerLostFocus(host)`: the view lost the focus, as `releaseFocus`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_ownerLostFocus(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.owner_lost_focus();
 }
 
 /// `ComposeRsNative.parseOptimizations(text)`: the bits of a list of optimizations (`none`,
@@ -899,6 +966,10 @@ mod flags {
     pub const SHOW_KEYBOARD: i64 = 128;
     /// The content asked to hide the soft keyboard (a field's `Done`, `hide()`).
     pub const HIDE_KEYBOARD: i64 = 256;
+    /// The content took the focus: the view takes it too (`requestOwnerFocus`).
+    pub const OWNER_FOCUS: i64 = 512;
+    /// `clear_focus`: the view gives it up (`clearOwnerFocus`).
+    pub const OWNER_CLEAR: i64 = 1024;
     /// Where the timer's milliseconds start.
     pub const TIMER_SHIFT: u32 = 16;
 }
@@ -946,6 +1017,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     match input.keyboard {
         Some(true) => result |= flags::SHOW_KEYBOARD,
         Some(false) => result |= flags::HIDE_KEYBOARD,
+        None => {}
+    }
+    match host.ui.take_owner_focus_request() {
+        Some(true) => result |= flags::OWNER_FOCUS,
+        Some(false) => result |= flags::OWNER_CLEAR,
         None => {}
     }
     if host.semantics_tree.after_frame(&stats) {
@@ -1245,6 +1321,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         13 => Key::PageUp,
         14 => Key::PageDown,
         15 => Key::DirectionCenter,
+        16 => Key::Back,
+        17 => Key::NavigateNext,
+        18 => Key::NavigatePrevious,
         _ => match character {
             Some(c) => Key::Character(c),
             None => return false,
@@ -1363,9 +1442,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     match action {
         0 => host.ui.perform_semantics_action(node, &A::ON_CLICK),
         1 => {
-            // An accessibility service moving the focus leaves touch mode, as Compose's
-            // `AccessibilityTouchModeTest`.
-            host.ui.set_input_mode(compose_ui::InputMode::Keyboard);
+            // The view has left touch mode by then (`performSemanticsAction`).
             host.ui.perform_semantics_action(node, &A::REQUEST_FOCUS)
         }
         2 => host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value)),

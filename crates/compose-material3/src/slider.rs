@@ -1142,6 +1142,8 @@ struct SliderInput {
 }
 
 struct SliderInputNode {
+    /// The container around it, pinned while it has the focus.
+    pin: compose_ui::FocusPin,
     /// Disabled, it isn't a focus target (D1274).
     is_focus_target: bool,
     state: SliderState,
@@ -1169,6 +1171,7 @@ impl ModifierNodeElement for SliderInput {
     type Node = SliderInputNode;
     fn create(&self) -> SliderInputNode {
         SliderInputNode {
+            pin: Default::default(),
             is_focus_target: self.enabled,
             state: self.state,
             on_value_change: self.on_value_change.clone(),
@@ -1524,6 +1527,7 @@ impl FocusTargetModifierNode for SliderInputNode {
         context: &mut EventContext<'_>,
     ) {
         let focused = current.is_focused();
+        self.pin.focus_changed(focused, context);
         if self.focused == focused {
             return;
         }

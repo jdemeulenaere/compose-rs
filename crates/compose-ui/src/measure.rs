@@ -145,7 +145,12 @@ impl UiTree {
                 && let Some(before) =
                     before.filter(|&target| self.target_can_be_given_focus(target))
             {
-                self.refocus_without_scrolling(before);
+                // Another modal still showing keeps it for its own closing.
+                if self.is_occluded_by_modal(before.node) {
+                    self.keep_for_when_modals_close(before);
+                } else {
+                    self.refocus_without_scrolling(before);
+                }
             }
         }
     }

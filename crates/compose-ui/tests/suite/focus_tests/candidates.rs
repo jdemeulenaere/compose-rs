@@ -3,10 +3,7 @@
 
 use super::support::*;
 
-const DIRECTIONS: [FocusDirection; 4] = [Left, Right, Up, Down];
-
-/// The items of a table's row, in order: the first has the focus. Composed in `order`, as a
-/// sibling's place in the tree says nothing to the search.
+/// A search among the items of a table's row, the first having the focus: who has it after.
 fn search_among(
     direction: FocusDirection,
     items: Vec<(&'static str, Bounds)>,

@@ -37,6 +37,8 @@ pub struct UiHost {
     composition: Composition,
     /// After `composition`: dropped after it, as a window's lifecycle ends once its composition is
     /// disposed.
+    /// Its tree's key: what's asked of the focus finds the tree if it's free through it.
+    tree_key: u32,
     lifecycle: HostLifecycle,
     size: IntSize,
     frame_requested: Rc<Cell<bool>>,
@@ -160,7 +162,9 @@ impl UiHost {
         let insets_source = crate::configuration::WindowInsetsSource::of(window_insets.clone());
         composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_source(insets_source));
         let navigation_events = compose_navigation_event::NavigationEventDispatcher::new();
+        let tree_key = composition.with_applier(|tree: &mut UiTree| tree.key);
         UiHost {
+            tree_key,
             composition: {
                 composition.with_applier(|tree: &mut UiTree| {
                     tree.saveable_registry = Some(saveable_registry.clone());
@@ -443,6 +447,10 @@ impl UiHost {
     /// compose from now on: call it before the first frame.
     pub fn restore_state(&self, state: compose_runtime::SavedState) {
         self.saveable_registry.restore(state);
+    }
+
+    fn focus_requests_of_host(&self) -> Rc<crate::focus_requester::FocusRequests> {
+        crate::node_context::requests_of(self.tree_key).expect("compose-ui: a host's tree")
     }
 
     /// Runs `f` with the tree.
@@ -1008,6 +1016,49 @@ impl UiHost {
     pub fn set_system_input_mode(&mut self, mode: crate::input_mode::InputMode) {
         let _turn = compose_runtime::platform::Turn::begin();
         self.with_tree(|tree| tree.input_mode.set_system_input_mode(mode));
+    }
+
+    /// Arrows, the D-pad, Enter, Back and Escape move the focus if nothing takes them, as on
+    /// Android. Off, Tab alone does (D230).
+    pub fn set_keys_navigate(&self, navigate: bool) {
+        self.with_tree(|tree| tree.focus.keys_navigate = navigate);
+    }
+
+    /// The window's view asks the content for the focus, as `AndroidComposeView.requestFocus`:
+    /// whether the content has it now. `false` where the tree is busy.
+    pub fn owner_requested_focus(
+        &self,
+        direction: crate::focus_manager::FocusDirection,
+        previous: Option<crate::unit::Rect>,
+    ) -> bool {
+        let key = self.tree_key;
+        crate::focus_requester::on_free_tree(key, |tree| {
+            tree.owner_requested_focus(direction, previous)
+        })
+        .unwrap_or(false)
+    }
+
+    /// The window's view lost the focus, as `releaseFocus`.
+    pub fn owner_lost_focus(&self) {
+        let key = self.tree_key;
+        crate::focus_requester::on_free_tree(key, |tree| tree.owner_lost_focus());
+    }
+
+    /// What the content asks of the window's view since the last call: to take the focus
+    /// (`Some(true)`) or to give it up (`Some(false)`).
+    pub fn take_owner_focus_request(&self) -> Option<bool> {
+        self.focus_requests_of_host().owner_focus.take()
+    }
+
+    /// What asks the system for keyboard mode, for a host whose system decides the input mode.
+    pub fn set_keyboard_mode_request(&self, request: impl Fn() -> bool + 'static) {
+        self.with_tree(|tree| tree.input_mode.set_keyboard_request(Rc::new(request)));
+    }
+
+    /// The input mode manager: told what the system says even while the tree is busy (asking it
+    /// for keyboard mode, from a composition, makes the system answer at once).
+    pub fn input_mode_manager(&self) -> crate::input_mode::InputModeManager {
+        self.with_tree(|tree| tree.input_mode.clone())
     }
 
     /// Moves focus to `node`'s focus target.

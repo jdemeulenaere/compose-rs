@@ -122,6 +122,9 @@ pub(crate) struct FocusOwner {
     /// nothing scrolls, and a modal overlay opening in this frame, which takes it next, doesn't
     /// shut it out.
     pub(crate) moved_by_tree: bool,
+    /// Arrows, the D-pad, Enter, Back and Escape move the focus if nothing takes them, as on
+    /// Android; else Tab alone (D230).
+    pub(crate) keys_navigate: bool,
     /// `performRequestFocus` runs: what it tells application code stops if one of them moves the
     /// focus (D1271).
     pub(crate) requesting: bool,
@@ -336,6 +339,41 @@ impl UiTree {
     }
 
     /// Whether `target` is attached: its entry is in its chain, attached, and its delegate there.
+    /// `target`, shut out by a modal, has the focus when what shuts it out is gone: kept by the
+    /// lowest overlay not containing it (the window above the one it's in). Whether one kept it.
+    pub(crate) fn keep_for_when_modals_close(&mut self, target: FocusTargetRef) -> bool {
+        let lowest = (0..self.focus_restore.len())
+            .find(|&at| !self.is_at_or_below(target.node, self.focus_restore[at].0));
+        let Some(lowest) = lowest else { return false };
+        self.focus_restore[lowest].1 = Some(target);
+        true
+    }
+
+    /// A window's view asked for the focus (`requestFocus(direction, rect)`), as
+    /// `AndroidComposeView.requestFocus`: with something focused already nothing changes;
+    /// else a search from `previous` (where it was, outside): whether it found something.
+    pub(crate) fn owner_requested_focus(
+        &mut self,
+        direction: FocusDirection,
+        previous: Option<crate::unit::Rect>,
+    ) -> bool {
+        if self.focus.active.is_some() {
+            return true;
+        }
+        self.focus_search(direction, previous, &mut |tree, target| {
+            tree.request_focus_target(target, direction)
+        }) == Some(true)
+    }
+
+    /// A window's view lost the focus, as `releaseFocus`: forced, and no block has a say.
+    pub(crate) fn owner_lost_focus(&mut self) {
+        self.prepare_to_clear_focus(None, true, true);
+        if let Some(previous) = self.focus.active {
+            self.set_active_target(None);
+            self.dispatch_focus_callbacks(previous, FocusState::Active, FocusState::Inactive);
+        }
+    }
+
     /// Whether `target` is there to be given the focus back: attached, and not put aside.
     pub(crate) fn target_can_be_given_focus(&mut self, target: FocusTargetRef) -> bool {
         self.get(target.node).is_some_and(|value| !value.deactivated)
@@ -886,14 +924,7 @@ impl UiTree {
         if !self.focus.moved_by_tree && self.is_occluded_by_modal(target.node) {
             // A dialog is a window of its own in Compose, which doesn't refuse this: it's what
             // has the focus when the modal closes (D1269).
-            let modal = self.modal_overlay();
-            return match self.focus_restore.iter_mut().rfind(|each| Some(each.0) == modal) {
-                Some(entry) => {
-                    entry.1 = Some(target);
-                    true
-                }
-                None => false,
-            };
+            return self.keep_for_when_modals_close(target);
         }
         let previous_active = self.focus.active;
         let previous_state = self.focus_state_of(target);
@@ -956,6 +987,11 @@ impl UiTree {
     }
 
     fn grant_focus(&mut self, target: FocusTargetRef) {
+        // The window has it for the content, as `requestOwnerFocus`.
+        if self.focus.active.is_none() {
+            self.focus_requests.owner_focus.set(Some(true));
+            self.focus_requests.wake();
+        }
         // The properties that made it focusable are observed: losing `can_focus` loses the focus.
         self.fetch_focus_properties_observed(target);
         self.set_active_target(Some(target));

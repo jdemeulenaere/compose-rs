@@ -211,6 +211,11 @@ pub enum Key {
     MoveEnd,
     PageUp,
     PageDown,
+    /// The back key, as `Key.Back`.
+    Back,
+    /// Keyboard navigation's own keys, as `Key.NavigateNext` and `Key.NavigatePrevious`.
+    NavigateNext,
+    NavigatePrevious,
     /// The modifier keys, as Compose's `Key.ShiftLeft`… A host reports what they hold in
     /// [`KeyEvent::modifiers`]; tests' key injection presses them as keys (D903).
     ShiftLeft,
@@ -253,6 +258,25 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
+    /// The direction this key moves the focus in, if nothing takes it, as Compose's
+    /// `toFocusDirection`.
+    pub fn to_focus_direction(&self) -> Option<crate::focus_manager::FocusDirection> {
+        use crate::focus_manager::FocusDirection as Direction;
+        Some(match self.key {
+            Key::NavigatePrevious => Direction::Previous,
+            Key::NavigateNext => Direction::Next,
+            Key::Tab if self.modifiers.shift => Direction::Previous,
+            Key::Tab => Direction::Next,
+            Key::DirectionRight => Direction::Right,
+            Key::DirectionLeft => Direction::Left,
+            Key::DirectionUp | Key::PageUp => Direction::Up,
+            Key::DirectionDown | Key::PageDown => Direction::Down,
+            Key::DirectionCenter | Key::Enter | Key::NumPadEnter => Direction::Enter,
+            Key::Back | Key::Escape => Direction::Exit,
+            _ => return None,
+        })
+    }
+
     pub fn down(key: Key) -> KeyEvent {
         KeyEvent { key, kind: KeyEventType::KeyDown, modifiers: KeyModifiers::default() }
     }

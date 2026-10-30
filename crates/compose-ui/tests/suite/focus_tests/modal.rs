@@ -202,3 +202,112 @@ fn closing_a_modal_doesnt_give_the_focus_to_a_target_removed_meanwhile() {
     scene.set("modal", false);
     assert!(!scene.root_has_focus());
 }
+
+#[test]
+fn a_request_behind_two_modals_waits_for_both_to_close() {
+    let scene = scene(|scene| {
+        Column!({
+            Leaf(scene.target("main").size(10.dp()));
+            if scene.flag("lower").get() {
+                Stack!(
+                    modifier = Modifier
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp()))
+                        .then(scene.listen("lower window"))
+                        .focus_target(),
+                    {
+                        Leaf(scene.target("in lower").size(10.dp()));
+                    }
+                );
+            }
+            if scene.flag("upper").get() {
+                Stack!(
+                    modifier = Modifier
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp()))
+                        .then(scene.listen("upper window"))
+                        .focus_target(),
+                    {
+                        Leaf(scene.target("in upper").size(10.dp()));
+                    }
+                );
+            }
+        });
+    });
+    scene.set("lower", true);
+    assert_eq!(scene.focused(), ["lower window"]);
+    assert!(scene.request("in lower"));
+    scene.set("upper", true);
+    assert_eq!(scene.focused(), ["upper window"]);
+
+    assert!(scene.request("main"));
+    assert_eq!(scene.focused(), ["upper window"]);
+    scene.set("upper", false);
+    assert_eq!(scene.focused(), ["in lower"], "what had it in the window below");
+    scene.set("lower", false);
+    assert_eq!(scene.focused(), ["main"]);
+}
+
+#[test]
+fn a_request_in_the_lower_modal_has_the_focus_when_the_upper_one_closes() {
+    let scene = scene(|scene| {
+        Column!({
+            if scene.flag("lower").get() {
+                Stack!(
+                    modifier = Modifier
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp())),
+                    {
+                        Leaf(scene.target("in lower").size(10.dp()));
+                        Leaf(scene.target("too").size(10.dp()));
+                    }
+                );
+            }
+            if scene.flag("upper").get() {
+                Stack!(
+                    modifier = Modifier
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp())),
+                    {
+                        Leaf(scene.target("in upper").size(10.dp()));
+                    }
+                );
+            }
+        });
+    });
+    scene.set("lower", true);
+    scene.set("upper", true);
+    assert_eq!(scene.focused(), ["in upper"]);
+    assert!(scene.request("too"));
+    assert_eq!(scene.focused(), ["in upper"]);
+    scene.set("upper", false);
+    assert_eq!(scene.focused(), ["too"]);
+}
+
+#[test]
+fn keys_go_to_a_modal_with_no_target_rather_than_what_it_shuts_out() {
+    let scene = scene(|scene| {
+        let hears = move |what: &'static str| {
+            Modifier.on_key_event(move |_: KeyEvent| {
+                scene.say(what);
+                true
+            })
+        };
+        Column!({
+            Leaf(hears("behind").then(scene.target("behind")).size(10.dp()));
+            if scene.flag("modal").get() {
+                Leaf(
+                    hears("modal")
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp())),
+                );
+            }
+        });
+    });
+    assert!(scene.request("behind"));
+    scene.set("modal", true);
+    assert_eq!(scene.focused(), ["behind"], "it took nothing: nothing in it to take it");
+    scene.forget();
+    scene.with_host(|host| host.send_key(KeyEvent::down(Key::Space)));
+    assert_eq!(scene.said(), ["modal"]);
+}

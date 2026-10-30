@@ -343,6 +343,46 @@ fn a_system_that_decides_the_input_mode_cant_be_asked_for_touch_mode() {
     assert!(manager.request_input_mode(InputMode::Touch));
     assert!(manager.request_input_mode(InputMode::Keyboard));
     assert_eq!(manager.input_mode(), InputMode::Keyboard);
+
+    // Who asks the system answers, and the mode is what the system says.
+    let asked = cell(0);
+    scene.with_host(|host| {
+        host.set_system_input_mode(InputMode::Touch);
+        host.set_keyboard_mode_request(move || {
+            asked.set(asked.get() + 1);
+            false
+        });
+    });
+    assert!(!manager.request_input_mode(InputMode::Keyboard));
+    assert_eq!(asked.get(), 1);
+    assert_eq!(manager.input_mode(), InputMode::Touch);
+}
+
+/// A panic in a block leaves no transaction under way: the block runs again.
+#[test]
+fn a_panic_in_a_block_leaves_the_focus_able_to_move() {
+    let panics = cell(true);
+    let ran = cell(0);
+    let scene = scene(move |scene| {
+        let blocks = properties(move |p| {
+            p.set_on_enter(move |_| {
+                ran.set(ran.get() + 1);
+                if panics.get() {
+                    panic!("a block's");
+                }
+            });
+        });
+        Stack!(modifier = blocks.focus_target(), {
+            Leaf(scene.target("x"));
+        });
+    });
+    let target = scene.requester("x");
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| target.request_focus()));
+    assert!(caught.is_err());
+    panics.set(false);
+    assert!(scene.request("x"));
+    assert_eq!(ran.get(), 2, "not skipped as still running");
+    assert_eq!(scene.focused(), ["x"]);
 }
 
 // ---- Told once --------------------------------------------------------------------------------------------

@@ -238,6 +238,8 @@ struct Down {
 
 /// The clickable family's node.
 pub(crate) struct ClickableNode {
+    /// The container around it, pinned while it has the focus.
+    pin: crate::pinnable::FocusPin,
     /// Disabled, it isn't a focus target, as `undelegate(focusableNode)` (D1274).
     is_focus_target: bool,
     spec: Clickable,
@@ -280,6 +282,7 @@ impl ClickableNode {
             ..Shared::default()
         };
         ClickableNode {
+            pin: Default::default(),
             is_focus_target: spec.enabled,
             spec,
             combined,
@@ -922,6 +925,7 @@ impl FocusTargetModifierNode for ClickableNode {
             return;
         }
         self.focused = focused;
+        self.pin.focus_changed(focused, context);
         if focused {
             context.bring_into_view();
             self.initialize_indication_in(context);

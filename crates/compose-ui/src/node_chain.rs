@@ -372,7 +372,7 @@ impl ChainEntry {
         self.own = NodeKinds::of(&mut *self.node, self.own.any(NodeKinds::OBSERVED));
         self.kinds = match self.node.delegates() {
             Some(delegates) if self.state & entry_state::DELEGATING != 0 => {
-                self.own | delegates.refresh_kinds(self.own)
+                self.own | delegates.entry_kinds(self.own)
             }
             _ => self.own,
         };

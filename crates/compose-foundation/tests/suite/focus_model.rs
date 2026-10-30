@@ -216,20 +216,18 @@ enum Holds {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/DeactivatedFocusNodeTest.kt, deactivatedActiveFocusNodeSendsFocusEvent, deactivatedActiveParentFocusNodeSendsFocusEvent, deactivatedCapturedFocusNodeSendsFocusEvent, deactivatedInactiveFocusNodeDoesNotSendFocusEvent
 #[test]
-fn an_item_leaving_a_list_tells_its_listener_only_if_it_had_the_focus() {
+fn an_item_scrolled_away_tells_its_listener_only_if_it_had_the_focus() {
     for holds in [Holds::Focus, Holds::Child, Holds::Capture, Holds::Nothing] {
         let heard: &'static RefCell<Vec<FocusState>> = Box::leak(Box::default());
         let requester = FocusRequester::new();
         let state = LazyListState::new(0, 0);
         let given = *state;
-        let first_item = Box::leak(Box::new(mutable_state_of(0usize))).handle();
         let mut ui = compose_test(move || {
             LazyRow!(
                 modifier = Modifier.size(10.dp()),
                 state = given,
                 move |scope: LazyListScope| {
-                    let first_item = first_item.get();
-                    for index in [first_item, 100] {
+                    for index in [0, 1] {
                         scope.item_keyed(index, move || {
                             // Reused, the node's updated element hears it (D1282): any of them.
                             let first = index == 0 || holds != Holds::Nothing;
@@ -270,12 +268,7 @@ fn an_item_leaving_a_list_tells_its_listener_only_if_it_had_the_focus() {
         }
         ui.wait_for_idle();
         heard.borrow_mut().clear();
-        // Scrolled away it stays with the focus, pinned (D1282): it's taken out of the list.
-        if holds == Holds::Nothing {
-            state.request_scroll_to_item(1, 0);
-        } else {
-            first_item.set(1);
-        }
+        state.request_scroll_to_item(1, 0);
         ui.wait_for_idle();
         let expected: &[FocusState] =
             if holds == Holds::Nothing { &[] } else { &[FocusState::Inactive] };
@@ -451,13 +444,6 @@ fn a_restorer_whose_item_is_gone_gives_the_focus_to_what_is_shown() {
         }
         state.request_scroll_to_item(50, 0);
         ui.wait_for_idle();
-        if !clear_first {
-            // It has the focus: pinned, where Compose's plain target isn't (D1282). Clearing it
-            // lets it go.
-            ui.on_node_with_tag("item 0").assert_exists();
-            ui.host().clear_focus();
-            ui.wait_for_idle();
-        }
         ui.on_node_with_tag("item 0").assert_does_not_exist();
         assert!(parent.request_focus());
         ui.wait_for_idle();
@@ -517,7 +503,7 @@ fn nested_lazy_lists_with_restorers_bring_the_focus_back_to_the_child_each_row_l
     ui.on_node_with_tag("0,9").assert_is_focused();
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, disposedLazyRowWithFocusRestorerRestoresFocusCorrectly_firstRow, disposedLazyRowWithFocusRestorerRestoresFocusCorrectly_allRows
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, disposedLazyRowWithFocusRestorerRestoresFocusCorrectly_firstRow
 #[test]
 fn a_row_with_a_restorer_disposed_and_composed_again_still_gives_the_focus_to_what_it_left() {
     let kept: Manager = Rc::default();
@@ -1262,4 +1248,201 @@ fn restorers_in_lazy_items_each_keep_their_own_child_across_a_recreated_host() {
         manager.move_focus(FocusDirection::Up);
     });
     assert_eq!(focused, ["r1c1"]);
+}
+
+/// Nested lists: what's focused in a row pins the row's item and the column's around it.
+#[test]
+fn a_focused_item_pins_each_list_around_it_and_a_plain_target_doesnt() {
+    for focusable in [true, false] {
+        let column = LazyListState::new(0, 0);
+        let given = *column;
+        let requester = FocusRequester::new();
+        let mut ui = compose_test(move || {
+            LazyColumn!(
+                modifier = Modifier.size(50.dp()),
+                state = given,
+                move |scope: LazyListScope| {
+                    scope.items(30, move |row| {
+                        LazyRow!(
+                            modifier = Modifier.size((50.dp(), 10.dp())),
+                            move |scope: LazyListScope| {
+                                scope.items(3, move |column| {
+                                    let shown =
+                                        Modifier.size(10.dp()).test_tag(format!("{row},{column}"));
+                                    let asked = if (row, column) == (0, 0) {
+                                        Modifier.focus_requester(requester)
+                                    } else {
+                                        Modifier
+                                    };
+                                    let target = shown.then(asked);
+                                    Box!(
+                                        modifier = if focusable {
+                                            target.focusable()
+                                        } else {
+                                            target.focus_target()
+                                        }
+                                    );
+                                });
+                            }
+                        );
+                    });
+                }
+            );
+        });
+        assert!(requester.request_focus());
+        ui.wait_for_idle();
+        column.request_scroll_to_item(20, 0);
+        ui.wait_for_idle();
+        if focusable {
+            ui.on_node_with_tag("0,0").assert_exists();
+            assert!(ui.host().with_tree(|tree| tree.focused()).is_some());
+        } else {
+            ui.on_node_with_tag("0,0").assert_does_not_exist();
+            assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
+        }
+    }
+}
+
+/// A group with a restorer over three children, there or not by `shown`, in a host of `saved`:
+/// what's focused after `steps` (given the group's requester), and the host's state.
+fn group_in_a_host(
+    saved: Option<SavedState>,
+    shown: bool,
+    steps: impl FnOnce(&mut ComposeTestRule, FocusRequester, compose_runtime::MutableState<bool>),
+) -> (SavedState, Vec<String>) {
+    let mut host = UiHost::new(
+        IntSize::new(400, 400),
+        Density::new(1.0),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+    );
+    if let Some(saved) = saved {
+        host.restore_state(saved);
+    }
+    let group = FocusRequester::new();
+    let shown = Box::leak(Box::new(mutable_state_of(shown))).handle();
+    let mut ui = ComposeTestRule::with_host(host, move || {
+        Column!({
+            if shown.get() {
+                Column!(
+                    modifier = Modifier
+                        .focus_requester(group)
+                        .focus_restorer(FocusRequester::DEFAULT)
+                        .focus_group(),
+                    {
+                        for child in 0..3 {
+                            Box!(
+                                modifier = Modifier
+                                    .size(10.dp())
+                                    .focusable()
+                                    .test_tag(format!("c{child}"))
+                            );
+                        }
+                    }
+                );
+            }
+            Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("outside"));
+        });
+    });
+    ui.wait_for_idle();
+    steps(&mut ui, group, shown);
+    ui.wait_for_idle();
+    let focused = ui
+        .on_all_nodes(is_focused())
+        .fetch_semantics_nodes()
+        .iter()
+        .filter_map(|node| {
+            node.config.get(&SemanticsProperties::TEST_TAG).map(|tag| tag.to_string())
+        })
+        .collect();
+    (ui.host().save_state(), focused)
+}
+
+fn ask(ui: &mut ComposeTestRule, tag: &str) {
+    ui.on_node_with_tag(tag).request_focus();
+    ui.wait_for_idle();
+}
+
+#[test]
+fn a_restorer_gone_saves_nothing_across_a_recreation() {
+    let (saved, _) = group_in_a_host(None, true, |ui, _, shown| {
+        ask(ui, "c2");
+        ui.host().clear_focus();
+        ui.wait_for_idle();
+        shown.set(false);
+        ui.wait_for_idle();
+    });
+    let (_, focused) = group_in_a_host(Some(saved), true, |_, group, _| {
+        assert!(group.request_focus());
+    });
+    assert_eq!(focused, ["c0"]);
+}
+
+#[test]
+fn the_last_saved_child_wins_across_a_recreation() {
+    let (saved, _) = group_in_a_host(None, true, |ui, _, _| {
+        ask(ui, "c2");
+        ui.host().clear_focus();
+        ui.wait_for_idle();
+        ask(ui, "c2");
+        ask(ui, "c1");
+        ui.host().clear_focus();
+        ui.wait_for_idle();
+    });
+    let (_, focused) = group_in_a_host(Some(saved), true, |_, group, _| {
+        assert!(group.request_focus());
+    });
+    assert_eq!(focused, ["c1"]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerTest.kt, disposedLazyRowWithFocusRestorerRestoresFocusCorrectly_allRows
+#[test]
+fn every_row_with_a_restorer_disposed_and_composed_again_gives_the_focus_to_what_it_left() {
+    let kept: Manager = Rc::default();
+    let keeping = kept.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 250), move || {
+        *keeping.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
+        LazyColumn!(
+            vertical_arrangement = Arrangement::spaced_by(12.dp()),
+            |scope: LazyListScope| {
+                scope.items(50, |row| {
+                    LazyRow!(
+                        horizontal_arrangement = Arrangement::spaced_by(8.dp()),
+                        modifier = Modifier.focus_restorer(FocusRequester::DEFAULT),
+                        move |scope: LazyListScope| {
+                            scope.items(50, move |column| {
+                                Box!(
+                                    modifier = Modifier
+                                        .size(50.dp())
+                                        .test_tag(format!("{row}-{column}"))
+                                        .focusable()
+                                );
+                            });
+                        }
+                    );
+                });
+            }
+        );
+    });
+    let manager = manager_of(&kept);
+    let press = |ui: &mut ComposeTestRule, direction: FocusDirection| {
+        manager.move_focus(direction);
+        ui.wait_for_idle();
+    };
+    ask(&mut ui, "0-0");
+    for row in 1..=25 {
+        press(&mut ui, FocusDirection::Down);
+        ui.on_node_with_tag(&format!("{row}-0")).assert_is_focused();
+    }
+    // Up to the first, leaving each row on its second item.
+    for row in (1..=25).rev() {
+        press(&mut ui, FocusDirection::Right);
+        ui.on_node_with_tag(&format!("{row}-1")).assert_is_focused();
+        press(&mut ui, FocusDirection::Up);
+        ui.on_node_with_tag(&format!("{}-0", row - 1)).assert_is_focused();
+    }
+    // Down again: each comes back to it.
+    for row in 1..=25 {
+        press(&mut ui, FocusDirection::Down);
+        ui.on_node_with_tag(&format!("{row}-1")).assert_is_focused();
+    }
 }

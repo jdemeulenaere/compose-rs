@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -232,6 +233,8 @@ class ComposeRsView @JvmOverloads constructor(
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        // The content shows its own focus.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) defaultFocusHighlightEnabled = false
         // Its instance state is saved only with an id.
         if (id == NO_ID) id = R.id.compose_rs_view
         insets.attach()
@@ -244,6 +247,32 @@ class ComposeRsView @JvmOverloads constructor(
         ViewTreeObserver.OnTouchModeChangeListener { touchMode ->
             if (host != 0L) ComposeRsNative.setInputMode(host, touchMode)
         }
+
+    /**
+     * As `AndroidComposeView.requestFocus`: the view system moving the focus here (a navigation
+     * key leaving touch mode, a focus search, the window's first focus) gives it to the content,
+     * which says if it can take it.
+     */
+    override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean {
+        if (isFocused) return true
+        if (host == 0L) return super.requestFocus(direction, previouslyFocusedRect)
+        val rect = previouslyFocusedRect
+        val taken = ComposeRsNative.ownerRequestedFocus(
+            host,
+            direction,
+            rect != null,
+            rect?.left?.toFloat() ?: 0f,
+            rect?.top?.toFloat() ?: 0f,
+            rect?.right?.toFloat() ?: 0f,
+            rect?.bottom?.toFloat() ?: 0f,
+        )
+        return taken && super.requestFocus(direction, previouslyFocusedRect)
+    }
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        if (!gainFocus && !hasFocus() && host != 0L) ComposeRsNative.ownerLostFocus(host)
+    }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -642,6 +671,12 @@ class ComposeRsView @JvmOverloads constructor(
         } else if (result and Frame.HIDE_KEYBOARD != 0L) {
             inputMethods.hideSoftInputFromWindow(windowToken, 0)
         }
+        // The window's focus follows the content's, as `requestOwnerFocus`, `clearOwnerFocus`.
+        if (result and Frame.OWNER_FOCUS != 0L) {
+            if (!isFocused) requestFocus()
+        } else if (result and Frame.OWNER_CLEAR != 0L) {
+            if (isFocused) clearFocus()
+        }
         // Read again when next asked, service or not (D630); the services on hear it.
         if (result and Frame.SEMANTICS != 0L) accessibility.semanticsChanged()
     }
@@ -815,8 +850,16 @@ class ComposeRsView @JvmOverloads constructor(
 
     internal fun semantics() = if (host != 0L) ComposeRsNative.semantics(host) else null
 
-    internal fun performSemanticsAction(id: Int, action: Int, value: Float): Boolean =
-        host != 0L && ComposeRsNative.performAction(host, id, action, value)
+    internal fun performSemanticsAction(id: Int, action: Int, value: Float): Boolean {
+        if (host == 0L) return false
+        // An accessibility service moving the focus leaves touch mode, as Compose's
+        // `AccessibilityTouchModeTest`: the system's, which tells the input mode.
+        if (action == ACTION_REQUEST_FOCUS) requestKeyboardMode()
+        return ComposeRsNative.performAction(host, id, action, value)
+    }
+
+    /** As `AndroidComposeView`'s input mode manager, asked for keyboard mode. Rust's too. */
+    fun requestKeyboardMode(): Boolean = if (isInTouchMode) requestFocusFromTouch() else true
 
     override fun onDraw(canvas: Canvas) {
         if (host == 0L) return
@@ -917,6 +960,9 @@ class ComposeRsView @JvmOverloads constructor(
         KeyEvent.KEYCODE_PAGE_UP -> 13
         KeyEvent.KEYCODE_PAGE_DOWN -> 14
         KeyEvent.KEYCODE_DPAD_CENTER -> 15
+        KeyEvent.KEYCODE_BACK -> 16
+        KeyEvent.KEYCODE_NAVIGATE_NEXT -> 17
+        KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> 18
         else -> 0
     }
 
@@ -942,6 +988,8 @@ class ComposeRsView @JvmOverloads constructor(
         // The back key, where no dispatcher takes back (no AndroidX, no predictive back): the
         // content's, on its release, while a handler is enabled.
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // Back is `Exit` first, if the focus has somewhere to go, as Compose's key handling.
+            if (sendKey(event)) return true
             if (back?.handlesKeys == true) {
                 event.startTracking()
                 return true
@@ -1089,6 +1137,9 @@ class ComposeRsView @JvmOverloads constructor(
 
     private companion object {
         const val SUPER_STATE = "rs.compose.android.super"
+
+        /** `ComposeRsNative.performAction`'s for a request for the focus. */
+        const val ACTION_REQUEST_FOCUS = 1
         const val COMPOSE_RS_STATE = "rs.compose.android.state"
 
         /** What recording paragraphs while idle leaves before the next frame, as Rust's prefetch. */

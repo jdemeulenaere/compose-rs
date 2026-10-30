@@ -48,6 +48,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
             Box::new(crate::clickable::ClickableNode::new(clickable.clone(), None))
         }
         Element::Focusable(source) => Box::new(FocusableNode {
+            pin: Default::default(),
             interaction_source: source.clone(),
             focused: false,
             focus: None,
@@ -513,6 +514,8 @@ impl PointerInputModifierNode for HoverableNode {
 // ---- Focus, keys, semantics ------------------------------------------------------------------
 
 struct FocusableNode {
+    /// The container around it, pinned while it has the focus.
+    pin: crate::pinnable::FocusPin,
     interaction_source: Option<crate::interaction::MutableInteractionSource>,
     focused: bool,
     /// The focus emitted into the source and not yet ended.
@@ -583,6 +586,7 @@ impl FocusTargetModifierNode for FocusableNode {
             return;
         }
         self.focused = focused;
+        self.pin.focus_changed(focused, context);
         if focused {
             context.bring_into_view();
         }

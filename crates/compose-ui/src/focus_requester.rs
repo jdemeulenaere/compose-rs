@@ -30,6 +30,9 @@ pub(crate) struct FocusRequests {
     pub(crate) tree_key: Cell<u32>,
     /// Changes when the focus moves: what's queued for application code before is stale.
     pub(crate) focus_generation: crate::focus::FocusGeneration,
+    /// What the window's view should do: take the focus (the content gained it) or give it up
+    /// (`clear_focus`), as `requestOwnerFocus` and `clearOwnerFocus`.
+    pub(crate) owner_focus: std::cell::Cell<Option<bool>>,
     /// Show (true) or hide (false) the on-screen keyboard: the last request, until the host's
     /// platform takes it.
     pub(crate) software_keyboard: std::cell::Cell<Option<bool>>,
@@ -166,7 +169,13 @@ impl UiTree {
                     && self.request_focus_at_or_below(node, FocusDirection::Enter)
             }
             FocusRequest::Clear { force } => {
-                self.clear_focus_with(force, true, FocusDirection::Exit)
+                let cleared = self.clear_focus_with(force, true, FocusDirection::Exit);
+                // As `clearOwnerFocus`: in keyboard mode, the view system gives it back.
+                if cleared {
+                    self.focus_requests.owner_focus.set(Some(false));
+                    self.focus_requests.wake();
+                }
+                cleared
             }
             FocusRequest::Move(direction) => self.move_focus_with(direction, true),
             FocusRequest::Requester(requester, operation) => {

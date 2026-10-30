@@ -539,10 +539,12 @@ impl UiTree {
     /// nothing focused, keys go to the topmost overlay that takes the focus (a dialog's Escape).
     fn key_path(&mut self) -> Vec<(NodeId, usize, EntryId)> {
         let mut path = Vec::new();
-        let mut node = self.focused().or_else(|| self.modal_overlay());
+        // Not what a modal shuts out (one with no target of its own to take the focus).
+        let focused = self.focused().filter(|&node| !self.is_occluded_by_modal(node));
+        let mut node = focused.or_else(|| self.modal_overlay());
         // From the last before the next target after the active one: what's below that target is
         // its, as `lastLocalNode`.
-        let mut end = self.focus.active.and_then(|active| {
+        let mut end = self.focus.active.filter(|_| focused.is_some()).and_then(|active| {
             let index = self.target_index(active)?;
             let chain = &self.node(active.node).chain;
             chain[index + 1..]
@@ -599,12 +601,12 @@ impl UiTree {
             }
         }
         self.apply_requests(requests, &mut actions);
-        if !consumed && event.key == Key::Tab && event.kind == KeyEventType::KeyDown {
-            let direction = if event.modifiers.shift {
-                crate::focus_manager::FocusDirection::Previous
-            } else {
-                crate::focus_manager::FocusDirection::Next
-            };
+        // Tab everywhere; the others where the host says they move the focus (D230).
+        let direction = event.to_focus_direction().filter(|_| {
+            event.kind == KeyEventType::KeyDown
+                && (event.key == Key::Tab || self.focus.keys_navigate)
+        });
+        if !consumed && let Some(direction) = direction {
             let (moved, moved_actions) = self.move_focus_in(direction);
             actions.extend(moved_actions);
             // A search waiting for a lazy list's next item asks for the frame laying it out.

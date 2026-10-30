@@ -421,7 +421,13 @@ pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> 
         .expect("compose-ui: the tree set aside for a block is there as it returns");
     let stand_in = std::mem::replace(tree, real);
     STAND_IN.with(|slot| *slot.borrow_mut() = Some(stand_in));
-    result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    result.unwrap_or_else(|panic| {
+        // Caught above it, the next change finds no transaction under way.
+        tree.focus.processing.clear();
+        tree.focus.requesting = false;
+        tree.focus.moved_by_tree = false;
+        std::panic::resume_unwind(panic)
+    })
 }
 
 /// Runs `f` with the tree of `key` if it's free (its host's composition holds it and nothing

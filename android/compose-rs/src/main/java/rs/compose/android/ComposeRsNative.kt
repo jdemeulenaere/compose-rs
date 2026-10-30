@@ -35,6 +35,21 @@ internal object ComposeRsNative {
     /** The bits a list of optimizations names (Rust's names), or -1 for an unknown one. */
     @JvmStatic external fun parseOptimizations(list: String): Long
 
+    /** The view asks the content for the focus: whether the content has it. */
+    @JvmStatic
+    external fun ownerRequestedFocus(
+        host: Long,
+        direction: Int,
+        hasRect: Boolean,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+    ): Boolean
+
+    /** The view lost the focus. */
+    @JvmStatic external fun ownerLostFocus(host: Long)
+
     /** The view system's touch mode: the input mode (Keyboard when it's false). */
     @JvmStatic external fun setInputMode(host: Long, touch: Boolean)
 
@@ -218,6 +233,8 @@ internal object Frame {
     const val BACK = 64L
     const val SHOW_KEYBOARD = 128L
     const val HIDE_KEYBOARD = 256L
+    const val OWNER_FOCUS = 512L
+    const val OWNER_CLEAR = 1024L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 16) - 1

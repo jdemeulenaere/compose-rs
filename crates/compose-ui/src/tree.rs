@@ -1575,6 +1575,8 @@ impl UiTree {
         if self.get(node).is_none() {
             return;
         }
+        // Before the pass updates its elements: what's told of the focus going is what was there.
+        self.focus_node_resetting(node);
         let semantics_id = self.next_semantics_id();
         let value = self.node_mut(node);
         value.semantics_id = semantics_id;

@@ -269,9 +269,9 @@ impl ScrollModifiers for Modifier {
         fling_behavior: Option<Rc<dyn FlingBehavior>>,
         reverse_scrolling: bool,
     ) -> Modifier {
-        // Its content a group for focus searches, as `ScrollableNode`'s target: outside what's
+        // Its node is a group for focus searches, as `ScrollableNode`'s target: outside what's
         // scrolled, so that its rectangle is the viewport's.
-        self.focus_group().then_custom(ScrollElement {
+        self.then_custom(ScrollElement {
             state,
             vertical: true,
             enabled,
@@ -287,7 +287,7 @@ impl ScrollModifiers for Modifier {
         fling_behavior: Option<Rc<dyn FlingBehavior>>,
         reverse_scrolling: bool,
     ) -> Modifier {
-        self.focus_group().then_custom(ScrollElement {
+        self.then_custom(ScrollElement {
             state,
             vertical: false,
             enabled,
@@ -475,8 +475,18 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
     }
 }
 
+impl compose_ui::FocusTargetModifierNode for ScrollNode {
+    /// A group: it can't take the focus itself unless properties say so.
+    fn focusability(&self) -> compose_ui::Focusability {
+        compose_ui::Focusability::NEVER
+    }
+}
+
 impl ModifierNode for ScrollNode {
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
+        Some(self)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn compose_ui::FocusTargetModifierNode> {
         Some(self)
     }
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {

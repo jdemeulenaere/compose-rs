@@ -2102,26 +2102,27 @@ fn LazyItem(
         Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>
     });
     let inner = state.inner_or_detached();
-    let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
     // The lazy lists composing in the item note themselves in this list under its key, whoever
     // composes it (a frame here, a request's resumes, a completion), as Compose's request finds
     // those of its precomposed item (`traversablePrefetchState`).
     let composing = inner.prefetch.composing_item.replace(Some(item_key));
     let target = prefetch::item_target(&inner, item_key);
-    let near = state;
+    // What's in it pins it while it has the focus, as `LazyLayoutPinnableItem`.
+    let parent = compose_ui::LOCAL_PINNABLE_CONTAINER.current();
+    let pin = compose_runtime::remember_keyed(item_key, || {
+        Rc::new(ItemPin {
+            key: item_key,
+            near: Cell::new(index),
+            pinned: inner.pinned.handle(),
+            state,
+            parent: parent.clone(),
+        })
+    });
+    pin.near.set(index);
+    let container: Rc<dyn compose_ui::PinnableContainer> = pin.clone();
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
-    let modifier =
-        Modifier.lazy_item_boundary().on_focus_changed(move |state: compose_ui::FocusState| {
-            if state.has_focus() {
-                if let Some(inner) = near.inner() {
-                    inner.pinned_near.set(index);
-                }
-                pinned.set(Some(item_key));
-            } else if pinned.get() == Some(item_key) {
-                pinned.set(None);
-            }
-        });
+    let modifier = Modifier.lazy_item_boundary();
     Layout(
         modifier,
         policy,
@@ -2130,12 +2131,44 @@ fn LazyItem(
                 // The item's content, as Compose's item subcomposition: a request's paused
                 // composition may pause in it, and applies it whole (D590).
                 compose_runtime::platform::PausableContentFor(target, || {
-                    holder.SaveableStateProvider(item_key, || (interval.content)(local));
+                    compose_runtime::CompositionLocalProvider(
+                        compose_ui::LOCAL_PINNABLE_CONTAINER.provides(Some(container.clone())),
+                        || holder.SaveableStateProvider(item_key, || (interval.content)(local)),
+                    );
                 });
             }
         }),
     );
     inner.prefetch.composing_item.set(composing);
+}
+
+/// A lazy item as a pinnable container, as `LazyLayoutPinnableItem`: pinned, its list keeps it
+/// composed and placed, and the list's own item around it too.
+struct ItemPin {
+    key: u64,
+    near: Cell<usize>,
+    pinned: compose_runtime::MutableState<Option<u64>>,
+    state: LazyListState,
+    parent: Option<Rc<dyn compose_ui::PinnableContainer>>,
+}
+
+impl compose_ui::PinnableContainer for ItemPin {
+    fn pin(&self) -> compose_ui::PinnedHandle {
+        if let Some(inner) = self.state.inner() {
+            inner.pinned_near.set(self.near.get());
+        }
+        self.pinned.set(Some(self.key));
+        let (pinned, key) = (self.pinned, self.key);
+        let parent = self.parent.as_ref().map(|parent| parent.pin());
+        compose_ui::PinnedHandle::new(move || {
+            if pinned.get() == Some(key) {
+                pinned.set(None);
+            }
+            if let Some(parent) = parent {
+                parent.release();
+            }
+        })
+    }
 }
 
 /// How an item's node stacks its children.
