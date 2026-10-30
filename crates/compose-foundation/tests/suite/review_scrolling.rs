@@ -348,6 +348,52 @@ fn a_drag_ends_when_its_node_leaves() {
     }
 }
 
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Draggable.kt, a drag released emits DragInteraction.Stop, one cancelled (the gesture cancelled, the node gone) DragInteraction.Cancel
+#[test]
+fn a_drag_tells_its_source_how_it_ended() {
+    for kind in SCROLLERS {
+        // Released.
+        let shown = mutable_state_of(true);
+        let (mut ui, driven) = scroller(kind, shown.handle(), || {});
+        let source = driven.source.clone().expect("a source");
+        let recorded = crate::interaction_helpers::record(&source);
+        let mut finger = Touch::down(&mut ui, CENTER);
+        finger.move_by(&mut ui, Offset::new(0.0, -50.0));
+        finger.up(&mut ui);
+        ui.wait_for_idle();
+        assert_eq!(crate::interaction_helpers::kinds(&recorded), ["Start", "Stop"], "{kind:?}");
+
+        // The gesture cancelled.
+        let recorded = crate::interaction_helpers::record(&source);
+        ui.on_node_with_tag(TAG).perform_touch_input(|touch| {
+            touch.down(CENTER);
+            touch.move_by(Offset::new(0.0, -50.0));
+            touch.cancel();
+        });
+        ui.wait_for_idle();
+        assert_eq!(
+            crate::interaction_helpers::kinds(&recorded),
+            ["Start", "DragCancel"],
+            "{kind:?}: cancelled"
+        );
+        assert!(!source.is_dragged(), "{kind:?}");
+
+        // The node gone.
+        let recorded = crate::interaction_helpers::record(&source);
+        let mut finger = Touch::down(&mut ui, CENTER);
+        finger.move_by(&mut ui, Offset::new(0.0, -50.0));
+        shown.set(false);
+        ui.wait_for_idle();
+        assert_eq!(
+            crate::interaction_helpers::kinds(&recorded),
+            ["Start", "DragCancel"],
+            "{kind:?}: removed"
+        );
+        assert!(!source.is_dragged(), "{kind:?}");
+        finger.up(&mut ui);
+    }
+}
+
 // A scroller in a list's item, released when its item leaves for good: a drag going on in it ends,
 // its state not left scrolling.
 #[test]

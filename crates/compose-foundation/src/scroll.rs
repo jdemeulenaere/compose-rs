@@ -993,7 +993,7 @@ impl DragScroller {
                     return;
                 }
                 event.consume();
-                self.end_drag();
+                self.end_drag(DragInteraction::Stop);
                 // A finger or a stylus let go while moving: the content goes on, slowing down
                 // (every pointer that drags flings, as Compose's).
                 drag.tracker.release(event_time(event));
@@ -1050,13 +1050,15 @@ impl DragScroller {
         compose_runtime::platform::poll_now(job);
     }
 
-    /// The drag's hold on the state's scroll ends, and the interaction source hears it.
-    fn end_drag(&mut self) {
+    /// The drag's hold on the state's scroll ends, and the interaction source hears how:
+    /// `ended` is `DragInteraction::Stop` for a release, `Cancel` for a gesture cancelled or a
+    /// node gone, as Compose's `processDragStop` and `processDragCancel`.
+    fn end_drag(&mut self, ended: fn(DragStart) -> DragInteraction) {
         if let Some(session) = self.session.take() {
             session.end();
         }
         if let Some((source, start)) = self.dragged.take() {
-            source.try_emit(DragInteraction::Stop(start));
+            source.try_emit(ended(start));
         }
     }
 
@@ -1120,7 +1122,7 @@ impl DragScroller {
     /// `onDragStopped(Zero)` (the connections around still hear it end).
     pub(crate) fn cancel(&mut self) {
         self.pressed.clear();
-        self.end_drag();
+        self.end_drag(DragInteraction::Cancel);
         if self.drag.take().is_some_and(|drag| drag.scrolling) {
             let chain = self.chain.clone();
             chain.pre_fling(Offset::ZERO);
