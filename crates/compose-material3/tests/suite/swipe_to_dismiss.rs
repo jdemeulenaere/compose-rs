@@ -21,7 +21,7 @@ use compose_ui::{
 const ROOT_WIDTH: f32 = 400.0;
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// Swipes across the node tagged `tag` at its middle, from its left edge to its right one

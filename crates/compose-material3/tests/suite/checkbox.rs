@@ -25,7 +25,7 @@ fn a_checkbox_is_an_enabled_checkbox_on_or_off() {
         });
     });
     for (tag, on) in [("unchecked", false), ("checked", true)] {
-        let node = ui.on_node_with_tag(tag).fetch_semantics_node();
+        let node = ui.on_node_with_tag(tag).fetch_semantics_snapshot();
         assert_eq!(
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
             Some(Role::Checkbox)
@@ -139,7 +139,7 @@ fn material_size(
             );
         });
     });
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 

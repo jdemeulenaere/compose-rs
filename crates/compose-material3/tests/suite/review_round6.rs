@@ -59,9 +59,9 @@ fn every_tab_is_as_tall_as_the_row() {
             });
         });
     });
-    let row = ui.on_node_with_tag("row").fetch_semantics_node().bounds;
+    let row = ui.on_node_with_tag("row").fetch_semantics_snapshot().bounds;
     assert_eq!(row.height(), 72.0);
-    let text = ui.on_node_with_tag("text").fetch_semantics_node().bounds;
+    let text = ui.on_node_with_tag("text").fetch_semantics_snapshot().bounds;
     assert_eq!(text.height(), 72.0, "as tall as the row");
 }
 

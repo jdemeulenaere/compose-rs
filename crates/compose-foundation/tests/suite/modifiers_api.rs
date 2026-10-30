@@ -22,7 +22,7 @@ use compose_ui::{
 type Log = Rc<RefCell<Vec<String>>>;
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn click(ui: &mut ComposeTestRule, x: f32, y: f32) {
@@ -364,7 +364,7 @@ fn selectable_and_selectable_group_set_their_semantics() {
     assert!(semantics.contains("selectable_group"), "{semantics}");
     assert!(semantics.contains("selected=true"), "{semantics}");
     ui.on_node_with_tag("option 1").perform_click();
-    let option = ui.on_node_with_tag("option 1").fetch_semantics_node();
+    let option = ui.on_node_with_tag("option 1").fetch_semantics_snapshot();
     assert_eq!(option.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
     assert_eq!(
         option.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),

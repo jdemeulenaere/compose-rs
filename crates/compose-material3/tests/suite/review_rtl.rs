@@ -14,7 +14,7 @@ use compose_test::*;
 use compose_ui::{IntSize, LayoutDirection, Modifier, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 /// Input: right to left, a `Crossfade` given `Modifier.width(100.dp())` (at the window's right,

@@ -9,7 +9,7 @@ use compose_test::*;
 use compose_ui::{Color, IntSize, Modifier, Role, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn a_button_follows_the_material_sizes_and_states() {
     assert_eq!(clicks.get(), 1);
     let roles = ui
         .on_node_with_tag("button")
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .config
         .get(&compose_ui::SemanticsProperties::ROLE)
         .copied();
@@ -172,7 +172,7 @@ fn a_pressed_button_shows_its_state_layer() {
     let mut ui = compose_test(Screen);
     let layer = format!("{:?}", light_color_scheme().on_primary.with_alpha(0.10));
     assert!(!ui.dump_display_list().contains(&layer));
-    let center = ui.on_node_with_tag("button").fetch_semantics_node().center();
+    let center = ui.on_node_with_tag("button").fetch_semantics_snapshot().center();
     ui.host().send_pointer(compose_ui::PointerEvent::press(center));
     ui.wait_for_idle();
     assert!(ui.dump_display_list().contains(&layer), "{}", ui.dump_display_list());

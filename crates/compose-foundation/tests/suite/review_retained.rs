@@ -162,8 +162,8 @@ fn a_selection_across_boundaries_is_drawn_and_cleared() {
         });
     });
     let highlights = |ui: &mut ComposeTestRule| ui.dump_display_list().matches("#664286F4").count();
-    let first = ui.on_node_with_tag("first").fetch_semantics_node().bounds;
-    let second = ui.on_node_with_tag("second").fetch_semantics_node().bounds;
+    let first = ui.on_node_with_tag("first").fetch_semantics_snapshot().bounds;
+    let second = ui.on_node_with_tag("second").fetch_semantics_snapshot().bounds;
     let from = Offset::new(first.left + 1.0, (first.top + first.bottom) / 2.0);
     let to = Offset::new(second.left + 30.0, (second.top + second.bottom) / 2.0);
     ui.host().send_pointer(PointerEvent::press(from));

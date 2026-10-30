@@ -415,7 +415,7 @@ fn an_item_focused_when_prefetched_is_scrolled_into_view() {
     AUTO.with(|auto| auto.set(None));
     let tag = format!("row {}", last + 1);
     ui.on_node_with_tag(&tag).assert_is_focused();
-    let bounds = ui.on_node_with_tag(&tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(&tag).fetch_semantics_snapshot().bounds;
     assert!(
         bounds.top >= 0.0 && bounds.bottom <= 100.0,
         "focused item at {bounds:?}, outside the 100 px viewport (first visible item {})",

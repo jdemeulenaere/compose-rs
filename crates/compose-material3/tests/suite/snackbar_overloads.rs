@@ -17,7 +17,7 @@ use compose_test::*;
 use compose_ui::{Modifier, SizeSpec, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag_unmerged(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag_unmerged(tag).fetch_semantics_snapshot().bounds
 }
 
 /// Visuals of `message`, `action` and a dismiss button or not.
@@ -279,8 +279,10 @@ fn the_light_snackbar_golden() {
 fn the_light_snackbar_with_an_action_golden() {
     let mut ui = golden(light_color_scheme(), "Snackbar message", true, false, false);
     assert_colors(&mut ui, light_color_scheme());
-    let (bar, undo) =
-        (bounds(&mut ui, "snackbar"), ui.on_node_with_text("Undo").fetch_semantics_node().bounds);
+    let (bar, undo) = (
+        bounds(&mut ui, "snackbar"),
+        ui.on_node_with_text("Undo").fetch_semantics_snapshot().bounds,
+    );
     // The action at the end, 8 dp in.
     assert!((bar.right - 8.0 - undo.right).abs() <= 12.0, "{bar:?} {undo:?}");
 }
@@ -289,8 +291,8 @@ fn the_light_snackbar_with_an_action_golden() {
 #[test]
 fn the_light_snackbar_with_a_dismiss_button_golden() {
     let mut ui = golden(light_color_scheme(), "Snackbar message", true, true, false);
-    let dismiss = ui.on_node_with_content_description("Dismiss").fetch_semantics_node().bounds;
-    let undo = ui.on_node_with_text("Undo").fetch_semantics_node().bounds;
+    let dismiss = ui.on_node_with_content_description("Dismiss").fetch_semantics_snapshot().bounds;
+    let undo = ui.on_node_with_text("Undo").fetch_semantics_snapshot().bounds;
     assert!(undo.right <= dismiss.left + 1.0, "the action before the dismiss button");
 }
 
@@ -322,8 +324,8 @@ fn check_long(scheme: ColorScheme) {
     let mut ui = golden(scheme, LONG_TEXT, true, true, false);
     let bar = bounds(&mut ui, "snackbar");
     assert!(bar.height() >= 68.0 + 24.0, "{bar:?}");
-    let message = ui.on_node_with_text(LONG_TEXT).fetch_semantics_node().bounds;
-    let undo = ui.on_node_with_text("Undo").fetch_semantics_node().bounds;
+    let message = ui.on_node_with_text(LONG_TEXT).fetch_semantics_snapshot().bounds;
+    let undo = ui.on_node_with_text("Undo").fetch_semantics_snapshot().bounds;
     assert!(undo.left >= message.right, "beside it: {message:?} {undo:?}");
 }
 
@@ -342,8 +344,8 @@ fn the_light_snackbar_with_a_long_message_golden() {
 /// The action under a long message, at the end.
 fn check_new_line(scheme: ColorScheme) {
     let mut ui = golden(scheme, LONG_TEXT, true, true, true);
-    let message = ui.on_node_with_text(LONG_TEXT).fetch_semantics_node().bounds;
-    let undo = ui.on_node_with_text("Undo").fetch_semantics_node().bounds;
+    let message = ui.on_node_with_text(LONG_TEXT).fetch_semantics_snapshot().bounds;
+    let undo = ui.on_node_with_text("Undo").fetch_semantics_snapshot().bounds;
     assert!(undo.top >= message.bottom, "under it: {message:?} {undo:?}");
 }
 

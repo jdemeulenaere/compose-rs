@@ -70,8 +70,9 @@ fn a_content_size_animates_to_its_new_size() {
     let expanded = mutable_state_of(false);
     let handle = expanded.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || Expanding(handle));
-    let top =
-        |ui: &mut ComposeTestRule| ui.on_node_with_tag("below").fetch_semantics_node().bounds.top;
+    let top = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag("below").fetch_semantics_snapshot().bounds.top
+    };
     assert_eq!(top(&mut ui), 20.0);
     expanded.set(true);
     ui.wait_for_idle();

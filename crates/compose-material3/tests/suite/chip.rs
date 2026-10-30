@@ -31,15 +31,19 @@ fn rule(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn role(ui: &mut ComposeTestRule, tag: &str) -> Option<Role> {
-    ui.on_node_with_tag(tag).fetch_semantics_node().config.get(&SemanticsProperties::ROLE).copied()
+    ui.on_node_with_tag(tag)
+        .fetch_semantics_snapshot()
+        .config
+        .get(&SemanticsProperties::ROLE)
+        .copied()
 }
 
 fn left(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.left
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.left
 }
 
 fn width(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.width()
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.width()
 }
 
 /// A leading or trailing icon of the chips' 18 dp.
@@ -552,7 +556,7 @@ fn a_chips_label_is_a_row() {
         );
     });
     let bounds = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
     };
     let chip = bounds(&mut ui, TAG);
     let (first, second) = (bounds(&mut ui, "first"), bounds(&mut ui, "second"));

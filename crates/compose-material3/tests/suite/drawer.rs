@@ -43,7 +43,7 @@ fn App(state: DrawerState) {
 }
 
 fn sheet_left(ui: &mut ComposeTestRule) -> f32 {
-    ui.on_node_with_tag("sheet").fetch_semantics_node().bounds.left
+    ui.on_node_with_tag("sheet").fetch_semantics_snapshot().bounds.left
 }
 
 #[test]
@@ -60,11 +60,11 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
     ui.advance_time_by(Duration::from_millis(400));
     assert_eq!(sheet_left(&mut ui), 0.0);
     assert!(state.is_open());
-    let sheet = ui.on_node_with_tag("sheet").fetch_semantics_node().bounds;
+    let sheet = ui.on_node_with_tag("sheet").fetch_semantics_snapshot().bounds;
     assert_eq!(sheet.width(), 360.0);
     assert_eq!(
         ui.on_node_with_tag("inbox")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),

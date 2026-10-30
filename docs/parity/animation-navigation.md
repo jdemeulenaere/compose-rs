@@ -693,8 +693,8 @@ Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavControlle
 | `rule.waitForIdle()` | `wait_for_idle()`. With auto-advance on it moves the clock while a frame is needed, up to 60 s of test time; with it off, a state change composes only at the next `advance_time_by…` frame, as Compose's (D900) |
 | `rule.waitUntil { cond }`, `mainClock.advanceTimeUntil { cond }` | `wait_until(|rule| …)`, `advance_time_until(|rule| …)` |
 | `LaunchedEffect(Unit) { withFrameNanos { … } }` inside content, asserting per frame | works as is (`compose_runtime::with_frame_nanos`, `LaunchedEffect`). Compose's `SingleValueAnimationTest` and `InfiniteTransitionTest` use this pattern. Or sample from the test: read the state after each `advance_time_by_frame()` |
-| `onGloballyPositioned { coords.localToRoot(…) }`, `size` | `Modifier.on_globally_positioned` and `on_size_changed` exist (`compose-ui/src/layout_callbacks.rs`); or `on_node_with_tag(t).fetch_semantics_node().bounds` (root coordinates, used by `visibility.rs`) |
-| `assertPositionInRootIsEqualTo`, `getBoundsInRoot`, `assertWidthIsEqualTo` | the bounds assertions (docs/09), or compare `fetch_semantics_node().bounds` |
+| `onGloballyPositioned { coords.localToRoot(…) }`, `size` | `Modifier.on_globally_positioned` and `on_size_changed` exist (`compose-ui/src/layout_callbacks.rs`); or `on_node_with_tag(t).fetch_semantics_snapshot().bounds` (root coordinates, used by `visibility.rs`) |
+| `assertPositionInRootIsEqualTo`, `getBoundsInRoot`, `assertWidthIsEqualTo` | the bounds assertions (docs/09), or compare `fetch_semantics_snapshot().bounds` |
 | `captureToImage()` and pixel or screenshot assertions | `capture_to_image` with `assert_pixels` (D904), or the display list (alphas and layer transforms, as `crossfade.rs` `alphas()` does; z-order) |
 | `CompositionLocalProvider(LocalDensity provides Density(1f))` | the default test host is at density 1; else `compose_test_with(size, Density(…), …)` |
 | `StateRestorationTester` / activity recreation | `host.save_state()` → `to_bytes` → a new rule with `restore_state` (see `recreate()` in `compose-navigation/tests/suite/navigation.rs`) |

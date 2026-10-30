@@ -58,8 +58,8 @@ fn snackbars_show_one_at_a_time_for_their_duration() {
     ui.on_node_with_text("First").assert_exists();
     ui.on_node_with_text("Second").assert_does_not_exist();
     // Above the FAB, centered.
-    let snackbar = ui.on_node_with_text("First").fetch_semantics_node().bounds;
-    let fab = ui.on_node_with_tag("fab").fetch_semantics_node().bounds;
+    let snackbar = ui.on_node_with_text("First").fetch_semantics_snapshot().bounds;
+    let fab = ui.on_node_with_tag("fab").fetch_semantics_snapshot().bounds;
     assert!(snackbar.bottom <= fab.top, "{snackbar:?} {fab:?}");
     // Four seconds on, the first is dismissed and the second shows.
     ui.advance_time_by(Duration::from_millis(4000));

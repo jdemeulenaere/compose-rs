@@ -50,7 +50,7 @@ fn an_empty_field_puts_its_cursor_at_the_right_once_the_direction_turns_right_to
     );
     ui.host().set_layout_direction(LayoutDirection::Rtl);
     ui.wait_for_idle();
-    assert_eq!(ui.on_node_with_tag("field").fetch_semantics_node().bounds.left, 100.0);
+    assert_eq!(ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds.left, 100.0);
     let left = cursor_left(&mut ui);
     assert!(left > 250.0, "the cursor at the field's right edge: {left}");
 }

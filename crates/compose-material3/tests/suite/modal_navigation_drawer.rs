@@ -33,7 +33,7 @@ fn launch(task: impl std::future::Future<Output = ()> + 'static) {
 }
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// A drawer remembering its state from `initial`, its sheet `sheet_modifier` wide (360 dp by
@@ -514,7 +514,7 @@ fn a_closed_drawers_pane_is_off_screen() {
     let mut ui = compose_test(drawer_of(*state));
     let bounds = ui
         .on_node_unmerged(expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into()))
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .bounds;
     assert_eq!(bounds.left, -360.0);
 }
@@ -567,7 +567,7 @@ fn keyboard_focus_stays_out_of_a_drawer_closed_again() {
     ui.press_key(compose_ui::Key::Tab);
     ui.on_node_with_tag("in content").assert_is_focused();
     let pane = expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into());
-    assert_eq!(ui.on_node_unmerged(pane).fetch_semantics_node().bounds.left, -240.0);
+    assert_eq!(ui.on_node_unmerged(pane).fetch_semantics_snapshot().bounds.left, -240.0);
 }
 
 /// While it's closed its content records nothing: a frame costs what the screen shows.

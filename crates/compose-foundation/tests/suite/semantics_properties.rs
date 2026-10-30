@@ -31,8 +31,8 @@ fn configurations(
     ui: &mut ComposeTestRule,
     tag: &str,
 ) -> (SemanticsConfiguration, SemanticsConfiguration) {
-    let unmerged = ui.on_node_with_tag_unmerged(tag).fetch_semantics_node().config;
-    let merged = ui.on_node_with_tag(tag).fetch_semantics_node().config;
+    let unmerged = ui.on_node_with_tag_unmerged(tag).fetch_semantics_snapshot().config;
+    let merged = ui.on_node_with_tag(tag).fetch_semantics_snapshot().config;
     (unmerged, merged)
 }
 
@@ -255,7 +255,7 @@ fn a_pane_title_is_its_nodes() {
             modifier = Modifier.test_tag("pane").semantics(|config| config.set_pane_title("title"))
         );
     });
-    let unmerged = ui.on_node_with_tag_unmerged("pane").fetch_semantics_node().config;
+    let unmerged = ui.on_node_with_tag_unmerged("pane").fetch_semantics_snapshot().config;
     assert_eq!(
         unmerged.get(&SemanticsProperties::PANE_TITLE).map(|title| title.as_str()),
         Some("title")
@@ -274,7 +274,7 @@ fn merging_a_pane_title_fails() {
         });
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ui.on_node_with_tag("clickable").fetch_semantics_node();
+        ui.on_node_with_tag("clickable").fetch_semantics_snapshot();
     }));
     let panic = failed.expect_err("merging a pane title fails");
     let message = panic.downcast_ref::<&str>().map(|text| text.to_string()).unwrap_or_default();
@@ -360,12 +360,12 @@ fn actions_on_one_node_collapse_label_and_function() {
             );
         });
     });
-    let action = ui.on_node_with_tag("action").fetch_semantics_node().config;
+    let action = ui.on_node_with_tag("action").fetch_semantics_snapshot().config;
     assert_eq!(
         label_and_result(&action, &SemanticsActions::COPY_TEXT),
         (Some("copy".to_string()), Some(true))
     );
-    let label = ui.on_node_with_tag("label").fetch_semantics_node().config;
+    let label = ui.on_node_with_tag("label").fetch_semantics_snapshot().config;
     assert_eq!(
         label_and_result(&label, &SemanticsActions::COPY_TEXT),
         (Some("copy".to_string()), Some(false))
@@ -392,7 +392,7 @@ fn an_outer_label_names_a_clickables_click() {
                     .size(10.dp())
             );
         });
-        let config = ui.on_node_with_tag("button").fetch_semantics_node().config;
+        let config = ui.on_node_with_tag("button").fetch_semantics_snapshot().config;
         assert_eq!(
             label_and_result(&config, &SemanticsActions::ON_CLICK),
             (Some("send".to_string()), Some(true))
@@ -431,12 +431,12 @@ fn merged_actions_take_label_and_function_apart() {
             );
         });
     });
-    let action = ui.on_node_with_tag("action").fetch_semantics_node().config;
+    let action = ui.on_node_with_tag("action").fetch_semantics_snapshot().config;
     assert_eq!(
         label_and_result(&action, &SemanticsActions::EXPAND),
         (Some("show more".to_string()), Some(true))
     );
-    let label = ui.on_node_with_tag("label").fetch_semantics_node().config;
+    let label = ui.on_node_with_tag("label").fetch_semantics_snapshot().config;
     assert_eq!(
         label_and_result(&label, &SemanticsActions::EXPAND),
         (Some("show more".to_string()), Some(false))
@@ -471,7 +471,7 @@ fn a_parents_label_does_not_reach_an_unmerged_action() {
                 }
             );
         });
-        let config = ui.on_node_with_tag("parent").fetch_semantics_node().config;
+        let config = ui.on_node_with_tag("parent").fetch_semantics_snapshot().config;
         let key = if clickable { &SemanticsActions::ON_CLICK } else { &SemanticsActions::COLLAPSE };
         let action = config.get(key).expect("the label");
         assert_eq!(action.label.as_deref(), Some("label"));

@@ -833,7 +833,7 @@ fn a_display_aligns_its_content() {
     ui.set_auto_advance(false);
     stack.push(50);
     ui.advance_time_by(Duration::from_millis(100));
-    let bounds = ui.on_node_with_tag("50").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("50").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.left, bounds.top), (50.0, 50.0));
 }
 
@@ -861,7 +861,7 @@ fn a_display_s_size_follows_its_size_transform() {
         ui.set_auto_advance(false);
         stack.push(150);
         ui.advance_time_by(Duration::from_millis(100));
-        ui.on_node_with_tag("display").fetch_semantics_node().bounds.width()
+        ui.on_node_with_tag("display").fetch_semantics_snapshot().bounds.width()
     }
     assert_eq!(size_during(None), 150.0);
     let animated = size_during(Some(compose_animation::size_transform(false, |_, _| {

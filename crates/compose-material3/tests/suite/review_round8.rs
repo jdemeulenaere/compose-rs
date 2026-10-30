@@ -32,9 +32,9 @@ fn badged_box_without_a_badge_still_shows_its_content() {
             );
         });
     });
-    let bounds = ui.on_node_with_tag("badged").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("badged").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (24.0, 24.0));
-    let icon = ui.on_node_with_content_description("Home").fetch_semantics_node().bounds;
+    let icon = ui.on_node_with_content_description("Home").fetch_semantics_snapshot().bounds;
     assert_eq!((icon.width(), icon.height()), (24.0, 24.0));
 }
 
@@ -54,7 +54,7 @@ fn selected_filter_chip_adds_no_icon_of_its_own() {
             });
         });
     });
-    let on = ui.on_node_with_tag("on").fetch_semantics_node().bounds;
-    let off = ui.on_node_with_tag("off").fetch_semantics_node().bounds;
+    let on = ui.on_node_with_tag("on").fetch_semantics_snapshot().bounds;
+    let off = ui.on_node_with_tag("off").fetch_semantics_snapshot().bounds;
     assert_eq!(on.width(), off.width());
 }

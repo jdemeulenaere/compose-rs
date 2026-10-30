@@ -239,7 +239,7 @@ fn an_exit_interrupted_by_a_new_size_grows_to_it() {
         });
     });
     let height_of = |ui: &mut ComposeTestRule| {
-        ui.on_node_with_tag("box").fetch_semantics_node().bounds.height()
+        ui.on_node_with_tag("box").fetch_semantics_snapshot().bounds.height()
     };
     ui.wait_for_idle();
     assert!(present.get());

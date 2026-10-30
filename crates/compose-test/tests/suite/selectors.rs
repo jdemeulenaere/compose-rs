@@ -288,7 +288,7 @@ fn all_matching_nodes_are_found_in_tree_order() {
             Leaf("a");
         });
     });
-    let found = ui.on_all_nodes_with_tag("a").fetch_semantics_nodes();
+    let found = ui.on_all_nodes_with_tag("a").fetch_semantics_snapshots();
     assert_eq!(found.len(), 3);
     assert_eq!(found[1].children.len(), 1, "the second is the one around the third");
     ui.on_all_nodes_with_tag("b").assert_count_equals(0);

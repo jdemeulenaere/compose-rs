@@ -161,7 +161,7 @@ fn layer_scale_and_alpha(ui: &mut ComposeTestRule) -> (f32, f32) {
 }
 
 fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.top
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.top
 }
 
 fn spring(damping_ratio: f32, stiffness: f32) -> AnimationSpec {
@@ -581,15 +581,15 @@ fn a_tab_rows_indicator_and_colors_animate_with_the_scheme() {
             );
         });
         let start_left =
-            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_snapshot().bounds.left;
         selected.set(1);
         to_halfway(&mut ui);
         let left =
-            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_snapshot().bounds.left;
         let (leaving, coming) = COLORS.with(|colors| (colors[0].get(), colors[1].get()));
         idle_after(&mut ui);
         let end_left =
-            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_snapshot().bounds.left;
         vec![
             along(left, start_left, end_left),
             color_along(coming, Color::BLUE, Color::RED),
@@ -1214,7 +1214,7 @@ fn a_filter_chips_icon_comes_and_goes_with_the_scheme() {
             );
         });
         let label_left = |ui: &mut ComposeTestRule| {
-            ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left
+            ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_snapshot().bounds.left
         };
         let icon_alpha = |ui: &mut ComposeTestRule| {
             let list = ui.host().display_list();
@@ -1264,7 +1264,8 @@ fn a_shaped_filter_chips_icon_comes_and_goes_with_the_scheme() {
         });
         shows.set(!at_first);
         to_halfway(&mut ui);
-        let left = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left;
+        let left =
+            ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_snapshot().bounds.left;
         let list = ui.host().display_list();
         let layers = list.groups.iter().filter_map(|group| group.layer.as_ref());
         let alpha = layers.fold(1.0f32, |alpha, layer| alpha.min(layer.alpha));
@@ -1302,7 +1303,7 @@ fn a_sized_extended_fab_animates_with_the_scheme() {
             );
         });
         let width = |ui: &mut ComposeTestRule| {
-            ui.on_node_unmerged(has_test_tag("fab")).fetch_semantics_node().bounds.width()
+            ui.on_node_unmerged(has_test_tag("fab")).fetch_semantics_snapshot().bounds.width()
         };
         let open = width(&mut ui);
         expanded.set(false);
@@ -1545,7 +1546,7 @@ fn a_focused_text_fields_parts_animate_with_the_scheme() {
                 );
             });
             let label_top = |ui: &mut ComposeTestRule| {
-                ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds.top
+                ui.on_node_unmerged(has_text("Label")).fetch_semantics_snapshot().bounds.top
             };
             let start_top = label_top(&mut ui);
             ui.on_node_with_tag("field").request_focus();
@@ -1584,7 +1585,7 @@ fn a_filled_text_fields_affix_animates_with_the_scheme() {
             );
         });
         let label_top = |ui: &mut ComposeTestRule| {
-            ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds.top
+            ui.on_node_unmerged(has_text("Label")).fetch_semantics_snapshot().bounds.top
         };
         let start_top = label_top(&mut ui);
         value.set("1".to_string());
@@ -1868,7 +1869,7 @@ fn an_extended_fabs_fade_and_width_animate_with_the_scheme() {
             );
         });
         let width = |ui: &mut ComposeTestRule| {
-            ui.on_node_with_tag("fab").fetch_semantics_node().bounds.width()
+            ui.on_node_with_tag("fab").fetch_semantics_snapshot().bounds.width()
         };
         let start = width(&mut ui);
         expanded.set(expand);

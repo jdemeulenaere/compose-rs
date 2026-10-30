@@ -15,7 +15,7 @@ use compose_ui::{
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn arrange(

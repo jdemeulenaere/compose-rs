@@ -391,7 +391,7 @@ fn a_mixed_line_reuses_each_items_slot_by_its_own_type() {
 /// A line's cells' bounds by item.
 fn bounds(ui: &mut ComposeTestRule, item: u64) -> Rect {
     let count = COUNTS.with(|counts| counts.borrow()[&item].get());
-    ui.on_node_with_tag(&format!("item {item}: {count}")).fetch_semantics_node().bounds
+    ui.on_node_with_tag(&format!("item {item}: {count}")).fetch_semantics_snapshot().bounds
 }
 
 thread_local! {

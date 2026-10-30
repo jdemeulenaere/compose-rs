@@ -209,7 +209,10 @@ fn does_not_expand_when_disabled() {
         click(&mut ui, TF);
         ui.on_node_with_tag(EDM).assert_does_not_exist();
         assert_eq!(
-            ui.on_node_with_tag(TF).fetch_semantics_node().config.get(&SemanticsProperties::ROLE),
+            ui.on_node_with_tag(TF)
+                .fetch_semantics_snapshot()
+                .config
+                .get(&SemanticsProperties::ROLE),
             None,
             "says nothing to accessibility"
         );
@@ -332,7 +335,7 @@ fn does_not_expand_if_the_touch_is_part_of_a_scroll() {
         });
     });
     ui.on_node_with_tag(TF).assert_is_displayed();
-    let height = ui.on_node_with_tag(TF).fetch_semantics_node().bounds.height();
+    let height = ui.on_node_with_tag(TF).fetch_semantics_snapshot().bounds.height();
     // Within the anchor's bounds as the content follows the finger: only the scroll cancels it.
     ui.on_node_with_tag(TF).perform_touch_input(|touch| {
         let center = touch.center();
@@ -420,7 +423,7 @@ fn field_takes_typing(ui: &mut ComposeTestRule, text: &str) -> bool {
     ui.host().send_text(text);
     ui.wait_for_idle();
     ui.on_node_with_tag(TF)
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .config
         .get(&SemanticsProperties::EDITABLE_TEXT)
         .is_some_and(|value| value.contains(text))
@@ -593,7 +596,8 @@ fn a_secondary_anchor_keeps_the_focus_in_the_field_and_says_what_it_does() {
             );
         });
     });
-    let config = ui.on_node_with_tag_unmerged(TRAILING_ICON).fetch_semantics_node().config.clone();
+    let config =
+        ui.on_node_with_tag_unmerged(TRAILING_ICON).fetch_semantics_snapshot().config.clone();
     assert_eq!(config.get(&SemanticsProperties::ROLE), Some(&Role::Button));
     assert_eq!(
         config.get(&SemanticsProperties::STATE_DESCRIPTION).map(|text| &**text),
@@ -607,7 +611,8 @@ fn a_secondary_anchor_keeps_the_focus_in_the_field_and_says_what_it_does() {
     assert!(expanded.get());
     ui.on_node_with_tag(ITEM).assert_is_displayed();
     ui.on_node_with_tag(TF).assert_is_focused();
-    let config = ui.on_node_with_tag_unmerged(TRAILING_ICON).fetch_semantics_node().config.clone();
+    let config =
+        ui.on_node_with_tag_unmerged(TRAILING_ICON).fetch_semantics_snapshot().config.clone();
     assert_eq!(
         config.get(&SemanticsProperties::STATE_DESCRIPTION).map(|text| &**text),
         Some("Expanded")
@@ -827,7 +832,7 @@ fn with_scrolled_content() {
 fn has_dropdown_semantics() {
     let (mut ui, _) = rule(false, false);
     assert_eq!(
-        ui.on_node_with_tag(TF).fetch_semantics_node().config.get(&SemanticsProperties::ROLE),
+        ui.on_node_with_tag(TF).fetch_semantics_snapshot().config.get(&SemanticsProperties::ROLE),
         Some(&Role::DropdownList)
     );
 }
@@ -1302,7 +1307,7 @@ fn menu_with_insets(
         ..Default::default()
     });
     ui.wait_for_idle();
-    ui.on_node_with_tag(EDM).fetch_semantics_node().bounds
+    ui.on_node_with_tag(EDM).fetch_semantics_snapshot().bounds
 }
 
 /// An open menu of what's typed in goes above the anchor when the keyboard is where it would go.

@@ -84,14 +84,27 @@ impl<'a> SemanticsNodeInteraction<'a> {
         self.with_node(|node| node.node().clone())
     }
 
-    /// The node, as `fetchSemanticsNode`. Panics unless exactly one matches.
+    /// The node, as `fetchSemanticsNode`: the live handle, in the tree this finder looks in (merged
+    /// unless `_unmerged`). Panics unless exactly one matches.
     #[track_caller]
-    pub fn fetch_semantics_node(&mut self) -> SemanticsSnapshot {
+    pub fn fetch_semantics_node(&mut self) -> compose_ui::SemanticsNode {
+        let id = self.fetch_semantics_snapshot().semantics_id;
+        let owner = self.rule.host.semantics_owner();
+        owner
+            .node(id, self.merged)
+            .unwrap_or_else(|| panic!("compose-test: no semantics node {id}, the one just found"))
+    }
+
+    /// A copy of the node and what's below it, as the tree had them when asked: its `bounds` are
+    /// unclipped and don't follow graphics layers' scale, where `SemanticsNode::bounds_in_root` is
+    /// clipped. Panics unless exactly one matches.
+    #[track_caller]
+    pub fn fetch_semantics_snapshot(&mut self) -> SemanticsSnapshot {
         self.find().unwrap_or_else(|message| panic!("compose-test: {message}"))
     }
 
     pub fn node_id(&mut self) -> NodeId {
-        self.fetch_semantics_node().id
+        self.fetch_semantics_snapshot().id
     }
 
     // ---- Navigation -------------------------------------------------------------------------
@@ -178,7 +191,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
     where
         AccessibilityAction<F>: SemanticsValue,
     {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         let Some(action) = node.config.get(key) else {
             panic!(
                 "compose-test: Failed to perform {} action.\nThe node is missing '{}': {:?}",
@@ -212,7 +225,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
         description: &str,
         predicate: impl Fn(&str) -> bool,
     ) -> &mut Self {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         let actions =
             node.config.get(&SemanticsActions::CUSTOM_ACTIONS).cloned().unwrap_or_default();
         let matching: Vec<_> = actions.iter().filter(|action| predicate(&action.label)).collect();
@@ -235,7 +248,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
     /// Focuses the node and checks it took the focus, for the text actions.
     #[track_caller]
     fn focus_for_text(&mut self, what: &str, require_editable: bool) -> SemanticsSnapshot {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         assert!(
             !node.config.contains(&SemanticsProperties::DISABLED),
             "compose-test: {what} on a node that isn't enabled: {:?}",
@@ -702,9 +715,25 @@ impl<'a> SemanticsNodeInteractionCollection<'a> {
         }
     }
 
-    /// The nodes, as `fetchSemanticsNodes`.
+    /// The nodes, as `fetchSemanticsNodes`: live handles, in this finder's tree.
     #[track_caller]
-    pub fn fetch_semantics_nodes(&mut self) -> Vec<SemanticsSnapshot> {
+    pub fn fetch_semantics_nodes(&mut self) -> Vec<compose_ui::SemanticsNode> {
+        let ids: Vec<i32> =
+            self.fetch_semantics_snapshots().iter().map(|node| node.semantics_id).collect();
+        let owner = self.rule.host.semantics_owner();
+        let merged = self.merged;
+        ids.into_iter()
+            .map(|id| {
+                owner.node(id, merged).unwrap_or_else(|| {
+                    panic!("compose-test: no semantics node {id}, one just found")
+                })
+            })
+            .collect()
+    }
+
+    /// Copies of the nodes and what's below them.
+    #[track_caller]
+    pub fn fetch_semantics_snapshots(&mut self) -> Vec<SemanticsSnapshot> {
         self.with_nodes(|nodes| nodes.iter().map(|node| node.node().clone()).collect())
     }
 

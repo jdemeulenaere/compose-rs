@@ -54,7 +54,7 @@ fn word() -> KeyModifiers {
 }
 
 fn text_of(ui: &mut ComposeTestRule) -> String {
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     node.config
         .get(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
         .cloned()
@@ -262,7 +262,7 @@ fn last_rect(list: &compose_ui::platform::FlatDisplayList) -> compose_ui::Rect {
 fn a_multi_line_field_keeps_its_cursor_in_view() {
     let mut ui = editor("", false);
     ui.on_node_with_tag("field").perform_text_input("one\ntwo\nthree\nfour");
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     let cursor = last_rect(&ui.host().display_list());
     assert!(
         cursor.top >= field.top && cursor.bottom <= field.bottom,

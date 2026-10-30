@@ -92,7 +92,7 @@ fn clear_and_set_semantics_clears_the_semantics_after_it_on_the_same_node() {
             }),
         );
     });
-    let node = ui.on_node_with_tag("greeting").fetch_semantics_node();
+    let node = ui.on_node_with_tag("greeting").fetch_semantics_snapshot();
     assert_eq!(
         node.config
             .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)

@@ -42,7 +42,7 @@ fn dismissible(state: DrawerState, width: Option<f32>) -> ComposeTestRule {
 }
 
 fn left(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.left
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.left
 }
 
 fn run(future: impl Future<Output = ()> + 'static, ui: &mut ComposeTestRule) {
@@ -133,7 +133,7 @@ fn a_dismissible_sheet_takes_its_insets() {
             );
         });
     });
-    let bounds = ui.on_node_unmerged(has_test_tag(CONTENT)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(CONTENT)).fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.left, bounds.top), (7.0, 7.0));
 }
 
@@ -151,7 +151,7 @@ fn its_sheet_is_360_dp_wide() {
 fn its_pane_has_a_title() {
     let state = DrawerState::new(DrawerValue::Open, |_| true);
     let mut ui = dismissible(*state, None);
-    let pane = ui.on_node_unmerged(has_test_tag(SHEET)).on_parent().fetch_semantics_node();
+    let pane = ui.on_node_unmerged(has_test_tag(SHEET)).on_parent().fetch_semantics_snapshot();
     assert_eq!(
         pane.config.get(&SemanticsProperties::PANE_TITLE).map(|title| title.to_string()),
         Some("Navigation menu".to_string())
@@ -309,7 +309,7 @@ fn right_to_left_a_swipe_goes_the_other_way() {
     swipe(&mut ui, 590.0, -500.0);
     assert_eq!(state.current_value(), DrawerValue::Open);
     // Pushed to the left, off the sheet at the right.
-    let bounds = ui.on_node_unmerged(has_test_tag(BODY)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(BODY)).fetch_semantics_snapshot().bounds;
     assert_eq!(bounds.right, 600.0 - 360.0);
     // Its coordinates: from 100 in the window, the body starting 360 before.
     swipe(&mut ui, 460.0, 180.0);
@@ -325,7 +325,7 @@ fn it_can_be_dismissed_while_open() {
     // Closed, the pane isn't placed: nothing to dismiss.
     ui.on_node_unmerged(has_test_tag(SHEET)).assert_does_not_exist();
     run(async move { handle.open().await }, &mut ui);
-    let pane = ui.on_node_unmerged(has_test_tag(SHEET)).on_parent().fetch_semantics_node();
+    let pane = ui.on_node_unmerged(has_test_tag(SHEET)).on_parent().fetch_semantics_snapshot();
     assert!(pane.config.contains(&SemanticsActions::DISMISS));
     ui.on_node_unmerged(has_test_tag(SHEET))
         .on_parent()
@@ -447,7 +447,7 @@ fn a_permanent_drawer_fills_its_room() {
             });
         });
     });
-    let bounds = ui.on_node_unmerged(has_test_tag(SHEET)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(SHEET)).fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (600.0, 600.0));
 }
 
@@ -484,7 +484,7 @@ fn a_permanent_sheet_takes_its_insets() {
             );
         });
     });
-    let bounds = ui.on_node_unmerged(has_test_tag(CONTENT)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(CONTENT)).fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.left, bounds.top), (13.0, 13.0));
 }
 
@@ -492,7 +492,7 @@ fn a_permanent_sheet_takes_its_insets() {
 #[test]
 fn a_permanent_sheet_has_a_pane_title() {
     let mut ui = permanent(None, LayoutDirection::Ltr);
-    let sheet = ui.on_node_unmerged(has_test_tag(SHEET)).fetch_semantics_node();
+    let sheet = ui.on_node_unmerged(has_test_tag(SHEET)).fetch_semantics_snapshot();
     assert_eq!(
         sheet.config.get(&SemanticsProperties::PANE_TITLE).map(|title| title.to_string()),
         Some("Navigation menu".to_string())

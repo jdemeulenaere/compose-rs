@@ -1285,7 +1285,7 @@ impl SemanticsNodeInteraction<'_> {
     /// The node's visible bounds in the root (clipped), and the root's.
     #[track_caller]
     fn injection_bounds(&mut self) -> (NodeId, Rect, Rect) {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         let root = self.rule.host.semantics_tree(true).bounds;
         let bounds = self
             .rule

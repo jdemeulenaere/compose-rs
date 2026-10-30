@@ -96,7 +96,7 @@ fn a_tooltip_shows_after_the_pointer_rests_and_hides_when_it_leaves() {
     ui.advance_time_by(Duration::from_millis(300));
     ui.on_node_with_tag("tooltip").assert_does_not_exist();
     ui.advance_time_by(Duration::from_millis(300));
-    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_node().bounds;
+    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_snapshot().bounds;
     // At the pointer, 16 dp below it.
     assert_eq!((tooltip.left, tooltip.top), (20.0, 36.0));
     // Leaving hides it.

@@ -16,7 +16,7 @@ use compose_ui::{
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn center_of(rect: compose_ui::Rect) -> Offset {
@@ -168,7 +168,7 @@ fn surfaces_click_and_select() {
     assert_eq!(bounds(&mut ui, "clickable").width(), 20.0);
     ui.on_node_with_tag("clickable").perform_click();
     assert_eq!(CLICKS.with(Cell::get), 1);
-    let selectable = ui.on_node_with_tag("selectable").fetch_semantics_node();
+    let selectable = ui.on_node_with_tag("selectable").fetch_semantics_snapshot();
     assert_eq!(
         selectable.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(),
         Some(true)
@@ -237,7 +237,7 @@ fn floating_action_buttons_have_composes_sizes() {
     }
     assert_eq!(
         ui.on_node_with_tag("regular")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::ROLE)
             .copied(),

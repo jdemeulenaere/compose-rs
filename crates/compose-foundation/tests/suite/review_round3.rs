@@ -36,7 +36,7 @@ fn a_dialogs_semantics_node_has_its_contents_bounds() {
             Box!(modifier = Modifier.size((100.dp(), 50.dp())).test_tag("content"));
         });
     });
-    let content = ui.on_node_with_tag("content").fetch_semantics_node().bounds;
+    let content = ui.on_node_with_tag("content").fetch_semantics_snapshot().bounds;
     assert_eq!((content.left, content.top, content.width()), (150.0, 175.0, 100.0));
     let tree = ui.host().semantics_tree(true);
     let dialog = tree
@@ -96,7 +96,7 @@ fn a_dialog_opened_from_a_closing_popup_gives_the_focus_back_to_the_screen() {
     ui.on_node_with_tag("button").request_focus().assert_is_focused();
     STEP.with(|cell| cell.borrow().unwrap().set(1));
     ui.wait_for_idle();
-    let delete = ui.on_node_with_tag("delete").fetch_semantics_node().center();
+    let delete = ui.on_node_with_tag("delete").fetch_semantics_snapshot().center();
     tap(&mut ui, delete.x, delete.y);
     ui.on_node_with_tag("confirm").assert_exists();
     ui.press_key(Key::Escape);
@@ -122,7 +122,7 @@ fn an_outer_content_description_replaces_the_images_own() {
                 .semantics(|config| config.set_content_description("Rating")),
         );
     });
-    let node = ui.on_node_with_tag("image").fetch_semantics_node();
+    let node = ui.on_node_with_tag("image").fetch_semantics_snapshot();
     assert_eq!(
         node.config
             .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
@@ -193,7 +193,7 @@ fn request_focus_on_a_text_fields_node_focuses_the_field() {
             modifier = Modifier.fill_max_width().test_tag("field"),
         );
     });
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert!(
         node.config.contains(&compose_ui::SemanticsProperties::FOCUSED),
         "the field's node isn't focusable: {:?}",

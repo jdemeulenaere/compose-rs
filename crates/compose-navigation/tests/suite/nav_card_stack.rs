@@ -218,7 +218,7 @@ fn gesture_to_half(ui: &mut ComposeTestRule) {
 }
 
 fn origin(ui: &mut ComposeTestRule, tag: &str) -> (f32, f32) {
-    let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
     (bounds.left, bounds.top)
 }
 

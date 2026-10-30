@@ -16,7 +16,7 @@ fn rtl(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn left(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.left
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.left
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn start_alignments_and_padding_are_at_the_right() {
         });
     });
     assert_eq!(left(&mut ui, "start"), 180.0);
-    let padded = ui.on_node_with_tag("padded").fetch_semantics_node().bounds;
+    let padded = ui.on_node_with_tag("padded").fetch_semantics_snapshot().bounds;
     // Inside the padding: its start (10) on the right, its end (30) on the left.
     assert_eq!((padded.left, padded.right), (30.0, 190.0));
     assert_eq!(left(&mut ui, "box start"), 190.0);
@@ -70,7 +70,7 @@ fn padding_insets_the_content_from_the_start_on_the_right() {
             Box!(modifier = Modifier.fill_max_width().height(10.dp()).test_tag("content"));
         });
     });
-    let content = ui.on_node_with_tag("content").fetch_semantics_node().bounds;
+    let content = ui.on_node_with_tag("content").fetch_semantics_snapshot().bounds;
     assert_eq!((content.left, content.right), (130.0, 190.0));
 }
 
@@ -161,8 +161,8 @@ fn a_column_still_runs_from_the_top() {
             }
         );
     });
-    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_node().bounds.top, 0.0);
-    assert_eq!(ui.on_node_with_tag("second").fetch_semantics_node().bounds.top, 25.0);
+    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_snapshot().bounds.top, 0.0);
+    assert_eq!(ui.on_node_with_tag("second").fetch_semantics_snapshot().bounds.top, 25.0);
 }
 
 #[test]
@@ -179,5 +179,5 @@ fn lazy_items_align_and_arrange_from_the_start() {
         );
     });
     assert_eq!(left(&mut ui, "0"), 170.0);
-    assert_eq!(ui.on_node_with_tag("1").fetch_semantics_node().bounds.top, 30.0);
+    assert_eq!(ui.on_node_with_tag("1").fetch_semantics_snapshot().bounds.top, 30.0);
 }

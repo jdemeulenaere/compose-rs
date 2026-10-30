@@ -274,7 +274,7 @@ impl SemanticsNodeInteraction<'_> {
     /// `captureToImage`. Needs a renderer (`set_capture_renderer`).
     #[track_caller]
     pub fn capture_to_image(&mut self) -> CapturedImage {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         let bounds = self
             .rule
             .host

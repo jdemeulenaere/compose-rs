@@ -22,11 +22,11 @@ fn handle_rule(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn bounds(ui: &mut ComposeTestRule) -> compose_ui::Rect {
-    ui.on_node_with_tag(TAG).fetch_semantics_node().bounds
+    ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds
 }
 
 fn center_of(ui: &mut ComposeTestRule) -> Offset {
-    ui.on_node_with_tag(TAG).fetch_semantics_node().center()
+    ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center()
 }
 
 fn press(ui: &mut ComposeTestRule) {

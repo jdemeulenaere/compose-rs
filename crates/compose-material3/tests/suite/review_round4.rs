@@ -186,7 +186,7 @@ fn a_list_item_merges_its_texts_into_one_node() {
             );
         });
     });
-    let node = ui.on_node_with_tag("item").fetch_semantics_node();
+    let node = ui.on_node_with_tag("item").fetch_semantics_snapshot();
     let texts: Vec<&str> = node
         .config
         .get(&compose_ui::SemanticsProperties::TEXT)
@@ -240,7 +240,7 @@ fn a_hidden_navigation_label_still_names_its_tab() {
             });
         });
     });
-    let search = ui.on_node_with_tag("Search").fetch_semantics_node();
+    let search = ui.on_node_with_tag("Search").fetch_semantics_snapshot();
     let texts: Vec<&str> = search
         .config
         .get(&compose_ui::SemanticsProperties::TEXT)
@@ -271,7 +271,7 @@ fn a_labelled_navigation_item_does_not_repeat_its_icon_description() {
             });
         });
     });
-    let node = ui.on_node_with_tag("home").fetch_semantics_node();
+    let node = ui.on_node_with_tag("home").fetch_semantics_snapshot();
     assert!(
         node.config
             .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
@@ -314,7 +314,7 @@ fn a_pressed_navigation_item_shows_its_ripple_on_the_pill_only() {
             });
         });
     });
-    let center = ui.on_node_with_tag("home").fetch_semantics_node().center();
+    let center = ui.on_node_with_tag("home").fetch_semantics_snapshot().center();
     ui.host().send_pointer(compose_ui::PointerEvent::press(center));
     ui.wait_for_idle();
     let rects: Vec<compose_ui::Rect> = ui

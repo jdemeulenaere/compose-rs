@@ -91,19 +91,24 @@ impl SemanticsOwner {
 
     /// The unmerged node with this id, if a layout node has it, attached and with semantics.
     pub fn get(&self, semantics_id: i32) -> Option<SemanticsNode> {
+        self.node(semantics_id, false)
+    }
+
+    /// `get`, in the merged tree with `merging_enabled`: a test finder's, which looks in either.
+    /// The root has no semantics of its own and is still a node.
+    pub fn node(&self, semantics_id: i32, merging_enabled: bool) -> Option<SemanticsNode> {
         let tree = self.tree;
         self.read(|ui| {
             let node = ui.node_with_semantics_id(semantics_id)?;
             let value = ui.get(node)?;
-            (value.attached && value.kinds.any(crate::node_chain::NodeKinds::SEMANTICS)).then_some(
-                SemanticsNode {
-                    tree,
-                    node,
-                    layout_id: semantics_id,
-                    merging_enabled: false,
-                    fake: None,
-                },
-            )
+            let has_semantics = value.kinds.any(crate::node_chain::NodeKinds::SEMANTICS);
+            (value.attached && (has_semantics || node == ui.root_id())).then_some(SemanticsNode {
+                tree,
+                node,
+                layout_id: semantics_id,
+                merging_enabled,
+                fake: None,
+            })
         })
         .flatten()
     }

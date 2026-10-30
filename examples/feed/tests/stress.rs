@@ -67,7 +67,7 @@ fn the_stress_list_shows_each_kind_under_a_header() {
 #[test]
 fn a_header_sticks_while_its_items_scroll_under_it() {
     let mut ui = phone(StressScroll);
-    let top = ui.on_node_with_text("Section 1").fetch_semantics_node().bounds.top;
+    let top = ui.on_node_with_text("Section 1").fetch_semantics_snapshot().bounds.top;
     let host = ui.host();
     let mut y = 2000.0;
     host.send_pointer(
@@ -89,7 +89,7 @@ fn a_header_sticks_while_its_items_scroll_under_it() {
     // Item 0 scrolled away (not placed: only the items in view are); its section's header is
     // where it was.
     assert_eq!(ui.count_nodes(&has_text("Collection 0")), 0);
-    assert_eq!(ui.on_node_with_text("Section 1").fetch_semantics_node().bounds.top, top);
+    assert_eq!(ui.on_node_with_text("Section 1").fetch_semantics_snapshot().bounds.top, top);
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn the_stress_animation_ticks_every_frame_and_its_card_grows() {
 }
 
 fn ticker(ui: &mut ComposeTestRule) -> String {
-    let node = ui.on_node(has_text_containing("Frame ")).fetch_semantics_node();
+    let node = ui.on_node(has_text_containing("Frame ")).fetch_semantics_snapshot();
     node.config.all_text().collect::<Vec<_>>().join("")
 }
 
@@ -370,7 +370,7 @@ fn the_expanded_cards_text_is_whole_and_its_record_kept_as_it_grows() {
         write(&mut ui);
     }
     // The text: four lines of 20 sp (45 px).
-    let bounds = ui.on_node(has_text_containing(more)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node(has_text_containing(more)).fetch_semantics_snapshot().bounds;
     assert_eq!(bounds.bottom - bounds.top, 4.0 * 45.0);
     let expanded = height(&mut ui);
     assert_eq!(expanded, (27 + 45 + 4 * 45 + 27) as f32);

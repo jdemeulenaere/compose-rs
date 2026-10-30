@@ -9,7 +9,7 @@ use compose_ui::{
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// At density 2, a 20 by 10 dp anchor 25 dp from the start and 50 dp from the top, its menu

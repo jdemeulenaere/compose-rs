@@ -239,7 +239,7 @@ fn App(expanded: bool) {
 fn the_app_composes_and_the_custom_arrangement_reverses() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 2000), || App(false));
     ui.on_node_with_tag("custom").assert_exists();
-    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_node().bounds.left, 18.0);
+    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_snapshot().bounds.left, 18.0);
     let tree = ui.dump_tree();
     assert!(tree.contains("toggle"), "{tree}");
 }

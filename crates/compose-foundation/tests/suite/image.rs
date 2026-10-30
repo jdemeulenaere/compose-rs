@@ -33,7 +33,7 @@ fn an_image_is_as_large_as_its_pixels_and_reads_its_description() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         Image!(image.clone(), Some("A cat"), modifier = Modifier.test_tag("image"));
     });
-    let node = ui.on_node_with_content_description("A cat").fetch_semantics_node();
+    let node = ui.on_node_with_content_description("A cat").fetch_semantics_snapshot();
     assert_eq!((node.bounds.width(), node.bounds.height()), (40.0, 20.0));
     ui.on_node(has_role(Role::Image)).assert_exists();
     assert_eq!(drawn(&mut ui), Rect::new(0.0, 0.0, 40.0, 20.0));
@@ -48,7 +48,7 @@ fn a_large_image_shrinks_to_its_constraints_keeping_its_aspect_ratio() {
             Image!(image.clone(), None, modifier = Modifier.test_tag("image"));
         });
     });
-    let bounds = ui.on_node_with_tag("image").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("image").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (100.0, 50.0));
     assert_eq!(drawn(&mut ui), Rect::new(0.0, 0.0, 100.0, 50.0));
     // Decorative: no role, no description.

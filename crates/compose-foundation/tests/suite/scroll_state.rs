@@ -74,8 +74,8 @@ fn scroller(config: Config, state: ScrollState, reversed: bool, main: i32) -> Co
 /// Where cell `index` starts along the scroller's axis, from the scroller's start (its right,
 /// right to left).
 fn cell_start(ui: &mut ComposeTestRule, config: Config, index: i32) -> f32 {
-    let scroller = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
-    let cell = ui.on_node_with_tag(&format!("cell {index}")).fetch_semantics_node().bounds;
+    let scroller = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
+    let cell = ui.on_node_with_tag(&format!("cell {index}")).fetch_semantics_snapshot().bounds;
     match config {
         Config::Vertical => cell.top - scroller.top,
         Config::HorizontalLtr => cell.left - scroller.left,
@@ -292,7 +292,7 @@ fn animated_scrolls_are_clamped_to_the_range() {
 
 /// The middle of the scroller across its axis (a column of text is as wide as its widest line).
 fn scroller_center_x(ui: &mut ComposeTestRule) -> f32 {
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     (bounds.left + bounds.right) / 2.0
 }
 
@@ -331,7 +331,7 @@ fn the_semantics_follow_the_offset_enabled_or_not() {
         let x = scroller_center_x(&mut ui);
         swipe(&mut ui, Offset::new(x, 90.0), Offset::new(x, 10.0), 200);
         ui.wait_for_idle();
-        let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+        let node = ui.on_node_with_tag(TAG).fetch_semantics_snapshot();
         let range = node
             .config
             .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
@@ -344,7 +344,7 @@ fn the_semantics_follow_the_offset_enabled_or_not() {
 /// Compose's `configAwareSwipe`: a swipe over the scroller in 200 ms, towards its content's end
 /// (up; left; right to left, right) or back.
 fn config_aware_swipe(ui: &mut ComposeTestRule, config: Config, forward: bool) {
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     let (center_x, center_y) =
         ((bounds.left + bounds.right) / 2.0, (bounds.top + bounds.bottom) / 2.0);
     let (from, to) = match config {
@@ -424,7 +424,7 @@ fn semantics_scroll_by_is_handled_at_an_edge() {
     let owner = ScrollState::new(0);
     let state = *owner;
     let mut ui = scrollable_content(Config::Vertical, state, || 100, true);
-    let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+    let node = ui.on_node_with_tag(TAG).fetch_semantics_snapshot();
     let handled = ui.host().perform_semantics_action_with(
         node.id,
         &compose_ui::SemanticsActions::SCROLL_BY,
@@ -443,7 +443,7 @@ fn semantics_scroll_by_is_handled_at_an_edge() {
                 .scrollable(scrollable.clone(), Orientation::Vertical)
         );
     });
-    let node = ui.on_node_with_tag("scrollable").fetch_semantics_node();
+    let node = ui.on_node_with_tag("scrollable").fetch_semantics_snapshot();
     let handled = ui.host().perform_semantics_action_with(
         node.id,
         &compose_ui::SemanticsActions::SCROLL_BY,

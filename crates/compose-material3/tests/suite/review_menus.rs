@@ -10,7 +10,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, Offset, PointerEvent, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// A menu at an anchor of 40 x 40 dp, `start` and `top` dp into the window, with `items` items.
@@ -93,7 +93,7 @@ fn a_menu_taller_than_the_window_scrolls() {
     let at = Offset::new(menu.left + 10.0, menu.top + 50.0);
     ui.host().send_pointer(PointerEvent::scroll(at, Offset::new(0.0, 5000.0)));
     ui.wait_for_idle();
-    let last = ui.on_node_with_text("19").fetch_semantics_node().bounds;
+    let last = ui.on_node_with_text("19").fetch_semantics_snapshot().bounds;
     assert!(last.bottom <= menu.bottom, "the last item is out of the menu: {last:?} {menu:?}");
 }
 

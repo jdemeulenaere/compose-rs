@@ -205,7 +205,7 @@ fn a_snackbar_is_at_most_600_dp_wide() {
     );
     show(&scope, &host, "Saved", None, SnackbarDuration::Indefinite);
     ui.wait_for_idle();
-    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_snapshot().bounds;
     assert_eq!(bar.width(), 624.0, "600 dp and the 12 dp padding: {bar:?}");
     assert_eq!(bar.left, (1200.0 - 624.0) / 2.0, "centered");
 }
@@ -226,8 +226,8 @@ fn a_two_line_snackbar_is_at_least_68_dp_high() {
     let message = "This message is long enough that it wraps onto a second line";
     show(&scope, &host, message, None, SnackbarDuration::Indefinite);
     ui.wait_for_idle();
-    let text = ui.on_node_with_text(message).fetch_semantics_node().bounds;
-    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
+    let text = ui.on_node_with_text(message).fetch_semantics_snapshot().bounds;
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_snapshot().bounds;
     assert!(text.height() > 30.0, "two lines: {text:?}");
     let surface = bar.height() - 24.0;
     assert!(surface >= 68.0, "the snackbar's surface is {surface} px high");
@@ -252,8 +252,8 @@ fn a_multi_line_filled_fields_resting_label_is_16_dp_from_the_top() {
             );
         });
     });
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
-    let label = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
+    let label = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_snapshot().bounds;
     assert_eq!(label.height(), 24.0, "the large body style");
     assert_eq!(label.top - field.top, 16.0, "{field:?} {label:?}");
 }
@@ -339,8 +339,8 @@ fn a_snackbars_dismiss_button_is_at_its_end() {
         });
     }
     ui.wait_for_idle();
-    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
-    let dismiss = ui.on_node_with_content_description("Dismiss").fetch_semantics_node().bounds;
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_snapshot().bounds;
+    let dismiss = ui.on_node_with_content_description("Dismiss").fetch_semantics_snapshot().bounds;
     // The bar's 12 dp padding, no row padding, the 4 dp between the target and the circle.
     assert_eq!(bar.right - dismiss.right, 12.0 + 4.0, "{bar:?} {dismiss:?}");
 }

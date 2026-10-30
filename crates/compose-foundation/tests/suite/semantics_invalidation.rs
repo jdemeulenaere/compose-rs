@@ -37,11 +37,11 @@ fn a_text_changed_shows_in_its_node_and_the_merging_one() {
         });
     });
     ui.on_node_with_text("one").assert_exists();
-    assert_eq!(own_text(&ui.on_node_with_tag("merging").fetch_semantics_node()), ["one"]);
+    assert_eq!(own_text(&ui.on_node_with_tag("merging").fetch_semantics_snapshot()), ["one"]);
     text.set("two");
     ui.on_node_with_text("two").assert_exists();
     ui.on_node_with_text("one").assert_does_not_exist();
-    assert_eq!(own_text(&ui.on_node_with_tag("merging").fetch_semantics_node()), ["two"]);
+    assert_eq!(own_text(&ui.on_node_with_tag("merging").fetch_semantics_snapshot()), ["two"]);
 }
 
 /// `Modifier.semantics` with another block, an image's other description, a test tag changed.
@@ -203,15 +203,15 @@ fn a_scrolls_range_follows_its_offset_and_content() {
             Box!(modifier = Modifier.size((20.dp(), handle.get().dp())));
         });
     });
-    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_node());
+    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_snapshot());
     assert_eq!(range.value, 0.0);
     let largest = range.max_value;
     assert!(largest > 0.0);
     scroll.dispatch_raw_delta(30.0);
-    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_node());
+    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_snapshot());
     assert_eq!(range.value, 30.0);
     height.set(200);
-    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_node());
+    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_snapshot());
     assert!(range.max_value > largest);
     // Performed through the semantics, the range moves too.
     ui.on_node_with_tag("column").perform_semantics_action_with(
@@ -220,7 +220,7 @@ fn a_scrolls_range_follows_its_offset_and_content() {
             assert!(action(0.0, 10.0));
         },
     );
-    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_node());
+    let range = vertical_range(&ui.on_node_with_tag("column").fetch_semantics_snapshot());
     assert_eq!(range.value, 40.0);
 }
 
@@ -243,24 +243,24 @@ fn a_lazy_lists_range_follows_its_scroll_and_items() {
             }
         );
     });
-    let first = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
+    let first = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_snapshot());
     assert_eq!(first.value, 0.0);
     assert_ne!(state.dispatch_raw_delta(30.0), 0.0);
     ui.wait_for_idle();
-    let scrolled = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
+    let scrolled = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_snapshot());
     assert!(scrolled.value > first.value, "{scrolled:?}");
     state.request_scroll_to_item(20, 0);
     ui.wait_for_idle();
-    let far = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
+    let far = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_snapshot());
     assert!(far.value > scrolled.value, "{far:?}");
     count.set(100);
     ui.wait_for_idle();
-    let more = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
+    let more = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_snapshot());
     assert!(more.max_value > far.max_value, "{more:?}");
     // To the end: no room left that way.
     state.request_scroll_to_item(99, 0);
     ui.wait_for_idle();
-    let end = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_node());
+    let end = vertical_range(&ui.on_node_with_tag("list").fetch_semantics_snapshot());
     assert_eq!(end.value, end.max_value, "{end:?}");
 }
 
@@ -300,7 +300,7 @@ fn a_text_field_shows_what_it_shows() {
             visual_transformation = transformation
         );
     });
-    let field = |ui: &mut ComposeTestRule| ui.on_node_with_tag("field").fetch_semantics_node();
+    let field = |ui: &mut ComposeTestRule| ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert_eq!(editable_text(&field(&mut ui)), "ab");
     // The value, from the application.
     text.set(String::from("abc"));
@@ -355,14 +355,14 @@ fn reuse_gives_a_new_semantics_id() {
             Box!(modifier = Modifier.size(10.dp()).test_tag("tag"));
         });
     });
-    let before = ui.on_node_with_tag("tag").fetch_semantics_node();
+    let before = ui.on_node_with_tag("tag").fetch_semantics_snapshot();
     key.set(1);
-    let after = ui.on_node_with_tag("tag").fetch_semantics_node();
+    let after = ui.on_node_with_tag("tag").fetch_semantics_snapshot();
     assert_eq!(before.id, after.id, "the same layout node, reused");
     assert_ne!(before.semantics_id, after.semantics_id);
     // Nothing else changes it.
     ui.wait_for_idle();
-    let again = ui.on_node_with_tag("tag").fetch_semantics_node();
+    let again = ui.on_node_with_tag("tag").fetch_semantics_snapshot();
     assert_eq!(after.semantics_id, again.semantics_id);
 }
 
@@ -380,18 +380,18 @@ fn deactivating_and_reusing_gives_a_new_semantics_id() {
             Box!(modifier = Modifier.size(10.dp()).test_tag("other"));
         });
     });
-    let before = ui.on_node_with_tag("hosted").fetch_semantics_node();
-    let other = ui.on_node_with_tag("other").fetch_semantics_node();
+    let before = ui.on_node_with_tag("hosted").fetch_semantics_snapshot();
+    let other = ui.on_node_with_tag("other").fetch_semantics_snapshot();
     assert_ne!(before.semantics_id, other.semantics_id);
     active.set(false);
     ui.on_node_with_tag("hosted").assert_does_not_exist();
     active.set(true);
-    let after = ui.on_node_with_tag("hosted").fetch_semantics_node();
+    let after = ui.on_node_with_tag("hosted").fetch_semantics_snapshot();
     assert_eq!(before.id, after.id);
     assert_ne!(before.semantics_id, after.semantics_id);
     assert_eq!(
         other.semantics_id,
-        ui.on_node_with_tag("other").fetch_semantics_node().semantics_id
+        ui.on_node_with_tag("other").fetch_semantics_snapshot().semantics_id
     );
 }
 
@@ -463,14 +463,14 @@ fn a_lazy_item_reused_shows_and_does_what_the_new_item_does() {
             }
         );
     });
-    let first = ui.on_node_with_tag("item0").fetch_semantics_node();
+    let first = ui.on_node_with_tag("item0").fetch_semantics_snapshot();
     assert_eq!(own_text(&first), ["Item 0"]);
     let mut seen = vec![first.semantics_id];
     for index in 1..12 {
         state.request_scroll_to_item(index, 0);
         ui.wait_for_idle();
         let tag = format!("item{index}");
-        let node = ui.on_node_with_tag(&tag).fetch_semantics_node();
+        let node = ui.on_node_with_tag(&tag).fetch_semantics_snapshot();
         assert_eq!(own_text(&node), [format!("Item {index}")]);
         ui.on_node_with_text(&format!("Item {}", index - 1)).assert_does_not_exist();
         ui.on_node_with_tag(&tag).perform_semantics_action(&SemanticsActions::ON_CLICK);

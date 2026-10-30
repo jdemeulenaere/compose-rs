@@ -37,7 +37,7 @@ fn rule(state: RangeSliderState, direction: LayoutDirection) -> ComposeTestRule 
 
 /// The slider's left, right and center x, y.
 fn frame(ui: &mut ComposeTestRule) -> (f32, f32, f32, f32) {
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     (
         bounds.left,
         bounds.right,
@@ -278,7 +278,7 @@ fn thumbs_rule(state: RangeSliderState) -> ComposeTestRule {
 }
 
 fn info(ui: &mut ComposeTestRule, tag: &str) -> ProgressBarRangeInfo {
-    let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_node();
+    let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_snapshot();
     *node.config.get(&SemanticsProperties::PROGRESS_BAR_RANGE_INFO).expect("a range")
 }
 
@@ -287,7 +287,7 @@ fn range(current: f32, range: (f32, f32), steps: u32) -> ProgressBarRangeInfo {
 }
 
 fn set_progress(ui: &mut ComposeTestRule, tag: &str, value: f32) {
-    let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_node();
+    let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_snapshot();
     let action = node.config.get(&SemanticsActions::SET_PROGRESS).expect("set progress").clone();
     assert!((action.action.expect("its action"))(value));
     ui.wait_for_idle();
@@ -333,7 +333,7 @@ fn a_thumbs_node_is_wider_than_the_thumb() {
     let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
     let mut ui = thumbs_rule(*state);
     for tag in ["start", "end"] {
-        let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_node();
+        let node = ui.on_node_unmerged(has_test_tag(tag)).on_parent().fetch_semantics_snapshot();
         // Compose's is 14: its `boundsInRoot` is clipped by the slider's edge, a thumb being at its
         // end. A node's bounds here aren't clipped, so 10 dp on both sides: 24.
         assert_eq!((node.bounds.width(), node.bounds.height()), (4.0 + 20.0, 44.0), "{tag}");
@@ -346,7 +346,7 @@ fn a_thumb_is_4_by_44_dp() {
     let state = RangeSliderState::new(0.0, 1.0, 0, (0.0, 1.0));
     let mut ui = thumbs_rule(*state);
     for tag in ["start", "end"] {
-        let bounds = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds;
+        let bounds = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds;
         assert_eq!((bounds.width(), bounds.height()), (4.0, 44.0), "{tag}");
     }
 }
@@ -363,7 +363,7 @@ fn with_infinite_width_it_takes_its_minimum() {
             });
         });
     });
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     assert_eq!(bounds.width(), 48.0);
 }
 
@@ -848,7 +848,7 @@ fn a_focused_thumb_shows_the_inset_ring() {
         });
     });
     let bounds = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
     };
     let (start, end) = (bounds(&mut ui, "start"), bounds(&mut ui, "end"));
     ui.press_key(compose_ui::Key::Tab);

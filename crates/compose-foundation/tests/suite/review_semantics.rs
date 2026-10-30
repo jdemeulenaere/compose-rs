@@ -24,7 +24,7 @@ fn a_merging_parent_does_not_take_its_childs_role() {
             BasicText!("Favorite");
         });
     });
-    let node = ui.on_node_with_tag("row").fetch_semantics_node();
+    let node = ui.on_node_with_tag("row").fetch_semantics_snapshot();
     assert_eq!(
         node.config
             .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
@@ -62,7 +62,7 @@ fn an_outer_semantics_modifier_wins_over_an_inner_one() {
     });
     assert_eq!(
         ui.on_node_with_tag("tab")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::ROLE)
             .copied(),
@@ -88,7 +88,7 @@ fn request_focus_on_a_node_without_the_action_is_not_performed() {
     ui.wait_for_idle();
     assert!(
         !ui.on_node_with_tag("button")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::FOCUSED)
             .copied()
@@ -118,11 +118,11 @@ fn passes_bounds_are_in_pixels_and_follow_scrolling() {
             });
         },
     );
-    let a = ui.on_node_with_tag("a").fetch_semantics_node().bounds;
+    let a = ui.on_node_with_tag("a").fetch_semantics_snapshot().bounds;
     assert_eq!((a.left, a.top, a.width()), (20.0, 20.0, 40.0));
     let state = STATE.with(|cell| *cell.borrow().as_ref().unwrap());
     state.dispatch_raw_delta(10.0 - state.value() as f32);
     ui.wait_for_idle();
-    let a = ui.on_node_with_tag("a").fetch_semantics_node().bounds;
+    let a = ui.on_node_with_tag("a").fetch_semantics_snapshot().bounds;
     assert_eq!(a.top, 10.0);
 }

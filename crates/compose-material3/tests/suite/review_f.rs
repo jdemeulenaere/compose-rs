@@ -50,7 +50,7 @@ fn Field() {
 #[test]
 fn a_tap_in_the_padding_puts_the_cursor_at_the_nearest_offset() {
     let mut ui = compose_test(Field);
-    let container = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let container = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     let input = inner_text_bounds(&mut ui);
     // In the bottom padding, past the end of the text.
     let (x, y) = (input.right - 8.0, (input.bottom + container.bottom) / 2.0);

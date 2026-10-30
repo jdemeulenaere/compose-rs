@@ -46,7 +46,7 @@ fn a_password_shows_masked_and_says_so() {
     let mut ui = password_field(value.clone());
     ui.on_node_with_tag("field").perform_text_input("héllo");
     assert_eq!(*value.borrow(), "héllo");
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).cloned().as_deref(),
         Some("•••••")
@@ -283,7 +283,7 @@ fn field_in_a_scrolling_page() -> (ComposeTestRule, ScrollState) {
 
 fn text_after_typing(ui: &mut ComposeTestRule) -> String {
     ui.type_text("X");
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).unwrap().to_string()
 }
 

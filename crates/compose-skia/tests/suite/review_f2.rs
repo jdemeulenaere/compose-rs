@@ -71,7 +71,7 @@ fn cursor(list: &FlatDisplayList) -> Rect {
 #[test]
 fn right_to_left_text_starts_at_the_right_of_its_field() {
     let mut ui = hebrew();
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     let cursor = cursor(&ui.host().display_list());
     assert!(
         cursor.left > field.right - 20.0,

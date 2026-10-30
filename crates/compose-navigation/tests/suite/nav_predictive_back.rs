@@ -174,7 +174,7 @@ fn a_gesture_moves_both_scenes_by_its_progress() {
     ui.host().on_back_started(event(0.5));
     ui.host().on_back_progressed(event(0.5));
     ui.wait_for_idle();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     assert_eq!(left(&mut ui, FIRST), -width / 4.0);
     assert_eq!(left(&mut ui, SECOND), width / 4.0);
     ui.host().on_back_progressed(event(0.0));
@@ -194,7 +194,7 @@ fn filling_entry(key: &'static str) -> NavEntry<&'static str> {
 }
 
 fn left(ui: &mut ComposeTestRule, text: &str) -> f32 {
-    ui.on_node_with_text(text).fetch_semantics_node().bounds.left
+    ui.on_node_with_text(text).fetch_semantics_snapshot().bounds.left
 }
 
 // Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayPredictiveBackTest.kt, testPredictiveBackDuringForwardAnimation
@@ -303,11 +303,11 @@ fn a_gesture_completed_hands_its_scenes_to_the_pop_where_they_are() {
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     let (enter_x, exit_x) = (left(&mut ui, FIRST), left(&mut ui, SECOND));
-    let exit_y = ui.on_node_with_text(SECOND).fetch_semantics_node().bounds.top;
+    let exit_y = ui.on_node_with_text(SECOND).fetch_semantics_snapshot().bounds.top;
     assert!(exit_x > 0.0, "exit shouldn't jump back: {exit_x}");
     assert!(enter_x < 0.0, "enter shouldn't jump back: {enter_x}");
     ui.advance_time_by(Duration::from_millis(100));
-    let exit_y_later = ui.on_node_with_text(SECOND).fetch_semantics_node().bounds.top;
+    let exit_y_later = ui.on_node_with_text(SECOND).fetch_semantics_snapshot().bounds.top;
     assert!(exit_y_later > exit_y, "the pop's own takes over: {exit_y_later} {exit_y}");
     ui.set_auto_advance(true);
     ui.wait_for_idle();
@@ -375,7 +375,7 @@ fn an_entry_s_predictive_transition_goes_first() {
         );
     });
     ui.wait_for_idle();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     ui.host().on_back_started(event(0.5));
     ui.host().on_back_progressed(event(0.5));
     ui.wait_for_idle();
@@ -415,7 +415,7 @@ fn a_gesture_follows_its_spec_s_easing() {
         );
     });
     ui.wait_for_idle();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     ui.host().on_back_started(event(0.5));
     ui.host().on_back_progressed(event(0.5));
     ui.wait_for_idle();
@@ -486,7 +486,7 @@ fn tagged_entry(key: &'static str) -> NavEntry<&'static str> {
 }
 
 fn left_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.left
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.left
 }
 
 /// The gesture's half way at the end of the steps upstream's tests make.

@@ -12,7 +12,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Rect, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// Lines of different heights (an item's height from its index), scrolled on and back by the

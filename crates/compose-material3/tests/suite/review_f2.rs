@@ -42,7 +42,7 @@ fn an_unsized_text_field_is_280_dp_wide() {
             );
         });
     });
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     assert_eq!(field.width(), 280.0, "{field:?}");
 }
 
@@ -65,7 +65,7 @@ fn a_taller_text_field_keeps_its_text_at_the_top() {
             );
         });
     });
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     assert_eq!(field.height(), 120.0);
     let input = inner_text_bounds(&mut ui);
     assert_eq!(input.top, 16.0, "the input in a 120 px field is at {input:?}");

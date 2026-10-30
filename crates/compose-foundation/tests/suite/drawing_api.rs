@@ -39,8 +39,8 @@ fn a_closure_is_a_measure_policy() {
             }
         );
     });
-    assert_eq!(ui.on_node_with_tag("second").fetch_semantics_node().bounds.left, 20.0);
-    assert_eq!(ui.on_node_with_tag("row").fetch_semantics_node().bounds.width(), 50.0);
+    assert_eq!(ui.on_node_with_tag("second").fetch_semantics_snapshot().bounds.left, 20.0);
+    assert_eq!(ui.on_node_with_tag("row").fetch_semantics_snapshot().bounds.width(), 50.0);
     assert!(ui.dump_tree().contains("Layout [0,0 50x30]"), "{}", ui.dump_tree());
 }
 

@@ -61,7 +61,7 @@ fn first_frames(content: fn(), n: usize) {
 
 /// `n` clicks of `matcher`'s `index`th node, each until idle.
 fn clicks(ui: &mut ComposeTestRule, matcher: Matcher, index: usize, n: usize) {
-    let center = ui.on_all_nodes(matcher).get(index).fetch_semantics_node().center();
+    let center = ui.on_all_nodes(matcher).get(index).fetch_semantics_snapshot().center();
     for _ in 0..n {
         ui.host().send_pointer(PointerEvent::press(center));
         ui.host().send_pointer(PointerEvent::release(center));
@@ -407,7 +407,7 @@ fn main() {
             let center = ui
                 .on_all_nodes(has_text_containing("Count"))
                 .get(0)
-                .fetch_semantics_node()
+                .fetch_semantics_snapshot()
                 .center();
             let finger = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
             for _ in 0..n {

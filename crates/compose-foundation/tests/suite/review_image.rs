@@ -20,7 +20,7 @@ fn bitmap(width: u32, height: u32) -> ImageBitmap {
 }
 
 fn size_of(ui: &mut ComposeTestRule, tag: &str) -> (f32, f32) {
-    let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 

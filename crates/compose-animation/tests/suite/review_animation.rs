@@ -54,7 +54,7 @@ fn panel(enter: EnterTransition, exit: ExitTransition) -> (ComposeTestRule, Owne
 }
 
 fn below_top(ui: &mut ComposeTestRule) -> f32 {
-    ui.on_node_with_tag("below").fetch_semantics_node().bounds.top
+    ui.on_node_with_tag("below").fetch_semantics_snapshot().bounds.top
 }
 
 /// A critically damped spring from 0 to 1 at `stiffness`, `seconds` in, from rest: Compose's

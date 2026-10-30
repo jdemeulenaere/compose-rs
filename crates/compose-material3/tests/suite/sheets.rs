@@ -15,7 +15,7 @@ use compose_ui::{IntSize, Key, Modifier, Offset, PointerEvent, PointerId, Pointe
 const FINGER: PointerId = PointerId(1);
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[composable]
@@ -257,7 +257,7 @@ fn the_contents_scrolls_drag_the_sheet_first() {
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
     let first = |ui: &mut ComposeTestRule| {
-        ui.on_node_unmerged(has_test_tag("first")).fetch_semantics_node().bounds.top
+        ui.on_node_unmerged(has_test_tag("first")).fetch_semantics_snapshot().bounds.top
     };
     assert_eq!(first(&mut ui), 300.0 + 48.0);
     // Up 100 past the slop on the content: the sheet goes up, the content doesn't scroll.

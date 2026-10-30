@@ -1097,6 +1097,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | Thinning monomorphization | about 2 % of an edit |
 | Avoiding the system's per-frame costs on Android | about 60 % of the animation's main thread, the same in Compose; inherent to a `View` |
 | Chasing the focus model's `counter_click` (+1.98 %) and `feed_pixel` (+1.34 %) | mostly code layout, D1285: under fat LTO +0.91 % and +0.48 %; the next commit, which adds nothing but a check to either path, moved them by -1.44 % and -0.68 %; in `sample`, what names the focus goes from 2.7 % to 4.0 % and from 0.3 % to 0.6 % of the samples, the rest moves between symbols |
+| Chasing `field_keystroke`'s +3.4 % after the semantics handles and bridges | the benchmark finds its field through the semantics tree at each key (`on_node_with_tag`), about 15 % of its samples before and after; in `sample`, what's new is in that build: `z_sorted_children` and its `SmallVec` (about 1.9 %), a config's one more key, the layer's alpha (0.2 %). With no service on, no tree is built for a real keystroke (D1297) |
 
 ## Caveats
 

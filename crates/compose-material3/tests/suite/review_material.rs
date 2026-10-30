@@ -34,7 +34,7 @@ use compose_ui::{
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn round_rects(ui: &mut ComposeTestRule) -> Vec<(compose_ui::Rect, compose_ui::Paint)> {
@@ -181,7 +181,7 @@ fn a_slider_whose_value_does_not_change_keeps_its_thumb() {
     });
     // The handle, centered on its value along the 2..218 track.
     let thumb = |ui: &mut ComposeTestRule| {
-        let rect = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
+        let rect = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_snapshot().bounds;
         (rect.left + rect.right) / 2.0
     };
     assert_eq!(thumb(&mut ui), 56.0);

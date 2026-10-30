@@ -13,7 +13,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Key, Modifier, Offset, PointerEvent, Role, UnitExt, platform::DrawOp};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn an_icon_is_24_dp_and_described() {
         Icon!(icons::filled::add(), Some("Add"), modifier = Modifier.test_tag("icon"));
     });
     assert_eq!(bounds(&mut ui, "icon").width(), 24.0);
-    let node = ui.on_node_with_tag("icon").fetch_semantics_node();
+    let node = ui.on_node_with_tag("icon").fetch_semantics_snapshot();
     assert_eq!(
         node.config
             .get(&compose_ui::SemanticsProperties::CONTENT_DESCRIPTION)
@@ -145,7 +145,7 @@ fn radio_buttons_select_one() {
     let selected: Vec<Option<bool>> = (0..3)
         .map(|index| {
             ui.on_node_with_tag(&format!("choice {index}"))
-                .fetch_semantics_node()
+                .fetch_semantics_snapshot()
                 .config
                 .get(&compose_ui::SemanticsProperties::SELECTED)
                 .copied()
@@ -154,7 +154,7 @@ fn radio_buttons_select_one() {
     assert_eq!(selected, [Some(false), Some(false), Some(true)]);
     assert_eq!(
         ui.on_node_with_tag("choice 2")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::ROLE)
             .copied(),
@@ -290,8 +290,8 @@ fn an_alert_dialog_shows_its_parts_and_its_buttons_act() {
     let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || Screen(handle));
     ui.on_node_with_text("Delete the item?").assert_exists();
     ui.on_node_with_text("It can't be undone.").assert_exists();
-    let cancel = ui.on_node_with_text("Cancel").fetch_semantics_node().bounds;
-    let delete = ui.on_node_with_text("Delete").fetch_semantics_node().bounds;
+    let cancel = ui.on_node_with_text("Cancel").fetch_semantics_snapshot().bounds;
+    let delete = ui.on_node_with_text("Delete").fetch_semantics_snapshot().bounds;
     assert!(cancel.right <= delete.left, "dismiss before confirm: {cancel:?} {delete:?}");
     ui.on_node_with_text("Delete").perform_click();
     assert_eq!(CONFIRMED.with(Cell::get), 1);
@@ -329,8 +329,8 @@ fn a_dropdown_menu_opens_below_its_anchor_and_closes_on_selection() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), Screen);
     ui.on_node_with_text("Edit").assert_does_not_exist();
     ui.on_node_with_tag("more").perform_click();
-    let edit = ui.on_node(has_text("Edit")).fetch_semantics_node().bounds;
-    let more = ui.on_node_with_tag("more").fetch_semantics_node().bounds;
+    let edit = ui.on_node(has_text("Edit")).fetch_semantics_snapshot().bounds;
+    let more = ui.on_node_with_tag("more").fetch_semantics_snapshot().bounds;
     assert!(edit.top >= more.bottom, "below the anchor: {edit:?} under {more:?}");
     assert!(edit.width() >= 112.0, "{edit:?}");
     ui.on_node_with_text("Share").perform_click();
@@ -386,7 +386,7 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
             Slider!(state, move |new| state.set_value(new), modifier = Modifier.test_tag("slider"));
         });
     });
-    let node = ui.on_node_with_tag("slider").fetch_semantics_node();
+    let node = ui.on_node_with_tag("slider").fetch_semantics_snapshot();
     let info = node
         .config
         .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
@@ -403,7 +403,7 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
     assert_eq!(value, 0.25, "snapped to the nearest of the 5 stops");
     let info = ui
         .on_node_with_tag("slider")
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .config
         .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
         .copied();
@@ -429,7 +429,7 @@ fn a_sliders_semantics_follow_its_value_focus_and_enabled_state() {
     });
     let current = |ui: &mut ComposeTestRule| {
         ui.on_node_with_tag("slider")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
             .map(|info| info.current)
@@ -506,7 +506,7 @@ fn a_right_to_left_slider_runs_from_the_right() {
     let value = || STATE.with(Cell::get).expect("composed").value();
     ui.host().set_layout_direction(LayoutDirection::Rtl);
     ui.wait_for_idle();
-    let bounds = ui.on_node_with_tag("slider").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("slider").fetch_semantics_snapshot().bounds;
     // A tap near the left end: near the range's end.
     let at = Offset::new(bounds.left + 12.0, bounds.top + bounds.height() / 2.0);
     ui.host().send_pointer(PointerEvent::press(at));
@@ -514,7 +514,7 @@ fn a_right_to_left_slider_runs_from_the_right() {
     ui.wait_for_idle();
     assert!(value() > 0.95, "{}", value());
     // The handle is placed on the left.
-    let handle = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
+    let handle = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_snapshot().bounds;
     assert!(handle.right < bounds.left + 30.0, "{handle:?} in {bounds:?}");
 }
 
@@ -531,7 +531,7 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
         });
     });
     // Sizes and semantics, as Compose's.
-    let circular = ui.on_node_with_tag("circular").fetch_semantics_node();
+    let circular = ui.on_node_with_tag("circular").fetch_semantics_snapshot();
     assert_eq!((circular.bounds.width(), circular.bounds.height()), (40.0, 40.0));
     let info = circular
         .config
@@ -539,7 +539,7 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
         .copied()
         .expect("a range");
     assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
-    let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
+    let linear = ui.on_node_with_tag("linear").fetch_semantics_snapshot().bounds;
     // Its semantics 10 dp taller on each side than the 4 dp line, as Compose's.
     assert_eq!((linear.width(), linear.height()), (240.0, 24.0));
     // A quarter turn from the top, after its track past the 4 dp gap (and the 4 dp stroke, for
@@ -622,14 +622,14 @@ fn list_items_are_as_high_as_their_lines_with_their_padding() {
         });
     });
     let height = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_with_tag(tag).fetch_semantics_node().bounds.height()
+        ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.height()
     };
     assert_eq!(height(&mut ui, "one"), 56.0);
     assert_eq!(height(&mut ui, "two"), 72.0);
     assert_eq!(height(&mut ui, "three"), 88.0);
     // The leading icon 16 dp in, centered down its 72 dp item.
     // Merged into its item (one node, as Compose's): found in the unmerged tree.
-    let icon = ui.on_node_unmerged(has_test_tag("icon")).fetch_semantics_node().bounds;
+    let icon = ui.on_node_unmerged(has_test_tag("icon")).fetch_semantics_snapshot().bounds;
     assert_eq!((icon.left, icon.top), (16.0, 56.0 + 24.0));
     ui.on_node_with_text("Two").assert_exists();
 }
@@ -654,9 +654,9 @@ fn a_navigation_bar_shares_its_width_and_selects_on_click() {
             });
         });
     });
-    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_snapshot().bounds;
     assert_eq!(bar.height(), 80.0);
-    let home = ui.on_node_with_tag("Home").fetch_semantics_node();
+    let home = ui.on_node_with_tag("Home").fetch_semantics_snapshot();
     assert_eq!(home.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
     // Two items sharing 400 px, 8 dp apart.
     assert_eq!(home.bounds.width(), 196.0);
@@ -664,7 +664,7 @@ fn a_navigation_bar_shares_its_width_and_selects_on_click() {
     assert_eq!(selected.get(), 1);
     assert_eq!(
         ui.on_node_with_tag("Search")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -730,9 +730,9 @@ fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
         });
     });
     let label = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
     };
-    let field = ui.on_node_with_tag("filled").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("filled").fetch_semantics_snapshot().bounds;
     let resting = label(&mut ui, "filled label");
     // Centered in the 56 dp field, in the large body style (24 px lines).
     assert_eq!(resting.height(), 24.0);
@@ -745,7 +745,7 @@ fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
     // The outlined field's floated label sits on its top edge, the outline cut around it.
     ui.on_node_with_tag("outlined").request_focus();
     ui.advance_time_by(std::time::Duration::from_millis(300));
-    let outlined = ui.on_node_with_tag("outlined").fetch_semantics_node().bounds;
+    let outlined = ui.on_node_with_tag("outlined").fetch_semantics_snapshot().bounds;
     let floated = label(&mut ui, "outlined label");
     // (The field's node is its outline, inside the 8 dp above it for the label.)
     assert_eq!(floated.top + floated.height() / 2.0, outlined.top, "on the edge");
@@ -779,8 +779,8 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
         });
     });
     ui.advance_time_by(std::time::Duration::from_millis(50));
-    let row = ui.on_node_with_tag("row").fetch_semantics_node().bounds;
-    let two = ui.on_node_with_tag("Two").fetch_semantics_node();
+    let row = ui.on_node_with_tag("row").fetch_semantics_snapshot().bounds;
+    let two = ui.on_node_with_tag("Two").fetch_semantics_snapshot();
     assert_eq!((row.height(), two.bounds.left, two.bounds.width()), (48.0, 200.0, 200.0));
     assert_eq!(two.config.get(&compose_ui::SemanticsProperties::ROLE).copied(), Some(Role::Tab));
     let indicator = |ui: &mut ComposeTestRule| {
@@ -798,7 +798,7 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     assert_eq!(indicator(&mut ui), Some(200.0));
     assert_eq!(
         ui.on_node_with_tag("Two")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -829,14 +829,14 @@ fn chips_and_badges_are_sized_and_behave_as_compose() {
         });
     });
     // 32 dp high (in a 48 dp touch target).
-    let filter = ui.on_node_with_tag("filter").fetch_semantics_node();
+    let filter = ui.on_node_with_tag("filter").fetch_semantics_snapshot();
     assert_eq!(filter.bounds.height(), 32.0);
     assert_eq!(filter.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(false));
     ui.on_node_with_tag("filter").perform_click();
     assert!(selected.get());
     assert_eq!(
         ui.on_node_with_tag("filter")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -844,8 +844,8 @@ fn chips_and_badges_are_sized_and_behave_as_compose() {
     );
     ui.on_node_with_tag("assist").assert_exists();
     // The dot: 6 dp, its start 6 dp before the icon's end, centered on its top.
-    let icon = ui.on_node_with_tag("badged").fetch_semantics_node().bounds;
-    let dot = ui.on_node_unmerged(has_test_tag("dot")).fetch_semantics_node().bounds;
+    let icon = ui.on_node_with_tag("badged").fetch_semantics_snapshot().bounds;
+    let dot = ui.on_node_unmerged(has_test_tag("dot")).fetch_semantics_snapshot().bounds;
     assert_eq!((dot.width(), dot.height()), (6.0, 6.0));
     assert_eq!((dot.left, dot.top), (icon.right - 6.0, icon.top - 3.0));
 }

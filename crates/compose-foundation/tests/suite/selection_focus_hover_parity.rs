@@ -56,7 +56,7 @@ fn a_tri_state_toggleable_says_its_state() {
         (ToggleableState::Off, "off"),
         (ToggleableState::Indeterminate, "indeterminate"),
     ] {
-        let config = ui.on_node_with_tag(tag).fetch_semantics_node().config;
+        let config = ui.on_node_with_tag(tag).fetch_semantics_snapshot().config;
         assert_eq!(config.toggleable_state_of(), Some(state));
         assert!(config.is_clickable() && !config.is_disabled());
     }
@@ -92,7 +92,7 @@ fn a_disabled_toggleable_is_not_enabled() {
         );
     });
     ui.on_node_with_tag(TAG).assert_is_not_enabled();
-    assert!(ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_clickable());
+    assert!(ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_clickable());
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/selection/ToggleableTest.kt, toggleableTest_toggle
@@ -394,7 +394,7 @@ fn a_selectable_says_it_is_selected() {
     let mut ui = compose_test(|| {
         Box!(modifier = Modifier.selectable(false, || {}).test_tag(TAG), { BasicText!("Text") });
     });
-    let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+    let config = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
     assert_eq!(config.selected_of(), Some(false));
     assert!(config.is_clickable() && !config.is_disabled());
 }
@@ -415,7 +415,10 @@ fn a_click_selects() {
     });
     ui.on_node_with_tag(TAG).perform_click();
     assert!(selected.get());
-    assert_eq!(ui.on_node_with_tag(TAG).fetch_semantics_node().config.selected_of(), Some(true));
+    assert_eq!(
+        ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.selected_of(),
+        Some(true)
+    );
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/selection/SelectableTest.kt, selectable_noClicksNoChanges
@@ -432,7 +435,10 @@ fn without_a_click_nothing_changes() {
             }
         );
     });
-    assert_eq!(ui.on_node_with_tag(TAG).fetch_semantics_node().config.selected_of(), Some(false));
+    assert_eq!(
+        ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.selected_of(),
+        Some(false)
+    );
     assert!(!selected.get());
 }
 
@@ -512,8 +518,8 @@ fn a_focusable_is_focusable_and_a_disabled_one_is_not() {
             );
         });
     });
-    assert!(ui.on_node_with_tag("enabled").fetch_semantics_node().config.is_focusable());
-    assert!(!ui.on_node_with_tag("disabled").fetch_semantics_node().config.is_focusable());
+    assert!(ui.on_node_with_tag("enabled").fetch_semantics_snapshot().config.is_focusable());
+    assert!(!ui.on_node_with_tag("disabled").fetch_semantics_snapshot().config.is_focusable());
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/FocusableTest.kt, focusable_focusAcquire
@@ -529,13 +535,13 @@ fn a_focusable_takes_and_loses_the_focus() {
             BasicText!("other", modifier = Modifier.focus_requester(second).focusable());
         });
     });
-    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_focused());
+    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_focused());
     assert!(first.request_focus());
     ui.wait_for_idle();
     ui.on_node_with_tag(TAG).assert_is_focused();
     assert!(second.request_focus());
     ui.wait_for_idle();
-    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_focused());
+    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_focused());
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/FocusableTest.kt, focusable_interactionSource
@@ -649,7 +655,7 @@ fn a_reused_focused_item_is_not_focused_any_more() {
     ui.on_node_with_tag(TAG).assert_is_focused();
     key_state.set(1);
     ui.wait_for_idle();
-    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_focused());
+    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_focused());
 }
 
 // ---- Hoverable -----------------------------------------------------------------------------------

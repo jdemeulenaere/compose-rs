@@ -9,7 +9,7 @@ use compose_test::*;
 use compose_ui::{Dp, IntSize, Key, Rect, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn a_tap_focuses_a_text_field_and_places_the_cursor() {
     // A tap between "a" and "b" (7 px per character).
     ui.on_node_with_tag("field").perform_click();
     ui.on_node_with_tag("field").assert_is_focused();
-    let center = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let center = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     let _ = center;
     ui.host().send_pointer(compose_ui::PointerEvent::press(compose_ui::Offset::new(7.0, 5.0)));
     ui.host().send_pointer(compose_ui::PointerEvent::release(compose_ui::Offset::new(7.0, 5.0)));

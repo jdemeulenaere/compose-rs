@@ -13,7 +13,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, UnitExt};
 
 fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.top
 }
 
 /// A deactivated child between two others in a Column: the one after it is laid out as if it
@@ -89,12 +89,12 @@ fn a_deactivated_weighted_child_in_a_row() {
     ui.wait_for_idle();
     active.set(true);
     ui.wait_for_idle();
-    let width = ui.on_node_with_tag("a").fetch_semantics_node().bounds.width();
+    let width = ui.on_node_with_tag("a").fetch_semantics_snapshot().bounds.width();
     assert_eq!(width, 30.0);
     active.set(false);
     ui.wait_for_idle();
-    let width = ui.on_node_with_tag("a").fetch_semantics_node().bounds.width();
-    let c = ui.on_node_with_tag("c").fetch_semantics_node().bounds;
+    let width = ui.on_node_with_tag("a").fetch_semantics_snapshot().bounds.width();
+    let c = ui.on_node_with_tag("c").fetch_semantics_snapshot().bounds;
     assert_eq!((width, c.left, c.width()), (45.0, 45.0, 45.0), "{}", ui.dump_semantics());
 }
 
@@ -320,7 +320,7 @@ fn a_selection_does_not_move_to_the_item_reusing_the_selected_ones_text() {
         });
     });
     ui.wait_for_idle();
-    let bounds = ui.on_node_with_tag("t0").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("t0").fetch_semantics_snapshot().bounds;
     let point = Offset::new(bounds.left + 7.0 * 8.0 + 1.0, (bounds.top + bounds.bottom) / 2.0);
     for _ in 0..2 {
         ui.host().send_pointer(PointerEvent::press(point));

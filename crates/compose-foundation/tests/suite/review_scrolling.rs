@@ -560,7 +560,7 @@ fn a_lists_scroll_by_is_handled_with_nothing_to_do() {
             }
         );
     });
-    let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+    let node = ui.on_node_with_tag(TAG).fetch_semantics_snapshot();
     assert!(ui.host().perform_semantics_action_with(
         node.id,
         &compose_ui::SemanticsActions::SCROLL_BY,

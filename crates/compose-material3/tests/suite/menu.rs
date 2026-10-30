@@ -154,7 +154,7 @@ fn a_menu_is_as_wide_as_its_widest_content_and_8_dp_more_above_and_below() {
                 & has_any_descendant(has_test_tag("MenuContent2")),
         )
         .assert_exists()
-        .fetch_semantics_node();
+        .fetch_semantics_snapshot();
     assert_eq!(node.bounds.width(), 130.0);
     assert_eq!(node.bounds.height(), 8.0 * 2.0 + 200.0);
 }

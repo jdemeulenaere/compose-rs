@@ -57,13 +57,13 @@ fn on_top_at(ui: &mut ComposeTestRule, at: Offset) -> &'static str {
 /// What's hit at the middle, one pixel to the left, what's always under both scenes sliding left to
 /// right: the one entering ends at the middle when it starts.
 fn on_top(ui: &mut ComposeTestRule) -> &'static str {
-    let bounds = ui.on_root().fetch_semantics_node().bounds;
+    let bounds = ui.on_root().fetch_semantics_snapshot().bounds;
     on_top_at(ui, Offset::new(bounds.width() / 2.0 - 1.0, bounds.height() / 2.0))
 }
 
 /// The same when both slide right to left.
 fn on_top_of_pop(ui: &mut ComposeTestRule) -> &'static str {
-    let bounds = ui.on_root().fetch_semantics_node().bounds;
+    let bounds = ui.on_root().fetch_semantics_snapshot().bounds;
     on_top_at(ui, Offset::new(bounds.width() / 2.0 + 1.0, bounds.height() / 2.0))
 }
 
@@ -169,7 +169,7 @@ fn a_scene_of_two_panes_popped_is_on_top() {
     ui.wait_for_idle();
     ui.on_node_with_text(SECOND).assert_is_displayed();
     ui.on_node_with_text(THIRD).assert_is_displayed();
-    let bounds = ui.on_root().fetch_semantics_node().bounds;
+    let bounds = ui.on_root().fetch_semantics_snapshot().bounds;
     let right = Offset::new(bounds.width() * 3.0 / 4.0, bounds.height() / 2.0);
     ui.set_auto_advance(false);
     stack.remove(2);
@@ -330,7 +330,7 @@ fn scene_animated(
 }
 
 fn position(ui: &mut ComposeTestRule, text: &str) -> (f32, f32) {
-    let bounds = ui.on_node_with_text(text).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_text(text).fetch_semantics_snapshot().bounds;
     (bounds.left, bounds.top)
 }
 
@@ -341,7 +341,7 @@ fn a_scene_s_own_transition_runs() {
     ui.wait_for_idle();
     ui.on_node_with_text(FIRST).assert_is_displayed();
     ui.on_node_with_text(SECOND).assert_is_displayed();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     ui.set_auto_advance(false);
     stack.push(THIRD);
     ui.advance_time_by(Duration::from_millis(u64::from(SCENE_DURATION) / 2));
@@ -362,7 +362,7 @@ fn a_scene_s_own_transition_runs() {
 fn a_scene_can_go_over_its_entry_s_transition() {
     let (mut ui, stack) = scene_animated(true, true);
     ui.wait_for_idle();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     ui.set_auto_advance(false);
     stack.push(THIRD);
     ui.advance_time_by(Duration::from_millis(u64::from(SCENE_DURATION) / 2));
@@ -376,7 +376,7 @@ fn a_scene_can_go_over_its_entry_s_transition() {
 fn a_scene_can_leave_it_to_its_entry_s_transition() {
     let (mut ui, stack) = scene_animated(false, true);
     ui.wait_for_idle();
-    let width = ui.on_root().fetch_semantics_node().bounds.width();
+    let width = ui.on_root().fetch_semantics_snapshot().bounds.width();
     ui.set_auto_advance(false);
     stack.push(THIRD);
     ui.advance_time_by(Duration::from_millis(u64::from(SCENE_DURATION) / 2));

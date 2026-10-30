@@ -153,7 +153,7 @@ fn animated_scrolls_move_the_semantics_scroll_range() {
         let handle = *state;
         let mut ui = default_list(vertical, handle);
         let range = |ui: &mut ComposeTestRule| {
-            let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+            let config = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
             let range = if vertical {
                 config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
             } else {

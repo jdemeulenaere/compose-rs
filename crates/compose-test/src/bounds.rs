@@ -54,7 +54,7 @@ impl SemanticsNodeInteraction<'_> {
     /// The node's bounds in the root in pixels, unclipped and clipped.
     #[track_caller]
     fn bounds_in_root_px(&mut self) -> (Rect, Rect) {
-        let node = self.fetch_semantics_node();
+        let node = self.fetch_semantics_snapshot();
         let bounds = self.rule.host.with_tree(|tree| tree.semantics_bounds_in_root(node.id));
         // The root has no semantics of its own: its bounds are the window's.
         bounds.unwrap_or((node.bounds, node.bounds))

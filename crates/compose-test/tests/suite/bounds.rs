@@ -305,7 +305,7 @@ fn bounds_are_in_dp_at_the_density() {
     bounds.left.assert_is_equal_to(20.dp(), "left", DEFAULT_BOUNDS_TOLERANCE);
     bounds.top.assert_is_equal_to(20.dp(), "top", DEFAULT_BOUNDS_TOLERANCE);
     ui.on_node_with_tag(TAG).assert_width_is_equal_to(10.dp());
-    let pixels = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let pixels = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     assert_eq!(pixels.width(), 20.0);
 }
 

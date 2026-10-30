@@ -28,7 +28,7 @@ fn a_slider_in_a_clickable_card_is_its_own_node() {
             });
         });
     });
-    let card = ui.on_node_with_tag("card").fetch_semantics_node();
+    let card = ui.on_node_with_tag("card").fetch_semantics_snapshot();
     assert!(
         !card.config.contains(&compose_ui::SemanticsProperties::DISABLED),
         "the disabled slider made the card disabled: {:?}",
@@ -60,7 +60,7 @@ fn a_sliders_own_state_description_is_kept() {
             );
         });
     });
-    let node = ui.on_node_with_tag("slider").fetch_semantics_node();
+    let node = ui.on_node_with_tag("slider").fetch_semantics_snapshot();
     assert_eq!(
         node.config
             .get(&compose_ui::SemanticsProperties::STATE_DESCRIPTION)
@@ -83,7 +83,7 @@ fn a_clickable_row_with_an_icon_is_not_an_image() {
             });
         });
     });
-    let node = ui.on_node_with_tag("row").fetch_semantics_node();
+    let node = ui.on_node_with_tag("row").fetch_semantics_snapshot();
     assert_ne!(
         node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
         Some(Role::Image),
@@ -117,7 +117,7 @@ fn passes_buttons_switches_and_text_fields_describe_themselves() {
             });
         });
     });
-    let button = ui.on_node_with_tag("button").fetch_semantics_node();
+    let button = ui.on_node_with_tag("button").fetch_semantics_snapshot();
     assert!(button.config.contains(&compose_ui::SemanticsProperties::DISABLED));
     assert_eq!(
         button.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
@@ -126,7 +126,7 @@ fn passes_buttons_switches_and_text_fields_describe_themselves() {
     // Its click is offered, as Compose's: the platform bridges refuse a disabled node's
     // actions (D1255).
     assert!(button.config.contains(&compose_ui::SemanticsActions::ON_CLICK));
-    let switch = ui.on_node_with_tag("switch").fetch_semantics_node();
+    let switch = ui.on_node_with_tag("switch").fetch_semantics_snapshot();
     assert_eq!(
         switch.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
         Some(Role::Switch)
@@ -135,7 +135,7 @@ fn passes_buttons_switches_and_text_fields_describe_themselves() {
         switch.config.get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE).copied(),
         Some(compose_ui::ToggleableState::On)
     );
-    let field = ui.on_node_with_tag("field").fetch_semantics_node();
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert!(field.config.contains(&compose_ui::SemanticsProperties::EDITABLE_TEXT));
     assert_eq!(
         field

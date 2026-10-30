@@ -449,7 +449,7 @@ fn the_tooltip_stays_while_the_pointer_is_on_it_inside_the_area() {
     });
     send(&mut ui, PointerEvent::moved(Offset::new(50.0, 50.0), false));
     ui.advance_time_by(Duration::from_millis(600));
-    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_node().bounds;
+    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_snapshot().bounds;
     assert_eq!((tooltip.left, tooltip.top), (50.0, 66.0));
     send(&mut ui, PointerEvent::moved(Offset::new(60.0, 80.0), false));
     ui.advance_time_by(Duration::from_millis(50));
@@ -479,7 +479,7 @@ fn a_tooltip_without_room_below_the_pointer_shows_above_it() {
     send(&mut ui, PointerEvent::moved(Offset::new(50.0, 780.0), false));
     ui.advance_time_by(Duration::from_millis(600));
     ui.on_node_with_tag("tooltip").assert_exists();
-    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_node().bounds;
+    let tooltip = ui.on_node_with_tag("tooltip").fetch_semantics_snapshot().bounds;
     assert_eq!(tooltip.top, 714.0);
 }
 

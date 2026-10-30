@@ -27,7 +27,7 @@ const SHEET_TAG: &str = "sheet";
 const HANDLE_TAG: &str = "handle";
 
 fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.top
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.top
 }
 
 fn new_state(values: &[SheetValue], initial: SheetValue) -> Owned<SheetState> {
@@ -302,7 +302,7 @@ fn the_slots_are_placed_around_the_sheet() {
         let _ = shown.show_snackbar("Hello").await;
     });
     ui.advance_time_by(std::time::Duration::from_millis(500));
-    let snackbars = ui.on_node_with_tag("snackbars").fetch_semantics_node().bounds;
+    let snackbars = ui.on_node_with_tag("snackbars").fetch_semantics_snapshot().bounds;
     assert_eq!(snackbars.bottom, ROOT_HEIGHT - PEEK);
 }
 
@@ -518,7 +518,7 @@ fn a_new_max_width_changes_the_sheets_width() {
     for width in [0.0f32, 200.0, 400.0] {
         max_width.set(width);
         ui.wait_for_idle();
-        let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_node().bounds;
+        let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_snapshot().bounds;
         assert_eq!(bounds.width(), width.min(400.0));
         assert_eq!(bounds.left, (400.0 - width.min(400.0)) / 2.0);
     }
@@ -742,7 +742,7 @@ fn a_standalone_sheet_fills_the_width() {
             });
         });
     });
-    let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_snapshot().bounds;
     assert_eq!(bounds.width(), 400.0);
 }
 
@@ -762,7 +762,7 @@ fn a_standalone_sheet_is_centered_at_its_max_width() {
             });
         });
     });
-    let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.left, bounds.width()), (100.0, 200.0));
 }
 
@@ -882,7 +882,7 @@ fn a_standalone_sheets_content_keeps_its_height() {
     let insets = compose_foundation::layout::WindowInsets::default();
     let mut ui = compose_test(sheet_with_insets(*state, insets, consumed));
     let height =
-        ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_node().bounds.height();
+        ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_snapshot().bounds.height();
     assert_eq!(height, SHEET_HEIGHT);
 }
 

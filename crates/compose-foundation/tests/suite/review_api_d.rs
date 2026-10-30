@@ -19,7 +19,7 @@ use compose_ui::{
 type Log = Rc<RefCell<Vec<String>>>;
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn click(ui: &mut ComposeTestRule, x: f32, y: f32) {

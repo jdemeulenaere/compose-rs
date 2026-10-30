@@ -102,7 +102,7 @@ fn width(_: &mut ComposeTestRule) -> f32 {
 /// The box's width in the frame before it leaves, moving the clock until it has.
 fn last_width(ui: &mut ComposeTestRule) -> f32 {
     let mut last = 0.0;
-    while !ui.on_all_nodes(has_test_tag("content")).fetch_semantics_nodes().is_empty() {
+    while !ui.on_all_nodes(has_test_tag("content")).fetch_semantics_snapshots().is_empty() {
         last = width(ui);
         ui.advance_time_by_frame();
     }

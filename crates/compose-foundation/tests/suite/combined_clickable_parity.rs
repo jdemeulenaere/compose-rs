@@ -75,7 +75,7 @@ fn a_long_click_is_a_semantics_action() {
     let (long_clicks, on_long_click) = counter();
     let (_, on_click) = counter();
     let mut ui = combined(Some(on_long_click), None, on_click);
-    let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+    let config = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
     assert!(config.is_long_clickable() && !config.is_disabled());
     ui.on_node_with_tag(TAG).perform_semantics_action(&SemanticsActions::ON_LONG_CLICK);
     assert_eq!(long_clicks.get(), 1);
@@ -99,7 +99,7 @@ fn the_long_click_action_follows_the_callback() {
         Box!(modifier = Modifier.size(10.dp()).combined_clickable(long, None, || {}).test_tag(TAG));
     });
     let long_clickable = |ui: &mut ComposeTestRule| {
-        ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_long_clickable()
+        ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_long_clickable()
     };
     assert!(!long_clickable(&mut ui));
     on_long_click.set(Some(0));
@@ -131,7 +131,7 @@ fn the_long_click_label_is_in_the_semantics() {
                 .test_tag(TAG)
         );
     });
-    let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+    let config = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
     assert_eq!(config.long_click_label().as_deref(), Some("Edit"));
 }
 

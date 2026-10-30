@@ -35,7 +35,7 @@ fn an_ellipsized_text_without_soft_wrap_is_one_line() {
             soft_wrap = false,
         );
     });
-    let bounds = ui.on_node_with_tag("text").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("text").fetch_semantics_snapshot().bounds;
     // One line of 14 sp text: 17.5 px, rounded up.
     assert_eq!(bounds.height(), 18.0, "{bounds:?}");
 }

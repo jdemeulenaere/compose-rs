@@ -255,7 +255,7 @@ fn an_overshooting_drawer_scales_up_and_its_content_back_down() {
         if offset > 0.0 {
             // It's placed there, and the scrim's no darker for that.
             let left =
-                ui.on_node_unmerged(has_test_tag("sheet")).fetch_semantics_node().bounds.left;
+                ui.on_node_unmerged(has_test_tag("sheet")).fetch_semantics_snapshot().bounds.left;
             assert!((left - offset).abs() <= 1.0, "{left}, {offset}");
             let ops = ui.host().display_list().ops.clone();
             let scrim = ops.iter().find_map(|op| match op {

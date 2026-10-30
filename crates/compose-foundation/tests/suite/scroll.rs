@@ -33,7 +33,7 @@ fn List() {
 }
 
 fn top(ui: &mut ComposeTestRule, index: u32) -> f32 {
-    ui.on_node_with_tag(&format!("item {index}")).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(&format!("item {index}")).fetch_semantics_snapshot().bounds.top
 }
 
 fn state() -> ScrollState {

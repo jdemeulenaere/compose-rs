@@ -25,7 +25,7 @@ fn take_seen() -> Vec<String> {
 }
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// The bounds of the field's inner text (its focus target): the field's semantics node is the

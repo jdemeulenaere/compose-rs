@@ -71,7 +71,7 @@ fn a_text_field_draws_the_cursor_on_the_line_enter_made() {
     ui.on_node_with_tag("field").perform_text_input("a");
     ui.press_key(Key::Enter);
     ui.on_node_with_tag("field").assert_text_equals(&["a\n"]);
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     // The cursor is the last rectangle drawn (after the paragraph).
     let list = ui.host().display_list();
     let cursor = list

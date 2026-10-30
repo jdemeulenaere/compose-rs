@@ -49,7 +49,7 @@ fn a_clickable_is_enabled_with_a_click_action_and_no_role() {
     let mut ui = compose_test(|| {
         Box!({ BasicText!("ClickableText", modifier = Modifier.test_tag(TAG).clickable(|| {})) });
     });
-    let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+    let node = ui.on_node_with_tag(TAG).fetch_semantics_snapshot();
     assert_eq!(node.config.role_of(), None);
     assert!(!node.config.is_disabled() && node.config.is_clickable());
 }
@@ -66,7 +66,7 @@ fn a_disabled_clickable_is_not_enabled_and_keeps_its_click_action() {
             )
         });
     });
-    let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+    let node = ui.on_node_with_tag(TAG).fetch_semantics_snapshot();
     assert_eq!(node.config.role_of(), None);
     assert!(node.config.is_disabled() && node.config.is_clickable());
 }
@@ -111,7 +111,8 @@ fn the_semantics_follow_enabled_and_the_role() {
             )
         });
     });
-    let config = |ui: &mut ComposeTestRule| ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+    let config =
+        |ui: &mut ComposeTestRule| ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
     assert_eq!(config(&mut ui).role_of(), Some(Role::Button));
     role.set(None);
     ui.wait_for_idle();
@@ -137,7 +138,7 @@ fn the_click_label_is_in_the_semantics_and_follows_changes() {
     });
     let label_of = |ui: &mut ComposeTestRule| {
         ui.on_node_with_tag(TAG)
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .click_label()
             .map(|label| label.to_string())
@@ -1469,7 +1470,7 @@ fn a_disabled_clickable_cannot_be_focused() {
     assert!(
         !ui.host().perform_semantics_action(node, &compose_ui::SemanticsActions::REQUEST_FOCUS)
     );
-    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_focused());
+    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_focused());
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ClickableTest.kt, focusUsingSemanticActionWhileChangingEnabledParam
@@ -1490,7 +1491,7 @@ fn focus_follows_enabled() {
     assert!(
         !ui.host().perform_semantics_action(node, &compose_ui::SemanticsActions::REQUEST_FOCUS)
     );
-    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_node().config.is_focused());
+    assert!(!ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.is_focused());
     enabled.set(true);
     ui.wait_for_idle();
     ui.on_node_with_tag(TAG).request_focus();

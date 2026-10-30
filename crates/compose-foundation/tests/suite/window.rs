@@ -56,9 +56,9 @@ fn a_popup_shows_over_its_anchor_takes_no_room_and_dismisses_on_a_click_outside(
     let handle = open.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || Screen(handle));
     // At the anchor's top start, 44 px down; the column doesn't make room for it.
-    let popup = ui.on_node_with_tag("popup").fetch_semantics_node().bounds;
+    let popup = ui.on_node_with_tag("popup").fetch_semantics_snapshot().bounds;
     assert_eq!((popup.left, popup.top), (0.0, 44.0));
-    assert_eq!(ui.on_node_with_tag("below").fetch_semantics_node().bounds.top, 40.0);
+    assert_eq!(ui.on_node_with_tag("below").fetch_semantics_snapshot().bounds.top, 40.0);
     // Drawn last: the popup's text is the last paragraph.
     let list = ui.host().display_list();
     assert!(matches!(
@@ -106,7 +106,7 @@ fn a_dialog_is_modal_takes_the_focus_and_dismisses_on_escape() {
     let open = mutable_state_of(true);
     let handle = open.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || WithDialog(handle));
-    let dialog = ui.on_node_with_tag("dialog").fetch_semantics_node().bounds;
+    let dialog = ui.on_node_with_tag("dialog").fetch_semantics_snapshot().bounds;
     assert_eq!((dialog.left, dialog.top), (100.0, 125.0), "centered");
     // A tap inside: nothing beneath clicks, and the dialog stays.
     tap(&mut ui, 150.0, 150.0);

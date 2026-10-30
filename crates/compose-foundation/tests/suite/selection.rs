@@ -30,7 +30,7 @@ fn clipboard(ui: &mut ComposeTestRule) -> Option<String> {
 
 /// Where character `index` of the text tagged `tag` starts (in its middle, vertically).
 fn at(ui: &mut ComposeTestRule, tag: &str, index: usize) -> Offset {
-    let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
     Offset::new(bounds.left + ADVANCE * index as f32 + 1.0, (bounds.top + bounds.bottom) / 2.0)
 }
 

@@ -290,7 +290,7 @@ fn rows_in_view(ui: &mut ComposeTestRule) -> Vec<(usize, compose_ui::Rect)> {
     for index in 0..20 {
         let tag = format!("row {index}");
         if ui.count_nodes(&has_test_tag(&tag)) == 1 {
-            let bounds = ui.on_node_with_tag(&tag).fetch_semantics_node().bounds;
+            let bounds = ui.on_node_with_tag(&tag).fetch_semantics_snapshot().bounds;
             if bounds.bottom > 0.0 && bounds.top < 100.0 {
                 rows.push((index, bounds));
             }

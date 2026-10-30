@@ -230,7 +230,7 @@ fn sticky_headers_stay_at_the_top() {
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(100.0, 30.0), Offset::new(0.0, 40.0)));
     ui.wait_for_idle();
     // Scrolled past Monday's header, it sticks to the top over its messages.
-    let header = ui.on_node_with_text("Monday").fetch_semantics_node();
+    let header = ui.on_node_with_text("Monday").fetch_semantics_snapshot();
     assert_eq!(header.bounds.top, 0.0, "{}", ui.dump_semantics());
 }
 
@@ -249,8 +249,8 @@ fn album_titles_span_their_lines() {
     let mut ui =
         ComposeTestRule::sized(IntSize::new(320, 600), move || layouts::Albums(albums.clone()));
     // Three columns of 96 dp or more; each title alone on its line, starting a new one.
-    let spring = ui.on_node_with_text("Spring").fetch_semantics_node().bounds;
-    let summer = ui.on_node_with_text("Summer").fetch_semantics_node().bounds;
+    let spring = ui.on_node_with_text("Spring").fetch_semantics_snapshot().bounds;
+    let summer = ui.on_node_with_text("Summer").fetch_semantics_snapshot().bounds;
     assert_eq!(spring.top, 0.0);
     assert!(summer.top > spring.bottom + 2.0 * 96.0, "{summer:?}");
     assert_eq!(summer.left, 0.0);
@@ -268,16 +268,16 @@ fn Wrapped() {
 #[test]
 fn the_custom_layout_wraps() {
     let mut ui = compose_test(Wrapped);
-    let third = ui.on_node_with_tag("box 2").fetch_semantics_node().bounds;
+    let third = ui.on_node_with_tag("box 2").fetch_semantics_snapshot().bounds;
     assert_eq!((third.left, third.top), (0.0, 20.0));
-    let second = ui.on_node_with_tag("box 1").fetch_semantics_node().bounds;
+    let second = ui.on_node_with_tag("box 1").fetch_semantics_snapshot().bounds;
     assert_eq!((second.left, second.top), (150.0, 0.0));
 }
 
 #[test]
 fn the_layout_modifier_indents() {
     let mut ui = compose_test(layouts::Outline);
-    assert_eq!(ui.on_node_with_tag("section").fetch_semantics_node().bounds.left, 16.0);
+    assert_eq!(ui.on_node_with_tag("section").fetch_semantics_snapshot().bounds.left, 16.0);
 }
 
 // ---- Drawing ----------------------------------------------------------------------------------

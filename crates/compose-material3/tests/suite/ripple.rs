@@ -943,7 +943,7 @@ fn a_clickable_in_the_theme_shows_a_ripple_in_the_content_color_where_it_is() {
             });
         });
     });
-    let center = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    let center = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center();
     let touch = compose_ui::PointerEvent::press(center)
         .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch);
     ui.host().send_pointer(touch);
@@ -976,7 +976,7 @@ fn a_navigation_items_ripple_starts_under_the_press() {
             });
         });
     });
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     // The 56 by 32 dp pill is centered in the item, as `NavigationBarItemLayout` places it.
     let pill_left = (bounds.width() - 56.0) / 2.0;
     let pill_top = (bounds.height() - 32.0) / 2.0;
@@ -998,7 +998,7 @@ fn a_radio_buttons_ripple_is_its_state_layers_size() {
             RadioButton!(false, Some(|| {}), modifier = Modifier.test_tag(TAG));
         });
     });
-    let center = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    let center = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center();
     let touch = compose_ui::PointerEvent::press(center)
         .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch);
     ui.host().send_pointer(touch);

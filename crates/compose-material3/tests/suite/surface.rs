@@ -214,7 +214,7 @@ fn overload(
 fn check_semantics(kind: Kind, role: Option<compose_ui::Role>) {
     let (mut ui, _state) = overload(kind, compose_ui::RECTANGLE_SHAPE, role, 30.0);
     let (before, after) = if kind == Kind::Clickable { ("0", "1") } else { ("false", "true") };
-    let node = ui.on_node_with_tag("surface").fetch_semantics_node();
+    let node = ui.on_node_with_tag("surface").fetch_semantics_snapshot();
     assert_eq!(node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(), role);
     ui.on_node_with_tag("surface")
         .assert_has_click_action()

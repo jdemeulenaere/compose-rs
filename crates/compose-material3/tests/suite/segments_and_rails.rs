@@ -11,7 +11,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, Role};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[composable]
@@ -50,11 +50,11 @@ fn segmented_buttons_share_the_row_and_select_one() {
     assert_eq!(bounds(&mut ui, "row").width(), 3.0 * day.width() - 2.0);
     assert!(
         ui.on_node_with_tag("row")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
     );
-    let node = ui.on_node_with_tag("Day").fetch_semantics_node();
+    let node = ui.on_node_with_tag("Day").fetch_semantics_snapshot();
     assert_eq!(
         (
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
@@ -65,7 +65,7 @@ fn segmented_buttons_share_the_row_and_select_one() {
     // The selected one shows a check before its label.
     assert_eq!(
         ui.on_node_with_tag("Week")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -74,7 +74,7 @@ fn segmented_buttons_share_the_row_and_select_one() {
     ui.on_node_with_tag("Week").perform_click();
     assert_eq!(
         ui.on_node_with_tag("Week")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -82,7 +82,7 @@ fn segmented_buttons_share_the_row_and_select_one() {
     );
     assert_eq!(
         ui.on_node_with_tag("Day")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -143,7 +143,7 @@ fn a_navigation_rail_and_its_items_are_80_dp_wide() {
     assert!(home.height() >= 56.0, "{home:?}");
     let bare = bounds(&mut ui, "bare");
     assert_eq!((bare.width(), bare.height()), (80.0, 56.0));
-    let node = ui.on_node_with_tag("Home").fetch_semantics_node();
+    let node = ui.on_node_with_tag("Home").fetch_semantics_snapshot();
     assert_eq!(
         (
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
@@ -154,7 +154,7 @@ fn a_navigation_rail_and_its_items_are_80_dp_wide() {
     ui.on_node_with_tag("Settings").perform_click();
     assert_eq!(
         ui.on_node_with_tag("Settings")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied(),
@@ -240,7 +240,7 @@ fn an_item_showing_its_label_when_selected_centers_its_icon_when_not() {
         });
     });
     let rect = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
     };
     let (item, icon) = (rect(&mut ui, "item"), rect(&mut ui, "icon"));
     assert_eq!(icon.top - item.top, (item.height() - 24.0) / 2.0);
@@ -252,7 +252,7 @@ fn an_item_showing_its_label_when_selected_centers_its_icon_when_not() {
     // Selected, the icon's semantics are cleared: its place shows from the label's below it, 24 dp
     // of icon and 4 + 4 dp of indicator and gap, centered with them in the bar.
     let item = rect(&mut ui, "item");
-    let label = ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds;
+    let label = ui.on_node_unmerged(has_text("Label")).fetch_semantics_snapshot().bounds;
     let content = 24.0 + 8.0 + label.height();
     assert_eq!(label.top - item.top, (item.height() - content) / 2.0 + 32.0);
 }
@@ -360,10 +360,10 @@ fn a_bar_item_places_at_a_fractional_density() {
         },
     );
     let top = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.top
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds.top
     };
     // Content 63 + 10.5 + 10.5 + 42 = 126; from 210 px: 42 of padding each side.
-    assert_eq!(ui.on_node_with_tag("bar").fetch_semantics_node().bounds.height(), 210.0);
+    assert_eq!(ui.on_node_with_tag("bar").fetch_semantics_snapshot().bounds.height(), 210.0);
     assert_eq!(top(&mut ui, "label"), 42.0 + 63.0 + 21.0);
     // The indicator's padding rounded to 11, so at 31, not 30; 63 + 21 tall, not 85.
     let list = ui.dump_display_list();

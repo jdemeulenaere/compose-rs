@@ -428,7 +428,7 @@ fn moving_down_in_a_spaced_list_moves_to_the_next_row() {
     let row_3 = ui.count_nodes(&has_test_tag("row 3")) == 1
         && ui
             .on_node_with_tag("row 3")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::FOCUSED)
             .copied()

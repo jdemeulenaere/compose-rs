@@ -565,8 +565,8 @@ fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
     // padding, laid out by the layout itself; row 0, before row 1, is the one prefetched.
     scroll(&mut ui, *state, -5.0);
     assert_eq!(state.first_visible_item_index(), 3);
-    assert_eq!(ui.on_node_with_tag("row 2").fetch_semantics_node().bounds.top, 5.0);
-    assert_eq!(ui.on_node_with_tag("row 1").fetch_semantics_node().bounds.top, -15.0);
+    assert_eq!(ui.on_node_with_tag("row 2").fetch_semantics_snapshot().bounds.top, 5.0);
+    assert_eq!(ui.on_node_with_tag("row 1").fetch_semantics_snapshot().bounds.top, -15.0);
     assert!(!live_items().contains(&0), "{:?}", live_items());
     assert!(!ui.host().prefetch(later()));
     assert!(live_items().contains(&0), "{:?}", live_items());

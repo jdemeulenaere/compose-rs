@@ -133,7 +133,7 @@ fn a_single_choice_row_is_a_selectable_group() {
     });
     assert!(
         ui.on_node_with_tag("row")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP)
     );
@@ -189,7 +189,7 @@ fn row_size(padding: [Option<PaddingValues>; 2]) -> (f32, f32) {
             });
         });
     });
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 

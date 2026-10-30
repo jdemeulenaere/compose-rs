@@ -14,8 +14,7 @@ use compose_ui::*;
 /// The handle of the node tagged `tag` in the unmerged tree.
 fn node(ui: &mut ComposeTestRule, tag: &str) -> SemanticsNode {
     ui.wait_for_idle();
-    let id = ui.on_node_with_tag_unmerged(tag).fetch_semantics_node().semantics_id;
-    ui.host().semantics_owner().get(id).expect("attached, with semantics")
+    ui.on_node_with_tag_unmerged(tag).fetch_semantics_node()
 }
 
 fn tag_of(config: &SemanticsConfiguration) -> Option<String> {
@@ -292,7 +291,7 @@ fn children_are_in_drawing_order_in_the_handles_and_the_snapshots() {
     let tags: Vec<_> =
         parent.children().iter().map(|child| tag_of(&child.config()).unwrap()).collect();
     assert_eq!(tags, ["under", "over"]);
-    let snapshot = ui.on_node_with_tag_unmerged("parent").fetch_semantics_node();
+    let snapshot = ui.on_node_with_tag_unmerged("parent").fetch_semantics_snapshot();
     let tags: Vec<_> =
         snapshot.children.iter().map(|child| tag_of(&child.config).unwrap()).collect();
     assert_eq!(tags, ["under", "over"]);
@@ -746,4 +745,49 @@ fn a_hit_stops_what_is_under_it_and_a_clearing_node_what_is_below_it() {
     let on_clearing = hits_at(55.0);
     assert!(on_clearing.contains(&clearing.id()));
     assert!(!on_clearing.contains(&below.id()));
+}
+
+#[test]
+fn a_finder_fetches_a_handle_in_its_own_tree_that_reads_the_tree_as_it_is() {
+    let label = Box::leak(Box::new(mutable_state_of("first"))).handle();
+    let mut ui = compose_test(move || {
+        let merging = Modifier
+            .semantics_with(true, |config| config.set_content_description("parent"))
+            .test_tag("merging");
+        Box!(modifier = merging, {
+            let child = Modifier.semantics(|config| config.set_state_description(label.get()));
+            Box!(modifier = child.test_tag("child"), {});
+        });
+    });
+    let merged = ui.on_node_with_tag("merging").fetch_semantics_node();
+    assert!(merged.merging_enabled());
+    assert!(merged.is_merging_semantics_of_descendants());
+    assert!(merged.children().is_empty(), "what it merges is its");
+    let unmerged = ui.on_node_with_tag_unmerged("merging").fetch_semantics_node();
+    assert!(!unmerged.merging_enabled());
+    assert!(!unmerged.is_merging_semantics_of_descendants());
+    assert_eq!(unmerged.children().len(), 1);
+    assert_eq!(merged.id(), unmerged.id());
+
+    let state = |node: &SemanticsNode| {
+        node.config().get(&SemanticsProperties::STATE_DESCRIPTION).map(|it| it.to_string())
+    };
+    assert_eq!(state(&merged).as_deref(), Some("first"));
+    label.set("second");
+    ui.wait_for_idle();
+    assert_eq!(state(&merged).as_deref(), Some("second"), "a handle isn't a copy");
+    let snapshot = ui.on_node_with_tag("merging").fetch_semantics_snapshot();
+    assert_eq!(snapshot.semantics_id, merged.id());
+    label.set("third");
+    ui.wait_for_idle();
+    let copied = snapshot.config.get(&SemanticsProperties::STATE_DESCRIPTION);
+    assert_eq!(copied.map(|it| it.as_str()), Some("second"), "a snapshot is");
+
+    let both = ui.on_all_nodes_unmerged(has_test_tag("merging")).fetch_semantics_nodes();
+    assert_eq!(both, [unmerged]);
+
+    // The root is a node, with nothing of its own.
+    let root = ui.on_root().fetch_semantics_node();
+    assert!(root.is_root());
+    assert_eq!(root.parent(), None);
 }

@@ -60,7 +60,7 @@ fn Opener(state: DrawerState) {
 }
 
 fn sheet_bounds(ui: &mut ComposeTestRule) -> compose_ui::Rect {
-    ui.on_node_with_tag("sheet").fetch_semantics_node().bounds
+    ui.on_node_with_tag("sheet").fetch_semantics_snapshot().bounds
 }
 
 fn click(ui: &mut ComposeTestRule, at: Offset) {
@@ -279,7 +279,7 @@ fn TallItem() {
 fn a_drawer_item_grows_with_a_tall_label() {
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), TallItem);
     ui.wait_for_idle();
-    let height = ui.on_node_with_tag("item").fetch_semantics_node().bounds.height();
+    let height = ui.on_node_with_tag("item").fetch_semantics_snapshot().bounds.height();
     assert!(height > 56.0, "{height}");
 }
 
@@ -353,7 +353,7 @@ fn tab_never_focuses_the_scrim() {
     for _ in 0..2 {
         ui.press_key(compose_ui::Key::Tab);
         let scrim =
-            ui.on_node_with_content_description("Close navigation menu").fetch_semantics_node();
+            ui.on_node_with_content_description("Close navigation menu").fetch_semantics_snapshot();
         assert!(!(scrim.config.get(&compose_ui::SemanticsProperties::FOCUSED) == Some(&true)));
     }
 }

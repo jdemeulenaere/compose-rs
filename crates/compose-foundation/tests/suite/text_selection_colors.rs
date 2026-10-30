@@ -34,7 +34,7 @@ fn rect_fills(ui: &mut ComposeTestRule) -> Vec<Color> {
 
 /// Double-clicks the start of the node tagged "text", selecting its first word.
 fn select_first_word(ui: &mut ComposeTestRule) {
-    let bounds = ui.on_node_with_tag("text").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("text").fetch_semantics_snapshot().bounds;
     let point = Offset::new(bounds.left + 2.0, bounds.top + 4.0);
     for _ in 0..2 {
         ui.host().send_pointer(PointerEvent::press(point));

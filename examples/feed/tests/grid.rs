@@ -13,9 +13,9 @@ fn the_grid_shows_tiles_in_four_columns_composed_lazily() {
     ui.advance_time_by_frame();
     ui.on_node_with_text("Grid").assert_exists();
     // 448 dp across, less 16 dp of padding: four columns of 102 dp, 8 dp apart.
-    let first = ui.on_node_with_text("Tile 1").fetch_semantics_node().bounds;
-    let fifth = ui.on_node_with_text("Tile 5").fetch_semantics_node().bounds;
-    let fourth = ui.on_node_with_text("Tile 4").fetch_semantics_node().bounds;
+    let first = ui.on_node_with_text("Tile 1").fetch_semantics_snapshot().bounds;
+    let fifth = ui.on_node_with_text("Tile 5").fetch_semantics_snapshot().bounds;
+    let fourth = ui.on_node_with_text("Tile 4").fetch_semantics_snapshot().bounds;
     assert!(fourth.left > first.left && fourth.top == first.top);
     assert!(fifth.top > first.top);
     assert_eq!(ui.count_nodes(&has_text(&format!("Tile {GRID_TILES}"))), 0);

@@ -57,7 +57,7 @@ fn tab_into_a_scrolled_list_focuses_its_first_row_in_view() {
             ui.count_nodes(&has_test_tag(&tag)) > 0
                 && ui
                     .on_node_with_tag(&tag)
-                    .fetch_semantics_node()
+                    .fetch_semantics_snapshot()
                     .config
                     .get(&compose_ui::SemanticsProperties::FOCUSED)
                     .copied()

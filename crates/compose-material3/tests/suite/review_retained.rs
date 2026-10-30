@@ -30,7 +30,7 @@ fn check_frames(ui: &mut ComposeTestRule, frames: usize, what: &str) {
 }
 
 fn center(ui: &mut ComposeTestRule, tag: &str) -> Offset {
-    let bounds = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds;
     Offset::new((bounds.left + bounds.right) / 2.0, (bounds.top + bounds.bottom) / 2.0)
 }
 

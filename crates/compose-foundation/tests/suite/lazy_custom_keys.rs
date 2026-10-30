@@ -31,7 +31,7 @@ fn Item(tag: String) {
 /// 100 px high.
 fn assert_items(ui: &mut ComposeTestRule, tags: &[&str]) {
     for (index, tag) in tags.iter().enumerate() {
-        let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+        let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
         assert_eq!(
             (bounds.top, bounds.height()),
             (ITEM_SIZE * index as f32, ITEM_SIZE),

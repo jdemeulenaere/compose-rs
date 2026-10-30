@@ -27,11 +27,11 @@ fn rule(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn dialog(ui: &mut ComposeTestRule) -> Rect {
-    ui.on_node(is_dialog()).fetch_semantics_node().bounds
+    ui.on_node(is_dialog()).fetch_semantics_snapshot().bounds
 }
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag_unmerged(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag_unmerged(tag).fetch_semantics_snapshot().bounds
 }
 
 fn text_button(tag: &'static str, label: &'static str) {

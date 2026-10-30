@@ -16,7 +16,7 @@ use compose_ui::{
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 /// Nodes with a selection, as Compose's `isSelectable()` (a private helper: compose-test has
@@ -32,7 +32,7 @@ fn selections(ui: &mut ComposeTestRule) -> Vec<bool> {
         .map(|index| {
             ui.on_all_nodes(is_selectable())
                 .get(index)
-                .fetch_semantics_node()
+                .fetch_semantics_snapshot()
                 .config
                 .get(&compose_ui::SemanticsProperties::SELECTED)
                 .copied()
@@ -81,7 +81,7 @@ fn a_tab_is_a_selected_enabled_clickable_tab_in_a_selectable_group() {
         });
     });
     for tag in ["tab", "leading"] {
-        let node = ui.on_node_with_tag(tag).fetch_semantics_node();
+        let node = ui.on_node_with_tag(tag).fetch_semantics_snapshot();
         assert_eq!(
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
             Some(Role::Tab),
@@ -99,7 +99,7 @@ fn a_tab_is_a_selected_enabled_clickable_tab_in_a_selectable_group() {
         );
     }
     for tag in ["row", "leading row"] {
-        let group = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node();
+        let group = ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot();
         assert!(
             group.config.contains(&compose_ui::SemanticsProperties::SELECTABLE_GROUP),
             "{tag}: {}",
@@ -138,7 +138,7 @@ fn a_disabled_tab_says_so_and_takes_no_clicks() {
         });
     });
     for tag in ["tab", "leading"] {
-        let node = ui.on_node_with_tag(tag).fetch_semantics_node();
+        let node = ui.on_node_with_tag(tag).fetch_semantics_snapshot();
         assert_eq!(
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
             Some(Role::Tab)
@@ -492,7 +492,7 @@ fn a_scrollable_row_selects_its_first_tab_then_the_clicked_one() {
 #[test]
 fn a_scrollable_row_scrolls_to_an_initially_selected_tab_off_screen() {
     let mut ui = text_tabs(10, true, 9);
-    let last = ui.on_all_nodes(is_selectable()).get(9).fetch_semantics_node();
+    let last = ui.on_all_nodes(is_selectable()).get(9).fetch_semantics_snapshot();
     assert_eq!(last.config.get(&compose_ui::SemanticsProperties::SELECTED).copied(), Some(true));
     // Displayed: inside the 400 dp window.
     assert!(last.bounds.left >= 0.0 && last.bounds.right <= 400.0, "{:?}", last.bounds);

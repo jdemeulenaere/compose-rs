@@ -148,7 +148,7 @@ fn the_hover_follows_a_list_scrolled_under_a_resting_mouse() {
         let first = (0..500)
             .find(|index| {
                 !ui.on_all_nodes_with_tag(&format!("item {index}"))
-                    .fetch_semantics_nodes()
+                    .fetch_semantics_snapshots()
                     .is_empty()
             })
             .expect("an item laid out");

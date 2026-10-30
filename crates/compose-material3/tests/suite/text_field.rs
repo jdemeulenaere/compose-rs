@@ -7,7 +7,7 @@ use compose_test::*;
 use compose_ui::Modifier;
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn supporting_text_and_errors_show_below_in_the_error_color() {
     let support = bounds(&mut ui, "support");
     // Below the 56 dp container, 4 dp under it, 16 dp in.
     assert_eq!((support.left - field.left, support.top - field.top), (16.0, 60.0));
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::ERROR).cloned().as_deref(),
         Some("Invalid input")

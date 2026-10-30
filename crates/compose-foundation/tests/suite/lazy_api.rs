@@ -11,7 +11,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Offset, PointerEvent, UnitExt};
 
 fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.top
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn a_lazy_column_aligns_its_items_with_a_horizontal_alignment() {
             }
         );
     });
-    assert_eq!(ui.on_node_with_tag("item").fetch_semantics_node().bounds.left, 30.0);
+    assert_eq!(ui.on_node_with_tag("item").fetch_semantics_snapshot().bounds.left, 30.0);
     assert_eq!(top_of(&mut ui, "cell"), 160.0);
 }
 
@@ -122,13 +122,13 @@ fn fill_parent_max_size_takes_the_viewport_less_the_padding() {
             }
         );
     });
-    let page = ui.on_node_with_tag("page").fetch_semantics_node().bounds;
+    let page = ui.on_node_with_tag("page").fetch_semantics_snapshot().bounds;
     assert_eq!(page.height(), 80.0);
-    assert_eq!(ui.on_node_with_tag("half").fetch_semantics_node().bounds.width(), 40.0);
+    assert_eq!(ui.on_node_with_tag("half").fetch_semantics_snapshot().bounds.width(), 40.0);
     // The viewport grows: the item follows in the same frame.
     height.set(200.0);
     ui.host().frame();
-    let page = ui.on_node_with_tag("page").fetch_semantics_node().bounds;
+    let page = ui.on_node_with_tag("page").fetch_semantics_snapshot().bounds;
     assert_eq!(page.height(), 180.0);
 }
 

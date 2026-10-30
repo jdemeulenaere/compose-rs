@@ -62,7 +62,7 @@ fn space_types_a_space_in_a_field_inside_a_clickable() {
     // The clickable merges the field's semantics: find it in the unmerged tree.
     ui.on_node_unmerged(has_test_tag("field")).request_focus();
     type_word(&mut ui, "a b");
-    let typed = ui.on_node_unmerged(has_test_tag("field")).fetch_semantics_node();
+    let typed = ui.on_node_unmerged(has_test_tag("field")).fetch_semantics_snapshot();
     let typed: Vec<&str> = typed.config.all_text().collect();
     assert_eq!((typed, CLICKS.with(Cell::get)), (vec!["a b"], 0), "the text, and the row's clicks");
 }
@@ -147,7 +147,7 @@ fn a_text_field_in_a_clickable_row_is_a_node_of_its_own() {
         });
     }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Row);
-    let row = ui.on_node_with_tag("row").fetch_semantics_node().config;
+    let row = ui.on_node_with_tag("row").fetch_semantics_snapshot().config;
     use compose_ui::SemanticsProperties as P;
     assert!(
         !row.contains(&P::EDITABLE_TEXT) && !row.contains(&P::DISABLED),
@@ -249,7 +249,7 @@ fn a_single_line_field_keeps_its_cursor_in_view() {
     }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Narrow);
     ui.on_node_with_tag("field").perform_text_input("a long title to add");
-    let field = ui.on_node_with_tag("field").fetch_semantics_node().bounds;
+    let field = ui.on_node_with_tag("field").fetch_semantics_snapshot().bounds;
     let list = ui.host().display_list();
     // The cursor is the last rectangle drawn.
     let (cursor, clip) = *painted(&list).last().expect("a cursor");

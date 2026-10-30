@@ -21,7 +21,7 @@ fn lerp(start: f32, stop: f32, fraction: f32) -> f32 {
 
 /// The bounds of the node tagged `tag`, in the root.
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// A rule showing a 100 × 100 box (tagged "box") in an `AnimatedVisibility` (tagged

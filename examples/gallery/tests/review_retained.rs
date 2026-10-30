@@ -68,14 +68,14 @@ fn the_gallerys_frames_draw_what_drawing_everything_does() {
     check_frames(&mut ui, 40, "card added, snackbar showing");
     ui.on_node(has_role(compose::ui::Role::Switch)).perform_click();
     check_frames(&mut ui, 40, "switch off, panel hiding");
-    let list = ui.on_node_with_text("Card 15").fetch_semantics_node().bounds;
+    let list = ui.on_node_with_text("Card 15").fetch_semantics_snapshot().bounds;
     let inside = Offset::new(list.left + 10.0, list.top + 5.0);
     for _ in 0..4 {
         ui.host().send_pointer(PointerEvent::scroll(inside, Offset::new(0.0, 37.0)));
         check_frames(&mut ui, 2, "list scrolled");
     }
     check_frames(&mut ui, 30, "scroll settling");
-    let moved = ui.on_node_with_text("Card 15").fetch_semantics_node().bounds;
+    let moved = ui.on_node_with_text("Card 15").fetch_semantics_snapshot().bounds;
     assert!(moved.top < list.top, "scrolled: {list:?} {moved:?}");
     // The top bar slid away with the scroll; scrolling back brings it back at once.
     ui.host().send_pointer(PointerEvent::scroll(inside, Offset::new(0.0, -80.0)));

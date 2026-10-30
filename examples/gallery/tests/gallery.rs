@@ -93,11 +93,12 @@ fn the_top_bar_comes_back_from_a_card_as_it_was_left() {
     use compose::ui::{Offset, PointerEvent};
     let mut ui = ComposeTestRule::with_manual_clock(gallery::Gallery);
     let step = std::time::Duration::from_millis(500);
-    let menu_top =
-        |ui: &mut ComposeTestRule| ui.on_node(described("Menu")).fetch_semantics_node().bounds.top;
+    let menu_top = |ui: &mut ComposeTestRule| {
+        ui.on_node(described("Menu")).fetch_semantics_snapshot().bounds.top
+    };
     let expanded = menu_top(&mut ui);
     // The cards scroll, the bar slides partly away (enter always).
-    let card = ui.on_node_with_text("Card 18").fetch_semantics_node().center();
+    let card = ui.on_node_with_text("Card 18").fetch_semantics_snapshot().center();
     ui.host().send_pointer(PointerEvent::scroll(card, Offset::new(0.0, 30.0)));
     ui.advance_time_by(step);
     let scrolled = menu_top(&mut ui);

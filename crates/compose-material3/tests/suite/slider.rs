@@ -51,7 +51,7 @@ fn required_width(modifier: Modifier, width: f32) -> Modifier {
 
 /// The slider's layout bounds: its semantics bounds less the padding on each side.
 fn layout_bounds(ui: &mut ComposeTestRule) -> Rect {
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     Rect::new(
         bounds.left + SEMANTICS_PADDING,
         bounds.top,
@@ -73,7 +73,7 @@ fn fraction(bounds: Rect, position: f32) -> f32 {
 
 fn range_info(ui: &mut ComposeTestRule) -> ProgressBarRangeInfo {
     ui.on_node_with_tag(TAG)
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .config
         .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
         .copied()
@@ -173,7 +173,7 @@ fn a_slider_is_focusable() {
     }));
     assert!(
         ui.on_node_with_tag(TAG)
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .contains(&compose_ui::SemanticsProperties::FOCUSED)
     );
@@ -244,7 +244,7 @@ fn a_slider_in_a_scrolling_column_lets_it_scroll_and_still_takes_taps() {
     });
     let scrolled = || SCROLL.with(Cell::get).expect("composed").value();
     assert_eq!(scrolled(), 1000);
-    let bounds = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_snapshot().bounds;
     drag(&mut ui, center(bounds), &[(0.0, 500.0)]);
     assert!(scrolled() < 1000, "{}", scrolled());
     assert_eq!(state.value(), 0.0);
@@ -315,7 +315,7 @@ fn size_within(max: f32, content: impl Fn() + 'static) -> (f32, f32) {
             Box!(modifier = Modifier.test_tag("container"), { content() });
         });
     }));
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 
@@ -342,7 +342,7 @@ fn a_weighted_slider_in_a_row_takes_whats_left() {
             Spacer!(modifier = Modifier.width(10.dp()));
         });
     }));
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     // The handle's 44 dp high, the semantics 10 dp wider on each side.
     assert_eq!((bounds.width(), bounds.height()), (80.0 + 2.0 * SEMANTICS_PADDING, 44.0));
 }
@@ -357,7 +357,7 @@ fn a_slider_in_no_room_is_the_handle_wide_and_the_track_high() {
             Slider!(handle, |_| {}, modifier = Modifier.test_tag(TAG));
         });
     }));
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     assert!((bounds.width() - (4.0 + 2.0 * SEMANTICS_PADDING)).abs() <= 1.0, "{bounds:?}");
     assert_eq!(bounds.height(), 16.0);
 }
@@ -537,7 +537,7 @@ fn a_slider_with_infinite_room_is_48_dp_wide() {
             }
         );
     }));
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     assert_eq!(bounds.width(), 48.0);
 }
 
@@ -662,7 +662,7 @@ fn only_a_slider_whose_range_goes_below_zero_describes_its_state() {
             Slider!(centered, |_| {}, modifier = Modifier.test_tag("centered"));
         });
     }));
-    let standard = ui.on_node_with_tag("standard").fetch_semantics_node().config;
+    let standard = ui.on_node_with_tag("standard").fetch_semantics_snapshot().config;
     let description = |config: &compose_ui::SemanticsConfiguration| {
         config
             .get(&compose_ui::SemanticsProperties::STATE_DESCRIPTION)
@@ -673,10 +673,10 @@ fn only_a_slider_whose_range_goes_below_zero_describes_its_state() {
     };
     assert_eq!(description(&standard), None);
     assert_eq!(range(&standard), Some(info(0.5, 0)));
-    let custom = ui.on_node_with_tag("custom").fetch_semantics_node().config;
+    let custom = ui.on_node_with_tag("custom").fetch_semantics_snapshot().config;
     assert_eq!(description(&custom).as_deref(), Some("0:13 of 0:18"));
     assert_eq!(range(&custom), Some(info(0.5, 0)));
-    let centered = ui.on_node_with_tag("centered").fetch_semantics_node().config;
+    let centered = ui.on_node_with_tag("centered").fetch_semantics_snapshot().config;
     assert_eq!(description(&centered).as_deref(), Some("0.0"));
     assert_eq!(
         range(&centered),
@@ -743,7 +743,7 @@ fn a_small_custom_thumb_is_measured_with_the_sliders_constraints() {
         );
     }));
     let slider = layout_bounds(&mut ui);
-    let thumb = ui.on_node_with_tag_unmerged("thumb").fetch_semantics_node().bounds;
+    let thumb = ui.on_node_with_tag_unmerged("thumb").fetch_semantics_snapshot().bounds;
     assert_eq!(thumb.top - slider.top, 0.0, "{slider:?} {thumb:?}");
     // Centred in the 4 dp wrapper at the start.
     assert_eq!(thumb.left - slider.left, 1.0, "{slider:?} {thumb:?}");
@@ -834,7 +834,7 @@ fn a_press_becomes_a_drag_in_the_interaction_source() {
     let state = SliderState::new(0.0, 0, (0.0, 1.0));
     let shown = mutable_state_of(true);
     let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
-    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    let at = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center();
     ui.host().send_pointer(PointerEvent::press(at));
     ui.wait_for_idle();
     assert!(source.is_pressed() && !source.is_dragged());
@@ -854,7 +854,7 @@ fn a_tap_and_a_focus_go_through_the_interaction_source() {
     let state = SliderState::new(0.0, 0, (0.0, 1.0));
     let shown = mutable_state_of(true);
     let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
-    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    let at = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center();
     ui.host().send_pointer(PointerEvent::press(at));
     ui.host().send_pointer(PointerEvent::release(at));
     ui.wait_for_idle();
@@ -923,7 +923,7 @@ fn rig() -> Rig {
 }
 
 fn center_of(ui: &mut ComposeTestRule) -> Offset {
-    ui.on_node_with_tag(TAG).fetch_semantics_node().center()
+    ui.on_node_with_tag(TAG).fetch_semantics_snapshot().center()
 }
 
 /// A second pointer, a finger.
@@ -1193,7 +1193,7 @@ fn a_clickable_around_the_slider_takes_no_press() {
             }
         );
     }));
-    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().center();
+    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_snapshot().center();
     ui.host().send_pointer(PointerEvent::press(at));
     ui.advance_time_by(std::time::Duration::from_millis(200));
     assert!(!parent.is_pressed());
@@ -1224,7 +1224,7 @@ fn a_scrolling_parent_cancels_the_press() {
             Spacer!(modifier = Modifier.height(2000.dp()));
         });
     });
-    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().center();
+    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_snapshot().center();
     let touch = |event: PointerEvent| event.with_pointer(PointerId(0), PointerType::Touch);
     ui.host().send_pointer(touch(PointerEvent::press(at)));
     assert!(source.is_pressed());
@@ -1613,7 +1613,7 @@ fn a_consumed_release_cancels_the_press() {
     }));
     let interactions = recorded(&source);
     ui.wait_for_idle();
-    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().bounds;
     // On the thumb, near the slider's start.
     let at = Offset::new(bounds.left + SEMANTICS_PADDING + 30.0, bounds.top + 24.0);
     ui.host().send_pointer(PointerEvent::press(at));
@@ -1666,7 +1666,7 @@ fn the_thumb_and_track_stay_where_they_are_when_an_inset_ring_shows() {
         });
     });
     let bounds = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
     };
     for value in [0.0, 0.3, 0.5, 1.0] {
         handle.set_value(value);
@@ -1770,7 +1770,7 @@ fn vertical(state: SliderState, top_to_bottom: bool, inset: bool) -> ComposeTest
 }
 
 fn rect_of(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 /// A vertical slider with its default track, 300 dp high.
@@ -1792,7 +1792,7 @@ fn vertical_default(state: SliderState) -> ComposeTestRule {
 fn a_vertical_sliders_node_grows_along_its_height() {
     let state = SliderState::new(0.5, 0, (0.0, 1.0));
     let mut ui = vertical_default(*state);
-    let bounds = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (44.0, 300.0 + 2.0 * SEMANTICS_PADDING));
 }
 

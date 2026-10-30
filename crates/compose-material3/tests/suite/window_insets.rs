@@ -15,7 +15,7 @@ use compose_ui::platform::{Insets, PlatformWindowInsets};
 use compose_ui::{IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// The system bars and a cutout, as `systemBarsForVisualComponents`.

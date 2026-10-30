@@ -572,7 +572,7 @@ fn the_state_scrolls_a_grid_with_user_scrolling_off() {
 fn semantics_dont_scroll_a_grid_with_user_scrolling_off() {
     for lazy in Lazy::grids() {
         let mut ui = five_of_30(lazy, false, None);
-        let tree = ui.on_node_with_tag(GRID).fetch_semantics_node();
+        let tree = ui.on_node_with_tag(GRID).fetch_semantics_snapshot();
         assert!(tree.config.get(&compose_ui::SemanticsActions::SCROLL_BY).is_none());
         let range = if lazy.vertical {
             tree.config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)

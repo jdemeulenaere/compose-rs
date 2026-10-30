@@ -127,7 +127,7 @@ fn move_focus_in_rtl_uses_physical_directions() {
 }
 
 fn height_of(ui: &mut ComposeTestRule, tag: &str) -> i32 {
-    let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
     (bounds.bottom - bounds.top).round() as i32
 }
 

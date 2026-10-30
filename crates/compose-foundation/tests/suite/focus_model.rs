@@ -602,7 +602,7 @@ fn rows_in_a_host(
     ui.wait_for_idle();
     let focused = ui
         .on_all_nodes(is_focused())
-        .fetch_semantics_nodes()
+        .fetch_semantics_snapshots()
         .iter()
         .filter_map(|node| {
             node.config.get(&SemanticsProperties::TEST_TAG).map(|tag| tag.to_string())
@@ -828,7 +828,7 @@ fn a_directional_search_enters_a_scrolled_column_with_overflow_from_either_side(
                     "{side:?} {horizontal} {scrolled}"
                 );
                 ui.wait_for_idle();
-                let focused = ui.on_all_nodes(is_focused()).fetch_semantics_nodes();
+                let focused = ui.on_all_nodes(is_focused()).fetch_semantics_snapshots();
                 let tag = focused[0]
                     .config
                     .get(&SemanticsProperties::TEST_TAG)
@@ -1234,7 +1234,7 @@ fn lazy_rows_in_a_host(
     ui.wait_for_idle();
     let focused = ui
         .on_all_nodes(is_focused())
-        .fetch_semantics_nodes()
+        .fetch_semantics_snapshots()
         .iter()
         .filter_map(|node| {
             node.config.get(&SemanticsProperties::TEST_TAG).map(|tag| tag.to_string())
@@ -1356,7 +1356,7 @@ fn group_in_a_host(
     ui.wait_for_idle();
     let focused = ui
         .on_all_nodes(is_focused())
-        .fetch_semantics_nodes()
+        .fetch_semantics_snapshots()
         .iter()
         .filter_map(|node| {
             node.config.get(&SemanticsProperties::TEST_TAG).map(|tag| tag.to_string())

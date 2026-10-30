@@ -796,7 +796,7 @@ fn a_drag_back_past_the_start_stops_at_the_first_item() {
             }
         };
         // One drag (not a swipe's several) from the center, overscrolling backward.
-        let center = ui.on_node_with_tag(LIST).fetch_semantics_node().center();
+        let center = ui.on_node_with_tag(LIST).fetch_semantics_snapshot().center();
         let mut finger = Touch::down(&mut ui, center);
         finger.move_by(&mut ui, along(-8.0));
         finger.move_by(&mut ui, along(150.0));
@@ -1028,7 +1028,7 @@ fn semantics_scrolling_is_not_offered_with_user_scrolling_off() {
         let lazy = Lazy { user_scroll_disabled: true, ..lazy };
         let state = LazyListState::new(0, 0);
         let mut ui = five_thirty_px_items(lazy, *state);
-        let node = ui.on_node_with_tag(LIST).fetch_semantics_node();
+        let node = ui.on_node_with_tag(LIST).fetch_semantics_snapshot();
         let scrolled = ui.host().perform_semantics_action_with(
             node.id,
             &compose_ui::SemanticsActions::SCROLL_BY,

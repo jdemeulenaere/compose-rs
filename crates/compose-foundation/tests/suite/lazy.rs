@@ -63,7 +63,7 @@ fn scrolling_composes_the_items_it_reaches_in_the_same_frame() {
     assert_eq!(state.first_visible_item_index(), 10);
     assert_eq!(state.first_visible_item_scroll_offset(), 10);
     assert!(frames <= 2, "{frames} frames to settle a scroll");
-    let row = ui.on_node_with_tag("row 10").fetch_semantics_node().bounds;
+    let row = ui.on_node_with_tag("row 10").fetch_semantics_snapshot().bounds;
     assert_eq!(row.top, -10.0);
     ui.on_node_with_text("item 0").assert_does_not_exist();
 }
@@ -74,11 +74,11 @@ fn scroll_to_item_jumps_far_and_clamps_at_the_end() {
     state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     ui.on_node_with_text("item 500").assert_exists();
-    assert_eq!(ui.on_node_with_tag("row 500").fetch_semantics_node().bounds.top, 0.0);
+    assert_eq!(ui.on_node_with_tag("row 500").fetch_semantics_snapshot().bounds.top, 0.0);
     // Past the end: the last item ends the viewport.
     state.request_scroll_to_item(999, 0);
     ui.wait_for_idle();
-    assert_eq!(ui.on_node_with_tag("row 999").fetch_semantics_node().bounds.bottom, 100.0);
+    assert_eq!(ui.on_node_with_tag("row 999").fetch_semantics_snapshot().bounds.bottom, 100.0);
     assert_eq!(state.first_visible_item_index(), 995);
     assert!(!state.can_scroll_forward());
     assert!(state.can_scroll_backward());
@@ -144,7 +144,7 @@ fn keyed_items_keep_their_state_when_items_before_them_go() {
     });
     ui.wait_for_idle();
     ui.on_node_with_text("b 1").assert_exists();
-    assert_eq!(ui.on_node_with_tag("b").fetch_semantics_node().bounds.top, 0.0);
+    assert_eq!(ui.on_node_with_tag("b").fetch_semantics_snapshot().bounds.top, 0.0);
 }
 
 #[test]
@@ -167,8 +167,8 @@ fn a_lazy_row_lays_out_sideways_with_padding_and_spacing() {
             }
         );
     });
-    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_node().bounds.left, 10.0);
-    assert_eq!(ui.on_node_with_tag("cell 0").fetch_semantics_node().bounds.left, 55.0);
+    assert_eq!(ui.on_node_with_tag("first").fetch_semantics_snapshot().bounds.left, 10.0);
+    assert_eq!(ui.on_node_with_tag("cell 0").fetch_semantics_snapshot().bounds.left, 55.0);
     ui.on_node_with_tag("cell 10").assert_does_not_exist();
 }
 
@@ -293,7 +293,7 @@ fn focusable_rows(count: usize) -> ComposeTestRule {
 }
 
 fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.top
 }
 
 /// The rows placed now (in the semantics tree).
@@ -402,7 +402,7 @@ fn tab_moves_through_a_grid_past_the_lines_laid_out() {
 
 /// The semantics node of the list tagged `tag` (its scroll's, outermost).
 fn scroll_node(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::platform::SemanticsSnapshot {
-    ui.on_node_with_tag(tag).fetch_semantics_node()
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot()
 }
 
 /// A lazy list says how far it's scrolled and can be, and scrolls by `ScrollBy`, as Compose's

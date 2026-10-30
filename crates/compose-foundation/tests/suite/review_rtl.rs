@@ -17,7 +17,7 @@ fn rtl(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn left(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.left
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.left
 }
 
 /// Input: right to left, a 100 px `Row` with `horizontal_scroll` (at the window's right,

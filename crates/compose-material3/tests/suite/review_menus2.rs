@@ -12,7 +12,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, Offset, PointerEvent, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 /// Compose's menu is `width(IntrinsicSize.Max)`: a child whose intrinsic width changes
@@ -105,14 +105,14 @@ fn a_reopened_menu_keeps_its_scroll_position() {
     let at = Offset::new(menu.left + 10.0, menu.top + 50.0);
     ui.host().send_pointer(PointerEvent::scroll(at, Offset::new(0.0, 200.0)));
     ui.wait_for_idle();
-    let scrolled = ui.on_node_with_text("0").fetch_semantics_node().bounds.top - menu.top;
+    let scrolled = ui.on_node_with_text("0").fetch_semantics_snapshot().bounds.top - menu.top;
     assert!(scrolled < 0.0, "the scroll didn't move the menu: {scrolled}");
     OPEN.with(|cell| cell.borrow().unwrap().set(false));
     ui.wait_for_idle();
     OPEN.with(|cell| cell.borrow().unwrap().set(true));
     ui.wait_for_idle();
     let menu = bounds(&mut ui, "menu");
-    let reopened = ui.on_node_with_text("0").fetch_semantics_node().bounds.top - menu.top;
+    let reopened = ui.on_node_with_text("0").fetch_semantics_snapshot().bounds.top - menu.top;
     assert_eq!(reopened, scrolled, "the reopened menu lost its scroll position");
 }
 
@@ -171,7 +171,8 @@ fn passes_a_long_item_with_icons_wraps_between_them_at_280_dp() {
     let trailing = bounds(&mut ui, "trailing");
     assert_eq!(leading.left, item.left + 12.0);
     assert_eq!(trailing.right, item.right - 12.0);
-    let text = ui.on_node_unmerged(has_text(&"label ".repeat(12))).fetch_semantics_node().bounds;
+    let text =
+        ui.on_node_unmerged(has_text(&"label ".repeat(12))).fetch_semantics_snapshot().bounds;
     assert!(text.left >= leading.right + 12.0 && text.right <= trailing.left - 12.0, "{text:?}");
     assert!(text.height() > 20.0, "the text didn't wrap: {text:?}");
     assert!(item.height() >= text.height(), "{item:?} {text:?}");

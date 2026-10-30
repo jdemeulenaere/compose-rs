@@ -20,7 +20,7 @@ use compose_ui::{
 const ROOT_WIDTH: f32 = 400.0;
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 fn item_size(content: impl Fn() + 'static) -> (f32, f32) {
@@ -237,7 +237,7 @@ fn a_clickable_item_clicks_and_long_clicks() {
             );
         });
     });
-    let node = ui.on_node_unmerged(has_test_tag("list")).fetch_semantics_node();
+    let node = ui.on_node_unmerged(has_test_tag("list")).fetch_semantics_snapshot();
     assert!(
         node.config.contains(&compose_ui::SemanticsActions::ON_CLICK)
             && node.config.contains(&compose_ui::SemanticsActions::ON_LONG_CLICK)
@@ -270,7 +270,7 @@ fn a_selectable_item_says_it_is_selected_and_long_clicks() {
     });
     let selection = |ui: &mut ComposeTestRule| {
         ui.on_node_unmerged(has_test_tag("list"))
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::SELECTED)
             .copied()
@@ -305,7 +305,7 @@ fn a_toggleable_item_turns_on_and_long_clicks() {
     });
     let state = |ui: &mut ComposeTestRule| {
         ui.on_node_unmerged(has_test_tag("list"))
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE)
             .copied()
@@ -362,7 +362,7 @@ fn a_selected_item_takes_the_selected_colors_and_a_disabled_one_says_so() {
     assert!(fills.contains(&(4.0, scheme.surface)), "{fills:?}");
     assert!(
         ui.on_node_with_tag("disabled")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .contains(&compose_ui::SemanticsProperties::DISABLED)
     );

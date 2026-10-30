@@ -13,7 +13,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, Offset, PointerEvent, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn height(ui: &mut ComposeTestRule) -> f32 {
 /// Where the scrolled content starts: its first item's top (the tagged column's own bounds
 /// are its viewport's, its scroll's semantics being outermost, as Compose's).
 fn content_top(ui: &mut ComposeTestRule) -> f32 {
-    ui.on_node_with_text("Item 0").fetch_semantics_node().bounds.top
+    ui.on_node_with_text("Item 0").fetch_semantics_snapshot().bounds.top
 }
 
 #[test]

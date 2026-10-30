@@ -45,7 +45,7 @@ fn grid() -> (ComposeTestRule, compose_ui::FocusManager) {
 fn the_focus_manager_moves_the_focus_in_two_dimensions() {
     let (mut ui, manager) = grid();
     let mut step = |direction: FocusDirection, expected: &str| {
-        let was = ui.on_node_with_tag(expected).fetch_semantics_node().config.clone();
+        let was = ui.on_node_with_tag(expected).fetch_semantics_snapshot().config.clone();
         let moved = manager.move_focus(direction);
         assert_eq!(moved, was.get(&compose_ui::SemanticsProperties::FOCUSED) != Some(&true));
         ui.wait_for_idle();
@@ -240,7 +240,7 @@ fn a_password_field_takes_its_transformation_without_into() {
             visual_transformation = PasswordVisualTransformation::new()
         );
     });
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).cloned().as_deref(),
         Some("••••••")
@@ -255,7 +255,7 @@ fn lines_high(lines: u32) -> i32 {
 }
 
 fn height_of(ui: &mut ComposeTestRule, tag: &str) -> i32 {
-    let bounds = ui.on_node_with_tag(tag).fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds;
     (bounds.bottom - bounds.top).round() as i32
 }
 

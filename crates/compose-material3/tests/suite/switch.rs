@@ -23,7 +23,7 @@ fn a_switch_is_an_enabled_switch_on_or_off() {
         });
     });
     for (tag, on) in [("checked", true), ("unchecked", false)] {
-        let node = ui.on_node_with_tag(tag).fetch_semantics_node();
+        let node = ui.on_node_with_tag(tag).fetch_semantics_snapshot();
         assert_eq!(
             node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
             Some(Role::Switch)
@@ -238,11 +238,11 @@ fn a_reused_switch_shows_its_new_value_without_animating() {
     checked.set(true);
     reuse_key.set(1);
     ui.advance_time_by_frame();
-    let before = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
+    let before = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_snapshot().bounds;
     for _ in 0..10 {
         ui.advance_time_by_frame();
     }
-    let after = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
+    let after = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_snapshot().bounds;
     assert_eq!(before, after, "the thumb doesn't move");
 }
 

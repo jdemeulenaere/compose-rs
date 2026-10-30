@@ -75,7 +75,7 @@ pub(crate) fn ends(recorded: &Recorded, start: usize, end: usize) -> bool {
 
 /// The bounds of the node tagged `tag`, in the root.
 pub(crate) fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 /// The center of the node tagged `tag`.

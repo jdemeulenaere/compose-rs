@@ -17,7 +17,7 @@ fn size(content: fn()) -> (f32, f32) {
             Box!(modifier = Modifier.test_tag("container"), { content() });
         });
     });
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 

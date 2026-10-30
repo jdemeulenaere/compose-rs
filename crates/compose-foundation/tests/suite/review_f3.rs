@@ -42,7 +42,7 @@ fn chord(ui: &mut ComposeTestRule, key: Key, modifiers: KeyModifiers) {
 }
 
 fn text_of(ui: &mut ComposeTestRule, tag: &str) -> String {
-    let node = ui.on_node_with_tag(tag).fetch_semantics_node();
+    let node = ui.on_node_with_tag(tag).fetch_semantics_snapshot();
     node.config
         .get(&compose_ui::SemanticsProperties::EDITABLE_TEXT)
         .cloned()

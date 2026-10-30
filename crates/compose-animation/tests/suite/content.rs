@@ -39,7 +39,7 @@ fn new_content_enters_as_the_old_one_exits() {
     ui.on_node_with_tag("0").assert_does_not_exist();
     ui.on_node_with_tag("1").assert_exists();
     // The container ends at the new content's size.
-    let container = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let container = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     assert_eq!(container.width(), 100.0);
 }
 

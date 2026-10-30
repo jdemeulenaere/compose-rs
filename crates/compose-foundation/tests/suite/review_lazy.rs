@@ -26,7 +26,7 @@ fn take_count() -> usize {
 }
 
 fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.top
 }
 
 /// A 100 x 100 list of `count` rows, 20 px tall, tagged `row {index}`.
@@ -394,7 +394,7 @@ fn tab_moves_focus_past_the_rows_in_view() {
         ui.press_key(Key::Tab);
     }
     ui.on_node_with_tag("row 6").assert_is_focused();
-    let row = ui.on_node_with_tag("row 6").fetch_semantics_node().bounds;
+    let row = ui.on_node_with_tag("row 6").fetch_semantics_snapshot().bounds;
     assert!(row.top >= 0.0 && row.bottom <= 100.0, "the focused row is out of view: {row:?}");
 }
 

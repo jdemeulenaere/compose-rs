@@ -15,7 +15,7 @@ use compose_test::*;
 use compose_ui::{IntOffset, IntSize, LayoutDirection, Modifier, Rect, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 fn size_of(ui: &mut ComposeTestRule, tag: &str) -> (i32, i32) {

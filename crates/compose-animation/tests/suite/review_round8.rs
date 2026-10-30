@@ -78,7 +78,7 @@ fn animated_content_measures_contents_with_its_constraints() {
             Box!(modifier = Modifier.test_tag("screen"));
         });
     });
-    let bounds = ui.on_node_with_tag("screen").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("screen").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (200.0, 100.0));
 }
 

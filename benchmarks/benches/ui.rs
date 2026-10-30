@@ -22,7 +22,7 @@ fn parity() {
 /// Clicks the center of `matcher`'s `index`th node, then runs frames until idle: the time of
 /// all of them (an animation the click starts included).
 fn click_until_idle(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
-    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node().center();
+    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_snapshot().center();
     let start = Instant::now();
     ui.host().send_pointer(PointerEvent::press(center));
     ui.host().send_pointer(PointerEvent::release(center));
@@ -43,7 +43,7 @@ fn click_frame_then(
     index: usize,
     mut after: impl FnMut(&mut ComposeTestRule),
 ) -> Duration {
-    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node().center();
+    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_snapshot().center();
     let start = Instant::now();
     ui.host().send_pointer(PointerEvent::press(center));
     ui.host().send_pointer(PointerEvent::release(center));
@@ -73,7 +73,7 @@ fn ui(criterion: &mut Criterion) {
 
     // Whole batches of clicks timed at once: a click is a few microseconds, near what timing each
     // and finding the node between them cost.
-    let center = counter.on_all_nodes(count.clone()).get(0).fetch_semantics_node().center();
+    let center = counter.on_all_nodes(count.clone()).get(0).fetch_semantics_snapshot().center();
     criterion.bench_function("counter click frames, batched", |bench| {
         bench.iter_custom(|iterations| {
             let start = Instant::now();

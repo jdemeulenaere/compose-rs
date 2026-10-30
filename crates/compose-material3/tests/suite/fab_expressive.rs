@@ -29,7 +29,7 @@ fn rule(content: impl Fn() + 'static) -> ComposeTestRule {
 }
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_snapshot().bounds
 }
 
 /// The radius of the corners of the FAB's container.

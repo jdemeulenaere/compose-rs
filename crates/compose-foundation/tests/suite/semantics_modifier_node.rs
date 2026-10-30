@@ -129,7 +129,7 @@ fn semantics_are_computed_once_and_kept() {
     semantics.reset_counters();
     ui.on_node_with_tag("TestTag").assert_exists();
     for _ in 0..3 {
-        ui.on_node_with_tag("TestTag").fetch_semantics_node();
+        ui.on_node_with_tag("TestTag").fetch_semantics_snapshot();
     }
     assert_eq!(semantics.invocations(), 0);
 }

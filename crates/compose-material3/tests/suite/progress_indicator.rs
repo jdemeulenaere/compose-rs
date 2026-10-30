@@ -8,7 +8,7 @@ use compose_test::*;
 use compose_ui::{Modifier, ProgressBarRangeInfo, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 const INDETERMINATE: ProgressBarRangeInfo =
@@ -144,7 +144,7 @@ fn a_size_modifier_sizes_a_linear_indicator() {
 
 fn range_info(ui: &mut ComposeTestRule, tag: &str) -> ProgressBarRangeInfo {
     ui.on_node_with_tag(tag)
-        .fetch_semantics_node()
+        .fetch_semantics_snapshot()
         .config
         .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
         .copied()

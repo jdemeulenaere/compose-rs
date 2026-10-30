@@ -66,7 +66,7 @@ fn size(kind: Kind, touch_target: bool) -> (f32, f32) {
             );
         });
     });
-    let bounds = ui.on_node_with_tag("container").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("container").fetch_semantics_snapshot().bounds;
     (bounds.width(), bounds.height())
 }
 
@@ -78,7 +78,7 @@ fn check_semantics(kind: Kind) {
             toggle(kind, checked.get(), move |now| checked.set(now), true, favorite);
         });
     });
-    let node = ui.on_node(is_toggleable()).fetch_semantics_node();
+    let node = ui.on_node(is_toggleable()).fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
         Some(Role::Checkbox)
@@ -93,7 +93,7 @@ fn check_disabled_semantics(kind: Kind) {
             toggle(kind, false, |_| {}, false, || {});
         });
     });
-    let node = ui.on_node(is_toggleable()).fetch_semantics_node();
+    let node = ui.on_node(is_toggleable()).fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
         Some(Role::Checkbox)

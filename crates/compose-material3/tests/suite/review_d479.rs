@@ -13,7 +13,7 @@ use compose_test::*;
 use compose_ui::{IntSize, Modifier, Offset, PointerEvent, PointerId, PointerType, UnitExt};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
 }
 
 fn height(ui: &mut ComposeTestRule) -> f32 {

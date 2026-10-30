@@ -434,7 +434,7 @@ fn insets_paddings_follow_the_host_insets() {
         );
     });
     let bounds = |ui: &mut ComposeTestRule, tag: &str| {
-        ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+        ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds
     };
     assert_eq!(bounds(&mut ui, "content").top, 0.0);
     ui.host().set_window_insets(PlatformWindowInsets {

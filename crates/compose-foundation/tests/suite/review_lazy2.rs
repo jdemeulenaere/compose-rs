@@ -27,7 +27,7 @@ fn take_count() -> usize {
 }
 
 fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+    ui.on_node_with_tag(tag).fetch_semantics_snapshot().bounds.top
 }
 
 /// A 100 x 100 list of rows keyed by `keys`, 20 px tall, tagged `key {key}`; clickable (so

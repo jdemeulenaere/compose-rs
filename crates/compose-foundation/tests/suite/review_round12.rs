@@ -218,7 +218,7 @@ fn a_double_click_selects_a_word_of_the_transformed_text() {
     }
     ui.wait_for_idle();
     ui.type_text("X");
-    let node = ui.on_node_with_tag("field").fetch_semantics_node();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::EDITABLE_TEXT).cloned().as_deref(),
         Some("1234 X")

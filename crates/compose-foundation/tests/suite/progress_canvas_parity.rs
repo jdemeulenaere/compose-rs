@@ -25,7 +25,7 @@ fn a_determinate_progress_says_its_value_in_its_range() {
         );
     });
     let range = |ui: &mut ComposeTestRule| {
-        ui.on_node_with_tag(TAG).fetch_semantics_node().config.progress_of()
+        ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config.progress_of()
     };
     for value in [0.0, 0.005, 0.5] {
         progress.set(value);
@@ -50,7 +50,7 @@ fn an_indeterminate_progress_says_so() {
                 Modifier.test_tag(TAG).progress_semantics().size(50.dp()).background(Color::CYAN)
         );
     });
-    let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
+    let config = ui.on_node_with_tag(TAG).fetch_semantics_snapshot().config;
     assert_eq!(config.progress_of(), Some(ProgressBarRangeInfo::INDETERMINATE));
 }
 
@@ -60,7 +60,7 @@ fn a_canvas_is_described_by_its_content_description() {
     let mut ui = compose_test(|| {
         Canvas_with(Modifier.test_tag("canvas"), "cd", |_| {});
     });
-    let config = ui.on_node_with_tag("canvas").fetch_semantics_node().config;
+    let config = ui.on_node_with_tag("canvas").fetch_semantics_snapshot().config;
     assert_eq!(config.content_descriptions(), ["cd"]);
 }
 
@@ -70,7 +70,7 @@ fn a_canvas_without_a_size_is_empty() {
     let mut ui = compose_test(|| {
         Canvas_with(Modifier.test_tag("canvas"), "empty", |_| {});
     });
-    let bounds = ui.on_node_with_tag("canvas").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("canvas").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (0.0, 0.0));
 }
 
@@ -83,7 +83,7 @@ fn a_canvas_is_the_size_its_modifier_gives_and_draws_there() {
             scope.draw_rect(bounds, Paint::fill(Color::RED));
         });
     });
-    let bounds = ui.on_node_with_tag("canvas").fetch_semantics_node().bounds;
+    let bounds = ui.on_node_with_tag("canvas").fetch_semantics_snapshot().bounds;
     assert_eq!((bounds.width(), bounds.height()), (100.0, 100.0));
     assert!(ui.dump_display_list().contains("#FFFF0000"), "{}", ui.dump_display_list());
 }
