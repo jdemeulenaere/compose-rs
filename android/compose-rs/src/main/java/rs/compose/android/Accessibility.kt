@@ -1,6 +1,7 @@
 package rs.compose.android
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ClipboardManager
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -63,6 +64,10 @@ internal class Accessibility(private val view: ComposeRsView) :
         val roleDescription: String?,
         /** The state's words, the library's where the application gives none. */
         val spokenState: String?,
+        /** A text's selection, -1 for none, and how it's moved through (0: it isn't). */
+        val selectionStart: Int,
+        val selectionEnd: Int,
+        val granularities: Int,
         /** What a service may ask (`accessibility::action`'s codes), with their labels. */
         val actionCodes: IntArray,
         val actionLabels: Array<String>,
@@ -212,6 +217,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             CHANGE_TEXT_CHANGED -> AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
             CHANGE_TEXT_SELECTION -> AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
             CHANGE_FOCUSED -> AccessibilityEvent.TYPE_VIEW_FOCUSED
+            CHANGE_TEXT_MOVED_FORWARD, CHANGE_TEXT_MOVED_BACKWARD ->
+                AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY
             else -> AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         }
         val event = AccessibilityEvent.obtain(type)
@@ -235,6 +242,16 @@ internal class Accessibility(private val view: ComposeRsView) :
                 event.fromIndex = from
                 event.toIndex = removed
                 event.itemCount = added
+            }
+            CHANGE_TEXT_MOVED_FORWARD, CHANGE_TEXT_MOVED_BACKWARD -> {
+                event.fromIndex = from
+                event.toIndex = removed
+                event.movementGranularity = added
+                event.action = if (kind == CHANGE_TEXT_MOVED_FORWARD) {
+                    AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY
+                } else {
+                    AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY
+                }
             }
             CHANGE_TAB_SELECTED -> if (before.isNotEmpty()) event.contentDescription = before
             else -> event.contentChangeTypes = when (kind) {
@@ -322,6 +339,9 @@ internal class Accessibility(private val view: ComposeRsView) :
             val roleDescription = spokenWords(buffer.get().toInt(), 0)
             val stateCode = buffer.get().toInt()
             val spokenState = spokenWords(stateCode, buffer.get().toInt() and 0xFF)
+            val selectionStart = buffer.getInt()
+            val selectionEnd = buffer.getInt()
+            val granularities = buffer.get().toInt()
             val actionCount = buffer.get().toInt() and 0xFF
             val actionCodes = IntArray(actionCount)
             val actionLabels = Array(actionCount) {
@@ -331,7 +351,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             val node = Node(
                 id, parent, bounds, flags, role, text, description, editableText, state, error,
                 paneTitle, range, scroll, before, drawingOrder, className, roleDescription,
-                spokenState, actionCodes, actionLabels,
+                spokenState, selectionStart, selectionEnd, granularities, actionCodes, actionLabels,
             )
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
@@ -427,8 +447,14 @@ internal class Accessibility(private val view: ComposeRsView) :
         if (node.range == null) node.scroll?.let { scroll -> if (scroll[1] > 0f) info.isScrollable = true }
         // Worked out in Rust, as Compose's delegate does (`accessibility::actions_of`, D1289).
         for (index in node.actionCodes.indices) {
+            val code = node.actionCodes[index]
+            if (code == CODE_PASTE && !clipboardHasText()) continue
             val label = node.actionLabels[index].ifEmpty { null }
-            info.addAction(AccessibilityAction(androidAction(node.actionCodes[index]), label))
+            info.addAction(AccessibilityAction(androidAction(code), label))
+        }
+        if (node.granularities != 0) {
+            info.setTextSelection(node.selectionStart, node.selectionEnd)
+            info.movementGranularities = node.granularities
         }
         if (node.paneTitle.isNotEmpty()) {
             info.paneTitle = node.paneTitle
@@ -442,14 +468,8 @@ internal class Accessibility(private val view: ComposeRsView) :
         if (virtualViewId == HOST_VIEW_ID) return view.performAccessibilityAction(action, arguments)
         refresh()
         val node = nodes.get(virtualViewId) ?: return false
-        // As Compose's delegate: the accessibility focus moves to a disabled node, its other
-        // actions are refused (`if (!node.enabled()) return false`, D1255).
-        if (node.flags and DISABLED != 0 &&
-            action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS &&
-            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
-        ) {
-            return false
-        }
+        // As Compose's delegate: the accessibility focus moves to a disabled node, and a text is
+        // read through; its other actions aren't among those it has (`actions_of`, D1255).
         return when (action) {
             AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
                 if (accessibilityFocused == virtualViewId) return false
@@ -472,6 +492,9 @@ internal class Accessibility(private val view: ComposeRsView) :
                 val index = node.actionCodes.indexOfFirst { androidAction(it) == action }
                 if (index < 0) return false
                 val code = node.actionCodes[index]
+                if (code in CODE_TEXT_FIRST..CODE_TEXT_LAST) {
+                    return performTextAction(virtualViewId, code, arguments)
+                }
                 val value = if (code == CODE_SET_PROGRESS) {
                     arguments?.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)
                         ?: return false
@@ -485,10 +508,43 @@ internal class Accessibility(private val view: ComposeRsView) :
         }
     }
 
+    private fun performTextAction(id: Int, code: Int, arguments: Bundle?): Boolean {
+        var first = 0
+        var second = 0
+        var extend = false
+        var text = ""
+        when (code) {
+            CODE_SET_TEXT -> text = arguments
+                ?.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)
+                ?.toString()
+                .orEmpty()
+            CODE_SET_SELECTION -> {
+                first = arguments?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1) ?: -1
+                second = arguments?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, -1) ?: -1
+            }
+            CODE_NEXT_AT_GRANULARITY, CODE_PREVIOUS_AT_GRANULARITY -> {
+                if (arguments == null) return false
+                first = arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT)
+                extend = arguments.getBoolean(AccessibilityNodeInfo.ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN)
+            }
+        }
+        val done = view.performTextAction(id, code, first, second, extend, text)
+        // What it moved (a place in a text, a field's selection) is read and said now.
+        stale = true
+        tell()
+        return done
+    }
+
+    private fun clipboardHasText(): Boolean = view.context
+        .getSystemService(ClipboardManager::class.java)
+        ?.primaryClipDescription
+        ?.hasMimeType("text/*") == true
+
     /**
      * The Android action of one of `accessibility::action`'s codes. A custom action's id is any
      * this view's nodes don't otherwise use: a service only hands it back.
      */
+    @android.annotation.SuppressLint("InlinedApi")
     private fun androidAction(code: Int): Int = when (code) {
         CODE_CLICK -> AccessibilityNodeInfo.ACTION_CLICK
         CODE_FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
@@ -508,6 +564,14 @@ internal class Accessibility(private val view: ComposeRsView) :
         14 -> android.R.id.accessibilityActionPageDown
         15 -> android.R.id.accessibilityActionPageLeft
         16 -> android.R.id.accessibilityActionPageRight
+        CODE_SET_TEXT -> AccessibilityNodeInfo.ACTION_SET_TEXT
+        CODE_IME_ENTER -> android.R.id.accessibilityActionImeEnter
+        CODE_COPY -> AccessibilityNodeInfo.ACTION_COPY
+        CODE_CUT -> AccessibilityNodeInfo.ACTION_CUT
+        CODE_PASTE -> AccessibilityNodeInfo.ACTION_PASTE
+        CODE_SET_SELECTION -> AccessibilityNodeInfo.ACTION_SET_SELECTION
+        CODE_NEXT_AT_GRANULARITY -> AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY
+        CODE_PREVIOUS_AT_GRANULARITY -> AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY
         else -> CUSTOM_ACTION_BASE + code
     }
 
@@ -574,6 +638,16 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val CODE_FOCUS = 1
         const val CODE_SET_PROGRESS = 2
         const val CODE_CLEAR_FOCUS = 19
+        const val CODE_SET_TEXT = 20
+        const val CODE_IME_ENTER = 21
+        const val CODE_COPY = 22
+        const val CODE_CUT = 23
+        const val CODE_PASTE = 24
+        const val CODE_SET_SELECTION = 25
+        const val CODE_NEXT_AT_GRANULARITY = 26
+        const val CODE_PREVIOUS_AT_GRANULARITY = 27
+        const val CODE_TEXT_FIRST = CODE_SET_TEXT
+        const val CODE_TEXT_LAST = CODE_PREVIOUS_AT_GRANULARITY
 
         /** Custom actions' ids: in no package's resources (`0x7f` an application's own). */
         const val CUSTOM_ACTION_BASE = 0x7fff0000
@@ -593,6 +667,8 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val CHANGE_TEXT_SELECTION = 12
         const val CHANGE_FOCUSED = 13
         const val CHANGE_WINDOW = 14
+        const val CHANGE_TEXT_MOVED_FORWARD = 15
+        const val CHANGE_TEXT_MOVED_BACKWARD = 16
     }
 }
 

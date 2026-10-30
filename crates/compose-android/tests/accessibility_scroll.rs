@@ -55,10 +55,11 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 1;
             (value, max, page)
         });
-        // Who it's read before, its drawing order, its class, role, state and percent, its actions.
+        // Who it's read before, its drawing order, its class, role, state and percent, selection,
+        // granularities, its actions.
         at += 8;
         let length = u32_at(&mut at) as usize;
-        at += length + 3;
+        at += length + 12;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {

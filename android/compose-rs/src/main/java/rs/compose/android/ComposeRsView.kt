@@ -878,6 +878,17 @@ class ComposeRsView @JvmOverloads constructor(
         return ComposeRsNative.performAction(host, id, action, value)
     }
 
+    internal fun performTextAction(
+        id: Int,
+        action: Int,
+        first: Int,
+        second: Int,
+        extendSelection: Boolean,
+        text: String,
+    ): Boolean =
+        host != 0L &&
+            ComposeRsNative.performTextAction(host, id, action, first, second, extendSelection, text)
+
     /** As `AndroidComposeView`'s input mode manager, asked for keyboard mode. Rust's too. */
     fun requestKeyboardMode(): Boolean = if (isInTouchMode) requestFocusFromTouch() else true
 

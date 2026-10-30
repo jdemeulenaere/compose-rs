@@ -1437,9 +1437,10 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics<'local>
 ) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    crate::accessibility::write_tree(
+    crate::accessibility::write_tree_with_cursor(
         host.semantics_tree.get(&host.ui),
         &mut host.custom_actions,
+        &host.semantics_changes.cursor,
         &mut host.semantics,
     );
     host.semantics.bytes.reserve(1);
@@ -1499,6 +1500,40 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
         id,
         action,
         value,
+    )
+}
+
+/// `ComposeRsNative.performTextAction(host, id, action, first, second, extendSelection, text)`: what
+/// a service asks of a text (`accessibility::perform_text_action`).
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performTextAction(
+    mut env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jint,
+    action: jint,
+    first: jint,
+    second: jint,
+    extend_selection: jboolean,
+    text: JString,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) else {
+        return false;
+    };
+    let tree = host.semantics_tree.get(&host.ui);
+    crate::accessibility::perform_text_action(
+        &mut host.ui,
+        tree,
+        &mut host.semantics_changes.cursor,
+        id,
+        action,
+        first,
+        second,
+        extend_selection,
+        &text,
     )
 }
 

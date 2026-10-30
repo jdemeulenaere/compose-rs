@@ -156,6 +156,20 @@ internal object ComposeRsNative {
     /** An accessibility action on virtual view [id]: 0 click, 1 focus, 2 set progress. */
     @JvmStatic external fun performAction(host: Long, id: Int, action: Int, value: Float): Boolean
 
+    /**
+     * What a service asks of the text of virtual view [id]: [first] and [second] a selection's ends
+     * or a movement's granularity, [text] a new text.
+     */
+    @JvmStatic external fun performTextAction(
+        host: Long,
+        id: Int,
+        action: Int,
+        first: Int,
+        second: Int,
+        extendSelection: Boolean,
+        text: String,
+    ): Boolean
+
     /** What the content's `remember_saveable`s hold, for the saved instance state, or null. */
     @JvmStatic external fun saveState(host: Long): ByteArray?
 

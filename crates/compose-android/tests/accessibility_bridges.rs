@@ -247,10 +247,10 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
             at += 13;
         }
         let before = read_u32(&mut at) as i32;
-        // Its drawing order, class, role, state and percent.
+        // Its drawing order, class, role, state and percent, selection and granularities.
         at += 4;
         skip_string(&mut at);
-        at += 3;
+        at += 12;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {

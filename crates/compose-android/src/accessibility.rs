@@ -14,6 +14,8 @@ use compose_ui::{
 use std::collections::HashMap;
 
 use crate::serialize::Writer;
+use crate::text::{byte_offset, utf16_index};
+use crate::text_segments::{Granularity, TextSegments, movement};
 
 /// The flags of a node's record.
 pub mod flag {
@@ -88,6 +90,14 @@ pub mod action {
     pub const STEP_FORWARD: u8 = 17;
     pub const STEP_BACKWARD: u8 = 18;
     pub const CLEAR_FOCUS: u8 = 19;
+    pub const SET_TEXT: u8 = 20;
+    pub const IME_ENTER: u8 = 21;
+    pub const COPY: u8 = 22;
+    pub const CUT: u8 = 23;
+    pub const PASTE: u8 = 24;
+    pub const SET_SELECTION: u8 = 25;
+    pub const NEXT_AT_GRANULARITY: u8 = 26;
+    pub const PREVIOUS_AT_GRANULARITY: u8 = 27;
     /// `CUSTOM_FIRST + i`: its custom action kept as `i` (`KeptCustomActions`).
     pub const CUSTOM_FIRST: u8 = 100;
 }
@@ -215,11 +225,21 @@ const MOST_CUSTOM_ACTIONS: u8 = 32;
 
 /// Writes the merged tree `root` (its children: the root itself is the view).
 pub fn write_tree(root: &SemanticsSnapshot, custom: &mut KeptCustomActions, out: &mut Writer) {
+    write_tree_with_cursor(root, custom, &TextCursor::default(), out);
+}
+
+/// `write_tree`, a text's selection where a service left its cursor (`text_selection_of`).
+pub fn write_tree_with_cursor(
+    root: &SemanticsSnapshot,
+    custom: &mut KeptCustomActions,
+    cursor: &TextCursor,
+    out: &mut Writer,
+) {
     out.bytes.clear();
     custom.assign(root);
     let before = compose_ui::traversal_before(root);
     for (order, child) in in_written_order(root) {
-        write_node(child, -1, root.bounds, &before, custom, order, out);
+        write_node(child, -1, root.bounds, &before, custom, cursor, order, out);
     }
 }
 
@@ -421,13 +441,17 @@ pub fn state_description_of(node: &SemanticsSnapshot) -> (u8, u8) {
 /// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is; then
 /// who a service reads it before (i32, -1 for none), its drawing order (u32), its class name (a
 /// length and UTF-8 bytes), its role description, its state and that state's percent (three
-/// `spoken`-code u8s), and its actions (a count: u8; each `action`'s u8 and a label).
+/// `spoken`-code u8s), its selection (2 × i32, -1 for none) and how it's moved through (u8, 0:
+/// it isn't, `movement_granularities`), and its actions (a count: u8; each `action`'s u8 and a
+/// label).
+#[allow(clippy::too_many_arguments)]
 fn write_node(
     node: &SemanticsSnapshot,
     parent: i32,
     clip: Rect,
     before: &HashMap<i32, i32>,
     custom: &KeptCustomActions,
+    cursor: &TextCursor,
     drawing_order: usize,
     out: &mut Writer,
 ) {
@@ -499,6 +523,10 @@ fn write_node(
     let (state, percent) = state_description_of(node);
     out.u8(state);
     out.u8(percent);
+    let (selection_start, selection_end) = text_selection_of(node, cursor);
+    out.u32(selection_start as u32);
+    out.u32(selection_end as u32);
+    out.u8(movement_granularities(node) as u8);
     let actions = actions_of(node, custom);
     out.u8(actions.len() as u8);
     for (action, label) in &actions {
@@ -509,7 +537,7 @@ fn write_node(
     let inner =
         if scroll.is_some() { visible.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
     for (order, child) in in_written_order(node) {
-        write_node(child, id, inner, before, custom, order, out);
+        write_node(child, id, inner, before, custom, cursor, order, out);
     }
 }
 
@@ -578,8 +606,21 @@ pub fn actions_of(
 fn standard_actions(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
     let own = node.unmerged_config();
     let mut actions = Vec::new();
+    // These a disabled text offers too: it's read as any other.
+    if let Some(copy) = own.get(&A::COPY_TEXT) {
+        actions.push((action::COPY, copy.label.clone()));
+    }
+    if has_iterable_text(node) {
+        let label = own.get(&A::SET_SELECTION).and_then(|it| it.label.clone());
+        actions.push((action::SET_SELECTION, label));
+        actions.push((action::NEXT_AT_GRANULARITY, None));
+        actions.push((action::PREVIOUS_AT_GRANULARITY, None));
+    }
     if node.config.contains(&P::DISABLED) {
         return actions;
+    }
+    if let Some(set) = own.get(&A::SET_TEXT) {
+        actions.push((action::SET_TEXT, set.label.clone()));
     }
     let mut labelled = |key, action: u8| {
         let found: Option<&compose_ui::AccessibilityAction<compose_ui::ActionFn>> = own.get(key);
@@ -587,6 +628,12 @@ fn standard_actions(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)>
             actions.push((action, found.label.clone()));
         }
     };
+    labelled(&A::ON_IME_ACTION, action::IME_ENTER);
+    labelled(&A::CUT_TEXT, action::CUT);
+    // Only where it would land; `Accessibility.kt` asks the clipboard.
+    if own.get(&P::FOCUSED) == Some(&true) {
+        labelled(&A::PASTE_TEXT, action::PASTE);
+    }
     if is_clickable(node) {
         labelled(&A::ON_CLICK, action::CLICK);
     }
@@ -623,6 +670,112 @@ fn standard_actions(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)>
         }
     }
     actions
+}
+
+/// What a service moves through in `node`, as Compose's `getIterableTextForAccessibility`: from its
+/// own configuration, its description before its text.
+pub fn iterable_text(node: &SemanticsSnapshot) -> Option<String> {
+    let own = node.unmerged_config();
+    if let Some(all) = own.get(&P::CONTENT_DESCRIPTION) {
+        return Some(all.iter().map(|text| text.as_str()).collect::<Vec<_>>().join(","));
+    }
+    if let Some(text) = own.get(&P::EDITABLE_TEXT) {
+        return Some(text.as_str().to_string());
+    }
+    own.get(&P::TEXT)?.iter().next().map(|text| text.as_str().to_string())
+}
+
+/// Whether `iterable_text` has anything, without making it: asked of every node.
+fn has_iterable_text(node: &SemanticsSnapshot) -> bool {
+    let own = node.unmerged_config();
+    if let Some(all) = own.get(&P::CONTENT_DESCRIPTION) {
+        return all.iter().any(|text| !text.as_str().is_empty()) || all.iter().count() > 1;
+    }
+    if let Some(text) = own.get(&P::EDITABLE_TEXT) {
+        return !text.as_str().is_empty();
+    }
+    own.get(&P::TEXT)
+        .and_then(|all| all.iter().next())
+        .is_some_and(|text| !text.as_str().is_empty())
+}
+
+/// How a service moves through `node`, `movement`'s bits: lines and pages only where there's a
+/// layout to find them in, not a description, and not a field without the focus (TalkBack doesn't
+/// handle them there, as Compose says).
+pub fn movement_granularities(node: &SemanticsSnapshot) -> i32 {
+    if !has_iterable_text(node) {
+        return 0;
+    }
+    let mut granularities = movement::CHARACTER | movement::WORD | movement::PARAGRAPH;
+    let own = node.unmerged_config();
+    let described = own.get(&P::CONTENT_DESCRIPTION).is_some_and(|all| !all.is_empty());
+    let unfocused_field = own.contains(&P::EDITABLE_TEXT) && own.get(&P::FOCUSED) != Some(&true);
+    if !described && own.contains(&A::GET_TEXT_LAYOUT_RESULT) && !unfocused_field {
+        granularities |= movement::LINE | movement::PAGE;
+    }
+    granularities
+}
+
+/// Where a service left its cursor in a text with no selection of its own, as Compose's
+/// `accessibilityCursorPosition`, and the movement it's yet to hear of (D1651).
+#[derive(Default)]
+pub struct TextCursor {
+    /// The node it's in, and where (-1: nowhere yet).
+    at: Option<(i32, i32)>,
+    moved: Option<TextMoved>,
+    /// What's to tell with the next changes: a plain text's moves change nothing else.
+    told: Vec<Change>,
+}
+
+/// A movement a selection change is yet to precede, as Compose's `PendingTextTraversedEvent`.
+struct TextMoved {
+    id: i32,
+    forward: bool,
+    granularity: i32,
+    from: i32,
+    to: i32,
+    at: std::time::Instant,
+}
+
+impl TextMoved {
+    /// Told only soon after it was asked for, as Compose's `TextTraversedEventTimeoutMillis`.
+    const LASTS: std::time::Duration = std::time::Duration::from_millis(1000);
+
+    fn change(self, text: &str, password: bool) -> Option<Change> {
+        if self.at.elapsed() > TextMoved::LASTS {
+            return None;
+        }
+        let kind =
+            if self.forward { ChangeKind::TextMovedForward } else { ChangeKind::TextMovedBackward };
+        Some(Change {
+            from: self.from,
+            removed: self.to,
+            added: self.granularity,
+            password,
+            ..Change::of(self.id, kind).saying(text)
+        })
+    }
+}
+
+impl TextCursor {
+    fn position_in(&self, id: i32) -> i32 {
+        self.at.filter(|(node, _)| *node == id).map_or(-1, |(_, position)| position)
+    }
+}
+
+/// `node`'s selection as a service reads it, as Compose's `getAccessibilitySelectionStart` and
+/// `End`, in UTF-16 units of `iterable_text`: its own if it has one and isn't read by its
+/// description, else where the service's cursor is.
+pub fn text_selection_of(node: &SemanticsSnapshot, cursor: &TextCursor) -> (i32, i32) {
+    let own = node.unmerged_config();
+    if !own.contains(&P::CONTENT_DESCRIPTION)
+        && let Some(range) = own.get(&P::TEXT_SELECTION_RANGE)
+    {
+        let text = own.get(&P::EDITABLE_TEXT).map_or("", |text| text.as_str());
+        return (utf16_index(text, range.min()) as i32, utf16_index(text, range.max()) as i32);
+    }
+    let position = cursor.position_in(virtual_id(node));
+    (position, position)
 }
 
 /// What a step of a value moves it by: a step, or a twentieth of the range when continuous, as
@@ -664,6 +817,10 @@ pub enum ChangeKind {
     Focused = 13,
     /// `TYPE_WINDOW_STATE_CHANGED` of the root of the window now taking the keys.
     Window = 14,
+    /// `TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY`, by the next or the previous: over
+    /// `from` to `removed`, at the granularity `added`.
+    TextMovedForward = 15,
+    TextMovedBackward = 16,
 }
 
 /// One change: the node's id (-1: the view), its kind, and what it says.
@@ -728,6 +885,8 @@ struct KeptNode {
 
 /// The tree when a service was last told, to tell it what changed since (D1291).
 pub struct KeptForChanges {
+    /// Where a service moved through a text, what it's yet to hear of that.
+    pub cursor: TextCursor,
     nodes: HashMap<i32, KeptNode>,
     window: Option<NodeId>,
     /// A service just turned on: the next tree is what it starts from, nothing told of it.
@@ -740,7 +899,7 @@ impl Default for KeptForChanges {
     fn default() -> KeptForChanges {
         let mut nodes = HashMap::new();
         nodes.insert(ROOT_KEPT, kept_root(Rect::new(0.0, 0.0, 0.0, 0.0), Vec::new()));
-        KeptForChanges { nodes, window: None, forgotten: false }
+        KeptForChanges { cursor: TextCursor::default(), nodes, window: None, forgotten: false }
     }
 }
 
@@ -889,11 +1048,12 @@ impl KeptForChanges {
         let window = ui.focused_window();
         let before = std::mem::replace(&mut self.nodes, now);
         let window_before = std::mem::replace(&mut self.window, window);
+        let told = std::mem::take(&mut self.cursor.told);
         if std::mem::take(&mut self.forgotten) {
             return Vec::new();
         }
         let now = &self.nodes;
-        let mut changes = Vec::new();
+        let mut changes = told;
 
         structure_changes(&before, now, ROOT_KEPT, &mut changes);
         let told_from_the_view = changes.iter().any(|change| change.id == -1);
@@ -937,6 +1097,19 @@ impl KeptForChanges {
         if window != window_before {
             let first = root.children.first().filter(|_| window.is_some()).map_or(-1, virtual_id);
             changes.push(Change::of(first, ChangeKind::Window));
+        }
+        // A field's move, once its selection changed: told after that, as Compose's
+        // `sendPendingTextTraversedAtGranularityEvent`.
+        if let Some(moved) = &self.cursor.moved
+            && let Some(at) = changes
+                .iter()
+                .position(|it| it.kind == ChangeKind::TextSelection && it.id == moved.id)
+        {
+            let (text, password) = (changes[at].text.clone(), changes[at].password);
+            let told = self.cursor.moved.take().and_then(|moved| moved.change(&text, password));
+            if let Some(told) = told {
+                changes.insert(at + 1, told);
+            }
         }
         changes
     }
@@ -1105,6 +1278,162 @@ pub fn perform_action(
         }
         _ => false,
     }
+}
+
+/// What an accessibility service asks of a text (`ComposeRsNative.performTextAction`), one of
+/// `action`'s: `first` and `second` are a selection's ends, or a movement's granularity, and
+/// `text` a new text; D1651.
+#[allow(clippy::too_many_arguments)]
+pub fn perform_text_action(
+    ui: &mut UiHost,
+    tree: &SemanticsSnapshot,
+    cursor: &mut TextCursor,
+    id: i32,
+    code: i32,
+    first: i32,
+    second: i32,
+    extend_selection: bool,
+    text: &str,
+) -> bool {
+    let Some(node) = find(tree, id) else { return false };
+    let Ok(code) = u8::try_from(code) else { return false };
+    match code {
+        action::SET_TEXT => ui.perform_semantics_action_with(node.id, &A::SET_TEXT, |set| {
+            set(text.to_string().into())
+        }),
+        action::IME_ENTER => ui.perform_semantics_action(node.id, &A::ON_IME_ACTION),
+        action::COPY => ui.perform_semantics_action(node.id, &A::COPY_TEXT),
+        action::CUT => ui.perform_semantics_action(node.id, &A::CUT_TEXT),
+        action::PASTE => ui.perform_semantics_action(node.id, &A::PASTE_TEXT),
+        action::SET_SELECTION => set_selection(ui, node, cursor, first, second, false),
+        action::NEXT_AT_GRANULARITY | action::PREVIOUS_AT_GRANULARITY => {
+            let forward = code == action::NEXT_AT_GRANULARITY;
+            move_through(ui, node, cursor, first, forward, extend_selection)
+        }
+        _ => false,
+    }
+}
+
+/// `node`'s text's layout, if it has one.
+fn text_layout_of(
+    ui: &mut UiHost,
+    node: &SemanticsSnapshot,
+) -> Option<compose_ui::TextLayoutResult> {
+    let mut layouts = Vec::new();
+    ui.perform_semantics_action_with(node.id, &A::GET_TEXT_LAYOUT_RESULT, |get| get(&mut layouts));
+    layouts.into_iter().next()
+}
+
+/// Moves a service's place in `node`'s text, as Compose's `traverseAtGranularity`: the piece of it
+/// after or before, selected from where it was if `extend_selection` and it's a field.
+fn move_through(
+    ui: &mut UiHost,
+    node: &SemanticsSnapshot,
+    cursor: &mut TextCursor,
+    granularity: i32,
+    forward: bool,
+    extend_selection: bool,
+) -> bool {
+    let id = virtual_id(node);
+    if cursor.at.is_none_or(|(there, _)| there != id) {
+        cursor.at = Some((id, -1));
+    }
+    let Some(text) = iterable_text(node).filter(|text| !text.is_empty()) else { return false };
+    let layout = match granularity {
+        movement::LINE | movement::PAGE => match text_layout_of(ui, node) {
+            Some(layout) => Some(layout),
+            None => return false,
+        },
+        _ => None,
+    };
+    let granularity_of = match (granularity, &layout) {
+        (movement::CHARACTER, _) => Granularity::Character,
+        (movement::WORD, _) => Granularity::Word,
+        (movement::PARAGRAPH, _) => Granularity::Paragraph,
+        (movement::LINE, Some(layout)) => Granularity::Line(layout),
+        (movement::PAGE, Some(layout)) => Granularity::Page(layout, node.bounds.height()),
+        _ => return false,
+    };
+    let segments = TextSegments::new(&text);
+    let (start, end) = text_selection_of(node, cursor);
+    let current = if end == -1 { if forward { 0 } else { segments.len() } } else { end };
+    let range = if forward {
+        segments.following(granularity_of, current)
+    } else {
+        segments.preceding(granularity_of, current)
+    };
+    let Some((from, to)) = range else { return false };
+    let own = node.unmerged_config();
+    let extends = extend_selection
+        && !own.contains(&P::CONTENT_DESCRIPTION)
+        && own.contains(&P::EDITABLE_TEXT);
+    let (selection_start, selection_end) = if extends {
+        let start = if start != -1 {
+            start
+        } else if forward {
+            from
+        } else {
+            to
+        };
+        (start, if forward { to } else { from })
+    } else {
+        let edge = if forward { to } else { from };
+        (edge, edge)
+    };
+    cursor.moved =
+        Some(TextMoved { id, forward, granularity, from, to, at: std::time::Instant::now() });
+    set_selection(ui, node, cursor, selection_start, selection_end, true);
+    true
+}
+
+/// As Compose's `setAccessibilitySelection`: `node`'s own selection, by its action, if it has one
+/// and is enabled; else the service's cursor, there and said so at once, what it can select being
+/// a position only.
+fn set_selection(
+    ui: &mut UiHost,
+    node: &SemanticsSnapshot,
+    cursor: &mut TextCursor,
+    start: i32,
+    end: i32,
+    traversal: bool,
+) -> bool {
+    let own = node.unmerged_config();
+    if own.contains(&A::SET_SELECTION) && !node.config.contains(&P::DISABLED) {
+        let shown = own.get(&P::EDITABLE_TEXT).map_or("", |text| text.as_str());
+        let bytes = |unit: i32| {
+            if unit < 0 { unit } else { byte_offset(shown, unit as usize) as i32 }
+        };
+        let (start, end) = (bytes(start), bytes(end));
+        let mut done = false;
+        ui.perform_semantics_action_with(node.id, &A::SET_SELECTION, |set| {
+            done = set(start, end, traversal);
+            done
+        });
+        return done;
+    }
+    let id = virtual_id(node);
+    if start == end && end == cursor.position_in(id) {
+        return false;
+    }
+    let Some(text) = iterable_text(node) else { return false };
+    let length = utf16_length(&text);
+    let position = if start >= 0 && start == end && end <= length { start } else { -1 };
+    cursor.at = Some((id, position));
+    let shown = !text.is_empty();
+    let (position, length) = if shown { (position, length) } else { (0, 0) };
+    let selected = Change {
+        from: position,
+        removed: position,
+        added: length,
+        ..Change::of(id, ChangeKind::TextSelection).saying(&text)
+    };
+    cursor.told.push(selected);
+    if let Some(moved) = cursor.moved.take_if(|moved| moved.id == id)
+        && let Some(told) = moved.change(&text, false)
+    {
+        cursor.told.push(told);
+    }
+    true
 }
 
 /// The scroll range of `node` along its axis (horizontal: `true`), from its own
