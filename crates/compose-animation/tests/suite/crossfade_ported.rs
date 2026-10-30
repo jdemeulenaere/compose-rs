@@ -12,7 +12,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::UnitExt;
+use compose_ui::{Modifier, UnitExt};
 
 const FIRST: &str = "first";
 const SECOND: &str = "second";
@@ -203,4 +203,59 @@ fn a_crossfade_keeps_a_content_while_its_key_stays() {
     target.set(1);
     ui.wait_for_idle();
     assert_eq!(*list.borrow(), [1, 2]);
+}
+
+/// A state that can be seen gone: what `AnimatedContent` and `Crossfade` remember by state must
+/// not keep old ones alive (D831).
+#[derive(Clone)]
+struct Page(Rc<i32>);
+
+impl PartialEq for Page {
+    fn eq(&self, other: &Page) -> bool {
+        self.0 == other.0
+    }
+}
+
+fn assert_old_pages_freed(state: MutableState<Option<Page>>, ui: &mut ComposeTestRule) {
+    // Never at rest: each change comes before the content entering has finished, the old
+    // contents' short exits long over.
+    ui.set_auto_advance(false);
+    let mut pages = Vec::new();
+    for number in 0..6 {
+        let page = Page(Rc::new(number));
+        pages.push(Rc::downgrade(&page.0));
+        state.set(Some(page));
+        ui.advance_time_by(Duration::from_millis(200));
+    }
+    // The last ones are kept by what's composed: the segment and each content's first state.
+    for (number, page) in pages.iter().take(3).enumerate() {
+        assert!(page.upgrade().is_none(), "page {number} is kept alive");
+    }
+    assert!(pages[5].upgrade().is_some());
+}
+
+#[test]
+fn a_transition_s_crossfade_does_not_keep_old_states_alive() {
+    let state = mutable_state_of(None::<Page>);
+    let read = state.handle();
+    let mut ui = compose_test(move || {
+        let transition = update_transition(read.get(), None);
+        transition.Crossfade(Modifier, tween(32), ContentKey::state(), |_| {});
+    });
+    assert_old_pages_freed(state.handle(), &mut ui);
+}
+
+#[test]
+fn an_animated_content_does_not_keep_old_states_alive() {
+    let state = mutable_state_of(None::<Page>);
+    let read = state.handle();
+    let mut ui = compose_test(move || {
+        AnimatedContent!(
+            read.get(),
+            transition_spec =
+                |_| fade_in_with(tween(100_000), 0.0).together_with(fade_out_with(tween(32), 0.0)),
+            content = |_, _| {}
+        );
+    });
+    assert_old_pages_freed(state.handle(), &mut ui);
 }

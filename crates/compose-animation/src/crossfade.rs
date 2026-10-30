@@ -203,6 +203,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                     }
                 }
             }
+            shown.forget_ids_not_shown();
         }
         let states: Vec<(u64, S)> = visible.borrow().states.clone();
         let content = Rc::new(content);

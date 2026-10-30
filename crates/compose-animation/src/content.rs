@@ -358,8 +358,8 @@ impl ComposeArg for AnimatedContentScope {
 pub(crate) struct Visible<T> {
     pub(crate) states: Vec<(u64, T)>,
     pub(crate) next_id: u64,
-    /// The ids given by state while the transition runs: a state dropped from `states` and added
-    /// back in one change keeps its content, as Compose's `key(contentKey(it))`.
+    /// The ids given by the states in `states`: a state dropped from it as its content leaves and
+    /// added back on the next pass keeps its content, as Compose's `key(contentKey(it))`.
     pub(crate) ids: Vec<(T, u64)>,
 }
 
@@ -392,6 +392,13 @@ impl<T: PartialEq + Clone> Visible<T> {
                 self.states.iter().position(|(_, shown)| key(shown) == wanted)
             }
         }
+    }
+
+    /// Forgets the ids of states no longer shown, at the end of each pass's update of `states`.
+    /// A state dropped and added back within that update is shown again by then.
+    pub(crate) fn forget_ids_not_shown(&mut self) {
+        let Visible { states, ids, .. } = self;
+        ids.retain(|(state, _)| states.iter().any(|(_, shown)| shown == state));
     }
 
     /// The id of a new content for `state`.
@@ -609,7 +616,6 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
                 };
                 shown.states = vec![(id, current.clone())];
             }
-            shown.ids.retain(|(state, _)| *state == current);
             root.content_alignment.set(content_alignment);
             root.layout_direction.set(layout_direction);
         }
@@ -645,6 +651,7 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
                 Some(_) => {}
             }
         }
+        shown.forget_ids_not_shown();
     }
     let segment = transition.segment();
     // The change a deferred phase previews, from the transition's target to the pending one, as
