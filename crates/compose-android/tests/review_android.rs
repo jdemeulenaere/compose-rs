@@ -238,3 +238,38 @@ fn a_timeout_started_by_a_touch_gets_a_tick() {
     );
     assert!(!long_pressed.get());
 }
+
+// ---- Android's animator duration scale ---------------------------------------------------------
+
+/// An animation on the main thread follows the setting (D836), as Compose's on Android.
+#[test]
+fn the_animator_duration_scale_reaches_the_threads_animations() {
+    use compose_animation::{Animatable, LINEAR_EASING, tween};
+    use compose_runtime::CoroutineScope;
+    use compose_test::ComposeTestRule;
+    use std::time::Duration;
+
+    let mut ui = ComposeTestRule::with_manual_clock(|| {});
+    compose_android::set_animator_duration_scale(2.0);
+    let animatable = Animatable::new(0.0f32);
+    let moved = animatable.clone();
+    let scope = CoroutineScope::new();
+    scope.launch(async move {
+        moved.animate_to(1000.0, tween(160).easing(LINEAR_EASING)).await;
+    });
+    // The first frame is its start; then 160 ms of its 320.
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(160));
+    assert_eq!(animatable.value(), 500.0);
+    compose_android::set_animator_duration_scale(1.0);
+}
+
+/// `adb shell settings put global animator_duration_scale -1` doesn't crash the app.
+#[test]
+fn a_negative_animator_duration_scale_is_0() {
+    compose_android::set_animator_duration_scale(-1.0);
+    assert_eq!(compose_ui::motion_duration_scale(), 0.0);
+    compose_android::set_animator_duration_scale(0.5);
+    assert_eq!(compose_ui::motion_duration_scale(), 0.5);
+    compose_android::set_animator_duration_scale(1.0);
+}

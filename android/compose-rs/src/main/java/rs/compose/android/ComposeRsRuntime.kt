@@ -1,8 +1,12 @@
 package rs.compose.android
 
+import android.content.Context
+import android.database.ContentObserver
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -55,11 +59,44 @@ object ComposeRsRuntime {
         handler.postAtTime(timerTick, at)
     }
 
+    /**
+     * The developer option's and battery saver's `ANIMATOR_DURATION_SCALE`, as Compose's
+     * `MotionDurationScale` follows it (`WindowRecomposer.android.kt`): watched while a view
+     * shows, read again when the first one attaches.
+     */
+    private val animatorScaleObserver = object : ContentObserver(handler) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) = passAnimatorScale()
+    }
+    private var animatorScaleContext: Context? = null
+
+    private fun passAnimatorScale() {
+        val context = animatorScaleContext ?: return
+        ComposeRsNative.setAnimatorDurationScale(
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ),
+        )
+    }
+
     internal fun attach(view: ComposeRsView) {
-        views.add(view)
+        if (views.add(view) && views.size == 1) {
+            val context = view.context.applicationContext
+            animatorScaleContext = context
+            context.contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),
+                false,
+                animatorScaleObserver,
+            )
+            passAnimatorScale()
+        }
     }
 
     internal fun detach(view: ComposeRsView) {
-        views.remove(view)
+        if (views.remove(view) && views.isEmpty()) {
+            animatorScaleContext?.contentResolver?.unregisterContentObserver(animatorScaleObserver)
+            animatorScaleContext = null
+        }
     }
 }

@@ -748,6 +748,17 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_resize(
     unsafe { self::host(host) }.ui.resize(IntSize::new(width, height));
 }
 
+/// `ComposeRsNative.setAnimatorDurationScale(scale)`: the setting's value (`ComposeRsRuntime.kt`
+/// watches it), on the main thread, whose animations follow it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setAnimatorDurationScale(
+    _env: EnvUnowned,
+    _class: JClass,
+    scale: jfloat,
+) {
+    crate::set_animator_duration_scale(scale);
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setDensity(
     _env: EnvUnowned,

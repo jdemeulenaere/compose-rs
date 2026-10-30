@@ -32,6 +32,13 @@ mod services;
 
 pub use jni;
 
+/// Animations on this thread (the main thread) follow Android's animator duration scale, as
+/// Compose's `MotionDurationScale` does (D836). The setting holds what `adb` puts in it: a negative
+/// one, which Compose would throw on while animating, is 0, not a crash of the app.
+pub fn set_animator_duration_scale(scale: f32) {
+    compose_ui::set_motion_duration_scale(if scale < 0.0 { 0.0 } else { scale });
+}
+
 use std::sync::OnceLock;
 
 /// A root composable an app's library offers, and its name.

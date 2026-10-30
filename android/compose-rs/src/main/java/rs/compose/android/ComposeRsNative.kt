@@ -37,6 +37,9 @@ internal object ComposeRsNative {
 
     @JvmStatic external fun setDensity(host: Long, density: Float, fontScale: Float)
 
+    /** `Settings.Global.ANIMATOR_DURATION_SCALE`: the main thread's animations follow it. */
+    @JvmStatic external fun setAnimatorDurationScale(scale: Float)
+
     /** Recomposes, lays out and draws what changed: [Frame] flags, and the next timer. */
     @JvmStatic external fun frame(host: Long): Long
 

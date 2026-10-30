@@ -22,7 +22,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 82 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
-| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 27 |
+| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 28 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 49 |
@@ -469,7 +469,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D824 | [ui-and-layout](decisions/ui-and-layout.md#d824) | current |
 | D825 | [ui-and-layout](decisions/ui-and-layout.md#d825) | current |
 | D826 | [api-and-tooling](decisions/api-and-tooling.md#d826) | revised by [D832](api-and-tooling.md#d832) |
-| D827 | [ui-and-layout](decisions/ui-and-layout.md#d827) | current |
+| D827 | [ui-and-layout](decisions/ui-and-layout.md#d827) | revised by [D836](android-host-and-performance.md#d836) |
 | D828 | [ui-and-layout](decisions/ui-and-layout.md#d828) | revised by [D830](ui-and-layout.md#d830), [D831](ui-and-layout.md#d831), [D833](ui-and-layout.md#d833), [D834](ui-and-layout.md#d834) |
 | D829 | [ui-and-layout](decisions/ui-and-layout.md#d829) | current |
 | D830 | [ui-and-layout](decisions/ui-and-layout.md#d830) | current |
@@ -478,6 +478,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D833 | [ui-and-layout](decisions/ui-and-layout.md#d833) | current |
 | D834 | [ui-and-layout](decisions/ui-and-layout.md#d834) | current |
 | D835 | [api-and-tooling](decisions/api-and-tooling.md#d835) | current |
+| D836 | [android-host-and-performance](decisions/android-host-and-performance.md#d836) | current |
 | D850 | [ui-and-layout](decisions/ui-and-layout.md#d850) | current |
 | D851 | [api-and-tooling](decisions/api-and-tooling.md#d851) | current |
 | D852 | [ui-and-layout](decisions/ui-and-layout.md#d852) | current |
