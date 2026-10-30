@@ -669,30 +669,36 @@ impl MeasurePolicy for DrawerLayout {
         let content = scope.measure(*content, constraints);
         let width = constraints.constrain_width(content.width);
         let height = constraints.constrain_height(content.height);
-        // Read while measuring: a frame of the slide places the sheet again only.
-        scope.place_relative(&content, 0, 0);
         let (scrim, sheet) = match rest {
             [scrim, sheet] => (Some(scrim), sheet),
             [sheet] => (None, sheet),
-            _ => return scope.layout(width, height),
+            _ => {
+                return scope.layout_with(width, height, move |placement| {
+                    placement.place_relative(&content, 0, 0);
+                });
+            }
         };
-        if let Some(scrim) = scrim {
-            let scrim = scope.measure(*scrim, Constraints::fixed(width, height));
-            scope.place_relative(&scrim, 0, 0);
-        }
+        let scrim = scrim.map(|scrim| scope.measure(*scrim, Constraints::fixed(width, height)));
         let sheet = scope.measure(*sheet, Constraints::new(0, width, height, height));
         if let Some(inner) = self.state.inner() {
             inner.width.set(sheet.width.max(1) as f32);
         }
-        // Read while measuring: a frame of the slide places the sheet again only. Closed, off
-        // the start, as Compose's offset: the pane is placed, and so in the semantics, what's
-        // in it not (`DrawerPaneLayout`).
-        let hidden = 1.0 - self.state.fraction();
-        // Under a motion frame of reference, as `DraggableAnchors`' offset: a slide isn't a move.
-        scope.with_motion_frame_of_reference_placement(|scope| {
-            scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
-        });
-        scope.layout(width, height)
+        let state = self.state;
+        scope.layout_with(width, height, move |placement| {
+            placement.place_relative(&content, 0, 0);
+            if let Some(scrim) = &scrim {
+                placement.place_relative(scrim, 0, 0);
+            }
+            // Read while placing: a frame of the slide places the sheet again only. Closed, off
+            // the start, as Compose's offset: the pane is placed, and so in the semantics, what's
+            // in it not (`DrawerPaneLayout`).
+            let hidden = 1.0 - state.fraction();
+            // Under a motion frame of reference, as `DraggableAnchors`' offset: a slide isn't a
+            // move of its own.
+            placement.with_motion_frame_of_reference_placement(|placement| {
+                placement.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
+            });
+        })
     }
 
     fn debug_name(&self) -> &'static str {

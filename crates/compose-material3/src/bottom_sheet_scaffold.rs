@@ -310,18 +310,28 @@ impl MeasurePolicy for ScaffoldLayout {
             scope.measure(*body, Constraints::new(0, width, 0, (height - top_bar.height).max(0)));
         let snackbar = scope.measure(*snackbar, loose);
         let peek = scope.density().to_px(self.peek_height);
-        let offset = self.update_anchors(height as f32, sheet.height as f32, peek);
-        let top = if offset.is_nan() { height as f32 } else { offset };
-        let snackbar_y = match self.state.current_value() {
-            SheetValue::PartiallyExpanded => top.round() as i32 - snackbar.height,
-            SheetValue::Expanded | SheetValue::Hidden => height - snackbar.height,
-        };
-        // In this order: for elevation.
-        scope.place_relative(&body, 0, top_bar.height);
-        scope.place_relative(&top_bar, 0, 0);
-        scope.place_relative(&sheet, ((width - sheet.width) / 2).max(0), top.round() as i32);
-        scope.place_relative(&snackbar, (width - snackbar.width) / 2, snackbar_y);
-        scope.layout(width, height)
+        // What the anchors depend on (`update_anchors` reads it unobserved), and measures again.
+        let _ = self.state.current_value();
+        self.update_anchors(height as f32, sheet.height as f32, peek);
+        let state = self.state;
+        scope.layout_with(width, height, move |placement| {
+            // Read while placing: a frame of the slide places the sheet again only.
+            let offset = state.inner().map_or(f32::NAN, |inner| inner.anchored.offset());
+            let top = if offset.is_nan() { height as f32 } else { offset };
+            let snackbar_y = match state.current_value() {
+                SheetValue::PartiallyExpanded => top.round() as i32 - snackbar.height,
+                SheetValue::Expanded | SheetValue::Hidden => height - snackbar.height,
+            };
+            // In this order: for elevation.
+            placement.place_relative(&body, 0, top_bar.height);
+            placement.place_relative(&top_bar, 0, 0);
+            placement.place_relative(
+                &sheet,
+                ((width - sheet.width) / 2).max(0),
+                top.round() as i32,
+            );
+            placement.place_relative(&snackbar, (width - snackbar.width) / 2, snackbar_y);
+        })
     }
 
     fn debug_name(&self) -> &'static str {
@@ -330,10 +340,9 @@ impl MeasurePolicy for ScaffoldLayout {
 }
 
 impl ScaffoldLayout {
-    /// The sheet's anchors for its size, as `StandardBottomSheet`'s `draggableAnchors`, and where
-    /// it is.
-    fn update_anchors(&self, layout_height: f32, sheet_height: f32, peek: f32) -> f32 {
-        let Some(inner) = self.state.inner() else { return f32::NAN };
+    /// The sheet's anchors for its size, as `StandardBottomSheet`'s `draggableAnchors`.
+    fn update_anchors(&self, layout_height: f32, sheet_height: f32, peek: f32) {
+        let Some(inner) = self.state.inner() else { return };
         let anchored = &inner.anchored;
         let hidden_available = sheet_height == 0.0 || peek == 0.0 || !inner.skip_hidden_state;
         let (anchors, new_target) =
@@ -397,7 +406,5 @@ impl ScaffoldLayout {
                 (anchors, new_target)
             });
         self.state.update_anchors(anchors, new_target);
-        // Read while measuring: a frame of the slide places the sheet again only.
-        anchored.offset()
     }
 }

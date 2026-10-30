@@ -451,3 +451,65 @@ fn semantics_scroll_by_is_handled_at_an_edge() {
     );
     assert!(handled, "consuming nothing");
 }
+
+/// Counts its layer's measurements.
+struct Measures(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNode for Measures {
+    fn as_layout_aware(&mut self) -> Option<&mut dyn compose_ui::LayoutAwareModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::LayoutAwareModifierNode for Measures {
+    fn on_remeasured(&mut self, _: IntSize, _: &mut compose_ui::NodeContext<'_>) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct MeasuresElement(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNodeElement for MeasuresElement {
+    type Node = Measures;
+    fn create(&self) -> Measures {
+        Measures(self.0.clone())
+    }
+    fn update(&self, _: &mut Measures) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Scroll.kt, ScrollNode: its offset is read in its placement block
+#[test]
+fn a_scroll_places_its_content_and_measures_nothing() {
+    let measures = std::rc::Rc::new(std::cell::Cell::new(0));
+    let state = ScrollState::new(0);
+    let (given, m) = (*state, measures.clone());
+    let at = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
+    let a = at.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let a = a.clone();
+        Box!(
+            modifier = Modifier
+                .height(100.dp())
+                .then_custom(MeasuresElement(m.clone()))
+                .vertical_scroll(given),
+            {
+                let a = a.clone();
+                Box!(
+                    modifier = Modifier.height(500.dp()).on_placed(
+                        move |coordinates: compose_ui::LayoutCoordinates| {
+                            a.set(coordinates.position_in_root().y)
+                        }
+                    )
+                );
+            }
+        );
+    });
+    let measured = measures.get();
+    state.dispatch_raw_delta(30.0);
+    ui.wait_for_idle();
+    assert_eq!(measures.get(), measured);
+    assert_eq!(at.get(), -30.0);
+}

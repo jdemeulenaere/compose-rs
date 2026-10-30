@@ -290,3 +290,62 @@ fn on_dismiss_hears_the_direction_once_settled_away() {
     assert_eq!(state().settled_value(), SwipeToDismissBoxValue::EndToStart);
     assert_eq!(*heard.borrow(), vec![SwipeToDismissBoxValue::EndToStart]);
 }
+
+/// Counts its layer's measurements.
+struct Measures(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNode for Measures {
+    fn as_layout_aware(&mut self) -> Option<&mut dyn compose_ui::LayoutAwareModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::LayoutAwareModifierNode for Measures {
+    fn on_remeasured(&mut self, _: compose_ui::IntSize, _: &mut compose_ui::NodeContext<'_>) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct MeasuresElement(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNodeElement for MeasuresElement {
+    type Node = Measures;
+    fn create(&self) -> Measures {
+        Measures(self.0.clone())
+    }
+    fn update(&self, _: &mut Measures) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, offset read while placing, as SwipeToDismissBox's `Modifier.offset { }`
+#[test]
+fn a_swipe_places_the_content_and_measures_nothing() {
+    use compose_foundation::layout::*;
+    let measures = std::rc::Rc::new(std::cell::Cell::new(0));
+    let m = measures.clone();
+    let shown: std::rc::Rc<std::cell::Cell<Option<SwipeToDismissBoxState>>> = Default::default();
+    let s = shown.clone();
+    let mut ui =
+        compose_test::ComposeTestRule::sized(compose_ui::IntSize::new(200, 100), move || {
+            let state = remember_swipe_to_dismiss_box_state!(SwipeToDismissBoxValue::Settled);
+            s.set(Some(state));
+            SwipeToDismissBox!(
+                state,
+                |_| {},
+                modifier = Modifier.then_custom(MeasuresElement(m.clone())),
+                |_| {
+                    Box!(modifier = Modifier.fill_max_size().test_tag("content"));
+                }
+            );
+        });
+    let measured = measures.get();
+    let state = shown.get().expect("composed");
+    compose_runtime::platform::launch(async move {
+        state.snap_to(SwipeToDismissBoxValue::StartToEnd).await;
+    });
+    ui.wait_for_idle();
+    assert_eq!(measures.get(), measured);
+    ui.on_node_with_tag("content").assert_left_position_in_root_is_equal_to(compose_ui::Dp(200.0));
+}

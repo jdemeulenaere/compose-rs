@@ -2,13 +2,15 @@
 //! `width`/`height`/`requiredWidth`/`requiredHeight(IntrinsicSize)` and
 //! `Modifier.layout { measurable, constraints -> … }`.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::alignment::{Alignment, HorizontalAlignment, VerticalAlignment};
 use crate::constraints::Constraints;
 use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
-use crate::unit::{Dp, IntSize};
+use crate::node_context::{NodeContext, NodeHandle};
+use crate::unit::{Density, Dp, IntOffset, IntSize};
 
 impl Modifier {
     /// Sizes the content to `ratio` (width / height), as `Modifier.aspectRatio`: the largest
@@ -554,5 +556,106 @@ impl LayoutModifierNode for LayoutElement {
         constraints: Constraints,
     ) -> MeasureResult {
         (self.0)(scope, content, constraints)
+    }
+}
+
+/// What an offset moves by: fixed, or read while placing.
+#[derive(Clone)]
+enum OffsetBy {
+    Dp(Dp, Dp),
+    Px(Rc<dyn Fn(Density) -> IntOffset>),
+}
+
+/// `Modifier.offset` and its kinds, as Compose's `OffsetNode` and `OffsetPxNode`: placed in a block,
+/// so a new offset, or what its block reads, places it again and measures nothing.
+pub(crate) struct OffsetElement {
+    by: OffsetBy,
+    rtl_aware: bool,
+}
+
+impl OffsetElement {
+    pub(crate) fn dp(x: Dp, y: Dp, rtl_aware: bool) -> OffsetElement {
+        OffsetElement { by: OffsetBy::Dp(x, y), rtl_aware }
+    }
+
+    pub(crate) fn px(by: Rc<dyn Fn(Density) -> IntOffset>, rtl_aware: bool) -> OffsetElement {
+        OffsetElement { by: OffsetBy::Px(by), rtl_aware }
+    }
+}
+
+pub(crate) struct OffsetNode {
+    /// What its block reads, its update changing it.
+    by: Rc<RefCell<(OffsetBy, bool)>>,
+    handle: Option<NodeHandle>,
+}
+
+impl ModifierNodeElement for OffsetElement {
+    type Node = OffsetNode;
+
+    fn create(&self) -> OffsetNode {
+        OffsetNode { by: Rc::new(RefCell::new((self.by.clone(), self.rtl_aware))), handle: None }
+    }
+
+    fn update(&self, node: &mut OffsetNode) {
+        *node.by.borrow_mut() = (self.by.clone(), self.rtl_aware);
+        if let Some(handle) = node.handle {
+            handle.invalidate_placement();
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.rtl_aware == other.rtl_aware
+            && match (&self.by, &other.by) {
+                (OffsetBy::Dp(a, b), OffsetBy::Dp(c, d)) => a == c && b == d,
+                (OffsetBy::Px(a), OffsetBy::Px(b)) => Rc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+
+    fn name(&self) -> &'static str {
+        "offset"
+    }
+}
+
+impl ModifierNode for OffsetNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.handle = Some(context.handle());
+    }
+
+    /// Its update asks for what it needs: a placing.
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+}
+
+impl LayoutModifierNode for OffsetNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        let by = self.by.clone();
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            let (offset, rtl_aware) = by.borrow().clone();
+            let density = placement.density();
+            let (x, y) = match offset {
+                OffsetBy::Dp(x, y) => (density.round_to_px(x), density.round_to_px(y)),
+                OffsetBy::Px(offset) => {
+                    let at = offset(density);
+                    (at.x, at.y)
+                }
+            };
+            if rtl_aware {
+                placement.place_relative(&placeable, x, y);
+            } else {
+                placement.place(&placeable, x, y);
+            }
+        })
     }
 }

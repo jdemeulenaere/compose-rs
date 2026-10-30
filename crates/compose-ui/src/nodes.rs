@@ -23,7 +23,6 @@ use crate::unit::{Dp, IntSize};
 pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
     match element {
         Element::Padding(padding) => Box::new(PaddingNode(*padding)),
-        Element::Offset(x, y) => Box::new(OffsetNode(*x, *y)),
         Element::MinimumTouchTarget(size) => Box::new(MinimumTouchTargetNode(*size)),
         Element::Size(spec) => Box::new(SizeNode(*spec)),
         Element::Fill(fill) => Box::new(FillNode(*fill)),
@@ -80,7 +79,6 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
     }
     match element {
         Element::Padding(padding) => set!(PaddingNode, PaddingNode(*padding)),
-        Element::Offset(x, y) => set!(OffsetNode, OffsetNode(*x, *y)),
         Element::MinimumTouchTarget(size) => {
             set!(MinimumTouchTargetNode, MinimumTouchTargetNode(*size))
         }
@@ -170,29 +168,6 @@ impl LayoutModifierNode for PaddingNode {
         let height = constraints.constrain_height(placeable.height + vertical);
         scope.place_relative(&placeable, start, top);
         scope.layout(width, height)
-    }
-}
-
-struct OffsetNode(Dp, Dp);
-
-impl ModifierNode for OffsetNode {
-    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
-
-impl LayoutModifierNode for OffsetNode {
-    fn measure(
-        &mut self,
-        scope: &mut MeasureScope<'_>,
-        content: Measurable,
-        constraints: Constraints,
-    ) -> MeasureResult {
-        let placeable = scope.measure(content, constraints);
-        let density = scope.density();
-        // In the layout direction, as `offset` (not `absoluteOffset`).
-        scope.place_relative(&placeable, density.round_to_px(self.0), density.round_to_px(self.1));
-        scope.layout(placeable.width, placeable.height)
     }
 }
 

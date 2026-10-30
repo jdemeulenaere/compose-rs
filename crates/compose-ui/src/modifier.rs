@@ -81,7 +81,30 @@ impl Modifier {
 
     /// Moves the content by `x`, `y` without changing its size, as `Modifier.offset`.
     pub fn offset(self, x: Dp, y: Dp) -> Modifier {
-        self.then_element(Element::Offset(x, y))
+        self.then_custom(crate::layout_modifiers::OffsetElement::dp(x, y, true))
+    }
+
+    /// Moves the content by `x`, `y` to the right and down, whatever the layout's direction, as
+    /// `Modifier.absoluteOffset`.
+    pub fn absolute_offset(self, x: Dp, y: Dp) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::dp(x, y, false))
+    }
+
+    /// Moves the content by what `offset` says, as `Modifier.offset { }`: read while placing, so
+    /// what it reads places it again and measures nothing.
+    pub fn offset_with(
+        self,
+        offset: impl Fn(crate::unit::Density) -> crate::unit::IntOffset + 'static,
+    ) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::px(Rc::new(offset), true))
+    }
+
+    /// `offset_with`, whatever the layout's direction, as `Modifier.absoluteOffset { }`.
+    pub fn absolute_offset_with(
+        self,
+        offset: impl Fn(crate::unit::Density) -> crate::unit::IntOffset + 'static,
+    ) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::px(Rc::new(offset), false))
     }
 
     /// A size within the incoming constraints, as `Modifier.size`'s overloads: `size(40.dp())`
@@ -821,7 +844,6 @@ pub(crate) use crate::clickable::Clickable;
 #[derive(Clone)]
 pub(crate) enum Element {
     Padding(PaddingValues),
-    Offset(Dp, Dp),
     MinimumTouchTarget(Dp),
     Size(SizeSpec),
     Fill(Fill),
@@ -859,7 +881,6 @@ impl Element {
         const ANY: NodeKinds = NodeKinds::ANY;
         Some(match self {
             Element::Padding(_)
-            | Element::Offset(..)
             | Element::MinimumTouchTarget(_)
             | Element::Size(_)
             | Element::Fill(_) => ANY.with(NodeKinds::LAYOUT),
@@ -904,7 +925,6 @@ impl Element {
         use Element::*;
         match (self, other) {
             (Padding(a), Padding(b)) => a == b,
-            (Offset(a, b), Offset(c, d)) => a == c && b == d,
             (MinimumTouchTarget(a), MinimumTouchTarget(b)) => a == b,
             (Size(a), Size(b)) => a == b,
             (Fill(a), Fill(b)) => a == b,
@@ -937,7 +957,6 @@ impl fmt::Debug for Element {
                 "padding({:?}, {:?}, {:?}, {:?})",
                 padding.start, padding.top, padding.end, padding.bottom
             ),
-            Offset(x, y) => write!(formatter, "offset({x:?}, {y:?})"),
             MinimumTouchTarget(size) => write!(formatter, "minimum_touch_target({size:?})"),
             Size(spec) => {
                 let bound =

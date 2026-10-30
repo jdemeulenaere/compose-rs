@@ -21,6 +21,7 @@ mod node_invalidation;
 mod node_locals;
 mod node_traversal;
 mod observer_nodes;
+mod offset;
 mod only_unsafe_module;
 mod paragraph;
 mod paragraph_style;

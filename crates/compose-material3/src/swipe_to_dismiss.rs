@@ -340,13 +340,15 @@ impl MeasurePolicy for SwipeLayout {
             };
             anchored.update_anchors_to(anchors, new_target);
         });
-        // Read while measuring: a frame of the swipe places the content again only.
-        let offset = anchored.offset();
-        let offset = if offset.is_nan() { 0 } else { offset.round() as i32 };
-        scope.place(&background, 0, 0);
-        // Mirrored in a right-to-left layout: towards the end is left there.
-        scope.place_relative(&content, offset, 0);
-        scope.layout(content.width, content.height)
+        let state = self.state;
+        scope.layout_with(content.width, content.height, move |placement| {
+            // Read while placing: a frame of the swipe places the content again only.
+            let offset = state.inner().map_or(0.0, |inner| inner.anchored.offset());
+            let offset = if offset.is_nan() { 0 } else { offset.round() as i32 };
+            placement.place(&background, 0, 0);
+            // Mirrored in a right-to-left layout: towards the end is left there.
+            placement.place_relative(&content, offset, 0);
+        })
     }
 
     fn debug_name(&self) -> &'static str {

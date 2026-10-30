@@ -530,6 +530,26 @@ fn main() {
         }
         "feed_pixel" => wheel(compose_rs_feed::Feed, 1.0, 1, n),
         "feed_step" => wheel(compose_rs_feed::Feed, 200.0, 25, n),
+        // A Column in a `vertical_scroll`: what a scroll's placement block is for.
+        "column_scroll" => {
+            let state = ScrollState::new(0);
+            let given = *state;
+            let mut ui = ComposeTestRule::sized(IntSize::new(400, 800), move || {
+                Column!(modifier = Modifier.fill_max_size().vertical_scroll(given), {
+                    for _ in 0..100 {
+                        Box!(modifier = Modifier.fill_max_width().height(40.dp()));
+                    }
+                });
+            });
+            let mut delta = 1.0;
+            for index in 0..n {
+                if index % 2000 == 1999 {
+                    delta = -delta;
+                }
+                state.dispatch_raw_delta(delta);
+                ui.wait_for_idle();
+            }
+        }
         "stress_pixel" => wheel(compose_rs_feed::stress::StressScroll, 1.0, 1, n),
         "stress_step" => wheel(compose_rs_feed::stress::StressScroll, 200.0, 25, n),
         "grid_pixel" => wheel(Gallery, 1.0, 1, n),
