@@ -3,9 +3,11 @@
 //! later write invalidated, so it measures or draws them again without recomposing.
 
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::hash::KeyHasher;
 use crate::runtime::{try_with_runtime, with_runtime};
 
 /// A registered observer.
@@ -13,7 +15,9 @@ pub(crate) struct ObserverEntry {
     serial: u64,
     notify: Rc<dyn Fn()>,
     /// The current observation of each key: reads from older ones are stale.
-    epochs: HashMap<u64, u32>,
+    // FNV, not SipHash: looked up for each observation (a node's measure, a node's draw), by
+    // keys no one chooses.
+    epochs: HashMap<u64, u32, BuildHasherDefault<KeyHasher>>,
     invalidated: Vec<u64>,
     /// `notify` is queued, and not called again until the invalidated keys are drained.
     pending: bool,
@@ -104,7 +108,7 @@ impl ReadObserver {
             let entry = ObserverEntry {
                 serial: observers.serial,
                 notify: Rc::new(notify),
-                epochs: HashMap::new(),
+                epochs: HashMap::default(),
                 invalidated: Vec::new(),
                 pending: false,
                 dirty_cell: None,

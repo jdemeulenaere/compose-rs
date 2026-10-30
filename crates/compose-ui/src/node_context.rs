@@ -109,9 +109,13 @@ impl NodeContext<'_> {
     pub fn coroutine_scope(&mut self) -> compose_runtime::CoroutineScope {
         assert!(self.is_attached(), "compose-ui: a node's coroutine scope while it isn't attached");
         *self.state_mut() |= entry_state::HAS_SCOPE;
-        let scope =
-            self.tree.scopes.entry(self.entry).or_insert_with(compose_runtime::CoroutineScope::new);
-        **scope
+        **self
+            .tree
+            .focus_requests
+            .scopes
+            .borrow_mut()
+            .entry(self.entry)
+            .or_insert_with(compose_runtime::CoroutineScope::new)
     }
 
     /// Runs `effect` once the tree applied the changes under way, as `Modifier.Node.sideEffect`
@@ -260,6 +264,18 @@ impl NodeHandle {
     pub fn is_attached(&self) -> bool {
         requests_of(self.tree)
             .is_some_and(|requests| requests.attached_entries.borrow().contains(&self.entry.0))
+    }
+
+    /// The node's coroutine scope, as [`NodeContext::coroutine_scope`], where the node has no
+    /// context (an event handler, an element's update): made on first use, the one its context
+    /// gives, cancelled when the node is detached. `None` if the node isn't attached.
+    pub fn coroutine_scope(&self) -> Option<compose_runtime::CoroutineScope> {
+        let requests = requests_of(self.tree)?;
+        if !requests.attached_entries.borrow().contains(&self.entry.0) {
+            return None;
+        }
+        let mut scopes = requests.scopes.borrow_mut();
+        Some(**scopes.entry(self.entry).or_insert_with(compose_runtime::CoroutineScope::new))
     }
 
     fn request(&self, what: Invalidation) {

@@ -71,6 +71,27 @@ fn a_disabled_clickable_is_not_enabled_and_keeps_its_click_action() {
     assert!(node.config.is_disabled() && node.config.is_clickable());
 }
 
+/// The click action of a disabled clickable calls its callback, as Compose's: refusing a
+/// disabled node's actions is the platform bridges' (D1255).
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, applySemantics
+#[test]
+fn a_disabled_clickable_s_click_action_calls_its_callback() {
+    let clicks = Rc::new(Cell::new(0));
+    let count = clicks.clone();
+    let mut ui = compose_test(move || {
+        let count = count.clone();
+        let options = ClickableOptions { enabled: false, ..ClickableOptions::DEFAULT };
+        Box!(
+            modifier = Modifier
+                .size(10.dp())
+                .test_tag(TAG)
+                .clickable_with(options, move || count.set(count.get() + 1))
+        );
+    });
+    ui.on_node_with_tag(TAG).perform_semantics_action(&compose_ui::SemanticsActions::ON_CLICK);
+    assert_eq!(clicks.get(), 1);
+}
+
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ClickableTest.kt, semanticsInvalidation
 #[test]
 fn the_semantics_follow_enabled_and_the_role() {
@@ -1267,5 +1288,48 @@ fn a_press_strays_within_the_minimum_touch_target_before_it_is_cancelled() {
     touch_move(&mut ui, far);
     touch_up(&mut ui, far);
     assert_eq!(clicks.get(), 1);
+    assert_eq!(kinds(&recorded), ["Press", "Release", "Press", "Cancel"]);
+}
+
+/// The minimum touch target is the view configuration's `minimum_touch_target_size`, each side
+/// its own: with 100 by 20 dp, a 20 dp clickable keeps a press 30 dp to its right, and cancels
+/// one 10 dp below it.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, getExtendedTouchPadding
+#[test]
+fn the_touch_target_is_the_view_configuration_s() {
+    let clicks = Rc::new(Cell::new(0));
+    let source = MutableInteractionSource::new();
+    let (count, given) = (clicks.clone(), source.clone());
+    let mut ui = compose_test(move || {
+        let (count, given) = (count.clone(), given.clone());
+        Box!(modifier = Modifier.padding(60.dp()), {
+            let count = count.clone();
+            Box!(
+                modifier = Modifier
+                    .size(20.dp())
+                    .clickable_with(options(&given), move || count.set(count.get() + 1))
+                    .test_tag(TAG)
+            );
+        });
+    });
+    ui.host().set_view_configuration(Some(compose_ui::ViewConfiguration {
+        minimum_touch_target_size: compose_ui::DpSize::new(100.dp(), 20.dp()),
+        ..compose_ui::ViewConfiguration::default()
+    }));
+    ui.wait_for_idle();
+    let recorded = record(&source);
+    let density = ui.density().density;
+    let at = center(&mut ui, TAG);
+    let bounds = bounds(&mut ui, TAG);
+    let right = Offset::new(bounds.right + 30.0 * density, at.y);
+    touch_down(&mut ui, at);
+    touch_move(&mut ui, right);
+    touch_up(&mut ui, right);
+    assert_eq!(clicks.get(), 1, "within the target's width (Android's 48 dp would cancel)");
+    let below = Offset::new(at.x, bounds.bottom + 10.0 * density);
+    touch_down(&mut ui, at);
+    touch_move(&mut ui, below);
+    touch_up(&mut ui, below);
+    assert_eq!(clicks.get(), 1, "past the target's height (Android's 48 dp would keep it)");
     assert_eq!(kinds(&recorded), ["Press", "Release", "Press", "Cancel"]);
 }

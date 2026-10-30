@@ -427,10 +427,11 @@ impl IndicationHostNode {
             self.retired.push(old);
         }
         let Some(handle) = self.handle else { return };
+        let Some(scope) = handle.coroutine_scope() else { return };
         if std::mem::replace(&mut self.lifecycle_scheduled, true) {
             return;
         }
-        compose_runtime::platform::launch(async move {
+        scope.launch(async move {
             handle.with_node(|host: &mut IndicationHostNode, context| {
                 host.lifecycle_scheduled = false;
                 host.run_lifecycle(context);
@@ -489,6 +490,8 @@ impl ModifierNode for IndicationHostNode {
             node.on_detach(context);
         }
         self.handle = None;
+        // Its task goes with its coroutine scope.
+        self.lifecycle_scheduled = false;
     }
     fn on_reset(&mut self, context: &mut NodeContext<'_>) {
         self.node.on_reset(context);

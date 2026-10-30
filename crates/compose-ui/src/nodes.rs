@@ -48,6 +48,8 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
             focused: false,
             focus: None,
             emitter: Default::default(),
+            handle: None,
+            scope: None,
         }),
         Element::OnFocusChanged(callback) => {
             Box::new(OnFocusChangedNode { callback: callback.clone(), last: None })
@@ -508,9 +510,23 @@ struct FocusableNode {
     focus: Option<crate::interaction::Focus>,
     /// Its emissions, in order (D1057).
     emitter: crate::interaction::Emitter,
+    /// Its handle while it's attached, for its coroutine scope where it has no context.
+    handle: Option<crate::node_context::NodeHandle>,
+    /// Its coroutine scope, once asked for, while it's attached.
+    scope: Option<compose_runtime::CoroutineScope>,
 }
 
 impl FocusableNode {
+    /// It leaves (reset or detached): what it queued goes as its scope is cancelled (D1061), its
+    /// focus interaction ends, as `disposeInteractionSource`.
+    fn leave(&mut self) {
+        self.emitter.drop_queued();
+        self.scope = None;
+        self.handle = None;
+        self.dispose();
+        self.focused = false;
+    }
+
     /// The focus interaction ends, as `disposeInteractionSource`.
     fn dispose(&mut self) {
         if let Some(focus) = self.focus.take()
@@ -522,18 +538,21 @@ impl FocusableNode {
 }
 
 impl ModifierNode for FocusableNode {
-    /// Reused or deactivated, its focus interaction ends; what it queued is dropped but its
-    /// fallbacks, as its scope's coroutines are cancelled (D1057).
-    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
-        self.emitter.cancel();
-        self.dispose();
-        self.focused = false;
+    /// Asked to run its lifecycle, which the tree skips for the other built-ins
+    /// (lifecycle.rs `for_custom_entries`).
+    fn observes_reads(&self) -> bool {
+        true
     }
-    /// Gone, the same, as `FocusableNode.onDetach` (a built-in's node has its reset and its
-    /// release, not its detach: lifecycle.rs `for_custom_entries`).
-    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
-        self.emitter.cancel();
-        self.dispose();
+    fn on_attach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        self.handle = Some(context.handle());
+    }
+    /// As `FocusableNode.onDetach`.
+    fn on_detach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        self.leave();
+    }
+    /// As `FocusableNode.onReset`: detached next, attached again when reused.
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        self.leave();
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
         Some(self)
@@ -551,13 +570,27 @@ impl FocusTargetModifierNode for FocusableNode {
         self.focused = focused;
         // As `FocusableNode.emitInteraction`.
         if let Some(source) = &self.interaction_source {
+            let scope = match self.scope {
+                Some(scope) => Some(scope),
+                None => {
+                    self.scope = self.handle.and_then(|handle| handle.coroutine_scope());
+                    self.scope
+                }
+            };
             if let Some(focus) = self.focus.take() {
-                self.emitter
-                    .emit_soon(source, crate::interaction::FocusInteraction::Unfocus(focus));
+                self.emitter.emit_soon(
+                    scope,
+                    source,
+                    crate::interaction::FocusInteraction::Unfocus(focus),
+                );
             }
             if focused {
                 let focus = crate::interaction::Focus::new();
-                self.emitter.emit_soon(source, crate::interaction::FocusInteraction::Focus(focus));
+                self.emitter.emit_soon(
+                    scope,
+                    source,
+                    crate::interaction::FocusInteraction::Focus(focus),
+                );
                 self.focus = Some(focus);
             }
         }

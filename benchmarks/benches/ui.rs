@@ -44,6 +44,21 @@ fn ui(criterion: &mut Criterion) {
         })
     });
 
+    // Whole batches of clicks timed at once: a click is a few microseconds, near what timing each
+    // and finding the node between them cost.
+    let center = counter.on_all_nodes(count.clone()).get(0).fetch_semantics_node().center();
+    criterion.bench_function("counter click frames, batched", |bench| {
+        bench.iter_custom(|iterations| {
+            let start = Instant::now();
+            for _ in 0..iterations {
+                counter.host().send_pointer(PointerEvent::press(center));
+                counter.host().send_pointer(PointerEvent::release(center));
+                counter.wait_for_idle();
+            }
+            start.elapsed()
+        })
+    });
+
     let mut todos = ComposeTestRule::sized(IntSize::new(400, 100_000), || todo::TodoAppWith(1000));
     let checkbox = has_role(Role::Checkbox);
     criterion.bench_function("toggle 1 of 1000 todos frame", |bench| {

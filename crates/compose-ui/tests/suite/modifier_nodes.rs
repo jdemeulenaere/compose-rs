@@ -1346,6 +1346,98 @@ fn a_detached_node_s_tasks_are_cancelled() {
     assert_eq!(ticks.get(), stopped, "cancelled once detached");
 }
 
+/// A node keeping a handle to itself, as a node that has no context where it needs its scope.
+struct Scoped(Rc<RefCell<Option<NodeHandle>>>);
+struct ScopedNode(Rc<RefCell<Option<NodeHandle>>>);
+
+impl ModifierNodeElement for Scoped {
+    type Node = ScopedNode;
+    fn create(&self) -> ScopedNode {
+        ScopedNode(self.0.clone())
+    }
+    fn update(&self, node: &mut ScopedNode) {
+        node.0 = self.0.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl ModifierNode for ScopedNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        *self.0.borrow_mut() = Some(context.handle());
+    }
+}
+
+/// A handle reaches the node's coroutine scope where it has no context (an event handler, an
+/// update), Compose's `Modifier.Node.coroutineScope` from anywhere: its tasks are cancelled when
+/// the node is detached, and a detached node has none. Reused (attached again), a new one.
+#[test]
+fn a_handle_gives_the_node_s_coroutine_scope_while_it_is_attached() {
+    let kept = Rc::new(RefCell::new(None));
+    let ticks = Rc::new(Cell::new(0));
+    let shown = mutable_state_of(true);
+    let (is_shown, given) = (shown.handle(), kept.clone());
+    let mut host = host(move || {
+        if is_shown.get() {
+            Leaf(Modifier.then_custom(Scoped(given.clone())));
+        }
+    });
+    host.frame();
+    let handle: NodeHandle = kept.borrow().expect("attached");
+    let scope = handle.coroutine_scope().expect("attached");
+    assert!(scope.is_active());
+    let counted = ticks.clone();
+    scope.launch(async move {
+        loop {
+            compose_runtime::with_frame_nanos(|_| ()).await;
+            counted.set(counted.get() + 1);
+        }
+    });
+    host.frame();
+    host.frame();
+    assert!(ticks.get() > 0, "the task runs while attached");
+
+    shown.set(false);
+    host.frame();
+    assert!(!scope.is_active(), "cancelled when detached");
+    assert!(handle.coroutine_scope().is_none(), "a detached node has no scope");
+    let stopped = ticks.get();
+    host.frame();
+    host.frame();
+    assert_eq!(ticks.get(), stopped);
+}
+
+/// The scope a node's context gives and the one its handle gives are one.
+#[test]
+fn a_node_s_context_and_its_handle_give_one_scope() {
+    struct Cancels(Rc<RefCell<Option<NodeHandle>>>);
+    struct CancelsNode(Rc<RefCell<Option<NodeHandle>>>);
+    impl ModifierNodeElement for Cancels {
+        type Node = CancelsNode;
+        fn create(&self) -> CancelsNode {
+            CancelsNode(self.0.clone())
+        }
+        fn update(&self, _: &mut CancelsNode) {}
+        fn same(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.0, &other.0)
+        }
+    }
+    impl ModifierNode for CancelsNode {
+        fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+            *self.0.borrow_mut() = Some(context.handle());
+            // Cancelling the handle's cancels this one.
+            context.coroutine_scope().cancel();
+            assert!(!context.handle().coroutine_scope().expect("attached").is_active());
+        }
+    }
+    let kept = Rc::new(RefCell::new(None));
+    let given = kept.clone();
+    let mut host = host(move || Leaf(Modifier.then_custom(Cancels(given.clone()))));
+    host.frame();
+    assert!(kept.borrow().is_some());
+}
+
 /// A node drawing the colour a shared cell holds, keeping a handle to itself.
 struct Painted(Rc<Cell<Color>>, Rc<RefCell<Option<NodeHandle>>>);
 

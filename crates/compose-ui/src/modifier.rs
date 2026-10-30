@@ -1084,7 +1084,8 @@ pub trait ModifierNode: Any {
     }
     /// Whether its drawing reads state that should draw it again when written, as a
     /// user-defined element's node always is: a built-in node hosting one (a clickable's
-    /// indication) says so. Asked once, when the node is made (its kinds).
+    /// indication) says so. Asked once, when the node is made (its kinds). It also runs the node's
+    /// `on_attach`, `on_detach` and the like, which the tree skips for the other built-ins.
     fn observes_reads(&self) -> bool {
         false
     }

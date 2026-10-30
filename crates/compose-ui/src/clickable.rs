@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use compose_runtime::{Callback, Job};
+use compose_runtime::{Callback, CoroutineScope, Job};
 use smallvec::SmallVec;
 
 use crate::draw::DrawScope;
@@ -27,21 +27,12 @@ use crate::modifier::{
 };
 use crate::semantics::{Role, SemanticsConfiguration, ToggleableState};
 use crate::text::SharedString;
-use crate::unit::{Dp, IntSize, Offset};
+use crate::unit::{IntSize, Offset};
 
 /// How long a press inside something waiting for a gesture (a scroll's slop) waits before it
 /// shows, as Compose's `TapIndicationDelay` (Android's tap timeout): a touch that becomes a
 /// scroll shows no press.
 pub const TAP_INDICATION_DELAY: Duration = Duration::from_millis(100);
-/// As `longPressTimeoutMillis`.
-const LONG_PRESS_TIMEOUT: Duration = Duration::from_millis(400);
-/// As `doubleTapTimeoutMillis`.
-const DOUBLE_TAP_TIMEOUT: Duration = Duration::from_millis(300);
-/// As `doubleTapMinTimeMillis`.
-const DOUBLE_TAP_MIN_TIME: Duration = Duration::from_millis(40);
-/// As `ViewConfiguration.minimumTouchTargetSize`: a press on a smaller clickable may stray this
-/// far around it before it's cancelled.
-const MINIMUM_TOUCH_TARGET: Dp = Dp(48.0);
 
 /// What a click does.
 #[derive(Clone)]
@@ -176,6 +167,11 @@ struct Shared {
     source: Option<MutableInteractionSource>,
     /// Its emissions, in order (D1057).
     emitter: Emitter,
+    /// The node's handle while it's attached, for its coroutine scope and `run_lifecycle`.
+    handle: Option<crate::node_context::NodeHandle>,
+    /// The node's coroutine scope, once asked for, while it's attached: its timers' and
+    /// emissions' tasks, cancelled when it's detached.
+    scope: std::cell::Cell<Option<CoroutineScope>>,
     /// The pointer press emitted and not yet released.
     press: Option<Press>,
     /// A press waiting `TAP_INDICATION_DELAY` to be emitted.
@@ -195,6 +191,22 @@ struct Shared {
 }
 
 impl Shared {
+    /// The node's coroutine scope, while it's attached.
+    fn scope(&self) -> Option<CoroutineScope> {
+        if self.scope.get().is_none() {
+            self.scope.set(self.handle.and_then(|handle| handle.coroutine_scope()));
+        }
+        self.scope.get()
+    }
+
+    /// The node leaves (reset or detached): what it queued goes as its scope is cancelled
+    /// (D1061), and from now on it emits at once.
+    fn leave(&mut self) {
+        self.emitter.drop_queued();
+        self.scope.set(None);
+        self.handle = None;
+    }
+
     /// Emits at once (after what's queued), as Compose's `tryEmit` where a node ends its
     /// interactions.
     fn emit(&self, interaction: impl Into<crate::interaction::Interaction>) {
@@ -206,7 +218,7 @@ impl Shared {
     /// Emits from the node's task, as Compose's `coroutineScope.launch { emit(…) }`.
     fn emit_soon(&self, interaction: impl Into<crate::interaction::Interaction>) {
         if let Some(source) = &self.source {
-            self.emitter.emit_soon(source, interaction);
+            self.emitter.emit_soon(self.scope(), source, interaction);
         }
     }
 }
@@ -285,8 +297,6 @@ pub(crate) struct ClickableNode {
     indication_attached: bool,
     /// Indication nodes replaced or forgotten while attached, detached by `run_lifecycle`.
     retired: Vec<Box<dyn ModifierNode>>,
-    /// The node's handle while it's attached, for `run_lifecycle`.
-    handle: Option<crate::node_context::NodeHandle>,
     /// A task runs `run_lifecycle` soon.
     lifecycle_scheduled: bool,
     down: Option<Down>,
@@ -320,7 +330,6 @@ impl ClickableNode {
             indication_draws_content: false,
             indication_attached: false,
             retired: Vec::new(),
-            handle: None,
             lifecycle_scheduled: false,
             down: None,
             hover: None,
@@ -428,11 +437,15 @@ impl ClickableNode {
     /// event, an element's update): the tree is free then (MN-5's delegates will make it at
     /// once).
     fn schedule_lifecycle(&mut self) {
-        let Some(handle) = self.handle else { return };
+        let (handle, scope) = {
+            let shared = self.shared.borrow();
+            let (Some(handle), Some(scope)) = (shared.handle, shared.scope()) else { return };
+            (handle, scope)
+        };
         if std::mem::replace(&mut self.lifecycle_scheduled, true) {
             return;
         }
-        compose_runtime::platform::launch(async move {
+        scope.launch(async move {
             handle.with_node(|node: &mut ClickableNode, context| {
                 node.lifecycle_scheduled = false;
                 node.run_lifecycle(context);
@@ -518,9 +531,10 @@ impl ClickableNode {
         let mut shared = self.shared.borrow_mut();
         let Some(source) = shared.source.clone() else { return };
         let press = Press::new(position);
-        if delay {
+        let scope = shared.scope();
+        if delay && let Some(scope) = scope {
             let shared_handle = Rc::downgrade(&self.shared);
-            let job = compose_runtime::platform::launch(async move {
+            let job = scope.launch(async move {
                 compose_runtime::delay(TAP_INDICATION_DELAY).await;
                 if let Some(shared) = shared_handle.upgrade() {
                     let mut shared = shared.borrow_mut();
@@ -532,7 +546,7 @@ impl ClickableNode {
             shared.delay_job = Some(job);
         } else {
             shared.press = Some(press);
-            shared.emitter.emit_soon(&source, PressInteraction::Press(press));
+            shared.emitter.emit_soon(scope, &source, PressInteraction::Press(press));
         }
     }
 
@@ -546,10 +560,11 @@ impl ClickableNode {
         {
             job.cancel();
             let press = Press::new(position);
-            shared.emitter.emit_soon(&source, PressInteraction::Press(press));
-            shared.emitter.emit_soon(&source, PressInteraction::Release(press));
+            let scope = shared.scope();
+            shared.emitter.emit_soon(scope, &source, PressInteraction::Press(press));
+            shared.emitter.emit_soon(scope, &source, PressInteraction::Release(press));
         } else if let Some(press) = shared.press {
-            shared.emitter.emit_soon(&source, PressInteraction::Release(press));
+            shared.emitter.emit_soon(shared.scope(), &source, PressInteraction::Release(press));
         }
         shared.press = None;
     }
@@ -571,11 +586,13 @@ impl ClickableNode {
     // ---- Pointer -------------------------------------------------------------------------
 
     /// Whether `event`'s position is outside the bounds, extended to the minimum touch target
-    /// around a smaller node, as `isOutOfBounds(size, extendedTouchPadding)`.
+    /// around a smaller node, as `isOutOfBounds(size, extendedTouchPadding)`, the target's
+    /// `LOCAL_VIEW_CONFIGURATION`'s `minimum_touch_target_size`.
     fn out_of_bounds(event: &PointerEvent, bounds: IntSize, context: &EventContext<'_>) -> bool {
-        let minimum = context.density().to_px(MINIMUM_TOUCH_TARGET);
-        let horizontal = ((minimum - bounds.width as f32) / 2.0).max(0.0);
-        let vertical = ((minimum - bounds.height as f32) / 2.0).max(0.0);
+        let minimum = context.view_configuration().minimum_touch_target_size;
+        let density = context.density();
+        let horizontal = ((density.to_px(minimum.width) - bounds.width as f32) / 2.0).max(0.0);
+        let vertical = ((density.to_px(minimum.height) - bounds.height as f32) / 2.0).max(0.0);
         let position = event.position;
         position.x < -horizontal
             || position.y < -vertical
@@ -589,13 +606,14 @@ impl ClickableNode {
         if !self.spec.enabled {
             return;
         }
+        let configuration = context.view_configuration();
         if self.combined.is_some() {
             let tap_waiting = self.shared.borrow().tap_job.is_some_and(|job| job.is_active());
             if tap_waiting {
                 let now = event_nanos(event);
-                let soon = self.first_tap_up_nanos.is_some_and(|up| {
-                    now.saturating_sub(up) < DOUBLE_TAP_MIN_TIME.as_nanos() as u64
-                });
+                let min_time = configuration.double_tap_min_time_millis * 1_000_000;
+                let soon =
+                    self.first_tap_up_nanos.is_some_and(|up| now.saturating_sub(up) < min_time);
                 if soon {
                     // Too soon for a double click: ignored, no press, no long press.
                     self.ignore_next_up = true;
@@ -608,10 +626,12 @@ impl ClickableNode {
         }
         self.press_started(event.position, context.has_waiting_parent());
         let long = self.combined.as_ref().is_some_and(|combined| combined.on_long_click.is_some());
-        if long {
+        let scope = self.shared.borrow().scope();
+        if long && let Some(scope) = scope {
+            let timeout = Duration::from_millis(configuration.long_press_timeout_millis);
             let shared = Rc::downgrade(&self.shared);
-            let job = compose_runtime::platform::launch(async move {
-                compose_runtime::delay(LONG_PRESS_TIMEOUT).await;
+            let job = scope.launch(async move {
+                compose_runtime::delay(timeout).await;
                 let Some(shared) = shared.upgrade() else { return };
                 let (callback, haptics) = {
                     let shared = shared.borrow();
@@ -649,17 +669,21 @@ impl ClickableNode {
                                 context.call(on_double_click);
                             }
                         } else if combined.on_double_click.is_some() {
-                            let shared = Rc::downgrade(&self.shared);
-                            let job = compose_runtime::platform::launch(async move {
-                                compose_runtime::delay(DOUBLE_TAP_TIMEOUT).await;
-                                let Some(shared) = shared.upgrade() else { return };
-                                let action = shared.borrow_mut().action.clone();
-                                shared.borrow_mut().tap_job = None;
-                                if let Some(action) = action {
-                                    action.fire_now();
-                                }
-                            });
-                            self.shared.borrow_mut().tap_job = Some(job);
+                            let scope = self.shared.borrow().scope();
+                            let timeout = context.view_configuration().double_tap_timeout_millis;
+                            if let Some(scope) = scope {
+                                let shared = Rc::downgrade(&self.shared);
+                                let job = scope.launch(async move {
+                                    compose_runtime::delay(Duration::from_millis(timeout)).await;
+                                    let Some(shared) = shared.upgrade() else { return };
+                                    let action = shared.borrow_mut().action.clone();
+                                    shared.borrow_mut().tap_job = None;
+                                    if let Some(action) = action {
+                                        action.fire_now();
+                                    }
+                                });
+                                self.shared.borrow_mut().tap_job = Some(job);
+                            }
                         } else {
                             self.spec.action.fire(context);
                         }
@@ -697,18 +721,18 @@ fn event_nanos(event: &PointerEvent) -> u64 {
 impl ModifierNode for ClickableNode {
     /// Attached, with a source given, its indication is made at once, as `onAttach`.
     fn on_attach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.handle = Some(context.handle());
         if self.spec.interaction_source.is_some() {
             self.initialize_indication();
         }
         self.run_lifecycle(context);
+        self.shared.borrow_mut().handle = Some(context.handle());
     }
 
     /// Leaving ends its interactions, and forgets its own source and its indication (made
     /// again if it comes back), as `onDetach`; what it queued to emit is dropped but its
     /// fallbacks, as its scope's coroutines are cancelled (D1057).
     fn on_detach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.shared.borrow().emitter.cancel();
+        self.shared.borrow_mut().leave();
         self.dispose_interactions();
         self.dispose_focus();
         self.cancel_input();
@@ -717,13 +741,14 @@ impl ModifierNode for ClickableNode {
         if self.spec.interaction_source.is_none() {
             self.shared.borrow_mut().source = None;
         }
-        self.handle = None;
+        // Its task went with its coroutine scope.
+        self.lifecycle_scheduled = false;
     }
 
     /// Reused or deactivated: its interactions are over and its indication goes, as
     /// `onReset`; it's detached next, and attached again when reused.
     fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
-        self.shared.borrow().emitter.cancel();
+        self.shared.borrow_mut().leave();
         self.dispose_interactions();
         self.dispose_focus();
         self.cancel_input();
@@ -972,7 +997,7 @@ impl KeyInputModifierNode for ClickableNode {
                     self.shared.borrow().emit_soon(PressInteraction::Press(press));
                     handled = true;
                 }
-                self.combined_key_down(event.key) || handled
+                self.combined_key_down(event.key, context) || handled
             }
             KeyEventType::KeyUp => {
                 let Some(index) = self.key_presses.iter().position(|(key, _)| *key == event.key)
@@ -991,16 +1016,19 @@ impl KeyInputModifierNode for ClickableNode {
 impl ClickableNode {
     /// A clicking key went down: a combined clickable's long click starts waiting, and a second
     /// press may be a double click, as `CombinedClickableNode.onClickKeyDownEvent`.
-    fn combined_key_down(&mut self, key: Key) -> bool {
+    fn combined_key_down(&mut self, key: Key, context: &EventContext<'_>) -> bool {
         let Some(combined) = &self.combined else { return false };
         let mut handled = false;
         let mut shared = self.shared.borrow_mut();
+        let scope = shared.scope();
         if combined.on_long_click.is_some()
             && !shared.long_key_jobs.iter().any(|(held, _)| *held == key)
+            && let Some(scope) = scope
         {
+            let timeout = context.view_configuration().long_press_timeout_millis;
             let weak = Rc::downgrade(&self.shared);
-            let job = compose_runtime::platform::launch(async move {
-                compose_runtime::delay(LONG_PRESS_TIMEOUT).await;
+            let job = scope.launch(async move {
+                compose_runtime::delay(Duration::from_millis(timeout)).await;
                 let callback =
                     weak.upgrade().and_then(|shared| shared.borrow().on_long_click.clone());
                 if let Some(callback) = callback {
@@ -1052,10 +1080,16 @@ impl ClickableNode {
             Some(on_double_click) => {
                 match shared.double_key_clicks.iter().position(|(held, ..)| *held == key) {
                     None => {
-                        if !long_clicked {
+                        let scope = shared.scope();
+                        if !long_clicked && let Some(scope) = scope {
+                            let configuration = context.view_configuration();
+                            let min_time =
+                                Duration::from_millis(configuration.double_tap_min_time_millis);
+                            let timeout =
+                                Duration::from_millis(configuration.double_tap_timeout_millis);
                             let weak = Rc::downgrade(&self.shared);
-                            let job = compose_runtime::platform::launch(async move {
-                                compose_runtime::delay(DOUBLE_TAP_MIN_TIME).await;
+                            let job = scope.launch(async move {
+                                compose_runtime::delay(min_time).await;
                                 if let Some(shared) = weak.upgrade() {
                                     for entry in &mut shared.borrow_mut().double_key_clicks {
                                         if entry.0 == key {
@@ -1063,8 +1097,7 @@ impl ClickableNode {
                                         }
                                     }
                                 }
-                                compose_runtime::delay(DOUBLE_TAP_TIMEOUT - DOUBLE_TAP_MIN_TIME)
-                                    .await;
+                                compose_runtime::delay(timeout.saturating_sub(min_time)).await;
                                 let action = weak.upgrade().and_then(|shared| {
                                     let mut shared = shared.borrow_mut();
                                     shared.double_key_clicks.retain(|entry| entry.0 != key);
@@ -1117,6 +1150,45 @@ mod tests {
             stack.extend(tree.children_of(id));
         }
         panic!("no clickable");
+    }
+
+    /// A clickable's tasks are on its coroutine scope, made at its first event, not when it's
+    /// attached (most clickables are never pressed), and gone with it.
+    #[test]
+    fn a_clickable_makes_its_coroutine_scope_at_its_first_event() {
+        let scopes =
+            |host: &UiHost| host.with_tree(|tree| tree.focus_requests.scopes.borrow().len());
+        let source = MutableInteractionSource::new();
+        let given = source.clone();
+        let shown = compose_runtime::mutable_state_of(true);
+        let is_shown = shown.handle();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            if is_shown.get() {
+                let options = ClickableOptions {
+                    interaction_source: Some(given.clone()),
+                    ..ClickableOptions::DEFAULT
+                };
+                crate::layout::emit_layout_node(
+                    Modifier.clickable_with(options, || {}).fill_max_size(),
+                    crate::layout::empty_measure_policy(),
+                    || {},
+                );
+            }
+        });
+        host.frame();
+        assert_eq!(scopes(&host), 0, "attached with a source and its indication: no scope");
+        let at = Offset::new(5.0, 5.0);
+        host.send_pointer(crate::input::PointerEvent::press(at));
+        assert_eq!(scopes(&host), 1);
+        host.frame();
+        assert!(source.is_pressed());
+        host.send_pointer(crate::input::PointerEvent::release(at));
+        host.frame();
+        assert!(!source.is_pressed());
+        shown.set(false);
+        host.frame();
+        assert_eq!(scopes(&host), 0, "cancelled and gone when it's detached");
     }
 
     /// Detached, the clickable drops what it queued to emit but its fallbacks, as Compose's

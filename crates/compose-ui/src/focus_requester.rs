@@ -33,6 +33,16 @@ pub(crate) struct FocusRequests {
     pub(crate) attached_entries: RefCell<
         std::collections::HashSet<u64, std::hash::BuildHasherDefault<compose_runtime::KeyHasher>>,
     >,
+    /// The coroutine scopes nodes made (`NodeContext::coroutine_scope`,
+    /// `NodeHandle::coroutine_scope`), cancelled when they are detached. Here for a handle to
+    /// reach one while the tree is busy (an event handler, an element's update).
+    pub(crate) scopes: RefCell<
+        std::collections::HashMap<
+            crate::node_chain::EntryId,
+            compose_runtime::Owned<compose_runtime::CoroutineScope>,
+            std::hash::BuildHasherDefault<compose_runtime::KeyHasher>,
+        >,
+    >,
 }
 
 /// A focus change asked for outside dispatch.

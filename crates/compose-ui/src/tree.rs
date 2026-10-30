@@ -306,10 +306,6 @@ pub struct UiTree {
     /// The modifier nodes' lifecycle steps the pass under way queued, run when it ends
     /// (lifecycle.rs); kept for its capacity.
     pub(crate) lifecycle: Vec<crate::lifecycle::Lifecycle>,
-    /// The coroutine scopes nodes made (`NodeContext::coroutine_scope`), cancelled when they
-    /// are detached.
-    pub(crate) scopes:
-        std::collections::HashMap<EntryId, compose_runtime::Owned<compose_runtime::CoroutineScope>>,
     /// A node's semantics changed outside what recomposition and layout say (its
     /// `invalidate_semantics`, a semantics node's update): the frame's stats tell it.
     pub(crate) semantics_changed: bool,
@@ -383,7 +379,6 @@ impl UiTree {
             key,
             lifecycle: Vec::new(),
             semantics_changed: false,
-            scopes: std::collections::HashMap::new(),
             hover_stale: false,
             paused_lifecycle: Vec::new(),
             side_effects: Vec::new(),

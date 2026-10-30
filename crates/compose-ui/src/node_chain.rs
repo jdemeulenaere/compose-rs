@@ -135,7 +135,7 @@ pub(crate) mod entry_state {
     pub(crate) const ATTACHED: u8 = 1;
     /// Its `on_attach` ran (and its `on_detach` hasn't): what detaching it calls `on_detach` on.
     pub(crate) const ATTACH_RAN: u8 = 2;
-    /// It made a coroutine scope (`UiTree::scopes`), cancelled when it's detached.
+    /// It made a coroutine scope (`FocusRequests::scopes`), cancelled when it's detached.
     pub(crate) const HAS_SCOPE: u8 = 4;
     /// A handle was made for it: its attachment is mirrored where handles read it.
     pub(crate) const HAS_HANDLE: u8 = 8;

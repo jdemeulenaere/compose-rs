@@ -516,7 +516,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 ### view-configuration (S)
 - **Compose API:** `ViewConfiguration`, `LocalViewConfiguration`.
 - **What:** the host provides touch slop, timeouts, minimum touch target and maximum fling velocity (Android's `ViewConfiguration`); `pointer_input` blocks restart when the density or configuration they read changes.
-- **Status:** partly done (D907): `ViewConfiguration` (every field, the handwriting ones included) and `LOCAL_VIEW_CONFIGURATION`, the host's, read by the detectors (`PointerInputScope::view_configuration`), scrolling's slop and fling bounds and compose-test. Left: the restart of `pointer_input` blocks when the configuration or the density changes (a running block keeps its scope's first values until its keys change), and a subtree's configuration, which needs modifier nodes reading composition locals.
+- **Status:** partly done (D907): `ViewConfiguration` (every field, the handwriting ones included) and `LOCAL_VIEW_CONFIGURATION`, the host's, read by the detectors (`PointerInputScope::view_configuration`), the clickable family (D1062), scrolling's slop and fling bounds and compose-test. Left: the restart of `pointer_input` blocks when the configuration or the density changes (a running block keeps its scope's first values until its keys change), and a subtree's configuration, which needs modifier nodes reading composition locals.
 - **Tests:** PointerInputViewConfigurationTest, PointerInputDensityTest.
 - **Depends on:** none.
 - **Experimental:** no.

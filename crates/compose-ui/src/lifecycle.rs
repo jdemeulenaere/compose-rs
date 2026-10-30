@@ -194,10 +194,13 @@ impl UiTree {
     /// Detaches `entry` (its `on_detach` ran or wasn't due): not attached, its scope cancelled,
     /// its handles told.
     fn mark_entry_detached(&mut self, entry: EntryId, state: &mut u8) {
-        if *state & entry_state::HAS_SCOPE != 0
-            && let Some(scope) = self.scopes.remove(&entry)
-        {
-            scope.cancel();
+        // A handle may have made one too (`NodeHandle::coroutine_scope`).
+        if *state & (entry_state::HAS_SCOPE | entry_state::HAS_HANDLE) != 0 {
+            // Taken out first: cancelling drops its tasks, which may reach the requests.
+            let scope = self.focus_requests.scopes.borrow_mut().remove(&entry);
+            if let Some(scope) = scope {
+                scope.cancel();
+            }
         }
         if *state & entry_state::HAS_HANDLE != 0 {
             self.focus_requests.attached_entries.borrow_mut().remove(&entry.0);
@@ -410,11 +413,9 @@ impl UiTree {
     pub fn apply_node_requests(&mut self) {
         self.run_lifecycle();
         let requests = self.focus_requests.clone();
-        loop {
+        // Nothing taken when nothing's asked: what's taken with no request would lose its capacity.
+        while !requests.node_invalidations.borrow().is_empty() {
             let mut pending = mem::take(&mut *requests.node_invalidations.borrow_mut());
-            if pending.is_empty() {
-                return;
-            }
             for (node, entry, what) in pending.drain(..) {
                 if let Some(index) = self.entry_index(node, entry)
                     && self.node(node).chain[index].state & entry_state::ATTACHED != 0

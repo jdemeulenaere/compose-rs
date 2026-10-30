@@ -14,7 +14,7 @@ use compose_test::*;
 use compose_ui::{
     ClickableOptions, FocusRequester, HapticFeedback, HapticFeedbackType, Indication, Key,
     KeyEvent, KeyEventType, LOCAL_HAPTIC_FEEDBACK, MutableInteractionSource, Offset,
-    PointerEventPass, PointerEventType, SemanticsActions, UnitExt,
+    PointerEventPass, PointerEventType, SemanticsActions, UnitExt, ViewConfiguration,
 };
 
 use crate::interaction_helpers::*;
@@ -724,4 +724,123 @@ fn disabled_mid_gesture_nothing_clicks() {
     touch_up(&mut ui, at);
     ui.advance_time_by(PAST_DOUBLE_TAP_TIMEOUT);
     assert_eq!((clicks.get(), doubles.get(), long_clicks.get()), (0, 0, 0));
+}
+
+// ---- LOCAL_VIEW_CONFIGURATION ------------------------------------------------------------------
+
+/// Android's view configuration with other timeouts, for the host (what its nodes read as
+/// `currentValueOf(LocalViewConfiguration)`).
+fn timeouts(long_press: u64, double_tap: u64, double_tap_min: u64) -> ViewConfiguration {
+    ViewConfiguration {
+        long_press_timeout_millis: long_press,
+        double_tap_timeout_millis: double_tap,
+        double_tap_min_time_millis: double_tap_min,
+        ..ViewConfiguration::default()
+    }
+}
+
+/// A long click waits the view configuration's `long_press_timeout_millis`, by touch.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, CombinedClickableNode's longPressTimeoutMillis
+#[test]
+fn a_long_click_waits_the_view_configuration_s_timeout() {
+    let (long_clicks, on_long_click) = counter();
+    let mut ui = combined(Some(on_long_click), None, callback(|| {}));
+    ui.host().set_view_configuration(Some(timeouts(1000, 300, 40)));
+    let at = center(&mut ui, TAG);
+    touch_down(&mut ui, at);
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
+    assert_eq!(long_clicks.get(), 0, "Android's 400 ms isn't the timeout");
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(1));
+    assert_eq!(long_clicks.get(), 1);
+    touch_up(&mut ui, at);
+}
+
+/// A key held long clicks after the view configuration's timeout.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onClickKeyDownEvent
+#[test]
+fn a_key_held_waits_the_view_configuration_s_timeout() {
+    let (mut ui, clicks, long_clicks) = focused_combined();
+    ui.host().set_view_configuration(Some(timeouts(1000, 300, 40)));
+    key(&mut ui, Key::Enter, KeyEventType::KeyDown);
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
+    assert_eq!(long_clicks.get(), 0);
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(1));
+    assert_eq!(long_clicks.get(), 1);
+    key(&mut ui, Key::Enter, KeyEventType::KeyUp);
+    assert_eq!(clicks.get(), 0);
+}
+
+/// A tap waits the view configuration's `double_tap_timeout_millis` for a second one before it
+/// clicks, by touch.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, CombinedClickableNode's doubleTapTimeoutMillis
+#[test]
+fn a_tap_waits_the_view_configuration_s_double_tap_timeout() {
+    let (clicks, on_click) = counter();
+    let (double_clicks, on_double_click) = counter();
+    let mut ui = combined(None, Some(on_double_click), on_click);
+    ui.host().set_view_configuration(Some(timeouts(400, 1000, 40)));
+    let at = center(&mut ui, TAG);
+    touch_click(&mut ui, at);
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
+    assert_eq!(clicks.get(), 0, "Android's 300 ms isn't the timeout");
+    touch_click(&mut ui, at);
+    assert_eq!((clicks.get(), double_clicks.get()), (0, 1), "still within the timeout");
+    touch_click(&mut ui, at);
+    ui.advance_time_by(Duration::from_millis(1000));
+    assert_eq!((clicks.get(), double_clicks.get()), (1, 1));
+}
+
+/// A second tap sooner than the view configuration's `double_tap_min_time_millis` is ignored.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, CombinedClickableNode's doubleTapMinTimeMillis
+#[test]
+fn a_second_tap_sooner_than_the_view_configuration_s_minimum_is_ignored() {
+    let (clicks, on_click) = counter();
+    let (double_clicks, on_double_click) = counter();
+    let mut ui = combined(None, Some(on_double_click), on_click);
+    ui.host().set_view_configuration(Some(timeouts(400, 300, 200)));
+    let at = center(&mut ui, TAG);
+    touch_click(&mut ui, at);
+    ui.advance_time_by(Duration::from_millis(100));
+    touch_click(&mut ui, at);
+    assert_eq!(double_clicks.get(), 0, "Android's 40 ms isn't the minimum");
+    ui.advance_time_by(Duration::from_millis(300));
+    assert_eq!((clicks.get(), double_clicks.get()), (1, 0));
+}
+
+/// Keys wait the view configuration's double-tap times too: a second click sooner than the
+/// minimum makes the first a click of its own; past it, within the timeout, it's a double click;
+/// past the timeout, a click.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onClickKeyUpEvent
+#[test]
+fn keys_wait_the_view_configuration_s_double_tap_times() {
+    let (clicks, on_click) = counter();
+    let (double_clicks, on_double_click) = counter();
+    let requester = FocusRequester::new();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        Box!(
+            modifier = Modifier.size(10.dp()).focus_requester(requester).combined_clickable(
+                None,
+                Some(on_double_click.clone()),
+                on_click.clone()
+            )
+        );
+    });
+    assert!(requester.request_focus());
+    ui.wait_for_idle();
+    ui.host().set_view_configuration(Some(timeouts(400, 1000, 200)));
+    let press = |ui: &mut ComposeTestRule| {
+        key(ui, Key::Enter, KeyEventType::KeyDown);
+        key(ui, Key::Enter, KeyEventType::KeyUp);
+    };
+    press(&mut ui);
+    ui.advance_time_by(Duration::from_millis(100));
+    key(&mut ui, Key::Enter, KeyEventType::KeyDown);
+    assert_eq!(clicks.get(), 1, "sooner than the minimum: the first is a click of its own");
+    key(&mut ui, Key::Enter, KeyEventType::KeyUp);
+    ui.advance_time_by(Duration::from_millis(500));
+    press(&mut ui);
+    assert_eq!((clicks.get(), double_clicks.get()), (1, 1), "within the timeout");
+    press(&mut ui);
+    ui.advance_time_by(Duration::from_millis(1000));
+    assert_eq!((clicks.get(), double_clicks.get()), (2, 1), "past the timeout, a click");
 }
