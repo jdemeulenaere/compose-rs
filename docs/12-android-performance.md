@@ -164,6 +164,24 @@ Animated header, `recommended`:
 - **Startup** (`TotalTime`, 15 cold starts): (a) the feed 115 against 139 ms, `big` 174 against 252 ms, the stress list 125 against 152 ms; at fixed clocks, slower for both (no launch boost above the locks): (b) 123 against 161, 214 against 324, 137 against 178 ms; (c) 124 against 164, 216 against 340, 139 against 179 ms.
 - **The stress screens** are in [15](15-android-stress-benchmark.md), "Round 16"; the navigation latency in [17](17-navigation-latency.md), "Android 17, at dynamic and fixed clocks".
 
+### Invalidation at apply time (D751–D754): an interleaved A/B
+
+compose-rs at parity before and after snapshots' step S1 (readers invalidated when a turn sends, not at each write), bench-rs alone (`measure.py --optimizations rs`) on the Pixel 8 Pro with dynamic clocks, no device setting changed, the two release APKs installed in turn and compiled `speed`: 47bb939 against the branch on it at f019de0, 6 rounds of the timing runs (one traced run of the feed's scroll, the stress animation and navigation's 20 navigations, plus one untraced run of them, a round; the first variant alternating) and 2 rounds of `--counters` (a discarded warm-up, then 3 counted runs a scenario: 6 runs a side). Every run started at thermal status 0, battery ≤ 34 °C and skin ≤ 35 °C (`--battery-limit 34 --skin-limit 35 --thermal-wait-limit 0`; runs at 26.5 to 31.7 °C and 28.4 to 34.2 °C), and ended at status 0. Medians over the rounds; nothing in the timings reaches p < 0.05 (exact two-sided Mann–Whitney). `results/2026-10-30-pixel-8-pro-snapshots-s1-ab.json`.
+
+| | feed scroll before | after | stress animation before | after |
+|---|---|---|---|---|
+| main p50 / p90 / p99 (ms) | 1.35 / 2.29 / 3.45 | 1.37 / 2.27 / 3.49 | 2.22 / 4.35 / 7.00 | 2.24 / 4.59 / 7.36 |
+| RenderThread p50 / p90 / p99 (ms) | 2.41 / 3.23 / 4.66 | 2.42 / 3.26 / 4.66 | 7.32 / 8.94 / 11.50 | 7.32 / 8.92 / 11.42 |
+| work main / RenderThread (ms) | 443 / 639 | 438 / 642 | 1,595 / 5,521 | 1,604 / 5,523 |
+| janky frames (range over the runs) | 0 (0 to 3) | 0 (0 to 0) | 0 (0 to 1) | 1 (0 to 1) |
+| instructions a frame, main (M) | 0.389 | 0.392 (+0.7 %) | 4.307 | 4.447 (+3.3 %) |
+| instructions a frame, RenderThread (M) | 0.776 | 0.776 | 10.864 | 10.867 |
+| instructions a frame, process (M) | 1.353 | 1.356 (+0.2 %) | 63.76 | 63.88 (+0.2 %) |
+
+Navigation: input to present p50 83.4 → 85.9 ms, p90 90.5 → 91.4 ms, within the rounds' spread (80.7 to 87.2, 81.8 to 86.5); the heavy `doFrame` p50 75.8 → 76.8 ms; 102.56 → 102.67 M main-thread instructions a navigation, 112.62 → 112.85 M for the process (+0.2 %).
+
+The one count that resolves beyond a fraction of a percent is the stress animation's main thread, +3.3 % (140 thousand instructions a frame, its hundreds of animated values each written, recorded and invalidated at the send), which the timings can't resolve from their spread (main-thread work +0.6 %). Headless (fastest of 5 and 4 interleaved rounds, an M-series Mac): a read outside composition 4.8 → 5.3 ns, a read in composition unchanged (1000 local reads −0.4 %, 2000 readers −1.3 %), a write outside composition 10.9 → 12.6 ns, a write and its send 16.4 ns, the counter click 297 → 314 ns (+5.9 %, most of it this benchmark's write being outside a turn, whose first change takes the wake handler's lock), a frame of the animated header 1.41 → 1.46 µs (+4 %) and 2.42 → 2.50 µs (+3 %), other frames within about ±1 % (the 1000 todos' frame swings by ±10 % between binaries, in both directions over the sessions).
+
 ### Round 15, on Android 16
 
 **Round 15** is compose-rs at f120c63, after pausable composition (D590–D599), against Compose 1.12.1, measured two ways in one session (2026-10-25), every scenario in each:
