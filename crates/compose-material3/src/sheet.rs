@@ -817,7 +817,11 @@ pub fn ModalBottomSheet(
     let policy = {
         let state = sheet_state;
         compose_runtime::remember_keyed((sheet_state, sheet_max_width), move || {
-            Rc::new(SheetLayout { state, max_width: sheet_max_width }) as Rc<dyn MeasurePolicy>
+            Rc::new(SheetLayout {
+                state,
+                max_width: sheet_max_width,
+                anchored_for: Cell::new(None),
+            }) as Rc<dyn MeasurePolicy>
         })
     };
     // The scrim fades in while the sheet is going anywhere but hidden, on the default effects
@@ -931,7 +935,8 @@ pub fn BottomSheet(
         sheet_parts(state, on_dismiss_request, modifier, gestures_enabled, scope, density);
     compose_ui::BackHandler(back_handler_enabled && state.is_visible(), back);
     let policy = compose_runtime::remember_keyed((state, max_width), move || {
-        Rc::new(SheetLayout { state, max_width }) as Rc<dyn MeasurePolicy>
+        Rc::new(SheetLayout { state, max_width, anchored_for: Cell::new(None) })
+            as Rc<dyn MeasurePolicy>
     });
     Layout(
         Modifier,
@@ -1219,6 +1224,8 @@ fn sheet_surface(
 struct SheetLayout {
     state: SheetState,
     max_width: Dp,
+    /// The window's and the sheet's heights its anchors are for.
+    anchored_for: Cell<Option<(f32, f32)>>,
 }
 
 impl MeasurePolicy for SheetLayout {
@@ -1245,42 +1252,46 @@ impl MeasurePolicy for SheetLayout {
             }
             return scope.layout(width, height);
         };
-        // Hidden below the window; half way when it can rest there (Compose's
-        // `isPartiallyExpandedAnchorAvailable` and `calculatePartiallyExpandedOffset`); expanded
-        // at its height.
-        let mut anchors = Vec::with_capacity(3);
-        anchors.push((SheetValue::Hidden, full));
-        // Half the sheet's height, at most half the window's (Compose's flag
-        // `isBottomSheetPartiallyExpandedDeterministicEnabled`, on by default).
-        if !inner.skip_partially_expanded && sheet_height != 0.0 {
-            let visible = (full / 2.0).min(sheet_height / 2.0);
-            anchors.push((SheetValue::PartiallyExpanded, full - visible));
-        }
-        if sheet_height != 0.0 {
-            anchors.push((SheetValue::Expanded, (full - sheet_height).max(0.0)));
-        }
-        let new_anchors = DraggableAnchors::new(|config| {
-            for (value, at) in &anchors {
-                config.at(*value, *at);
+        // Measured again at each frame of a slide (the offset is read below): new anchors only for
+        // a new size, as Compose's `draggableAnchors`, measured for one.
+        if self.anchored_for.replace(Some((full, sheet_height))) != Some((full, sheet_height)) {
+            // Hidden below the window; half way when it can rest there (Compose's
+            // `isPartiallyExpandedAnchorAvailable` and `calculatePartiallyExpandedOffset`); expanded
+            // at its height.
+            let mut anchors = Vec::with_capacity(3);
+            anchors.push((SheetValue::Hidden, full));
+            // Half the sheet's height, at most half the window's (Compose's flag
+            // `isBottomSheetPartiallyExpandedDeterministicEnabled`, on by default).
+            if !inner.skip_partially_expanded && sheet_height != 0.0 {
+                let visible = (full / 2.0).min(sheet_height / 2.0);
+                anchors.push((SheetValue::PartiallyExpanded, full - visible));
             }
-        });
-        // Where it goes when its anchor went, as Compose's `draggableAnchors` new target.
-        let retarget = compose_runtime::snapshots::Snapshot::without_read_observation(|| {
-            let has = |value: SheetValue| new_anchors.has_position_for(&value);
-            match self.state.target_value() {
-                SheetValue::Hidden => SheetValue::Hidden,
-                SheetValue::PartiallyExpanded if has(SheetValue::PartiallyExpanded) => {
-                    SheetValue::PartiallyExpanded
-                }
-                SheetValue::PartiallyExpanded | SheetValue::Expanded
-                    if has(SheetValue::Expanded) =>
-                {
-                    SheetValue::Expanded
-                }
-                _ => SheetValue::Hidden,
+            if sheet_height != 0.0 {
+                anchors.push((SheetValue::Expanded, (full - sheet_height).max(0.0)));
             }
-        });
-        self.state.update_anchors(new_anchors, retarget);
+            let new_anchors = DraggableAnchors::new(|config| {
+                for (value, at) in &anchors {
+                    config.at(*value, *at);
+                }
+            });
+            // Where it goes when its anchor went, as Compose's `draggableAnchors` new target.
+            let retarget = compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                let has = |value: SheetValue| new_anchors.has_position_for(&value);
+                match self.state.target_value() {
+                    SheetValue::Hidden => SheetValue::Hidden,
+                    SheetValue::PartiallyExpanded if has(SheetValue::PartiallyExpanded) => {
+                        SheetValue::PartiallyExpanded
+                    }
+                    SheetValue::PartiallyExpanded | SheetValue::Expanded
+                        if has(SheetValue::Expanded) =>
+                    {
+                        SheetValue::Expanded
+                    }
+                    _ => SheetValue::Hidden,
+                }
+            });
+            self.state.update_anchors(new_anchors, retarget);
+        }
         // Read while measuring: a frame of the slide places the sheet again only.
         let offset = inner.anchored.offset();
         let top = if offset.is_nan() { full } else { offset };
