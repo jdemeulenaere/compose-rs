@@ -903,8 +903,8 @@ impl UiTree {
     /// it), a draw node (a graphics layer included) draws it again; a change of its parent data
     /// measures its parent. An overlay (compose-rs's popup windows) is positioned, and takes or
     /// gives back the focus, by the layout: it lays out again, as Compose's popup updates its
-    /// window. A semantics node's change is told in the frame's stats (semantics are read
-    /// afresh when asked); a pointer node come or gone has the resting mouse's hover refreshed (an
+    /// window. A semantics node's change forgets what the node kept and is told in the frame's
+    /// stats; a pointer node come or gone has the resting mouse's hover refreshed (an
     /// `Enter` for one that came under it), as the layout does; focus is revalidated by the chain
     /// change itself.
     fn auto_invalidate(
