@@ -33,11 +33,29 @@ fn a_part_of_a_bitmap_is_sampled_within_its_source_rect() {
             src: Rect::new(0.0, 0.0, 1.0, 1.0),
             dst: Rect::new(0.0, 0.0, 100.0, 100.0),
             alpha: 1.0,
+            tint: None,
         }],
         100,
     );
     assert_eq!(renderer.pixel(10, 50), Color::RED);
     assert_eq!(renderer.pixel(98, 50), Color::RED, "the right edge of the destination");
+}
+
+/// A tint draws every pixel of the bitmap in it, keeping their alpha, as `ColorFilter.tint`.
+#[test]
+fn a_tinted_bitmap_is_all_of_its_tint() {
+    let renderer = &mut render(
+        vec![DrawOp::DrawImage {
+            image: red_then_blue(),
+            src: Rect::new(0.0, 0.0, 2.0, 1.0),
+            dst: Rect::new(0.0, 0.0, 100.0, 100.0),
+            alpha: 1.0,
+            tint: Some(Color::GREEN),
+        }],
+        100,
+    );
+    assert_eq!(renderer.pixel(10, 50), Color::GREEN);
+    assert_eq!(renderer.pixel(90, 50), Color::GREEN);
 }
 
 /// Passes (locks in): a 0 × 0 bitmap and an alpha out of range neither panic nor misdraw; a
@@ -54,18 +72,21 @@ fn edge_case_images_draw_and_decode() {
                 src: Rect::new(0.0, 0.0, 0.0, 0.0),
                 dst: Rect::new(0.0, 0.0, 10.0, 10.0),
                 alpha: 1.0,
+                tint: None,
             },
             DrawOp::DrawImage {
                 image: image.clone(),
                 src: Rect::new(0.0, 0.0, 2.0, 1.0),
                 dst: Rect::new(0.0, 20.0, 20.0, 30.0),
                 alpha: 7.0,
+                tint: None,
             },
             DrawOp::DrawImage {
                 image: image.clone(),
                 src: Rect::new(0.0, 0.0, 2.0, 1.0),
                 dst: Rect::new(0.0, 40.0, 20.0, 50.0),
                 alpha: -1.0,
+                tint: None,
             },
         ],
         100,
@@ -83,6 +104,7 @@ fn edge_case_images_draw_and_decode() {
             src: Rect::new(0.0, 0.0, 1.0, 1.0),
             dst: Rect::new(0.0, 0.0, 10.0, 10.0),
             alpha: 1.0,
+            tint: None,
         }],
         10,
     );

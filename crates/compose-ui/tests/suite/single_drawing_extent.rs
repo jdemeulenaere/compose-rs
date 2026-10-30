@@ -116,6 +116,7 @@ fn text_images_and_shadows_have_no_extent() {
         src: Rect::new(0.0, 0.0, 1.0, 1.0),
         dst: Rect::new(0.0, 0.0, 4.0, 4.0),
         alpha: 1.0,
+        tint: None,
     };
     assert_eq!(extent(vec![image]), None);
     let shadow = DrawOp::DrawShadow {

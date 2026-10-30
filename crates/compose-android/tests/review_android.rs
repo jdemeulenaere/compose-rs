@@ -112,6 +112,7 @@ fn image_op(image: ImageBitmap) -> DrawOp {
         src: Rect::new(0.0, 0.0, w, h),
         dst: Rect::new(0.0, 0.0, w.max(1.0), h.max(1.0)),
         alpha: 1.0,
+        tint: None,
     }
 }
 

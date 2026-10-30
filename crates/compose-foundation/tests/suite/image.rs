@@ -107,6 +107,7 @@ fn the_alignment_and_alpha_are_applied() {
             Alignment::BOTTOM_END,
             ContentScale::None,
             0.5,
+            None,
         );
     });
     assert_eq!(drawn(&mut ui), Rect::new(80.0, 30.0, 100.0, 50.0));

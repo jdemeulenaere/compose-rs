@@ -8,6 +8,7 @@ import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
@@ -101,6 +102,8 @@ internal class Replayer(var text: TextMeasurer) {
     private var shaderCount = 0
     private var shaderNext = 0
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    /** The tint `bitmapPaint`'s filter is for, 0 for none. */
+    private var bitmapTint = 0
     private val rect = RectF()
     private val source = Rect()
     private val clip = Path()
@@ -525,6 +528,13 @@ internal class Replayer(var text: TextMeasurer) {
                     val src = buffer.readRect(RectF())
                     buffer.readRect(rect)
                     bitmapPaint.alpha = (buffer.float().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                    val tint = buffer.getInt()
+                    if (tint != bitmapTint) {
+                        bitmapTint = tint
+                        bitmapPaint.colorFilter =
+                            if (tint == 0) null
+                            else PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_IN)
+                    }
                     if (image != null) {
                         source.set(src.left.toInt(), src.top.toInt(), src.right.toInt(), src.bottom.toInt())
                         canvas.drawBitmap(image, source, rect, bitmapPaint)

@@ -103,10 +103,10 @@ pub use fab::{
     SmallFloatingActionButton,
 };
 pub use icon::{
-    FilledIconButton, FilledIconToggleButton, FilledTonalIconButton, FilledTonalIconToggleButton,
-    Icon, IconButton, IconButtonColors, IconButtonDefaults, IconButtonShapes,
-    IconButtonWidthOption, IconToggleButton, IconToggleButtonColors, IconToggleButtonShapes,
-    OutlinedIconButton, OutlinedIconToggleButton, icons,
+    BitmapIcon, FilledIconButton, FilledIconToggleButton, FilledTonalIconButton,
+    FilledTonalIconToggleButton, Icon, IconButton, IconButtonColors, IconButtonDefaults,
+    IconButtonShapes, IconButtonWidthOption, IconToggleButton, IconToggleButtonColors,
+    IconToggleButtonShapes, OutlinedIconButton, OutlinedIconToggleButton, icons,
 };
 pub use list_item::{
     ClickableListItem, ClickableSegmentedListItem, ListItem, ListItemColors, ListItemDefaults,

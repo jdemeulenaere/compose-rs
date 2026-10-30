@@ -302,11 +302,17 @@ fn draw_op(
             let skia = skia_path(path).make_offset((offset.x, offset.y));
             canvas.clip_path(&skia, ClipOp::Intersect, true);
         }
-        DrawOp::DrawImage { image, src, dst, alpha: image_alpha } => {
+        DrawOp::DrawImage { image, src, dst, alpha: image_alpha, tint } => {
             let (alpha, outer_alpha) = (*image_alpha, alpha);
             if let Some(skia) = skia_image(image) {
                 let mut paint = skia_safe::Paint::default();
                 paint.set_alpha_f(alpha.clamp(0.0, 1.0) * outer_alpha);
+                if let Some(tint) = tint {
+                    paint.set_color_filter(skia_safe::color_filters::blend(
+                        skia_safe::Color::new(tint.argb()),
+                        skia_safe::BlendMode::SrcIn,
+                    ));
+                }
                 let sampling = skia_safe::SamplingOptions::new(
                     skia_safe::FilterMode::Linear,
                     skia_safe::MipmapMode::None,

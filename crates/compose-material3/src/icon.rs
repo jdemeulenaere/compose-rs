@@ -38,6 +38,28 @@ pub fn Icon(
     );
 }
 
+/// A bitmap icon, as Compose's `Icon(bitmap, …)`: its pixels' size unless given another, fitted and
+/// centered, drawn in `tint` (by default the content color, as `ColorFilter.tint`), or in its own
+/// colors with `Color::UNSPECIFIED`.
+#[composable]
+#[allow(non_snake_case)]
+pub fn BitmapIcon(
+    bitmap: compose_ui::ImageBitmap,
+    content_description: Option<impl Into<compose_ui::SharedString>>,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::LOCAL_CONTENT_COLOR.current())] tint: Color,
+) {
+    compose_foundation::Image(
+        bitmap,
+        content_description,
+        modifier,
+        compose_ui::Alignment::CENTER,
+        compose_foundation::ContentScale::Fit,
+        1.0,
+        tint.is_specified().then_some(tint),
+    );
+}
+
 struct IconElement {
     image_vector: ImageVector,
     tint: Color,

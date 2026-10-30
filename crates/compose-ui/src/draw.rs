@@ -257,8 +257,24 @@ impl DrawScope<'_> {
         dst: Rect,
         alpha: f32,
     ) {
+        self.draw_image_tinted(image, src, dst, alpha, None);
+    }
+
+    /// The same, its pixels all in `tint` if any, as `drawImage` with `ColorFilter.tint`.
+    pub fn draw_image_tinted(
+        &mut self,
+        image: &crate::image::ImageBitmap,
+        src: Rect,
+        dst: Rect,
+        alpha: f32,
+        tint: Option<Color>,
+    ) {
+        // Transparent draws nothing: on the wire, 0 is no tint.
+        if tint.is_some_and(|tint| tint.alpha() == 0) {
+            return;
+        }
         let dst = self.to_list(dst);
-        self.list.push(DrawOp::DrawImage { image: image.clone(), src, dst, alpha });
+        self.list.push(DrawOp::DrawImage { image: image.clone(), src, dst, alpha, tint });
     }
 
     /// Draws `path` (in the node's coordinates), as `drawPath`: a `&Path`, its contents as they

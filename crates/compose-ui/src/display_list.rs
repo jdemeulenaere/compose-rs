@@ -39,12 +39,14 @@ pub enum DrawOp {
         rotation: f32,
         translation: Offset,
     },
-    /// The part `src` of a bitmap (in its pixels) drawn into `dst`, at `alpha`.
+    /// The part `src` of a bitmap (in its pixels) drawn into `dst`, at `alpha`, its pixels all in
+    /// `tint` if any, as `ColorFilter.tint` (`SrcIn`).
     DrawImage {
         image: crate::image::ImageBitmap,
         src: Rect,
         dst: Rect,
         alpha: f32,
+        tint: Option<crate::graphics::Color>,
     },
     /// The shadows of `outline` raised by `elevation` pixels, lit from `light` (x, y, z in the
     /// window's pixels, not moved by transforms) of `light_radius`: an ambient shadow in
@@ -319,13 +321,14 @@ impl FlatDisplayList {
                     writeln!(out, "paragraph {} at {} {}", handle.0, offset.x, offset.y)
                 }
                 DrawOp::SaveLayerAlpha { alpha, .. } => writeln!(out, "save layer alpha {alpha}"),
-                DrawOp::DrawImage { image, src, dst, alpha } => writeln!(
+                DrawOp::DrawImage { image, src, dst, alpha, tint } => writeln!(
                     out,
-                    "image {}x{} {} into {} alpha {alpha}",
+                    "image {}x{} {} into {} alpha {alpha}{}",
                     image.width(),
                     image.height(),
                     rect_text(src),
-                    rect_text(dst)
+                    rect_text(dst),
+                    tint.map_or(String::new(), |tint| format!(" tint {tint:?}")),
                 ),
                 DrawOp::DrawPath { path, offset, scale, paint } => writeln!(
                     out,

@@ -615,7 +615,7 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
         tag::DRAW_PARAGRAPH => 12,
         tag::SAVE_LAYER_ALPHA => 16 + 4,
         tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4,
+        tag::DRAW_IMAGE => 4 + 32 + 4 + 4,
         tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
         tag::DRAW_ARC => painted(16 + 8 + 1),
         tag::DRAW_PATH => painted(4 + 16),
@@ -1406,13 +1406,15 @@ fn write_op(
             out.f32(*rotation);
             out.offset(*translation);
         }
-        DrawOp::DrawImage { image, src, dst, alpha } => {
+        DrawOp::DrawImage { image, src, dst, alpha, tint } => {
             let id = resources.image_id(image);
             out.u8(tag::DRAW_IMAGE);
             out.u32(id);
             out.rect(src);
             out.rect(dst);
             out.f32(*alpha);
+            // 0, a transparent tint, is none: `draw_image_tinted` leaves those out.
+            out.color(tint.unwrap_or(Color::TRANSPARENT));
         }
         DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot, .. } => {
             out.u8(tag::DRAW_SHADOW);
@@ -1786,6 +1788,7 @@ mod tests {
             src: Rect::new(0.0, 0.0, 1.0, 1.0),
             dst: Rect::new(0.0, 0.0, 1.0, 1.0),
             alpha: 1.0,
+            tint: None,
         });
         let mut out = Writer::default();
         write_display_list(&list, resources, &mut GroupCache::default(), &mut out);
