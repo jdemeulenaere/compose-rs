@@ -52,18 +52,22 @@ impl UiTree {
     /// Places the overlays in the root with their providers, from their anchors' bounds (inside
     /// the modifiers of the layout around the popup, the parent of its host, as Compose's
     /// `parentLayoutCoordinates`), and moves the focus into those that ask for it when they
-    /// first appear; once one that took it is gone, what had it before gets it back.
+    /// first appear; once one that took it is gone, the window below it takes the keys (D1284).
     fn position_overlays(&mut self) {
         let mut overlays = std::mem::take(&mut self.overlays);
         overlays.retain(|node| self.get(*node).is_some_and(|value| value.overlay));
         self.order_sibling_overlays(&mut overlays);
         self.overlays = overlays;
-        // Closed overlays first give the focus back, so one opened in the same frame (a
-        // dialog replacing a menu) gives it back in turn once it closes.
+        // Closed windows go first, so one opened in the same frame (a dialog replacing a menu)
+        // stacks on what's below them.
         self.close_gone_windows();
         for index in 0..self.overlays.len() {
             let node = self.overlays[index];
             let value = self.node(node);
+            // Put aside: no window until it's reused, opening again then (`OverlayNode::on_reset`).
+            if value.deactivated {
+                continue;
+            }
             let size = value.layers[0].size;
             let anchor_node = value.parent.and_then(|host| self.node(host).parent).or(value.parent);
             let anchor = anchor_node.map_or(crate::unit::Rect::new(0.0, 0.0, 0.0, 0.0), |anchor| {

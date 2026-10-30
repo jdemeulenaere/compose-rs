@@ -118,10 +118,11 @@ pub(crate) struct FocusOwner {
     pub(crate) processing: SmallVec<[(FocusTargetRef, bool); 2]>,
     /// Calls waiting for their node to be back in its chain.
     deferred: Vec<(NodeId, EntryId, EntryId, FocusCall)>,
-    /// The tree itself moves the focus (an overlay taking it or giving it back, inside a layout):
-    /// nothing scrolls, and a modal overlay opening in this frame, which takes it next, doesn't
-    /// shut it out.
+    /// The tree itself moves the focus (an overlay taking it as it opens, inside a layout):
+    /// nothing scrolls.
     pub(crate) moved_by_tree: bool,
+    /// The windows that lost the keys to one opened over them, until the pass ends.
+    pub(crate) windows_losing_keys: SmallVec<[Option<NodeId>; 1]>,
     /// The overlay whose window `active` and `captured` are of: `None`, the main one's. What
     /// takes keys and searches, but for a moment while a target of another's is asked (D1284).
     pub(crate) window: Option<NodeId>,
@@ -352,8 +353,7 @@ impl UiTree {
         self.get(target.node)?.chain.iter().position(|entry| entry.id == target.entry)
     }
 
-    /// Whether `target` is attached: its entry is in its chain, attached, and its delegate there.
-    /// A window's view asked for the focus (`requestFocus(direction, rect)`), as
+    /// The view asked for the focus (`requestFocus(direction, rect)`), as
     /// `AndroidComposeView.requestFocus`: with something focused already nothing changes;
     /// else a search from `previous` (where it was, outside): whether it found something.
     pub(crate) fn owner_requested_focus(
@@ -450,6 +450,12 @@ impl UiTree {
         self.in_window(window, f)
     }
 
+    /// Whether the active target of a window, any window, is one `matches` says.
+    pub(crate) fn a_window_has_active(&self, matches: impl Fn(FocusTargetRef) -> bool) -> bool {
+        self.focus.active.is_some_and(&matches)
+            || self.focus.other_windows.iter().any(|other| other.active.is_some_and(&matches))
+    }
+
     /// `f` in each window: what's asked of the active target, whichever it is.
     pub(crate) fn in_each_window(&mut self, mut f: impl FnMut(&mut UiTree)) {
         f(self);
@@ -470,6 +476,9 @@ impl UiTree {
             return;
         }
         let focus = &mut self.focus;
+        if focus.active.is_some() {
+            focus.windows_losing_keys.push(focus.window);
+        }
         focus.other_windows.push(WindowFocus {
             window: focus.window,
             active: focus.active,
@@ -489,7 +498,7 @@ impl UiTree {
         }
         let is_open = |tree: &UiTree, window: Option<NodeId>| {
             window.is_none_or(|overlay| {
-                tree.get(overlay).is_some_and(|value| value.overlay)
+                tree.get(overlay).is_some_and(|value| value.overlay && !value.deactivated)
                     && tree.overlay_node(overlay).is_some_and(|it| it.focus_on_open)
             })
         };
@@ -521,15 +530,40 @@ impl UiTree {
         }
     }
 
-    /// `is_window_focused` reads this: written after the pass, the tree being in it.
+    /// Another window takes the keys. `is_window_focused` reads this: written after the pass, the
+    /// tree being in it. An input method's connection is the top window's: it starts over, or a
+    /// word it's composing goes to another window's field (D1286).
     fn window_focus_changed(&mut self) {
         let window = self.focus.window;
-        let requests = self.focus_requests.clone();
-        self.focus_requests
-            .side_effects
-            .borrow_mut()
-            .push(Box::new(move || requests.focused_window.0.set(window)));
+        let requests = Rc::downgrade(&self.focus_requests);
+        self.focus_requests.side_effects.borrow_mut().push(Box::new(move || {
+            if let Some(requests) = requests.upgrade() {
+                requests.focused_window.0.set(window);
+            }
+        }));
         self.focus_requests.wake();
+        self.input_method_reset = true;
+    }
+
+    /// Windows with another opened over them hear it, from their active target up
+    /// (`KeyInputModifierNode::on_window_lost_keys`): a field commits what's being composed. Only
+    /// with the frame over, the actions running next: the frame's measuring would take an edit
+    /// whose value hasn't come back for one the application refused.
+    fn tell_windows_losing_keys(&mut self) {
+        for window in mem::take(&mut self.focus.windows_losing_keys) {
+            let is_there = window == self.focus.window
+                || self.focus.other_windows.iter().any(|other| other.window == window);
+            if !is_there {
+                continue;
+            }
+            let (_, mut actions) = self.in_window(window, |tree| {
+                tree.dispatch_to_key_path(|handler, context| {
+                    handler.on_window_lost_keys(context);
+                    false
+                })
+            });
+            self.pending_actions.append(&mut actions);
+        }
     }
 
     /// The event nodes among `events` on the path from this window's active target up: told what
@@ -1627,7 +1661,7 @@ impl UiTree {
     /// it loses it first, its focusability having said so, when the pass ends.
     pub(crate) fn flip_focus_target(&mut self, node: NodeId, entry: EntryId, wanted: bool) {
         if !wanted
-            && self.focus.active.is_some_and(|active| active.node == node && active.entry == entry)
+            && self.a_window_has_active(|active| active.node == node && active.entry == entry)
         {
             self.focus.target_flips.push((node, entry));
             self.focus.recheck_active = true;
@@ -1705,7 +1739,7 @@ impl UiTree {
         events: &[EntryId],
     ) {
         if kinds.any(NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_PROPERTIES)
-            && self.focus.active.is_some()
+            && self.a_window_has_active(|_| true)
         {
             self.focus.recheck_active = true;
         }
@@ -1776,7 +1810,7 @@ impl UiTree {
 
     /// Asks again, after a write to what the active target's properties read.
     pub(crate) fn focus_properties_read_changed(&mut self, node: NodeId) {
-        if self.focus.active.is_some_and(|active| active.node == node) {
+        if self.a_window_has_active(|active| active.node == node) {
             self.focus.recheck_active = true;
         }
     }
@@ -1919,6 +1953,9 @@ impl UiTree {
     /// for the host to run after the frame.
     pub fn take_pending_actions(&mut self) -> Vec<Action> {
         self.flush_focus_invalidations();
+        if !self.focus.windows_losing_keys.is_empty() {
+            self.tell_windows_losing_keys();
+        }
         mem::take(&mut self.pending_actions)
     }
 
@@ -2045,6 +2082,8 @@ pub(crate) struct BeyondSearch {
     pub(crate) exhausted: Vec<(NodeId, usize)>,
     /// The focused target when the search waited: another then is a focus change from outside.
     pub(crate) focused: Option<FocusTargetRef>,
+    /// The window it searches in.
+    pub(crate) window: Option<NodeId>,
 }
 
 /// The generation of the focus: a focus change queued for application code is dropped if the

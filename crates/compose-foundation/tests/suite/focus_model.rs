@@ -1567,3 +1567,272 @@ fn a_text_fields_cursor_shows_only_while_its_window_takes_the_keys() {
     open.set(false);
     assert!(shown(&mut ui), "they're back");
 }
+
+/// A field holding `value`, with a dialog that shows on `open`, holding a field of its own on
+/// `inside` that takes the focus as it opens.
+fn field_and_dialog(
+    value: compose_runtime::MutableState<String>,
+    inside: compose_runtime::MutableState<String>,
+    open: compose_runtime::MutableState<bool>,
+    with_a_field: bool,
+) -> ComposeTestRule {
+    ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Column!({
+            BasicTextField!(
+                value.get(),
+                move |it| value.set(it),
+                single_line = true,
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            if open.get() {
+                Dialog!(on_dismiss_request = move || open.set(false), {
+                    if with_a_field {
+                        let requester = remember(FocusRequester::new);
+                        compose_runtime::LaunchedEffect((), async move {
+                            requester.request_focus();
+                        });
+                        BasicTextField!(
+                            inside.get(),
+                            move |it| inside.set(it),
+                            single_line = true,
+                            modifier = Modifier
+                                .size((100.dp(), 40.dp()))
+                                .focus_requester(requester)
+                                .test_tag("in dialog")
+                        );
+                    } else {
+                        Box!(modifier = Modifier.size(20.dp()));
+                    }
+                });
+            }
+        });
+    })
+}
+
+// The field's connection can't take a composition up again: it's committed (D1286).
+#[test]
+fn a_word_being_composed_is_committed_as_a_dialog_opens_over_its_field() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let value = Box::leak(Box::new(mutable_state_of(String::from("ab")))).handle();
+    let inside = Box::leak(Box::new(mutable_state_of(String::new()))).handle();
+    let mut ui = field_and_dialog(value, inside, open, false);
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    ui.host().send_key(KeyEvent::down(Key::MoveEnd));
+    ui.host().send_preedit("hel", Some((3, 3)));
+    ui.wait_for_idle();
+    ui.host().take_input_method_reset();
+
+    open.set(true);
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "abhel");
+    assert!(ui.host().take_input_method_reset(), "the input method starts over");
+    ui.on_node_with_tag("field").assert_is_focused();
+
+    open.set(false);
+    ui.wait_for_idle();
+    ui.host().send_text("x");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "abhelx");
+}
+
+#[test]
+fn a_word_being_composed_stays_out_of_a_dialogs_field_taking_the_focus_as_it_opens() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let value = Box::leak(Box::new(mutable_state_of(String::from("ab")))).handle();
+    let inside = Box::leak(Box::new(mutable_state_of(String::new()))).handle();
+    let mut ui = field_and_dialog(value, inside, open, true);
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    ui.host().send_key(KeyEvent::down(Key::MoveEnd));
+    ui.host().send_preedit("hel", Some((3, 3)));
+    ui.wait_for_idle();
+    ui.host().take_input_method_reset();
+
+    open.set(true);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in dialog").assert_is_focused();
+    assert_eq!(value.get(), "abhel");
+    // The same options as the field's: only this has the input method start over.
+    assert!(ui.host().take_input_method_reset());
+    ui.host().send_text("x");
+    ui.wait_for_idle();
+    assert_eq!(inside.get(), "x");
+    assert_eq!(value.get(), "abhel");
+}
+
+#[test]
+fn a_word_being_composed_in_a_dialog_stays_out_of_the_field_behind_as_it_closes() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let value = Box::leak(Box::new(mutable_state_of(String::from("ab")))).handle();
+    let inside = Box::leak(Box::new(mutable_state_of(String::new()))).handle();
+    let mut ui = field_and_dialog(value, inside, open, true);
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    ui.host().send_key(KeyEvent::down(Key::MoveEnd));
+    open.set(true);
+    ui.wait_for_idle();
+    ui.host().send_preedit("hel", Some((3, 3)));
+    ui.wait_for_idle();
+    ui.host().take_input_method_reset();
+
+    open.set(false);
+    ui.wait_for_idle();
+    assert!(ui.host().take_input_method_reset());
+    assert_eq!(value.get(), "ab");
+    ui.host().send_text("x");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "abx");
+}
+
+#[test]
+fn a_field_disabled_behind_a_dialog_has_no_keyboard_when_it_closes() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let enabled = Box::leak(Box::new(mutable_state_of(true))).handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Column!({
+            BasicTextField!(
+                String::from("ab"),
+                |_| {},
+                enabled = enabled.get(),
+                modifier = Modifier.size((100.dp(), 40.dp())).test_tag("field")
+            );
+            if open.get() {
+                Dialog!(on_dismiss_request = move || open.set(false), {
+                    Box!(modifier = Modifier.size(20.dp()));
+                });
+            }
+        });
+    });
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    assert!(ui.host().text_input_options().is_some());
+    open.set(true);
+    ui.wait_for_idle();
+    enabled.set(false);
+    ui.wait_for_idle();
+    open.set(false);
+    ui.wait_for_idle();
+    assert!(ui.host().text_input_options().is_none(), "nothing's focused that takes text");
+    assert!(!ui.host().send_text("x"));
+}
+
+#[test]
+fn a_move_from_behind_a_dialog_while_the_dialogs_search_waits_moves_behind_it() {
+    let behind_first = Box::leak(Box::new(Cell::new(FocusState::Inactive)));
+    let behind_second = Box::leak(Box::new(Cell::new(FocusState::Inactive)));
+    let first: &'static Cell<FocusState> = behind_first;
+    let second: &'static Cell<FocusState> = behind_second;
+    let in_list = FocusRequester::new();
+    let start = FocusRequester::new();
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let behind: Manager = Rc::default();
+    let inside: Manager = Rc::default();
+    let (keeping_behind, keeping_inside) = (behind.clone(), inside.clone());
+    let mut ui = compose_test(move || {
+        *keeping_behind.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
+        let keeping_inside = keeping_inside.clone();
+        Column!({
+            Box!(
+                modifier = Modifier
+                    .size(10.dp())
+                    .focus_requester(start)
+                    .on_focus_changed(move |it: FocusState| first.set(it))
+                    .focus_target()
+            );
+            Box!(
+                modifier = Modifier
+                    .size(10.dp())
+                    .on_focus_changed(move |it: FocusState| second.set(it))
+                    .focus_target()
+            );
+            if open.get() {
+                let keeping_inside = keeping_inside.clone();
+                Dialog!(on_dismiss_request = || {}, {
+                    *keeping_inside.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
+                    LazyColumn!(modifier = Modifier.size(10.dp()), move |scope: LazyListScope| {
+                        scope.item(move || {
+                            Box!(
+                                modifier =
+                                    Modifier.size(10.dp()).focus_requester(in_list).focus_target()
+                            );
+                        });
+                        scope.item(move || {
+                            Box!(modifier = Modifier.size(10.dp()).focus_target());
+                        });
+                    });
+                });
+            }
+        });
+    });
+    assert!(start.request_focus());
+    ui.wait_for_idle();
+    open.set(true);
+    ui.wait_for_idle();
+    assert!(in_list.request_focus());
+    ui.wait_for_idle();
+
+    // The dialog's search waits for its list; a move behind it comes before the frame.
+    manager_of(&inside).move_focus(FocusDirection::Next);
+    manager_of(&behind).move_focus(FocusDirection::Next);
+    ui.wait_for_idle();
+    assert_eq!(second.get(), FocusState::Active, "its own window's move");
+    assert_eq!(first.get(), FocusState::Inactive);
+}
+
+#[test]
+fn the_input_method_starts_over_as_a_window_opens_or_closes_with_no_word_being_composed() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let value = Box::leak(Box::new(mutable_state_of(String::from("ab")))).handle();
+    let inside = Box::leak(Box::new(mutable_state_of(String::new()))).handle();
+    let mut ui = field_and_dialog(value, inside, open, true);
+    ui.on_node_with_tag("field").perform_click();
+    ui.wait_for_idle();
+    ui.host().take_input_method_reset();
+
+    // Another field, the same options: what the input method knows of the text isn't its.
+    open.set(true);
+    ui.wait_for_idle();
+    assert!(ui.host().take_input_method_reset());
+    open.set(false);
+    ui.wait_for_idle();
+    assert!(ui.host().take_input_method_reset());
+}
+
+#[test]
+fn a_search_waiting_behind_a_dialog_opening_goes_on_in_its_window() {
+    let heard: &'static RefCell<Vec<FocusState>> = Box::leak(Box::default());
+    let first = FocusRequester::new();
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let kept: Manager = Rc::default();
+    let keeping = kept.clone();
+    let mut ui = compose_test(move || {
+        *keeping.borrow_mut() = Some(LOCAL_FOCUS_MANAGER.current());
+        Column!({
+            LazyColumn!(modifier = Modifier.size(10.dp()), move |scope: LazyListScope| {
+                scope.item(move || {
+                    Box!(modifier = Modifier.size(10.dp()).focus_requester(first).focus_target());
+                });
+                scope.item(move || {
+                    Box!(
+                        modifier = Modifier
+                            .size(10.dp())
+                            .on_focus_changed(move |it: FocusState| heard.borrow_mut().push(it))
+                            .focus_target()
+                    );
+                });
+            });
+            if open.get() {
+                Dialog!(on_dismiss_request = || {}, {
+                    Box!(modifier = Modifier.size(10.dp()));
+                });
+            }
+        });
+    });
+    assert!(first.request_focus());
+    ui.wait_for_idle();
+    manager_of(&kept).move_focus(FocusDirection::Next);
+    open.set(true);
+    ui.wait_for_idle();
+    assert!(heard.borrow().contains(&FocusState::Active), "{:?}", heard.borrow());
+}

@@ -1335,7 +1335,7 @@ impl FocusTargetModifierNode for TextFieldNode {
         let focused = current.is_focused();
         self.pin.focus_changed(focused, context);
         if focused {
-            self.window = Some(context.window_info());
+            self.window = Some(context.current_value_of(&compose_ui::LOCAL_WINDOW_INFO));
         }
         if self.focused == focused {
             return;
@@ -1551,6 +1551,10 @@ impl KeyInputModifierNode for TextFieldNode {
         self.preferred_x = None;
         self.insert(text, true, context);
         true
+    }
+
+    fn on_window_lost_keys(&mut self, context: &mut EventContext<'_>) {
+        self.commit_composition(context);
     }
 
     fn on_preedit(

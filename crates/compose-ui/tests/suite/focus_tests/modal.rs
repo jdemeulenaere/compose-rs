@@ -1,9 +1,10 @@
 //! An overlay that takes the focus is a window of its own, as Compose's dialogs are: what's behind
 //! keeps its focus and takes neither keys nor searches until it closes (D1284).
 
+use std::cell::Cell;
 use std::rc::Rc;
 
-use compose_runtime::{DisposableEffect, ReusableContentHost};
+use compose_runtime::{DisposableEffect, MutableState, ReusableContentHost, remember};
 
 use super::support::*;
 
@@ -67,7 +68,7 @@ fn behind_and_in(scene: Scene) {
     });
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedTest.kt, dispatchKeyEvent_barrierBlocksKeyEventsToOccludedFocusedNode, focusSearch_barrierDismissed_focusTargetBecomesEligibleAgain, activeFocusTarget_barrierDismissed_targetCanBeRefocused
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedTest.kt, dispatchKeyEvent_barrierBlocksKeyEventsToOccludedFocusedNode, focusSearch_barrierDismissed_focusTargetBecomesEligibleAgain
 #[test]
 fn what_had_the_focus_keeps_it_behind_a_modal_and_takes_no_key_until_it_closes() {
     let scene = scene(behind_and_in);
@@ -101,7 +102,6 @@ fn a_capture_behind_a_modal_survives_it() {
     assert_eq!(keys_reach(*scene), ["behind"]);
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusChangedTest.kt, requestFocus_rejectedWhenTargetIsOccludedByBarrier
 #[test]
 fn a_request_behind_a_modal_moves_the_focus_of_that_window_and_not_the_keys() {
     let scene = scene(behind_and_in);
@@ -276,6 +276,267 @@ fn a_target_losing_its_modifier_behind_a_modal_loses_the_focus_there() {
     assert_eq!(scene.state("first"), Active, "the dialog's window keeps its own");
     scene.set("modal", false);
     assert!(!scene.root_has_focus(), "the window behind has none left");
+}
+
+#[test]
+fn a_clear_gives_up_the_view_only_when_no_window_has_the_focus_left() {
+    let (scene, inside, outside) = dialog_scene();
+    let manager = |kept: Kept| kept.borrow().as_ref().expect("composed").0.clone();
+    let asked = |scene: Scene| {
+        scene.idle();
+        scene.with_host(|host| host.take_owner_focus_request())
+    };
+    // The way the view would answer: what it asked for, it hears back.
+    let the_view_answers = |scene: Scene| {
+        if asked(scene) == Some(false) {
+            scene.with_host(|host| host.owner_lost_focus());
+            scene.idle();
+        }
+    };
+
+    // The dialog's first.
+    assert!(scene.request("main"));
+    scene.set("open", true);
+    assert!(scene.request("in dialog"));
+    asked(*scene);
+    manager(inside).clear_focus(false);
+    assert_ne!(asked(*scene), Some(false), "the main window still has it");
+    assert_eq!(scene.state("main"), Active);
+    the_view_answers(*scene);
+    assert_eq!(scene.state("main"), Active);
+
+    // The main window's first.
+    assert!(scene.request("in dialog"));
+    asked(*scene);
+    manager(outside).clear_focus(false);
+    assert_ne!(asked(*scene), Some(false), "the dialog's window still has it");
+    assert_eq!(scene.state("in dialog"), Active);
+    the_view_answers(*scene);
+    assert_eq!(scene.state("in dialog"), Active);
+
+    // The last one gives it up.
+    manager(inside).clear_focus(false);
+    assert_eq!(asked(*scene), Some(false));
+}
+
+/// A modal with no target, whose window has no active target of its own.
+fn modal_with_no_target(scene: Scene) {
+    if scene.flag("modal").get() {
+        Stack!(
+            modifier =
+                Modifier.overlay(Rc::new(WindowPosition), true).required_size((50.dp(), 50.dp())),
+            {}
+        );
+    }
+}
+
+/// A target behind an overlay, whose properties `properties` says in each composition.
+fn behind_with(scene: Scene, properties: impl Fn(Scene) -> Modifier + 'static) {
+    Column!({
+        Leaf(properties(scene).then(keyed(scene, "behind")));
+        modal_with_no_target(scene);
+    });
+}
+
+fn loses_the_focus_behind_a_modal(scene: Scene) {
+    assert!(scene.request("behind"));
+    scene.set("modal", true);
+    scene.set("no", true);
+    assert_eq!(scene.state("behind"), Inactive, "at once, the other window over it");
+    scene.set("modal", false);
+    assert!(!scene.root_has_focus());
+    assert!(keys_reach(scene).is_empty());
+}
+
+#[test]
+fn a_properties_block_refusing_the_focus_behind_a_modal_clears_it_there() {
+    let scene = scene(|scene| {
+        behind_with(scene, |scene| {
+            Modifier.focus_properties(move |properties| {
+                properties.can_focus = !scene.flag("no").get();
+            })
+        });
+    });
+    loses_the_focus_behind_a_modal(*scene);
+}
+
+#[test]
+fn an_element_changing_to_refuse_the_focus_behind_a_modal_clears_it_there() {
+    let scene = scene(|scene| {
+        behind_with(scene, |scene| {
+            let can_focus = !scene.flag("no").get();
+            Modifier.focus_properties(move |properties| properties.can_focus = can_focus)
+        });
+    });
+    loses_the_focus_behind_a_modal(*scene);
+}
+
+#[test]
+fn a_held_targets_focusability_changing_behind_a_modal_clears_it_there() {
+    let held = HeldTarget::new(Focusability::ALWAYS);
+    let scene = scene(move |scene| {
+        Column!({
+            Leaf(held.modifier().size(10.dp()));
+            modal_with_no_target(scene);
+        });
+    });
+    scene.idle();
+    assert!(held.request());
+    scene.idle();
+    scene.set("modal", true);
+    held.take_changes();
+    held.set_focusability(Focusability::NEVER);
+    scene.idle();
+    assert_eq!(held.take_changes(), [(Active, Inactive)]);
+    scene.set("modal", false);
+    assert!(!scene.root_has_focus());
+}
+
+/// A node saying the focus properties changed, as it attaches.
+struct InvalidatesAsItAttaches;
+
+struct InvalidatingNode;
+
+impl ModifierNodeElement for InvalidatesAsItAttaches {
+    type Node = InvalidatingNode;
+    fn create(&self) -> InvalidatingNode {
+        InvalidatingNode
+    }
+    fn update(&self, _node: &mut InvalidatingNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
+    }
+    fn name(&self) -> &'static str {
+        "invalidates_as_it_attaches"
+    }
+}
+
+impl ModifierNode for InvalidatingNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        context.invalidate_focus_properties();
+    }
+}
+
+#[compose_runtime::composable]
+fn attaching_on(flag: MutableState<bool>) {
+    if flag.get() {
+        Leaf(Modifier.then_custom(InvalidatesAsItAttaches));
+    }
+}
+
+#[test]
+fn a_nodes_invalidation_asks_the_window_behind_a_modal_again() {
+    let refused: &'static Cell<bool> = Box::leak(Box::default());
+    let scene = scene(move |scene| {
+        Column!({
+            let refuses =
+                Modifier.focus_properties(move |properties| properties.can_focus = !refused.get());
+            Leaf(refuses.then(keyed(scene, "behind")));
+            // Recomposing alone: the target's chain has nothing to say.
+            attaching_on(scene.flag("no"));
+            modal_with_no_target(scene);
+        });
+    });
+    assert!(scene.request("behind"));
+    scene.set("modal", true);
+    refused.set(true);
+    scene.set("no", true);
+    assert_eq!(scene.state("behind"), Inactive);
+    scene.set("modal", false);
+    assert!(!scene.root_has_focus());
+}
+
+#[test]
+fn a_held_targets_modifier_removed_behind_a_modal_tells_it() {
+    let held = HeldTarget::new(Focusability::ALWAYS);
+    let scene = scene(move |scene| {
+        Column!({
+            let target = if scene.flag("gone").get() { Modifier } else { held.modifier() };
+            Leaf(target.size(10.dp()));
+            overlay(scene, "modal", "window", move || Leaf(scene.target("first").size(10.dp())));
+        });
+    });
+    scene.idle();
+    assert!(held.request());
+    scene.idle();
+    scene.set("modal", true);
+    held.take_changes();
+    scene.set("gone", true);
+    assert_eq!(held.take_changes(), [(Active, Inactive)]);
+    assert_eq!(scene.state("window"), Active);
+}
+
+#[test]
+fn a_targets_modifier_removed_behind_a_modal_with_no_target_leaves_no_focus_when_it_closes() {
+    let scene = scene(|scene| {
+        Column!({
+            let target = if scene.flag("gone").get() { Modifier } else { scene.target("behind") };
+            Leaf(target.size(10.dp()));
+            modal_with_no_target(scene);
+        });
+    });
+    assert!(scene.request("behind"));
+    scene.set("modal", true);
+    scene.set("gone", true);
+    scene.set("modal", false);
+    assert!(!scene.root_has_focus());
+}
+
+#[test]
+fn a_modal_put_aside_stops_taking_the_keys_and_takes_them_again_when_its_back() {
+    let scene = scene(|scene| {
+        let active = !scene.flag("aside").get();
+        Column!({
+            Leaf(keyed(scene, "main"));
+            ReusableContentHost(active, move || {
+                Stack!(
+                    modifier = Modifier
+                        .overlay(Rc::new(WindowPosition), true)
+                        .required_size((50.dp(), 50.dp()))
+                        .focus_target(),
+                    {
+                        Leaf(keyed(scene, "in it"));
+                    }
+                );
+            });
+        });
+    });
+    assert!(scene.request("main"));
+    assert!(scene.request("in it"));
+    assert_eq!(keys_reach(*scene), ["in it"]);
+    scene.set("aside", true);
+    assert_eq!(keys_reach(*scene), ["main"]);
+    scene.set("aside", false);
+    assert!(scene.request("in it"));
+    assert_eq!(keys_reach(*scene), ["in it"]);
+}
+
+#[test]
+fn a_popups_focusable_changing_keeps_its_content() {
+    let composed: &'static Cell<u32> = Box::leak(Box::default());
+    let inside: Kept = Box::leak(Box::default());
+    let outside: Kept = Box::leak(Box::default());
+    let scene = scene(move |scene| {
+        *outside.borrow_mut() = Some((LOCAL_FOCUS_MANAGER.current(), LOCAL_WINDOW_INFO.current()));
+        let focusable = scene.flag("focusable").get();
+        Popup!(properties = PopupProperties { focusable, ..Default::default() }, {
+            remember(|| composed.set(composed.get() + 1));
+            *inside.borrow_mut() =
+                Some((LOCAL_FOCUS_MANAGER.current(), LOCAL_WINDOW_INFO.current()));
+        });
+    });
+    scene.idle();
+    assert_eq!(composed.get(), 1);
+    assert!(window_focused(outside));
+    assert!(window_focused(inside));
+    scene.set("focusable", true);
+    assert_eq!(composed.get(), 1, "it stays");
+    assert!(!window_focused(outside));
+    assert!(window_focused(inside));
+    scene.set("focusable", false);
+    assert_eq!(composed.get(), 1, "it stays");
+    assert!(window_focused(outside));
+    assert!(window_focused(inside), "it's the window beneath it again");
 }
 
 /// An overlay that takes the focus until `stops` says so, as a popup's `focusable` can.

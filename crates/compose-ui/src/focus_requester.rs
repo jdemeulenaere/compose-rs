@@ -174,8 +174,9 @@ impl UiTree {
                 let cleared = self.in_window(window, |tree| {
                     tree.clear_focus_with(force, true, FocusDirection::Exit)
                 });
-                // As `clearOwnerFocus`: in keyboard mode, the view system gives it back.
-                if cleared {
+                // As `clearOwnerFocus`: in keyboard mode, the view system gives it back. One view
+                // stands for all the windows: it stays while another has the focus (D1284).
+                if cleared && !self.a_window_has_active(|_| true) {
                     self.focus_requests.owner_focus.set(Some(false));
                     self.focus_requests.wake();
                 }
@@ -728,7 +729,7 @@ impl NodeContext<'_> {
     /// focusability): the focused target is asked again if it can keep the focus, when the
     /// pass ends, or at the next frame from a callback outside one.
     pub fn invalidate_focus_properties(&mut self) {
-        if self.tree.focus.active.is_some() {
+        if self.tree.a_window_has_active(|_| true) {
             self.tree.focus.recheck_active = true;
             self.tree.focus_requests.wake();
         }
@@ -822,7 +823,7 @@ impl NodeHandle {
     /// As `invalidateFocusProperties` and `focusability`'s setter, from outside the node's code.
     pub fn invalidate_focus_properties(&self) {
         let _ = on_free_tree(self.tree_key(), |tree| {
-            if tree.focus.active.is_some() {
+            if tree.a_window_has_active(|_| true) {
                 tree.focus.recheck_active = true;
                 tree.flush_focus_invalidations();
             }

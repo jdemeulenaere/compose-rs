@@ -720,7 +720,7 @@ impl UiTree {
         None
     }
 
-    fn dispatch_to_key_path(
+    pub(crate) fn dispatch_to_key_path(
         &mut self,
         mut send: impl FnMut(
             &mut dyn crate::modifier::KeyInputModifierNode,

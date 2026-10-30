@@ -192,14 +192,10 @@ pub fn PopupWithPositionProvider(
                 );
             }
             let content = content.clone();
-            let focusable = properties.focusable;
             // A focusable popup is a window of its own: what's in it sees that window's focus.
+            let in_window = properties.focusable.then_some(token);
             let content = compose_runtime::callback(move || {
-                if focusable {
-                    crate::focus_manager::in_window_of_token(token.clone(), || content());
-                } else {
-                    content();
-                }
+                crate::focus_manager::in_window_of_token(in_window.clone(), || content());
             });
             compose_runtime::CompositionLocalProvider(
                 crate::back::LOCAL_BACK_LAYER.provides(layer),
@@ -262,7 +258,7 @@ pub fn Dialog(
             let content = compose_runtime::callback(move || {
                 let content = content.clone();
                 let stack = stack.clone();
-                crate::focus_manager::in_window_of_token(token.clone(), move || {
+                crate::focus_manager::in_window_of_token(Some(token.clone()), move || {
                     Layout(
                         Modifier.semantics(|config| config.dialog()),
                         stack,

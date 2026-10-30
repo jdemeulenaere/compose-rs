@@ -520,6 +520,9 @@ impl UiHost {
                 props: self.props.clone(),
                 events: self.events.clone(),
                 insets: crate::configuration::WindowInsetsSource::of(self.window_insets.clone()),
+                window_info: crate::focus_manager::WindowInfo::main(
+                    self.with_tree(|tree| Rc::downgrade(&tree.focus_requests)),
+                ),
             };
             let configuration = self.configuration.handle();
             let content: compose_runtime::Callback = compose_runtime::callback(content);
@@ -1131,6 +1134,7 @@ struct HostLocals {
     props: crate::configuration::HostProps,
     events: crate::configuration::HostEvents,
     insets: crate::configuration::WindowInsetsSource,
+    window_info: crate::focus_manager::WindowInfo,
 }
 
 impl HostLocals {
@@ -1148,6 +1152,7 @@ impl HostLocals {
                         .provides(Some(self.navigation_events.clone())),
                     crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
                         .provides(Some(self.back_dispatcher.clone())),
+                    crate::focus_manager::LOCAL_WINDOW_INFO.provides(self.window_info.clone()),
                 ),
                 compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
                     .provides(Some(self.saveable_registry.clone())),

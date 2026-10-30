@@ -141,7 +141,7 @@ The geometry-only 2D tests (`TwoDimensionalFocusTraversalTwoItemsTest`, `…Thre
 
 ## A.6 What the implementation settled
 
-FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1284). Where they differ from the text above: `FocusState` is one enum (D1267); a block's requests act at once, the tree set aside for it (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
+FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1286). Where they differ from the text above: `FocusState` is one enum (D1267); a block's requests act at once, the tree set aside for it (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
 
 # Part B: semantics
 

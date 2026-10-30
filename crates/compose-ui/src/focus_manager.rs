@@ -70,6 +70,11 @@ impl WindowInfo {
         WindowInfo { requests: composing_tree_requests(), window: None }
     }
 
+    /// The main window of the host with these `requests`.
+    pub(crate) fn main(requests: Weak<FocusRequests>) -> WindowInfo {
+        WindowInfo { requests, window: None }
+    }
+
     /// Whether this window takes the keys now, as `isWindowFocused`: a state. Only another
     /// window of this host over it says no here: the platform's window isn't asked yet.
     pub fn is_window_focused(&self) -> bool {
@@ -96,30 +101,26 @@ impl std::fmt::Debug for WindowInfo {
     }
 }
 
-/// The window of `node`.
-pub(crate) fn window_info_of(tree: &UiTree, node: crate::tree::NodeId) -> WindowInfo {
-    let window = tree.focus_window_of(node);
-    WindowInfo {
-        requests: Rc::downgrade(&tree.focus_requests),
-        window: window.map(|overlay| WindowToken(Rc::new(Cell::new(Some(overlay))))),
-    }
-}
-
-/// The window of what's composing, as Compose's `LocalWindowInfo`. A node asks
-/// `NodeContext::window_info`.
+/// The window of what's composing, as Compose's `LocalWindowInfo`: the host provides its main
+/// window's, a dialog or a focusable popup its own.
 pub static LOCAL_WINDOW_INFO: CompositionLocal<WindowInfo> =
     CompositionLocal::new("LocalWindowInfo", WindowInfo::of_composing_tree);
 
-/// `content` in the window `token` names: its focus manager and window info are that window's.
-pub(crate) fn in_window_of_token(token: WindowToken, content: impl FnOnce()) {
+/// `content` in the window `token` names (its focus manager and window info are that window's),
+/// or `None`, in the window around it: the same groups either way, so that a popup's `focusable`
+/// changing keeps its content.
+pub(crate) fn in_window_of_token(token: Option<WindowToken>, content: impl FnOnce()) {
     let manager = LOCAL_FOCUS_MANAGER.current();
     let info = LOCAL_WINDOW_INFO.current();
-    compose_runtime::CompositionLocalProvider(
-        (
-            LOCAL_FOCUS_MANAGER
-                .provides(FocusManager { requests: manager.requests, window: Some(token.clone()) }),
-            LOCAL_WINDOW_INFO.provides(WindowInfo { requests: info.requests, window: Some(token) }),
+    let (manager, info) = match token {
+        Some(token) => (
+            FocusManager { requests: manager.requests, window: Some(token.clone()) },
+            WindowInfo { requests: info.requests, window: Some(token) },
         ),
+        None => (manager, info),
+    };
+    compose_runtime::CompositionLocalProvider(
+        (LOCAL_FOCUS_MANAGER.provides(manager), LOCAL_WINDOW_INFO.provides(info)),
         content,
     );
 }

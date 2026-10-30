@@ -1523,6 +1523,9 @@ pub trait KeyInputModifierNode {
     fn on_text_input(&mut self, _text: &str, _context: &mut EventContext<'_>) -> bool {
         false
     }
+    /// Another window opened over this node's and takes the keys: it keeps its focus. An input
+    /// method's connection doesn't follow it back, so what's being composed is committed (D1286).
+    fn on_window_lost_keys(&mut self, _context: &mut EventContext<'_>) {}
     /// The text an input method is composing (pinyin, kana, a dead key), shown until it is
     /// committed or cancelled (empty), with the cursor's byte range in it, if any.
     fn on_preedit(

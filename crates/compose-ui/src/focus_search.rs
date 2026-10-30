@@ -61,8 +61,14 @@ impl UiTree {
 
     pub(crate) fn move_focus_with(&mut self, direction: FocusDirection, wrap: bool) -> bool {
         if self.has_beyond_bounds_moves() {
-            self.beyond_search.moves.push_back(direction);
-            return true;
+            if self.beyond_search.window == self.focus.window {
+                self.beyond_search.moves.push_back(direction);
+                return true;
+            }
+            // Another window's move: it wins, as a focus change from outside does (D495). Each
+            // window could wait on its own, were there a search per window.
+            self.beyond_search.moves.clear();
+            self.end_beyond_bounds();
         }
         self.focus.move_stopped = false;
         let moved = self.search_and_move_focus(direction, wrap);
@@ -720,6 +726,7 @@ impl UiTree {
         self.beyond_search.steps += 1;
         self.beyond_search.moves.push_back(direction);
         self.beyond_search.focused = self.focus.active;
+        self.beyond_search.window = self.focus.window;
         true
     }
 
@@ -745,14 +752,22 @@ impl UiTree {
     /// out (each may wait again, for one more item).
     pub fn run_beyond_bounds_moves(&mut self) -> Vec<Action> {
         let moves = std::mem::take(&mut self.beyond_search.moves);
-        // The focus moved meanwhile (a click, a `FocusRequester`): that wins, the search and
-        // the moves waiting go (D495).
-        if !moves.is_empty() && self.focus.active != self.beyond_search.focused {
-            self.end_beyond_bounds();
+        let window = self.beyond_search.window;
+        // In the window it started in, whichever has the keys now.
+        let ended = self.in_window(window, |tree| {
+            // The focus moved meanwhile (a click, a `FocusRequester`): that wins, the search and
+            // the moves waiting go (D495).
+            if !moves.is_empty() && tree.focus.active != tree.beyond_search.focused {
+                tree.end_beyond_bounds();
+                return true;
+            }
+            for direction in moves {
+                tree.move_focus_with(direction, true);
+            }
+            false
+        });
+        if ended {
             return Vec::new();
-        }
-        for direction in moves {
-            self.move_focus_with(direction, true);
         }
         self.take_pending_actions()
     }
