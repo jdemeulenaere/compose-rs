@@ -400,69 +400,19 @@ struct IndicationElement {
     factory: Rc<dyn IndicationNodeFactory>,
 }
 
-/// An attached hosted node gone for good (replaced, or its clickable leaving): detached, as
-/// Compose's `undelegate`, then what it holds given back (D1064).
-pub(crate) fn detach_and_release(mut node: Box<dyn ModifierNode>, context: &mut NodeContext<'_>) {
-    node.on_detach(context);
-    node.on_release(&mut context.release_context());
-}
-
-/// Hosts the factory's node, made again for a new source or a factory not the same.
+/// Delegates to the factory's node, made again for a new source or a factory not the same, as
+/// Compose's `IndicationModifierNode`.
 pub(crate) struct IndicationHostNode {
-    node: Box<dyn ModifierNode>,
-    /// Whether the node draws its content itself, asked when it was made.
-    draws_content: bool,
-    /// Whether `node` is attached (attached with its host, as Compose's delegate).
-    attached: bool,
-    /// Nodes replaced while attached, detached and released by `run_lifecycle`.
-    retired: Vec<Box<dyn ModifierNode>>,
-    /// The host's handle while it's attached, for `run_lifecycle` from a task (an update has
-    /// no context: MN-5's delegates will do this at once).
-    handle: Option<NodeHandle>,
-    /// A task runs `run_lifecycle` soon. Shared with the task: it says it's done even if the
-    /// tree was busy and the node out of reach.
-    lifecycle_scheduled: Rc<std::cell::Cell<bool>>,
+    delegates: crate::delegation::Delegates,
+    node: Option<crate::node_chain::EntryId>,
+    /// What an update asks for: made when it has a context, the old one gone by then.
+    next: Option<(Rc<dyn IndicationNodeFactory>, InteractionSource)>,
 }
 
 impl IndicationHostNode {
-    pub(crate) fn new(mut node: Box<dyn ModifierNode>) -> IndicationHostNode {
-        let draws_content = node.as_draw().is_some_and(|draw| draw.draws_content());
-        IndicationHostNode {
-            node,
-            draws_content,
-            attached: false,
-            retired: Vec::new(),
-            handle: None,
-            lifecycle_scheduled: Rc::default(),
-        }
-    }
-
-    /// Hosts `node` instead, the old one detached soon, as Compose's `undelegate`.
-    fn replace(&mut self, mut node: Box<dyn ModifierNode>) {
-        self.draws_content = node.as_draw().is_some_and(|draw| draw.draws_content());
-        let old = std::mem::replace(&mut self.node, node);
-        if std::mem::take(&mut self.attached) {
-            self.retired.push(old);
-        }
-        let Some(handle) = self.handle else { return };
-        let Some(scope) = handle.coroutine_scope() else { return };
-        if self.lifecycle_scheduled.replace(true) {
-            return;
-        }
-        let scheduled = self.lifecycle_scheduled.clone();
-        scope.launch(async move {
-            scheduled.set(false);
-            handle.with_node(|host: &mut IndicationHostNode, context| host.run_lifecycle(context));
-        });
-    }
-
-    fn run_lifecycle(&mut self, context: &mut NodeContext<'_>) {
-        for node in self.retired.drain(..) {
-            detach_and_release(node, context);
-        }
-        if context.is_attached() && !self.attached {
-            self.node.on_attach(context);
-            self.attached = true;
+    fn make_next(&mut self) {
+        if let Some((factory, source)) = self.next.take() {
+            self.node = Some(self.delegates.delegate_boxed(factory.create(source)));
         }
     }
 }
@@ -471,11 +421,22 @@ impl ModifierNodeElement for IndicationElement {
     type Node = IndicationHostNode;
 
     fn create(&self) -> IndicationHostNode {
-        IndicationHostNode::new(self.factory.create(self.source.clone()))
+        let mut node = IndicationHostNode {
+            delegates: crate::delegation::Delegates::new(),
+            node: None,
+            next: Some((self.factory.clone(), self.source.clone())),
+        };
+        node.make_next();
+        node
     }
 
+    /// As `IndicationModifierNode.update`: undelegates, makes the new one and delegates to it.
     fn update(&self, node: &mut IndicationHostNode) {
-        node.replace(self.factory.create(self.source.clone()));
+        if let Some(old) = node.node.take() {
+            node.delegates.undelegate_boxed(old);
+        }
+        node.next = Some((self.factory.clone(), self.source.clone()));
+        node.delegates.ask_for_context();
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -489,68 +450,15 @@ impl ModifierNodeElement for IndicationElement {
 }
 
 impl ModifierNode for IndicationHostNode {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
+    fn delegates(&mut self) -> Option<&mut crate::delegation::Delegates> {
+        Some(&mut self.delegates)
     }
-    fn observes_reads(&self) -> bool {
-        true
+    fn on_update_with_context(&mut self, _: &mut NodeContext<'_>) {
+        self.make_next();
     }
-    fn is_composition_local_consumer(&self) -> bool {
-        true
-    }
-    fn on_composition_locals_changed(&mut self, context: &mut NodeContext<'_>) {
-        if self.attached {
-            self.node.on_composition_locals_changed(context);
-        }
-    }
-    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
-        self.handle = Some(context.handle());
-        self.run_lifecycle(context);
-    }
-    fn on_detach(&mut self, context: &mut NodeContext<'_>) {
-        if std::mem::take(&mut self.attached) {
-            self.node.on_detach(context);
-        }
-        for node in self.retired.drain(..) {
-            detach_and_release(node, context);
-        }
-        self.handle = None;
-        // Its task goes with its coroutine scope.
-        self.lifecycle_scheduled.set(false);
-    }
-    /// Its node's too if it's attached, as `DelegatingNode.reset` resets its delegates.
-    fn on_reset(&mut self, context: &mut NodeContext<'_>) {
-        if self.attached {
-            self.node.on_reset(context);
-        }
-    }
-    fn on_release(&mut self, context: &mut crate::modifier::ReleaseContext<'_>) {
-        for node in self.retired.iter_mut() {
-            node.on_release(context);
-        }
-        self.node.on_release(context);
-    }
-}
-
-/// Draws as the hosted node does.
-impl DrawModifierNode for IndicationHostNode {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        if let Some(draw) = self.node.as_draw() {
-            draw.draw(scope);
-        }
-    }
-    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
-        if let Some(draw) = self.node.as_draw() {
-            draw.draw_after(scope);
-        }
-    }
-    fn draws_content(&self) -> bool {
-        self.draws_content
-    }
-    fn draw_with_content(&mut self, scope: &mut crate::draw_modifiers::ContentDrawScope<'_, '_>) {
-        if let Some(draw) = self.node.as_draw() {
-            draw.draw_with_content(scope);
-        }
+    /// An update while it wasn't attached, or a reuse in its pass.
+    fn on_attach(&mut self, _: &mut NodeContext<'_>) {
+        self.make_next();
     }
 }
 
@@ -815,15 +723,14 @@ mod tests {
                         entry.node.downcast_ref::<IndicationHostNode>().is_some()
                     });
                 if let Some(index) = found {
-                    tree.with_entry(id, index, |node, context| {
+                    tree.with_entry(id, index, |node, _| {
                         let host = node.downcast_mut::<IndicationHostNode>().expect("the host");
-                        // Its node out, a new one made and not yet attached, which hears a press.
-                        host.on_detach(context);
+                        // A new one made and not yet attached, which hears a press.
                         let factory = state_layer_factory(Color::RED, None);
-                        host.replace(factory.create(source.as_source().clone()));
+                        host.delegates.undelegate_boxed(host.node.take().expect("its node"));
+                        let new = factory.create(source.as_source().clone());
+                        host.node = Some(host.delegates.delegate_boxed(new));
                         source.try_emit(PressInteraction::Press(Press::new(Offset::ZERO)));
-                        assert!(!context.tree.has_node_requests(), "nothing to ask through");
-                        host.on_attach(context);
                     });
                     return;
                 }

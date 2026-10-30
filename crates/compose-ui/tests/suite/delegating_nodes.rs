@@ -2121,7 +2121,36 @@ fn a_delegate_attached_in_a_kept_node_s_on_detach_hears_its_on_detach() {
     assert_eq!(take_log(), ["attach late", "detach late"]);
 }
 
-// ---- What the tree only asks a chain's node ---------------------------------------------------
+// ---- compose-rs's extras, on delegates --------------------------------------------------------
+
+/// A node that's only a delegating one, over `delegate`.
+struct Over(Delegates);
+
+impl ModifierNode for Over {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.0)
+    }
+}
+
+/// An element of a node delegating to what `make` makes.
+struct OverElement<N>(Rc<dyn Fn() -> N>);
+
+impl<N: ModifierNode> ModifierNodeElement for OverElement<N> {
+    type Node = Over;
+    fn create(&self) -> Over {
+        let mut delegates = Delegates::new();
+        delegates.delegate((self.0)());
+        Over(delegates)
+    }
+    fn update(&self, _: &mut Over) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn over<N: ModifierNode>(make: impl Fn() -> N + 'static) -> Modifier {
+    Modifier.then_custom(OverElement(Rc::new(make)))
+}
 
 struct Boundary;
 
@@ -2131,12 +2160,49 @@ impl ModifierNode for Boundary {
     }
 }
 
-struct BeyondBounds;
+#[test]
+fn a_delegate_may_be_a_repaint_boundary() {
+    let groups = |modifier: fn() -> Modifier| {
+        let mut host = UiHost::headless(200, 100);
+        host.set_content(move || Leaf(modifier().size(10.dp())));
+        host.frame();
+        host.with_tree(|tree| tree.display_list().groups.len())
+    };
+    assert_eq!(groups(|| over(|| Boundary)), groups(|| Modifier) + 1);
+}
+
+struct BeyondBounds(Rc<Cell<u32>>);
 
 impl ModifierNode for BeyondBounds {
     fn is_beyond_bounds_layout(&self) -> bool {
         true
     }
+    fn lay_out_beyond_bounds(&mut self, _: FocusDirection, _: LayoutDirection) -> bool {
+        self.0.set(self.0.get() + 1);
+        false
+    }
+}
+
+#[test]
+fn a_delegate_may_lay_out_beyond_bounds_for_a_focus_search() {
+    let asked = Rc::new(Cell::new(0));
+    let a = asked.clone();
+    let requester = FocusRequester::new();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let a = a.clone();
+        Stack(
+            over(move || BeyondBounds(a.clone())).size(50.dp()),
+            callback(move || {
+                Leaf(Modifier.focus_requester(requester).focusable().size(10.dp()));
+            }),
+        );
+    });
+    host.frame();
+    requester.request_focus();
+    host.frame();
+    host.with_tree(|tree| tree.move_focus_in(FocusDirection::Down));
+    assert!(asked.get() > 0, "the search asked it");
 }
 
 struct Clips;
@@ -2147,23 +2213,235 @@ impl ModifierNode for Clips {
     }
 }
 
-// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeKind.kt, Nodes
+/// What's outside a delegate's clip isn't hit, and its coordinates are clipped by it.
 #[test]
-#[should_panic(expected = "is a repaint boundary")]
-fn delegating_to_a_repaint_boundary_panics_in_debug() {
-    Delegates::new().delegate(Boundary);
+fn a_delegate_may_clip_hits_and_bounds() {
+    let clicks = Rc::new(Cell::new(0));
+    let bounds = Rc::new(Cell::new(None));
+    let (c, b) = (clicks.clone(), bounds.clone());
+    let policy = measure_policy(|scope, measurables, constraints| {
+        for &measurable in measurables {
+            let placeable = scope.measure(measurable, constraints.loosen());
+            scope.place(&placeable, 20, 0);
+        }
+        scope.layout(30, 30)
+    });
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let (c, b) = (c.clone(), b.clone());
+        Layout(
+            over(|| Clips),
+            policy.clone(),
+            callback(move || {
+                let (c, b) = (c.clone(), b.clone());
+                Leaf(
+                    Modifier
+                        .clickable(move || c.set(c.get() + 1))
+                        .on_globally_positioned(move |coordinates: LayoutCoordinates| {
+                            b.set(Some(coordinates.bounds_in_root()))
+                        })
+                        .size(20.dp()),
+                );
+            }),
+        );
+    });
+    host.frame();
+    click(&mut host, 25.0, 5.0);
+    assert_eq!(clicks.get(), 1, "inside");
+    click(&mut host, 35.0, 5.0);
+    assert_eq!(clicks.get(), 1, "outside the delegate's clip");
+    let bounds = bounds.get().expect("told");
+    assert_eq!(bounds.right, 30.0, "clipped by the delegate");
+}
+
+struct Scrolls(Rc<Cell<u32>>);
+
+impl ModifierNode for Scrolls {
+    fn bring_into_view(&mut self, rect: Rect, _: IntSize) -> Option<Rect> {
+        self.0.set(self.0.get() + 1);
+        Some(rect)
+    }
 }
 
 #[test]
-#[should_panic(expected = "lays out beyond its bounds")]
-fn delegating_to_a_beyond_bounds_layout_panics_in_debug() {
-    Delegates::new().delegate(BeyondBounds);
+fn a_delegate_may_scroll_something_into_view() {
+    let asked = Rc::new(Cell::new(0));
+    let a = asked.clone();
+    let leaf = Rc::new(Cell::new(None));
+    let l = leaf.clone();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let (a, l) = (a.clone(), l.clone());
+        Stack(
+            over(move || Scrolls(a.clone())).size(50.dp()),
+            callback(move || {
+                Leaf(Modifier.then_custom(KnowsItsNodeElement(l.clone())).size(10.dp()));
+            }),
+        );
+    });
+    host.frame();
+    let node = leaf.get().expect("attached");
+    host.with_tree(|tree| tree.bring_into_view(node));
+    assert_eq!(asked.get(), 1);
 }
 
+struct KnowsItsNode(Rc<Cell<Option<NodeId>>>);
+
+impl ModifierNode for KnowsItsNode {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(Some(context.layout_node()));
+    }
+}
+
+struct KnowsItsNodeElement(Rc<Cell<Option<NodeId>>>);
+
+impl ModifierNodeElement for KnowsItsNodeElement {
+    type Node = KnowsItsNode;
+    fn create(&self) -> KnowsItsNode {
+        KnowsItsNode(self.0.clone())
+    }
+    fn update(&self, _: &mut KnowsItsNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// ---- An update's context, and each consumer told ------------------------------------------------
+
+struct AsksContext(Delegates, Rc<RefCell<Vec<&'static str>>>);
+
+impl ModifierNode for AsksContext {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.0)
+    }
+    fn on_update_with_context(&mut self, context: &mut NodeContext<'_>) {
+        assert!(context.is_attached());
+        self.1.borrow_mut().push("with context");
+    }
+    fn on_attach(&mut self, _: &mut NodeContext<'_>) {
+        self.1.borrow_mut().push("attach");
+    }
+}
+
+struct AsksContextElement(i32, Rc<RefCell<Vec<&'static str>>>);
+
+impl ModifierNodeElement for AsksContextElement {
+    type Node = AsksContext;
+    fn create(&self) -> AsksContext {
+        AsksContext(Delegates::new(), self.1.clone())
+    }
+    fn update(&self, node: &mut AsksContext) {
+        node.0.ask_for_context();
+        self.1.borrow_mut().push("update");
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+/// An `update` asking for a context gets it when its pass's lifecycle runs.
 #[test]
-#[should_panic(expected = "clips hits")]
-fn delegating_to_a_hit_clip_panics_in_debug() {
-    Delegates::new().delegate(Clips);
+fn an_update_may_ask_for_its_context() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let version = mutable_state_of(0);
+    let (v, l) = (version.handle(), log.clone());
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.then_custom(AsksContextElement(v.get(), l.clone())));
+    });
+    host.frame();
+    assert_eq!(*log.borrow(), ["attach"]);
+    version.set(1);
+    host.frame();
+    assert_eq!(*log.borrow(), ["attach", "update", "with context"]);
+}
+
+/// Asked for again from there, it's dropped: nothing to spin on.
+#[test]
+fn asking_for_a_context_from_it_is_dropped() {
+    struct AsksAgain(Delegates, Rc<Cell<u32>>);
+    impl ModifierNode for AsksAgain {
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+        fn on_update_with_context(&mut self, _: &mut NodeContext<'_>) {
+            self.1.set(self.1.get() + 1);
+            self.0.ask_for_context();
+        }
+    }
+    struct AsksAgainElement(i32, Rc<Cell<u32>>);
+    impl ModifierNodeElement for AsksAgainElement {
+        type Node = AsksAgain;
+        fn create(&self) -> AsksAgain {
+            AsksAgain(Delegates::new(), self.1.clone())
+        }
+        fn update(&self, node: &mut AsksAgain) {
+            node.0.ask_for_context();
+        }
+        fn same(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    let told = Rc::new(Cell::new(0));
+    let version = mutable_state_of(0);
+    let (v, t) = (version.handle(), told.clone());
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        Leaf(Modifier.then_custom(AsksAgainElement(v.get(), t.clone())));
+    });
+    host.frame();
+    version.set(1);
+    host.frame();
+    assert_eq!(told.get(), 1);
+}
+
+struct Consumes(&'static str, Rc<RefCell<Vec<&'static str>>>, Delegates);
+
+impl ModifierNode for Consumes {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.2)
+    }
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+    fn on_composition_locals_changed(&mut self, _: &mut NodeContext<'_>) {
+        self.1.borrow_mut().push(self.0);
+    }
+}
+
+struct ConsumesElement(Rc<RefCell<Vec<&'static str>>>);
+
+impl ModifierNodeElement for ConsumesElement {
+    type Node = Consumes;
+    fn create(&self) -> Consumes {
+        let mut delegates = Delegates::new();
+        delegates.delegate(Consumes("delegate", self.0.clone(), Delegates::new()));
+        Consumes("owner", self.0.clone(), delegates)
+    }
+    fn update(&self, _: &mut Consumes) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeKind.kt, autoInvalidateNodeIncludingDelegates
+#[test]
+fn a_consumer_and_its_delegate_are_each_told_of_new_locals() {
+    static LOCAL: CompositionLocal<i32> = CompositionLocal::new_static("Local", || 0);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let value = mutable_state_of(0);
+    let (v, l) = (value.handle(), log.clone());
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let l = l.clone();
+        CompositionLocalProvider(LOCAL.provides(v.get()), move || {
+            Leaf(Modifier.then_custom(ConsumesElement(l.clone())));
+        });
+    });
+    host.frame();
+    value.set(1);
+    host.frame();
+    assert_eq!(*log.borrow(), ["owner", "delegate"]);
 }
 
 // ---- `invalidate_layer` -----------------------------------------------------------------------

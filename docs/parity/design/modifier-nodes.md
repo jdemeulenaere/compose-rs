@@ -150,7 +150,7 @@ pub trait ModifierNode: Any {
     /// Its delegates, for a delegating node (§3.7).
     fn delegates(&mut self) -> Option<&mut Delegates> { None }
 
-    // compose-rs extras stay: is_repaint_boundary, hit_clip(_at), is_pointer_observer,
+    // compose-rs extras stay, and reach delegates (D1194): is_repaint_boundary, hit_clip(_at), is_pointer_observer,
     // bring_into_view, is_beyond_bounds_layout, lay_out_beyond_bounds, end_beyond_bounds.
 }
 ```
@@ -285,7 +285,7 @@ impl<E: ModifierNodeElement> AnyModifierNodeElement for E { /* downcasts once, h
 
 ### 3.7 Delegation
 
-As built (D1169, D1170, D1173, D1179): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes); `delegate_attached(node, context)` attaches inside the call from a callback, `delegate` once the code returns; compose-rs's extras stay the chain's node's. The rest is as below.
+As built (D1169, D1170, D1173, D1179; extras reach delegates since D1194, and a clickable and `Modifier.indication` delegate to their indication's node, D1193): delegates are named by their own `EntryId` instead of a `DelegatePath` (an index shifts when an earlier delegate goes); `delegate_attached(node, context)` attaches inside the call from a callback, `delegate` once the code returns; compose-rs's extras reach delegates (D1194). The rest is as below.
 
 **Reaching the delegator.** Compose's delegate calls its `node`, or a sibling, through a field. Here a delegate can't reach its owner while either runs: the owner is out of its chain, its delegates inside it, and the borrow is the owner's. So what they share goes in an `Rc` they both hold (a `Cell` or `RefCell` of the clickable's interaction state), made in `create` before the delegate is, and what a delegate asks *of* its owner goes through a deferred handle:
 
@@ -383,7 +383,7 @@ Compose's `traverseKey: Any` compared with `==` becomes a `&'static TraverseKey`
 
 **`ObserverModifierNode`**: `trait ObserverModifierNode { fn on_observed_reads_changed(&mut self, cx: &mut NodeContext<'_>); }`, and `NodeContext::observe_reads(block)` observes `block`'s state reads under a key naming the entry. The tree's `ReadObserver` keys are `(NodeId, kind)` (`tree.rs:32-46`); entry observers get their own `ReadObserver` keyed by `EntryId`, with a side map `EntryId → NodeId`. A write that changes what was read queues `on_observed_reads_changed` once (the key is forgotten when it fires, as Compose's one-shot); the call runs at the next drain point, outside passes, if the entry is still attached (`ObserverNodeOwnerScope.isObservationValid`).
 
-As built (D1182, D1183): the handle is `CompositionLocalAnchor`, with its provider's version so a provider's change that recomposes its content gives its nodes a new one and no one else's (D1190); `MeasureScope` and `DrawScope` read through it too, and `observe_reads` in those takes the node's handle: **known difference**, `NodeHandle::observe_reads` where Compose's node calls `observeReads` itself, measuring and drawing having no `NodeContext` (the scopes' closures hold the tree for the content). `LOCAL_DENSITY`, `LOCAL_LAYOUT_DIRECTION` and `LOCAL_VIEW_CONFIGURATION` are static, and they are resolved only when a node's anchor changes, so no per-emission walk remains.
+As built (D1182, D1183): the handle is `CompositionLocalAnchor`, with its provider's version so a provider's change that recomposes its content gives its nodes a new one and no one else's (D1190). **Known difference:** a node removed in the same pass its provider's static value changes reads the default in `on_detach`, where Compose's, holding its map, reads the old value (D1190); `MeasureScope` and `DrawScope` read through it too, and `observe_reads` in those takes the node's handle: **known difference**, `NodeHandle::observe_reads` where Compose's node calls `observeReads` itself, measuring and drawing having no `NodeContext` (the scopes' closures hold the tree for the content). `LOCAL_DENSITY`, `LOCAL_LAYOUT_DIRECTION` and `LOCAL_VIEW_CONFIGURATION` are static, and they are resolved only when a node's anchor changes, so no per-emission walk remains.
 
 **`CompositionLocalConsumerModifierNode`**: `NodeContext::current_value_of(&LOCAL)` reads the layout node's captured locals. This needs a runtime handle the runtime ledger lists under `local-variants` (`CompositionLocalMap`, `currentCompositionLocalMap`): compose-rs's locals are provider groups in the slot table found by walking the enclosing providers (`crates/compose-runtime/src/local.rs:1-10`, `86-120`), so the handle is an anchor to the nearest provider group above the emitting group, and `get(local)` walks from it outside composition. A provided value is a state cell, so a read inside measure, draw, semantics or `observe_reads` is observed for free. `emit_layout_node` (`crates/compose-ui/src/layout.rs:324-342`) stores the anchor on the node; when it changes, the node's consumer entries are auto-invalidated as updated (`LayoutNode.kt:789-803`). A read before attach or after detach panics, as Compose's (`CompositionLocalConsumerModifierNode.kt:71-75`).
 

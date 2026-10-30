@@ -73,6 +73,8 @@ pub struct Delegates {
     removed: Vec<DelegateEntry>,
     /// Delegated or undelegated since the tree last looked.
     changed: bool,
+    /// `ask_for_context` since the tree last looked.
+    wants_context: bool,
     /// The kinds of what was attached, detached or released since the tree last brought the
     /// chain up to date: what it invalidates then, and its kinds again.
     pending: NodeKinds,
@@ -104,16 +106,14 @@ impl Delegates {
     ///
     /// A node may have at most one delegate of the layout kind unless it implements
     /// `as_layout` itself, as Compose's rule: the tree panics when it looks otherwise.
-    ///
-    /// compose-rs's own extras aren't dispatched to delegates (`ModifierNode::delegates`): in
-    /// debug builds, a delegate that is a repaint boundary, a beyond-bounds layout, a selectable
-    /// or clips hits panics here. `bring_into_view` can't be asked without its effects, so it
-    /// isn't checked: the node owning a scrolling delegate forwards it.
-    pub fn delegate<N: ModifierNode>(&mut self, mut node: N) -> Delegate<N> {
-        if cfg!(debug_assertions) {
-            check_not_an_extra(&mut node);
-        }
-        let own = NodeKinds::of_delegate(&mut node);
+    pub fn delegate<N: ModifierNode>(&mut self, node: N) -> Delegate<N> {
+        let id = self.delegate_boxed(Box::new(node));
+        Delegate { id, _node: PhantomData }
+    }
+
+    /// `delegate` of a node whose type isn't known (an indication factory's), by its name.
+    pub(crate) fn delegate_boxed(&mut self, mut node: Box<dyn ModifierNode>) -> EntryId {
+        let own = NodeKinds::of_delegate(&mut *node);
         let kinds = match node.delegates() {
             Some(delegates) => own | delegates.refresh_kinds(own),
             None => own,
@@ -122,9 +122,19 @@ impl Delegates {
             next.set(next.get() + 1);
             EntryId(DELEGATE_ID | next.get())
         });
-        self.entries.push(DelegateEntry { node: Box::new(node), own, kinds, id, state: 0 });
+        self.entries.push(DelegateEntry { node, own, kinds, id, state: 0 });
         self.changed = true;
-        Delegate { id, _node: PhantomData }
+        id
+    }
+
+    /// Asks for `ModifierNode::on_update_with_context` once the code running returns, if the node
+    /// is attached: what an element's `update`, which has no context, leaves to do with one
+    /// (Compose's `update` is the node's own code, with all it can reach). compose-rs's, for its
+    /// own nodes; asked from `on_update_with_context`, it's dropped.
+    #[doc(hidden)]
+    pub fn ask_for_context(&mut self) {
+        self.wants_context = true;
+        self.changed = true;
     }
 
     /// Makes `node` a delegate from a callback, attaching it inside this call if the owner is
@@ -136,10 +146,20 @@ impl Delegates {
         node: N,
         context: &mut NodeContext<'_>,
     ) -> Delegate<N> {
+        let id = self.delegate_boxed_attached(Box::new(node), context);
+        Delegate { id, _node: PhantomData }
+    }
+
+    /// `delegate_attached` of a node whose type isn't known, by its name.
+    pub(crate) fn delegate_boxed_attached(
+        &mut self,
+        node: Box<dyn ModifierNode>,
+        context: &mut NodeContext<'_>,
+    ) -> EntryId {
         let changed = self.changed;
-        let delegate = self.delegate(node);
+        let id = self.delegate_boxed(node);
         if context.tree.delegates_wait {
-            return delegate;
+            return id;
         }
         self.changed = changed;
         let entry = self.entries.last_mut().expect("just delegated to");
@@ -150,7 +170,7 @@ impl Delegates {
             mark_delegate_attached(entry, &requests);
             run_delegate_attach(entry, context);
         }
-        delegate
+        id
     }
 
     /// Stops delegating to `delegate`, as `DelegatingNode.undelegate`: once the owner's code
@@ -159,7 +179,12 @@ impl Delegates {
     ///
     /// Panics if it isn't a delegate of this node (any more), as Compose's.
     pub fn undelegate<N: ModifierNode>(&mut self, delegate: Delegate<N>) {
-        let index = self.position(delegate.id);
+        self.undelegate_boxed(delegate.id);
+    }
+
+    /// `undelegate` by its name.
+    pub(crate) fn undelegate_boxed(&mut self, id: EntryId) {
+        let index = self.position(id);
         self.removed.push(self.entries.remove(index));
         self.changed = true;
     }
@@ -217,6 +242,13 @@ impl Delegates {
         pending
     }
 
+    /// `refresh_kinds` for a chain's entry: with `DELEGATING` if it has delegates, which a hit
+    /// test asks for clips.
+    pub(crate) fn entry_kinds(&mut self, owner: NodeKinds) -> NodeKinds {
+        let union = self.refresh_kinds(owner);
+        if union.is_empty() { union } else { union | NodeKinds::DELEGATING }
+    }
+
     /// The union of its delegates' kinds, theirs brought up to date first; `owner` is what the
     /// node holding it implements itself. Panics on two layout delegates under an owner that
     /// isn't a layout node itself, as Compose's `validateDelegateKindSet`.
@@ -239,16 +271,45 @@ impl Delegates {
     }
 }
 
-/// Debug builds: panics for a delegate answering what the tree only asks a chain's node.
-fn check_not_an_extra(node: &mut dyn ModifierNode) {
-    let name = "compose-ui: a delegate that";
-    let what = "isn't told: the tree asks only a chain's node (`ModifierNode::delegates`)";
-    assert!(!node.is_repaint_boundary(), "{name} is a repaint boundary {what}");
-    assert!(!node.is_beyond_bounds_layout(), "{name} lays out beyond its bounds {what}");
-    assert!(node.as_selectable().is_none(), "{name} is selectable {what}");
-    let size = crate::unit::Size::new(1.0, 1.0);
-    let density = crate::unit::Density::new(1.0);
-    assert!(node.hit_clip_at(size, density).is_none(), "{name} clips hits {what}");
+/// The clip of `node` or, if it has none, of its first delegate with one: compose-rs's extra, as
+/// a kind's dispatch but asked of each, a graphics layer's being known only when asked.
+pub(crate) fn hit_clip_of(
+    node: &mut dyn ModifierNode,
+    size: crate::unit::Size,
+    density: crate::unit::Density,
+) -> Option<crate::graphics::Shape> {
+    if let Some(clip) = node.hit_clip_at(size, density) {
+        return Some(clip);
+    }
+    let delegates = node.delegates()?;
+    delegates.entries.iter_mut().find_map(|entry| hit_clip_of(&mut *entry.node, size, density))
+}
+
+/// `node`'s `bring_into_view` or, if it doesn't scroll, its first delegate's that does.
+pub(crate) fn bring_into_view_of(
+    node: &mut dyn ModifierNode,
+    rect: crate::unit::Rect,
+    viewport: crate::unit::IntSize,
+) -> Option<crate::unit::Rect> {
+    if let Some(moved) = node.bring_into_view(rect, viewport) {
+        return Some(moved);
+    }
+    let delegates = node.delegates()?;
+    delegates
+        .entries
+        .iter_mut()
+        .find_map(|entry| bring_into_view_of(&mut *entry.node, rect, viewport))
+}
+
+/// `node` if it's selectable, or its first delegate that is, for `as_selectable`.
+pub(crate) fn selectable_of(
+    node: &mut dyn ModifierNode,
+) -> Option<&mut dyn crate::text_selection::Selectable> {
+    if node.as_selectable().is_some() {
+        return node.as_selectable();
+    }
+    let delegates = node.delegates()?;
+    delegates.entries.iter_mut().find_map(|entry| selectable_of(&mut *entry.node))
 }
 
 /// Calls `f` for `node`, whose own kinds are `own`, if it's of `kind`, else for each of its
@@ -497,6 +558,10 @@ pub(crate) fn run_on_delegates(
 /// even if its owner is leaving its chain. Each `on_detach` follows one `on_attach`.
 pub(crate) fn detach_with_delegates(node: &mut dyn ModifierNode, context: &mut NodeContext<'_>) {
     node.on_detach(context);
+    // What an update left to do with a context is over: attached again, it starts from nothing.
+    if let Some(delegates) = node.delegates() {
+        delegates.wants_context = false;
+    }
     sync_node(node, context.is_attached(), context);
     let Some(delegates) = node.delegates() else { return };
     for entry in delegates.entries.iter_mut().rev() {
@@ -605,7 +670,7 @@ impl UiTree {
         let entry = &mut self.node_mut(node).chain[index];
         let (id, own, before) = (entry.id, entry.own, entry.kinds);
         let (kinds, changes) = match entry.node.delegates() {
-            Some(delegates) => (own | delegates.refresh_kinds(own), delegates.take_pending()),
+            Some(delegates) => (own | delegates.entry_kinds(own), delegates.take_pending()),
             None => (own, NodeKinds::NONE),
         };
         entry.kinds = kinds;
@@ -630,7 +695,7 @@ impl UiTree {
         let entry = &mut self.node_mut(node).chain[index];
         let before = entry.kinds;
         if !before.all(kinds) {
-            entry.kinds |= kinds;
+            entry.kinds |= kinds | NodeKinds::DELEGATING;
             let after = entry.kinds;
             self.entry_kinds_changed(node, before, after);
         }
@@ -673,6 +738,12 @@ fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeCont
         context.tree.mark_delegate_detached(&mut gone);
         context.tree.release_delegate(gone);
     }
+    // Between: Compose's `update` undelegates, makes the new one and delegates to it, in order.
+    if delegates.wants_context && attached {
+        node.on_update_with_context(context);
+    }
+    let Some(delegates) = node.delegates() else { return };
+    delegates.wants_context = false;
     let requests = context.tree.focus_requests.clone();
     for entry in &mut delegates.entries {
         if attached && entry.state & entry_state::ATTACHED == 0 {
@@ -685,5 +756,64 @@ fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeCont
                 sync_node(node, attached, context);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use super::*;
+    use crate::text::{SharedString, TextMeasurer};
+    use crate::text_selection::Selectable;
+    use crate::unit::Offset;
+
+    struct Text(&'static str);
+
+    impl Selectable for Text {
+        fn text(&self) -> SharedString {
+            SharedString::from(self.0)
+        }
+        fn offset_at(&self, _: Offset, _: &mut dyn TextMeasurer) -> Option<usize> {
+            None
+        }
+        fn word_at(&self, _: usize) -> Range<usize> {
+            0..0
+        }
+        fn set_selection(&mut self, _: Option<Range<usize>>, _: &mut dyn TextMeasurer) -> bool {
+            false
+        }
+    }
+
+    impl ModifierNode for Text {
+        fn as_selectable(&mut self) -> Option<&mut dyn Selectable> {
+            Some(self)
+        }
+    }
+
+    struct Owner(Delegates);
+
+    impl ModifierNode for Owner {
+        fn delegates(&mut self) -> Option<&mut Delegates> {
+            Some(&mut self.0)
+        }
+    }
+
+    /// Asked of the node, then of its delegates, in the order they were delegated to, down
+    /// theirs.
+    #[test]
+    fn a_selectable_is_found_on_a_delegate() {
+        let mut inner = Delegates::new();
+        inner.delegate(Text("inner"));
+        let mut outer = Delegates::new();
+        outer.delegate(Owner(Delegates::new()));
+        outer.delegate(Owner(inner));
+        outer.delegate(Text("last"));
+        let mut owner = Owner(outer);
+        let found = selectable_of(&mut owner).map(|text| text.text());
+        assert_eq!(found, Some(SharedString::from("inner")));
+        let mut own = Text("own");
+        assert_eq!(selectable_of(&mut own).map(|t| t.text()), Some(SharedString::from("own")));
+        assert!(selectable_of(&mut Owner(Delegates::new())).is_none());
     }
 }

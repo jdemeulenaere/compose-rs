@@ -145,9 +145,9 @@ impl UiTree {
             let mut layer = 0;
             for index in 0..self.node(node).chain.len() {
                 let bits = self.node(node).chain[index].kinds;
-                let version = self.get_mut(node).and_then(|value| {
-                    value.chain[index].node.as_selectable().map(|text| text.version())
-                });
+                let version = self
+                    .get_mut(node)
+                    .and_then(|value| value.chain[index].selectable().map(|text| text.version()));
                 if let Some(version) = version {
                     let origin = self.layer_origin(node, layer);
                     let size = self.node(node).layers[layer].measured;
@@ -170,7 +170,7 @@ impl UiTree {
 
     fn selectable_text(&mut self, node: NodeId, index: usize) -> SharedString {
         self.get_mut(node)
-            .and_then(|value| value.chain[index].node.as_selectable().map(|text| text.text()))
+            .and_then(|value| value.chain[index].selectable().map(|text| text.text()))
             .unwrap_or(SharedString::EMPTY)
     }
 
@@ -179,7 +179,7 @@ impl UiTree {
         let local = position - entry.origin;
         self.node_and_measurer(entry.node)
             .and_then(|(value, (measurer, _))| {
-                value.chain[entry.index].node.as_selectable()?.offset_at(local, measurer)
+                value.chain[entry.index].selectable()?.offset_at(local, measurer)
             })
             .unwrap_or(0)
     }
@@ -232,7 +232,7 @@ impl UiTree {
     fn word(&mut self, point: Point) -> Range<usize> {
         self.get_mut(point.node)
             .and_then(|value| {
-                value.chain[point.index].node.as_selectable().map(|text| text.word_at(point.offset))
+                value.chain[point.index].selectable().map(|text| text.word_at(point.offset))
             })
             .unwrap_or(point.offset..point.offset)
     }
@@ -364,7 +364,7 @@ impl UiTree {
             let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
             if let Some((value, (measurer, _))) = self.node_and_measurer(entry.node)
-                && let Some(selectable) = value.chain[entry.index].node.as_selectable()
+                && let Some(selectable) = value.chain[entry.index].selectable()
                 && selectable.set_selection(range, measurer)
             {
                 self.invalidate_draw_of(entry.node);

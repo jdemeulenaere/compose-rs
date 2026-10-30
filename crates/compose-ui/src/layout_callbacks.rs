@@ -549,36 +549,41 @@ impl UiTree {
     /// The coordinates of layer `layer` of `node`, for its chain entry `entry`: its bounds
     /// clipped by the clipping modifiers around it (its own before the entry, and its
     /// ancestors').
-    fn coordinates(&self, node: NodeId, layer: usize, entry: usize) -> LayoutCoordinates {
-        let value = self.node(node);
-        let size = value.layers[layer].size;
+    fn coordinates(&mut self, node: NodeId, layer: usize, entry: usize) -> LayoutCoordinates {
+        let size = self.node(node).layers[layer].size;
         let origin = self.map_to_root(node, layer, Some(entry), Offset::ZERO);
         let mut bounds = self.rect_in_root(node, layer, Some(entry), size);
-        let clip_node = |id: NodeId, before_entry: Option<usize>, bounds: &mut Rect| {
-            let value = self.node(id);
-            let mut layer_of_entry = 0;
-            for (index, entry) in value.chain.iter().enumerate() {
-                if before_entry.is_some_and(|before| index >= before) {
-                    break;
-                }
-                let size = value.layers[layer_of_entry].size;
-                if entry.node.hit_clip_at(size.into(), value.density).is_some() {
-                    let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
-                    *bounds = intersect(*bounds, clip);
-                }
-                if value.chain[index].kinds.any(NodeKinds::LAYOUT) {
-                    layer_of_entry += 1;
-                }
-            }
-        };
-        clip_node(node, Some(entry), &mut bounds);
+        self.clip_by_node(node, Some(entry), &mut bounds);
+        let value = self.node(node);
         let mut current = if value.overlay { None } else { value.parent };
         while let Some(id) = current {
-            clip_node(id, None, &mut bounds);
+            self.clip_by_node(id, None, &mut bounds);
             let value = self.node(id);
             current = if value.overlay { None } else { value.parent };
         }
         LayoutCoordinates { size, position_in_root: origin, clipped_bounds: bounds }
+    }
+
+    /// `bounds` clipped by the clipping modifiers of `id`, those before chain entry `before_entry`
+    /// if it's given.
+    fn clip_by_node(&mut self, id: NodeId, before_entry: Option<usize>, bounds: &mut Rect) {
+        let mut layer_of_entry = 0;
+        for index in 0..self.node(id).chain.len() {
+            if before_entry.is_some_and(|before| index >= before) {
+                break;
+            }
+            let value = self.node_mut(id);
+            let size = value.layers[layer_of_entry].size;
+            let density = value.density;
+            let is_layout = value.chain[index].kinds.any(NodeKinds::LAYOUT);
+            if value.chain[index].hit_clip_at(size.into(), density).is_some() {
+                let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
+                *bounds = intersect(*bounds, clip);
+            }
+            if is_layout {
+                layer_of_entry += 1;
+            }
+        }
     }
 
     /// The bounding box in the root of a rectangle of `size` at the origin of layer `layer` of
