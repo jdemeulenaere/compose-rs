@@ -7,6 +7,7 @@ mod annotated_string;
 mod annotated_string_builder;
 mod delegating_nodes;
 mod dp_offset;
+mod focus_tests;
 mod intrinsics;
 mod layout_aware_nodes;
 mod modifier_locals;

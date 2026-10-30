@@ -10,6 +10,7 @@ mod drawing_api;
 mod effects;
 mod fling;
 mod flow_layout;
+mod focus_model;
 mod focus_requester;
 mod forms;
 mod foundation;
