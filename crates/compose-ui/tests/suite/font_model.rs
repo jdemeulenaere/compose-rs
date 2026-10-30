@@ -3,8 +3,9 @@
 
 use compose_ui::platform::FontMatcher;
 use compose_ui::{
-    Density, DeviceFontFamilyName, Font, FontFamily, FontLoadingStrategy, FontOptions, FontStyle,
-    FontVariation, FontVariationSetting, FontVariationSettings, FontWeight, Typeface, UnitExt,
+    Density, DeviceFontFamilyName, Font, FontBytes, FontFamily, FontLoadingStrategy, FontOptions,
+    FontStyle, FontVariation, FontVariationSetting, FontVariationSettings, FontWeight, Typeface,
+    UnitExt,
 };
 
 const RESOURCE: &[u8] = b"a font";
@@ -57,6 +58,19 @@ fn a_font_makes_a_family_of_itself() {
     let family = font.to_font_family();
     let FontFamily::FontList(list) = &family else { panic!("a font list: {family:?}") };
     assert_eq!(list.fonts(), std::slice::from_ref(&font));
+}
+
+#[test]
+fn bytes_are_the_same_allocation_only_where_they_are_shared() {
+    let first: std::sync::Arc<[u8]> = vec![1u8, 2, 3].into();
+    let elsewhere: std::sync::Arc<[u8]> = vec![1u8, 2, 3].into();
+    let shared = FontBytes::Shared(first.clone());
+    assert!(shared.is_same_allocation(&FontBytes::Shared(first)));
+    assert!(!shared.is_same_allocation(&FontBytes::Shared(elsewhere.clone())));
+    assert!(shared == FontBytes::Shared(elsewhere));
+    static BYTES: [u8; 3] = [1, 2, 3];
+    assert!(FontBytes::Static(&BYTES).is_same_allocation(&FontBytes::Static(&BYTES)));
+    assert!(!FontBytes::Static(&BYTES).is_same_allocation(&FontBytes::Static(&BYTES[..2])));
 }
 
 #[test]

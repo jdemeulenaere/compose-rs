@@ -19,6 +19,7 @@ use compose_ui::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use crate::serialize::Writer;
 
@@ -115,6 +116,35 @@ impl Drop for AndroidTypeface {
 /// The numbers of the typefaces dropped since the last call.
 pub fn take_dropped_typefaces() -> Vec<u32> {
     DROPPED_TYPEFACES.with(|dropped| std::mem::take(&mut *dropped.borrow_mut()))
+}
+
+/// A typeface a worker loaded, on its way to the main thread. Its load may be gone by the time it
+/// gets there (past its timeout, say): dropped, on whichever thread, its number is queued for
+/// the Kotlin table to let it go ([`take_abandoned_typefaces`]).
+pub struct LoadedTypeface(pub u32);
+
+static ABANDONED_TYPEFACES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+impl LoadedTypeface {
+    /// Its number, for the thread that was waiting for it to hold.
+    pub fn into_number(self) -> u32 {
+        let number = self.0;
+        std::mem::forget(self);
+        number
+    }
+}
+
+impl Drop for LoadedTypeface {
+    fn drop(&mut self) {
+        ABANDONED_TYPEFACES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(self.0);
+    }
+}
+
+/// The numbers of the typefaces loaded for nobody since the last call.
+pub fn take_abandoned_typefaces() -> Vec<u32> {
+    std::mem::take(
+        &mut *ABANDONED_TYPEFACES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
 }
 
 struct Entry {

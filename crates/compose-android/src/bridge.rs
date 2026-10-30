@@ -204,7 +204,11 @@ impl JniFonts {
         bytes: &compose_ui::FontBytes,
     ) -> Arc<Global<JObject<'static>>> {
         let mut buffers = self.buffers.borrow_mut();
-        if let Some(found) = buffers.iter().position(|(kept, _)| kept == bytes) {
+        let found = buffers
+            .iter()
+            .position(|(kept, _)| kept.is_same_allocation(bytes))
+            .or_else(|| buffers.iter().position(|(kept, _)| kept == bytes));
+        if let Some(found) = found {
             let entry = buffers.remove(found);
             let buffer = entry.1.clone();
             buffers.push(entry);
@@ -372,20 +376,24 @@ impl compose_ui::platform::PlatformFontLoader for JniFonts {
             let Some(request) = request else {
                 return Err("a font of an application's loader".to_string());
             };
-            let number = compose_runtime::spawn_background(move || {
+            let loaded = compose_runtime::spawn_background(move || {
                 vm().attach_current_thread(|env| -> jni::errors::Result<jint> {
                     Ok(JniFonts::load(env, &measurer, &request, &settings))
                 })
-                .unwrap_or(-1)
+                .ok()
+                .filter(|number| *number >= 0)
+                .map(|number| crate::text::LoadedTypeface(number as u32))
             })
             .await;
             self.release_dropped();
+            let number = loaded.map_or(-1, |loaded| loaded.into_number() as jint);
             JniFonts::result_of(number, &font)
         })
     }
 
     fn release_dropped(&self) {
-        let dropped = crate::text::take_dropped_typefaces();
+        let mut dropped = crate::text::take_dropped_typefaces();
+        dropped.extend(crate::text::take_abandoned_typefaces());
         if dropped.is_empty() {
             return;
         }

@@ -81,7 +81,16 @@ fn path_of(font: &compose_ui::Font) -> Option<std::path::PathBuf> {
 impl SkiaFontLoader {
     fn base_of(&self, font: &compose_ui::Font) -> Option<Typeface> {
         let mut bases = self.bases.borrow_mut();
-        let found = bases.iter().position(|(source, _)| source == font.source())?;
+        use compose_ui::FontSource::Bytes;
+        // The very bytes first: a copy of a large font elsewhere in the list costs a comparison
+        // of all of it.
+        let found = bases
+            .iter()
+            .position(|(source, _)| match (source, font.source()) {
+                (Bytes(kept), Bytes(asked)) => kept.is_same_allocation(asked),
+                _ => false,
+            })
+            .or_else(|| bases.iter().position(|(source, _)| source == font.source()))?;
         let entry = bases.remove(found);
         let typeface = entry.1.clone();
         bases.push(entry);

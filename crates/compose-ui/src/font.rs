@@ -246,13 +246,18 @@ impl FontBytes {
             FontBytes::Shared(bytes) => bytes,
         }
     }
+
+    /// Whether these are the very bytes of `other`, not a copy of them: a question that costs
+    /// nothing, for a cache to ask of all it holds before comparing any contents.
+    pub fn is_same_allocation(&self, other: &FontBytes) -> bool {
+        std::ptr::eq(self.as_slice(), other.as_slice())
+    }
 }
 
 impl PartialEq for FontBytes {
     /// Comparing the same bytes costs nothing, which is nearly always the comparison asked.
     fn eq(&self, other: &Self) -> bool {
-        let (first, second) = (self.as_slice(), other.as_slice());
-        std::ptr::eq(first, second) || first == second
+        self.is_same_allocation(other) || self.as_slice() == other.as_slice()
     }
 }
 
