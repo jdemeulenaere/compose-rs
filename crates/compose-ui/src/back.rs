@@ -105,10 +105,9 @@ impl OnBackPressedDispatcher {
 pub static LOCAL_ON_BACK_PRESSED_DISPATCHER: CompositionLocal<Option<OnBackPressedDispatcher>> =
     CompositionLocal::new("LocalOnBackPressedDispatcher", || None);
 
-/// Whether the `BackHandler`s of the content may take back: `false` disables them all, as
-/// Navigation Compose's back stack entries that aren't resumed (an entry fading out, under a
-/// `NavHost` transition) disable theirs through their lifecycle. A container providing it
-/// provides `false` inside content already disabled.
+/// Whether the `BackHandler`s of the content may take back: `false` disables them all. A container
+/// providing it provides `false` inside content already disabled. An entry leaving a `NavDisplay`
+/// disables its own through its lifecycle.
 pub static LOCAL_BACK_HANDLERS_ENABLED: CompositionLocal<bool> =
     CompositionLocal::new("LocalBackHandlersEnabled", || true);
 

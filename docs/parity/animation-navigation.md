@@ -14,7 +14,7 @@ The inventory of Compose's animation and navigation tests and public API against
   - Navigation Compose: `navigation/navigation-compose`, on top of `navigation-runtime`'s `NavController`: inventoried below, all `n/a: replaced by Navigation 3 (D704)`;
   - Navigation 3: `navigation3/navigation3-runtime` and `navigation3/navigation3-ui`.
 
-  **`crates/compose-navigation` stays as it is until Navigation 3 replaces it.** It's still the Navigation Compose model of D291 (`NavController`, `NavHost`, `NavBackStackEntry`, `NavOptions`, `remember_nav_controller`), with destinations that are values of the app's own type `match`ed in `NavHost`. It takes no new features: D704 replaces it rather than keeping both, so the work goes to Navigation 3 (see [navigation3](#navigation3)), which starts once the runtime's state collections land (S3 of the snapshot work).
+  `crates/compose-navigation` is Navigation 3 (D704): the Navigation Compose model of D291 is gone.
 - **Test source sets:** all of them: `commonTest`, `androidHostTest`, `androidDeviceTest`. Helper files with no `@Test` are left out of the table (9 of them: `AnimationTestUtils.kt`, the 4 `IgnoreAndroidHostTestTarget*.kt`, the 2 `TestUtils.kt`, `TestNestedTransitionScenes.kt`, `TestDualPaneScenes.kt`). Counts are `grep -cE '^\s*@Test\b'` per file. `SharedTransitionTest.kt` has 71 `@Test` lines for 69 named methods.
 - **API:** each module's `api/current.txt`. `restricted_current.txt` was used only to tell what isn't public. Experimental means an `@Experimental*` opt-in annotation on the declaration. At this tip, almost nothing in animation is experimental:
   - `ArcAnimationSpec` (`@ExperimentalAnimationSpecApi`);
@@ -319,7 +319,7 @@ Deprecated and left out:
 
 ### Navigation Compose (`androidx.navigation.compose`) and `NavController`
 
-`n/a: replaced by Navigation 3 (D704)`. `crates/compose-navigation` has what follows, and stays as it is until Navigation 3 replaces it; what it lacks of Navigation Compose (graphs, dialog destinations, entry owners, pop transitions, saved back stacks, deep links) isn't to be added to it.
+`n/a: replaced by Navigation 3 (D704)`. `crates/compose-navigation` had what follows, and has it no more.
 
 - `remember_nav_controller(start)`, `NavController`:
   - `navigate`, `navigate_with(NavOptions { pop_up_to, pop_up_to_inclusive, launch_single_top })`;
@@ -653,10 +653,7 @@ nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and 
   - Tests: 8 files (211 tests).
   - Dependencies: a URI type and a decoding trait (the analogue of kotlinx.serialization), and a platform path delivering links: on Android an `Intent`, which is n/a, or a desktop URL handler.
 
-Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting beside it: its crate's users move then, and what's left of D291's goes. With `navigation3-ui`:
-
-- **Deleted:** `crates/compose-navigation/src/controller.rs`, `src/host.rs`, `tests/suite/navigation.rs`, and the `NavHost` parts of `tests/suite/review.rs`.
-- **Migrated:** `examples/gallery`, `examples/guide/src/navigation.rs`, `docs/guide/kotlin-to-rust.md`, `docs/guide/differences.md`, `docs/06-ui.md`, `docs/11-status.md`, `README.md`, and a comment in `crates/compose-ui/src/back.rs`.
+Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavController` and `NavHost` are gone, and its users, the gallery and the guide, are on `NavDisplay`.
 
 ### Suggested order
 

@@ -4,7 +4,7 @@
 //! `compose::runtime` is `androidx.compose.runtime`, `compose::ui` is `androidx.compose.ui`
 //! (with `graphics`, `unit` and `text`), `compose::foundation` (with `layout`) and
 //! `compose::material3` and `compose::animation` are their Compose namesakes,
-//! `compose::navigation` is Navigation Compose's `androidx.navigation.compose`, and, with the
+//! `compose::navigation` is Navigation 3's `androidx.navigation3`, and, with the
 //! `test` feature, `compose::test` is `androidx.compose.ui.test`.
 //!
 //! The app-facing surface is what these modules export at their top level. Each crate also has
@@ -50,9 +50,8 @@ pub mod animation {
     pub use compose_animation::*;
 }
 
-/// Navigation 3's runtime (`androidx.navigation3.runtime`): `NavEntry`, `NavBackStack` and
-/// `remember_decorated_nav_entries`; and, until `NavDisplay` replaces them (D704), `NavController`
-/// and `NavHost`, with typed destinations.
+/// `androidx.navigation3`: `NavDisplay`, `NavEntry`, `NavBackStack` and
+/// `remember_nav_back_stack`, with typed keys, and scenes.
 pub mod navigation {
     pub use compose_navigation::*;
 }

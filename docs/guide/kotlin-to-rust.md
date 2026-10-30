@@ -27,7 +27,7 @@ compose-rs keeps Compose's names, parameter names, parameter order and defaults,
 
 | Kotlin | compose-rs |
 |---|---|
-| `androidx.compose.runtime`, `.ui`, `.foundation`, `.foundation.layout`, `.material3`, `.animation`; `androidx.navigation.compose` | `compose::runtime`, `compose::ui`, `compose::foundation`, `compose::foundation::layout`, `compose::material3`, `compose::animation`; `compose::navigation` |
+| `androidx.compose.runtime`, `.ui`, `.foundation`, `.foundation.layout`, `.material3`, `.animation`; `androidx.navigation3` | `compose::runtime`, `compose::ui`, `compose::foundation`, `compose::foundation::layout`, `compose::material3`, `compose::animation`; `compose::navigation` |
 | `@Composable fun Greeting(…)` | `#[composable] fn Greeting(…)`, called `Greeting!(…)` |
 | `rememberLazyListState()`, `mutableStateOf(0)` | `remember_lazy_list_state!()`, `mutable_state_of(0)` |
 | `Modifier.fillMaxWidth().padding(16.dp)` | `Modifier.fill_max_width().padding(16.dp())` |
@@ -1871,53 +1871,32 @@ pub fn Loading(loading: bool) {
 
 ## Navigation
 
-`compose::navigation` is a small Navigation Compose: a `NavController` holds a back stack of destinations, and a `NavHost` shows the top one. Destinations are values of the app's own type, an enum typically, rather than routes: a `match` takes the place of the graph builder, and an enum variant's fields are its arguments.
+`compose::navigation` is Navigation 3: the back stack is state the app owns, a list of keys of its own type (an enum, typically), and `NavDisplay` shows the entries an entry provider makes of them. Kotlin's `entry<K>` matches keys by class; here a `match` on the enum does it, and `entry_provider` is there for the DSL.
 
 ```kotlin
-@Serializable object Inbox
-@Serializable data class Message(val id: Int)
-@Serializable object Settings
+@Serializable data object Inbox : NavKey
+@Serializable data class Message(val id: Int) : NavKey
+@Serializable data object Settings : NavKey
 
-val navController = rememberNavController()
-NavHost(navController, startDestination = Inbox) {
-    composable<Inbox> {
-        Inbox(onOpen = { id -> navController.navigate(Message(id)) },
-              onSettings = { navController.navigate(Settings) })
+val backStack = rememberNavBackStack(Inbox)
+NavDisplay(backStack, entryProvider = entryProvider {
+    entry<Inbox> {
+        Inbox(onOpen = { id -> backStack.add(Message(id)) }, onSettings = { backStack.add(Settings) })
     }
-    composable<Message> { entry -> MessageScreen(entry.toRoute<Message>().id) }
-    composable<Settings> { SettingsScreen() }
-}
+    entry<Message> { key -> MessageScreen(key.id) }
+    entry<Settings> { SettingsScreen() }
+})
 ```
 
 <!-- snippet: src/navigation.rs#screens -->
 ```rust
-/// The app's destinations: Navigation Compose's routes, as an enum (`ComposeArg`, so a
-/// composable can take one).
-#[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
+/// The app's screens: Navigation 3's keys, as an enum. Saved field by field, so the back stack
+/// survives the activity's recreation.
+#[derive(Clone, Copy, PartialEq, Debug, ComposeArg, Saveable)]
 pub enum Screen {
     Inbox,
     Message(u32),
     Settings,
-}
-
-/// Saved as a number, so the back stack survives the activity's recreation.
-impl Saveable for Screen {
-    fn save(&self) -> SavedValue {
-        SavedValue::Int(match *self {
-            Screen::Inbox => -1,
-            Screen::Settings => -2,
-            Screen::Message(id) => i64::from(id),
-        })
-    }
-
-    fn restore(saved: &SavedValue) -> Option<Screen> {
-        match *saved {
-            SavedValue::Int(-1) => Some(Screen::Inbox),
-            SavedValue::Int(-2) => Some(Screen::Settings),
-            SavedValue::Int(id) => u32::try_from(id).ok().map(Screen::Message),
-            _ => None,
-        }
-    }
 }
 ```
 
@@ -1926,49 +1905,57 @@ impl Saveable for Screen {
 #[composable]
 pub fn App() {
     // The back stack, starting at the inbox: saved, so it survives the activity's recreation.
-    let nav_controller = remember_nav_controller(Screen::Inbox);
-    // Shows the top entry; back pops the stack, and leaves the app at the inbox.
-    NavHost!(nav_controller, move |screen: Screen| match screen {
-        Screen::Inbox => Inbox!(
-            on_open = move |id: u32| nav_controller.navigate(Screen::Message(id)),
-            on_settings = move || nav_controller.navigate(Screen::Settings)
-        ),
-        Screen::Message(id) => MessageScreen!(id),
-        Screen::Settings => SettingsScreen!(),
-    });
+    let back_stack = remember_nav_back_stack([Screen::Inbox]);
+    // Shows the last entry; back pops the stack, and leaves the app at the inbox.
+    NavDisplay!(back_stack, entry_provider = move |screen: Screen| entry(back_stack, screen));
+}
+
+/// What each screen shows: any `Fn(T) -> NavEntry<T>`.
+fn entry(back_stack: NavBackStack<Screen>, screen: Screen) -> NavEntry<Screen> {
+    match screen {
+        Screen::Inbox => NavEntry::new(screen, move |_| {
+            Inbox!(
+                on_open = move |id: u32| back_stack.push(Screen::Message(id)),
+                on_settings = move || back_stack.push(Screen::Settings)
+            );
+        }),
+        Screen::Message(id) => NavEntry::new(screen, move |_| MessageScreen!(id)),
+        Screen::Settings => NavEntry::new(screen, |_| SettingsScreen!()),
+    }
 }
 ```
 
-- **The back stack.** `nav_controller.navigate(destination)` pushes; `pop_back_stack()` pops (and returns `false` at the start destination, which stays); `pop_back_stack_to(&destination, inclusive)` is `popBackStack(route, inclusive)`. `navigate_with(destination, NavOptions { pop_up_to: Some(Screen::Inbox), launch_single_top: true, ..NavOptions::default() })` is `navigate(route) { popUpTo(Inbox); launchSingleTop = true }`. `current_destination()`, `current_back_stack_entry()`, `previous_back_stack_entry()` and `current_back_stack()` are state reads: what reads them recomposes when the stack changes. Navigate from event handlers, not while composing.
-- **Saved state.** `remember_nav_controller(start_destination)` saves the stack, so destinations implement `Saveable`. Each entry's content is in a `SaveableStateProvider` of its own: its `remember_saveable` values (its lists' scroll positions too) are kept while it's on the stack, come back when it shows again, survive the process's death with the stack, and go when it's popped. `remember` values go when another entry shows, as in Compose.
-- **Back.** The `NavHost` pops on back while there's an entry under the top one; at the start destination, back leaves the app (or goes to the Kotlin UI around it). A screen's own `BackHandler` goes first.
-- **Transitions.** None by default: `NavHost!(nav_controller, enter_transition = fade_in(), exit_transition = fade_out(), …)` fades, as Compose's default does; any `EnterTransition` and `ExitTransition` go. A screen fading out takes no back: its `BackHandler`s are disabled (`LOCAL_BACK_HANDLERS_ENABLED`), as Navigation Compose's entries that aren't resumed.
-- **Navigate from handlers and effects.** `navigate` writes state, which composition can't (debug builds panic); a redirect goes in a `LaunchedEffect`:
+- **The back stack.** `remember_nav_back_stack(keys)` is a `NavBackStack<T>`, a `Copy` handle that derefs to a `SnapshotStateList`: `push` navigates, `remove_last_or_none` pops, and any other edit of the list is a navigation. A plain `Vec` a state chooses works too, as Kotlin's `List`.
+- **Saved state.** The stack is saved, so keys implement `Saveable` (`#[derive(Saveable)]`). `NavDisplay`'s default decorator gives each entry a `SaveableStateProvider` by its content key, what the key prints by default: its `remember_saveable` values (its lists' scroll positions) are kept while it's on the stack, come back with it, and are forgotten when it's popped. A key on the stack twice shares its state.
+- **Back.** `NavDisplay` pops on back while a scene has something before it; at the last one, back leaves the app (or goes to the Kotlin UI around it). A screen's own `BackHandler` goes first. `on_back = Some(…)` replaces what it does. A predictive gesture moves both scenes by its progress (`predictive_pop_transition_spec`).
+- **Transitions.** A 700 ms fade by default, as `NavDisplay`'s: `transition_spec`, `pop_transition_spec` and `predictive_pop_transition_spec` replace it, and an entry's metadata (`NavDisplay::transition_spec(…)`) goes first. `LOCAL_NAV_ANIMATED_CONTENT_SCOPE` is what an entry animates in.
+- **Scenes.** A `Scene` shows one or more entries, made by the `SceneStrategy`s of `scene_strategies`: `DialogSceneStrategy` shows an entry with `DialogSceneStrategy::dialog(…)` metadata in a dialog over what's before it; `OverlayScene` is any scene over others, and a strategy can show two entries side by side, though an entry moving between panes starts anew until there's movable content (D1404).
+- **Lifecycles.** Each scene has a lifecycle owner: resumed once settled, started during a transition or under an overlay, an entry leaving created at most, as `LifecycleResumeEffect` sees.
+- **Results.** `ResultEventBus`, `ResultEffect` and `remember_result_event_bus_nav_entry_decorator` pass results back to an entry before.
+- **Edit the stack from handlers and effects**, as any state read while composing:
 
 <!-- snippet: src/navigation.rs#redirect -->
 ```rust
-/// Sends the user to `to` as soon as it shows, in place of itself. Navigating writes state, so
-/// it goes in an effect or an event handler, never in a composable's body (debug builds panic).
+/// Sends the user to `to` as soon as it shows, in place of itself: the stack is the app's, so it's
+/// edited as any list. It's state, so it goes in an effect or an event handler.
 #[composable]
-pub fn Redirect(nav_controller: NavController<Screen>, to: Screen) {
+pub fn Redirect(back_stack: NavBackStack<Screen>, to: Screen) {
     LaunchedEffect((), async move {
-        nav_controller.navigate_with(
-            to,
-            NavOptions { pop_up_to: Some(Screen::Inbox), ..NavOptions::default() },
-        );
+        back_stack.clear();
+        back_stack.push(Screen::Inbox);
+        back_stack.push(to);
     });
 }
 ```
 
 
-What's different from Navigation Compose:
+What's different from Navigation 3:
 
-- `remember_nav_controller` takes the start destination (`NavHost` takes it in Compose), so the stack is never empty.
-- Entry ids are random 64-bit numbers rather than UUID strings; destinations that a composable takes implement `ComposeArg` (`#[derive(ComposeArg)]`).
-- Destinations are compared with `==`: `launch_single_top` keeps the top entry only when it's equal (Compose's compares the route and replaces the arguments), and `pop_up_to` finds the topmost entry equal to it.
-- There are no nested graphs, deep links, dialog destinations, per-entry `ViewModel`s or lifecycles, and no `saveState`/`restoreState` for bottom navigation's tabs.
+- Keys are one type, usually an enum: open polymorphism has nothing to register, and `rememberNavBackStack(configuration, …)` has no analogue.
+- An entry provider's closures are other content when made anew, so a `match` provider's entries are equal only once decorated; what counts how often an entry is shown keeps its provider outside (D1405).
+- No shared elements yet (`sharedTransitionScope`), and no deep links yet.
 
-Without a `NavHost`, a back stack is a `remember_saveable(|| mutable_state_of(vec![Screen::Inbox]))`, a `match` on its last entry and a `BackHandler` that pops; but then a screen under the top loses its state. `remember_saveable_state_holder()` (`compose::runtime`, Compose's `rememberSaveableStateHolder`) keeps it for content of your own: `holder.SaveableStateProvider(key, || …)` around each screen or tab, and `holder.remove_state(key)` when one is gone for good.
+Without a `NavDisplay`, a back stack is a `remember_nav_back_stack`, a `match` on its last key and a `BackHandler` that pops; but then a screen under the top loses its state. `remember_saveable_state_holder()` (`compose::runtime`, Compose's `rememberSaveableStateHolder`) keeps it for content of your own: `holder.SaveableStateProvider(key, || …)` around each screen or tab, and `holder.remove_state(key)` when one is gone for good.
 
 Back goes to the innermost enabled `BackHandler`: those in dialogs, bottom sheets and menus first, then the one composed last. While none is enabled, back leaves the app. Escape is back on desktop.
 

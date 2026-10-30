@@ -1,4 +1,4 @@
-//! Navigation with a NavHost (docs/guide/kotlin-to-rust.md, "Navigation").
+//! Navigation with a NavDisplay (docs/guide/kotlin-to-rust.md, "Navigation").
 
 use compose::foundation::layout::*;
 use compose::foundation::{LazyColumn, LazyListScope};
@@ -7,33 +7,13 @@ use compose::navigation::*;
 use compose::runtime::*;
 
 // ANCHOR: screens
-/// The app's destinations: Navigation Compose's routes, as an enum (`ComposeArg`, so a
-/// composable can take one).
-#[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
+/// The app's screens: Navigation 3's keys, as an enum. Saved field by field, so the back stack
+/// survives the activity's recreation.
+#[derive(Clone, Copy, PartialEq, Debug, ComposeArg, Saveable)]
 pub enum Screen {
     Inbox,
     Message(u32),
     Settings,
-}
-
-/// Saved as a number, so the back stack survives the activity's recreation.
-impl Saveable for Screen {
-    fn save(&self) -> SavedValue {
-        SavedValue::Int(match *self {
-            Screen::Inbox => -1,
-            Screen::Settings => -2,
-            Screen::Message(id) => i64::from(id),
-        })
-    }
-
-    fn restore(saved: &SavedValue) -> Option<Screen> {
-        match *saved {
-            SavedValue::Int(-1) => Some(Screen::Inbox),
-            SavedValue::Int(-2) => Some(Screen::Settings),
-            SavedValue::Int(id) => u32::try_from(id).ok().map(Screen::Message),
-            _ => None,
-        }
-    }
 }
 // ANCHOR_END: screens
 
@@ -41,29 +21,35 @@ impl Saveable for Screen {
 #[composable]
 pub fn App() {
     // The back stack, starting at the inbox: saved, so it survives the activity's recreation.
-    let nav_controller = remember_nav_controller(Screen::Inbox);
-    // Shows the top entry; back pops the stack, and leaves the app at the inbox.
-    NavHost!(nav_controller, move |screen: Screen| match screen {
-        Screen::Inbox => Inbox!(
-            on_open = move |id: u32| nav_controller.navigate(Screen::Message(id)),
-            on_settings = move || nav_controller.navigate(Screen::Settings)
-        ),
-        Screen::Message(id) => MessageScreen!(id),
-        Screen::Settings => SettingsScreen!(),
-    });
+    let back_stack = remember_nav_back_stack([Screen::Inbox]);
+    // Shows the last entry; back pops the stack, and leaves the app at the inbox.
+    NavDisplay!(back_stack, entry_provider = move |screen: Screen| entry(back_stack, screen));
+}
+
+/// What each screen shows: any `Fn(T) -> NavEntry<T>`.
+fn entry(back_stack: NavBackStack<Screen>, screen: Screen) -> NavEntry<Screen> {
+    match screen {
+        Screen::Inbox => NavEntry::new(screen, move |_| {
+            Inbox!(
+                on_open = move |id: u32| back_stack.push(Screen::Message(id)),
+                on_settings = move || back_stack.push(Screen::Settings)
+            );
+        }),
+        Screen::Message(id) => NavEntry::new(screen, move |_| MessageScreen!(id)),
+        Screen::Settings => NavEntry::new(screen, |_| SettingsScreen!()),
+    }
 }
 // ANCHOR_END: app
 
 // ANCHOR: redirect
-/// Sends the user to `to` as soon as it shows, in place of itself. Navigating writes state, so
-/// it goes in an effect or an event handler, never in a composable's body (debug builds panic).
+/// Sends the user to `to` as soon as it shows, in place of itself: the stack is the app's, so it's
+/// edited as any list. It's state, so it goes in an effect or an event handler.
 #[composable]
-pub fn Redirect(nav_controller: NavController<Screen>, to: Screen) {
+pub fn Redirect(back_stack: NavBackStack<Screen>, to: Screen) {
     LaunchedEffect((), async move {
-        nav_controller.navigate_with(
-            to,
-            NavOptions { pop_up_to: Some(Screen::Inbox), ..NavOptions::default() },
-        );
+        back_stack.clear();
+        back_stack.push(Screen::Inbox);
+        back_stack.push(to);
     });
 }
 // ANCHOR_END: redirect

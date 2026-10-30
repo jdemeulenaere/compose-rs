@@ -61,7 +61,8 @@ fn the_menu_opens_the_drawer() {
 #[test]
 fn a_card_opens_its_screen_and_back_returns_to_the_tour_as_it_was() {
     let mut ui = ComposeTestRule::with_manual_clock(gallery::Gallery);
-    let step = std::time::Duration::from_millis(500);
+    // Past a `NavDisplay`'s 700 ms fade.
+    let step = std::time::Duration::from_millis(800);
     ui.on_node(described("Add a card")).perform_click();
     ui.advance_time_by(step);
     ui.on_node_with_text("Card 19").perform_click();

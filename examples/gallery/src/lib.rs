@@ -3,7 +3,7 @@
 //! scroll back) and an extended floating action button adding a card (and saying so in a
 //! snackbar; just its icon once the cards are scrolled), Material's selection controls, text
 //! fields, progress indicators, an animated panel and a lazy list of cards with a scrollbar.
-//! A card opens a screen of its own (a `NavHost`): back returns to the tour as it was left.
+//! A card opens a screen of its own (a `NavDisplay`): back returns to the tour as it was left.
 
 #![allow(non_snake_case)]
 
@@ -23,28 +23,32 @@ pub fn Gallery() {
     GalleryWith(false);
 }
 
-/// The gallery's screens: the tour, and a card's own.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// The gallery's screens: the tour, and a card's own. Saved, so the back stack survives the
+/// activity's recreation.
+#[derive(Clone, Copy, PartialEq, Debug, Saveable)]
 pub enum Destination {
     Home,
     Card(u32),
 }
 
-/// Saved as a number, so the back stack survives the activity's recreation.
-impl Saveable for Destination {
-    fn save(&self) -> SavedValue {
-        SavedValue::Int(match *self {
-            Destination::Home => -1,
-            Destination::Card(card) => i64::from(card),
-        })
-    }
-
-    fn restore(saved: &SavedValue) -> Option<Destination> {
-        match *saved {
-            SavedValue::Int(-1) => Some(Destination::Home),
-            SavedValue::Int(card) => u32::try_from(card).ok().map(Destination::Card),
-            _ => None,
-        }
+/// What each screen shows.
+fn destination_entry(
+    back_stack: NavBackStack<Destination>,
+    about: bool,
+    destination: Destination,
+) -> NavEntry<Destination> {
+    match destination {
+        Destination::Home => NavEntry::new(destination, move |_| {
+            Home!(about, on_open_card = move |card: u32| back_stack.push(Destination::Card(card)));
+        }),
+        Destination::Card(card) => NavEntry::new(destination, move |_| {
+            CardScreen!(
+                card,
+                on_back = move || {
+                    back_stack.remove_last_or_none();
+                }
+            );
+        }),
     }
 }
 
@@ -57,19 +61,13 @@ pub fn GalleryWith(about: bool) {
     MaterialTheme!(color_scheme = color_scheme, {
         // The tour, and above it the card opened, if any. The tour's saveable state (the
         // cards, the search, the list's position, the controls) is kept while a card shows.
-        let nav_controller = remember_nav_controller(Destination::Home);
-        NavHost!(nav_controller, move |destination: Destination| match destination {
-            Destination::Home => Home!(
-                about,
-                on_open_card = move |card: u32| nav_controller.navigate(Destination::Card(card))
-            ),
-            Destination::Card(card) => CardScreen!(
-                card,
-                on_back = move || {
-                    nav_controller.pop_back_stack();
-                }
-            ),
-        });
+        let back_stack = remember_nav_back_stack([Destination::Home]);
+        NavDisplay!(
+            back_stack,
+            entry_provider = move |destination: Destination| {
+                destination_entry(back_stack, about, destination)
+            }
+        );
     });
 }
 

@@ -1,10 +1,11 @@
 //! `NavDisplay`, against Navigation 3's `NavDisplayTest`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
 use compose_foundation::layout::*;
+use compose_foundation::{LazyColumn, LazyListScope};
 use compose_navigation::*;
 use compose_navigation_event::{
     DirectNavigationEventInput, LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER, NavigationEvent,
@@ -13,7 +14,7 @@ use compose_navigation_event::{
 use compose_runtime::snapshots::{OwnedStateList, mutable_state_list_from};
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::DialogProperties;
+use compose_ui::{BackHandler, DialogProperties, Modifier, UnitExt};
 
 use crate::nav_support::*;
 
@@ -559,4 +560,113 @@ fn a_dialog_dismissed_goes_back_by_the_latest_on_back() {
     assert!(ui.host().on_back_pressed());
     ui.wait_for_idle();
     assert_eq!(*told.borrow(), [1]);
+}
+
+#[composable]
+fn HandlingBack(key: &'static str, backs: Rc<Cell<u32>>) {
+    BackHandler!(on_back = move || backs.set(backs.get() + 1));
+    Shown!(key);
+}
+
+/// A screen's own `BackHandler` goes before the display's.
+#[test]
+fn a_screen_s_back_handler_goes_first() {
+    let backs = Rc::new(Cell::new(0));
+    let seen = backs.clone();
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let seen = seen.clone();
+        NavDisplay!(
+            stack,
+            entry_provider = move |key: &'static str| {
+                let seen = seen.clone();
+                if key == SECOND {
+                    NavEntry::new(key, move |key| HandlingBack!(key, seen.clone()))
+                } else {
+                    text_entry(key)
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert!(ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    assert_eq!(backs.get(), 1);
+    assert_eq!(stack.len(), 2);
+}
+
+/// An entry leaving is created at most, so its `BackHandler` takes nothing while it animates out.
+#[test]
+fn a_leaving_entry_s_back_handler_takes_nothing() {
+    let backs = Rc::new(Cell::new(0));
+    let seen = backs.clone();
+    let owner = mutable_state_list_from([FIRST, SECOND, THIRD]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let seen = seen.clone();
+        NavDisplay!(
+            stack,
+            entry_provider = move |key: &'static str| {
+                let seen = seen.clone();
+                if key == THIRD {
+                    NavEntry::new(key, move |key| HandlingBack!(key, seen.clone()))
+                } else {
+                    text_entry(key)
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    stack.remove(2);
+    ui.advance_time_by(Duration::from_millis(100));
+    ui.on_node_with_text(THIRD).assert_exists();
+    assert!(ui.host().on_back_pressed());
+    assert_eq!(backs.get(), 0, "the display took it");
+    assert_eq!(stack.len(), 1);
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+}
+
+#[composable(non_restartable)]
+fn ListOfDisplays() {
+    LazyColumn!(|scope: LazyListScope| {
+        scope.items(2, move |index| {
+            let key: &'static str = if index == 0 { "inner one" } else { "inner two" };
+            Box!(modifier = Modifier.size(50.dp()), {
+                NavDisplay!(vec![key], on_back = Some(|| {}), entry_provider = text_entry);
+            });
+        });
+    });
+}
+
+/// A display in each item of a list in an entry of a display: each its own, and shown again after
+/// going away and back.
+#[test]
+fn displays_in_a_list_in_a_display() {
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            entry_provider = |key: &'static str| {
+                if key == FIRST {
+                    NavEntry::new(key, |_| ListOfDisplays())
+                } else {
+                    text_entry(key)
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_text("inner one").assert_is_displayed();
+    ui.on_node_with_text("inner two").assert_is_displayed();
+    stack.push(SECOND);
+    ui.wait_for_idle();
+    ui.on_node_with_text("inner one").assert_does_not_exist();
+    stack.remove(1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("inner one").assert_is_displayed();
+    ui.on_node_with_text("inner two").assert_is_displayed();
 }

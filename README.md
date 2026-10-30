@@ -17,7 +17,7 @@ compose-rs is Jetpack Compose's programming model in Rust: write UIs as composab
 | `crates/compose-lifecycle` | lifecycles and their effects, view models |
 | `crates/compose-navigation-event` | navigation events: back and forward gestures with progress |
 | `crates/compose-animation` | animations and transitions |
-| `crates/compose-navigation` | `NavController` and `NavHost` |
+| `crates/compose-navigation` | Navigation 3: `NavDisplay`, `NavEntry` and `NavBackStack` |
 | `crates/compose-test` | `ComposeTestRule` and event scripts |
 | `crates/compose-skia` | Skia renderer and text, for desktop |
 | `crates/compose-android` | the Android bridge behind `ComposeRsView` (`android/`) |

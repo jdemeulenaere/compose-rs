@@ -74,6 +74,8 @@ name = "compose-navigation"
 version = "0.1.0"
 dependencies = [
  "compose-animation",
+ "compose-lifecycle",
+ "compose-navigation-event",
  "compose-runtime",
  "compose-ui",
 ]
