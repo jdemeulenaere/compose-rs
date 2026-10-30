@@ -669,3 +669,57 @@ fn collect_now<S: Stream + Unpin>(flow: &mut S) -> Vec<S::Item> {
     }
     values
 }
+
+/// As a `StateFlow`'s collector, a subscription compares values: changed and changed back between
+/// its polls, it gives nothing.
+#[test]
+fn a_state_flow_subscription_compares_values() {
+    let flow = MutableStateFlow::new("A");
+    let mut subscription = flow.subscribe();
+    assert_eq!(collect_now(&mut subscription), ["A"]);
+    flow.set_value("B");
+    flow.set_value("A");
+    assert_eq!(collect_now(&mut subscription), Vec::<&str>::new());
+    flow.set_value("B");
+    assert_eq!(collect_now(&mut subscription), ["B"]);
+}
+
+/// A disposed manager stays so: a flow's first run with it panics, as `runAndWatch`.
+#[test]
+fn a_disposed_manager_stays_disposed() {
+    let manager = SnapshotFlowManager::new();
+    manager.dispose();
+    let mut flow = snapshot_flow_with(&manager, || 1);
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| collect_now(&mut flow)));
+    let message = run.expect_err("disposed");
+    assert!(message.downcast_ref::<&str>().is_some_and(|message| message.contains("disposed")));
+}
+
+/// Collecting a state flow looks at its value when the state is made, not at each recomposition.
+#[test]
+fn a_state_flow_collected_as_state_clones_its_value_once() {
+    #[derive(PartialEq)]
+    struct Counted(Rc<Cell<u32>>);
+    // A flow's value crosses threads by `T: Send`, which a flow on one thread doesn't ask.
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            self.0.set(self.0.get() + 1);
+            Counted(self.0.clone())
+        }
+    }
+    let clones = Rc::new(Cell::new(0));
+    let flow = MutableStateFlow::new(Counted(clones.clone()));
+    let collected = flow.as_state_flow();
+    let trigger = mutable_state_of(0);
+    let read = trigger.handle();
+    let mut test = composition_test();
+    test.compose(move || {
+        let _ = collected.collect_as_state();
+        Text(&read.get().to_string());
+    });
+    test.advance();
+    let at_first = clones.get();
+    trigger.set(1);
+    test.expect_changes();
+    assert_eq!(clones.get(), at_first, "a recomposition looks at nothing");
+}

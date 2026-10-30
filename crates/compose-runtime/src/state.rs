@@ -898,30 +898,30 @@ impl<T: 'static> StateObjectCell for StateCell<T> {
             MergeResult::Fail => Merged::Fail,
             MergeResult::Applied => Merged::Nothing,
             MergeResult::New(value) => Merged::New(Box::new(ValueRecord { value })),
-            MergeResult::Current => {
-                // Compose copies the current record under a new id, so it wins over the snapshot's
-                // own. A value needn't be `Clone` here (D773): the snapshot's record goes, or
-                // stays if a nested snapshot may read it, equivalent by the policy.
-                let Ok(mut records) = self.records.try_borrow_mut() else {
-                    // A `with` closure applying: the record stays, equivalent.
-                    return Merged::Current;
-                };
-                let current = records.index_in(&views.current);
-                let applied = records.index_in(&views.applied);
-                let mut gone = None;
-                if let (Some(current), Some(applied)) = (current, applied) {
-                    if views.alone && current != applied {
-                        gone = Some(records.remove(applied));
-                    } else {
-                        let version = records.at(current).version;
-                        records.at_mut(applied).version = version;
-                    }
-                }
-                // User code, and the records may be needed by it.
-                drop(records);
-                drop(gone);
-                Merged::Current
-            }
+            MergeResult::Current => Merged::Current,
+        }
+    }
+
+    fn current_stands(
+        &self,
+        views: &ApplyViews,
+        alone: bool,
+        previous: &crate::snapshots::IdSet,
+        garbage: &mut Vec<Box<dyn Any>>,
+    ) {
+        // Compose copies the current record under a new id, so it wins over the snapshot's own. A
+        // value needn't be `Clone` here (D773): the snapshot's records go, or stay if a nested
+        // snapshot may read them, equivalent by the policy. A `with` closure applying: they stay.
+        let Ok(mut records) = self.records.try_borrow_mut() else { return };
+        if alone {
+            records.abandon(views.applied.id, previous, garbage);
+            return;
+        }
+        let current = records.index_in(&views.current);
+        let applied = records.index_in(&views.applied);
+        if let (Some(current), Some(applied)) = (current, applied) {
+            let version = records.at(current).version;
+            records.at_mut(applied).version = version;
         }
     }
 
@@ -1768,6 +1768,29 @@ pub fn state_records<T: 'static>(state: MutableState<T>) -> (usize, u32) {
         }
         _ => (0, 0),
     }
+}
+
+/// The id of the snapshot that wrote the record this snapshot reads of `state`.
+pub(crate) fn record_snapshot_id<T: 'static>(state: MutableState<T>) -> u64 {
+    let cell = object_cell(state.id, Location::caller());
+    let view = crate::snapshots::view();
+    let records = StateCell::<T>::of(&cell).records.borrow();
+    match view {
+        Some(view) => {
+            let index = records.index_in(&view).unwrap_or_else(|| crate::snapshots::read_error());
+            records.effective_id(index, &view)
+        }
+        None => {
+            let id = records.head.id;
+            if id == crate::snapshots::PREEXISTING { records.born } else { id }
+        }
+    }
+}
+
+/// The number of observed reads a state keeps (current and stale ones). For tests.
+#[doc(hidden)]
+pub fn state_observed_read_count<T: 'static>(state: MutableState<T>) -> usize {
+    with_runtime(|runtime| runtime.cells.entry(state.id).map_or(0, |entry| entry.observed.len()))
 }
 
 /// The number of live state cells on this thread. For tests.

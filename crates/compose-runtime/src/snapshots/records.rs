@@ -116,18 +116,21 @@ impl<R> Records<R> {
         if index == 0 { &mut self.head } else { &mut self.rest[index - 1] }
     }
 
-    /// The index of the record `view` reads, as Compose's `readable`: the highest valid id.
+    /// The index of the record `view` reads, as Compose's `readable`: the highest valid id, the
+    /// first record ranking as the snapshot it was born in if `view` can see that one (Compose's
+    /// record of that id); a later record of that id is written over it.
     pub(crate) fn index_in(&self, view: &View) -> Option<usize> {
         let mut best = None;
         let mut best_id = INVALID;
-        if view.valid(self.head.id) {
-            best = Some(0);
-            best_id = self.head.id;
-        }
-        for (index, record) in self.rest.iter().enumerate() {
-            if record.id > best_id && view.valid(record.id) {
-                best = Some(index + 1);
-                best_id = record.id;
+        for index in 0..self.len() {
+            let id = self.at(index).id;
+            if !view.valid(id) {
+                continue;
+            }
+            let rank = self.effective_id(index, view);
+            if rank > best_id || (rank == best_id && id != PREEXISTING) {
+                best = Some(index);
+                best_id = rank;
             }
         }
         best
@@ -235,18 +238,28 @@ impl<R> Records<R> {
         if self.rest.is_empty() {
             return false;
         }
+        // The first record stands for two of Compose's (`born`): while the one of the snapshot it
+        // was born in can be read, it stays.
+        let rank = |id: SnapshotId| if id == PREEXISTING { self.born } else { id };
         let mut newest = INVALID;
+        let mut newest_rank = INVALID;
         for index in 0..self.len() {
             let id = self.at(index).id;
-            if id < reuse_limit && id > newest {
+            let rank = rank(id);
+            if rank < reuse_limit
+                && (rank > newest_rank || (rank == newest_rank && id != PREEXISTING))
+            {
                 newest = id;
+                newest_rank = rank;
             }
         }
+        let born = self.born;
         let mut index = self.len();
         while index > 0 {
             index -= 1;
             let id = self.at(index).id;
-            if id < reuse_limit && id != newest {
+            let kept_for_birth = id == PREEXISTING && born >= reuse_limit;
+            if id != newest && id < reuse_limit && !kept_for_birth {
                 garbage.push(Box::new(self.remove(index)));
             }
         }
@@ -289,8 +302,6 @@ pub(crate) struct ApplyViews {
     pub(crate) current: View,
     /// The snapshot's own view: its writes.
     pub(crate) applied: View,
-    /// No nested snapshot of it is active: nothing else reads its records.
-    pub(crate) alone: bool,
 }
 
 /// A state object's cell in the thread's arena, as Compose's `StateObject`, erased: what the
@@ -318,6 +329,17 @@ pub(crate) trait StateObjectCell: Any {
     /// code (the policy): outside the runtime's borrow.
     fn merge_at_apply(&self, _views: &ApplyViews) -> Merged {
         Merged::Nothing
+    }
+    /// The apply stands, and for this state the current value did (`Merged::Current`): the
+    /// snapshot's records have no more say. With `alone` (no nested snapshot of it is active) they
+    /// go, as `abandon`; otherwise they stay for what reads them, with the current version.
+    fn current_stands(
+        &self,
+        _views: &ApplyViews,
+        _alone: bool,
+        _previous: &IdSet,
+        _garbage: &mut Vec<Box<dyn Any>>,
+    ) {
     }
     /// Adds a record `merge_at_apply` made, under the apply's new id.
     fn prepend_merged(&self, _record: Box<dyn Any>, _id: SnapshotId, _version: u32) {}

@@ -14,7 +14,10 @@ use std::task::{Context, Poll, Waker};
 pub use futures_core::Stream;
 
 use crate::compose_arg::ComposeArg;
-use crate::effects::{produce_state, produce_state_with};
+use crate::effects::{
+    ProduceStateScope, produce_state, produce_state_from, produce_state_with,
+    produce_state_with_from,
+};
 use crate::snapshots::{ChangeSet, ObserverHandle, Snapshot, StateObjectId};
 use crate::state::{MutationPolicy, State};
 
@@ -59,11 +62,18 @@ impl Watcher {
 struct ManagerInner {
     /// Its apply observer, registered at the first flow's run, until it's disposed.
     registration: RefCell<Option<ObserverHandle>>,
+    /// Disposed: it stays so.
+    disposed: Cell<bool>,
     watchers: RefCell<HashMap<StateObjectId, Vec<Rc<Watcher>>>>,
 }
 
 impl ManagerInner {
     fn register(self: &Rc<ManagerInner>) {
+        // As `runAndWatch`'s check.
+        assert!(
+            !self.disposed.get(),
+            "Called run_and_watch on a manager that has been disposed of"
+        );
         if self.registration.borrow().is_some() {
             return;
         }
@@ -139,9 +149,11 @@ impl SnapshotFlowManager {
         SnapshotFlowManager::default()
     }
 
-    /// Unregisters its apply observer, as `dispose()`: its flows hear nothing more. Dropping the
-    /// last handle and the flows made with it does the same.
+    /// Unregisters its apply observer, as `dispose()`: its flows hear nothing more, and a flow
+    /// running for the first time with it panics, as Compose's. Dropping the last handle and the
+    /// flows made with it unregisters too.
     pub fn dispose(&self) {
+        self.inner.disposed.set(true);
         let registration = self.inner.registration.borrow_mut().take();
         drop(registration);
     }
@@ -278,8 +290,6 @@ where
 
 struct FlowShared<T> {
     value: T,
-    /// Bumped by each change: what a subscription compares.
-    version: u64,
     wakers: Vec<Waker>,
 }
 
@@ -313,7 +323,7 @@ fn lock<T>(shared: &Mutex<FlowShared<T>>) -> std::sync::MutexGuard<'_, FlowShare
 
 impl<T: Clone + PartialEq + 'static> MutableStateFlow<T> {
     pub fn new(value: T) -> MutableStateFlow<T> {
-        let shared = FlowShared { value, version: 0, wakers: Vec::new() };
+        let shared = FlowShared { value, wakers: Vec::new() };
         MutableStateFlow { shared: Arc::new(Mutex::new(shared)) }
     }
 
@@ -344,7 +354,6 @@ impl<T: Clone + PartialEq + 'static> MutableStateFlow<T> {
 
     fn change(&self, mut shared: std::sync::MutexGuard<'_, FlowShared<T>>, value: T) {
         let old = std::mem::replace(&mut shared.value, value);
-        shared.version += 1;
         let wakers = std::mem::take(&mut shared.wakers);
         drop(shared);
         drop(old);
@@ -379,15 +388,29 @@ impl<T: Clone + PartialEq + 'static> StateFlow<T> {
     /// State following it, as `StateFlow.collectAsState()`: its value now, then its changes.
     /// Another flow here starts following that one; the state keeps its value until then.
     pub fn collect_as_state(&self) -> State<T> {
-        let flow = self.clone();
-        collect_as_state(self.key(), self.value(), move || flow.subscribe())
+        let (flow, now) = (self.clone(), self.clone());
+        // Its value is looked at when the state is made, not at each recomposition.
+        produce_state_from(
+            move || now.value(),
+            self.key(),
+            move |scope| async move {
+                forward(flow.subscribe(), scope).await;
+            },
+        )
     }
 
     /// Like [`collect_as_state`](Self::collect_as_state), with the state's mutation policy, as
     /// `collectAsState(mutationPolicy = …)`.
     pub fn collect_as_state_with<P: MutationPolicy<T>>(&self, policy: P) -> State<T> {
-        let flow = self.clone();
-        collect_as_state_with(self.key(), self.value(), policy, move || flow.subscribe())
+        let (flow, now) = (self.clone(), self.clone());
+        produce_state_with_from(
+            move || now.value(),
+            self.key(),
+            policy,
+            move |scope| async move {
+                forward(flow.subscribe(), scope).await;
+            },
+        )
     }
 
     /// Its identity, to key the collection on.
@@ -396,28 +419,40 @@ impl<T: Clone + PartialEq + 'static> StateFlow<T> {
     }
 }
 
-/// The stream of [`StateFlow::subscribe`].
+/// What a producer of [`StateFlow::collect_as_state`] does.
+async fn forward<T: Clone + PartialEq + 'static>(
+    mut stream: StateFlowSubscription<T>,
+    scope: ProduceStateScope<T>,
+) {
+    while let Some(value) = next(&mut stream).await {
+        scope.set(value);
+    }
+}
+
+/// The stream of [`StateFlow::subscribe`]. It compares values, as a `StateFlow`'s collector: a
+/// value changed and changed back between its polls gives nothing.
 pub struct StateFlowSubscription<T> {
     shared: Arc<Mutex<FlowShared<T>>>,
-    seen: Option<u64>,
+    seen: Option<T>,
 }
 
 impl<T> Unpin for StateFlowSubscription<T> {}
 
-impl<T: Clone> Stream for StateFlowSubscription<T> {
+impl<T: Clone + PartialEq> Stream for StateFlowSubscription<T> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<T>> {
         let this = &mut *self;
         let mut shared = lock(&this.shared);
-        if this.seen == Some(shared.version) {
+        if this.seen.as_ref() == Some(&shared.value) {
             let waker = context.waker();
             if !shared.wakers.iter().any(|other| other.will_wake(waker)) {
                 shared.wakers.push(waker.clone());
             }
             return Poll::Pending;
         }
-        this.seen = Some(shared.version);
-        Poll::Ready(Some(shared.value.clone()))
+        let value = shared.value.clone();
+        this.seen = Some(value.clone());
+        Poll::Ready(Some(value))
     }
 }

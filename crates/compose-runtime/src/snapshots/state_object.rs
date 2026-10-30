@@ -63,6 +63,25 @@ impl<R: StateRecord> SnapshotStateObject<R> {
         self.state.set(record);
     }
 
+    /// [`writable`](Self::writable) in `snapshot`, as `writable(state, snapshot)`.
+    #[track_caller]
+    pub fn writable_in<T>(&self, snapshot: &super::Snapshot, f: impl FnOnce(&mut R) -> T) -> T {
+        snapshot.enter(|| self.writable(f))
+    }
+
+    /// [`readable`](Self::readable) in `snapshot`, as `readable(state, snapshot)`.
+    #[track_caller]
+    pub fn readable_in<T>(&self, snapshot: &super::Snapshot, f: impl FnOnce(&R) -> T) -> T {
+        snapshot.enter(|| self.readable(f))
+    }
+
+    /// The id of the snapshot that wrote the record this snapshot reads, as the record's
+    /// `snapshotId`. Records aren't otherwise reachable: no `firstStateRecord` or
+    /// `prependStateRecord`, the chain being the runtime's (D784).
+    pub fn record_snapshot_id(&self) -> u64 {
+        crate::state::record_snapshot_id(self.state)
+    }
+
     /// The object's identity, as observers are told it.
     pub fn state_object_id(&self) -> StateObjectId {
         self.state.state_object_id()

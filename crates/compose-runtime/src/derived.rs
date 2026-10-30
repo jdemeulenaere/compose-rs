@@ -42,6 +42,30 @@ struct ResultRecord<T> {
     /// equivalent keeps this): what tells readers in the global snapshot that another snapshot's
     /// record, become theirs, holds another value.
     value_since: u32,
+    /// In a snapshot other than the global one: the key its calculation read under, forgotten with
+    /// this record (D781). `None` for the global snapshot's key 0.
+    side_key: Option<crate::observe::ForgetKey>,
+}
+
+impl<T> ResultRecord<T> {
+    fn unset(value_since: u32) -> ResultRecord<T> {
+        ResultRecord {
+            result: None,
+            valid_at: Cell::new((0, 0)),
+            dependencies: Rc::from([]),
+            value_since,
+            side_key: None,
+        }
+    }
+}
+
+/// What a read found valid or computed: taken from the record then, as a later look may find
+/// another (`notify_objects_initialized` advanced past a discarded snapshot's record).
+struct Validated<T> {
+    result: Rc<T>,
+    version: u32,
+    value_since: u32,
+    recomputed: bool,
 }
 
 /// A derived state's cell in the arena, as Compose's `DerivedSnapshotState`.
@@ -63,15 +87,13 @@ pub(crate) struct DerivedCell<T: 'static> {
     observer: ReadObserver,
     /// Its id, once allocated.
     id: Cell<Option<StateId>>,
-    /// The keys its observer read under in snapshots other than the global one, one per snapshot:
-    /// what a calculation there read adds to what a send walks through (a record of that snapshot
-    /// may become what the global snapshot reads), until a calculation with no snapshot open.
-    side_keys: RefCell<Vec<u64>>,
     /// The `value_since` of the record the global snapshot last saw: another means a snapshot's
     /// calculation became what it reads (its apply), of which its readers must hear.
     global_saw: Cell<u32>,
     /// Calculated in a snapshot other than the global one since a calculation with none open.
     in_other_snapshots: Cell<bool>,
+    /// Meanwhile, the value the global snapshot's readers last saw: what tells them of a change.
+    global_value: RefCell<Option<Rc<T>>>,
 }
 
 impl<T: 'static> StateObjectCell for DerivedCell<T> {
@@ -85,15 +107,10 @@ impl<T: 'static> StateObjectCell for DerivedCell<T> {
 
     fn current_version(&self, view: Option<&View>) -> Option<u32> {
         // A send a running calculation caused doesn't validate that calculation.
-        if !self.calculating.get() {
-            self.current();
+        if self.calculating.get() {
+            return self.records.borrow().version_in(view);
         }
-        if view.is_none() {
-            return self.records.borrow().version_in(None);
-        }
-        // The snapshot may have advanced.
-        let view = crate::snapshots::view();
-        self.records.borrow().version_in(view.as_ref())
+        Some(self.current().version)
     }
 
     #[inline]
@@ -164,25 +181,33 @@ impl<T: 'static> DerivedCell<T> {
         }
     }
 
-    /// Whether the record is up to date: what it read is as it saw it, without computing this
-    /// state (the derived states it read are brought up to date, which may send, and so may
-    /// recompute this one: then it looks again).
-    fn is_valid(&self) -> bool {
+    /// The record, if it's up to date: what it read is as it saw it, without computing this state
+    /// (the derived states it read are brought up to date, which may send, and so may recompute
+    /// this one: then it looks again).
+    fn valid_record(&self) -> Option<Validated<T>> {
+        let of = |record: &crate::snapshots::Record<ResultRecord<T>>| {
+            let result = record.data.result.clone()?;
+            Some(Validated {
+                result,
+                version: record.version,
+                value_since: record.data.value_since,
+                recomputed: false,
+            })
+        };
         loop {
             let (mark, isolated) = crate::snapshots::valid_mark_and_isolated();
             let view = if isolated { crate::snapshots::view() } else { None };
-            let dependencies = self.with_record(view.as_ref(), |record| {
-                if record.result.is_none() {
-                    return Err(false);
+            let (dependencies, checked) = {
+                let records = self.records.borrow();
+                let record = match &view {
+                    None => &records.head,
+                    Some(view) => records.readable_in(view),
+                };
+                record.data.result.as_ref()?;
+                if record.data.valid_at.get() == mark {
+                    return of(record);
                 }
-                if record.valid_at.get() == mark {
-                    return Err(true);
-                }
-                Ok(record.dependencies.clone())
-            });
-            let dependencies = match dependencies {
-                Ok(dependencies) => dependencies,
-                Err(valid) => return valid,
+                (record.data.dependencies.clone(), record.version)
             };
             let calculations = self.calculations.get();
             let same = dependencies.iter().all(|&(dependency, seen)| {
@@ -192,40 +217,56 @@ impl<T: 'static> DerivedCell<T> {
             if self.calculations.get() != calculations {
                 continue;
             }
-            if same {
-                self.with_record(view.as_ref(), |record| record.valid_at.set(mark_after(mark)));
+            if !same {
+                return None;
             }
-            return same;
+            // A send on the way may have advanced the snapshot and reclaimed records: another
+            // record is looked at anew.
+            let view = if isolated { crate::snapshots::view() } else { None };
+            let records = self.records.borrow();
+            let record = match &view {
+                None => &records.head,
+                Some(view) => records.readable_in(view),
+            };
+            if record.version != checked {
+                continue;
+            }
+            record.data.valid_at.set(mark_after(mark));
+            return of(record);
         }
     }
 
-    /// Brings the record up to date; returns whether that recomputed it.
-    fn current(&self) -> bool {
-        let valid = self.is_valid();
-        if !valid {
-            self.recompute();
+    /// Brings the record up to date, and gives what it holds.
+    fn current(&self) -> Validated<T> {
+        match self.valid_record() {
+            Some(valid) => {
+                if self.in_other_snapshots.get() {
+                    self.tell_of_another_record(&valid);
+                }
+                valid
+            }
+            None => self.recompute(),
         }
-        if self.in_other_snapshots.get() {
-            self.tell_of_another_record(valid);
-        }
-        !valid
     }
 
-    /// In the global snapshot: its readers may have read another record (no recomputation tells
-    /// them of a record an applied snapshot made).
+    /// In the global snapshot: its readers may have read another record, of which no recalculation
+    /// tells them (an applied snapshot's calculation).
     #[cold]
-    fn tell_of_another_record(&self, valid: bool) {
+    fn tell_of_another_record(&self, valid: &Validated<T>) {
         let view = crate::snapshots::view();
-        if view.as_ref().is_none_or(|view| view.global) {
-            let since = self.with_record(view.as_ref(), |record| record.value_since);
-            if self.global_saw.replace(since) != since && valid {
-                let id = self.id.get().expect("an allocated derived state");
-                crate::state::invalidate_result_readers(id);
-            }
+        if view.as_ref().is_some_and(|view| !view.global)
+            || self.global_saw.replace(valid.value_since) == valid.value_since
+        {
+            return;
+        }
+        let saw = self.global_value.replace(Some(valid.result.clone()));
+        if saw.is_some_and(|saw| !(self.equivalent)(&valid.result, &saw)) {
+            let id = self.id.get().expect("an allocated derived state");
+            crate::state::invalidate_result_readers(id);
         }
     }
 
-    fn recompute(&self) {
+    fn recompute(&self) -> Validated<T> {
         /// Ends a calculation, on an unwind too.
         struct Calculation<'a>(&'a Cell<bool>);
         impl Drop for Calculation<'_> {
@@ -245,21 +286,22 @@ impl<T: 'static> DerivedCell<T> {
             Some(view) if !view.global => view.id,
             _ => 0,
         };
+        if key != 0 && !self.in_other_snapshots.replace(true) {
+            // What the global snapshot's readers saw, kept to compare with what they'll see.
+            let saw = self.global_saw.get();
+            let records = self.records.borrow();
+            let seen = (0..records.len())
+                .map(|index| records.at(index))
+                .find(|record| record.data.value_since == saw)
+                .and_then(|record| record.data.result.clone());
+            *self.global_value.borrow_mut() = seen;
+        }
         crate::snapshots::begin_calculation();
         let calculation = Calculation(&self.calculating);
         let value = self.observer.observe_exclusive(key, || {
             crate::snapshots::observe_calculation();
             (self.calculation)()
         });
-        if key != 0 {
-            self.side_keys.borrow_mut().push(key);
-            self.in_other_snapshots.set(true);
-        } else if view.is_none() && self.in_other_snapshots.replace(false) {
-            // One record now, this calculation's.
-            for key in self.side_keys.borrow_mut().drain(..) {
-                self.observer.forget(key);
-            }
-        }
         let read = crate::snapshots::calculation_reads();
         drop(calculation);
         let mut seen: Vec<(StateId, u32)> = Vec::with_capacity(read.len());
@@ -281,12 +323,21 @@ impl<T: 'static> DerivedCell<T> {
         };
         let differs = !kept && old.as_ref().is_some_and(|old| !(self.equivalent)(&value, old));
         let first = old.is_none();
-        // Only the global snapshot's readers are registered; a snapshot's own record tells none.
-        let told = differs && view.as_ref().is_none_or(|view| view.global);
+        // Only the global snapshot's readers are registered; a snapshot's own record tells none, and
+        // they're told by what they saw, not by a record of a snapshot discarded since.
+        let in_global = view.as_ref().is_none_or(|view| view.global);
+        let told = in_global
+            && if self.in_other_snapshots.get() {
+                let saw = self.global_value.borrow();
+                saw.as_ref().is_some_and(|saw| !(self.equivalent)(&value, saw))
+            } else {
+                differs
+            };
         // The record's `Rc` alone holds it now, to write in place.
         drop(old);
         let mut replaced = None;
         let mut pushed = false;
+        let validated;
         {
             let mut records = self.records.borrow_mut();
             // A record of another snapshot (or one seen by others) stays, as Compose's
@@ -306,20 +357,15 @@ impl<T: 'static> DerivedCell<T> {
                     } else {
                         pushed = true;
                         let (id, version) = crate::snapshots::next_record();
-                        records.push(
-                            id,
-                            version,
-                            ResultRecord {
-                                result: None,
-                                valid_at: Cell::new((0, 0)),
-                                dependencies: Rc::from([]),
-                                value_since,
-                            },
-                        )
+                        records.push(id, version, ResultRecord::unset(value_since))
                     }
                 }
             };
             let record = records.at_mut(index);
+            // The record's reads are this calculation's: another key's are forgotten.
+            if record.data.side_key.as_ref().map_or(0, |side| side.key) != key {
+                record.data.side_key = (key != 0).then(|| self.observer.forgetting(key));
+            }
             // In place unless a validation is going through the list.
             let list = &mut record.data.dependencies;
             match Rc::get_mut(list) {
@@ -337,14 +383,27 @@ impl<T: 'static> DerivedCell<T> {
                     None => record.data.result = Some(Rc::new(value)),
                 }
             }
+            validated = Validated {
+                result: record.data.result.clone().expect("a result, just computed or kept"),
+                version: record.version,
+                value_since: record.data.value_since,
+                recomputed: true,
+            };
         }
         if pushed {
             crate::snapshots::note_extra_record(id);
         }
         // What readers in the global snapshot go by, this one's now.
-        if view.as_ref().is_none_or(|view| view.global) {
-            let since = self.with_record(view.as_ref(), |record| record.value_since);
-            self.global_saw.set(since);
+        if in_global {
+            self.global_saw.set(validated.value_since);
+            if view.is_none() {
+                // One record now, this calculation's.
+                if self.in_other_snapshots.replace(false) {
+                    *self.global_value.borrow_mut() = None;
+                }
+            } else if self.in_other_snapshots.get() {
+                *self.global_value.borrow_mut() = Some(validated.result.clone());
+            }
         }
         let mark = crate::snapshots::valid_mark();
         // The new one in place: readers of the old one are told before any send below.
@@ -358,8 +417,19 @@ impl<T: 'static> DerivedCell<T> {
             crate::snapshots::Snapshot::notify_objects_initialized();
         }
         // A notify_objects_initialized in a mutable snapshot gave it a new id: this view still reads
-        // this record.
-        self.with_record(view.as_ref(), |record| record.valid_at.set(mark_after(mark)));
+        // this record. In the global snapshot its advance may have reclaimed it, a discarded
+        // snapshot's record being the newest: then there's nothing to mark.
+        {
+            let records = self.records.borrow();
+            let record = match &view {
+                None => Some(&records.head),
+                Some(view) => records.index_in(view).map(|index| records.at(index)),
+            };
+            if let Some(record) = record.filter(|record| record.version == validated.version) {
+                record.data.valid_at.set(mark_after(mark));
+            }
+        }
+        validated
     }
 }
 
@@ -368,11 +438,9 @@ impl<T: 'static> DerivedCell<T> {
 pub(crate) fn read<T: 'static, R>(id: StateId, f: impl FnOnce(&T) -> R) -> R {
     let at = Location::caller();
     // No write since it was last found valid: nothing to validate.
-    let mut found_valid = true;
-    let (cell, cached_observed) = match crate::state::read_if_valid(id, at) {
-        Some(valid) => valid,
+    let (cell, cached_observed, validated) = match crate::state::read_if_valid(id, at) {
+        Some((cell, observed)) => (cell, observed, None),
         None => {
-            found_valid = false;
             let cell = crate::state::object_cell(id, at);
             let derived = DerivedCell::<T>::of(&cell);
             if derived.calculating.get() {
@@ -380,10 +448,10 @@ pub(crate) fn read<T: 'static, R>(id: StateId, f: impl FnOnce(&T) -> R) -> R {
             }
             // Read observers hear it first, as Compose's value getter tells them.
             let observed = crate::snapshots::notify_read_if_observed(id);
-            let recomputed = derived.current();
+            let validated = derived.current();
             // Registered after: what the recomputation invalidates read the old value.
             crate::state::register_read_of(id, at);
-            (cell, observed && !recomputed)
+            (cell, observed && !validated.recomputed, Some(validated.result))
         }
     };
     let derived = DerivedCell::<T>::of(&cell);
@@ -395,10 +463,15 @@ pub(crate) fn read<T: 'static, R>(id: StateId, f: impl FnOnce(&T) -> R) -> R {
             crate::snapshots::notify_read(dependency);
         }
     }
-    // Found valid with no snapshot to look at, and no user code since: the head.
-    let view = if found_valid && !cached_observed { None } else { crate::snapshots::view() };
-    let value = derived.with_record(view.as_ref(), |record| record.result.clone());
-    f(&value.expect("a calculated derived state"))
+    match validated {
+        Some(result) => f(&result),
+        None => {
+            // Found valid with no snapshot to look at: the head, unless observers ran since.
+            let view = if cached_observed { crate::snapshots::view() } else { None };
+            let value = derived.with_record(view.as_ref(), |record| record.result.clone());
+            f(&value.expect("a calculated derived state"))
+        }
+    }
 }
 
 /// For hosts, until they all rely on turns: what's written so far is sent, which validates the
@@ -414,11 +487,10 @@ pub(crate) fn display<T: std::fmt::Debug + 'static>(
     (index, generation): (u32, u32),
 ) -> std::fmt::Result {
     let derived = DerivedCell::<T>::of(cell);
-    let valid = derived.is_valid();
-    let view = crate::snapshots::view();
-    let result = derived.with_record(view.as_ref(), |record| record.result.clone());
-    match result.as_ref().filter(|_| valid) {
-        Some(value) => write!(formatter, "DerivedState(value={value:?})@{index}v{generation}"),
+    match derived.valid_record() {
+        Some(valid) => {
+            write!(formatter, "DerivedState(value={:?})@{index}v{generation}", valid.result)
+        }
         None => write!(formatter, "DerivedState(value=<Not calculated>)@{index}v{generation}"),
     }
 }
@@ -448,24 +520,14 @@ fn new_derived<T: 'static>(
         calculation,
         policy,
         equivalent,
-        records: RefCell::new(Records::new(
-            ResultRecord {
-                result: None,
-                valid_at: Cell::new((0, 0)),
-                dependencies: Rc::from([]),
-                value_since: version,
-            },
-            snapshot,
-            born,
-            version,
-        )),
+        records: RefCell::new(Records::new(ResultRecord::unset(version), snapshot, born, version)),
         calculating: Cell::new(false),
         calculations: Cell::new(0),
         observer: ReadObserver::new(|| {}),
         id: Cell::new(None),
-        side_keys: RefCell::new(Vec::new()),
         global_saw: Cell::new(version),
         in_other_snapshots: Cell::new(false),
+        global_value: RefCell::new(None),
     });
     let erased: Rc<dyn StateObjectCell> = cell.clone();
     let owner = crate::state::owned_object(erased, created_at);

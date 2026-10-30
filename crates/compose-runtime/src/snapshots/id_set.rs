@@ -361,23 +361,52 @@ mod tests {
     // Compose: SnapshotIdSetTests.shouldValidWhenSetIsLarge, with generated operations for its table
     #[test]
     fn should_stay_valid_when_the_set_is_large() {
-        let mut random = Random(5);
-        let mut model = std::collections::BTreeSet::new();
-        let mut set = IdSet::EMPTY;
-        for _ in 0..20000 {
-            let id = random.next(4096);
-            if random.next(2) == 0 {
-                model.insert(id);
-                set = set.set(id);
-            } else {
-                model.remove(&id);
-                set = set.clear(id);
+        use std::collections::BTreeSet;
+        fn check(set: &IdSet, model: &BTreeSet<u64>) {
+            assert!(set.iter().eq(model.iter().copied()));
+            assert_eq!(set.len(), model.len() as u64);
+            assert_eq!(set.lowest(u64::MAX), model.first().copied().unwrap_or(u64::MAX));
+            assert_eq!(set.highest(0), model.last().copied().unwrap_or(0));
+            assert_eq!(set.is_empty(), model.is_empty());
+        }
+        for seed in 0..40 {
+            let mut random = Random(seed);
+            let bound = 1 << (4 + seed % 9);
+            let (mut sets, mut models) =
+                (vec![IdSet::EMPTY, IdSet::EMPTY], vec![BTreeSet::new(), BTreeSet::new()]);
+            for _ in 0..500 {
+                let which = random.next(2) as usize;
+                let (id, other) = (random.next(bound), 1 - which);
+                match random.next(6) {
+                    0 | 1 => {
+                        models[which].insert(id);
+                        sets[which] = sets[which].set(id);
+                    }
+                    2 => {
+                        models[which].remove(&id);
+                        sets[which] = sets[which].clear(id);
+                    }
+                    3 => {
+                        let until = id + random.next(20);
+                        models[which].extend(id..until);
+                        sets[which] = sets[which].add_range(id, until);
+                    }
+                    4 => {
+                        let union = models[0].union(&models[1]).copied().collect();
+                        sets[which] = sets[which].or(&sets[other]);
+                        models[which] = union;
+                    }
+                    _ => {
+                        let difference =
+                            models[which].difference(&models[other]).copied().collect();
+                        sets[which] = sets[which].and_not(&sets[other]);
+                        models[which] = difference;
+                    }
+                }
+                check(&sets[which], &models[which]);
+                assert_eq!(sets[which].get(id), models[which].contains(&id));
             }
         }
-        assert!(set.iter().eq(model.iter().copied()));
-        assert_eq!(set.len(), model.len() as u64);
-        assert_eq!(set.lowest(u64::MAX), model.first().copied().unwrap_or(u64::MAX));
-        assert_eq!(set.highest(0), model.last().copied().unwrap_or(0));
     }
 
     #[test]

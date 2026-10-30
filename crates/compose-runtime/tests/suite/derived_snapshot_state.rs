@@ -686,6 +686,88 @@ mod in_snapshots {
         assert_eq!(derived.get(), 1);
     }
 
+    /// A global read returns what it computed, not a discarded snapshot's record the calculation's
+    /// advance made readable.
+    #[test]
+    fn a_global_read_doesnt_return_a_discarded_snapshots_value() {
+        let (x, y) = (mutable_state_of(0i32), mutable_state_of(0i32));
+        let (read_x, read_y) = (x.handle(), y.handle());
+        let derived = derived_state_of(move || read_x.get() + read_y.get());
+        let read = derived.as_state();
+        assert_eq!(read.get(), 0);
+        let other = Snapshot::take_snapshot(None);
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| read_x.set(1));
+        assert_eq!(snapshot.enter(|| read.get()), 1);
+        snapshot.enter(|| read_x.set(2));
+        assert_eq!(snapshot.enter(|| read.get()), 2);
+        snapshot.dispose();
+        read_y.set(5);
+        assert_eq!(read.get(), 5);
+        drop(other);
+    }
+
+    /// A derived state computed only in snapshots keeps no more than its records' reads.
+    #[test]
+    fn a_derived_state_computed_in_snapshots_doesnt_grow() {
+        let state = mutable_state_of(0);
+        let handle = state.handle();
+        let derived = derived_state_of(move || handle.get() + 1);
+        let read = derived.as_state();
+        read.get();
+        for _ in 0..8000 {
+            Snapshot::with_mutable_snapshot(|| {
+                handle.update(|value| value + 1);
+                read.get();
+            });
+        }
+        assert!(platform::state_observed_read_count(handle) < 100);
+        assert_eq!(read.get(), 8001);
+    }
+
+    /// What a nested snapshot applied changes what its parent's derived state reads, though nothing
+    /// was written since the parent validated it (stricter than Compose's, D782).
+    #[test]
+    fn a_parents_derived_state_sees_a_nested_apply() {
+        let state = mutable_state_of(0);
+        let handle = state.handle();
+        let derived = derived_state_of(move || handle.get());
+        let parent = Snapshot::take_mutable_snapshot(None, None);
+        let nested = parent.take_nested_mutable_snapshot(None, None);
+        nested.enter(|| handle.set(1));
+        assert_eq!(parent.enter(|| derived.get()), 0);
+        nested.apply().check();
+        assert_eq!(parent.enter(|| derived.get()), 1);
+    }
+
+    /// A discarded snapshot's calculation tells a global reader nothing when what it read hasn't
+    /// changed for it.
+    #[test]
+    fn a_discarded_calculation_tells_no_reader() {
+        let (x, y) = (mutable_state_of(0), mutable_state_of(0));
+        let (read_x, read_y) = (x.handle(), y.handle());
+        let derived = derived_state_of(move || read_x.get() + read_y.get().min(0));
+        let read = derived.as_state();
+        let notified = Rc::new(Cell::new(0));
+        let count = notified.clone();
+        let observer = platform::ReadObserver::new(move || count.set(count.get() + 1));
+        observer.observe(1, || read.get());
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            read_x.set(7);
+            assert_eq!(read.get(), 7);
+        });
+        snapshot.dispose();
+        drop(snapshot);
+        read_y.set(5);
+        Snapshot::send_apply_notifications();
+        assert_eq!(read.get(), 0);
+        assert_eq!(notified.get(), 0);
+        read_x.set(1);
+        Snapshot::send_apply_notifications();
+        assert_eq!(notified.get(), 1);
+    }
+
     /// A derived state made in a snapshot is readable elsewhere, as a state is.
     #[test]
     fn a_derived_state_made_in_a_snapshot_is_born_accessible() {

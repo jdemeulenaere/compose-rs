@@ -287,9 +287,10 @@ impl Snapshots {
     }
 
     /// The limit of `overwriteUnusedRecordsLocked`: below it only the newest record of a state
-    /// can be read.
+    /// can be read. The global snapshot reads too: a snapshot that advanced past it and is gone
+    /// has records it doesn't see yet (Compose reclaims only after advancing it).
     pub(super) fn reuse_limit(&self) -> SnapshotId {
-        self.pins.keys().next().copied().unwrap_or(self.next_id)
+        self.pins.keys().next().copied().unwrap_or(self.next_id).min(self.global + 1)
     }
 
     pub(super) fn lowest_pin(&self) -> Option<SnapshotId> {
@@ -645,6 +646,10 @@ impl Snapshots {
         self.sending > 0
     }
 
+    pub(super) fn global_modified(&self) -> Vec<StateId> {
+        self.modified.clone()
+    }
+
     pub(super) fn has_global_changes(&self) -> bool {
         !self.modified.is_empty()
     }
@@ -864,6 +869,7 @@ pub(super) fn send_with(always: bool, applied: Option<(Vec<StateId>, &Snapshot)>
         Some((own, snapshot)) => (own, Some(snapshot)),
         None => (Vec::new(), None),
     };
+    let mut reclaim = false;
     let sent = with_runtime(|runtime| {
         if runtime.is_composing() {
             // As a write in composition: invalidated at once, heard at the next send.
@@ -883,6 +889,7 @@ pub(super) fn send_with(always: bool, applied: Option<(Vec<StateId>, &Snapshot)>
         if !runtime.snapshots.has_changes() && own.is_empty() {
             if always {
                 runtime.snapshots.advance();
+                reclaim = runtime.snapshots.isolated;
             }
             return None;
         }
@@ -907,7 +914,12 @@ pub(super) fn send_with(always: bool, applied: Option<(Vec<StateId>, &Snapshot)>
         .then(|| runtime.snapshots.apply_observers.iter().map(|(_, o)| o.clone()).collect());
         Some((modified, observers, requested, derived))
     });
-    let Some((modified, observers, requested, derived)) = sent else { return };
+    let Some((modified, observers, requested, derived)) = sent else {
+        if reclaim {
+            reclaim_records();
+        }
+        return;
+    };
     struct Sending;
     impl Drop for Sending {
         fn drop(&mut self) {
@@ -967,7 +979,13 @@ fn send_settled() {
             }
             settled
         });
-        if settled != Some(false) {
+        if settled == Some(true) {
+            if try_with_runtime(|runtime| runtime.snapshots.isolated) == Some(true) {
+                reclaim_records();
+            }
+            return;
+        }
+        if settled.is_none() {
             return;
         }
         send(false);

@@ -22,6 +22,11 @@ HERE = pathlib.Path(__file__).resolve().parent
 EXAMPLE = "instructions"
 # Iterations about a second of work each.
 SCENARIOS = {
+    "state_read": 2000000,
+    "state_write": 1000000,
+    "derived_read": 1000000,
+    "derived_after_write": 500000,
+    "derived_recompute": 200000,
     "counter_click": 5000,
     "todo_toggle": 40,
     "first_frame_feed": 200,

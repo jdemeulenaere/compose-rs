@@ -217,6 +217,11 @@ impl ReadObserver {
         });
     }
 
+    /// What forgets `key`'s reads when dropped.
+    pub(crate) fn forgetting(&self, key: u64) -> ForgetKey {
+        ForgetKey { index: self.index, serial: self.serial, key }
+    }
+
     /// The keys whose current observation read `state`.
     pub(crate) fn keys_reading(&self, state: crate::state::StateId) -> Vec<u64> {
         with_runtime(|runtime| crate::state::observed_keys(runtime, state, self.index))
@@ -227,6 +232,24 @@ impl ReadObserver {
         with_runtime(|runtime| {
             if let Some(entry) = runtime.observers.entry(self.index, self.serial) {
                 entry.epochs.remove(&key);
+            }
+        });
+    }
+}
+
+/// Forgets a key's reads when dropped, as [`ReadObserver::forget`]: what ties a derived state's
+/// reads in a snapshot to the record they made (D781).
+pub(crate) struct ForgetKey {
+    index: u32,
+    serial: u64,
+    pub(crate) key: u64,
+}
+
+impl Drop for ForgetKey {
+    fn drop(&mut self) {
+        let _ = try_with_runtime(|runtime| {
+            if let Some(entry) = runtime.observers.entry(self.index, self.serial) {
+                entry.epochs.remove(&self.key);
             }
         });
     }

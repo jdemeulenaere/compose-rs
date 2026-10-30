@@ -41,7 +41,8 @@ impl Kind {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct ReadContext {
     scope: bool,
-    observing: Option<(u32, u64, u32)>,
+    /// The observer (not its key: what's read is recorded under the scope in progress).
+    observing: Option<u32>,
 }
 
 impl ReadContext {
@@ -52,10 +53,7 @@ impl ReadContext {
         let visible = |observing: &Observing| snapshots.observes_at(observing.depth);
         ReadContext {
             scope: !runtime.reading_scope().is_none() && snapshots.composition_reads(),
-            observing: runtime
-                .observing
-                .filter(visible)
-                .map(|observing| (observing.observer, observing.key, observing.epoch)),
+            observing: runtime.observing.filter(visible).map(|observing| observing.observer),
         }
     }
 }
@@ -78,6 +76,9 @@ pub(crate) struct SnapshotInner {
     previous_pins: RefCell<Vec<SnapshotId>>,
     /// Itself and the nested snapshots still active, as `snapshots`.
     nested: Cell<u32>,
+    /// How many read-only snapshots share its id: nested in a read-only one, it's the same view,
+    /// and the id stays open until the last goes.
+    sharers: Rc<Cell<u32>>,
     applied: Cell<bool>,
     disposed: Cell<bool>,
     deactivated: Cell<bool>,
@@ -96,6 +97,7 @@ impl SnapshotInner {
         read_observer: Option<StateObserverFn>,
         write_observer: Option<StateObserverFn>,
         context: ReadContext,
+        sharers: Rc<Cell<u32>>,
     ) -> SnapshotRef {
         let pin = invalid.lowest(id);
         snapshots.pin(pin);
@@ -112,6 +114,7 @@ impl SnapshotInner {
             pin: Cell::new(Some(pin)),
             previous_pins: RefCell::new(Vec::new()),
             nested: Cell::new(1),
+            sharers,
             applied: Cell::new(false),
             disposed: Cell::new(false),
             deactivated: Cell::new(false),
@@ -285,13 +288,15 @@ fn dispose(inner: &SnapshotRef) {
     }
     match inner.kind {
         Kind::ReadOnly => {
+            inner.sharers.set(inner.sharers.get().saturating_sub(1));
             nested_deactivated(inner);
             inner.disposed.set(true);
             with_runtime(|runtime| inner.release_pins(&mut runtime.snapshots));
         }
         Kind::NestedReadOnly => {
             let parent = inner.parent.as_ref().expect("a nested snapshot's parent");
-            if inner.id.get() != parent.id.get() {
+            inner.sharers.set(inner.sharers.get().saturating_sub(1));
+            if inner.id.get() != parent.id.get() && inner.sharers.get() == 0 {
                 with_runtime(|runtime| {
                     inner.close(&mut runtime.snapshots);
                     inner.release_pins(&mut runtime.snapshots);
@@ -324,12 +329,7 @@ fn inner_apply(inner: &SnapshotRef, current: View, modified: &mut Vec<StateId>) 
     let id = inner.id.get();
     let invalid = inner.invalid();
     let start = invalid.set(id).or(&inner.previous_ids.borrow());
-    let views = ApplyViews {
-        start: View::of(id, start),
-        current,
-        applied: View::of(id, invalid),
-        alone: inner.nested.get() == 1,
-    };
+    let views = ApplyViews { start: View::of(id, start), current, applied: View::of(id, invalid) };
     let mut merged = Vec::new();
     let mut stands = Vec::new();
     for &state in modified.iter() {
@@ -337,11 +337,22 @@ fn inner_apply(inner: &SnapshotRef, current: View, modified: &mut Vec<StateId>) 
         // The policy: user code, outside the borrow.
         match cell.merge_at_apply(&views) {
             Merged::Nothing => {}
-            Merged::Current => stands.push(state),
+            Merged::Current => stands.push((state, cell)),
             Merged::New(record) => merged.push((state, cell, record)),
             Merged::Fail => return false,
         }
     }
+    // Nothing failed: only now does anything change.
+    let alone = inner.nested.get() == 1;
+    let mut garbage = Vec::new();
+    {
+        let previous = inner.previous_ids.borrow();
+        for (_, cell) in &stands {
+            cell.current_stands(&views, alone, &previous, &mut garbage);
+        }
+    }
+    // The values' `Drop`: user code, with nothing borrowed.
+    drop(garbage);
     if !merged.is_empty() {
         with_runtime(|runtime| inner.advance(&mut runtime.snapshots));
         let id = inner.id.get();
@@ -352,7 +363,7 @@ fn inner_apply(inner: &SnapshotRef, current: View, modified: &mut Vec<StateId>) 
         }
     }
     if !stands.is_empty() {
-        modified.retain(|state| !stands.contains(state));
+        modified.retain(|state| !stands.iter().any(|(stood, _)| stood == state));
     }
     true
 }
@@ -372,13 +383,14 @@ fn apply_root(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
         inner.validate_open(snapshots);
         View::of(snapshots.next_id(), snapshots.open().clone())
     });
-    // A copy: a policy that panics leaves the snapshot as it was, to abandon.
+    // A copy: a policy that panics leaves the snapshot as it was, to abandon. Each state once: one
+    // written on both sides of an advance is merged once.
     let mut modified = inner.modified.borrow().clone();
+    dedupe(&mut modified);
     if !modified.is_empty() && !inner_apply(inner, current, &mut modified) {
-        return SnapshotApplyResult::Failure(SnapshotApplyConflict { snapshot_id: inner.id.get() });
+        return SnapshotApplyResult::Failure(handle.handle());
     }
     inner.modified.borrow_mut().clear();
-    dedupe(&mut modified);
     with_runtime(|runtime| inner.close(&mut runtime.snapshots));
     inner.applied.set(true);
     // A new global snapshot, which sees this one, and what changed is told.
@@ -390,16 +402,15 @@ fn apply_root(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
 }
 
 /// As `NestedMutableSnapshot.apply`.
-fn apply_nested(inner: &SnapshotRef) -> SnapshotApplyResult {
+fn apply_nested(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
     let parent = inner.parent.as_ref().expect("a nested snapshot's parent");
-    let failure =
-        || SnapshotApplyResult::Failure(SnapshotApplyConflict { snapshot_id: inner.id.get() });
     if !parent.is_active() {
-        return failure();
+        return SnapshotApplyResult::Failure(handle.handle());
     }
     with_runtime(|runtime| inner.validate_open(&runtime.snapshots));
-    // A copy: a policy that panics leaves the snapshot as it was, to abandon.
+    // A copy: a policy that panics leaves the snapshot as it was, to abandon. Each state once.
     let mut modified = inner.modified.borrow().clone();
+    dedupe(&mut modified);
     if modified.is_empty() {
         with_runtime(|runtime| {
             inner.close(&mut runtime.snapshots);
@@ -408,13 +419,16 @@ fn apply_nested(inner: &SnapshotRef) -> SnapshotApplyResult {
     } else {
         let current = View::of(parent.id.get(), parent.invalid());
         if !inner_apply(inner, current, &mut modified) {
-            return failure();
+            return SnapshotApplyResult::Failure(handle.handle());
         }
         inner.modified.borrow_mut().clear();
         parent.modified.borrow_mut().append(&mut modified);
     }
     with_runtime(|runtime| {
         let snapshots = &mut runtime.snapshots;
+        // What the parent validated may read other records now, though nothing was written just
+        // now: a derived state's mark must not stand (D782).
+        snapshots.next_version();
         let id = inner.id.get();
         if parent.id.get() < id {
             parent.advance(snapshots);
@@ -453,6 +467,11 @@ pub struct Snapshot {
 impl Snapshot {
     fn owning(inner: SnapshotRef) -> Snapshot {
         Snapshot { inner: Some(inner), owner: true, transparent: false, refuses_writes: false }
+    }
+
+    /// The global snapshot, as the `GlobalSnapshot` an apply observer may be given.
+    pub fn global_snapshot() -> Snapshot {
+        Snapshot::global_handle()
     }
 
     pub(super) fn global_handle() -> Snapshot {
@@ -531,6 +550,16 @@ impl Snapshot {
         }
     }
 
+    /// The states it wrote and hasn't applied, each once, as `modified`.
+    pub fn modified(&self) -> Vec<StateObjectId> {
+        let mut ids = match &self.inner {
+            Some(inner) => inner.modified.borrow().clone(),
+            None => with_runtime(|runtime| runtime.snapshots.global_modified()),
+        };
+        dedupe(&mut ids);
+        ids.into_iter().map(StateObjectId).collect()
+    }
+
     /// This snapshot as a mutable one, if it is one, as Kotlin's cast: a handle.
     pub fn as_mutable(&self) -> Option<MutableSnapshot> {
         (!self.read_only()).then(|| MutableSnapshot(self.handle()))
@@ -597,6 +626,7 @@ impl Snapshot {
                     _ => parent.parent.as_ref().expect("a nested snapshot's parent"),
                 };
                 owner.nested.set(owner.nested.get() + 1);
+                parent.sharers.set(parent.sharers.get() + 1);
                 return SnapshotInner::new(
                     snapshots,
                     parent.id.get(),
@@ -606,6 +636,7 @@ impl Snapshot {
                     read,
                     None,
                     context,
+                    parent.sharers.clone(),
                 );
             }
             let previous = parent.id.get();
@@ -621,6 +652,7 @@ impl Snapshot {
                 read,
                 None,
                 context,
+                Rc::new(Cell::new(1)),
             );
             parent.nested.set(parent.nested.get() + 1);
             if parent.is_active() {
@@ -635,19 +667,21 @@ impl Snapshot {
     /// Runs `block` in this snapshot, as `enter`: its reads and writes go through it, and its
     /// observers hear them.
     pub fn enter<R>(&self, block: impl FnOnce() -> R) -> R {
-        self.push_entered();
-        let _frame = FrameGuard;
+        let _frame = FrameGuard(self.push_entered());
         block()
     }
 
-    fn push_entered(&self) {
+    /// Enters it; returns the frame depth before.
+    fn push_entered(&self) -> u32 {
         with_runtime(|runtime| {
             let (read, write, context) = self.base(runtime);
             let barrier = ReadContext::of(runtime) != context;
             let read_only = self.read_only();
+            let depth = runtime.snapshots.depth();
             let frame = ObserverFrame { read, write, barrier, entered: None };
             runtime.snapshots.enter(self.inner.clone(), read_only, frame);
-        });
+            depth
+        })
     }
 
     /// Makes this snapshot the current one until [`unsafe_leave`](Snapshot::unsafe_leave), as
@@ -672,7 +706,8 @@ impl Snapshot {
                 }
         });
         assert!(current, "Cannot leave snapshot; {self:?} is not the current snapshot");
-        drop(FrameGuard);
+        // The frame it entered: the one on top.
+        drop(FrameGuard(with_runtime(|runtime| runtime.snapshots.depth()) - 1));
     }
 
     /// `future`, each of its polls in this snapshot, as `asContextElement`: compose-rs has no
@@ -691,11 +726,13 @@ impl Snapshot {
 
     /// Runs `block` in the global snapshot, as `Snapshot.global`.
     pub fn global<R>(block: impl FnOnce() -> R) -> R {
-        with_runtime(|runtime| {
+        let depth = with_runtime(|runtime| {
+            let depth = runtime.snapshots.depth();
             let frame = ObserverFrame { read: None, write: None, barrier: true, entered: None };
             runtime.snapshots.enter(None, false, frame);
+            depth
         });
-        let _frame = FrameGuard;
+        let _frame = FrameGuard(depth);
         block()
     }
 
@@ -793,15 +830,17 @@ impl Snapshot {
         write_observer: Option<StateObserverFn>,
         block: impl FnOnce() -> R,
     ) -> R {
-        with_runtime(|runtime| {
+        let depth = with_runtime(|runtime| {
+            let depth = runtime.snapshots.depth();
             runtime.snapshots.push_frame(ObserverFrame {
                 read: read_observer,
                 write: write_observer,
                 barrier: false,
                 entered: None,
-            })
+            });
+            depth
         });
-        let _frame = FrameGuard;
+        let _frame = FrameGuard(depth);
         block()
     }
 
@@ -809,15 +848,17 @@ impl Snapshot {
     /// composition, nor an observation, nor a read observer started outside `block` records
     /// them (one started inside it does).
     pub fn without_read_observation<R>(block: impl FnOnce() -> R) -> R {
-        with_runtime(|runtime| {
+        let depth = with_runtime(|runtime| {
+            let depth = runtime.snapshots.depth();
             runtime.snapshots.push_frame(ObserverFrame {
                 read: None,
                 write: None,
                 barrier: true,
                 entered: None,
-            })
+            });
+            depth
         });
-        let _frame = FrameGuard;
+        let _frame = FrameGuard(depth);
         block()
     }
 }
@@ -876,6 +917,7 @@ fn take_root(
             merged_with(read_observer, base_read),
             if kind.read_only() { None } else { merged_with(write_observer, base_write) },
             context,
+            Rc::new(Cell::new(1)),
         );
         snapshots.open_id(id);
         inner
@@ -885,14 +927,20 @@ fn take_root(
     snapshot
 }
 
-/// Pops the top frame when dropped (an unwind too), leaving what it entered.
-struct FrameGuard;
+/// Pops the frames down to its depth when dropped (an unwind too), leaving what they entered: an
+/// `unsafe_enter` not left inside an `enter` ends with it, as `enter`'s `restoreCurrent`.
+struct FrameGuard(u32);
 
 impl Drop for FrameGuard {
     fn drop(&mut self) {
-        let popped = try_with_runtime(|runtime| runtime.snapshots.pop_frame()).flatten();
-        // The observers, the last owner of what was entered: user code, outside the borrow.
-        drop(popped);
+        while let Some(popped) = try_with_runtime(|runtime| {
+            if runtime.snapshots.depth() > self.0 { runtime.snapshots.pop_frame() } else { None }
+        })
+        .flatten()
+        {
+            // The observers, the last owner of what was entered: user code, outside the borrow.
+            drop(popped);
+        }
     }
 }
 
@@ -966,6 +1014,7 @@ impl MutableSnapshot {
                 merged_with(read_observer, base_read),
                 merged_with(write_observer, base_write),
                 context,
+                Rc::new(Cell::new(1)),
             );
             parent.nested.set(parent.nested.get() + 1);
             if parent.is_active() {
@@ -986,7 +1035,7 @@ impl MutableSnapshot {
             panic!("Cannot apply the global snapshot directly. Call Snapshot.advanceGlobalSnapshot")
         };
         if inner.kind == Kind::NestedMutable {
-            apply_nested(inner)
+            apply_nested(inner, &self.0)
         } else {
             apply_root(inner, &self.0)
         }
@@ -995,27 +1044,31 @@ impl MutableSnapshot {
 
 /// What [`MutableSnapshot::apply`] came to, as `SnapshotApplyResult`.
 #[must_use = "an apply can fail: check it"]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum SnapshotApplyResult {
     Success,
-    Failure(SnapshotApplyConflict),
+    /// The snapshot that failed to apply, still open, as `Failure.snapshot`.
+    Failure(Snapshot),
 }
 
 impl SnapshotApplyResult {
     /// Panics with [`SnapshotApplyConflict`] if it failed, as `check`.
     pub fn check(self) {
-        if let SnapshotApplyResult::Failure(conflict) = self {
+        if let SnapshotApplyResult::Failure(snapshot) = self {
+            let conflict = SnapshotApplyConflict { snapshot_id: snapshot.snapshot_id() };
+            drop(snapshot);
             std::panic::panic_any(conflict);
         }
     }
 
     /// Whether it succeeded, as `succeeded`.
-    pub fn succeeded(self) -> bool {
-        self == SnapshotApplyResult::Success
+    pub fn succeeded(&self) -> bool {
+        matches!(self, SnapshotApplyResult::Success)
     }
 }
 
-/// An apply that failed, as `SnapshotApplyConflictException`.
+/// An apply that failed, as `SnapshotApplyConflictException`, the panic payload of
+/// [`SnapshotApplyResult::check`] (`Send`, so it names the snapshot by its id).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SnapshotApplyConflict {
     pub snapshot_id: u64,

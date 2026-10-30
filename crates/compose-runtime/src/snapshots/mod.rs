@@ -33,7 +33,7 @@ pub use map::{
 };
 pub use observer::SnapshotStateObserver;
 pub(crate) use records::{
-    ApplyViews, Merged, PREEXISTING, Records, SnapshotId, StateObjectCell, View, WriteSlot,
+    ApplyViews, Merged, PREEXISTING, Record, Records, SnapshotId, StateObjectCell, View, WriteSlot,
     read_error, report_read_only_write,
 };
 pub use set::{

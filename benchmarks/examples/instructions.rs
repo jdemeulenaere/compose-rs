@@ -11,7 +11,7 @@ use std::time::Duration;
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::foundation::*;
-use compose::runtime::{composable, key, mutable_state_of, platform, remember};
+use compose::runtime::{composable, derived_state_of, key, mutable_state_of, platform, remember};
 use compose::test::*;
 use compose::ui::platform::{FixedTextMeasurer, Optimizations, UiHost};
 use compose::ui::*;
@@ -181,6 +181,44 @@ fn main() {
     let n: usize = n.parse().expect("a number of iterations");
     use_optimizations(Optimizations::NONE);
     match scenario.as_str() {
+        "state_read" => {
+            let state = mutable_state_of(1u64);
+            for _ in 0..n {
+                std::hint::black_box(state.get());
+            }
+        }
+        "state_write" => {
+            let state = mutable_state_of(0u64);
+            for value in 0..n {
+                state.set(value as u64);
+            }
+        }
+        "derived_read" => {
+            let state = mutable_state_of(1u64);
+            let handle = state.handle();
+            let derived = derived_state_of(move || handle.get() + 1);
+            for _ in 0..n {
+                std::hint::black_box(derived.get());
+            }
+        }
+        "derived_after_write" => {
+            let (state, unrelated) = (mutable_state_of(1u64), mutable_state_of(0u64));
+            let handle = state.handle();
+            let derived = derived_state_of(move || handle.get() + 1);
+            for value in 0..n {
+                unrelated.set(value as u64);
+                std::hint::black_box(derived.get());
+            }
+        }
+        "derived_recompute" => {
+            let state = mutable_state_of(0u64);
+            let handle = state.handle();
+            let derived = derived_state_of(move || handle.get() + 1);
+            for value in 0..n {
+                state.set(value as u64);
+                std::hint::black_box(derived.get());
+            }
+        }
         "counter_click" => {
             let mut ui = compose_test(counter::Counter);
             clicks(&mut ui, has_text_containing("Count"), 0, n);

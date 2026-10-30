@@ -239,6 +239,39 @@ where
     launch_producer(state, key, producer)
 }
 
+/// [`produce_state`], its initial value made only when the state is.
+pub(crate) fn produce_state_from<T, K, F>(
+    initial: impl FnOnce() -> T,
+    key: K,
+    producer: impl FnOnce(ProduceStateScope<T>) -> F + 'static,
+) -> crate::state::State<T>
+where
+    T: PartialEq + 'static,
+    K: ComposeArg,
+    F: std::future::Future<Output = ()> + 'static,
+{
+    let state = crate::remember::remember(|| crate::state::mutable_state_of(initial()));
+    launch_producer(state, key, producer)
+}
+
+/// [`produce_state_with`], its initial value made only when the state is.
+pub(crate) fn produce_state_with_from<T, K, P, F>(
+    initial: impl FnOnce() -> T,
+    key: K,
+    policy: P,
+    producer: impl FnOnce(ProduceStateScope<T>) -> F + 'static,
+) -> crate::state::State<T>
+where
+    T: 'static,
+    K: ComposeArg,
+    P: crate::state::MutationPolicy<T>,
+    F: std::future::Future<Output = ()> + 'static,
+{
+    let state =
+        crate::remember::remember(|| crate::state::mutable_state_of_with(initial(), policy));
+    launch_producer(state, key, producer)
+}
+
 /// Like [`produce_state`], with the state's mutation policy, as
 /// `produceState(initialValue, key1, mutationPolicy) { … }`.
 pub fn produce_state_with<T, K, P, F>(

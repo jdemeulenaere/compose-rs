@@ -10,7 +10,7 @@ use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-use compose_runtime::platform::state_records;
+use compose_runtime::platform::{self, state_records};
 use compose_runtime::snapshots::{
     MergeResult, MutableSnapshot, Snapshot, SnapshotApplyConflict, SnapshotApplyResult,
     StateObjectId, StateObserverFn, StateRecord, mutable_state_list_of, mutable_state_map_of,
@@ -1577,6 +1577,354 @@ fn an_edit_in_a_snapshot_during_a_with_closure_names_the_conflict() {
         state.with(|_| snapshot.enter(|| state.edit(|value| value.push(2))));
     });
     assert!(message.contains("is borrowed by `with` or `edit`"), "{message}");
+}
+
+// ---- After the review of S5 (D780-D790) ------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Add;
+
+impl MutationPolicy<i32> for Add {
+    fn equivalent(a: &i32, b: &i32) -> bool {
+        a == b
+    }
+    fn merge(previous: &i32, current: &i32, applied: &i32) -> Option<i32> {
+        Some(current + applied - previous)
+    }
+}
+
+/// Written on both sides of an advance, a state is merged once: one record for the merged value,
+/// and the thread back on the fast path.
+#[test]
+fn a_state_written_on_both_sides_of_an_advance_merges_once() {
+    let _open = open_snapshots();
+    let state = mutable_state_of_with(0, Add);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get());
+    let read = derived.as_state();
+    let snapshot = mutable();
+    snapshot.enter(|| {
+        handle.set(1);
+        read.get();
+        handle.set(2);
+    });
+    handle.set(10);
+    Snapshot::send_apply_notifications();
+    snapshot.apply().check();
+    drop(snapshot);
+    Snapshot::send_apply_notifications();
+    Snapshot::notify_objects_initialized();
+    assert_eq!(handle.get(), 12);
+    assert_eq!(used_records(handle), 1);
+}
+
+/// As a nested snapshot's apply: merged once, into its parent.
+#[test]
+fn a_state_written_on_both_sides_of_a_nested_advance_merges_once() {
+    let _open = open_snapshots();
+    let state = mutable_state_of_with(0, Add);
+    let handle = state.handle();
+    let parent = mutable();
+    let child = parent.take_nested_mutable_snapshot(None, None);
+    child.enter(|| {
+        handle.set(1);
+        Snapshot::notify_objects_initialized();
+        handle.set(2);
+    });
+    parent.enter(|| handle.set(10));
+    child.apply().check();
+    assert_eq!(parent.enter(|| handle.get()), 12);
+    child.dispose();
+    parent.apply().check();
+    parent.dispose();
+    assert_eq!(handle.get(), 12);
+    assert_eq!(used_records(handle), 1);
+}
+
+/// Merged once, a `Current` doesn't meet its own second record as a conflict.
+#[test]
+fn a_current_merge_of_a_state_written_on_both_sides_of_an_advance_succeeds() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let snapshot = mutable();
+    snapshot.enter(|| {
+        handle.set(1);
+        Snapshot::notify_objects_initialized();
+        handle.set(2);
+    });
+    handle.set(2);
+    Snapshot::send_apply_notifications();
+    assert!(snapshot.apply().succeeded());
+}
+
+/// A failed apply changes nothing, whatever was decided before the conflict.
+#[test]
+fn a_failed_apply_leaves_the_snapshot_as_it_was() {
+    let _open = open_snapshots();
+    let (a, b) = (mutable_state_of(0), mutable_state_of(0));
+    let (a, b) = (a.handle(), b.handle());
+    let snapshot = mutable();
+    snapshot.enter(|| {
+        a.set(1);
+        b.set(1);
+    });
+    a.set(1);
+    b.set(2);
+    Snapshot::send_apply_notifications();
+    let result = snapshot.apply();
+    assert_eq!(result, SnapshotApplyResult::Failure(snapshot.handle()));
+    assert_eq!(snapshot.enter(|| a.get()), 1);
+    assert_eq!(snapshot.modified(), [a.state_object_id(), b.state_object_id()]);
+    snapshot.dispose();
+}
+
+/// A `Current` merge takes all the snapshot's records out: an intermediate write doesn't resurface.
+#[test]
+fn a_current_merge_leaves_no_intermediate_write() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let snapshot = mutable();
+    handle.set(2);
+    Snapshot::send_apply_notifications();
+    snapshot.enter(|| {
+        Snapshot::notify_objects_initialized();
+        handle.set(1);
+        Snapshot::notify_objects_initialized();
+        handle.set(2);
+    });
+    assert!(snapshot.apply().succeeded());
+    assert_eq!(handle.get(), 2);
+}
+
+/// With a nested snapshot active a `Current` merge leaves the records it may read.
+#[test]
+fn a_current_merge_leaves_what_a_nested_snapshot_reads() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let snapshot = mutable();
+    snapshot.enter(|| handle.set(1));
+    let nested = snapshot.take_nested_snapshot(None);
+    handle.set(1);
+    Snapshot::send_apply_notifications();
+    assert!(snapshot.apply().succeeded());
+    assert_eq!(nested.enter(|| handle.get()), 1);
+    assert_eq!(handle.get(), 1);
+}
+
+/// A read-only snapshot nested in a read-only one keeps its view after the other's dispose, the id
+/// they share open until the last goes.
+#[test]
+fn a_read_only_snapshot_outlives_the_one_it_shares_an_id_with() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let parent = mutable();
+    let first = parent.take_nested_snapshot(None);
+    let second = first.take_nested_snapshot(None);
+    parent.apply().check();
+    first.dispose();
+    handle.set(1);
+    assert_eq!(second.enter(|| handle.get()), 0);
+}
+
+/// The first record of a state born in a snapshot ranks as that snapshot's, as Compose's second
+/// record does: an older snapshot's write doesn't win over it.
+#[test]
+fn a_state_born_in_a_snapshot_ranks_as_that_snapshot() {
+    let _open = open_snapshots();
+    let older = mutable();
+    let younger = mutable();
+    let state = younger.enter(|| mutable_state_of(1));
+    older.enter(|| state.set(0));
+    older.apply().check();
+    younger.apply().check();
+    assert_eq!(state.get(), 1);
+    assert_eq!(used_records(state.handle()), 1);
+}
+
+/// So does a parent's state written by its older child, once the child is applied.
+#[test]
+fn a_parents_state_written_by_its_older_child_stays_the_parents() {
+    let _open = open_snapshots();
+    let parent = mutable();
+    let child = parent.take_nested_mutable_snapshot(None, None);
+    let state = parent.enter(|| mutable_state_of(1));
+    child.enter(|| state.set(2));
+    child.apply().check();
+    assert_eq!(parent.enter(|| state.get()), 1);
+}
+
+/// An `unsafe_enter` not left inside an `enter` ends with it, as `enter` restores what it replaced.
+#[test]
+fn enter_leaves_what_an_unsafe_enter_left_inside_it() {
+    let _open = open_snapshots();
+    let (a, b) = (read_only(), read_only());
+    a.enter(|| {
+        drop(b.unsafe_enter());
+        assert_eq!(Snapshot::current(), b);
+    });
+    assert_eq!(Snapshot::current(), Snapshot::global_snapshot());
+    assert!(!Snapshot::is_in_snapshot());
+}
+
+/// A snapshot taken in one observation of an observer, entered in another, records under the one
+/// in progress.
+#[test]
+fn a_snapshot_entered_in_another_observation_of_its_observer_records_there() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let notified = Rc::new(Cell::new(0));
+    let count = notified.clone();
+    let observer = platform::ReadObserver::new(move || count.set(count.get() + 1));
+    let snapshot = observer.observe(1, read_only);
+    observer.observe(2, || snapshot.enter(|| state.get()));
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    let mut keys = Vec::new();
+    observer.drain_invalidated(|key| keys.push(key));
+    assert_eq!(keys, [2]);
+    assert_eq!(notified.get(), 1);
+}
+
+/// A nested write reaches the parent's modified list: heard when the parent applies, gone with it
+/// if it's discarded.
+#[test]
+fn a_nested_apply_gives_its_writes_to_the_parent() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let parent = mutable();
+    let nested = parent.take_nested_mutable_snapshot(None, None);
+    nested.enter(|| state.set(1));
+    nested.apply().check();
+    assert_eq!(parent.modified(), [state.state_object_id()]);
+    let heard = changes_of(state.state_object_id(), || parent.apply().check());
+    assert_eq!(heard, 1);
+    assert_eq!(state.get(), 1);
+
+    let parent = mutable();
+    let nested = parent.take_nested_mutable_snapshot(None, None);
+    nested.enter(|| state.set(2));
+    nested.apply().check();
+    parent.dispose();
+    assert_eq!(state.get(), 1, "its parent was discarded");
+    drop((nested, parent));
+    assert_eq!(state.get(), 1);
+    assert_eq!(used_records(state.handle()), 1);
+}
+
+/// Each observer of a nested mutable snapshot hears its reads and writes, then its parent's.
+#[test]
+fn a_nested_mutable_snapshots_read_observer_hears_its_reads() {
+    let _open = open_snapshots();
+    let state = mutable_state_of(0);
+    let log: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let parent = Snapshot::take_mutable_snapshot(tagged(&log, 1), tagged(&log, 2));
+    let nested = parent.take_nested_mutable_snapshot(tagged(&log, 3), tagged(&log, 4));
+    nested.enter(|| state.get());
+    assert_eq!(*log.borrow(), [3, 1]);
+    log.borrow_mut().clear();
+    nested.enter(|| state.set(1));
+    assert_eq!(*log.borrow(), [4, 2]);
+}
+
+/// An apply tells the global snapshot's pending changes first, then its own, naming itself.
+#[test]
+fn an_apply_tells_the_global_changes_then_its_own() {
+    let _open = open_snapshots();
+    let (global, own) = (mutable_state_of(0), mutable_state_of(0));
+    Snapshot::notify_objects_initialized();
+    let snapshot = mutable();
+    type Heard = Vec<(Vec<StateObjectId>, bool)>;
+    let heard: Rc<RefCell<Heard>> = Rc::default();
+    let log = heard.clone();
+    let target = snapshot.handle();
+    let _observer = Snapshot::register_apply_observer(move |changed, snapshot| {
+        log.borrow_mut().push((changed.iter().collect(), *snapshot == target));
+    });
+    snapshot.enter(|| own.set(1));
+    global.set(1);
+    snapshot.apply().check();
+    assert_eq!(
+        *heard.borrow(),
+        [(vec![global.state_object_id()], true), (vec![own.state_object_id()], true)]
+    );
+    assert!(!Snapshot::is_apply_observer_notification_pending());
+}
+
+/// What a nested snapshot writes is before what its ancestors write later, whichever is nested
+/// deepest: taking one advances them all (`advanceParentSnapshotsWhenTakingNestedSnapshot`).
+#[test]
+fn taking_a_nested_snapshot_advances_its_ancestors() {
+    let _open = open_snapshots();
+    let root = mutable();
+    let child = root.take_nested_mutable_snapshot(None, None);
+    let global_before = Snapshot::current().snapshot_id();
+    let root_before = root.snapshot_id();
+    let grandchild = child.take_nested_mutable_snapshot(None, None);
+    assert!(root.snapshot_id() > root_before);
+    assert!(Snapshot::current().snapshot_id() > global_before);
+    let state = grandchild.enter(|| mutable_state_of(0));
+    grandchild.enter(|| state.set(1));
+    root.enter(|| state.set(2));
+    grandchild.apply().check();
+    child.apply().check();
+    assert_eq!(root.enter(|| state.get()), 2, "the root's write is the later one");
+}
+
+/// A state the snapshot read as preexisting can't conflict: nothing could have been read of it
+/// before it wrote it.
+#[test]
+fn a_write_to_a_state_born_elsewhere_doesnt_conflict() {
+    let _open = open_snapshots();
+    let born_in = mutable();
+    let state = born_in.enter(|| mutable_state_of(0));
+    let writer = mutable();
+    writer.enter(|| state.set(1));
+    state.set(5);
+    Snapshot::send_apply_notifications();
+    assert!(writer.apply().succeeded());
+    drop(born_in);
+}
+
+/// The public face Compose's has: `Failure.snapshot`, `modified`, a record's id, reading and
+/// writing in a given snapshot.
+#[test]
+fn the_state_object_api_reaches_a_given_snapshot() {
+    let _open = open_snapshots();
+    let counter = snapshot_state_object(CounterRecord(1));
+    let snapshot = mutable();
+    counter.writable_in(&snapshot, |record| record.0 = 2);
+    assert_eq!(counter.readable_in(&snapshot, |record| record.0), 2);
+    assert_eq!(counter.readable(|record| record.0), 1);
+    assert_eq!(snapshot.modified(), [counter.state_object_id()]);
+    assert_ne!(
+        snapshot.enter(|| counter.record_snapshot_id()),
+        counter.record_snapshot_id(),
+        "each reads the record of another snapshot"
+    );
+    assert_eq!(snapshot.enter(|| counter.record_snapshot_id()), snapshot.snapshot_id());
+}
+
+/// A snapshot gone that had advanced past the global one leaves records it can't see yet: they stay
+/// until it advances, as what it reads does.
+#[test]
+fn a_discarded_snapshot_ahead_of_the_global_one_takes_nothing_it_reads() {
+    let _open = open_snapshots();
+    let snapshot = mutable();
+    snapshot.enter(Snapshot::notify_objects_initialized);
+    let state = snapshot.enter(|| mutable_state_of(2));
+    snapshot.enter(|| state.set(3));
+    Snapshot::global(|| state.set(0));
+    snapshot.dispose();
+    assert_eq!(state.get(), 0);
+    assert_eq!(used_records(state.handle()), 3);
+    Snapshot::notify_objects_initialized();
+    // As Compose's: a state's record born with the snapshot isn't undone with it (D772).
+    assert_eq!(state.get(), 3);
+    assert_eq!(used_records(state.handle()), 1);
 }
 
 /// A snapshot's handle doesn't dispose it, its owner does; a read-only one's view survives.
