@@ -149,7 +149,7 @@ fn flags(node: &SemanticsNode) -> u32 {
 /// Record: id (i32), parent (i32), bounds (4 × f32, clipped by the scrolling containers around:
 /// `clip`), flags (u32), role (u8: 0 none, 1 button, 2 checkbox, 3 switch, 4 radio button,
 /// 5 tab, 6 image, 7 dropdown list), text, content description, editable text, state
-/// description, error (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
+/// description, error, pane title (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
 /// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
 /// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is.
 fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
@@ -198,6 +198,8 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     write_string(out, text_of(config.get(&P::EDITABLE_TEXT)));
     write_string(out, text_of(config.get(&P::STATE_DESCRIPTION)));
     write_string(out, text_of(config.get(&P::ERROR)));
+    // From its own configuration, as Compose's delegate.
+    write_string(out, text_of(node.unmerged_config().get(&P::PANE_TITLE)));
     if let Some(info) = config.get(&P::PROGRESS_BAR_RANGE_INFO) {
         out.f32(info.current);
         out.f32(info.range.0);

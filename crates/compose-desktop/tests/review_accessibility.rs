@@ -83,6 +83,22 @@ fn a_dialog_is_a_modal_dialog_node() {
     assert!(dialog.is_modal(), "the dialog isn't modal");
 }
 
+/// A pane's title is its name, where a drawer or a sheet has no other (D1029).
+#[test]
+fn a_panes_title_is_its_label() {
+    let host = host(|| {
+        Box!(modifier = Modifier.size(10.dp()).semantics(|config| {
+            config.set_pane_title("Navigation menu");
+        }));
+    });
+    let update = accessibility::tree_update(&host, "App");
+    let pane = nodes(&update)
+        .into_iter()
+        .find(|node| node.role() == accesskit::Role::Pane)
+        .expect("no pane in the accessibility tree");
+    assert_eq!(pane.label(), Some("Navigation menu"));
+}
+
 /// A clickable row (no role) holding a described image is a button to AccessKit (as Compose:
 /// clickable, no role); the merged child's `Role::Image` makes it an image, which VoiceOver
 /// announces as "Star, Favorite, image".

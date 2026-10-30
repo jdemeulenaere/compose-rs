@@ -33,6 +33,7 @@ use compose_ui::*;
 struct Record {
     id: i32,
     text: String,
+    pane_title: String,
     /// A scrolling container's offset.
     scroll: Option<f32>,
 }
@@ -52,7 +53,7 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         let flags = u32_at(&mut at);
         at += 1;
         let mut strings = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             let length = u32_at(&mut at) as usize;
             strings.push(String::from_utf8(bytes[at..at + length].to_vec()).unwrap());
             at += length;
@@ -65,7 +66,8 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 9;
             value
         });
-        out.push(Record { id, text: strings.swap_remove(0), scroll });
+        let pane_title = strings.swap_remove(5);
+        out.push(Record { id, text: strings.swap_remove(0), pane_title, scroll });
     }
     out
 }
@@ -379,6 +381,9 @@ fn the_kotlin_is_the_model() {
         "    private fun turnedOn() {\n        stale = true\n        scrolledTo = SparseArray()\n        tell()",
         "    private fun tell() {\n        if (!manager.isEnabled) return",
         "event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE",
+        // The record's strings in its order, the pane title last, and where it goes.
+        "val error = buffer.readString()\n            val paneTitle = buffer.readString()",
+        "info.paneTitle = node.paneTitle",
     ] {
         assert!(accessibility.contains(line), "Accessibility.kt lacks {line:?}");
     }
@@ -390,6 +395,25 @@ fn the_kotlin_is_the_model() {
     ] {
         assert!(view.contains(line), "ComposeRsView.kt lacks {line:?}");
     }
+}
+
+/// A pane's title reaches the service as the node's `paneTitle`, as Compose's delegate: a drawer,
+/// a sheet or a dialog has no other name (D1029).
+#[test]
+fn a_panes_title_is_in_its_record() {
+    let host = kept_host(|| {
+        Box!(modifier = Modifier.size(10.dp()).semantics(|config| {
+            config.set_pane_title("Navigation menu");
+        }));
+        BasicText!("Beside it");
+    });
+    let root = host.semantics_tree(true);
+    let mut out = Writer::default();
+    write_tree(&root, &mut out);
+    let read = records(&out.bytes);
+    let panes: Vec<&str> = read.iter().map(|record| record.pane_title.as_str()).collect();
+    assert!(panes.contains(&"Navigation menu"), "{read:?}");
+    assert_eq!(panes.iter().filter(|title| !title.is_empty()).count(), 1, "{read:?}");
 }
 
 /// A frame whose only change is a modifier node's semantics (`invalidate_semantics`, or a

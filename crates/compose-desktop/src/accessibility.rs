@@ -59,6 +59,8 @@ fn add(
     };
     let texts = join(config.get(&P::TEXT));
     let descriptions = join(config.get(&P::CONTENT_DESCRIPTION));
+    // From its own configuration, as Compose's delegate.
+    let pane_title = own.get(&P::PANE_TITLE);
     let disabled = config.contains(&P::DISABLED);
     let clickable = own.contains(&A::ON_CLICK);
     // As Compose's delegate, from the node's own configuration (`unmergedConfig`).
@@ -74,6 +76,7 @@ fn add(
         // A role added later: a generic container.
         Some(_) => accesskit::Role::GenericContainer,
         None if config.contains(&P::IS_DIALOG) => accesskit::Role::Dialog,
+        None if pane_title.is_some() => accesskit::Role::Pane,
         None if config.contains(&P::PASSWORD) => accesskit::Role::PasswordInput,
         None if config.contains(&P::EDITABLE_TEXT) => accesskit::Role::TextInput,
         None if range.is_some() => accesskit::Role::Slider,
@@ -89,8 +92,13 @@ fn add(
         x1: bounds.right as f64,
         y1: bounds.bottom as f64,
     });
-    // What a screen reader says: its description, else its text (a label's own value).
-    let label = if descriptions.is_empty() { texts.clone() } else { descriptions };
+    // What a screen reader says: its description, else its pane's title, else its text (a label's
+    // own value).
+    let label = match (descriptions.is_empty(), pane_title) {
+        (false, _) => descriptions,
+        (true, Some(title)) => title.to_string(),
+        (true, None) => texts.clone(),
+    };
     if role == accesskit::Role::Label {
         access.set_value(label);
     } else if !label.is_empty() {

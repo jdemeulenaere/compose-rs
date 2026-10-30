@@ -38,6 +38,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         val editableText: String,
         val state: String,
         val error: String,
+        val paneTitle: String,
         val range: FloatArray?,
         /** A scrolling container's offset, the largest, and its viewport's length. */
         val scroll: FloatArray?,
@@ -170,6 +171,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             val editableText = buffer.readString()
             val state = buffer.readString()
             val error = buffer.readString()
+            val paneTitle = buffer.readString()
             val range = if (flags and RANGE != 0) {
                 floatArrayOf(buffer.getFloat(), buffer.getFloat(), buffer.getFloat())
             } else {
@@ -182,8 +184,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             }
             val scrollActions = if (flags and SCROLL != 0) buffer.get().toInt() and 0xFF else 0
             val node = Node(
-                id, parent, bounds, flags, role, text, description, editableText, state, error, range,
-                scroll, scrollActions,
+                id, parent, bounds, flags, role, text, description, editableText, state, error,
+                paneTitle, range, scroll, scrollActions,
             )
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
@@ -293,7 +295,11 @@ internal class Accessibility(private val view: ComposeRsView) :
                 if (actions and SCROLL_RIGHT != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_RIGHT)
             }
         }
-        if (node.flags and DIALOG != 0) info.paneTitle = node.description.ifEmpty { node.text }
+        if (node.paneTitle.isNotEmpty()) {
+            info.paneTitle = node.paneTitle
+        } else if (node.flags and DIALOG != 0) {
+            info.paneTitle = node.description.ifEmpty { node.text }
+        }
         return info
     }
 

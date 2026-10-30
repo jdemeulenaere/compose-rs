@@ -40,7 +40,7 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         let flags = u32_at(&mut at);
         at += 1;
         let mut strings = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             let length = u32_at(&mut at) as usize;
             strings.push(String::from_utf8(bytes[at..at + length].to_vec()).unwrap());
             at += length;
