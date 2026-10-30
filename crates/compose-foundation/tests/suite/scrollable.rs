@@ -864,3 +864,49 @@ fn a_default_fling_is_the_spline_based_decay_frame_by_frame() {
         assert!(duration as u64 > (frame - 1) * 16_000_000, "not later: {frame} frames");
     }
 }
+
+/// Runs a default fling over `scope` a frame at a time until it ends: what it returns, and the
+/// play time of its last frame.
+fn fling_left(
+    ui: &mut ComposeTestRule,
+    scope: ScrollScope,
+    velocity: f32,
+    density: f32,
+) -> (f32, i64) {
+    let left = Rc::new(Cell::new(None));
+    let result = left.clone();
+    let coroutines = compose_runtime::CoroutineScope::new();
+    coroutines.launch(async move {
+        let behavior = DefaultFlingBehavior::new(density);
+        result.set(Some(behavior.perform_fling(scope, velocity).await));
+    });
+    // The first frame is its start.
+    ui.advance_time_by_frame();
+    let mut frame = 0u64;
+    while left.get().is_none() {
+        frame += 1;
+        ui.advance_time_by_frame();
+        assert!(frame < 1_000, "the fling never ended");
+    }
+    (left.get().unwrap(), (((frame * 16_000_000) as f32) / 1.0) as i64)
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AbstractScrollableNode.kt, DefaultFlingBehavior.performFling (`velocityLeft = this.velocity`; no test of Compose's at this value)
+#[test]
+fn a_fling_stopped_by_an_edge_returns_the_decay_s_velocity_there() {
+    use compose_animation::{FloatDecayAnimationSpec, SplineBasedFloatDecayAnimationSpec};
+    let density = 2.625;
+    let spec = SplineBasedFloatDecayAnimationSpec::new(compose_ui::Density::new(density));
+    let velocity = 8000.0f32;
+    let mut ui = ComposeTestRule::with_manual_clock(|| {});
+    // An edge 300 px away.
+    let room = Rc::new(Cell::new(300.0f32));
+    let scope = ScrollScope::new(move |delta| {
+        let used = delta.min(room.get());
+        room.set(room.get() - used);
+        used
+    });
+    let (left, play_time) = fling_left(&mut ui, scope, velocity, density);
+    assert_eq!(left, spec.velocity_from_nanos(play_time, 0.0, velocity));
+    assert!(left > 0.0 && left < velocity, "{left}");
+}

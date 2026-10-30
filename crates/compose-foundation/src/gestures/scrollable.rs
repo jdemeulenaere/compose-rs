@@ -448,12 +448,8 @@ impl FlingBehavior for DefaultFlingBehavior {
                 let delta = target - covered;
                 covered = target;
                 let used = if delta == 0.0 { 0.0 } else { scope.scroll_by(delta) };
-                // Its velocity there (the spline's slope), as Compose's `velocityLeft`.
-                let velocity_here = || {
-                    let step = (course.duration_nanos as i64 / 100).min(play_time);
-                    (target - course.distance_at(play_time - step))
-                        / (step as f32 / 1e9).max(f32::EPSILON)
-                };
+                // The decay's velocity there, as Compose's `velocityLeft` and `animationState.velocity`.
+                let velocity_here = || course.velocity_at(play_time);
                 // The node left, as Compose's catch of the fling's cancellation.
                 if scope.is_fling_cancelled() {
                     return velocity_here();

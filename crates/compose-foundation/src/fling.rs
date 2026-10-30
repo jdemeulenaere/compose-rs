@@ -81,6 +81,11 @@ impl Fling {
         play_time_nanos >= self.duration_nanos as i64
     }
 
+    /// Its velocity at `play_time_nanos`: the decay's then.
+    pub(crate) fn velocity_at(&self, play_time_nanos: i64) -> f32 {
+        self.spec.velocity_from_nanos(play_time_nanos.max(0), 0.0, self.velocity)
+    }
+
     /// The distance covered at `play_time_nanos`: the decay's value then.
     pub(crate) fn distance_at(&self, play_time_nanos: i64) -> f32 {
         if self.is_finished(play_time_nanos) {
@@ -121,6 +126,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A finished fling leaves no velocity: the frame loop's 0 at its end is the decay's end
+    /// velocity, what Compose's `velocityLeft` is then.
+    #[test]
+    fn a_fling_ends_with_no_velocity() {
+        for velocity in [-5000.0f32, 800.0, 12_000.0] {
+            let fling = Fling::new(velocity, 2.625);
+            assert_eq!(fling.velocity_at(fling.duration_nanos as i64), 0.0, "{velocity}");
+        }
+    }
+
+    // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AbstractScrollableNode.kt, DefaultFlingBehavior.performFling (the catch: `velocityLeft = animationState.velocity`; no test of Compose's at this value)
+    #[test]
+    fn a_fling_whose_node_left_returns_the_decay_s_velocity_there() {
+        use crate::gestures::{DefaultFlingBehavior, FlingBehavior, ScrollScope};
+        use compose_runtime::platform;
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        platform::set_manual_clock(1_000_000_000);
+        let velocity = 8000.0f32;
+        let (cancelled, calls) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(0u32)));
+        let (leaving, counted) = (cancelled.clone(), calls.clone());
+        // The node leaves during the third frame's scroll.
+        let scope = ScrollScope::of_fling(
+            move |delta| {
+                counted.set(counted.get() + 1);
+                if counted.get() == 3 {
+                    leaving.set(true);
+                }
+                delta
+            },
+            cancelled,
+        );
+        let left = Rc::new(Cell::new(None));
+        let result = left.clone();
+        let coroutines = compose_runtime::CoroutineScope::new();
+        coroutines.launch(async move {
+            let behavior = DefaultFlingBehavior::new(2.625);
+            result.set(Some(behavior.perform_fling(scope, velocity).await));
+        });
+        // The first frame is its start, then three.
+        for _ in 0..4 {
+            platform::run_ready();
+            platform::advance_clock(Duration::from_millis(16));
+            platform::dispatch_frame();
+        }
+        platform::run_ready();
+        let expected = Fling::new(velocity, 2.625).velocity_at(48_000_000);
+        assert_eq!(left.get(), Some(expected));
+        assert!(expected > 0.0 && expected < velocity, "{expected}");
     }
 
     #[test]
