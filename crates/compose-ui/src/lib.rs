@@ -21,6 +21,7 @@ mod clickable;
 mod clipboard;
 mod configuration;
 mod constraints;
+mod content_scale;
 mod delegation;
 mod dispatch;
 mod display_list;
@@ -158,6 +159,7 @@ pub use configuration::{
     PropValue, ScreenOrientation,
 };
 pub use constraints::Constraints;
+pub use content_scale::ContentScale;
 pub use delegation::{Delegate, Delegates};
 pub use draw::{DrawScope, SharedPath};
 pub use draw_modifiers::{CacheDrawScope, ContentDrawScope, DrawResult};

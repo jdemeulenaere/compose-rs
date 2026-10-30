@@ -24,6 +24,7 @@ mod easing;
 mod infinite;
 mod keyframes;
 mod seekable;
+mod shared;
 mod spec;
 mod spline;
 mod spring;
@@ -75,6 +76,10 @@ pub use easing::{
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
 pub use seekable::SeekableTransitionState;
+pub use shared::{
+    BoundsTransform, DefaultSharedContentConfig, PlaceholderSize, ResizeMode, SharedContentConfig,
+    SharedTransitionDefaults,
+};
 pub use spec::{
     AnimationConstants, AnimationSpec, CustomDurationBasedSpec, CustomSpec,
     DEFAULT_DURATION_MILLIS, DurationBasedSpec, FloatAnimationSpec, FloatSpringSpec,

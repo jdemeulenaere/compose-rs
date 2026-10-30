@@ -221,6 +221,7 @@ Deprecated and left out:
 - `remember_infinite_transition` with `animate_value/float/color`.
 - `update_transition` and `remember_transition(&MutableTransitionState)`, with `current_state`, `target_state`, `segment`, `is_running`, `label`, `total_duration_nanos`, `create_child_transition` and `animate_value/float/dp/color/offset/size/int/int_offset/int_size/rect`.
 - `DeferredTargetAnimation`.
+- `DeferredTransitionState`, `DeferredTransition`, `remember_deferred_transition` (D828); the motion duration scale (`compose_ui::motion_duration_scale`, `with_motion_duration_scale`, `set_motion_duration_scale`, D827).
 - `Animate` for `f32`, `i32`, `Dp`, `DpOffset`, `Offset`, `IntOffset`, `Size`, `IntSize`, `Rect`, `Color` (Oklab) and `AnimationVector`; the `VisibilityThreshold` constants.
 
 **animation:**
@@ -231,6 +232,7 @@ Deprecated and left out:
 - `AnimatedContent(target_state, modifier, transition_spec(scope), content_alignment, label, content_key, content(scope, state))` and `transition.AnimatedContent(modifier, transition_spec, content_alignment, content_key, content)`, the scopes `AnimatedContentTransitionScope` (`slide_into_container`, `slide_out_of_container`, `SlideDirection`) and `AnimatedContentScope`, `ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED`, `transition.Crossfade(…)`, with `ContentTransform` (`together_with`, `using`, `target_content_z_index`), `size_transform(clip, spec)` and `default_content_transform()`.
 - `Crossfade(target_state, modifier, animation_spec, label, content)`.
 - `Modifier.animate_content_size()`/`animate_content_size_with(spec, alignment, finished_listener)`.
+- `DeferredAnimatedVisibility`, `DeferredAnimatedContent`, `MutableTransform`, `MutableContentTransform`, `TransformScope` (D828); `BoundsTransform`, `SharedTransitionDefaults`, `PlaceholderSize`, `ResizeMode`, `SharedContentConfig` (D829).
 
 **navigation:** see [Navigation Compose](#navigation-compose-androidxnavigationcompose-and-navcontroller).
 
@@ -295,7 +297,8 @@ Deprecated and left out:
 | `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
 | `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
 | `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | present: methods of `DeferredTransition`; `TransformScope`'s setters `set_alpha` and the like (D828) | deferred-transition |
-| `SharedTransitionLayout`, `SharedTransitionScope(content)`, the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
+| `BoundsTransform`, `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`), `SharedTransitionScope.PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`), `SharedContentConfig`'s `shouldKeepEnabledForOngoingAnimation` and `permitTransformDuringDeferredTransition` | present (D829); what takes a `SharedContentState` comes with the scope | shared-transition |
+| `SharedTransitionLayout`, `SharedTransitionScope(content)`, the rest of the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
 | `Modifier.animateBounds(lookaheadScope, modifier, boundsTransform, animateMotionFrameOfReference)` | missing | animate-bounds |
 | `LookaheadAnimationVisualDebugging(…)`, `CustomizedLookaheadAnimationVisualDebugging(…)` (experimental) | missing | lookahead-visual-debug |
 | `splineBasedDecay(density)`, `rememberSplineBasedDecay()`, `SplineBasedFloatDecayAnimationSpec` | present (D820; foundation's flings decay along it, D826) | decay-animation |
@@ -589,19 +592,21 @@ One entry per feature. Sizes:
 
 #### shared-transition (XL, not exp.)
 
+- **Done, without lookahead (D829):** `BoundsTransform`, `SharedTransitionDefaults`, `PlaceholderSize`, `ResizeMode` (`ContentScale` moved to compose-ui, as Compose's is in ui), the state-free part of `SharedContentConfig`. From deferred-transition (D828): `pending_target_state`, the manual transforms' state machine, forced initial values on deferred animations. **Left:** everything with a `SharedContentState` or a scope.
 - **API:** `SharedTransitionLayout`, `SharedTransitionScope` and its whole surface (see the API table), `BoundsTransform`, `SharedTransitionDefaults`.
 - **What it does:** matches elements across content changes and animates their bounds in an overlay.
 - **Tests:** `SharedTransitionTest` (71), `DeferredSharedElementTest` (15), `OverlaySceneTest`, `AnimatedTest.testSharedElement`, `NavDisplayScreenshotTest` (1).
 - **Dependencies:**
   - **ui lookahead** (`LookaheadScope`, approach and intermediate layout, lookahead coordinates), which compose-rs lacks entirely;
   - movable content (tests use `movableContentOf`), which compose-runtime lacks;
-  - an overlay with z-ordering, animated-visibility-scope, transition-state, and lazy layouts (present).
+  - an overlay with z-ordering: its `LayerRenderer`s draw `GraphicsLayer`s recorded in place, so it waits for ui-core's **graphics-layer-object** (compose-ui has graphics layer modifiers, no layer object to record and draw elsewhere); `renderInSharedTransitionScopeOverlay` with it;
+  - animated-visibility-scope, transition-state, and lazy layouts (present).
 
 #### animate-bounds (L, not exp.)
 
 - **API:** `Modifier.animate_bounds(lookahead_scope, modifier, bounds_transform, animate_motion_frame_of_reference)`.
 - **Tests:** `AnimateBoundsTest`.
-- **Dependencies:** ui lookahead; `BoundsTransform` (shared with shared-transition); movable content for 1 test.
+- **Dependencies:** ui lookahead; `BoundsTransform` (done, D829); movable content for 1 test.
 
 #### lookahead-visual-debug (M, exp.)
 
