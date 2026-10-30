@@ -3,6 +3,7 @@
 //! the selected one's icon in a pill.
 
 use compose_ui::ClickableOptions;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_foundation::layout::{
@@ -129,9 +130,14 @@ pub fn NavigationBarItem(
     #[default(None)] interaction_source: Option<compose_ui::MutableInteractionSource>,
 ) {
     let show_label = label.is_some() && (always_show_label || selected);
+    let pill_position = remember(|| Rc::new(Cell::new(compose_ui::Offset::ZERO)));
     let policy = {
+        let pill_position = pill_position.clone();
         compose_runtime::remember_keyed(show_label, move || {
-            Rc::new(NavigationBarItemLayout { label: show_label }) as Rc<dyn MeasurePolicy>
+            Rc::new(NavigationBarItemLayout {
+                label: show_label,
+                pill_position: pill_position.clone(),
+            }) as Rc<dyn MeasurePolicy>
         })
     };
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
@@ -147,6 +153,7 @@ pub fn NavigationBarItem(
         colors,
         interaction_source,
         (64.dp(), 32.dp()),
+        pill_position,
     );
 }
 
@@ -165,6 +172,7 @@ fn navigation_item(
     colors: NavigationBarItemColors,
     interaction: compose_ui::MutableInteractionSource,
     pill_size: (Dp, Dp),
+    pill_position: Rc<Cell<compose_ui::Offset>>,
 ) {
     let (icon_color, text_color) = match (enabled, selected) {
         (false, _) => (colors.disabled_icon_color, colors.disabled_text_color),
@@ -174,14 +182,23 @@ fn navigation_item(
     let pill = remember(|| Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]));
     let indicator = if selected { colors.selected_indicator_color } else { Color::TRANSPARENT };
     let typography = MaterialTheme::typography();
-    // The press, focus and hover show on the pill only, as Compose's
-    // (`selectable(indication = null)`, the pill's own ripple).
+    // The press, focus and hover show on the pill only, as Compose's: the item's
+    // `selectable(indication = null)`, its interactions mapped into the pill's coordinates for
+    // the pill's own ripple.
+    let mapped = compose_runtime::remember_keyed(interaction.clone(), {
+        let (source, position) = (interaction.clone(), pill_position.clone());
+        move || {
+            Rc::new(crate::ripple::MappedInteractionSource::new(source.as_source(), move || {
+                position.get()
+            }))
+        }
+    });
     let modifier = modifier
         .clickable_with(
             ClickableOptions {
                 enabled,
                 role: Some(Role::Tab),
-                indication: Color::UNSPECIFIED.into(),
+                indication: compose_ui::Indication::NONE,
                 interaction_source: Some(interaction.clone()),
                 ..ClickableOptions::DEFAULT
             },
@@ -195,27 +212,12 @@ fn navigation_item(
         policy,
         compose_runtime::callback(move || {
             // The pill, then the icon over it, then the label.
-            let (pressed, pill_shape) = (interaction.clone(), pill.clone());
             Box(
                 Modifier
                     .size_in(SizeSpec::bounds(pill_width, pill_height, pill_width, pill_height))
                     .background_with(indicator, pill.clone())
-                    .draw_behind(move |scope| {
-                        // Read while drawing: a press, focus or hover draws again only.
-                        // Material's state layers: pressed and focused 10 %, hovered 8 %.
-                        let alpha = if pressed.is_pressed() || pressed.is_focused() {
-                            Some(0.1)
-                        } else if pressed.is_hovered() {
-                            Some(0.08)
-                        } else {
-                            None
-                        };
-                        if let Some(alpha) = alpha
-                            && enabled
-                        {
-                            scope.draw_shape(&pill_shape, icon_color.with_alpha(alpha));
-                        }
-                    }),
+                    .clip(pill.clone())
+                    .indication(mapped.source(), crate::ripple::shaped_ripple(pill.clone())),
                 Alignment::CENTER,
                 false,
                 compose_runtime::callback(|_| {}),
@@ -259,6 +261,8 @@ fn navigation_item(
 /// whole centered down the item, as Compose's `NavigationBarItemLayout`.
 struct NavigationBarItemLayout {
     label: bool,
+    /// Where the pill is placed, for its ripple's coordinates.
+    pill_position: Rc<Cell<compose_ui::Offset>>,
 }
 
 impl MeasurePolicy for NavigationBarItemLayout {
@@ -294,6 +298,7 @@ impl MeasurePolicy for NavigationBarItemLayout {
         };
         let top = (height - content).max(0) / 2;
         let center = |child_width: i32| (width - child_width) / 2;
+        self.pill_position.set(compose_ui::Offset::new(center(pill.width) as f32, top as f32));
         scope.place_relative(&pill, center(pill.width), top);
         scope.place_relative(&icon, center(icon.width), top + (pill.height - icon.height) / 2);
         if let Some(label) = &label {
@@ -405,8 +410,15 @@ pub fn NavigationRailItem(
     #[default(None)] interaction_source: Option<compose_ui::MutableInteractionSource>,
 ) {
     let show_label = label.is_some() && (always_show_label || selected);
-    let policy = compose_runtime::remember_keyed(show_label, move || {
-        Rc::new(NavigationRailItemLayout { label: show_label }) as Rc<dyn MeasurePolicy>
+    let pill_position = remember(|| Rc::new(Cell::new(compose_ui::Offset::ZERO)));
+    let policy = compose_runtime::remember_keyed(show_label, {
+        let pill_position = pill_position.clone();
+        move || {
+            Rc::new(NavigationRailItemLayout {
+                label: show_label,
+                pill_position: pill_position.clone(),
+            }) as Rc<dyn MeasurePolicy>
+        }
     });
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     navigation_item(
@@ -421,6 +433,7 @@ pub fn NavigationRailItem(
         colors,
         interaction_source,
         (56.dp(), if show_label { 32.dp() } else { 56.dp() }),
+        pill_position,
     );
 }
 
@@ -429,6 +442,8 @@ pub fn NavigationRailItem(
 /// `NavigationRailItem`'s layout.
 struct NavigationRailItemLayout {
     label: bool,
+    /// Where the pill is placed, for its ripple's coordinates.
+    pill_position: Rc<Cell<compose_ui::Offset>>,
 }
 
 impl MeasurePolicy for NavigationRailItemLayout {
@@ -454,6 +469,7 @@ impl MeasurePolicy for NavigationRailItemLayout {
         );
         let center = |child_width: i32| (width - child_width) / 2;
         let top = (height - content) / 2;
+        self.pill_position.set(compose_ui::Offset::new(center(pill.width) as f32, top as f32));
         scope.place_relative(&pill, center(pill.width), top);
         scope.place_relative(&icon, center(icon.width), top + (pill.height - icon.height) / 2);
         if let Some(label) = &label {

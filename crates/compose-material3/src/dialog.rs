@@ -727,7 +727,7 @@ pub fn DropdownMenuItem(
         })
     };
     // The ripple in the content color around the item, as Compose's `ripple(true)`.
-    let indication = LOCAL_CONTENT_COLOR.current().into();
+    let indication = crate::ripple::default_ripple();
     let modifier = modifier
         .clickable_with(
             ClickableOptions {

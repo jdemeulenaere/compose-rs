@@ -1024,8 +1024,11 @@ fn a_drag_ends_when_the_slider_is_disabled() {
     rig.enabled.set(false);
     rig.ui.wait_for_idle();
     assert!(!rig.source.is_dragged() && !rig.state.is_dragging());
+    // `processDragCancel` calls `onDragStopped`, which finishes the value's change.
+    assert_eq!(rig.finished.get(), 1);
     rig.ui.host().send_pointer(PointerEvent::release(moved));
     rig.ui.wait_for_idle();
+    assert_eq!(rig.finished.get(), 1, "its release is nothing now");
     rig.enabled.set(true);
     rig.ui.wait_for_idle();
     let value = rig.state.value();
@@ -1045,6 +1048,26 @@ fn a_focus_ends_when_the_slider_is_disabled() {
     rig.enabled.set(false);
     rig.ui.wait_for_idle();
     assert!(!rig.source.is_focused());
+}
+
+/// Disabled while focused then enabled again, it isn't focused, as `focusable(enabled = false)`
+/// removing its node: nothing's heard again, and the handle is whole.
+#[test]
+fn a_slider_enabled_again_has_lost_its_focus() {
+    let mut rig = rig();
+    rig.ui.on_node_with_tag(TAG).request_focus();
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_focused());
+    rig.enabled.set(false);
+    rig.ui.wait_for_idle();
+    rig.enabled.set(true);
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_focused());
+    rig.ui.on_node_with_tag(TAG).assert_is_not_focused();
+    assert_eq!(handle_width(&mut rig.ui), 4.0);
+    rig.ui.on_node_with_tag(TAG).request_focus();
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_focused(), "and can take it again");
 }
 
 /// A disabled slider takes no press.

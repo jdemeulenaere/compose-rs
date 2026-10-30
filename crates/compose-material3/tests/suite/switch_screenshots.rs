@@ -44,6 +44,12 @@ fn drawn(ui: &mut ComposeTestRule) -> (Vec<Shape>, Vec<Color>) {
                 },
                 color: paint.color,
             }),
+            // The ripple's circle.
+            DrawOp::DrawArc { oval, paint, .. } => shapes.push(Shape {
+                rect: (oval.left + at.x, oval.top + at.y, oval.right + at.x, oval.bottom + at.y),
+                stroke: 0.0,
+                color: paint.color,
+            }),
             DrawOp::DrawPath { paint, .. } => icons.push(paint.color),
             _ => {}
         }
@@ -235,6 +241,7 @@ fn a_hovered_switch_shows_its_thumbs_state_layer() {
         let center = mouse.center();
         mouse.enter(center);
     });
+    ui.advance_time_by(Duration::from_millis(100));
     let shapes = drawn(&mut ui).0;
     // Around the checked thumb's center (36, 24).
     assert!(shapes.iter().any(|shape| shape.rect == (16.0, 4.0, 56.0, 44.0)), "{shapes:?}");
@@ -249,6 +256,7 @@ fn a_focused_switch_shows_its_thumbs_state_layer() {
         });
     });
     ui.on_node_with_tag("switch").request_focus();
+    ui.advance_time_by(Duration::from_millis(100));
     let shapes = drawn(&mut ui).0;
     assert!(shapes.iter().any(|shape| shape.rect == (16.0, 4.0, 56.0, 44.0)), "{shapes:?}");
 }

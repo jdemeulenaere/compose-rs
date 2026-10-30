@@ -788,7 +788,7 @@ fn tab_modifier(
         ClickableOptions {
             enabled,
             role: Some(Role::Tab),
-            indication: selected_content_color.into(),
+            indication: crate::ripple::ripple(true, Dp::UNSPECIFIED, selected_content_color),
             interaction_source,
             ..ClickableOptions::DEFAULT
         },

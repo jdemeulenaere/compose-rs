@@ -20,6 +20,9 @@ fn drawn_rects(ui: &mut ComposeTestRule) -> Vec<String> {
             DrawOp::DrawRoundRect(rect, radii, paint) => {
                 Some(format!("round rect {rect:?} {radii:?} {:?}", paint.color))
             }
+            DrawOp::DrawArc { oval, paint, .. } => {
+                Some(format!("circle {oval:?} {:?}", paint.color))
+            }
             _ => None,
         })
         .collect()
@@ -28,6 +31,7 @@ fn drawn_rects(ui: &mut ComposeTestRule) -> Vec<String> {
 fn rect_of(op: &DrawOp) -> Option<Rect> {
     match op {
         DrawOp::DrawRect(rect, _) | DrawOp::DrawRoundRect(rect, _, _) => Some(*rect),
+        DrawOp::DrawArc { oval, .. } => Some(*oval),
         _ => None,
     }
 }
@@ -53,6 +57,7 @@ fn a_focused_checkbox_shows_a_round_state_layer_around_its_box() {
     let before = ui.host().display_list().ops;
     ui.press_key(Key::Tab);
     ui.on_node_with_tag("box").assert_is_focused();
+    ui.wait_for_idle();
     let after = ui.host().display_list().ops;
     let added: Vec<Rect> = after
         .iter()
@@ -100,6 +105,7 @@ fn a_focused_navigation_item_shows_a_state_layer_on_its_pill() {
     let before = drawn_rects(&mut ui);
     ui.press_key(Key::Tab);
     ui.on_node_with_tag("home").assert_is_focused();
+    ui.wait_for_idle();
     let after = drawn_rects(&mut ui);
     assert_ne!(before, after, "a focused navigation item draws nothing to show its focus");
 }

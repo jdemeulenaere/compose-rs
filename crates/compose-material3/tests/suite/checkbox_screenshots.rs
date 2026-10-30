@@ -55,6 +55,15 @@ fn drawn(ui: &mut ComposeTestRule) -> Vec<Drawn> {
                 color: paint.color,
                 width: width(paint.style),
             }),
+            // The ripple's circle.
+            DrawOp::DrawArc { oval, paint, .. } => out.push(Drawn::Box {
+                left: round(oval.left + at.x),
+                top: round(oval.top + at.y),
+                size: round(oval.width()),
+                radius: round(oval.width() / 2.0),
+                color: paint.color,
+                width: 0.0,
+            }),
             DrawOp::DrawLine(from, to, paint) => out.push(Drawn::Line {
                 from: (round(from.x + at.x), round(from.y + at.y)),
                 to: (round(to.x + at.x), round(to.y + at.y)),
@@ -180,10 +189,11 @@ fn a_pressed_checkbox_shows_its_state_layer_around_the_box() {
             touch.down(center);
         });
         ui.advance_time_by_frame();
-        ui.advance_time_by(Duration::from_millis(200));
+        ui.advance_time_by(Duration::from_millis(400));
         let found = drawn(&mut ui);
+        // The content color where it is, as `ripple()` with Compose's flag off.
         let color = state_layer(&found).expect("a state layer");
-        assert_eq!(color.argb() & 0xFFFFFF, s.on_surface_variant.argb() & 0xFFFFFF);
+        assert_eq!(color, Color::BLACK.with_alpha(0.1));
     }
 }
 
@@ -306,9 +316,10 @@ fn a_hovered_checkbox_shows_its_state_layer() {
             let center = mouse.center();
             mouse.enter(center);
         });
+        ui.advance_time_by(Duration::from_millis(100));
         let found = drawn(&mut ui);
         let color = state_layer(&found).expect("a state layer");
-        assert_eq!(color.argb() & 0xFFFFFF, s.primary.argb() & 0xFFFFFF);
+        assert_eq!(color, Color::BLACK.with_alpha(0.08));
     }
 }
 
@@ -318,9 +329,10 @@ fn a_focused_checkbox_shows_its_state_layer() {
     for s in schemes() {
         let mut ui = rule(s, || Checkbox!(true, Some(|_| {}), modifier = Modifier.test_tag("box")));
         ui.on_node_with_tag("box").request_focus();
+        ui.advance_time_by(Duration::from_millis(100));
         let found = drawn(&mut ui);
         let color = state_layer(&found).expect("a state layer");
-        assert_eq!(color.argb() & 0xFFFFFF, s.primary.argb() & 0xFFFFFF);
+        assert_eq!(color, Color::BLACK.with_alpha(0.1));
     }
 }
 

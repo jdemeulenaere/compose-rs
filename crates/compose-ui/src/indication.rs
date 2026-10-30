@@ -28,6 +28,17 @@ pub trait IndicationNodeFactory: Any {
     /// Whether `other` makes the same nodes, as Compose's required `equals`: a factory with no
     /// properties compares its type (`other.downcast_ref::<Self>().is_some()`).
     fn same(&self, other: &dyn IndicationNodeFactory) -> bool;
+
+    /// While composing, where the clickable's layout node takes its modifier: a factory whose
+    /// nodes read composition locals where they are (Compose's
+    /// `CompositionLocalConsumerModifierNode`: Material's ripple) returns one holding `locals()`,
+    /// the map there. With node-level locals (MN-8) the node reads them itself. (D1025)
+    fn at_node(
+        &self,
+        _locals: &mut dyn FnMut() -> compose_runtime::CompositionLocalMap,
+    ) -> Option<Rc<dyn IndicationNodeFactory>> {
+        None
+    }
 }
 
 impl dyn IndicationNodeFactory {
@@ -48,8 +59,9 @@ enum Kind {
 /// ([`Indication::new`]), `NONE` (Compose's `null`), or `LOCAL`, the clickables' default,
 /// [`LOCAL_INDICATION`]'s value where the clickable's node is (D1056).
 ///
-/// [`Indication::bounded`] and [`Indication::unbounded`] are compose-rs's state layer (Material's
-/// ripple at rest, without its animation), and a `Color` converts to a bounded one.
+/// [`Indication::bounded`] and [`Indication::unbounded`] are compose-rs's state layer, a simple
+/// indication for what doesn't use Material (Material's is its `ripple`), and a `Color` converts
+/// to a bounded one.
 #[derive(Clone)]
 pub struct Indication(Kind);
 
@@ -73,8 +85,7 @@ impl Indication {
     }
 
     /// A state layer of `color` over the node's bounds while pressed or focused (10 %) or
-    /// hovered (8 %), as Material's bounded ripple settles at; an unspecified color is no
-    /// indication.
+    /// hovered (8 %); an unspecified color is no indication.
     pub fn bounded(color: Color) -> Indication {
         Indication::state_layer(color, None)
     }
@@ -552,6 +563,15 @@ impl Modifier {
     ) -> Modifier {
         match indication.resolve() {
             Some(factory) => {
+                // The locals where the modifier is made, a factory reading them being given them
+                // while composing (a clickable's are its layout node's, D1025).
+                let factory = if compose_runtime::is_composing() {
+                    factory
+                        .at_node(&mut compose_runtime::current_composition_local_map)
+                        .unwrap_or(factory)
+                } else {
+                    factory
+                };
                 self.then_custom(IndicationElement { source: interaction_source.into(), factory })
             }
             None => self,

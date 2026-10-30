@@ -579,12 +579,14 @@ fn interactive_list_item(
             compose_ui::DEFAULT_SHADOW_COLOR,
         )
         .background_with(container, shape.clone())
-        .clip(shape);
+        .clip(shape.clone());
     let modifier = match click {
         Some(click) => modifier.combined_clickable_with(
             ClickableOptions {
                 enabled,
-                indication: content_color.into(),
+                // The ring in the focused shape, the one it shows on: Compose's animated shape is
+                // one object, and a factory changing with the state would make the node again.
+                indication: crate::ripple::shaped_ripple(shapes.focused_shape.clone()),
                 interaction_source: Some(click.interaction_source),
                 ..ClickableOptions::DEFAULT
             },

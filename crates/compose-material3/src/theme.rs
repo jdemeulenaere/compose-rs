@@ -610,6 +610,7 @@ pub fn MaterialTheme(
             LOCAL_SHAPES.provides(shapes.0.clone()),
             LOCAL_TYPOGRAPHY.provides(typography.0.clone()),
             LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
+            compose_ui::LOCAL_INDICATION.provides(crate::ripple::default_ripple()),
         ),
         || {
             // The body text style, as Compose's (and no content color: surfaces give it).

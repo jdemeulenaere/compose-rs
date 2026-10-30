@@ -374,8 +374,8 @@ pub(crate) fn surface(
     let elevation = Dp(LOCAL_ABSOLUTE_TONAL_ELEVATION.current().0 + tonal_elevation.0);
     let color = scheme.apply_tonal_elevation(color, elevation);
     let modifier = match click {
-        // At least the touch target, the state layer in the content color, as Compose's
-        // clickable `Surface` (`ripple()` over `LocalContentColor`).
+        // At least the touch target, the ripple in the content color, as Compose's clickable
+        // `Surface` (`ripple()` over `LocalContentColor`).
         Some(click) => {
             let modifier = minimum_interactive_component_size(modifier);
             // The shadow follows the press, hover and focus, animated and read here as Compose's
@@ -388,12 +388,13 @@ pub(crate) fn surface(
                 }
                 None => shadow_elevation,
             };
+            let ripple = crate::ripple::shaped_ripple(shape.clone());
             let modifier = surface_modifier(modifier, shape, color, border, shadow_elevation)
                 .clickable_with(
                     ClickableOptions {
                         enabled: click.enabled,
                         role: click.role,
-                        indication: content_color.into(),
+                        indication: ripple,
                         interaction_source: Some(click.interaction_source),
                         ..ClickableOptions::DEFAULT
                     },

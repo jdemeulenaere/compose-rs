@@ -26,6 +26,7 @@ mod list_item;
 mod motion;
 mod navigation;
 mod progress;
+mod ripple;
 mod scaffold;
 mod scrim;
 mod segmented_button;
@@ -85,6 +86,11 @@ pub use navigation::{
 pub use progress::{
     CircularProgressIndicator, DrawStopIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
+};
+pub use ripple::{
+    LOCAL_RIPPLE_CONFIGURATION, LOCAL_RIPPLE_THEME_CONFIGURATION, RippleConfiguration,
+    RippleConfigurationFocus, RippleDefaults, RippleOptions, RippleThemeConfiguration,
+    RippleThemeFocus, default_ripple, ripple, ripple_end_radius, ripple_start_radius, ripple_with,
 };
 pub use scaffold::{
     Card, CardColors, CardDefaults, CardElevation, DividerDefaults, ElevatedCard, FabPosition,

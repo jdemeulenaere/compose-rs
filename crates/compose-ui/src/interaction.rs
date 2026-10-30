@@ -297,7 +297,8 @@ enum Kind {
 
 /// A listener's callback (`InteractionSource::listen`): called with each interaction as it's
 /// emitted, while the listener is held.
-pub(crate) struct Listener(RefCell<ListenerCallback>);
+#[doc(hidden)]
+pub struct Listener(RefCell<ListenerCallback>);
 
 type ListenerCallback = Box<dyn FnMut(&Interaction)>;
 
@@ -359,7 +360,8 @@ impl InteractionSource {
     /// Calls `callback` with each interaction emitted from now on, from the emission itself, while
     /// the returned listener is held: compose-rs's own indications' collection (D1057), which
     /// a task polling a queue would cost an executor round per emission.
-    pub(crate) fn listen(&self, callback: impl FnMut(&Interaction) + 'static) -> Rc<Listener> {
+    #[doc(hidden)]
+    pub fn listen(&self, callback: impl FnMut(&Interaction) + 'static) -> Rc<Listener> {
         let listener = Rc::new(Listener(RefCell::new(Box::new(callback))));
         let mut listeners = self.inner.listeners.borrow_mut();
         listeners.retain(|listener| listener.strong_count() > 0);

@@ -707,7 +707,7 @@ pub fn NavigationDrawerItem(
         .clickable_with(
             ClickableOptions {
                 role: Some(Role::Tab),
-                indication: text_color.into(),
+                indication: crate::ripple::default_ripple(),
                 ..ClickableOptions::DEFAULT
             },
             on_click,

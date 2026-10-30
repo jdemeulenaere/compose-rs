@@ -51,12 +51,13 @@ fn chip(
     if let Some(border) = look.border {
         surface = surface.border_stroke(border, shape.clone());
     }
+    let ripple = crate::ripple::shaped_ripple(shape.clone());
     let mut surface =
         surface.background_with(look.container, shape.clone()).clip(shape).clickable_with(
             ClickableOptions {
                 enabled,
                 role: Some(role),
-                indication: look.label.into(),
+                indication: ripple,
                 ..ClickableOptions::DEFAULT
             },
             on_click,

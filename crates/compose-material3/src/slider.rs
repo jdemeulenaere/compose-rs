@@ -599,6 +599,25 @@ pub fn Slider(
         ..SizeSpec::bounds(THUMB_WIDTH, TRACK_HEIGHT, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
     });
     let modifier = crate::components::increase_semantics_bounds(modifier, true).then_custom(input);
+    // The focus as a ring around the slider, where the theme shows it so, as Compose's.
+    let modifier = if matches!(
+        crate::ripple::LOCAL_RIPPLE_THEME_CONFIGURATION.current().focus,
+        crate::ripple::RippleThemeFocus::InsetRing { .. }
+    ) {
+        modifier.indication(
+            interaction_source.clone(),
+            crate::ripple::ripple_with(crate::ripple::RippleOptions {
+                focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
+                enable_press_indication: false,
+                enable_focus_indication: true,
+                enable_drag_indication: false,
+                enable_hover_indication: false,
+                ..crate::ripple::RippleOptions::default()
+            }),
+        )
+    } else {
+        modifier
+    };
     let policy = compose_runtime::remember_keyed(state, move || {
         Rc::new(SliderLayout { state }) as Rc<dyn MeasurePolicy>
     });
@@ -756,8 +775,14 @@ impl ModifierNodeElement for SliderInput {
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
         if node.enabled && !self.enabled {
-            // As `sliderTapModifier` dropping off and `DragGestureNode.update` when disabled.
+            // As `sliderTapModifier` dropping off and `DragGestureNode.update` when disabled: a
+            // drag under way is cancelled, which finishes the value's change (`processDragCancel`
+            // to `onDragStopped`).
+            let dragging = node.drag_lag.is_some();
             node.end_gesture();
+            if dragging {
+                node.finish_later();
+            }
         }
         node.enabled = self.enabled;
         if node.interaction_source != self.interaction_source {
@@ -882,6 +907,14 @@ impl SliderInputNode {
     fn finish(&self, context: &mut EventContext<'_>) {
         if let Some(callback) = &self.on_value_change_finished {
             context.call(callback);
+        }
+    }
+
+    /// `on_value_change_finished` in a task: where there's no event context, in an update or the
+    /// tree in the middle of a cancellation.
+    fn finish_later(&self) {
+        if let Some(callback) = self.on_value_change_finished.clone() {
+            compose_runtime::platform::launch(async move { callback() });
         }
     }
 
@@ -1036,10 +1069,7 @@ impl PointerInputModifierNode for SliderInputNode {
         self.end_drag(false);
         if dragging {
             self.set_dragging(false);
-            if let Some(callback) = self.on_value_change_finished.clone() {
-                // Later: no context here, and the tree is in the middle of the cancellation.
-                compose_runtime::platform::launch(async move { callback() });
-            }
+            self.finish_later();
         }
     }
 }

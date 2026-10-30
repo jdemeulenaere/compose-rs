@@ -166,14 +166,38 @@ pub fn Switch(
     let track = compose_foundation::CIRCLE_SHAPE;
     let (thumb_color, icon_color) =
         (colors.thumb_color(enabled, checked), colors.icon_color(enabled, checked));
-    // The thumb's state layer in the content color, as `ripple()`'s.
-    let ripple_color = crate::theme::LOCAL_CONTENT_COLOR.current();
+    // The thumb's ripple, as Compose's: no focus on it where the track has the inset ring.
+    let inset_ring = matches!(
+        crate::ripple::LOCAL_RIPPLE_THEME_CONFIGURATION.current().focus,
+        crate::ripple::RippleThemeFocus::InsetRing { .. }
+    );
+    let thumb_ripple = crate::ripple::ripple_with(crate::ripple::RippleOptions {
+        bounded: false,
+        radius: STATE_LAYER_SIZE / 2.0,
+        enable_focus_indication: !inset_ring,
+        ..crate::ripple::RippleOptions::default()
+    });
     let has_content = thumb_content.is_some();
     let modifier = modifier
         .wrap_content_size()
         .required_size((SWITCH_WIDTH, SWITCH_HEIGHT))
         .border_with(TRACK_OUTLINE_WIDTH, colors.border_color(enabled, checked), track.clone())
-        .background_with(colors.track_color(enabled, checked), track);
+        .background_with(colors.track_color(enabled, checked), track.clone());
+    let modifier = if inset_ring {
+        modifier.indication(
+            interaction_source.clone(),
+            crate::ripple::ripple_with(crate::ripple::RippleOptions {
+                focus_ring_shape: Some(track),
+                enable_press_indication: false,
+                enable_focus_indication: true,
+                enable_drag_indication: false,
+                enable_hover_indication: false,
+                ..crate::ripple::RippleOptions::default()
+            }),
+        )
+    } else {
+        modifier
+    };
     compose_foundation::layout::Box(
         modifier,
         compose_ui::Alignment::TOP_START,
@@ -187,10 +211,7 @@ pub fn Switch(
                     checked,
                     has_content,
                 })
-                .then_custom(ThumbStateLayer {
-                    source: interaction_source.clone(),
-                    color: ripple_color,
-                })
+                .indication(interaction_source.clone(), thumb_ripple.clone())
                 .background_with(thumb_color, compose_foundation::CIRCLE_SHAPE);
             compose_foundation::layout::Box(
                 thumb,
@@ -345,60 +366,6 @@ impl compose_ui::LayoutModifierNode for ThumbNode {
     }
 }
 
-/// The thumb's state layer: a `STATE_LAYER_SIZE` circle around it while its switch is pressed,
-/// focused or hovered, as Compose's `indication(interactionSource, ripple(bounded = false))`.
-struct ThumbStateLayer {
-    source: MutableInteractionSource,
-    color: Color,
-}
-
-impl ModifierNodeElement for ThumbStateLayer {
-    type Node = ThumbStateLayer;
-    fn create(&self) -> ThumbStateLayer {
-        ThumbStateLayer { source: self.source.clone(), color: self.color }
-    }
-
-    fn update(&self, node: &mut ThumbStateLayer) {
-        node.source = self.source.clone();
-        node.color = self.color;
-    }
-
-    fn same(&self, other: &Self) -> bool {
-        other.source == self.source && other.color == self.color
-    }
-
-    fn name(&self) -> &'static str {
-        "switchThumbIndication"
-    }
-}
-
-impl ModifierNode for ThumbStateLayer {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for ThumbStateLayer {
-    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
-        // Read while drawing: a press, focus or hover draws the thumb again.
-        let alpha = if self.source.is_pressed() || self.source.is_focused() {
-            0.10
-        } else if self.source.is_hovered() {
-            0.08
-        } else {
-            return;
-        };
-        let size = scope.size();
-        let center = Offset::new(size.width / 2.0, size.height / 2.0);
-        let radius = scope.density().to_px(STATE_LAYER_SIZE) / 2.0;
-        scope.draw_round_rect(
-            Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
-            [radius; 4],
-            Paint::fill(self.color.with_alpha(alpha)),
-        );
-    }
-}
-
 /// `from` blended toward `to` by `fraction`, channel by channel.
 pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
     let channel =
@@ -453,14 +420,13 @@ pub fn RadioButton(
     #[default(true)] enabled: bool,
     #[default(crate::RadioButtonDefaults::colors())] colors: RadioButtonColors,
 ) {
-    let color = if selected { colors.selected_color } else { colors.unselected_color };
     let modifier = match on_click {
         Some(on_click) => {
             // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
             let options = ClickableOptions {
                 enabled,
                 role: Some(Role::RadioButton),
-                indication: compose_ui::Indication::unbounded(color, 20.dp()),
+                indication: crate::ripple::unbounded_ripple(20.dp()),
                 ..ClickableOptions::DEFAULT
             };
             minimum_interactive_component_size(modifier.clickable_with(options, on_click))

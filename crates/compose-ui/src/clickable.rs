@@ -226,23 +226,44 @@ impl Shared {
     }
 }
 
-/// Sets `LOCAL_INDICATION`'s factory, where the composition is now (the layout node taking
-/// `modifier`, `emit_layout_node`), on its clickables using the local indication: Compose's
-/// node reads it where it is (`currentValueOf(LocalIndication)`), so a clickable made outside
-/// a provider and used inside it shows the provider's (D1056). Read once, only if one does.
-/// (With node-level composition locals, MN-8, the node reads it itself.)
+/// Sets the indications of `modifier`'s clickables, where the composition is now (the layout node
+/// taking `modifier`, `emit_layout_node`). `LOCAL_INDICATION`'s factory on those using the local
+/// indication: Compose's node reads it where it is (`currentValueOf(LocalIndication)`), so a
+/// clickable made outside a provider and used inside it shows the provider's (D1056). And the
+/// locals here on a factory whose nodes read them (`IndicationNodeFactory::at_node`, D1025). Each
+/// read once, only if one does. (With node-level composition locals, MN-8, the nodes read them.)
 pub(crate) fn resolve_local_indications(modifier: &mut crate::modifier::Modifier) {
-    let mut local: Option<Option<Rc<dyn IndicationNodeFactory>>> = None;
+    type Factory = Option<Rc<dyn IndicationNodeFactory>>;
+    let mut local: Option<Factory> = None;
+    let mut map: Option<compose_runtime::CompositionLocalMap> = None;
+    let mut bound = |factory: Factory| -> Factory {
+        let factory = factory?;
+        let mut locals =
+            || map.get_or_insert_with(compose_runtime::current_composition_local_map).clone();
+        Some(factory.at_node(&mut locals).unwrap_or(factory))
+    };
     let mut resolved = || local.get_or_insert_with(crate::indication::local_factory).clone();
     for element in modifier.elements_mut() {
         match element {
-            crate::modifier::Element::Clickable(clickable) if clickable.use_local_indication => {
-                clickable.indication = resolved();
+            crate::modifier::Element::Clickable(clickable) => {
+                let factory = if clickable.use_local_indication {
+                    resolved()
+                } else if clickable.indication.is_some() {
+                    clickable.indication.clone()
+                } else {
+                    continue;
+                };
+                clickable.indication = bound(factory);
             }
             crate::modifier::Element::Custom(custom) => {
                 let factory = match custom.downcast_ref::<CombinedClickableElement>() {
-                    Some(combined) if combined.clickable.use_local_indication => {
-                        let factory = resolved();
+                    Some(combined) => {
+                        let factory = if combined.clickable.use_local_indication {
+                            resolved()
+                        } else {
+                            combined.clickable.indication.clone()
+                        };
+                        let factory = bound(factory);
                         if crate::indication::same_factory(&combined.clickable.indication, &factory)
                         {
                             continue;

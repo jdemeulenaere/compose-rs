@@ -188,7 +188,7 @@ pub use input::{
 };
 pub use interaction::{
     DragInteraction, DragStart, Focus, FocusInteraction, HoverEnter, HoverInteraction, Interaction,
-    InteractionSource, Interactions, MutableInteractionSource, Press, PressInteraction,
+    InteractionSource, Interactions, Listener, MutableInteractionSource, Press, PressInteraction,
 };
 pub use intl::{Locale, LocaleList};
 pub use layout::{

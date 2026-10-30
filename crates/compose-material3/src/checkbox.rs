@@ -219,15 +219,16 @@ fn checkbox(
 ) {
     let modifier = match on_click {
         Some(on_click) => {
-            // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`.
-            let indication = compose_ui::Indication::unbounded(
-                if state == ToggleableState::Off {
-                    colors.unchecked_border_color
-                } else {
-                    colors.checked_box_color
-                },
-                20.dp(),
-            );
+            // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`, in the
+            // content color (`isCheckboxStylingFixEnabled` off, its default).
+            let indication = crate::ripple::ripple_with(crate::ripple::RippleOptions {
+                bounded: false,
+                radius: 20.dp(),
+                focus_ring_shape: Some(compose_ui::Shape::Rounded(
+                    [compose_ui::CornerSize::Percent(25.0); 4],
+                )),
+                ..crate::ripple::RippleOptions::default()
+            });
             let options = ClickableOptions {
                 enabled,
                 role: Some(Role::Checkbox),

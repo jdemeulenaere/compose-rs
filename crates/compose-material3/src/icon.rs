@@ -311,25 +311,26 @@ pub fn IconButton(
     let mut modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
         .clip(shape.clone())
-        .background_with(colors.container_color(enabled), shape);
+        .background_with(colors.container_color(enabled), shape.clone());
     modifier = modifier.clickable_with(
         ClickableOptions {
             enabled,
             role: Some(Role::Button),
-            indication: color.into(),
+            indication: crate::ripple::shaped_ripple(shape.clone()),
             interaction_source,
             ..ClickableOptions::DEFAULT
         },
         on_click,
     );
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        Box(
-            modifier.clone(),
-            Alignment::CENTER,
-            false,
-            compose_runtime::callback(move |_| content()),
-        );
-    });
+    // The provider inside: the ripple's in the content color around the button, as Compose's.
+    Box(
+        modifier,
+        Alignment::CENTER,
+        false,
+        compose_runtime::callback(move |_| {
+            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || content());
+        }),
+    );
 }
 
 /// An icon button that toggles, as Compose's `IconToggleButton`: as `IconButton`, a click
@@ -351,26 +352,27 @@ pub fn IconToggleButton(
     let modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
         .clip(shape.clone())
-        .background_with(colors.container_color(enabled, checked), shape)
+        .background_with(colors.container_color(enabled, checked), shape.clone())
         .toggleable_with(
             checked,
             ClickableOptions {
                 enabled,
                 role: Some(Role::Checkbox),
-                indication: color.into(),
+                indication: crate::ripple::shaped_ripple(shape.clone()),
                 interaction_source: Some(interaction_source),
                 ..ClickableOptions::DEFAULT
             },
             on_checked_change,
         );
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        Box(
-            modifier.clone(),
-            Alignment::CENTER,
-            false,
-            compose_runtime::callback(move |_| content()),
-        );
-    });
+    // The provider inside: the ripple's in the content color around the button, as Compose's.
+    Box(
+        modifier,
+        Alignment::CENTER,
+        false,
+        compose_runtime::callback(move |_| {
+            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || content());
+        }),
+    );
 }
 
 /// The filled and outlined icon buttons' body: a clickable surface of `shape` around a 40 dp
