@@ -1139,6 +1139,8 @@ fn LazyGrid(
     let items = Rc::new(Items::new(intervals));
     let owner = compose_runtime::remember(|| Rc::new(()));
     inner.prefetch.use_window(&inner, cache_window, &owner);
+    // In a lazy layout's item, its requests compose this grid's first items.
+    super::prefetch::note_nested(&inner);
     let density = compose_ui::LOCAL_DENSITY.current();
     let cross_spacing = cross_arrangement.spacing(&density);
     let info = GridInfo {
