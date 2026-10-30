@@ -350,7 +350,7 @@ fn a_dismissed_item_cant_be_dragged_back() {
     ui.set_auto_advance(false);
     let item = bounds(&mut ui, "item");
     let y = (item.top + item.bottom) / 2.0;
-    swipe(&mut ui, y, &[300.0, 280.0, 220.0, 150.0]);
+    swipe(&mut ui, y, &[300.0, 280.0, 180.0, 80.0]);
     assert_eq!(state.current_value(), SwipeToDismissBoxValue::EndToStart);
     assert_eq!(bounds(&mut ui, "item").left, -400.0);
     // The item is off screen; the box (its background) is still there to be dragged.

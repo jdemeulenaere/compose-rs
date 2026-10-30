@@ -3,11 +3,15 @@
 //! `SheetState`.
 
 use compose_runtime::{ObjectHandle, Owned};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compose_animation::{AnimationSpec, FAST_OUT_SLOW_IN_EASING, Spring};
-use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
+use compose_animation::{AnimationSpec, Spring};
+use compose_foundation::MutatePriority;
+use compose_foundation::gestures::{
+    AnchoredDraggableModifier, AnchoredDraggableOptions, AnchoredDraggableState, DraggableAnchors,
+    FlingBehavior, LocalBoxFuture, Orientation, ScrollScope, remember_anchored_fling_behavior,
+};
 use compose_foundation::layout::{
     Box, Column, ColumnScope, WindowInsets, WindowInsetsModifiers, WindowInsetsProvider,
     WindowInsetsSides,
@@ -20,7 +24,6 @@ use compose_ui::{
 };
 use compose_ui::{NestedScrollConnection, NestedScrollSource, Offset};
 
-use crate::anchored::Anchored;
 use crate::motion::MotionScheme;
 use crate::theme::MaterialTheme;
 
@@ -30,16 +33,6 @@ pub enum SheetValue {
     Hidden,
     Expanded,
     PartiallyExpanded,
-}
-
-impl SheetValue {
-    fn from_key(key: u8) -> SheetValue {
-        match key {
-            0 => SheetValue::Hidden,
-            1 => SheetValue::Expanded,
-            _ => SheetValue::PartiallyExpanded,
-        }
-    }
 }
 
 impl ComposeArg for SheetValue {
@@ -54,16 +47,33 @@ impl SheetValue {
         [SheetValue::Hidden, SheetValue::PartiallyExpanded, SheetValue::Expanded];
 }
 
+impl SheetValue {
+    fn from_key(key: u8) -> SheetValue {
+        match key {
+            0 => SheetValue::Hidden,
+            1 => SheetValue::Expanded,
+            _ => SheetValue::PartiallyExpanded,
+        }
+    }
+}
+
+/// A fling behavior as a key, by identity.
+#[derive(Clone)]
+pub(crate) struct FlingKey(pub(crate) Rc<dyn FlingBehavior>);
+
+impl ComposeArg for FlingKey {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 pub(crate) struct SheetInner {
-    pub(crate) anchored: Anchored,
+    pub(crate) anchored: AnchoredDraggableState<SheetValue>,
     pub(crate) skip_partially_expanded: bool,
     pub(crate) skip_hidden_state: bool,
     /// How far a drag must go to settle at the next anchor, in pixels, as
     /// `positionalThreshold`.
     pub(crate) positional_threshold: Box<dyn Fn() -> f32>,
-    /// A release faster than this (pixels per second) settles in its direction, as
-    /// `velocityThreshold`.
-    pub(crate) velocity_threshold: Box<dyn Fn() -> f32>,
     confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
     /// What showing and expanding animate with, and hiding and partially expanding, as
     /// `showMotionSpec` and `hideMotionSpec`: at once until a sheet sets its motion.
@@ -149,7 +159,7 @@ impl SheetState {
     fn create(
         enabled_values: &[SheetValue],
         positional_threshold: Box<dyn Fn() -> f32>,
-        velocity_threshold: Box<dyn Fn() -> f32>,
+        _velocity_threshold: Box<dyn Fn() -> f32>,
         initial_value: SheetValue,
         confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
     ) -> Owned<SheetState> {
@@ -164,15 +174,12 @@ impl SheetState {
         let confirm = confirm_value_change.clone();
         Owned::new(
             SheetInner {
-                anchored: Anchored::new(
-                    initial_value as u8,
-                    Box::new(move |key| confirm(SheetValue::from_key(key))),
-                    BOTTOM_SHEET_ANIMATION_SPEC,
-                ),
+                anchored: AnchoredDraggableState::with_confirm(initial_value, move |value| {
+                    confirm(*value)
+                }),
                 skip_partially_expanded: !enabled_values.contains(&SheetValue::PartiallyExpanded),
                 skip_hidden_state: !enabled_values.contains(&SheetValue::Hidden),
                 positional_threshold,
-                velocity_threshold,
                 confirm_value_change,
                 show_spec: RefCell::new(compose_animation::snap(0).into()),
                 hide_spec: RefCell::new(compose_animation::snap(0).into()),
@@ -184,23 +191,18 @@ impl SheetState {
     /// Where it last settled (a state read), as `currentValue` (the anchored state's settled
     /// value).
     pub fn current_value(&self) -> SheetValue {
-        self.inner().map_or(SheetValue::Hidden, |inner| {
-            SheetValue::from_key(inner.anchored.settled_value())
-        })
+        self.inner().map_or(SheetValue::Hidden, |inner| inner.anchored.settled_value())
     }
 
     /// Where it's going (a state read), as `targetValue`.
     pub fn target_value(&self) -> SheetValue {
-        self.inner()
-            .map_or(SheetValue::Hidden, |inner| SheetValue::from_key(inner.anchored.target_value()))
+        self.inner().map_or(SheetValue::Hidden, |inner| inner.anchored.target_value())
     }
 
     /// Whether it's showing, as `isVisible`: not hidden, or dragged more than half way out of
     /// hiding (the anchored state's current value).
     pub fn is_visible(&self) -> bool {
-        self.inner().is_some_and(|inner| {
-            SheetValue::from_key(inner.anchored.current_value()) != SheetValue::Hidden
-        })
+        self.inner().is_some_and(|inner| inner.anchored.current_value() != SheetValue::Hidden)
     }
 
     /// Whether it's animating to a value (a state read), as `isAnimationRunning`.
@@ -210,13 +212,15 @@ impl SheetState {
 
     /// Whether it can rest expanded, as `hasExpandedState`.
     pub fn has_expanded_state(&self) -> bool {
-        self.inner().is_some_and(|inner| inner.anchored.has_anchor(SheetValue::Expanded as u8))
+        self.inner()
+            .is_some_and(|inner| inner.anchored.anchors().has_position_for(&SheetValue::Expanded))
     }
 
     /// Whether it can rest half way, as `hasPartiallyExpandedState`.
     pub fn has_partially_expanded_state(&self) -> bool {
-        self.inner()
-            .is_some_and(|inner| inner.anchored.has_anchor(SheetValue::PartiallyExpanded as u8))
+        self.inner().is_some_and(|inner| {
+            inner.anchored.anchors().has_position_for(&SheetValue::PartiallyExpanded)
+        })
     }
 
     /// Its top's offset from the top of the window, in pixels (a state read; NaN before it's
@@ -236,7 +240,36 @@ impl SheetState {
             && (inner.confirm_value_change)(value)
         {
             let spec = if show { &inner.show_spec } else { &inner.hide_spec }.borrow().clone();
-            inner.anchored.animate_to_with(value as u8, spec).await;
+            // The target new anchors gave it, if not this one: there at once, as Compose's.
+            let resolved = Rc::new(Cell::new(value));
+            let noted = resolved.clone();
+            let anchored = inner.anchored.clone();
+            let _ = inner
+                .anchored
+                .anchored_drag_to(value, MutatePriority::Default, move |scope, anchors, latest| {
+                    noted.set(latest);
+                    let (spec, anchored) = (spec.clone(), anchored.clone());
+                    async move {
+                        let target = anchors.position_of(&latest);
+                        let offset = anchored.offset();
+                        let previous = if offset.is_nan() { 0.0 } else { offset };
+                        if !target.is_nan() && previous != target {
+                            compose_animation::animate(
+                                previous,
+                                target,
+                                anchored.last_velocity(),
+                                spec,
+                                |value, velocity| scope.drag_to(value, velocity),
+                            )
+                            .await;
+                        }
+                    }
+                })
+                .await;
+            let resolved = resolved.get();
+            if resolved != value && inner.anchored.anchors().has_position_for(&resolved) {
+                let _ = inner.anchored.snap_to(resolved).await;
+            }
         }
     }
 
@@ -280,10 +313,71 @@ impl SheetState {
     }
 
     /// At `value` at once, as `snapTo`.
-    pub fn snap_to(&self, value: SheetValue) {
+    pub async fn snap_to(&self, value: SheetValue) {
         if let Some(inner) = self.inner() {
-            inner.anchored.snap_to(value as u8);
+            let _ = inner.anchored.snap_to(value).await;
         }
+    }
+
+    /// Flings in a drag of its state, as `anchoredDrag(flingBehavior, initialVelocity)`: returns
+    /// what the behavior left.
+    pub(crate) async fn fling(&self, behavior: &Rc<dyn FlingBehavior>, velocity: f32) -> f32 {
+        let Some(inner) = self.inner() else { return 0.0 };
+        let left = Rc::new(Cell::new(0.0));
+        let noted = left.clone();
+        let anchored = inner.anchored.clone();
+        let _ = inner
+            .anchored
+            .anchored_drag(MutatePriority::Default, move |drag, _| {
+                let (behavior, noted, anchored) =
+                    (behavior.clone(), noted.clone(), anchored.clone());
+                async move {
+                    let scope = ScrollScope::new(move |pixels| {
+                        let offset = anchored.offset();
+                        let (min, max) =
+                            (anchored.anchors().min_position(), anchored.anchors().max_position());
+                        let start = if offset.is_nan() { 0.0 } else { offset };
+                        let next = (start + pixels).clamp(min, max);
+                        drag.drag_to(next, 0.0);
+                        next - start
+                    });
+                    noted.set(behavior.perform_fling(scope, velocity).await);
+                }
+            })
+            .await;
+        left.get()
+    }
+
+    /// New anchors and where they take it, in a measurement, as `draggableAnchors`.
+    pub(crate) fn update_anchors(&self, anchors: DraggableAnchors<SheetValue>, target: SheetValue) {
+        if let Some(inner) = self.inner() {
+            compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                inner.anchored.update_anchors_to(anchors, target);
+            });
+        }
+    }
+
+    /// The state its gestures drive; a state of its own once its owner went (D240).
+    pub(crate) fn anchored_state(&self) -> AnchoredDraggableState<SheetValue> {
+        self.inner().map_or_else(
+            || AnchoredDraggableState::new(SheetValue::Hidden),
+            |inner| inner.anchored.clone(),
+        )
+    }
+
+    /// A fling settling by its positional threshold and the theme's spatial motion, as both sheets'
+    /// `AnchoredDraggableDefaults.flingBehavior`.
+    pub(crate) fn remember_settling(&self) -> Rc<dyn FlingBehavior> {
+        let state = *self;
+        let threshold = compose_runtime::remember_keyed(state, move || {
+            Rc::new(move |_: f32| state.inner().map_or(0.0, |inner| (inner.positional_threshold)()))
+                as Rc<dyn Fn(f32) -> f32>
+        });
+        remember_anchored_fling_behavior(
+            self.anchored_state(),
+            threshold,
+            MaterialTheme::motion_scheme().default_spatial_spec(),
+        )
     }
 
     /// Sets what it animates with, as Compose's sheets do from the motion scheme: showing and
@@ -293,19 +387,9 @@ impl SheetState {
         if let Some(inner) = self.inner() {
             *inner.show_spec.borrow_mut() = motion.default_spatial_spec();
             *inner.hide_spec.borrow_mut() = motion.fast_effects_spec();
-            inner.anchored.set_spec(motion.default_spatial_spec());
         }
     }
 }
-
-/// A 300 ms ease, as Compose's `BottomSheetAnimationSpec`: drags settle with it until a sheet
-/// sets its motion.
-const BOTTOM_SHEET_ANIMATION_SPEC: AnimationSpec =
-    AnimationSpec::Tween(compose_animation::TweenSpec {
-        duration_millis: 300,
-        delay_millis: 0,
-        easing: FAST_OUT_SLOW_IN_EASING,
-    });
 
 impl ComposeArg for SheetState {
     fn same(&self, other: &Self) -> bool {
@@ -543,7 +627,7 @@ impl BottomSheetDefaults {
 /// The sheet's part in its content's scrolls.
 pub(crate) struct SheetConnection {
     pub(crate) state: SheetState,
-    pub(crate) settle: RefCell<Rc<dyn Fn(f32)>>,
+    pub(crate) fling: Rc<dyn FlingBehavior>,
 }
 
 impl NestedScrollConnection for SheetConnection {
@@ -553,7 +637,7 @@ impl NestedScrollConnection for SheetConnection {
             && source == NestedScrollSource::UserInput
             && let Some(inner) = self.state.inner()
         {
-            Offset::new(0.0, inner.anchored.drag_by(available.y))
+            Offset::new(0.0, inner.anchored.dispatch_raw_delta(available.y))
         } else {
             Offset::ZERO
         }
@@ -562,21 +646,24 @@ impl NestedScrollConnection for SheetConnection {
     /// What the content leaves scrolling down (it's at its top) drags the sheet down.
     fn on_post_scroll(&self, _: Offset, available: Offset, source: NestedScrollSource) -> Offset {
         if source == NestedScrollSource::UserInput
+            && available.y != 0.0
             && let Some(inner) = self.state.inner()
         {
-            Offset::new(0.0, inner.anchored.drag_by(available.y))
+            Offset::new(0.0, inner.anchored.dispatch_raw_delta(available.y))
         } else {
             Offset::ZERO
         }
     }
 
-    /// A fling up while the sheet isn't at its top settles the sheet instead.
+    /// A fling up while the sheet isn't at its top flings the sheet instead.
     fn on_pre_fling(&self, available: Offset) -> compose_ui::LocalBoxFuture<'_, Offset> {
         Box::pin(async move {
             let Some(inner) = self.state.inner() else { return Offset::ZERO };
-            let anchored = &inner.anchored;
-            if available.y < 0.0 && anchored.offset() > anchored.bounds().0 {
-                (self.settle.borrow())(available.y);
+            if available.y < 0.0
+                && inner.anchored.offset() > inner.anchored.anchors().min_position()
+            {
+                self.state.fling(&self.fling, available.y).await;
+                // It goes to the anchor with a settling animation: all consumed, for the best UX.
                 available
             } else {
                 Offset::ZERO
@@ -584,15 +671,70 @@ impl NestedScrollConnection for SheetConnection {
         })
     }
 
-    /// After the content's fling (or a drag let go), the sheet settles.
+    /// After the content's fling (or a drag let go), the sheet flings.
     fn on_post_fling(
         &self,
-        _: Offset,
+        consumed: Offset,
         available: Offset,
     ) -> compose_ui::LocalBoxFuture<'_, Offset> {
         Box::pin(async move {
-            (self.settle.borrow())(available.y);
-            available
+            let left = self.state.fling(&self.fling, available.y).await;
+            Offset::new(consumed.x, left)
+        })
+    }
+}
+
+/// A modal sheet's fling, as `modalBottomSheetFlingBehavior`: slowed near the hidden anchor, and
+/// the caller told if it ended hidden.
+struct ModalSheetFling {
+    state: SheetState,
+    settle: Rc<dyn FlingBehavior>,
+    density: compose_ui::Density,
+    max_velocity: f32,
+    on_dismiss: Rc<RefCell<Option<compose_runtime::Callback>>>,
+}
+
+/// Tells the caller however the fling ends, as its `finally`.
+struct DismissIfHidden<'a>(&'a ModalSheetFling);
+
+impl Drop for DismissIfHidden<'_> {
+    fn drop(&mut self) {
+        if !self.0.state.is_visible() {
+            let on_dismiss = self.0.on_dismiss.borrow().clone();
+            if let Some(on_dismiss) = on_dismiss {
+                on_dismiss();
+            }
+        }
+    }
+}
+
+impl FlingBehavior for ModalSheetFling {
+    fn perform_fling<'a>(
+        &'a self,
+        scope: ScrollScope,
+        initial_velocity: f32,
+    ) -> LocalBoxFuture<'a, f32> {
+        Box::pin(async move {
+            let mut velocity = initial_velocity.clamp(-self.max_velocity, self.max_velocity);
+            if velocity > 0.0
+                && let Some(inner) = self.state.inner()
+                && inner.anchored.anchors().has_position_for(&SheetValue::Hidden)
+            {
+                let hidden = inner.anchored.anchors().position_of(&SheetValue::Hidden);
+                let distance = (hidden - inner.anchored.offset()).max(0.0);
+                let zone = self.density.to_px(BottomSheetDefaults::BOUNDARY_DAMPENING_ZONE);
+                if distance < zone {
+                    let factor = distance / zone;
+                    velocity *= factor * factor;
+                    // A fling fast enough to settle stays so.
+                    let floor = self.density.to_px(BottomSheetDefaults::VELOCITY_THRESHOLD);
+                    if initial_velocity >= floor {
+                        velocity = velocity.max(floor);
+                    }
+                }
+            }
+            let _dismiss = DismissIfHidden(self);
+            self.settle.perform_fling(scope, velocity).await
         })
     }
 }
@@ -872,82 +1014,46 @@ fn sheet_parts(
             }
         })
     };
-    let settle = {
-        let (state, scope, on_dismiss) = (sheet_state, scope, on_dismiss_request);
-        let dampening_zone = density.to_px(BottomSheetDefaults::BOUNDARY_DAMPENING_ZONE);
-        let velocity_floor = density.to_px(BottomSheetDefaults::VELOCITY_THRESHOLD);
-        Rc::new(move |velocity: f32| {
-            let (state, on_dismiss) = (state, on_dismiss.clone());
-            scope.launch(async move {
-                if let Some(inner) = state.inner() {
-                    // A fling down near the hidden anchor slows, quadratically, though one
-                    // fast enough to settle stays so, as Compose's sheet fling behavior.
-                    let mut velocity = velocity;
-                    if velocity > 0.0
-                        && let Some(hidden) = inner.anchored.position_of(SheetValue::Hidden as u8)
-                    {
-                        let distance = (hidden - inner.anchored.offset()).max(0.0);
-                        if distance < dampening_zone {
-                            let factor = distance / dampening_zone;
-                            let initial = velocity;
-                            velocity *= factor * factor;
-                            if initial >= velocity_floor {
-                                velocity = velocity.max(velocity_floor);
-                            }
-                        }
-                    }
-                    let positional = (inner.positional_threshold)();
-                    let threshold = (inner.velocity_threshold)();
-                    inner.anchored.settle(velocity, &|_| positional, threshold).await;
-                }
-                if !state.is_visible() {
-                    on_dismiss();
-                }
-            });
-        }) as Rc<dyn Fn(f32)>
-    };
+    let anchored_state = sheet_state.anchored_state();
+    let settle = sheet_state.remember_settling();
+    // The newest `on_dismiss_request`: a fling outlives its composition.
+    let latest_dismiss = compose_runtime::remember(|| Rc::new(RefCell::new(None)));
+    *latest_dismiss.borrow_mut() = Some(on_dismiss_request.clone());
+    let max_velocity = compose_ui::LOCAL_VIEW_CONFIGURATION.current().maximum_fling_velocity;
+    let fling: Rc<dyn FlingBehavior> = compose_runtime::remember_keyed(
+        (FlingKey(settle.clone()), sheet_state, density, max_velocity.to_bits()),
+        move || {
+            Rc::new(ModalSheetFling {
+                state: sheet_state,
+                settle,
+                density,
+                max_velocity,
+                on_dismiss: latest_dismiss,
+            }) as Rc<dyn FlingBehavior>
+        },
+    );
     // The content's scrolls drag the sheet within its anchors first (up) or after it (down),
     // and its flings settle it, as Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScroll
     // Connection`.
     let connection = {
-        let (state, settle) = (sheet_state, settle.clone());
-        compose_runtime::remember_keyed(sheet_state, move || {
-            Rc::new(SheetConnection { state, settle: RefCell::new(settle) })
-        })
-    };
-    *connection.settle.borrow_mut() = settle.clone();
-    let connection: Rc<dyn NestedScrollConnection> = connection;
-    let drag = {
-        let state = sheet_state;
-        compose_runtime::remember_keyed(sheet_state, move || {
-            draggable_state(move |delta| {
-                if let Some(inner) = state.inner() {
-                    inner.anchored.drag_by(delta);
-                }
-            })
+        let (state, fling) = (sheet_state, fling.clone());
+        compose_runtime::remember_keyed((sheet_state, FlingKey(fling.clone())), move || {
+            Rc::new(SheetConnection { state, fling }) as Rc<dyn NestedScrollConnection>
         })
     };
     // Dragged once shown, and part of its content's scrolls, with its gestures.
-    let sheet_modifier = modifier.draggable(
-        drag,
-        Orientation::Vertical,
-        sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
-        false,
-        |_| {},
-        {
-            let settle = settle.clone();
-            move |velocity| settle(velocity)
-        },
-    );
-    let sheet_modifier = if sheet_gestures_enabled {
-        sheet_modifier.nested_scroll(connection)
-    } else {
-        sheet_modifier
-    }
-    .semantics(|config| {
-        config.set_pane_title("Bottom Sheet");
-        config.set_traversal_index(0.0);
-    });
+    let gestures = AnchoredDraggableOptions {
+        enabled: sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
+        fling_behavior: Some(fling),
+        ..AnchoredDraggableOptions::default()
+    };
+    let sheet_modifier =
+        if sheet_gestures_enabled { modifier.nested_scroll(connection) } else { modifier }
+            .anchored_draggable(anchored_state, Orientation::Vertical, gestures)
+            .semantics(|config| {
+                config.set_pane_title("Bottom Sheet");
+                config.set_traversal_index(0.0);
+            });
     // The drag handle's actions, by the sheet's value, while its gestures are on, as Compose's.
     let handle_semantics = {
         let (state, scope, dismiss) = (sheet_state, scope, dismiss.clone());
@@ -956,7 +1062,8 @@ fn sheet_parts(
                 return;
             }
             if let Some(inner) = state.inner() {
-                inner.anchored.observe_anchors();
+                // New anchors change what it offers.
+                inner.anchored.anchors();
             }
             let on_dismiss = dismiss.clone();
             config.dismiss(Some("Dismiss bottom sheet".into()), move || {
@@ -1053,7 +1160,7 @@ fn sheet_surface(
     // How far the state's past its top anchor, as a spring overshoots.
     let overflow_scale = move |height: f32| {
         let overflow = state.inner().map_or(0.0, |inner| {
-            let (offset, top) = (inner.anchored.offset(), inner.anchored.bounds().0);
+            let (offset, top) = (inner.anchored.offset(), inner.anchored.anchors().min_position());
             if offset < top { top - offset } else { 0.0 }
         });
         if overflow > 0.0 && height > 0.0 { (height + overflow) / height } else { 1.0 }
@@ -1152,30 +1259,28 @@ impl MeasurePolicy for SheetLayout {
         if sheet_height != 0.0 {
             anchors.push((SheetValue::Expanded, (full - sheet_height).max(0.0)));
         }
-        let has = |value: SheetValue| anchors.iter().any(|(anchor, _)| *anchor == value);
+        let new_anchors = DraggableAnchors::new(|config| {
+            for (value, at) in &anchors {
+                config.at(*value, *at);
+            }
+        });
         // Where it goes when its anchor went, as Compose's `draggableAnchors` new target.
-        let retarget = match self.state.target_value() {
-            SheetValue::Hidden => SheetValue::Hidden,
-            SheetValue::PartiallyExpanded if has(SheetValue::PartiallyExpanded) => {
-                SheetValue::PartiallyExpanded
+        let retarget = compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+            let has = |value: SheetValue| new_anchors.has_position_for(&value);
+            match self.state.target_value() {
+                SheetValue::Hidden => SheetValue::Hidden,
+                SheetValue::PartiallyExpanded if has(SheetValue::PartiallyExpanded) => {
+                    SheetValue::PartiallyExpanded
+                }
+                SheetValue::PartiallyExpanded | SheetValue::Expanded
+                    if has(SheetValue::Expanded) =>
+                {
+                    SheetValue::Expanded
+                }
+                _ => SheetValue::Hidden,
             }
-            SheetValue::PartiallyExpanded | SheetValue::Expanded if has(SheetValue::Expanded) => {
-                SheetValue::Expanded
-            }
-            _ => SheetValue::Hidden,
-        };
-        let changed = inner
-            .anchored
-            .update_anchors(anchors.into_iter().map(|(value, at)| (value as u8, at)).collect());
-        // New anchors take it to its target at once unless it's animating, as Compose's
-        // `updateAnchors` (`trySnapTo`): where it rests follows the anchors anyway.
-        if changed
-            && !inner.anchored.is_animation_running()
-            && (!inner.anchored.is_resting()
-                || !inner.anchored.has_anchor(inner.anchored.settled_value()))
-        {
-            inner.anchored.snap_to(retarget as u8);
-        }
+        });
+        self.state.update_anchors(new_anchors, retarget);
         // Read while measuring: a frame of the slide places the sheet again only.
         let offset = inner.anchored.offset();
         let top = if offset.is_nan() { full } else { offset };

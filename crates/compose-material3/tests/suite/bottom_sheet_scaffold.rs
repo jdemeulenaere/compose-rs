@@ -487,7 +487,8 @@ fn with_swiping_off_the_sheet_isnt_in_its_contents_scrolls() {
     swipe_up(&mut ui, SHEET_TAG);
     assert!(scroll().value() > 0);
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
-    state.snap_to(SheetValue::Expanded);
+    let snapping = *state;
+    launch_on(&mut ui, async move { snapping.snap_to(SheetValue::Expanded).await });
     ui.wait_for_idle();
     assert_eq!(state.current_value(), SheetValue::Expanded);
     swipe_down(&mut ui, SHEET_TAG);
@@ -985,4 +986,9 @@ fn a_modal_sheets_content_sees_its_offset_as_consumed() {
     compose_runtime::platform::launch(async move { handle.expand().await });
     ui.wait_for_idle();
     assert_eq!(top(), 0);
+}
+
+fn launch_on(ui: &mut ComposeTestRule, task: impl std::future::Future<Output = ()> + 'static) {
+    CoroutineScope::new().launch(task);
+    ui.wait_for_idle();
 }

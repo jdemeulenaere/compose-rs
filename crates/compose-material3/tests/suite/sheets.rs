@@ -113,13 +113,13 @@ fn dragging_the_sheet_down_dismisses_it_and_a_short_drag_comes_back() {
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(bounds(&mut ui, "content").top, 400.0);
     assert!(shown.get());
-    // Now 100 dp down: hidden, then dismissed.
+    // Now past half way down, let go without velocity: the closest anchor, hidden, then dismissed.
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 450.0)));
-    for y in [470.0, 500.0, 530.0, 558.0] {
+    for y in [470.0, 500.0, 530.0, 598.0] {
         ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));
         ui.advance_time_by(Duration::from_millis(200));
     }
-    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 558.0)));
+    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 598.0)));
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::Hidden);
     assert!(!shown.get());
@@ -183,7 +183,7 @@ fn SwipeApp(state: SwipeToDismissBoxState) {
 }
 
 #[test]
-fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
+fn a_swipe_past_half_way_dismisses_and_a_short_one_settles_back() {
     let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| 56.0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
@@ -213,13 +213,13 @@ fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
     assert_eq!(bounds(&mut ui, "item").left, 0.0);
     ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, y)));
     ui.advance_time_by(Duration::from_secs(1));
-    // 150 dp left: dismissed, the item gone off the start.
+    // Past half way left, let go without velocity: the closest anchor, the item gone off the start.
     ui.host().send_pointer(PointerEvent::press(Offset::new(300.0, y)));
-    for x in [280.0, 220.0, 150.0] {
+    for x in [280.0, 220.0, 80.0] {
         ui.host().send_pointer(PointerEvent::moved(Offset::new(x, y), true));
         ui.advance_time_by(Duration::from_millis(100));
     }
-    ui.host().send_pointer(PointerEvent::release(Offset::new(150.0, y)));
+    ui.host().send_pointer(PointerEvent::release(Offset::new(80.0, y)));
     ui.advance_time_by(Duration::from_secs(1));
     assert_eq!(state.current_value(), SwipeToDismissBoxValue::EndToStart);
     assert_eq!(bounds(&mut ui, "item").left, -400.0);
@@ -260,20 +260,20 @@ fn the_contents_scrolls_drag_the_sheet_first() {
         ui.on_node_unmerged(has_test_tag("first")).fetch_semantics_snapshot().bounds.top
     };
     assert_eq!(first(&mut ui), 300.0 + 48.0);
-    // Up 100 past the slop on the content: the sheet goes up, the content doesn't scroll.
+    // Up 200 past the slop on the content: the sheet goes up, the content doesn't scroll.
     ui.host().send_pointer(
         PointerEvent::press(Offset::new(200.0, 500.0)).with_pointer(FINGER, PointerType::Touch),
     );
-    for y in [492.0, 450.0, 420.0, 392.0] {
+    for y in [492.0, 420.0, 350.0, 292.0] {
         ui.host().send_pointer(
             PointerEvent::moved(Offset::new(200.0, y), true)
                 .with_pointer(FINGER, PointerType::Touch),
         );
         ui.advance_time_by(Duration::from_millis(100));
     }
-    assert_eq!(first(&mut ui), 200.0 + 48.0);
+    assert_eq!(first(&mut ui), 100.0 + 48.0);
     ui.host().send_pointer(
-        PointerEvent::release(Offset::new(200.0, 392.0)).with_pointer(FINGER, PointerType::Touch),
+        PointerEvent::release(Offset::new(200.0, 292.0)).with_pointer(FINGER, PointerType::Touch),
     );
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::Expanded);

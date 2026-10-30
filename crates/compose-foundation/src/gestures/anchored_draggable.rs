@@ -863,8 +863,17 @@ pub fn remember_anchored_fling_behavior<T: Clone + PartialEq + 'static>(
     positional_threshold: Rc<dyn Fn(f32) -> f32>,
     animation_spec: AnimationSpec,
 ) -> Rc<dyn FlingBehavior> {
+    /// A fling's inputs compared as Compose's `remember(density, positionalThreshold, animationSpec)`.
+    #[derive(Clone)]
+    struct Inputs(Rc<dyn Fn(f32) -> f32>, AnimationSpec);
+    impl ComposeArg for Inputs {
+        fn same(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.0, &other.0) && self.1 == other.1
+        }
+    }
     let density = compose_ui::LOCAL_DENSITY.current();
-    compose_runtime::remember_keyed((state.clone(), density), move || {
+    let inputs = Inputs(positional_threshold.clone(), animation_spec.clone());
+    compose_runtime::remember_keyed((state.clone(), density, inputs), move || {
         anchored_fling_behavior(state, density, positional_threshold, animation_spec)
     })
 }

@@ -480,11 +480,11 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: the five files in `gestures/snapping`.
     - Depends on: scrollable (`FlingBehavior`), lazy-layout-info, animation's decay specs (`DecayAnimationSpec`, `exponentialDecay`, `splineBasedDecay`: animation ledger).
     - Size: M. Experimental: no.
-16. **anchored-draggable.** Done (D1463), but for material3's private `Anchored`, which isn't moved onto it yet.
+16. **anchored-draggable.** Done (D1463); material3's sheets and swipe-to-dismiss are on it (D1466).
     - API: the `anchoredDraggable` family (see above).
     - Tests: the four `anchoredDraggable` files, DraggableAnchorsTest.
     - Depends on: draggable, snapping (`TargetedFlingBehavior`), the decay specs (animation), overscroll (for its overscroll tests).
-    - Size: M–L. Then move material3's private `Anchored` onto it. Experimental: no.
+    - Size: M–L. Experimental: no.
 17. **overscroll.** The events are done (D1464): the effect, its factory, the parameters. Left: Android's stretch and glow (a `RenderEffect` or `EdgeEffect` in the replayer), with StretchOverscrollIntegrationTest, StretchOverscrollScreenshotTest and the drawing tests of OverscrollTest.
     - API: `OverscrollEffect`, `overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, `rememberPlatformOverscrollFactory`; the `overscrollEffect` parameters.
     - Does: edge effects; Android's stretch.

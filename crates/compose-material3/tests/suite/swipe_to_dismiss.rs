@@ -89,7 +89,9 @@ fn ltr_box(initial: SwipeToDismissBoxValue) -> impl Fn() {
 #[test]
 fn a_remembered_state_is_restored_in_a_new_host() {
     let mut ui = compose_test(ltr_box(SwipeToDismissBoxValue::Settled));
-    state().snap_to(SwipeToDismissBoxValue::StartToEnd);
+    let snapping = state();
+    CoroutineScope::new()
+        .launch(async move { snapping.snap_to(SwipeToDismissBoxValue::StartToEnd).await });
     ui.wait_for_idle();
     assert_eq!(state().settled_value(), SwipeToDismissBoxValue::StartToEnd);
     let saved = ui.host().save_state();

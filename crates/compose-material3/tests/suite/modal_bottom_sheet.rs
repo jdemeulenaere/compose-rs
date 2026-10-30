@@ -646,3 +646,32 @@ fn a_short_sheet_rests_half_way_unless_its_state_has_none() {
         (SheetValue::Expanded, 704.0, 96.0)
     );
 }
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt, computeTarget: a velocity past the threshold goes the way it goes, wherever the offset is
+#[test]
+fn a_flick_up_from_far_down_keeps_the_sheet_expanded() {
+    let state = SheetState::new(
+        &[SheetValue::Hidden, SheetValue::Expanded],
+        || BottomSheetDefaults::POSITIONAL_THRESHOLD.0,
+        || BottomSheetDefaults::VELOCITY_THRESHOLD.0,
+        SheetValue::Expanded,
+        |_| true,
+    );
+    let given = *state;
+    let mut ui = compose_test(move || Bare(given, Dp(WINDOW_HEIGHT)));
+    ui.wait_for_idle();
+    assert_eq!(state.require_offset(), 0.0);
+    ui.on_node_with_tag("sheetContentTag").perform_touch_input(|touch| {
+        touch.down(Offset::new(200.0, 100.0));
+        touch.move_by(Offset::new(0.0, 520.0));
+        // Then up, at 500 px a second, ending 60 % of the way down.
+        for _ in 0..5 {
+            touch.move_pointer_by(0, Offset::new(0.0, -8.0), 16);
+        }
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), SheetValue::Expanded);
+    assert_eq!(state.require_offset(), 0.0);
+    assert!(state.is_visible());
+}

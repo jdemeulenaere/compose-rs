@@ -1,10 +1,11 @@
 //! `BottomSheetScaffold`, as Compose's: a screen's top bar, body and snackbars with a standard
 //! bottom sheet over them, resting at its peek height.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
-use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
+use compose_foundation::gestures::{
+    AnchoredDraggableModifier, AnchoredDraggableOptions, DraggableAnchors, Orientation,
+};
 use compose_foundation::layout::{Box, Column, ColumnScope};
 use compose_runtime::{CompositionLocalProvider, composable, remember_coroutine_scope};
 use compose_ui::{
@@ -12,7 +13,7 @@ use compose_ui::{
     MeasureScope, Modifier, NestedScrollConnection, PaddingValues, Shape, SizeSpec,
 };
 
-use crate::sheet::{SheetConnection, SheetState, SheetValue};
+use crate::sheet::{FlingKey, SheetConnection, SheetState, SheetValue};
 use crate::snackbar::SnackbarHostState;
 use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
@@ -174,28 +175,13 @@ fn standard_bottom_sheet(
     let scope = remember_coroutine_scope();
     let motion = MaterialTheme::motion_scheme();
     compose_runtime::SideEffect(move || state.set_motion(&motion));
-    let settle: Rc<dyn Fn(f32)> = Rc::new(move |velocity: f32| {
-        scope.launch(async move {
-            if let Some(inner) = state.inner() {
-                let positional = (inner.positional_threshold)();
-                let threshold = (inner.velocity_threshold)();
-                inner.anchored.settle(velocity, &|_| positional, threshold).await;
-            }
-        });
-    });
-    let connection = compose_runtime::remember_keyed(state, {
-        let settle = settle.clone();
-        move || Rc::new(SheetConnection { state, settle: RefCell::new(settle) })
-    });
-    *connection.settle.borrow_mut() = settle.clone();
-    let connection: Rc<dyn NestedScrollConnection> = connection;
-    let drag = compose_runtime::remember_keyed(state, move || {
-        draggable_state(move |delta| {
-            if let Some(inner) = state.inner() {
-                inner.anchored.drag_by(delta);
-            }
+    let fling = state.remember_settling();
+    let connection = {
+        let fling = fling.clone();
+        compose_runtime::remember_keyed((state, FlingKey(fling.clone())), move || {
+            Rc::new(SheetConnection { state, fling }) as Rc<dyn NestedScrollConnection>
         })
-    });
+    };
     let modifier = Modifier
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, Dp::UNSPECIFIED, max_width, Dp::UNSPECIFIED))
         .fill_max_width()
@@ -204,9 +190,15 @@ fn standard_bottom_sheet(
             ..SizeSpec::bounds(Dp::UNSPECIFIED, peek_height, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
         });
     let modifier = if swipe_enabled { modifier.nested_scroll(connection) } else { modifier };
-    let modifier = modifier.draggable(drag, Orientation::Vertical, swipe_enabled, false, |_| {}, {
-        move |velocity| settle(velocity)
-    });
+    let modifier = modifier.anchored_draggable(
+        state.anchored_state(),
+        Orientation::Vertical,
+        AnchoredDraggableOptions {
+            enabled: swipe_enabled,
+            fling_behavior: Some(fling),
+            ..AnchoredDraggableOptions::default()
+        },
+    );
     crate::components::Surface(
         modifier,
         shape,
@@ -266,8 +258,7 @@ fn handle_semantics(
     config: &mut compose_ui::SemanticsConfiguration,
 ) {
     let Some(inner) = state.inner() else { return };
-    inner.anchored.observe_anchors();
-    if inner.anchored.anchor_count() <= 1 || !swipe_enabled {
+    if inner.anchored.anchors().size() <= 1 || !swipe_enabled {
         return;
     }
     if state.current_value() == SheetValue::PartiallyExpanded {
@@ -345,60 +336,67 @@ impl ScaffoldLayout {
         let Some(inner) = self.state.inner() else { return f32::NAN };
         let anchored = &inner.anchored;
         let hidden_available = sheet_height == 0.0 || peek == 0.0 || !inner.skip_hidden_state;
-        // A peek height of 0 can be a value not yet computed: on the first layout, or resting
-        // there, it stays at the anchor apps know of, as Compose's.
-        let is_initial_layout = anchored.anchor_count() == 0;
-        let is_stable_at_partial = self.state.current_value() == SheetValue::PartiallyExpanded
-            && !anchored.is_animation_running();
-        let ambiguous_partial_allowed = peek == 0.0 && (is_initial_layout || is_stable_at_partial);
-        let partial_available = !inner.skip_partially_expanded
-            && (peek > 0.0 || ambiguous_partial_allowed)
-            && peek != sheet_height;
-        let expanded_available = sheet_height > 0.0;
-        assert!(
-            hidden_available || partial_available || expanded_available,
-            "BottomSheetScaffold: Require at least 1 anchor to be initialized"
-        );
-        let mut anchors = Vec::with_capacity(3);
-        if partial_available {
-            anchors.push((SheetValue::PartiallyExpanded as u8, layout_height - peek));
-        }
-        if hidden_available {
-            anchors.push((SheetValue::Hidden as u8, layout_height));
-        }
-        if expanded_available {
-            anchors.push((SheetValue::Expanded as u8, layout_height - sheet_height));
-        }
-        let has = |value: SheetValue| anchors.iter().any(|(key, _)| *key == value as u8);
-        let old_target = self.state.target_value();
-        let new_target = match old_target {
-            SheetValue::Hidden => old_target,
-            SheetValue::PartiallyExpanded => {
-                if has(SheetValue::PartiallyExpanded) {
-                    SheetValue::PartiallyExpanded
-                } else if has(SheetValue::Expanded) {
-                    SheetValue::Expanded
-                } else if has(SheetValue::Hidden) {
-                    SheetValue::Hidden
-                } else {
-                    old_target
-                }
-            }
-            SheetValue::Expanded => {
-                if has(SheetValue::Expanded) {
-                    SheetValue::Expanded
-                } else {
-                    SheetValue::Hidden
-                }
-            }
-        };
-        let changed = anchored.update_anchors(anchors);
-        if changed
-            && !anchored.is_animation_running()
-            && (!anchored.is_resting() || !anchored.has_anchor(anchored.settled_value()))
-        {
-            anchored.snap_to(new_target as u8);
-        }
+        let (anchors, new_target) =
+            compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                // A peek height of 0 can be a value not yet computed: on the first layout, or resting
+                // there, it stays at the anchor apps know of, as Compose's.
+                let is_initial_layout = anchored.anchors().size() == 0;
+                let is_stable_at_partial = self.state.current_value()
+                    == SheetValue::PartiallyExpanded
+                    && !anchored.is_animation_running();
+                let ambiguous_partial_allowed =
+                    peek == 0.0 && (is_initial_layout || is_stable_at_partial);
+                let partial_available = !inner.skip_partially_expanded
+                    && (peek > 0.0 || ambiguous_partial_allowed)
+                    && peek != sheet_height;
+                let expanded_available = sheet_height > 0.0;
+                assert!(
+                    hidden_available || partial_available || expanded_available,
+                    "BottomSheetScaffold: Require at least 1 anchor to be initialized"
+                );
+                let anchors = DraggableAnchors::new(|config| {
+                    if partial_available {
+                        config.at(SheetValue::PartiallyExpanded, layout_height - peek);
+                    }
+                    if hidden_available {
+                        config.at(SheetValue::Hidden, layout_height);
+                    }
+                    if expanded_available {
+                        config.at(SheetValue::Expanded, layout_height - sheet_height);
+                    }
+                });
+                let has = |value: SheetValue| anchors.has_position_for(&value);
+                let old_target = self.state.target_value();
+                let new_target = match old_target {
+                    SheetValue::Hidden => {
+                        if has(SheetValue::Hidden) {
+                            SheetValue::Hidden
+                        } else {
+                            old_target
+                        }
+                    }
+                    SheetValue::PartiallyExpanded => {
+                        if has(SheetValue::PartiallyExpanded) {
+                            SheetValue::PartiallyExpanded
+                        } else if has(SheetValue::Expanded) {
+                            SheetValue::Expanded
+                        } else if has(SheetValue::Hidden) {
+                            SheetValue::Hidden
+                        } else {
+                            old_target
+                        }
+                    }
+                    SheetValue::Expanded => {
+                        if has(SheetValue::Expanded) {
+                            SheetValue::Expanded
+                        } else {
+                            SheetValue::Hidden
+                        }
+                    }
+                };
+                (anchors, new_target)
+            });
+        self.state.update_anchors(anchors, new_target);
         // Read while measuring: a frame of the slide places the sheet again only.
         anchored.offset()
     }

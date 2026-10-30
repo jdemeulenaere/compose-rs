@@ -4,16 +4,17 @@
 use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
-use compose_animation::AnimationSpec;
-use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{Arrangement, Row, RowScope};
-use compose_runtime::{ComposeArg, composable, remember_coroutine_scope};
-use compose_ui::{
-    Alignment, Constraints, Dp, Layout, LayoutDirection, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier,
-};
 
-use crate::anchored::Anchored;
+use compose_foundation::gestures::{
+    AnchoredDraggableDefaults, AnchoredDraggableModifier, AnchoredDraggableOptions,
+    AnchoredDraggableState, DraggableAnchors, Orientation, remember_anchored_fling_behavior,
+};
+use compose_runtime::{ComposeArg, composable};
+use compose_ui::{
+    Alignment, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
+    Modifier,
+};
 
 /// Where a swipe-to-dismiss box rests, as Compose's `SwipeToDismissBoxValue`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,8 +44,8 @@ impl ComposeArg for SwipeToDismissBoxValue {
 }
 
 struct SwipeInner {
-    anchored: Anchored,
-    positional_threshold: Box<dyn Fn(f32) -> f32>,
+    anchored: AnchoredDraggableState<SwipeToDismissBoxValue>,
+    positional_threshold: Rc<dyn Fn(f32) -> f32>,
 }
 
 /// A swipe-to-dismiss box's state, as Compose's `SwipeToDismissBoxState`.
@@ -75,12 +76,8 @@ impl SwipeToDismissBoxState {
     ) -> Owned<SwipeToDismissBoxState> {
         Owned::new(
             SwipeInner {
-                anchored: Anchored::new(
-                    initial_value as u8,
-                    Box::new(|_| true),
-                    AnimationSpec::Spring(compose_animation::spring()),
-                ),
-                positional_threshold: Box::new(positional_threshold),
+                anchored: AnchoredDraggableState::new(initial_value),
+                positional_threshold: Rc::new(positional_threshold),
             },
             |object| SwipeToDismissBoxState { object },
         )
@@ -89,23 +86,17 @@ impl SwipeToDismissBoxState {
     /// Where it last settled, or, while swiped, the anchor it was swiped half way to (a state
     /// read), as `currentValue`.
     pub fn current_value(&self) -> SwipeToDismissBoxValue {
-        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
-            SwipeToDismissBoxValue::from_key(inner.anchored.current_value())
-        })
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| inner.anchored.current_value())
     }
 
     /// Where it last settled (a state read), as `settledValue`.
     pub fn settled_value(&self) -> SwipeToDismissBoxValue {
-        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
-            SwipeToDismissBoxValue::from_key(inner.anchored.settled_value())
-        })
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| inner.anchored.settled_value())
     }
 
     /// Where it's going, or would settle if let go now (a state read), as `targetValue`.
     pub fn target_value(&self) -> SwipeToDismissBoxValue {
-        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
-            SwipeToDismissBoxValue::from_key(inner.anchored.target_value())
-        })
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| inner.anchored.target_value())
     }
 
     /// The content's offset, in pixels (a state read), as `requireOffset()`.
@@ -129,34 +120,27 @@ impl SwipeToDismissBoxState {
     pub fn progress(&self) -> f32 {
         let Some(inner) = self.inner() else { return 0.0 };
         let anchored = &inner.anchored;
-        let offset = self.require_offset();
-        let from = anchored.position_of(anchored.settled_value()).unwrap_or(0.0);
-        let to = anchored.position_of(anchored.target_value()).unwrap_or(from);
-        if offset.is_nan() || from == to {
-            1.0
-        } else {
-            ((offset - from) / (to - from)).clamp(0.0, 1.0)
-        }
+        anchored.progress(&anchored.settled_value(), &anchored.target_value())
     }
 
     /// Animates it back in place, as `reset()`.
     pub async fn reset(&self) {
         if let Some(inner) = self.inner() {
-            inner.anchored.animate_to(SwipeToDismissBoxValue::Settled as u8).await;
+            let _ = inner.anchored.animate_to(SwipeToDismissBoxValue::Settled).await;
         }
     }
 
     /// Animates it away in `direction`, as `dismiss(direction)`.
     pub async fn dismiss(&self, direction: SwipeToDismissBoxValue) {
         if let Some(inner) = self.inner() {
-            inner.anchored.animate_to(direction as u8).await;
+            let _ = inner.anchored.animate_to(direction).await;
         }
     }
 
     /// At `value` at once, as `snapTo`.
-    pub fn snap_to(&self, value: SwipeToDismissBoxValue) {
+    pub async fn snap_to(&self, value: SwipeToDismissBoxValue) {
         if let Some(inner) = self.inner() {
-            inner.anchored.snap_to(value as u8);
+            let _ = inner.anchored.snap_to(value).await;
         }
     }
 }
@@ -226,9 +210,6 @@ pub fn remember_swipe_to_dismiss_box_state(
     )
 }
 
-/// A release faster than this dismisses, as Compose's `DismissThreshold` (125 dp/s).
-const VELOCITY_THRESHOLD: Dp = Dp(125.0);
-
 /// Content that can be swiped away sideways, as Compose's `SwipeToDismissBox`: dragged across,
 /// it uncovers `background_content` (as large as the content, behind it), and let go past the
 /// threshold or fast enough it settles away (`StartToEnd` or `EndToStart`, each if enabled), else
@@ -256,27 +237,18 @@ pub fn SwipeToDismissBox(
             }
         });
     }
-    let scope = remember_coroutine_scope();
-    let density = compose_ui::LOCAL_DENSITY.current();
-    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
-    let drag = {
-        compose_runtime::remember_keyed(state, move || {
-            draggable_state(move |delta| {
-                if let Some(inner) = state.inner() {
-                    inner.anchored.drag_by(delta);
-                }
-            })
-        })
+    let (anchored, threshold) = match state.inner() {
+        Some(inner) => (inner.anchored.clone(), inner.positional_threshold.clone()),
+        None => (
+            AnchoredDraggableState::new(SwipeToDismissBoxValue::Settled),
+            Rc::new(|_: f32| 0.0f32) as Rc<dyn Fn(f32) -> f32>,
+        ),
     };
-    let settle = {
-        let threshold = density.to_px(VELOCITY_THRESHOLD);
-        move |velocity: f32| {
-            scope.launch(async move {
-                let Some(inner) = state.inner() else { return };
-                inner.anchored.settle(velocity, &*inner.positional_threshold, threshold).await;
-            });
-        }
-    };
+    let fling = remember_anchored_fling_behavior(
+        anchored.clone(),
+        threshold,
+        AnchoredDraggableDefaults::snap_animation_spec(),
+    );
     let policy = {
         compose_runtime::remember_keyed(
             (state, enable_dismiss_from_start_to_end, enable_dismiss_from_end_to_start),
@@ -291,14 +263,16 @@ pub fn SwipeToDismissBox(
     };
     Layout(
         // Dragged only while settled in place, as Compose's (a dismissed item stays away); the
-        // offset is logical (towards the end positive), so a right-to-left drag is reversed.
-        modifier.draggable(
-            drag,
+        // offset is logical (towards the end positive), so a right-to-left drag is reversed, as the
+        // modifier's default.
+        modifier.anchored_draggable(
+            anchored,
             Orientation::Horizontal,
-            gestures_enabled && settled == SwipeToDismissBoxValue::Settled,
-            rtl,
-            |_| {},
-            settle,
+            AnchoredDraggableOptions {
+                enabled: gestures_enabled && settled == SwipeToDismissBoxValue::Settled,
+                fling_behavior: Some(fling),
+                ..AnchoredDraggableOptions::default()
+            },
         ),
         policy,
         compose_runtime::callback(move || {
@@ -337,25 +311,35 @@ impl MeasurePolicy for SwipeLayout {
             scope.measure(*background, Constraints::fixed(content.width, content.height));
         let width = content.width as f32;
         let towards_end = width;
-        let mut anchors = vec![(SwipeToDismissBoxValue::Settled, 0.0)];
-        if self.start_to_end {
-            anchors.push((SwipeToDismissBoxValue::StartToEnd, towards_end));
-        }
-        if self.end_to_start {
-            anchors.push((SwipeToDismissBoxValue::EndToStart, -towards_end));
-        }
+        let (start_to_end, end_to_start) = (self.start_to_end, self.end_to_start);
+        let anchors = DraggableAnchors::new(|config| {
+            config.at(SwipeToDismissBoxValue::Settled, 0.0);
+            if start_to_end {
+                config.at(SwipeToDismissBoxValue::StartToEnd, towards_end);
+            }
+            if end_to_start {
+                config.at(SwipeToDismissBoxValue::EndToStart, -towards_end);
+            }
+        });
         let Some(inner) = self.state.inner() else {
             scope.place(&background, 0, 0);
             scope.place_relative(&content, 0, 0);
             return scope.layout(content.width, content.height);
         };
         let anchored = &inner.anchored;
-        anchored.update_anchors(anchors.into_iter().map(|(value, at)| (value as u8, at)).collect());
-        // At rest at a value it has no anchor for (its direction disabled): back in place, as
-        // Compose's new anchors' target (the value kept if it has an anchor, else `Settled`).
-        if anchored.is_resting() && !anchored.has_anchor(anchored.settled_value()) {
-            anchored.snap_to(SwipeToDismissBoxValue::Settled as u8);
-        }
+        // Where new anchors take it, as Compose's `draggableAnchors` target.
+        compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+            let is_initialized = anchored.anchors().size() > 0;
+            let (previous, target) = (anchored.current_value(), anchored.target_value());
+            let new_target = if !is_initialized && anchors.has_position_for(&previous) {
+                previous
+            } else if anchors.has_position_for(&target) {
+                target
+            } else {
+                SwipeToDismissBoxValue::Settled
+            };
+            anchored.update_anchors_to(anchors, new_target);
+        });
         // Read while measuring: a frame of the swipe places the content again only.
         let offset = anchored.offset();
         let offset = if offset.is_nan() { 0 } else { offset.round() as i32 };
