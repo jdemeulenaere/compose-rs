@@ -47,3 +47,24 @@ pub fn ReusableContentHost(active: bool, content: impl FnOnce()) {
     }
     composer.end_reusable_group();
 }
+
+/// The group of a [`ReusableComposition`](crate::ReusableComposition)'s content, as
+/// `startReuseFromRoot`: `set_content_with_reuse` is no key of Compose's, so a composite key hash
+/// doesn't hold these (`composite_key_hash_at`).
+pub(crate) const REUSE_ROOT_KEY: u64 = key_of("compose_runtime::reuseFromRoot");
+
+/// A reusable composition's content: as [`ReusableContentHost`] around [`ReusableContent`], the
+/// content reused when `generation` moves, without what they'd add to a hash.
+#[allow(non_snake_case)]
+pub(crate) fn ReusableRootContent(active: bool, generation: u64, content: impl FnOnce()) {
+    let composer = current();
+    composer.start_reusable_group(REUSE_ROOT_KEY, u64::from(active));
+    if active {
+        composer.start_reusable_group(REUSE_ROOT_KEY, generation);
+        content();
+        composer.end_reusable_group();
+    } else {
+        composer.deactivate_to_end_group(false);
+    }
+    composer.end_reusable_group();
+}

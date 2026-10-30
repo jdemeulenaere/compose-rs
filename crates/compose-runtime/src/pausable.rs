@@ -59,7 +59,7 @@ use crate::slot_table::{GroupKind, NONE, SENTINEL, SlotTable, SlotValue};
 pub(crate) const NO_REGION: u32 = u32::MAX;
 
 /// The group key of [`PausableContent`].
-const PAUSABLE_KEY: u64 = key_of("compose_runtime::PausableContent");
+pub(crate) const PAUSABLE_KEY: u64 = key_of("compose_runtime::PausableContent");
 
 /// What a paused composition asks at each pause point, as Compose's `ShouldPauseCallback`:
 /// whether to pause there. A closure `Fn() -> bool` is one.
@@ -716,8 +716,13 @@ impl PausedComposition {
     ///
     /// # Panics
     ///
-    /// Once applied or cancelled, or during a pass.
+    /// Once complete, applied or cancelled, or during a pass, as Compose's.
     pub fn resume(&self, should_pause: impl ShouldPauseCallback + 'static) -> bool {
+        // What the turn wrote may make it incomplete again.
+        crate::snapshots::Snapshot::send_apply_notifications();
+        if self.state.get() == PausedState::ApplyPending {
+            misuse(ComposeError::PausedCompositionState)
+        }
         self.resume_with(Some(Rc::new(should_pause)))
     }
 

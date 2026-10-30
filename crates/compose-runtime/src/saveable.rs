@@ -620,6 +620,18 @@ fn composite_key_hash_at(table: &crate::slot_table::SlotTable, group: u32) -> u6
         let mut hash = 0u64;
         while group != NONE {
             let entry = &table[group];
+            // What a reusable composition's root adds isn't in a hash: it hashes as a plain one.
+            if entry.key == crate::reusable::REUSE_ROOT_KEY {
+                group = crate::slot_table::SENTINEL;
+                continue;
+            }
+            if entry.key == crate::pausable::PAUSABLE_KEY
+                && entry.parent != NONE
+                && table[entry.parent].key == crate::reusable::REUSE_ROOT_KEY
+            {
+                group = entry.parent;
+                continue;
+            }
             // Groups of one key under one parent (two calls of a composable: keys here are per
             // composable, where Compose's are per call site) are told apart by their order among
             // themselves; a `key(…)` group by its key alone.

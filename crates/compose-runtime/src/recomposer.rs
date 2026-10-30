@@ -16,7 +16,7 @@ use std::task::{Poll, Waker};
 use crate::composer::{Mode, run_walk};
 use crate::composition::{Composed, Pass, apply_work};
 use crate::error::{ComposeError, misuse};
-use crate::executor::{Job, launch, with_frame_nanos};
+use crate::executor::{Job, finished_job, launch, launch_owned, with_frame_nanos};
 use crate::runtime::{CompositionId, with_runtime};
 use crate::slot_table::SENTINEL;
 use crate::snapshots::Snapshot;
@@ -60,16 +60,61 @@ struct RecomposerInner {
     state: Cell<RecomposerState>,
     /// What `current_state` reads, made when it's first asked for.
     observed: RefCell<Option<OwnedState<RecomposerState>>>,
-    /// What waits for its state to change (`await_idle`, `join`) and for work (its loop).
+    /// What waits for its state to change (`await_idle`, `join`).
     waiters: RefCell<Vec<Waker>>,
-    run_waker: RefCell<Option<Waker>>,
+    /// Its loop waiting for work: woken once there's a state other than `Idle`.
+    work_waker: RefCell<Option<Waker>>,
+    /// Its loop waiting for its frame: woken only once it's to stop, as it has work then.
+    stop_waker: RefCell<Option<Waker>>,
     change_count: Cell<u64>,
     frame_end_callbacks: RefCell<Vec<(u64, FrameEndCallback)>>,
     next_callback: Cell<u64>,
     /// Its compositions' effects and scopes' tasks not over yet.
     effects: Cell<usize>,
     jobs: RefCell<Vec<Job>>,
+    /// Its effects' tasks waiting for a frame, as `broadcastFrameClock.hasAwaiters`.
+    frame_awaiters: Cell<usize>,
+    /// `pause_composition_frame_clock` was called, and no `resume`.
+    paused: Cell<bool>,
+    /// Its effects' tasks held back while it's paused.
     paused_waiters: RefCell<Vec<Waker>>,
+}
+
+impl RecomposerInner {
+    /// `effectJob` completed: cancelled, or closed with no effect left.
+    fn is_over(&self) -> bool {
+        self.cancelled.get() || (self.closed.get() && self.effects.get() == 0)
+    }
+
+    fn wake_all(&self) {
+        let wakers: Vec<Waker> = (std::mem::take(&mut *self.waiters.borrow_mut()).into_iter())
+            .chain(std::mem::take(&mut *self.paused_waiters.borrow_mut()))
+            .chain(self.work_waker.borrow_mut().take())
+            .chain(self.stop_waker.borrow_mut().take())
+            .collect();
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+}
+
+/// Its owner dropped, once the arena lets it go (a retired object goes at the next pass): nothing's
+/// left to wait for, nor to run for it.
+impl Drop for RecomposerInner {
+    fn drop(&mut self) {
+        if !self.is_default {
+            crate::executor::remove_recomposer_hook();
+        }
+        let jobs = std::mem::take(&mut *self.jobs.borrow_mut());
+        // At thread exit, the executor may have gone before it, its tasks with it.
+        if crate::executor::is_there() {
+            for job in jobs {
+                job.cancel();
+            }
+        }
+        self.wake_all();
+        update_running_info();
+    }
 }
 
 /// What a thread's compositions compose under, as `Recomposer`: a `Copy` handle, its owner the
@@ -154,14 +199,13 @@ thread_local! {
     static RUNNING: RefCell<Vec<Recomposer>> = const { RefCell::new(Vec::new()) };
     static RUNNING_INFO: RefCell<Option<OwnedState<Vec<RecomposerInfo>>>> =
         const { RefCell::new(None) };
-    /// Those whose compositions' frame clock is paused.
-    static PAUSED: RefCell<Vec<Recomposer>> = const { RefCell::new(Vec::new()) };
-    /// Whether `RUNNING` or `PAUSED` has any: the one thing asked at every frame awaited.
-    static FRAMES_HOOKED: Cell<bool> = const { Cell::new(false) };
 }
 
 impl Recomposer {
     fn make(is_default: bool) -> Owned<Recomposer> {
+        if !is_default {
+            crate::executor::add_recomposer_hook();
+        }
         let inner = RecomposerInner {
             is_default,
             closed: Cell::new(false),
@@ -171,12 +215,15 @@ impl Recomposer {
             state: Cell::new(RecomposerState::Inactive),
             observed: RefCell::new(None),
             waiters: RefCell::new(Vec::new()),
-            run_waker: RefCell::new(None),
+            work_waker: RefCell::new(None),
+            stop_waker: RefCell::new(None),
             change_count: Cell::new(0),
             frame_end_callbacks: RefCell::new(Vec::new()),
             next_callback: Cell::new(0),
             effects: Cell::new(0),
             jobs: RefCell::new(Vec::new()),
+            frame_awaiters: Cell::new(0),
+            paused: Cell::new(false),
             paused_waiters: RefCell::new(Vec::new()),
         };
         Owned::new(inner, |inner| Recomposer { inner })
@@ -237,31 +284,47 @@ impl Recomposer {
         })
     }
 
-    /// Whether it has anything to do for a frame, as `hasPendingWork`.
+    /// Every scope of its compositions invalid.
+    fn invalidate_known(&self) {
+        let is_default = self.is_default();
+        with_runtime(|runtime| {
+            for id in runtime.compositions.live_ids() {
+                let known = runtime.compositions.get(id).is_some_and(|data| {
+                    self.holds(data, is_default) && !data.closed && !data.poisoned
+                });
+                if known {
+                    crate::composition::invalidate_all_scopes(runtime, id);
+                }
+            }
+        });
+        crate::runtime::request_frames();
+    }
+
+    /// Whether it has anything to do for a frame, as `hasPendingWork`: frame work, and what's invalid
+    /// if there's someone to compose it. That's its loop, or the host for the default recomposer,
+    /// whose frames hosts run themselves: with neither, Compose's clears what's invalid, and the
+    /// loop's start invalidates all it knows.
     pub fn has_pending_work(&self) -> bool {
         // The turn's changes invalidate their readers first (D751).
         let busy = with_runtime(|runtime| runtime.is_busy());
         if !busy {
             Snapshot::send_apply_notifications();
         }
-        let has_frame_work = self.inner.try_get().is_some_and(|inner| {
-            !inner.frame_end_callbacks.borrow().is_empty() || self.effects_await_frame(&inner)
-        });
-        has_frame_work || !self.invalid_compositions().is_empty()
+        let Some(inner) = self.inner.try_get().filter(|inner| !inner.is_over()) else {
+            return false;
+        };
+        self.has_frame_work(&inner)
+            || ((inner.running.get() || inner.is_default)
+                && !self.invalid_compositions().is_empty())
     }
 
-    /// Whether its compositions' effects wait for a frame, as Compose's
-    /// `hasBroadcastFrameClockAwaiters`: its frame is theirs, what they write composed in it. The
-    /// default recomposer's tasks aren't told apart: any.
-    fn effects_await_frame(&self, inner: &RecomposerInner) -> bool {
-        if inner.is_default {
-            return crate::executor::has_frame_awaiters();
-        }
-        if inner.effects.get() == 0 {
-            return false;
-        }
-        let jobs = inner.jobs.borrow();
-        crate::executor::frame_awaiting_jobs().iter().any(|job| jobs.contains(job))
+    /// What a frame is wanted for whatever's invalid, as `hasBroadcastFrameClockAwaitersLocked ||
+    /// hasNextFrameEndAwaitersLocked`: nothing while its clock is paused.
+    fn has_frame_work(&self, inner: &RecomposerInner) -> bool {
+        !inner.paused.get()
+            && (!inner.frame_end_callbacks.borrow().is_empty()
+                || inner.frame_awaiters.get() > 0
+                || (inner.is_default && crate::executor::has_unowned_frame_awaiters()))
     }
 
     fn derive_state(&self) -> RecomposerState {
@@ -269,21 +332,25 @@ impl Recomposer {
         if inner.shut_down.get() {
             return RecomposerState::ShutDown;
         }
-        if inner.closed.get() {
+        if inner.is_over() {
             if inner.effects.get() == 0 && !inner.running.get() {
                 inner.shut_down.set(true);
                 return RecomposerState::ShutDown;
             }
             return RecomposerState::ShuttingDown;
         }
-        let pending = !inner.frame_end_callbacks.borrow().is_empty()
-            || self.effects_await_frame(&inner)
-            || !self.invalid_compositions().is_empty();
-        match (inner.running.get(), pending) {
-            (false, false) => RecomposerState::Inactive,
-            (false, true) => RecomposerState::InactivePendingWork,
-            (true, false) => RecomposerState::Idle,
-            (true, true) => RecomposerState::PendingWork,
+        let frame_work = self.has_frame_work(&inner);
+        if !inner.running.get() {
+            return if frame_work {
+                RecomposerState::InactivePendingWork
+            } else {
+                RecomposerState::Inactive
+            };
+        }
+        if frame_work || !self.invalid_compositions().is_empty() {
+            RecomposerState::PendingWork
+        } else {
+            RecomposerState::Idle
         }
     }
 
@@ -293,7 +360,13 @@ impl Recomposer {
         let state = self.derive_state();
         let changed = inner.state.replace(state) != state;
         if state != RecomposerState::Idle {
-            let waker = inner.run_waker.borrow_mut().take();
+            let waker = inner.work_waker.borrow_mut().take();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
+        if !self.keeps_going() {
+            let waker = inner.stop_waker.borrow_mut().take();
             if let Some(waker) = waker {
                 waker.wake();
             }
@@ -396,37 +469,71 @@ impl Recomposer {
         self.update_state();
     }
 
-    /// Effects' `with_frame_nanos` wait from now on, as `pauseCompositionFrameClock`: composition
-    /// goes on.
+    /// The tasks of its effects get no frames from now on, as `pauseCompositionFrameClock`, those
+    /// waiting already too: animations stop. Composition goes on, and what's not its effects'.
     pub fn pause_composition_frame_clock(&self) {
-        let recomposer = *self;
-        PAUSED.with_borrow_mut(|paused| {
-            if !paused.contains(&recomposer) {
-                paused.push(recomposer);
-            }
-        });
-        update_frames_hooked();
+        if let Some(inner) = self.inner.try_get() {
+            inner.paused.set(true);
+        }
+        self.update_state();
     }
 
     /// Effects' frames go on, as `resumeCompositionFrameClock`.
     pub fn resume_composition_frame_clock(&self) {
-        let recomposer = *self;
-        PAUSED.with_borrow_mut(|paused| paused.retain(|other| *other != recomposer));
-        update_frames_hooked();
         let Some(inner) = self.inner.try_get() else { return };
+        inner.paused.set(false);
         let waiters = std::mem::take(&mut *inner.paused_waiters.borrow_mut());
         for waker in waiters {
             waker.wake();
+        }
+        self.update_state();
+    }
+
+    /// Whether the task being polled, one of its effects', gets no frame now. It's woken when
+    /// that's over.
+    pub(crate) fn holds_back_frames(&self, waker: &Waker) -> bool {
+        let Some(inner) = self.inner.try_get().filter(|inner| inner.paused.get()) else {
+            return false;
+        };
+        let mut waiters = inner.paused_waiters.borrow_mut();
+        if !waiters.iter().any(|other| other.will_wake(waker)) {
+            waiters.push(waker.clone());
+        }
+        true
+    }
+
+    /// A frame came for one of its effects' tasks: it's no longer waiting, and whether it gets the
+    /// frame is what this says: if not, it's woken when the pause is over.
+    pub(crate) fn frame_awaiter_taken(&self, waker: &Waker) -> bool {
+        let Some(inner) = self.inner.try_get() else { return false };
+        inner.frame_awaiters.set(inner.frame_awaiters.get() - 1);
+        drop(inner);
+        self.holds_back_frames(waker)
+    }
+
+    /// One of its effects' tasks gave up waiting for a frame.
+    pub(crate) fn frame_awaiter_gone(&self) {
+        let Some(inner) = self.inner.try_get() else { return };
+        inner.frame_awaiters.set(inner.frame_awaiters.get() - 1);
+        if inner.frame_awaiters.get() == 0 {
+            drop(inner);
+            self.update_state();
         }
     }
 
     /// Schedules `action` for the end of the current or next frame, asking for one when idle, as
     /// `scheduleFrameEndCallback`. Run by [`perform_frame`].
+    ///
+    /// # Panics
+    ///
+    /// Once it's shut down, as it would never run.
     pub fn schedule_frame_end_callback(
         &self,
         action: impl FnOnce() + 'static,
     ) -> CancellationHandle {
-        let inner = self.inner.try_get().expect("a recomposer whose owner is there");
+        let Some(inner) = self.inner.try_get().filter(|inner| !inner.is_over()) else {
+            misuse(ComposeError::RecomposerShutDown)
+        };
         let id = inner.next_callback.get();
         inner.next_callback.set(id + 1);
         inner.frame_end_callbacks.borrow_mut().push((id, Box::new(action)));
@@ -460,7 +567,7 @@ impl Recomposer {
                     return Poll::Ready(());
                 }
                 if let Some(inner) = recomposer.inner.try_get() {
-                    *inner.run_waker.borrow_mut() = Some(context.waker().clone());
+                    *inner.work_waker.borrow_mut() = Some(context.waker().clone());
                 }
                 Poll::Pending
             })
@@ -475,7 +582,7 @@ impl Recomposer {
                     return Poll::Ready(None);
                 }
                 if let Some(inner) = recomposer.inner.try_get() {
-                    *inner.run_waker.borrow_mut() = Some(context.waker().clone());
+                    *inner.stop_waker.borrow_mut() = Some(context.waker().clone());
                 }
                 frame.as_mut().poll(context).map(Some)
             })
@@ -496,29 +603,25 @@ impl Recomposer {
         }
     }
 
-    /// `future` as a task of its compositions' effects: over when it ends, cancelled with it, and
-    /// never started once it's shut down.
+    /// `future` as a task of its compositions' effects: over when it ends, cancelled with it. None
+    /// starts once it's cancelled, or closed with none left, as `effectJob` is complete then.
     pub(crate) fn launch_effect(&self, future: impl Future<Output = ()> + 'static) -> Job {
-        let Some(inner) = self.inner.try_get().filter(|inner| !inner.closed.get()) else {
-            let job = launch(async {});
-            job.cancel();
-            return job;
+        let Some(inner) = self.inner.try_get().filter(|inner| !inner.is_over()) else {
+            return finished_job();
         };
         inner.effects.set(inner.effects.get() + 1);
         let guard = EffectGuard(*self);
-        let job = launch(async move {
-            let _guard = guard;
-            future.await;
-        });
+        let job = launch_owned(
+            async move {
+                let _guard = guard;
+                future.await;
+            },
+            *self,
+        );
         let mut jobs = inner.jobs.borrow_mut();
         jobs.retain(Job::is_active);
         jobs.push(job);
         job
-    }
-
-    /// Whether `job` is one of its compositions' effects.
-    fn is_effect(&self, job: Job) -> bool {
-        self.inner.try_get().is_some_and(|inner| inner.jobs.borrow().contains(&job))
     }
 }
 
@@ -543,10 +646,13 @@ impl Running {
         if inner.running.get() {
             misuse(ComposeError::RecomposerRunning)
         }
-        if inner.closed.get() {
+        if inner.is_over() {
             misuse(ComposeError::RecomposerShutDown)
         }
         inner.running.set(true);
+        if inner.is_default {
+            crate::executor::add_recomposer_hook();
+        }
         drop(inner);
         let first = RUNNING.with_borrow_mut(|running| {
             running.push(recomposer);
@@ -557,8 +663,9 @@ impl Running {
                 runtime.compositions.recomposer_wake = Some(Rc::new(wake_running));
             });
         }
-        update_frames_hooked();
         update_running_info();
+        // It wasn't observing for them: anything could have changed, as `recompositionRunner`.
+        recomposer.invalidate_known();
         recomposer.update_state();
         Running(recomposer)
     }
@@ -569,7 +676,11 @@ impl Drop for Running {
         let Running(recomposer) = *self;
         if let Some(inner) = recomposer.inner.try_get() {
             inner.running.set(false);
-            inner.run_waker.borrow_mut().take();
+            inner.work_waker.borrow_mut().take();
+            inner.stop_waker.borrow_mut().take();
+            if inner.is_default {
+                crate::executor::remove_recomposer_hook();
+            }
         }
         let empty = RUNNING.with_borrow_mut(|running| {
             running.retain(|other| *other != recomposer);
@@ -580,27 +691,32 @@ impl Drop for Running {
                 runtime.compositions.recomposer_wake = None;
             });
         }
-        update_frames_hooked();
         update_running_info();
         recomposer.update_state();
     }
 }
 
-fn update_frames_hooked() {
-    let running = RUNNING.try_with(|running| !running.borrow().is_empty()).unwrap_or(false);
-    let paused = PAUSED.try_with(|paused| !paused.borrow().is_empty()).unwrap_or(false);
-    let _ = FRAMES_HOOKED.try_with(|hooked| hooked.set(running || paused));
-}
-
-/// Whether frames awaited are of interest to a recomposer: none running or paused, none are.
-#[inline]
-pub(crate) fn frames_hooked() -> bool {
-    FRAMES_HOOKED.with(Cell::get)
-}
-
-/// A task started waiting for a frame.
-pub(crate) fn frame_awaited() {
-    wake_running();
+/// A task started waiting for a frame: `owner`'s, or no recomposer's.
+pub(crate) fn frame_awaited(owner: Option<Recomposer>) {
+    match owner {
+        Some(owner) => {
+            let Some(inner) = owner.inner.try_get() else { return };
+            inner.frame_awaiters.set(inner.frame_awaiters.get() + 1);
+            // Each effect waiting doesn't go through the state: the first says what the rest would.
+            if inner.frame_awaiters.get() == 1 {
+                drop(inner);
+                owner.update_state();
+            }
+        }
+        // The default's, if something runs a loop on it.
+        None => {
+            let default =
+                RUNNING.with_borrow(|running| running.iter().copied().find(Recomposer::is_default));
+            if let Some(default) = default {
+                default.update_state();
+            }
+        }
+    }
 }
 
 /// What an invalidation asks, while a loop is running.
@@ -612,14 +728,24 @@ fn wake_running() {
 }
 
 fn update_running_info() {
-    let state = RUNNING_INFO.with_borrow(|info| info.as_ref().map(|state| state.handle()));
+    let Ok(state) =
+        RUNNING_INFO.try_with(|info| info.borrow().as_ref().map(|state| state.handle()))
+    else {
+        return;
+    };
     if let Some(state) = state {
         state.set(running_list());
     }
 }
 
+/// Those running, but one whose owner is gone while its loop hasn't heard yet.
 fn running_list() -> Vec<RecomposerInfo> {
-    RUNNING.with_borrow(|running| running.iter().map(Recomposer::as_recomposer_info).collect())
+    (RUNNING.try_with(|running| {
+        let running = running.borrow();
+        let alive = running.iter().filter(|recomposer| recomposer.inner.is_alive());
+        alive.map(Recomposer::as_recomposer_info).collect()
+    }))
+    .unwrap_or_default()
 }
 
 /// The running recomposers of this thread, as `Recomposer.runningRecomposers`.
@@ -632,7 +758,7 @@ pub fn running_recomposers() -> State<Vec<RecomposerInfo>> {
 
 /// Runs `block` with a recomposer running, shutting it down after, as `withRunningRecomposer`.
 pub async fn with_running_recomposer<R>(block: impl AsyncFnOnce(Recomposer) -> R) -> R {
-    /// Gone with the task, cancelled or not.
+    /// Gone with the task, for when it's cancelled in the block or in the join.
     struct Shutdown(Owned<Recomposer>, Job);
     impl Drop for Shutdown {
         fn drop(&mut self) {
@@ -647,24 +773,10 @@ pub async fn with_running_recomposer<R>(block: impl AsyncFnOnce(Recomposer) -> R
     // Running by the time `block` starts, as it's a task of the same thread's next poll.
     crate::executor::poll_now(runner);
     let result = block(recomposer).await;
-    recomposer.cancel();
+    recomposer.close();
     recomposer.join().await;
     drop(shutdown);
     result
-}
-
-/// Whether the task being polled must wait for a frame: an effect of a recomposer whose
-/// compositions' clock is paused. It's woken when that's over.
-pub(crate) fn frame_held_back(waker: &Waker) -> bool {
-    let paused = PAUSED.with_borrow(|paused| (!paused.is_empty()).then(|| paused.clone()));
-    let Some(paused) = paused else { return false };
-    let Some(job) = crate::executor::current_job() else { return false };
-    let holding = paused.iter().find(|recomposer| recomposer.is_effect(job));
-    let Some(inner) = holding.and_then(|recomposer| recomposer.inner.try_get()) else {
-        return false;
-    };
-    inner.paused_waiters.borrow_mut().push(waker.clone());
-    true
 }
 
 /// The frame of `recomposer` at `frame_time_nanos`, as the body of Compose's `withFrameNanos`:
@@ -673,7 +785,11 @@ pub(crate) fn frame_held_back(waker: &Waker) -> bool {
 /// composition was composed.
 pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
     let _ = frame_time_nanos;
+    if !recomposer.inner.try_get().is_some_and(|inner| !inner.is_over()) {
+        return false;
+    }
     Snapshot::send_apply_notifications();
+    let before = with_runtime(|runtime| runtime.changes_made());
     let mut to_apply: Vec<Composed> = Vec::new();
     let mut panic = None;
     loop {
@@ -682,13 +798,16 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
             break;
         }
         for id in invalid {
-            crate::pausable::run_requests(id);
-            let Some(pass) = Pass::begin(id, Mode::Walk) else { continue };
-            match catch_unwind(AssertUnwindSafe(|| run_walk(0))) {
-                Ok(()) => to_apply.push(pass.finish_composing()),
+            let composed = catch_unwind(AssertUnwindSafe(|| {
+                crate::pausable::run_requests(id);
+                let pass = Pass::begin(id, Mode::Walk)?;
+                run_walk(0);
+                Some(pass.finish_composing())
+            }));
+            match composed {
+                Ok(composed) => to_apply.extend(composed),
+                // The pass's drop poisoned it. What's composed is applied before it goes on.
                 Err(caught) => {
-                    // The pass's drop poisons it. What's composed is applied before it goes on.
-                    drop(pass);
                     panic = Some(caught);
                     break;
                 }
@@ -700,11 +819,20 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
         Snapshot::send_apply_notifications();
     }
     let changed = !to_apply.is_empty();
+    // A pass may have changed nothing, as `recompose` then says, and its work isn't counted on.
+    if with_runtime(|runtime| runtime.changes_made()) != before
+        && let Some(inner) = recomposer.inner.try_get()
+    {
+        inner.change_count.set(inner.change_count.get() + 1);
+    }
     for pass in to_apply {
         if let Err(caught) = catch_unwind(AssertUnwindSafe(|| apply_work(pass))) {
             panic.get_or_insert(caught);
         }
     }
+    recomposer.update_state();
+    // What the work wrote and made is everybody's, before the frame's end.
+    Snapshot::notify_objects_initialized();
     let callbacks = recomposer
         .inner
         .try_get()
@@ -713,10 +841,6 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
     for (_, callback) in callbacks {
         callback();
     }
-    if changed && let Some(inner) = recomposer.inner.try_get() {
-        inner.change_count.set(inner.change_count.get() + 1);
-    }
-    Snapshot::send_apply_notifications();
     recomposer.update_state();
     if let Some(panic) = panic {
         resume_unwind(panic);

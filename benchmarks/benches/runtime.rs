@@ -262,8 +262,44 @@ fn many_readers(criterion: &mut Criterion) {
     });
 }
 
+/// A frame of effects waiting for it, under a recomposer with its loop running: an awaiter costs
+/// the recomposer a counter, whatever the number of them.
+fn effects_under_a_running_recomposer(c: &mut Criterion) {
+    use compose_runtime::platform::{
+        advance_clock, dispatch_frame, launch, run_ready, set_manual_clock,
+    };
+    set_manual_clock(0);
+    let owner = Recomposer::new();
+    let recomposer = owner.handle();
+    let runner = launch(async move { recomposer.run_recompose_and_apply_changes().await });
+    let composition = Composition::with_parent(Tree::new(), recomposer.as_context());
+    composition.set_content(|| {
+        for index in 0..500 {
+            key(index, || {
+                LaunchedEffect((), async {
+                    loop {
+                        with_frame_nanos(|_| ()).await;
+                    }
+                });
+            });
+        }
+    });
+    run_ready();
+    c.bench_function("a frame of 500 effects under a running recomposer", |b| {
+        b.iter(|| {
+            advance_clock(std::time::Duration::from_millis(16));
+            dispatch_frame();
+            run_ready();
+        })
+    });
+    recomposer.cancel();
+    run_ready();
+    runner.cancel();
+}
+
 criterion_group!(
     benches,
+    effects_under_a_running_recomposer,
     counter_click,
     toggle_one_row,
     skipped_composables,

@@ -46,6 +46,9 @@ struct TaskSlot {
     /// The waker its polls get, made at its first: each poll clones it rather than allocating
     /// one (a frame polls a task per animated value).
     waker: Option<Waker>,
+    /// The recomposer whose effect it is, or an effect's task launched: paused with it, its frames
+    /// its frames, cancelled with it.
+    owner: Option<crate::recomposer::Recomposer>,
 }
 
 /// What wakers reach from any thread.
@@ -153,7 +156,10 @@ impl Ord for Timer {
 }
 
 /// A task waiting for the next frame: the frame's time once dispatched.
-type FrameAwaiter = (Rc<Cell<Option<u64>>>, Waker, Option<TaskKey>);
+type FrameAwaiter = (Rc<Cell<Option<u64>>>, Waker, Option<crate::recomposer::Recomposer>);
+
+/// What a frame awaiter's time says when its recomposer's pause held it back.
+const HELD_BACK: u64 = u64::MAX;
 
 struct Executor {
     tasks: Vec<TaskSlot>,
@@ -163,6 +169,8 @@ struct Executor {
     timers: BinaryHeap<Reverse<Timer>>,
     timer_serial: u64,
     frame_awaiters: Vec<FrameAwaiter>,
+    /// See [`add_recomposer_hook`].
+    hooks: usize,
     /// Scratch for polling, kept for its capacity.
     polling: Vec<TaskKey>,
 }
@@ -182,6 +190,7 @@ thread_local! {
         timers: BinaryHeap::new(),
         timer_serial: 0,
         frame_awaiters: Vec::new(),
+            hooks: 0,
         polling: Vec::new(),
     }));
 }
@@ -199,6 +208,30 @@ impl Executor {
         }
     }
 
+    /// The owner of the task being polled.
+    fn current_owner(&mut self) -> Option<crate::recomposer::Recomposer> {
+        let key = CURRENT_TASK.try_with(Cell::get).ok().flatten()?;
+        self.slot(key).and_then(|slot| slot.owner)
+    }
+
+    /// Adds a frame awaiter, replacing its registration if it has one. The first awaiter since the
+    /// last frame asks the host for the next (returned, to ask outside the borrow); the host
+    /// already runs it for the others (it runs frames while `has_frame_awaiters`).
+    fn add_frame_awaiter(
+        &mut self,
+        registered: bool,
+        time: Rc<Cell<Option<u64>>>,
+        waker: &Waker,
+        owner: Option<crate::recomposer::Recomposer>,
+    ) -> Option<Arc<Shared>> {
+        if registered {
+            self.frame_awaiters.retain(|(awaiting, ..)| !Rc::ptr_eq(awaiting, &time));
+        }
+        let first = self.frame_awaiters.is_empty();
+        self.frame_awaiters.push((time, waker.clone(), owner));
+        first.then(|| self.shared.clone())
+    }
+
     fn slot(&mut self, key: TaskKey) -> Option<&mut TaskSlot> {
         self.tasks.get_mut(key.index as usize).filter(|slot| slot.generation == key.generation)
     }
@@ -207,6 +240,10 @@ impl Executor {
 /// Starts `future` as a task on this thread's executor; it first runs at the next
 /// [`run_ready`]. Returns its key, to cancel it.
 fn spawn(future: BoxedTask) -> TaskKey {
+    spawn_owned(future, None)
+}
+
+fn spawn_owned(future: BoxedTask, owner: Option<crate::recomposer::Recomposer>) -> TaskKey {
     let (key, shared) = with_executor(|executor| {
         let key = match executor.free.pop() {
             Some(index) => {
@@ -216,6 +253,7 @@ fn spawn(future: BoxedTask) -> TaskKey {
                 slot.live = true;
                 slot.cancelled = false;
                 slot.waker = None;
+                slot.owner = owner;
                 TaskKey { index, generation: slot.generation }
             }
             None => {
@@ -226,6 +264,7 @@ fn spawn(future: BoxedTask) -> TaskKey {
                     live: true,
                     cancelled: false,
                     waker: None,
+                    owner,
                 });
                 TaskKey { index, generation: 0 }
             }
@@ -481,7 +520,14 @@ pub fn dispatch_frame() -> u64 {
     {
         let _quiet = QuietWakes::new(&shared);
         let mut awaiters = UnwokenAwaiters(awaiters.into_iter());
-        for (time, waker, _) in awaiters.0.by_ref() {
+        for (time, waker, owner) in awaiters.0.by_ref() {
+            // Paused since it began waiting: no frame, and no more asked for it till that's over.
+            if let Some(owner) = owner
+                && owner.frame_awaiter_taken(&waker)
+            {
+                time.set(Some(HELD_BACK));
+                continue;
+            }
             time.set(Some(now));
             waker.wake();
         }
@@ -511,18 +557,31 @@ impl Drop for UnwokenAwaiters {
     }
 }
 
-/// Whether a task waits for a frame: the host should run one.
-/// The tasks waiting for a frame.
-pub(crate) fn frame_awaiting_jobs() -> Vec<Job> {
-    with_executor(|executor| {
-        executor
-            .frame_awaiters
-            .iter()
-            .filter_map(|(.., task)| task.map(|key| Job { key }))
-            .collect()
-    })
+/// Whether a task of no recomposer's waits for a frame: what the default recomposer can tell.
+pub(crate) fn has_unowned_frame_awaiters() -> bool {
+    with_executor(|executor| executor.frame_awaiters.iter().any(|(.., owner)| owner.is_none()))
 }
 
+/// Whether this thread's executor is there still: not at thread exit, after its destructor.
+pub(crate) fn is_there() -> bool {
+    EXECUTOR.try_with(|_| ()).is_ok()
+}
+
+/// The recomposers that may own a task: with none, a frame awaited or a task launched has no one
+/// to tell, which hosts on the default recomposer pay a look at a field for.
+pub(crate) fn add_recomposer_hook() {
+    with_executor(|executor| executor.hooks += 1);
+}
+
+pub(crate) fn remove_recomposer_hook() {
+    let _ = EXECUTOR.try_with(|executor| {
+        if let Ok(mut executor) = executor.try_borrow_mut() {
+            executor.hooks = executor.hooks.saturating_sub(1);
+        }
+    });
+}
+
+/// Whether a task waits for a frame: the host should run one.
 pub fn has_frame_awaiters() -> bool {
     with_executor(|executor| !executor.frame_awaiters.is_empty())
 }
@@ -684,39 +743,81 @@ impl<R, F: FnOnce(u64) -> R> Future for WithFrame<F> {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<R> {
         if let Some(time) = self.time.as_ref().and_then(|time| time.get()) {
-            // Resumed: no longer an awaiter, nothing for its drop to remove.
+            // Resumed, or parked by a pause (and woken, so waiting again): no longer an awaiter,
+            // nothing for its drop to remove.
             self.time = None;
-            let on_frame = self.on_frame.take().expect("polled after it completed");
-            return Poll::Ready(on_frame(time));
+            if time != HELD_BACK {
+                let on_frame = self.on_frame.take().expect("polled after it completed");
+                return Poll::Ready(on_frame(time));
+            }
         }
         assert!(self.on_frame.is_some(), "polled after it completed");
-        // With a recomposer's loop running or paused, its effects' frames are its concern.
-        let hooked = crate::recomposer::frames_hooked();
-        if hooked && crate::recomposer::frame_held_back(context.waker()) {
-            return Poll::Pending;
-        }
         // Polled again while waiting: its registration is replaced (with this poll's waker).
         let registered = self.time.is_some();
         let time = self.time.get_or_insert_with(|| Rc::new(Cell::new(None))).clone();
-        let task = if hooked { CURRENT_TASK.try_with(Cell::get).ok().flatten() } else { None };
-        let shared = with_executor(|executor| {
-            if registered {
-                executor.frame_awaiters.retain(|(awaiting, ..)| !Rc::ptr_eq(awaiting, &time));
+        let (hooked, owner, shared) = with_executor(|executor| {
+            let hooked = executor.hooks != 0;
+            let owner = if hooked { executor.current_owner() } else { None };
+            if owner.is_some() {
+                return (hooked, owner, None);
             }
-            // The first awaiter since the last frame asks the host for the next; the host
-            // already runs it for the others (it runs frames while `has_frame_awaiters`).
-            let first = executor.frame_awaiters.is_empty();
-            executor.frame_awaiters.push((time, context.waker().clone(), task));
-            first.then(|| executor.shared.clone())
+            (hooked, None, executor.add_frame_awaiter(registered, time, context.waker(), None))
         });
         if let Some(shared) = shared {
             shared.wake_host();
         }
-        // A recomposer's loop has a frame to do, for its effects' awaiters to go first.
-        if hooked {
-            crate::recomposer::frame_awaited();
+        if let Some(owner) = owner {
+            self.register_as_effect(owner, registered, context);
+        } else if hooked && !registered {
+            crate::recomposer::frame_awaited(None);
         }
         Poll::Pending
+    }
+}
+
+impl<F> WithFrame<F> {
+    /// [`poll`](Future::poll) of a task of `owner`'s effects: nothing asked while its clock is
+    /// paused, or its awaiter counted on it, its loop told.
+    fn register_as_effect(
+        &mut self,
+        owner: crate::recomposer::Recomposer,
+        registered: bool,
+        context: &Context<'_>,
+    ) {
+        if owner.holds_back_frames(context.waker()) {
+            if let Some(time) = self.time.take().filter(|_| registered) {
+                unregister_frame_awaiter(&time);
+            }
+            return;
+        }
+        let time = self.time.clone().expect("it's just been made");
+        let shared = with_executor(|executor| {
+            executor.add_frame_awaiter(registered, time, context.waker(), Some(owner))
+        });
+        if let Some(shared) = shared {
+            shared.wake_host();
+        }
+        if !registered {
+            crate::recomposer::frame_awaited(Some(owner));
+        }
+    }
+}
+
+/// `time` no longer waits for a frame.
+fn unregister_frame_awaiter(time: &Rc<Cell<Option<u64>>>) {
+    let owner = EXECUTOR
+        .try_with(|executor| {
+            let mut executor = executor.try_borrow_mut().ok()?;
+            let at = executor
+                .frame_awaiters
+                .iter()
+                .position(|(awaiting, ..)| Rc::ptr_eq(awaiting, time))?;
+            executor.frame_awaiters.remove(at).2
+        })
+        .ok()
+        .flatten();
+    if let Some(owner) = owner {
+        owner.frame_awaiter_gone();
     }
 }
 
@@ -724,11 +825,7 @@ impl<F> Drop for WithFrame<F> {
     /// A frame no longer awaited (the task cancelled) isn't asked for.
     fn drop(&mut self) {
         if let Some(time) = &self.time {
-            let _ = EXECUTOR.try_with(|executor| {
-                if let Ok(mut executor) = executor.try_borrow_mut() {
-                    executor.frame_awaiters.retain(|(awaiting, ..)| !Rc::ptr_eq(awaiting, time));
-                }
-            });
+            unregister_frame_awaiter(time);
         }
     }
 }
@@ -755,8 +852,31 @@ impl Job {
 
 /// Starts `future` as a task of no scope (an effect's, a modifier node's), as `launch` on a scope of
 /// its own, without the arena object a [`CoroutineScope`] is: cancel it through its [`Job`].
+///
+/// In a task of a recomposer's effect, it's a task of that effect's recomposer, as a coroutine
+/// launched there has its context: paused, composed for and cancelled with it.
 pub fn launch(future: impl Future<Output = ()> + 'static) -> Job {
+    if let Some(owner) =
+        with_executor(|executor| if executor.hooks == 0 { None } else { executor.current_owner() })
+    {
+        return owner.launch_effect(future);
+    }
     Job { key: spawn(Box::pin(future)) }
+}
+
+/// [`launch`] as a task of `owner`.
+pub(crate) fn launch_owned(
+    future: impl Future<Output = ()> + 'static,
+    owner: crate::recomposer::Recomposer,
+) -> Job {
+    Job { key: spawn_owned(Box::pin(future), Some(owner)) }
+}
+
+/// A job that's already over.
+pub(crate) fn finished_job() -> Job {
+    let key = spawn(Box::pin(async {}));
+    cancel(key);
+    Job { key }
 }
 
 /// Where tasks are launched, as Compose's `CoroutineScope`: a scope from
@@ -803,10 +923,7 @@ impl CoroutineScope {
     pub fn launch(&self, future: impl Future<Output = ()> + 'static) -> Job {
         let inner = self.inner.try_get().filter(|inner| !inner.cancelled.get());
         let Some(inner) = inner else {
-            // A job that is already over.
-            let key = spawn(Box::pin(async {}));
-            cancel(key);
-            return Job { key };
+            return finished_job();
         };
         let job = match inner.recomposer {
             Some(recomposer) => recomposer.launch_effect(future),

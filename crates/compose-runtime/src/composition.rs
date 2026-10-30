@@ -109,28 +109,7 @@ impl Composition {
 
     /// Every scope of it invalid, so its next pass composes it all, as `invalidateAll`.
     pub fn invalidate_all(&self) {
-        with_runtime(|runtime| {
-            let scopes = {
-                let table = &self.data(runtime).table;
-                let mut scopes = Vec::new();
-                let mut stack = vec![table[SENTINEL].first_child];
-                while let Some(group) = stack.pop() {
-                    let mut group = group;
-                    while group != NONE {
-                        if table[group].kind == GroupKind::Restart && !table[group].scope.is_none()
-                        {
-                            scopes.push(table[group].scope);
-                        }
-                        stack.push(table[group].first_child);
-                        group = table[group].next_sibling;
-                    }
-                }
-                scopes
-            };
-            for scope in scopes {
-                crate::runtime::invalidate_scope(runtime, scope);
-            }
-        });
+        with_runtime(|runtime| invalidate_all_scopes(runtime, self.id));
         request_frames();
     }
 
@@ -309,6 +288,27 @@ impl Drop for Composition {
     }
 }
 
+/// Every scope of `id` invalid.
+pub(crate) fn invalidate_all_scopes(runtime: &mut Runtime, id: CompositionId) {
+    let Some(data) = runtime.compositions.get(id) else { return };
+    let table = &data.table;
+    let mut scopes = Vec::new();
+    let mut stack = vec![table[SENTINEL].first_child];
+    while let Some(group) = stack.pop() {
+        let mut group = group;
+        while group != NONE {
+            if table[group].kind == GroupKind::Restart && !table[group].scope.is_none() {
+                scopes.push(table[group].scope);
+            }
+            stack.push(table[group].first_child);
+            group = table[group].next_sibling;
+        }
+    }
+    for scope in scopes {
+        crate::runtime::invalidate_scope(runtime, scope);
+    }
+}
+
 thread_local! {
     static EXIT_GUARD: ExitGuard = const { ExitGuard };
 }
@@ -366,20 +366,26 @@ impl ReusableRoot {
         let root = self.clone();
         Rc::new(move || {
             let content = root.content.borrow().clone();
-            crate::reusable::ReusableContentHost(root.active.get(), || {
-                crate::reusable::ReusableContent(root.reuse_key.get(), || {
-                    // In a scope of its own, inside what pauses, as Compose's content lambda.
-                    if root.pausable {
-                        crate::pausable::PausableContent(|| compose_root(content.clone()));
-                    } else {
-                        compose_root(content.clone());
-                    }
-                });
+            crate::reusable::ReusableRootContent(root.active.get(), root.reuse_key.get(), || {
+                // In a scope of its own, inside what pauses, as Compose's content lambda.
+                if root.pausable {
+                    crate::pausable::PausableContent(|| compose_root(content.clone()));
+                } else {
+                    compose_root(content.clone());
+                }
             });
         })
     }
 
-    fn set(&self, content: impl Fn() + 'static, reuse: bool) {
+    /// # Panics
+    ///
+    /// While a paused composition of it is in progress, as Compose's `clearDeactivated`.
+    fn set(&self, id: CompositionId, content: impl Fn() + 'static, reuse: bool) {
+        with_runtime(|runtime| {
+            if runtime.compositions.get(id).is_some_and(|data| data.has_paused_in_progress()) {
+                misuse(ComposeError::PausedCompositionState)
+            }
+        });
         *self.content.borrow_mut() = Rc::new(content);
         self.active.set(true);
         if reuse {
@@ -407,7 +413,7 @@ impl ReusableComposition {
     /// Sets the content, as [`Composition::set_content`]: deactivated, it comes back reusing what
     /// was there.
     pub fn set_content(&self, content: impl Fn() + 'static) {
-        self.root.set(content, false);
+        self.root.set(self.composition.id, content, false);
         let root = self.root.content();
         self.composition.set_content(move || root());
     }
@@ -416,7 +422,7 @@ impl ReusableComposition {
     /// as empty, so values are remembered anew and the old ones forgotten, reusable nodes are kept
     /// and updated, others replaced.
     pub fn set_content_with_reuse(&self, content: impl Fn() + 'static) {
-        self.root.set(content, true);
+        self.root.set(self.composition.id, content, true);
         let root = self.root.content();
         self.composition.set_content(move || root());
     }
@@ -497,7 +503,7 @@ impl PausableComposition {
         if cancelled {
             misuse(ComposeError::PausedCompositionState)
         }
-        self.reusable.root.set(content, reuse);
+        self.reusable.root.set(self.reusable.composition.id, content, reuse);
         let paused = self.reusable.composition.paused_content(self.reusable.root.content());
         *self.last.borrow_mut() = Some(paused.state());
         paused
@@ -789,7 +795,11 @@ pub(crate) fn apply_work(composed: Composed) {
             }
         }
     };
-    apply_deferred(&applier, &mut deferred, true);
+    // Disposed by another's work in this frame: its changes are cleared, as `dispose` clears them.
+    let disposed = with_runtime(|runtime| {
+        runtime.compositions.get(id).is_none_or(|data| data.disposed || data.closed)
+    });
+    apply_deferred(&applier, &mut deferred, !disposed);
     // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
     let freeing = std::mem::take(&mut finishing.freeing);
     let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));

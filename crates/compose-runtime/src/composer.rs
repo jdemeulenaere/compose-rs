@@ -1201,6 +1201,7 @@ pub(crate) fn apply_node_op(op: NodeOp) {
             }
             _ => Some(op),
         };
+        runtime.node_changes += 1;
         Some((runtime.active_applier(), flushed, now))
     });
     if let Some((applier, flushed, now)) = work {
@@ -1324,7 +1325,10 @@ fn start_branch_group_of(key: u64, branch: u64) {
 /// Resets a node kept by content being reused (`Applier::reuse`), before the pass updates it.
 fn reuse_node(node: NodeRef, region: u32) {
     flush_node_moves();
-    let applier = with_runtime(|runtime| runtime.active_applier());
+    let applier = with_runtime(|runtime| {
+        runtime.node_changes += 1;
+        runtime.active_applier()
+    });
     let mut applier =
         applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
     if region == NO_REGION {
@@ -1373,7 +1377,10 @@ fn insert_node(
     node_type: &str,
 ) -> NodeRef {
     flush_node_moves();
-    let applier = with_runtime(|runtime| runtime.active_applier());
+    let applier = with_runtime(|runtime| {
+        runtime.node_changes += 1;
+        runtime.active_applier()
+    });
     let mut applier =
         applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
     // In a region: made apart, attached when the paused composition is applied.

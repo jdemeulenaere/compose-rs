@@ -66,6 +66,8 @@ pub(crate) struct Runtime {
     /// Slots written and side effects recorded on this thread: what Compose's change list
     /// holds besides node changes. For tests (`platform::recorded_changes`).
     pub recorded_changes: u64,
+    /// Nodes inserted, moved, removed or reused by passes, for [`changes_made`](Self::changes_made).
+    pub node_changes: u64,
     /// The removal of the nodes of a branch group `start_group` just deleted (D715), for
     /// `start_branch_group_of` to apply first.
     pub branch_removal: crate::composer::NodeOp,
@@ -123,6 +125,7 @@ impl Runtime {
             bodies_run: 0,
             state_reads: 0,
             recorded_changes: 0,
+            node_changes: 0,
             branch_removal: crate::composer::NodeOp::None,
             recomposition_counts: None,
             abandoned_groups: false,
@@ -148,6 +151,12 @@ impl Runtime {
     /// frame requests and retired cells wait until it ends.
     pub fn is_busy(&self) -> bool {
         self.active.is_some() || self.finishing > 0 || self.disposing > 0
+    }
+
+    /// What passes changed so far: their changes to the nodes and what Compose's change list holds
+    /// besides, for a frame to know it changed something (`changeCount`).
+    pub fn changes_made(&self) -> u64 {
+        self.node_changes + self.recorded_changes
     }
 
     pub fn is_composing(&self) -> bool {

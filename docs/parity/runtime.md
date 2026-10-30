@@ -22,7 +22,7 @@ What compose-rs's runtime (`crates/compose-runtime`, `crates/compose-macros`) ha
 | `feature:…` | 15 | 235 |
 | `n/a` | 91 | 968 |
 
-579 tests are ported so far (each cites its Compose test in a `// Compose:` comment), in `ported` and `partial` files.
+581 tests are ported so far (each cites its Compose test in a `// Compose:` comment), in `ported` and `partial` files.
 
 The `feature:…` files by feature: computed-state 2 (54), movable-content 3 (54), retain 2 (37), error-traces 1 (33), composition-observer 4 (28), snapshot-isolation 1 (14), composition-data 2 (15). `partial` rows name further features they need for some of their tests (composition-context, composition-api, recomposer, movable-content, host-defaults, snapshot-isolation, computed-state).
 
@@ -270,7 +270,7 @@ From each module's `api/current.txt` (`restricted_current.txt` only to tell what
 | composition-context | `rememberCompositionContext`, `CompositionContext` (`effectCoroutineContext`, `scheduleFrameEndCallback`), the `parent` of `Composition(applier, parent)`, `ControlledComposition(applier, parent)`, `ReusableComposition(applier, parent)`, `PausableComposition(applier, parent)` | `Composition::new(applier)`: compositions are independent, share no locals or invalidations |
 | composition-api | `Composition.dispose`, `.isDisposed`; `ReusableComposition` (`setContentWithReuse`, `deactivate`); `PausableComposition` (`setPausableContent`, `setPausableContentWithReuse`); `ControlledComposition` (`composeContent`, `recompose`, `applyChanges`, `applyLateChanges`, `changesApplied`, `abandonChanges`, `invalidateAll`, `isComposing`, `hasPendingChanges`, `observesAnyOf`, `recordModificationsOf`, `recordReadOf`, `recordWriteOf`, `prepareCompose`, `delegateInvalidations`, `getAndSetShouldPauseCallback`); the name `currentCompositeKeyHashCode` | `Composition::{dispose, is_disposed, invalidate_all}`, dropping disposes; `Composition::reusable`, `ReusableComposition::{set_content, set_content_with_reuse, deactivate}`; `Composition::pausable`, `PausableComposition::{set_pausable_content, set_pausable_content_with_reuse}`; the name `current_composite_key_hash_code`; `Pass::{finish_composing, apply_work}` in the crate (D1300, D1301); `recompose` composes and applies in one step as the hosts' path until C4; `recompose_pausable(_for)` with `platform::PausableContent` regions |
 | recomposer | `Recomposer` (`runRecomposeAndApplyChanges`, `awaitIdle`, `cancel`, `close`, `join`, `currentState`, `State` enum, `hasPendingWork`, `changeCount`, `effectCoroutineContext`, `pauseCompositionFrameClock`, `resumeCompositionFrameClock`, `asRecomposerInfo`, `runningRecomposers`), `RecomposerInfo` (`state`, `hasPendingWork`, `changeCount`, `errorState` (tooling opt-in), `observe` *(exp)*), `withRunningRecomposer`, `RecomposerErrorInformation` (tooling opt-in) | present but `errorState`, `observe`, `RecomposerErrorInformation` and `effectCoroutineContext` (D1301): hosts (`UiHost`, `ComposeTestRule`, the desktop `application`) still drive `Composition::recompose` and the executor, until the ui area's step |
-| frame-end-callback | `Composer.scheduleFrameEndCallback`, `CompositionContext.scheduleFrameEndCallback`, `Recomposer.scheduleFrameEndCallback`, `CancellationHandle` | present, run by `perform_frame` (D1301) |
+| frame-end-callback | `Composer.scheduleFrameEndCallback`, `CompositionContext.scheduleFrameEndCallback`, `Recomposer.scheduleFrameEndCallback`, `CancellationHandle` | present, run by `perform_frame`, on the default recomposer not yet by a host (D1301) |
 | composable-annotations | `@NonSkippableComposable`, `@ReadOnlyComposable`, `@DontMemoize`, `@ExplicitGroupsComposable` | `#[composable(non_restartable)]` only |
 | saveable-gaps (`runtime.saveable`) | `listSaver`, `mapSaver`, `rememberSaveable(vararg inputs, …)` (all three non-deprecated forms take `inputs`), the latest `saver` used for saving, `SaveableStateHolder.keys`, `SaveableStateRegistry(restoredValues, canBeSaved)` with `canBeSaved`, `SaverScope.canBeSaved` | `remember_saveable(_with)` without inputs, keeping the saver of its first composition; `SaveableStateRegistry::new(restored)`; typed `SavedValue`s instead of `canBeSaved` |
 | remember-serializable (`runtime.saveable`) | `rememberSerializable` (4 forms, kotlinx.serialization) | none; the Rust analogue would be serde (a dependency decision) |
@@ -370,19 +370,19 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 - **Depends on:** composition-context for the `parent` argument (an `Option` until then).
 
 ### recomposer (M): done but moving the hosts onto it (D1301)
-- **APIs:** `Recomposer` (state machine `Inactive`/`Idle`/`PendingWork`/`ShuttingDown`/`ShutDown`, `run_recompose_and_apply_changes` as a future, `await_idle`, `cancel`, `close`, `join`, `has_pending_work`, `change_count`, `running_recomposers`), `RecomposerInfo`, `with_running_recomposer`.
-- **Does:** owns the compositions of a thread and recomposes them on the frame clock, with a lifecycle hosts and tests can observe. Today each host loops over `Composition::recompose` itself.
-- **Tests:** `RecomposerTests` (7 of its 12; 3 others ported on `Composition::recompose`), `RecomposerTests.jvm` (1), integration `RecomposerTests.runningRecomposerFlow`, the registration observer tests.
-- **Depends on:** frame-clocks; the hosts (`UiHost`, compose-test, desktop, Android) would move onto it (ui area).
+- **APIs:** `Recomposer` (state machine `Inactive`/`InactivePendingWork`/`Idle`/`PendingWork`/`ShuttingDown`/`ShutDown`, `run_recompose_and_apply_changes` as a future, `await_idle`, `cancel`, `close`, `join`, `has_pending_work`, `change_count`, `running_recomposers`), `RecomposerInfo`, `with_running_recomposer`.
+- **Does:** recomposes its compositions on the frame clock, with a lifecycle hosts and tests can observe. Hosts still loop over `Composition::recompose` until C4.
+- **Tests:** `RecomposerTests` (ported, but the two by threads and `testSubcompositionDisposedInParent`), `RecomposerTests.jvm` (1), integration `RecomposerTests.runningRecomposerFlow`; the registration observer tests wait for `observe`.
+- **Depends on:** the hosts' step (C4). For it: effects of a recomposer whose loop isn't running get frames from the host where Compose's wait for the loop's clock, and pausing the default recomposer holds nothing, as its tasks have no owner (`WindowRecomposer.android.kt:402` pauses on stop).
 
 ### frame-clocks (S): done
-- The `MonotonicFrameClock` trait, `ExecutorFrameClock`, `BroadcastFrameClock`, `PausableMonotonicFrameClock`; tests in crates/compose-runtime/tests/suite/frame_clocks.rs. The recomposer (not there yet) would pause its clock as Compose's.
+- The `MonotonicFrameClock` trait, `ExecutorFrameClock`, `BroadcastFrameClock`, `PausableMonotonicFrameClock`; tests in crates/compose-runtime/tests/suite/frame_clocks.rs. The recomposer pauses its effects' frames itself, on the executor's clock (D1301).
 
 ### frame-end-callback (S): done (D1301)
 - **APIs:** `schedule_frame_end_callback(action) -> CancellationHandle` on the composer, a composition context and the recomposer.
-- **Does:** runs `action` once the current frame's composition and its effects settle (after movable content moves), requesting a frame if idle.
-- **Tests:** `RecomposerFrameEndSchedulingTests` (4; 1 needs movable-content).
-- **Depends on:** recomposer (or the executor's frame loop until then).
+- **Does:** runs `action` at the end of the frame `perform_frame` runs, after its work, asking for a frame if idle, held while its clock is paused. Refused once it's shut down.
+- **Tests:** `RecomposerFrameEndSchedulingTests` (3 of 4; 1 needs movable-content).
+- **Depends on:** the hosts' step (C4): on the default recomposer, nothing runs `perform_frame` until then.
 
 ### movable-content (L; XL with moves across compositions)
 - **APIs:** `movableContentOf` with 0 to 4 parameters, `movableContentWithReceiverOf` with 0 to 3.
