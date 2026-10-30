@@ -25,11 +25,15 @@ pub enum NestedScrollSource {
     SideEffect,
 }
 
+/// A boxed future borrowing for `'a`, as the object-safe suspending functions of the traits here
+/// and in foundation's scrolling return.
+pub type LocalBoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
+
 /// What takes part in the scrolls of the scrollables inside it, as Compose's
 /// `NestedScrollConnection`. Offsets and velocities are in pixels (per second) in the pointer's
 /// direction: positive towards the bottom and the right (a finger moving down, content
-/// scrolling back to its top). Each returns what it consumed. The fling callbacks don't
-/// suspend here: one that animates launches its animation.
+/// scrolling back to its top). Each returns what it consumed. The fling callbacks suspend, as
+/// Compose's: the fling's end waits for them, and what they leave goes on to the next.
 pub trait NestedScrollConnection {
     /// Before the scrollable scrolls by `available`, as `onPreScroll`.
     fn on_pre_scroll(&self, available: Offset, source: NestedScrollSource) -> Offset {
@@ -50,15 +54,15 @@ pub trait NestedScrollConnection {
     }
 
     /// Before the scrollable flings at `available`, as `onPreFling`.
-    fn on_pre_fling(&self, available: Offset) -> Offset {
+    fn on_pre_fling(&self, available: Offset) -> LocalBoxFuture<'_, Offset> {
         let _ = available;
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 
     /// After the scrollable's fling (or its drag's release, without one), as `onPostFling`.
-    fn on_post_fling(&self, consumed: Offset, available: Offset) -> Offset {
+    fn on_post_fling(&self, consumed: Offset, available: Offset) -> LocalBoxFuture<'_, Offset> {
         let _ = (consumed, available);
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 
@@ -126,19 +130,19 @@ impl NestedScrollChain {
     }
 
     /// Offers a fling's velocity before it starts, the outermost first, as `dispatchPreFling`.
-    pub fn pre_fling(&self, available: Offset) -> Offset {
+    pub async fn pre_fling(&self, available: Offset) -> Offset {
         let mut consumed = Offset::ZERO;
         for connection in self.connections.iter() {
-            consumed = consumed + connection.on_pre_fling(available - consumed);
+            consumed = consumed + connection.on_pre_fling(available - consumed).await;
         }
         consumed
     }
 
     /// Tells a fling's end, the innermost first, as `dispatchPostFling`.
-    pub fn post_fling(&self, consumed: Offset, available: Offset) -> Offset {
+    pub async fn post_fling(&self, consumed: Offset, available: Offset) -> Offset {
         let mut taken = Offset::ZERO;
         for connection in self.connections.iter().rev() {
-            taken = taken + connection.on_post_fling(consumed + taken, available - taken);
+            taken = taken + connection.on_post_fling(consumed + taken, available - taken).await;
         }
         taken
     }

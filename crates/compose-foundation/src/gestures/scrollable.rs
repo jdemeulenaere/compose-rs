@@ -21,8 +21,7 @@ use crate::gestures::Orientation;
 use crate::mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 use crate::scroll::same_fling;
 
-/// A boxed future borrowing for `'a`, as the object-safe parts of the scrolling traits return.
-pub type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+pub use compose_ui::LocalBoxFuture;
 
 /// A scroll's block, boxed: what [`ScrollableState::scroll_boxed`] runs with the scope.
 pub type ScrollBlock<'a> = Box<dyn FnOnce(ScrollScope) -> LocalBoxFuture<'a, ()> + 'a>;

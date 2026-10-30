@@ -28,9 +28,9 @@ impl NestedScrollConnection for TakesTheRest {
         self.post_scrolls.borrow_mut().push(available);
         available
     }
-    fn on_post_fling(&self, _: Offset, _: Offset) -> Offset {
+    fn on_post_fling(&self, _: Offset, _: Offset) -> compose_ui::LocalBoxFuture<'_, Offset> {
         self.post_flings.set(self.post_flings.get() + 1);
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 
@@ -152,9 +152,13 @@ impl NestedScrollConnection for Recorder {
         }
         Offset::ZERO
     }
-    fn on_post_fling(&self, _: Offset, available: Offset) -> Offset {
+    fn on_post_fling(
+        &self,
+        _: Offset,
+        available: Offset,
+    ) -> compose_ui::LocalBoxFuture<'_, Offset> {
         self.post_fling.set(Some(available));
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 

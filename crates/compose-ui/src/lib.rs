@@ -199,7 +199,7 @@ pub use modifier::{
     PointerInputModifierNode, ReleaseContext, RowScope, SemanticsModifierNode, SizeSpec,
     WeightScope,
 };
-pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
+pub use nested_scroll::{LocalBoxFuture, NestedScrollConnection, NestedScrollSource};
 pub use node_context::{NodeContext, NodeHandle};
 pub use observer_node::ObserverModifierNode;
 pub use overlay::{PopupPositionProvider, WindowPosition};

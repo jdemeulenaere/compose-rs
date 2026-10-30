@@ -35,6 +35,7 @@ struct Heard {
     pre_side_effect: Cell<f32>,
     pre_fling: Cell<Option<f32>>,
     post_fling: Cell<Option<(f32, f32)>>,
+    post_flings: Cell<u32>,
     /// Counts the fling deltas only once this one heard its fling end.
     after: RefCell<Option<Rc<Heard>>>,
 }
@@ -49,14 +50,15 @@ impl NestedScrollConnection for Heard {
         Offset::ZERO
     }
 
-    fn on_pre_fling(&self, available: Offset) -> Offset {
+    fn on_pre_fling(&self, available: Offset) -> LocalBoxFuture<'_, Offset> {
         self.pre_fling.set(Some(available.y));
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 
-    fn on_post_fling(&self, consumed: Offset, available: Offset) -> Offset {
+    fn on_post_fling(&self, consumed: Offset, available: Offset) -> LocalBoxFuture<'_, Offset> {
         self.post_fling.set(Some((consumed.y, available.y)));
-        Offset::ZERO
+        self.post_flings.set(self.post_flings.get() + 1);
+        Box::pin(async { Offset::ZERO })
     }
 }
 
@@ -248,15 +250,14 @@ impl FlingBehavior for GivesBack {
 #[derive(Default)]
 struct HeardAcross {
     post_fling: Cell<Option<(f32, f32)>>,
+    calls: Cell<u32>,
 }
 
 impl NestedScrollConnection for HeardAcross {
-    fn on_post_fling(&self, consumed: Offset, available: Offset) -> Offset {
-        // The outer scrollable's own fling, of nothing along its axis, is heard too for now.
-        if available.x != 0.0 {
-            self.post_fling.set(Some((consumed.x, available.x)));
-        }
-        available
+    fn on_post_fling(&self, consumed: Offset, available: Offset) -> LocalBoxFuture<'_, Offset> {
+        self.post_fling.set(Some((consumed.x, available.x)));
+        self.calls.set(self.calls.get() + 1);
+        Box::pin(async move { available })
     }
 }
 
@@ -297,6 +298,139 @@ fn a_scrollable_passes_on_the_velocity_across_its_axis() {
     let (consumed, available) = heard.post_fling.get().expect("heard");
     assert_eq!(consumed, 0.0);
     assert!((available - 5000.0).abs() < 250.0, "{available}");
+    assert_eq!(heard.calls.get(), 1, "the outer scrollable's own fling tells it nothing");
+}
+
+/// Scrolls nothing; gives back half.
+#[derive(Default)]
+struct GivesBackHalf {
+    velocities: RefCell<Vec<f32>>,
+}
+
+impl FlingBehavior for GivesBackHalf {
+    fn perform_fling<'a>(&'a self, _: ScrollScope, velocity: f32) -> LocalBoxFuture<'a, f32> {
+        self.velocities.borrow_mut().push(velocity);
+        Box::pin(async move { velocity / 2.0 })
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AbstractScrollableNode.kt, ScrollableNestedScrollConnection.onPostFling returns available - velocityLeft: the dispatch goes on to the parents with the rest, once its fling is over
+#[test]
+fn what_a_parents_fling_left_goes_on_to_its_parents() {
+    let heard = Rc::new(Heard::default());
+    let fling = Rc::new(GivesBackHalf::default());
+    let (around, behavior) = (heard.clone(), fling.clone());
+    let (outer, inner) = (scrollable_state(|_| 0.0), scrollable_state(|_| 0.0));
+    let mut ui = sized(move || {
+        let (parent, child): (Rc<dyn FlingBehavior>, Rc<dyn FlingBehavior>) =
+            (behavior.clone(), Rc::new(GivesBack));
+        let inner = inner.clone();
+        Box!(
+            modifier = Modifier.size(300.dp()).nested_scroll(around.clone()).scrollable_with(
+                outer.clone(),
+                Orientation::Vertical,
+                true,
+                false,
+                Some(parent),
+                None
+            ),
+            {
+                Box!(
+                    modifier = Modifier.size(300.dp()).scrollable_with(
+                        inner.clone(),
+                        Orientation::Vertical,
+                        true,
+                        false,
+                        Some(child.clone()),
+                        None
+                    )
+                );
+            }
+        );
+    });
+    swipe(&mut ui, Offset::new(100.0, 10.0), Offset::new(100.0, 290.0), 100);
+    ui.wait_for_idle();
+    let flung = fling.velocities.borrow()[0];
+    assert_eq!(heard.post_flings.get(), 1, "one hearing, at the end");
+    assert_eq!(heard.post_fling.get(), Some((flung / 2.0, flung / 2.0)));
+}
+
+/// Takes frames until `go`, then gives back all it's given.
+struct Gated {
+    go: Rc<Cell<bool>>,
+    calls: Cell<u32>,
+}
+
+impl Gated {
+    fn new() -> Rc<Gated> {
+        Rc::new(Gated { go: Rc::default(), calls: Cell::new(0) })
+    }
+}
+
+impl FlingBehavior for Gated {
+    fn perform_fling<'a>(&'a self, _: ScrollScope, velocity: f32) -> LocalBoxFuture<'a, f32> {
+        self.calls.set(self.calls.get() + 1);
+        Box::pin(async move {
+            while !self.go.get() {
+                compose_runtime::with_frame_nanos(|_| ()).await;
+            }
+            velocity
+        })
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AbstractScrollableNode.kt, onPostFling: isFlinging, Velocity.Zero left: two children flinging, the second's end finds the parent still flinging the first's velocity, and all is taken without another fling
+#[test]
+fn a_parent_already_flinging_takes_a_velocity_without_another_fling() {
+    let (first, second, parent) = (Gated::new(), Gated::new(), Gated::new());
+    let heard = Rc::new(Heard::default());
+    let (a, b, p, around) = (first.clone(), second.clone(), parent.clone(), heard.clone());
+    let outer = scrollable_state(|_| 0.0);
+    let (left, right) = (scrollable_state(|_| 0.0), scrollable_state(|_| 0.0));
+    let mut ui = sized(move || {
+        let (a, b, left, right) = (a.clone(), b.clone(), left.clone(), right.clone());
+        let parent: Rc<dyn FlingBehavior> = p.clone();
+        Row!(
+            modifier = Modifier.size(300.dp()).nested_scroll(around.clone()).scrollable_with(
+                outer.clone(),
+                Orientation::Vertical,
+                true,
+                false,
+                Some(parent),
+                None
+            ),
+            {
+                let child = |state: DefaultScrollableState, behavior: Rc<Gated>| {
+                    let behavior: Rc<dyn FlingBehavior> = behavior;
+                    Modifier.size(100.dp()).scrollable_with(
+                        state,
+                        Orientation::Vertical,
+                        true,
+                        false,
+                        Some(behavior),
+                        None,
+                    )
+                };
+                Box!(modifier = child(left.clone(), a.clone()));
+                Box!(modifier = child(right.clone(), b.clone()));
+            }
+        );
+    });
+    ui.set_auto_advance(false);
+    swipe(&mut ui, Offset::new(50.0, 5.0), Offset::new(50.0, 95.0), 100);
+    swipe(&mut ui, Offset::new(150.0, 5.0), Offset::new(150.0, 95.0), 100);
+    ui.advance_time_by_frame();
+    assert_eq!((first.calls.get(), second.calls.get()), (1, 1), "both flinging");
+    first.go.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(parent.calls.get(), 1, "the first's velocity");
+    second.go.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(parent.calls.get(), 1, "no other fling");
+    assert_eq!(heard.post_flings.get(), 1, "the second's end, all taken; the first's waits");
+    assert_eq!(heard.post_fling.get().map(|(_, available)| available), Some(0.0));
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, scrollable_nestedFling_shouldCancelWhenHitTheBounds_ifRemoved

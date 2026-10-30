@@ -330,12 +330,16 @@ impl NestedScrollConnection for ScrollConnection {
         }
     }
 
-    fn on_post_fling(&self, _consumed: Offset, _available: Offset) -> Offset {
+    fn on_post_fling(
+        &self,
+        _consumed: Offset,
+        _available: Offset,
+    ) -> compose_ui::LocalBoxFuture<'_, Offset> {
         if self.kind != ScrollKind::Pinned {
             let state = self.state;
             self.scope.launch(async move { state.settle().await });
         }
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 

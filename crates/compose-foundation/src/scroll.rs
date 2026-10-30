@@ -5,7 +5,7 @@
 //! The offset is state: the node reads it while measuring (observed, so a write by the
 //! application scrolls), and writes it when the wheel or a drag scrolls.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::task::Poll;
 
@@ -892,11 +892,12 @@ impl ScrollTarget {
     /// flings with the rest (the fling behavior, the default's spline if none), then they hear how
     /// it ended, as Compose's `onScrollStopped`.
     pub(crate) fn launch_fling(self, velocity: f32) -> Job {
-        let velocity = velocity + self.along(self.chain.pre_fling(self.axis(-velocity)));
         CoroutineScope::new().launch(async move {
+            let pre = self.chain.pre_fling(self.axis(-velocity)).await;
+            let velocity = velocity + self.along(pre);
             // Interrupted, what interrupted it goes on, and no one hears of the fling.
             if let Ok(left) = self.do_fling(velocity).await {
-                self.chain.post_fling(self.axis(-(velocity - left)), self.axis(-left));
+                self.chain.post_fling(self.axis(-(velocity - left)), self.axis(-left)).await;
             }
         })
     }
@@ -921,8 +922,6 @@ pub(crate) struct DragScroller {
     pressed: Vec<(PointerId, Offset)>,
     /// A fling going on: a press stops it.
     fling: Option<Job>,
-    /// A fling with what a scrollable inside left, as a nested-scroll parent.
-    parent_fling: Rc<RefCell<Option<Job>>>,
     /// A fling of this node goes on, as `isFlinging`.
     flinging: Rc<Cell<bool>>,
     /// The node left, for the flings of the time it was attached; a new one when it's reused.
@@ -948,9 +947,8 @@ struct ScrollableConnection {
     scroll_side_effect: Rc<dyn Fn(f32) -> f32>,
     vertical: bool,
     reverse: bool,
-    /// Its fling with what they leave, and the job running it.
+    /// Its fling with what they leave.
     target: ScrollTarget,
-    parent_fling: Rc<RefCell<Option<Job>>>,
 }
 
 impl NestedScrollConnection for ScrollableConnection {
@@ -971,23 +969,26 @@ impl NestedScrollConnection for ScrollableConnection {
     }
 
     /// Flings with what a scrollable inside left, as Compose's `onPostFling`, unless it's flinging
-    /// already. The callback doesn't suspend (D188): it takes all of it now, and what its fling
-    /// leaves goes on to its own parents when it ends, where Compose's returns it to the dispatch.
-    fn on_post_fling(&self, _: Offset, available: Offset) -> Offset {
-        // Its axis only: what goes across is for the parents, as Compose's `doFlingAnimation`.
-        let along = self.target.axis(self.target.along(available));
-        if self.target.flinging.get() {
-            return along;
-        }
-        let target = self.target.clone();
-        let velocity = -target.along(available);
-        let job = CoroutineScope::new().launch(async move {
-            if let Ok(left) = target.do_fling(velocity).await {
-                target.chain.post_fling(target.axis(-(velocity - left)), target.axis(-left));
-            }
-        });
-        *self.parent_fling.borrow_mut() = Some(job);
-        along
+    /// already; returns what it used, along its axis: what goes across is for the parents, as
+    /// `doFlingAnimation`. Its fling interrupted, the fling that called it ends too, as Compose's
+    /// cancellation goes through the suspending call.
+    fn on_post_fling(&self, _: Offset, available: Offset) -> LocalBoxFuture<'_, Offset> {
+        Box::pin(async move {
+            let along = self.target.along(available);
+            let left = if self.target.flinging.get() {
+                0.0
+            } else {
+                match self.target.do_fling(-along).await {
+                    Ok(left) => left,
+                    Err(MutationInterrupted) => {
+                        compose_runtime::platform::cancel_current_task();
+                        std::future::pending().await
+                    }
+                }
+            };
+            // The content's way is the pointer's other.
+            self.target.axis(along + left)
+        })
     }
 }
 
@@ -1027,7 +1028,6 @@ impl DragScroller {
                 vertical,
                 reverse,
                 target,
-                parent_fling: self.parent_fling.clone(),
             }));
         }
         if event.kind == PointerEventType::Scroll {
@@ -1214,17 +1214,19 @@ impl DragScroller {
         self.end_drag(DragInteraction::Cancel);
         if self.drag.take().is_some_and(|drag| drag.scrolling) {
             let chain = self.chain.clone();
-            chain.pre_fling(Offset::ZERO);
-            chain.post_fling(Offset::ZERO, Offset::ZERO);
+            CoroutineScope::new().launch(async move {
+                chain.pre_fling(Offset::ZERO).await;
+                chain.post_fling(Offset::ZERO, Offset::ZERO).await;
+            });
         }
     }
 
-    /// Another state takes over: what the old one's doing stops now (its owner may be going, D240).
+    /// Another state takes over: what the old one's doing stops now (its owner may be going, D240),
+    /// and a fling with what a child left, in the child's task, at its next delta.
     pub(crate) fn stop_fling(&mut self) {
+        self.detached.set(true);
+        self.detached = Rc::default();
         if let Some(fling) = self.fling.take() {
-            fling.cancel();
-        }
-        if let Some(fling) = self.parent_fling.borrow_mut().take() {
             fling.cancel();
         }
         if let Some(wheel) = self.wheel.take() {
@@ -1240,7 +1242,6 @@ impl DragScroller {
         self.detached.set(true);
         self.detached = Rc::default();
         self.fling = None;
-        self.parent_fling.borrow_mut().take();
         if let Some(wheel) = self.wheel.take() {
             wheel.stop();
         }

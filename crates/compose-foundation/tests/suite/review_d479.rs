@@ -30,9 +30,13 @@ impl NestedScrollConnection for Records {
         self.available.borrow_mut().push(available);
         Offset::ZERO
     }
-    fn on_post_fling(&self, _: Offset, available: Offset) -> Offset {
+    fn on_post_fling(
+        &self,
+        _: Offset,
+        available: Offset,
+    ) -> compose_ui::LocalBoxFuture<'_, Offset> {
         self.flung.borrow_mut().push(available);
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 

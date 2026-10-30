@@ -742,10 +742,10 @@ impl NestedScrollConnection for PreScroll {
         if self.greedy.get() { available } else { Offset::ZERO }
     }
 
-    fn on_pre_fling(&self, _: Offset) -> Offset {
+    fn on_pre_fling(&self, _: Offset) -> LocalBoxFuture<'_, Offset> {
         let in_progress = self.in_progress.borrow();
         self.at_pre_fling.set(in_progress.as_ref().map(|in_progress| in_progress()));
-        Offset::ZERO
+        Box::pin(async { Offset::ZERO })
     }
 }
 

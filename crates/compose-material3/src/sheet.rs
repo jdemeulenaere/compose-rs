@@ -516,21 +516,29 @@ impl NestedScrollConnection for SheetConnection {
     }
 
     /// A fling up while the sheet isn't at its top settles the sheet instead.
-    fn on_pre_fling(&self, available: Offset) -> Offset {
-        let Some(inner) = self.state.inner() else { return Offset::ZERO };
-        let anchored = &inner.anchored;
-        if available.y < 0.0 && anchored.offset() > anchored.bounds().0 {
-            (self.settle.borrow())(available.y);
-            available
-        } else {
-            Offset::ZERO
-        }
+    fn on_pre_fling(&self, available: Offset) -> compose_ui::LocalBoxFuture<'_, Offset> {
+        Box::pin(async move {
+            let Some(inner) = self.state.inner() else { return Offset::ZERO };
+            let anchored = &inner.anchored;
+            if available.y < 0.0 && anchored.offset() > anchored.bounds().0 {
+                (self.settle.borrow())(available.y);
+                available
+            } else {
+                Offset::ZERO
+            }
+        })
     }
 
     /// After the content's fling (or a drag let go), the sheet settles.
-    fn on_post_fling(&self, _: Offset, available: Offset) -> Offset {
-        (self.settle.borrow())(available.y);
-        available
+    fn on_post_fling(
+        &self,
+        _: Offset,
+        available: Offset,
+    ) -> compose_ui::LocalBoxFuture<'_, Offset> {
+        Box::pin(async move {
+            (self.settle.borrow())(available.y);
+            available
+        })
     }
 }
 
