@@ -13,6 +13,7 @@ use compose_animation::*;
 use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::platform::DrawOp;
 use compose_ui::{Color, IntOffset, IntSize, Modifier, Offset, TransformOrigin, UnitExt};
 
 fn millis(millis: u64) -> Duration {
@@ -827,4 +828,209 @@ fn a_gesture_back_during_an_exit_keeps_the_content_and_enters_it_from_its_enter_
     assert!(x.get() < 200.0 && x.get() > 0.0, "entering: {}", x.get());
     ui.advance_time_by(millis(200));
     assert_eq!(x.get(), 0.0);
+}
+
+/// The offset's motion after a hand-off with no velocity provider, to an exit with no slide (the
+/// hand-off keeps the last offset): the gesture's `steps`, a frame each, then where it is
+/// three frames after the hand-off, from the last step.
+fn overshoot_after(steps: &[i32]) -> f32 {
+    let preview = mutable_state_of(0);
+    let read = preview.handle();
+    let Fixture { mut ui, state, x, .. } =
+        fixture(true, fade_in_linear(1000), fade_out_linear(1000), move |state| {
+            let state = state.clone();
+            Some(MutableTransform::new(move |scope, _| {
+                if state.pending_target_state().is_some() {
+                    scope.set_offset(IntOffset::new(read.get(), 0));
+                }
+            }))
+        });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    state.defer(false);
+    ui.advance_time_by_frame();
+    ui.wait_for_idle();
+    for step in steps {
+        ui.advance_time_by_frame();
+        preview.set(*step);
+        ui.wait_for_idle();
+    }
+    let last = x.get();
+    assert_eq!(last, *steps.last().unwrap() as f32);
+    state.animate_to(false);
+    for _ in 0..3 {
+        ui.advance_time_by_frame();
+    }
+    x.get() - last
+}
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/DeferredEnterExitTransition.kt, trackSlideVelocity (no test of Compose's without a provider)
+#[test]
+fn the_offset_s_velocity_is_tracked_without_a_provider_in_its_direction() {
+    let right = overshoot_after(&[20, 40, 60, 80, 100]);
+    let left = overshoot_after(&[-20, -40, -60, -80, -100]);
+    assert!(right > 5.0, "goes on to the right: {right}");
+    assert!(left < -5.0, "goes on to the left: {left}");
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker.kt, HorizonMilliseconds (no test of Compose's through a hand-off)
+#[test]
+fn the_offset_s_velocity_counts_its_last_100_ms_only() {
+    let slow: Vec<i32> = (1..=13).map(|step| 3000 + step * 10).collect();
+    let after_fast: Vec<i32> = [1000, 2000, 3000].into_iter().chain(slow.iter().copied()).collect();
+    let after_rest: Vec<i32> = [3000, 3000, 3000].into_iter().chain(slow.iter().copied()).collect();
+    let (fast, rest) = (overshoot_after(&after_fast), overshoot_after(&after_rest));
+    assert!(rest > 3.0, "it's moving: {rest}");
+    assert_eq!(fast, rest, "what came 200 ms before doesn't count");
+}
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/DeferredEnterExitTransition.kt, combinedSlide (no test of Compose's: manual changes add on during the catch-up)
+#[test]
+fn a_manual_change_during_the_catch_up_adds_on_top_of_it() {
+    let at_third_frame = |changed: bool| {
+        let preview = mutable_state_of(50);
+        let read = preview.handle();
+        let Fixture { mut ui, state, x, .. } = fixture(
+            false,
+            Some(slide_in_horizontally_with(linear(1000), |_| 200)),
+            Some(slide_out_horizontally_with(linear(1000), |_| 200)),
+            move |state| {
+                let state = state.clone();
+                Some(MutableTransform::new(move |scope, _| {
+                    if state.pending_target_state().is_some() {
+                        scope.set_offset(IntOffset::new(read.get(), 0));
+                    }
+                }))
+            },
+        );
+        ui.wait_for_idle();
+        ui.set_auto_advance(false);
+        state.animate_to(true);
+        ui.advance_time_by_frame();
+        ui.advance_time_by(millis(500));
+        state.defer(false);
+        ui.advance_time_by_frame();
+        ui.advance_time_by_frame();
+        if changed {
+            preview.set(80);
+        }
+        ui.advance_time_by_frame();
+        x.get()
+    };
+    let (unchanged, changed) = (at_third_frame(false), at_third_frame(true));
+    assert!(unchanged > 50.0, "still catching up from about 100: {unchanged}");
+    close(changed - unchanged, 30.0, 1.0, "the change on top of the catch-up");
+}
+
+// Compose: compose/animation/animation-core/src/commonMain/kotlin/androidx/compose/animation/core/Transition.kt, updateTargetValue (isInterrupted = !isFinished && forcedInitialValue == null; no test of Compose's)
+#[test]
+fn a_hand_off_mid_animation_takes_the_exit_s_spec_not_the_interruption_spring() {
+    let preview = mutable_state_of(0.5f32);
+    let Fixture { mut ui, state, .. } = fixture(
+        false,
+        scale_in_linear(2000),
+        scale_out_linear(1000),
+        scale_while_pending(preview.handle()),
+    );
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    state.animate_to(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(200));
+    state.defer(false);
+    // Caught up, the enter still running under it.
+    ui.advance_time_by(millis(320));
+    ui.wait_for_idle();
+    let full = ui.density().to_px(100.dp());
+    close(width(&mut ui), full * 0.5, 1.0, "the preview's");
+    state.animate_to(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(500));
+    // A second's tween from 0.5 to 0, half way: an interruption's spring would be at 0 by now.
+    close(width(&mut ui), full * 0.25, full * 0.03, "along the exit's tween");
+}
+
+/// The operations drawn with a transform scaling and veiling a box, the veil over the parent or
+/// not, in the deferred phase.
+fn veil_ops(veil_match_parent_size: bool) -> Vec<DrawOp> {
+    let Fixture { mut ui, state, .. } =
+        fixture(true, fade_in_linear(100), fade_out_linear(100), move |_| {
+            Some(
+                MutableTransform::new(|scope, _| {
+                    scope.set_scale(0.5);
+                    scope.set_veil(Color::RED);
+                })
+                .veil_match_parent_size(veil_match_parent_size),
+            )
+        });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    state.defer(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    ui.host().display_list().ops.clone()
+}
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/EnterExitTransition.kt, createEnterExitModifier (shouldVeilMatchParentSize: `activeMutableState.mutableData?.veilMatchParentSize`; no test of Compose's in the deferred phase)
+#[test]
+fn a_transform_s_veil_over_the_parent_is_not_scaled_and_one_not_is() {
+    let position = |ops: &[DrawOp]| {
+        let veil = ops
+            .iter()
+            .position(|op| matches!(op, DrawOp::DrawRect(_, paint) if paint.color == Color::RED));
+        veil.unwrap_or_else(|| panic!("the veil: {ops:?}"))
+    };
+    let transformed = |ops: &[DrawOp]| ops.iter().any(|op| matches!(op, DrawOp::Transform { .. }));
+    let over_parent = veil_ops(true);
+    assert!(!transformed(&over_parent[..position(&over_parent)]), "{over_parent:?}");
+    let over_content = veil_ops(false);
+    assert!(transformed(&over_content[..position(&over_content)]), "{over_content:?}");
+}
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/EnterExitTransition.kt, createGraphicsLayerBlock (forcedInitialValue = transformOriginHandoffValue; no test of Compose's)
+#[test]
+fn the_transform_origin_hands_off_from_the_manual_one() {
+    let state = DeferredTransitionState::new(true);
+    let held = state.clone();
+    let mut ui = compose_test(move || {
+        let transition = remember_deferred_transition(&held, None);
+        let transform = remember(|| {
+            Rc::new(MutableTransform::new(|scope, _| {
+                scope.set_scale(0.5);
+                scope.set_transform_origin(TransformOrigin {
+                    pivot_fraction_x: 0.0,
+                    pivot_fraction_y: 0.0,
+                });
+            }))
+        });
+        transition.DeferredAnimatedVisibility(
+            |visible| *visible,
+            Modifier,
+            fade_in_linear(1000),
+            fade_out_linear(1000),
+            (*transform).clone(),
+            |_| {
+                Box!(modifier = Modifier.size(100.dp()).background(Color::BLUE));
+            },
+        );
+    });
+    ui.wait_for_idle();
+    let pivot = |ui: &mut ComposeTestRule| {
+        ui.host().display_list().ops.iter().find_map(|op| match op {
+            DrawOp::Transform { pivot, .. } => Some(pivot.x),
+            _ => None,
+        })
+    };
+    ui.set_auto_advance(false);
+    state.defer(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(pivot(&mut ui), Some(0.0), "the manual origin");
+    state.animate_to(false);
+    ui.advance_time_by_frame();
+    let centre = ui.density().to_px(50.dp());
+    let handed_off = pivot(&mut ui).expect("a scale");
+    assert!(handed_off < centre / 2.0, "from the manual origin: {handed_off}");
+    ui.advance_time_by(millis(500));
+    close(pivot(&mut ui).expect("a scale"), centre, 1.0, "at the centre, the exit's");
 }

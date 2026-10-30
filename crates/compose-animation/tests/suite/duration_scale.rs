@@ -229,6 +229,8 @@ fn an_infinite_transition_stretches_ends_at_0_and_restarts_when_the_scale_change
     assert_eq!(value.get(), 1000.0);
     ui.advance_time_by(millis(100));
     assert_eq!(value.get(), 1000.0);
+    // It waits for the scale, asking for no frames.
+    assert!(!platform::has_frame_awaiters());
     // Above 0 again: from the start, at the first frame after.
     ui.set_motion_duration_scale(1.0);
     ui.advance_time_by_frame();
@@ -365,4 +367,29 @@ fn a_task_of_its_own_scale_does_not_change_what_runs_around_it() {
 #[should_panic(expected = "negative scale factor")]
 fn a_negative_scale_panics_as_compose_s() {
     compose_ui::set_motion_duration_scale(-1.0);
+}
+
+// Compose: compose/animation/animation-core/src/commonMain/kotlin/androidx/compose/animation/core/InfiniteTransition.kt, run (no test of Compose's: "Restart every time duration scale changes")
+#[test]
+fn an_infinite_transition_restarts_when_the_scale_changes_between_two_non_zero_values() {
+    let value = Rc::new(Cell::new(-1.0f32));
+    let seen = value.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = remember_infinite_transition!();
+        let animated = transition.animate_float(
+            0.0,
+            1000.0,
+            infinite_repeatable(tween(1000).easing(LINEAR_EASING), RepeatMode::Restart),
+        );
+        seen.set(animated.get());
+    });
+    ui.set_motion_duration_scale(2.0);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(320));
+    assert_eq!(value.get(), 160.0);
+    ui.set_motion_duration_scale(4.0);
+    ui.advance_time_by_frame();
+    assert_eq!(value.get(), 0.0, "from the start at the first frame after");
+    ui.advance_time_by_frame();
+    assert_eq!(value.get(), 4.0, "at a quarter speed");
 }
