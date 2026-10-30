@@ -1244,11 +1244,14 @@ fn LazyGrid(
         }
         Some(cell_constraints(vertical, sizes[0]))
     });
+    // Reversed, each ends where the item does, as `LazyGridMeasuredItem.place`.
+    let stacking =
+        if reverse { ItemStacking::AtTheEnd { vertical } } else { ItemStacking::AtTheOrigin };
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            LazyItems(list, items.clone(), holder, fallback, ItemStacking::AtTheOrigin)
+            LazyItems(list, items.clone(), holder, fallback, stacking)
         }),
     );
 }

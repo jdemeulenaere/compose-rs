@@ -2383,7 +2383,7 @@ impl compose_ui::PinnableContainer for ItemPin {
 pub(crate) enum ItemStacking {
     /// At the top start, as large as the largest: a grid's, as Compose's `LazyGridMeasuredItem`.
     AtTheOrigin,
-    /// At the end along the axis, as large as the largest: a reversed staggered grid's, as Compose's
+    /// At the end along the axis, as large as the largest: a reversed grid's, as Compose's
     /// `mainAxisLayoutSize - offset - placeable.mainAxisSize`.
     AtTheEnd { vertical: bool },
     /// One after the other along the axis (the last first, reversed), as Compose's

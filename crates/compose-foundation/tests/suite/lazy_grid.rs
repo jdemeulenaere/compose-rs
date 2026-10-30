@@ -1939,3 +1939,38 @@ fn an_item_prefetched_after_new_spans_is_measured_in_its_new_cell() {
     }
     assert_eq!(*widths.borrow(), vec![100], "item 10 once, across the line it fills");
 }
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/grid/LazyGridMeasuredItem.kt place
+#[test]
+fn reversed_an_items_layouts_end_together() {
+    for lazy in Lazy::grids() {
+        let content = |scope: LazyGridScope| {
+            scope.item(|| {
+                Box!(modifier = Modifier.size(200.dp()).test_tag("0"));
+                Box!(modifier = Modifier.size(100.dp()).test_tag("1"));
+            });
+        };
+        let mut ui = rule(move || {
+            let modifier = axis_size(lazy, 200.0, 400.0);
+            if lazy.vertical {
+                LazyVerticalGrid!(
+                    fixed(2),
+                    modifier = modifier,
+                    reverse_layout = true,
+                    move |scope: LazyGridScope| content(scope)
+                );
+            } else {
+                LazyHorizontalGrid!(
+                    fixed(2),
+                    modifier = modifier,
+                    reverse_layout = true,
+                    move |scope: LazyGridScope| content(scope)
+                );
+            }
+        });
+        assert_eq!(lazy.main_start(&mut ui, "0"), 200.0);
+        assert_eq!(lazy.main_size(&mut ui, "0"), 200.0);
+        assert_eq!(lazy.main_start(&mut ui, "1"), 300.0);
+        assert_eq!(lazy.main_size(&mut ui, "1"), 100.0);
+    }
+}
