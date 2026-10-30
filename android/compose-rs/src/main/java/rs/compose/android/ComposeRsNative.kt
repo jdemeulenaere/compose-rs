@@ -138,6 +138,31 @@ internal object ComposeRsNative {
     /** The user went back: whether a `BackHandler` took it. */
     @JvmStatic external fun onBackPressed(host: Long): Boolean
 
+    /** A back gesture starts (API 34+): its end is [onBackPressed] or [onBackCancelled]. */
+    @JvmStatic
+    external fun onBackStarted(
+        host: Long,
+        swipeEdge: Int,
+        progress: Float,
+        touchX: Float,
+        touchY: Float,
+        frameTimeMillis: Long,
+    )
+
+    /** It goes on. */
+    @JvmStatic
+    external fun onBackProgressed(
+        host: Long,
+        swipeEdge: Int,
+        progress: Float,
+        touchX: Float,
+        touchY: Float,
+        frameTimeMillis: Long,
+    )
+
+    /** It's given up. */
+    @JvmStatic external fun onBackCancelled(host: Long)
+
     /** Android's `Configuration`, as the content's `LOCAL_CONFIGURATION`. */
     @JvmStatic
     external fun setConfiguration(

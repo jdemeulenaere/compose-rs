@@ -9,6 +9,7 @@ The inventory of Compose's animation and navigation tests and public API against
   - `compose/animation/animation-core` (Animatable, `animate*AsState`, Transition, specs, easing, converters, decay, infinite transitions);
   - `compose/animation/animation` (AnimatedVisibility, AnimatedContent, Crossfade, `animateContentSize`, enter/exit transitions, shared transitions, `animateBounds`, spline decay);
   - `compose/animation/animation-graphics` (animated vector drawables).
+- **Back:** `navigationevent/navigationevent`, `navigationevent/navigationevent-compose` and `activity/activity-compose`'s `BackHandler` and `PredictiveBackHandler`, what Navigation 3's back goes through.
 - **Navigation:** both libraries exist in the checkout, and **Navigation 3 is the one in scope** (D704, the user's decision):
   - Navigation Compose: `navigation/navigation-compose`, on top of `navigation-runtime`'s `NavController`: inventoried below, all `n/a: replaced by Navigation 3 (D704)`;
   - Navigation 3: `navigation3/navigation3-runtime` and `navigation3/navigation3-ui`.
@@ -27,16 +28,16 @@ The inventory of Compose's animation and navigation tests and public API against
 
 ## Totals
 
-**95 test files, 1,021 `@Test` methods.**
+**108 test files, 1,219 `@Test` methods.**
 
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 33 | 260 |
+| `ported` | 41 | 423 |
 | `port` | 0 | 0 |
-| `partial` | 6 | 59 |
+| `partial` | 7 | 68 |
 | `feature:<name>` | 46 | 574 |
-| `n/a` | 10 | 128 |
+| `n/a` | 14 | 154 |
 
 By module:
 
@@ -48,6 +49,7 @@ By module:
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
 | navigation3-ui | 15 | 121 | 0 | 0 | 0 | 0 | 15 / 121 | 0 |
+| navigationevent, activity-compose's back | 13 | 198 | 0 | 8 / 163 | 0 | 1 / 9 | 0 | 4 / 26 |
 
 `@Test` methods by missing feature (a file counts under its main blocker; the notes name the others):
 
@@ -64,10 +66,11 @@ By module:
 | captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
 
-Three parts:
+Four parts:
 
 - **Animation** (50 files, 472 tests): 33 files `ported` (260 tests), 6 `partial` (59), 11 waiting on features (153), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the ui path iterator (path-easing), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
-- **Navigation 3** (36 files, 428 tests): 35 files waiting on its four features (421 tests), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3. Predictive back is one of its dependencies.
+- **Navigation 3** (36 files, 428 tests): 35 files waiting on its four features (421 tests), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3.
+- **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
 ## Test files
@@ -179,6 +182,19 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 93 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt` | 22 | z-order and frames of predictive back, pops, duplicates, scenes (screenshots) | `feature:nav3-ui` | z-order via the display list rather than goldens |
 | 94 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayTest.kt` | 21 | NavDisplay: content, dialogs, back, saved state per entry, back stack swaps, duplicates, multi-pane | `feature:nav3-ui` |  |
 | 95 | `navigation3/navigation3-ui/src/commonTest/kotlin/androidx/navigation3/scene/SceneInfoTest.kt` | 4 | `SceneInfo` title/url metadata | `feature:nav3-ui` |  |
+| 96 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventDispatcherTest.kt` | 102 | the dispatcher: gestures, priorities, trees, fallbacks, disposal, transition state and history | ported | `dispatcher.rs` of `compose-navigation-event`'s suite |
+| 97 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventInputTest.kt` | 10 | an input with no dispatcher, and what it hears | ported | `input.rs` |
+| 98 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/DirectNavigationEventInputTest.kt` | 9 | a direct input's calls | partial | 8 ported, `input.rs`; `navigationMethod_ifNameChanged_shouldFail` checks signatures by reflection: n/a |
+| 99 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventHistoryTest.kt` | 7 | the history's merged places, equality, printing | ported | `input.rs`; its hash isn't there, an info being any value with `==` |
+| 100 | `navigationevent/navigationevent/src/androidDeviceTest/kotlin/androidx/navigationevent/NavigationEventTest.kt` | 4 | `BackEvent` to `NavigationEvent` and back | n/a: `Back.kt` passes the fields on; checked on the Pixel (D845) |  |
+| 101 | `navigationevent/navigationevent/src/androidDeviceTest/kotlin/androidx/navigationevent/OnBackInvokedInputTest.kt` | 14 | `OnBackInvokedInput` registering and dispatching | n/a: `Back.kt`'s `PlatformBack`, in Kotlin; checked on the Pixel (D845) |  |
+| 102 | `navigationevent/navigationevent/src/androidDeviceTest/kotlin/androidx/navigationevent/ViewTreeNavigationEventDispatcherTest.kt` | 6 | the owner on Android's view tree | n/a: a host provides its dispatcher |  |
+| 103 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/NavigationEventHandlerTest.kt` | 10 | the composable handler | ported | `composition.rs` |
+| 104 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/NavigationEventDispatcherOwnerTest.kt` | 9 | `rememberNavigationEventDispatcherOwner` | ported | `composition.rs` |
+| 105 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/RememberNavigationEventStateTest.kt` | 3 | `rememberNavigationEventState` | ported | `composition.rs` |
+| 106 | `navigationevent/navigationevent-compose/src/androidDeviceTest/kotlin/androidx/navigationevent/compose/LocalNavigationEventDispatcherOwnerTest.kt` | 2 | the local's fallback to the context and the view tree | n/a: a host provides its dispatcher |  |
+| 107 | `activity/activity-compose/src/androidTest/java/androidx/activity/compose/BackHandlerTest.kt` | 4 | `BackHandler` | ported | `predictive_back.rs` |
+| 108 | `activity/activity-compose/src/androidTest/java/androidx/activity/compose/PredictiveBackHandlerTest.kt` | 18 | `PredictiveBackHandler`: start, progress, completion, cancellation, order, lifecycle | ported | `predictive_back.rs`; a task's cancelled wait as D845 says |
 
 ## Public API surface
 
@@ -613,16 +629,10 @@ One entry per feature. Sizes:
 
 ### Navigation
 
-#### predictive-back (L, not exp.)
+#### predictive-back (L, not exp.): the host's side done (D845)
 
-- **API:**
-  - back with progress, swipe edge and cancel: `PredictiveBackHandler` in activity-compose, `NavigationEventHandler` in the `navigationevent` library;
-  - `NavDisplay` seeking its transition by it: `predictivePopTransitionSpec`, `NavigationBackHandler`, `rememberNavigationEventState`, in nav3-ui.
-- **What it does:** on Android, the back gesture previews the screen underneath and commits or cancels.
-- **Tests:** the `PredictiveBackHandler` tests of activity-compose where they're in the checkout, then the predictive-back tests of navigation3-ui (`NavDisplayPredictiveBackTest`, `NavDisplayInfoTest`, `NavigationBackHandlerTest`, `RememberNavigationEventStateTest`).
-- **Dependencies:**
-  - the ui/platform area: the Android host delivering back progress, and `BackHandler` growing a progress form. docs/11 notes there's no `PredictiveBackHandler`;
-  - seekable-transition (done).
+- **Done:** `compose-navigation-event` (`NavigationEventDispatcher`, `NavigationEventHandler`, `NavigationBackHandler`, `NavigationEventState`, inputs), `BackHandler` and `PredictiveBackHandler` on it, and the Android host's back progress (`OnBackAnimationCallback`, `OnBackPressedCallback`).
+- **Left:** `NavDisplay` seeking its transition by it: `predictivePopTransitionSpec`, and Navigation 3's `NavigationBackHandler(sceneState, …)` and `rememberNavigationEventState(sceneState)`, in nav3-ui, with their tests (`NavDisplayPredictiveBackTest`, `NavDisplayInfoTest`, `NavigationBackHandlerTest`, `RememberNavigationEventStateTest`). Material 3's own use of the progress is in its ledger.
 
 #### Navigation Compose's features: n/a
 
@@ -662,7 +672,7 @@ Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting b
 7. **The animation-core additions:** decay-animation (M), then suspend-animate (M) and motion-duration-scale (S–M).
 8. **seekable-transition (L)**.
 9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental, done).
-10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work.
+10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work: the host's side done (D845), `NavDisplay`'s with nav3-ui.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
 12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last or never. It replaces `compose-navigation`.
 13. **After ui lookahead (and movable content) lands in its own area:**
@@ -692,7 +702,7 @@ Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting b
 | `captureToImage()` and pixel or screenshot assertions | `capture_to_image` with `assert_pixels` (D904), or the display list (alphas and layer transforms, as `crossfade.rs` `alphas()` does; z-order) |
 | `CompositionLocalProvider(LocalDensity provides Density(1f))` | the default test host is at density 1; else `compose_test_with(size, Density(…), …)` |
 | `StateRestorationTester` / activity recreation | `host.save_state()` → `to_bytes` → a new rule with `restore_state` (see `recreate()` in `compose-navigation/tests/suite/navigation.rs`) |
-| `Espresso.pressBack()` / `onBackPressedDispatcher.onBackPressed()` | `ui.host().on_back_pressed()`; no predictive-back progress events |
+| `Espresso.pressBack()` / `onBackPressedDispatcher.onBackPressed()` | `ui.host().on_back_pressed()`; a gesture with `on_back_started`, `on_back_progressed`, `on_back_cancelled`, or a `DirectNavigationEventInput` |
 | `performTouchInput { swipe… }` | the touch injection scope (D903) |
 | recomposition counts (`TransitionTest.testRecompositionCountWhenPassingTransition`) | `recomposition_counts()` / `track_recompositions` |
 | `DetectLeaksAfterTestSuccess` | n/a |

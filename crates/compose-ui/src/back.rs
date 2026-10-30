@@ -1,9 +1,10 @@
-//! Back navigation, as AndroidX's `OnBackPressedDispatcher` and `BackHandler`: the host owns a
-//! dispatcher ([`LOCAL_ON_BACK_PRESSED_DISPATCHER`]) where `BackHandler`s register; a back
-//! press (Android's back gesture or button, Escape on desktop when nothing focused takes it)
-//! calls the innermost enabled one. The platform asks [`has_enabled_callbacks`] after each
-//! frame, so it intercepts back only while a handler wants it (otherwise Android's activity
-//! finishes, as usual).
+//! Back navigation, as AndroidX's `OnBackPressedDispatcher`, `BackHandler` and
+//! `PredictiveBackHandler`, on navigation events ([`compose_navigation_event`]): the host owns a
+//! dispatcher (`LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER`) where handlers register, and an input a
+//! back press or gesture comes through (Android's back gesture or button, Escape on desktop when
+//! nothing focused takes it), which goes to the innermost enabled one. The platform asks
+//! [`has_enabled_callbacks`] after each frame, so it intercepts back only while a handler wants it
+//! (otherwise Android's activity finishes, as usual).
 //!
 //! Handlers in a dialog or a focusable popup come first, as Compose's dialogs are windows of
 //! their own that get back before the window beneath; among the others, the one registered last
@@ -12,87 +13,78 @@
 //! [`has_enabled_callbacks`]: OnBackPressedDispatcher::has_enabled_callbacks
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
+use compose_lifecycle::{LifecycleStartEffect, LifecycleStartStopEffectScope};
+use compose_navigation_event::{
+    DirectNavigationEventInput, LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER, NavigationEvent,
+    NavigationEventCallbacks, NavigationEventDispatcher, NavigationEventHandler,
+    NavigationEventInfo,
+};
 use compose_runtime::{
-    Callback, CompositionLocal, RememberObserver, SideEffect, composable, remember_observer,
+    Callback, CompositionLocal, CoroutineScope, DisposableEffect, Job, SideEffect, composable,
+    current_composite_key_hash, remember_coroutine_scope, remember_keyed,
 };
 
-/// A registered handler.
-struct BackCallback {
-    enabled: Cell<bool>,
-    /// How many dialogs or focusable popups it's in: the deepest goes first.
-    layer: u32,
-    /// The order it was registered in: the last goes first, within a layer.
-    order: u64,
-    on_back: RefCell<Callback>,
-}
+/// What `PredictiveBackHandler` gets of a gesture, as AndroidX's `BackEventCompat`.
+pub type BackEventCompat = NavigationEvent;
 
-#[derive(Default)]
-struct DispatcherInner {
-    callbacks: RefCell<Vec<Rc<BackCallback>>>,
-    next_order: Cell<u64>,
-}
-
-/// Where `BackHandler`s register, as AndroidX's `OnBackPressedDispatcher`; owned by the host.
-#[derive(Clone, Default)]
+/// How back reaches the host's handlers, as AndroidX's `OnBackPressedDispatcher` where it's a layer
+/// over a `NavigationEventDispatcher`: owned by the host.
+#[derive(Clone)]
 pub struct OnBackPressedDispatcher {
-    inner: Rc<DispatcherInner>,
+    input: DirectNavigationEventInput,
 }
 
 impl compose_runtime::ComposeArg for OnBackPressedDispatcher {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.input == other.input
     }
 }
 
 impl OnBackPressedDispatcher {
-    pub fn new() -> OnBackPressedDispatcher {
-        OnBackPressedDispatcher::default()
+    /// With an input of its own on `dispatcher`.
+    pub fn new(dispatcher: &NavigationEventDispatcher) -> OnBackPressedDispatcher {
+        let input = DirectNavigationEventInput::new();
+        dispatcher.add_input(&input);
+        OnBackPressedDispatcher { input }
     }
 
     /// Whether a handler is enabled: a back press would go to it, so the platform intercepts it.
     pub fn has_enabled_callbacks(&self) -> bool {
-        self.inner.callbacks.borrow().iter().any(|callback| callback.enabled.get())
+        self.input.has_enabled_back_handlers()
     }
 
-    /// Calls the innermost enabled handler, as `onBackPressed`. Returns whether one was.
+    /// Back is pressed, or a gesture ends, the innermost enabled handler taking it, as
+    /// `onBackPressed`. Returns whether one was.
     pub fn on_back_pressed(&self) -> bool {
-        let handler = self
-            .inner
-            .callbacks
-            .borrow()
-            .iter()
-            .filter(|callback| callback.enabled.get())
-            .max_by_key(|callback| (callback.layer, callback.order))
-            .map(|callback| callback.on_back.borrow().clone());
-        // Called without the borrow: it may compose away handlers (it writes state).
-        match handler {
-            Some(handler) => {
-                handler();
-                true
-            }
-            None => false,
-        }
+        let handled = self.has_enabled_callbacks();
+        self.input.back_completed();
+        handled
     }
 
-    fn add(&self, callback: &Rc<BackCallback>) {
-        self.inner.callbacks.borrow_mut().push(callback.clone());
+    /// A back gesture starts, as `dispatchOnBackStarted`.
+    pub fn dispatch_on_back_started(&self, event: BackEventCompat) {
+        self.input.back_started(event);
     }
 
-    fn remove(&self, callback: &Rc<BackCallback>) {
-        self.inner.callbacks.borrow_mut().retain(|other| !Rc::ptr_eq(other, callback));
+    /// It goes on, as `dispatchOnBackProgressed`.
+    pub fn dispatch_on_back_progressed(&self, event: BackEventCompat) {
+        self.input.back_progressed(event);
     }
 
-    fn next_order(&self) -> u64 {
-        let order = self.inner.next_order.get();
-        self.inner.next_order.set(order + 1);
-        order
+    /// It's given up, as `dispatchOnBackCancelled`.
+    pub fn dispatch_on_back_cancelled(&self) {
+        self.input.back_cancelled();
     }
 }
 
-/// The dispatcher `BackHandler` registers with, as Compose's `LocalOnBackPressedDispatcherOwner`:
-/// the host's, or none (a handler then does nothing).
+/// How back reaches this content, as Compose's `LocalOnBackPressedDispatcherOwner`: the host's, or
+/// none.
 pub static LOCAL_ON_BACK_PRESSED_DISPATCHER: CompositionLocal<Option<OnBackPressedDispatcher>> =
     CompositionLocal::new("LocalOnBackPressedDispatcher", || None);
 
@@ -107,53 +99,313 @@ pub static LOCAL_BACK_HANDLERS_ENABLED: CompositionLocal<bool> =
 pub(crate) static LOCAL_BACK_LAYER: CompositionLocal<u32> =
     CompositionLocal::new("LocalBackLayer", || 0);
 
-/// Registered while in the composition.
-struct BackRegistration {
-    dispatcher: Option<OnBackPressedDispatcher>,
-    callback: Rc<BackCallback>,
+/// What a handler tells of itself, as AndroidX's `BackHandlerInfo`: its place.
+#[derive(PartialEq, Debug)]
+struct BackHandlerInfo(u64);
+
+/// Keeps `handler` on the dispatcher, enabled while `enabled` and the lifecycle's at least started,
+/// as `BackHandler` and `PredictiveBackHandler` do both.
+fn registered(
+    dispatcher: NavigationEventDispatcher,
+    handler: NavigationEventHandler,
+    enabled: bool,
+    on_enabled: impl Fn(bool) + 'static,
+) {
+    let on_enabled = Rc::new(on_enabled);
+    let (enabling, stopping) = (on_enabled.clone(), on_enabled);
+    LifecycleStartEffect!(
+        (enabled, handler.id()),
+        effects = move |scope: LifecycleStartStopEffectScope| {
+            enabling(enabled);
+            let stopping = stopping.clone();
+            scope.on_stop_or_dispose(move |_| stopping(false))
+        }
+    );
+    let layer = LOCAL_BACK_LAYER.current();
+    DisposableEffect((dispatcher.clone(), handler.id()), move |scope| {
+        dispatcher.add_handler_in_layer(&handler, layer);
+        scope.on_dispose(move || handler.remove())
+    });
 }
 
-impl RememberObserver for BackRegistration {
-    fn on_remembered(&self) {
-        if let Some(dispatcher) = &self.dispatcher {
-            dispatcher.add(&self.callback);
-        }
-    }
+struct BackCallbacks {
+    on_back: Rc<RefCell<Callback>>,
+}
 
-    fn on_forgotten(&self) {
-        if let Some(dispatcher) = &self.dispatcher {
-            dispatcher.remove(&self.callback);
-        }
+impl NavigationEventCallbacks for BackCallbacks {
+    fn on_back_completed(&self, _: &NavigationEventHandler) {
+        let on_back = self.on_back.borrow().clone();
+        on_back();
     }
 }
 
 /// Calls `on_back` when the user goes back (Android's back gesture or button, Escape on
 /// desktop) while `enabled`, as AndroidX's `BackHandler`: the innermost enabled handler gets
 /// it (those in dialogs and focusable popups first, then the one composed last). While any is
-/// enabled, back doesn't leave the app. Where [`LOCAL_BACK_HANDLERS_ENABLED`] is `false`, it's
-/// disabled.
+/// enabled, back doesn't leave the app. It's disabled while its lifecycle isn't started, and where
+/// [`LOCAL_BACK_HANDLERS_ENABLED`] is `false`.
 #[composable]
 #[allow(non_snake_case)]
 pub fn BackHandler(#[default(true)] enabled: bool, on_back: impl Fn() + 'static) {
+    let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
     let enabled = enabled && LOCAL_BACK_HANDLERS_ENABLED.current();
-    let registration = remember_observer(|| {
-        let dispatcher = LOCAL_ON_BACK_PRESSED_DISPATCHER.current();
-        let layer = LOCAL_BACK_LAYER.current();
-        let order = dispatcher.as_ref().map_or(0, OnBackPressedDispatcher::next_order);
-        BackRegistration {
-            dispatcher,
-            callback: Rc::new(BackCallback {
-                enabled: Cell::new(enabled),
-                layer,
-                order,
-                on_back: RefCell::new(on_back.clone()),
-            }),
-        }
-    });
-    let callback = registration.callback.clone();
+    let key = current_composite_key_hash();
+    let (handler, current) = {
+        let on_back = on_back.clone();
+        remember_keyed((dispatcher.clone(), key), move || {
+            let current = Rc::new(RefCell::new(on_back));
+            let handler = NavigationEventHandler::new(
+                NavigationEventInfo::new(BackHandlerInfo(key)),
+                false,
+                false,
+                BackCallbacks { on_back: current.clone() },
+            );
+            (handler, current)
+        })
+    };
     // Once the pass is applied, as Compose's `SideEffect` updating the callback.
-    SideEffect(move || {
-        callback.enabled.set(enabled);
-        *callback.on_back.borrow_mut() = on_back;
-    });
+    SideEffect(move || *current.borrow_mut() = on_back);
+    let enabling = handler.clone();
+    registered(dispatcher, handler, enabled, move |enabled| enabling.set_back_enabled(enabled));
+}
+
+/// A gesture given up, what [`BackProgress::next`] says, as Compose's `CancellationException`
+/// "onBack cancelled". A handler's task ends at its next wait after that.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BackCancelled;
+
+impl std::fmt::Display for BackCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("onBack cancelled")
+    }
+}
+
+impl std::error::Error for BackCancelled {}
+
+/// How many events wait for the task; more are dropped, as `Channel.BUFFERED` with `trySend`.
+const BUFFERED: usize = 64;
+
+/// A gesture's channel, as `activeChannel`, and the task it wakes.
+#[derive(Default)]
+struct BackChannel {
+    events: RefCell<VecDeque<BackEventCompat>>,
+    closed: Cell<bool>,
+    cancelled: Cell<bool>,
+    waker: RefCell<Option<Waker>>,
+    collected: Cell<bool>,
+}
+
+impl BackChannel {
+    fn wake(&self) {
+        if let Some(waker) = self.waker.borrow_mut().take() {
+            waker.wake();
+        }
+    }
+
+    fn send(&self, event: BackEventCompat) {
+        let mut events = self.events.borrow_mut();
+        if events.len() < BUFFERED {
+            events.push_back(event);
+            drop(events);
+            self.wake();
+        }
+    }
+
+    fn close(&self) {
+        self.closed.set(true);
+        self.wake();
+    }
+
+    fn cancel(&self) {
+        self.cancelled.set(true);
+        self.wake();
+    }
+}
+
+/// A gesture's progress, what [`PredictiveBackHandler`]'s `on_back` is given, as Compose's
+/// `Flow<BackEventCompat>`, and which it must collect: its events, ended when the gesture completes
+/// (back is taken), or with [`BackCancelled`] when it's given up.
+pub struct BackProgress {
+    channel: Rc<BackChannel>,
+}
+
+impl BackProgress {
+    /// The next event, as a collector's next value: `None` when the gesture completes.
+    pub async fn next(&mut self) -> Result<Option<BackEventCompat>, BackCancelled> {
+        self.channel.collected.set(true);
+        std::future::poll_fn(|context| {
+            let channel = &self.channel;
+            if channel.cancelled.get() {
+                return Poll::Ready(Err(BackCancelled));
+            }
+            if let Some(event) = channel.events.borrow_mut().pop_front() {
+                return Poll::Ready(Ok(Some(event)));
+            }
+            if channel.closed.get() {
+                return Poll::Ready(Ok(None));
+            }
+            *channel.waker.borrow_mut() = Some(context.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+
+    /// Runs `on_event` on each event until the gesture ends, as `collect { … }`: `Ok` when it
+    /// completes, `Err` when it's given up.
+    pub async fn collect(
+        mut self,
+        mut on_event: impl FnMut(BackEventCompat),
+    ) -> Result<(), BackCancelled> {
+        while let Some(event) = self.next().await? {
+            on_event(event);
+        }
+        Ok(())
+    }
+}
+
+type BoxedFuture = Pin<Box<dyn Future<Output = ()>>>;
+type OnBack = Rc<dyn Fn(BackProgress) -> BoxedFuture>;
+
+/// A gesture's task, as `launchNewGesture`: it doesn't start if the gesture's given up first, ends
+/// at its next wait once it's given up (Compose's cancelled job), and panics if the handler never
+/// collected.
+async fn gesture(on_back: OnBack, channel: Rc<BackChannel>, enabled: Rc<dyn Fn() -> bool>) {
+    if channel.cancelled.get() || !enabled() {
+        return;
+    }
+    let mut future = on_back(BackProgress { channel: channel.clone() });
+    std::future::poll_fn(move |context: &mut Context<'_>| {
+        if let Poll::Ready(()) = future.as_mut().poll(context) {
+            assert!(channel.collected.get(), "You must collect the progress flow");
+            return Poll::Ready(());
+        }
+        if channel.cancelled.get() {
+            return Poll::Ready(());
+        }
+        // What it waits for, or this: a gesture given up ends it whatever it waits for.
+        *channel.waker.borrow_mut() = Some(context.waker().clone());
+        Poll::Pending
+    })
+    .await;
+}
+
+/// `ComposePredictiveBackHandler`, its state for a gesture at a time.
+struct PredictiveState {
+    scope: CoroutineScope,
+    handler_enabled: Rc<Cell<bool>>,
+    on_back: RefCell<OnBack>,
+    active: RefCell<Option<(Rc<BackChannel>, Job)>>,
+    is_predictive_back: Cell<bool>,
+}
+
+impl PredictiveState {
+    fn launch_new_gesture(&self) {
+        let channel = Rc::new(BackChannel::default());
+        let enabled = self.handler_enabled.clone();
+        let job = self.scope.launch(gesture(
+            self.on_back.borrow().clone(),
+            channel.clone(),
+            Rc::new(move || enabled.get()),
+        ));
+        *self.active.borrow_mut() = Some((channel, job));
+    }
+
+    fn cancelled(&self) {
+        let active = self.active.borrow_mut().take();
+        if let Some((channel, _)) = active {
+            channel.cancel();
+        }
+        self.is_predictive_back.set(false);
+    }
+
+    /// Mirrors `enabled`: disabled with a task that's over, what's left of it goes, as its setter.
+    fn set_enabled(&self, handler: &NavigationEventHandler, enabled: bool) {
+        let over = self.active.borrow().as_ref().is_some_and(|(_, job)| !job.is_active());
+        if !enabled && self.handler_enabled.get() && over {
+            self.cancelled();
+        }
+        self.handler_enabled.set(enabled);
+        handler.set_back_enabled(enabled);
+    }
+}
+
+struct PredictiveCallbacks {
+    state: Rc<PredictiveState>,
+}
+
+impl NavigationEventCallbacks for PredictiveCallbacks {
+    fn on_back_started(&self, _: &NavigationEventHandler, _: &NavigationEvent) {
+        // If the last gesture wasn't ended.
+        self.state.cancelled();
+        if self.state.handler_enabled.get() {
+            self.state.is_predictive_back.set(true);
+            self.state.launch_new_gesture();
+        }
+    }
+
+    fn on_back_progressed(&self, _: &NavigationEventHandler, event: &NavigationEvent) {
+        if let Some((channel, _)) = &*self.state.active.borrow() {
+            channel.send(*event);
+        }
+    }
+
+    fn on_back_completed(&self, _: &NavigationEventHandler) {
+        let state = &self.state;
+        // Not predictive: its completion goes through a session of its own.
+        if state.active.borrow().is_some() && !state.is_predictive_back.get() {
+            state.cancelled();
+        }
+        if state.active.borrow().is_none() {
+            state.is_predictive_back.set(false);
+            state.launch_new_gesture();
+        }
+        if let Some((channel, _)) = &*state.active.borrow() {
+            channel.close();
+        }
+        state.is_predictive_back.set(false);
+    }
+
+    fn on_back_cancelled(&self, _: &NavigationEventHandler) {
+        self.state.cancelled();
+    }
+}
+
+/// Takes back with its progress, as AndroidX's `PredictiveBackHandler`: each gesture while `enabled`
+/// runs `on_back` as a task of this place, with the gesture's [`BackProgress`], which it must
+/// collect. Where it comes in the handlers, and when it's disabled, as [`BackHandler`]. A press with
+/// no gesture runs it too, with no events.
+#[composable]
+#[allow(non_snake_case)]
+pub fn PredictiveBackHandler<F: Future<Output = ()> + 'static>(
+    #[default(true)] enabled: bool,
+    on_back: impl Fn(BackProgress) -> F + 'static,
+) {
+    let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
+    let enabled = enabled && LOCAL_BACK_HANDLERS_ENABLED.current();
+    let on_back: OnBack = Rc::new(move |progress| Box::pin(on_back(progress)));
+    let scope = remember_coroutine_scope();
+    let key = current_composite_key_hash();
+    let (handler, state) = {
+        let on_back = on_back.clone();
+        remember_keyed((dispatcher.clone(), key), move || {
+            let state = Rc::new(PredictiveState {
+                scope,
+                handler_enabled: Rc::new(Cell::new(false)),
+                on_back: RefCell::new(on_back),
+                active: RefCell::new(None),
+                is_predictive_back: Cell::new(false),
+            });
+            let handler = NavigationEventHandler::new(
+                NavigationEventInfo::new(BackHandlerInfo(key)),
+                false,
+                false,
+                PredictiveCallbacks { state: state.clone() },
+            );
+            (handler, state)
+        })
+    };
+    let updating = state.clone();
+    SideEffect(move || *updating.on_back.borrow_mut() = on_back);
+    let enabling = handler.clone();
+    registered(dispatcher, handler, enabled, move |enabled| state.set_enabled(&enabling, enabled));
 }

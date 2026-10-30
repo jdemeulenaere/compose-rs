@@ -6,7 +6,7 @@ compose-rs aims at 1:1 parity with state-of-the-art Jetpack Compose: every publi
 
 The androidx checkout at `/Users/jdemeulenaere/Development/androidx-main` (Compose under `frameworks/support/compose`, Navigation 3 under `frameworks/support/navigation3`), at its tip: the ledgers were made at commit `d153d87ed76`. Agents read it, read-only: never modify it, never run its build or Gradle, never run anything in it that downloads. Where the tip and the Compose 1.12.1 that the Android benchmarks ran differ, the tip wins, parity mode included (D705).
 
-**In scope:** `compose/runtime`, `compose/ui` (ui, ui-text, ui-graphics, ui-geometry, ui-unit, ui-util, ui-test), `compose/foundation` (foundation, foundation-layout), `compose/animation` (animation-core, animation, animation-graphics), `compose/material3` (material3-ripple inside it; the adaptive libraries, window size class and navigation suite last), Navigation 3 with a lifecycle and ViewModel model (D704). **Out of scope:** Material 2, Wear, TV, Glance, remote, Navigation Compose (replaced by Navigation 3), material3-a2ui.
+**In scope:** `compose/runtime`, `compose/ui` (ui, ui-text, ui-graphics, ui-geometry, ui-unit, ui-util, ui-test), `compose/foundation` (foundation, foundation-layout), `compose/animation` (animation-core, animation, animation-graphics), `compose/material3` (material3-ripple inside it; the adaptive libraries, window size class and navigation suite last), Navigation 3 with a lifecycle and ViewModel model (D704) and the navigation events under it (`navigationevent`, activity-compose's back handlers). **Out of scope:** Material 2, Wear, TV, Glance, remote, Navigation Compose (replaced by Navigation 3), material3-a2ui.
 
 ## The ledgers
 
@@ -20,7 +20,7 @@ One per area. Each lists every Compose test file with its status, the public API
 | [ui-text-and-test](ui-text-and-test.md) | ui-text; ui-test, the test framework compose-rs's harness must match |
 | [foundation-layout-lazy](foundation-layout-lazy.md) | foundation-layout, gestures, scrolling, lazy layouts, pager |
 | [foundation-text-misc](foundation-text-misc.md) | text, text fields, selection, clickable, interactions, images, shapes and the rest of foundation |
-| [animation-navigation](animation-navigation.md) | animation-core, animation, animation-graphics, Navigation 3 |
+| [animation-navigation](animation-navigation.md) | animation-core, animation, animation-graphics, Navigation 3, navigationevent |
 | [lifecycle](lifecycle.md) | androidx.lifecycle: lifecycles and ViewModels (D704) |
 | [material3](material3.md) | Material 3 |
 

@@ -973,6 +973,37 @@ fn every_entry_point_of_the_host_is_a_turn() {
     }
 }
 
+/// A back gesture's entry points are turns too: what a handler wrote (here its transition state) has
+/// asked for a frame by the time each returns.
+#[test]
+fn a_back_gesture_s_entry_points_are_turns() {
+    use compose_navigation_event::*;
+    #[derive(Clone, PartialEq, Debug)]
+    struct Info;
+    let mut host = host(|| {
+        let state = remember_navigation_event_state!(Info);
+        let _ = state.transition_state();
+        NavigationBackHandler!(state, on_back_completed = || {});
+    });
+    let calls = HostCalls::of(&host);
+    host.frame();
+    let event = |progress| BackEventCompat { progress, ..Default::default() };
+    type Step<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
+    let steps: [Step; 3] = [
+        ("on_back_started", &|host| host.on_back_started(event(0.1))),
+        ("on_back_progressed", &|host| host.on_back_progressed(event(0.5))),
+        ("on_back_cancelled", &|host| host.on_back_cancelled()),
+    ];
+    for (name, step) in steps {
+        calls.frames.set(0);
+        calls.wakes();
+        step(&mut host);
+        assert_eq!(calls.wakes(), 0, "{name}: a write outside a turn asked for a tick");
+        assert!(calls.frames.get() > 0, "{name} asked for a frame");
+        host.frame();
+    }
+}
+
 /// A derived state read only by drawing: the send of what it reads validates it, in the tick a
 /// write outside a turn asks for or at a turn's end, and asks for the frame that draws it (D759).
 #[test]

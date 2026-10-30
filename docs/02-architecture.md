@@ -35,6 +35,7 @@ Mirroring Compose's artifacts as crates (`runtime`, `ui`, `foundation`, `materia
 compose-macros ── (generated code calls) ──► compose-runtime
 compose-ui ──► compose-runtime
 compose-ui ──► compose-lifecycle ──► compose-runtime   (hosts' lifecycles, D837)
+compose-ui ──► compose-navigation-event ──► compose-runtime   (back, D845)
 compose-foundation ──► compose-ui ──► compose-runtime
 compose-material3 ──► compose-foundation
 compose-animation ──► compose-ui

@@ -14,6 +14,7 @@ compose-ui.workspace = true
 jni = "0.22"
 
 [dev-dependencies]
+compose-navigation-event.workspace = true
 compose-animation.workspace = true
 compose-foundation.workspace = true
 compose-test.workspace = true

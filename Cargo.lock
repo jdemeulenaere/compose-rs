@@ -669,6 +669,7 @@ dependencies = [
  "compose-lifecycle",
  "compose-material3",
  "compose-navigation",
+ "compose-navigation-event",
  "compose-runtime",
  "compose-test",
  "compose-ui",
@@ -683,6 +684,7 @@ dependencies = [
  "compose-animation",
  "compose-foundation",
  "compose-lifecycle",
+ "compose-navigation-event",
  "compose-runtime",
  "compose-test",
  "compose-ui",
@@ -786,6 +788,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "compose-navigation-event"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-lifecycle",
+ "compose-runtime",
+ "compose-test",
+ "compose-ui",
+]
+
+[[package]]
 name = "compose-runtime"
 version = "0.1.0"
 dependencies = [
@@ -820,6 +833,7 @@ name = "compose-ui"
 version = "0.1.0"
 dependencies = [
  "compose-lifecycle",
+ "compose-navigation-event",
  "compose-runtime",
  "futures-core",
  "log",

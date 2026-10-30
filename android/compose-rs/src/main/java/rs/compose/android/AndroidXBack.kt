@@ -1,6 +1,7 @@
 package rs.compose.android
 
 import android.app.Activity
+import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcherOwner
 
@@ -10,11 +11,33 @@ import androidx.activity.OnBackPressedDispatcherOwner
  * app.
  */
 internal object AndroidXBack {
-    fun register(activity: Activity, onBack: () -> Unit): BackRegistration? {
+    fun register(activity: Activity, gesture: BackGesture): BackRegistration? {
         val owner = activity as? OnBackPressedDispatcherOwner ?: return null
         val dispatcher = owner.onBackPressedDispatcher
         val callback = object : OnBackPressedCallback(false) {
-            override fun handleOnBackPressed() = onBack()
+            override fun handleOnBackPressed() = gesture.onBack()
+
+            override fun handleOnBackStarted(backEvent: BackEventCompat) {
+                gesture.onBackStarted(
+                    backEvent.swipeEdge,
+                    backEvent.progress,
+                    backEvent.touchX,
+                    backEvent.touchY,
+                    backEvent.frameTimeMillis,
+                )
+            }
+
+            override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+                gesture.onBackProgressed(
+                    backEvent.swipeEdge,
+                    backEvent.progress,
+                    backEvent.touchX,
+                    backEvent.touchY,
+                    backEvent.frameTimeMillis,
+                )
+            }
+
+            override fun handleOnBackCancelled() = gesture.onBackCancelled()
         }
         dispatcher.addCallback(callback)
         return object : BackRegistration {

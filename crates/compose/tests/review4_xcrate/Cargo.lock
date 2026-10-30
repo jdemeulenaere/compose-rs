@@ -19,6 +19,7 @@ dependencies = [
  "compose-lifecycle",
  "compose-material3",
  "compose-navigation",
+ "compose-navigation-event",
  "compose-runtime",
  "compose-ui",
  "log",
@@ -78,6 +79,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compose-navigation-event"
+version = "0.1.0"
+dependencies = [
+ "compose-runtime",
+]
+
+[[package]]
 name = "compose-runtime"
 version = "0.1.0"
 dependencies = [
@@ -90,6 +98,7 @@ name = "compose-ui"
 version = "0.1.0"
 dependencies = [
  "compose-lifecycle",
+ "compose-navigation-event",
  "compose-runtime",
  "futures-core",
  "log",

@@ -416,7 +416,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `painter` (ui) | a `Painter` abstraction (`VectorPainter`, `BitmapPainter`) | icon-overloads | M |
 | `dp-hairline` (ui, done) | `Dp::HAIRLINE` (one pixel whatever the density) | DividerTest, DividerScreenshotTest | S |
 | `path-measure` (ui) | `PathMeasure` (length, segments of a path) | wavy-progress; Compose's checkbox draws its checkmark with it too | S-M |
-| `predictive-back` (ui/platforms) | `PredictiveBackHandler` with progress events (Android 14's `OnBackAnimationCallback`), `NavigationEvent`; docs/11 notes it's missing | predictive-back, material-transitions | M |
+| `predictive-back` (ui/platforms) | done (D845): `PredictiveBackHandler` with progress events (Android 14's `OnBackAnimationCallback`), `NavigationEvent`; the components' use of it is the component side above | predictive-back, material-transitions | M |
 | `lookahead` (ui) | `LookaheadScope`, approach layouts | ~6 tests (Scaffold, ModalBottomSheet, SwipeToDismiss, DraggableAnchors, two Slider scenarios) | XL |
 | `calendar-model` (platforms) | locale-aware date formatting and parsing (month and weekday names, date patterns, first day of week, numerals): Android through `java.time`/ICU over the Kotlin bridge, desktop through a Rust crate (an `icu4x` dependency is a decision for the user) | date-picker | M-L |
 

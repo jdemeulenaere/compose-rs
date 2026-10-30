@@ -353,6 +353,17 @@ fn a_retained_view_model_store_lives_until_it_is_cleared() {
     compose_android::clear_retained_view_model_store(other);
 }
 
+/// `Back.kt` passes `BackEvent.swipeEdge` on as it is.
+#[test]
+fn the_swipe_edges_are_android_s() {
+    use compose_navigation_event::NavigationEvent;
+    // `android.window.BackEvent`'s `EDGE_LEFT`, `EDGE_RIGHT` and `EDGE_NONE`.
+    assert_eq!(
+        (NavigationEvent::EDGE_LEFT, NavigationEvent::EDGE_RIGHT, NavigationEvent::EDGE_NONE),
+        (0, 1, 2)
+    );
+}
+
 /// `ComposeRsView` sends `Lifecycle.State`'s ordinals (`Lifecycle.kt`).
 #[test]
 fn the_lifecycle_states_are_in_androidx_s_order() {

@@ -38,6 +38,12 @@ pub mod lifecycle {
     pub use compose_lifecycle::*;
 }
 
+/// `androidx.navigationevent`: `NavigationEventDispatcher`, `NavigationEventHandler`,
+/// `NavigationBackHandler`, and the back gesture's progress they carry.
+pub mod navigation_event {
+    pub use compose_navigation_event::*;
+}
+
 /// `androidx.compose.animation` and `animation.core`: `Animatable`, `tween`, `spring`, easings,
 /// `animate_*_as_state`, infinite transitions.
 pub mod animation {

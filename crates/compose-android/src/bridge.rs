@@ -1374,6 +1374,70 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_saveState<'local>
     with_env(&mut env, |env| env.byte_array_from_slice(&state.to_bytes()).unwrap_or_default())
 }
 
+/// `ComposeRsNative.onBackStarted(host, …)`: a back gesture starts (`Back.kt`, API 34 and up); its
+/// end is `onBackPressed` or `onBackCancelled`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackStarted(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    swipe_edge: jint,
+    progress: jfloat,
+    touch_x: jfloat,
+    touch_y: jfloat,
+    frame_time_millis: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.on_back_started(back_event(swipe_edge, progress, touch_x, touch_y, frame_time_millis));
+}
+
+/// `ComposeRsNative.onBackProgressed(host, …)`: the gesture goes on.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackProgressed(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    swipe_edge: jint,
+    progress: jfloat,
+    touch_x: jfloat,
+    touch_y: jfloat,
+    frame_time_millis: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.on_back_progressed(back_event(
+        swipe_edge,
+        progress,
+        touch_x,
+        touch_y,
+        frame_time_millis,
+    ));
+}
+
+/// `ComposeRsNative.onBackCancelled(host)`: the gesture's given up.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackCancelled(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    unsafe { self::host(host) }.ui.on_back_cancelled();
+}
+
+fn back_event(
+    swipe_edge: jint,
+    progress: jfloat,
+    touch_x: jfloat,
+    touch_y: jfloat,
+    frame_time_millis: jlong,
+) -> compose_ui::BackEventCompat {
+    compose_ui::BackEventCompat { swipe_edge, progress, touch_x, touch_y, frame_time_millis }
+}
+
 /// `ComposeRsNative.onBackPressed(host)`: the user went back; the innermost enabled
 /// `BackHandler` gets it. Returns whether one did.
 #[unsafe(no_mangle)]

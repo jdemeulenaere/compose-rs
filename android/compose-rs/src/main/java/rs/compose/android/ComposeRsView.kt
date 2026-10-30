@@ -381,8 +381,42 @@ class ComposeRsView @JvmOverloads constructor(
     private fun updateBack(enabled: Boolean) {
         if (enabled == backEnabled) return
         backEnabled = enabled
-        val registration = back ?: BackRegistration.create(this) { handleBack() }.also { back = it }
+        val registration = back ?: BackRegistration.create(this, backGesture).also { back = it }
         registration.setEnabled(enabled)
+    }
+
+    private val backGesture = object : BackGesture {
+        override fun onBack() = handleBack()
+
+        override fun onBackStarted(
+            swipeEdge: Int,
+            progress: Float,
+            touchX: Float,
+            touchY: Float,
+            frameTimeMillis: Long,
+        ) {
+            if (host == 0L) return
+            ComposeRsNative.onBackStarted(host, swipeEdge, progress, touchX, touchY, frameTimeMillis)
+            ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+        }
+
+        override fun onBackProgressed(
+            swipeEdge: Int,
+            progress: Float,
+            touchX: Float,
+            touchY: Float,
+            frameTimeMillis: Long,
+        ) {
+            if (host == 0L) return
+            ComposeRsNative.onBackProgressed(host, swipeEdge, progress, touchX, touchY, frameTimeMillis)
+            ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+        }
+
+        override fun onBackCancelled() {
+            if (host == 0L) return
+            ComposeRsNative.onBackCancelled(host)
+            ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+        }
     }
 
     private fun handleBack() {

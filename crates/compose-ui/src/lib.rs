@@ -150,8 +150,8 @@ pub use annotated::{
     LinkInteractionListener, SpanRange, StringAnnotation, TextLinkStyles, TtsAnnotation,
 };
 pub use back::{
-    BackHandler, LOCAL_BACK_HANDLERS_ENABLED, LOCAL_ON_BACK_PRESSED_DISPATCHER,
-    OnBackPressedDispatcher,
+    BackCancelled, BackEventCompat, BackHandler, BackProgress, LOCAL_BACK_HANDLERS_ENABLED,
+    LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher, PredictiveBackHandler,
 };
 pub use border::{BorderRenderer, BorderStroke};
 pub use brush::{Brush, ColorStops, TileMode};

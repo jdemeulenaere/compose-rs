@@ -58,7 +58,9 @@ pub struct UiHost {
     /// Work lazy lists ask for between frames (`prefetch`), given to content as
     /// `LOCAL_PREFETCH_SCHEDULER`.
     prefetch_scheduler: crate::prefetch::PrefetchScheduler,
-    /// Where `BackHandler`s register (`LOCAL_ON_BACK_PRESSED_DISPATCHER`).
+    /// Where `BackHandler`s register (`LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER`).
+    navigation_events: compose_navigation_event::NavigationEventDispatcher,
+    /// How back reaches them (`LOCAL_ON_BACK_PRESSED_DISPATCHER`).
     back_dispatcher: crate::back::OnBackPressedDispatcher,
     /// Where `remember_saveable` registers (`LOCAL_SAVEABLE_STATE_REGISTRY`).
     saveable_registry: compose_runtime::SaveableStateRegistry,
@@ -140,6 +142,7 @@ impl UiHost {
         let window_insets = Rc::new(crate::configuration::HostInsets::new());
         let insets_source = crate::configuration::WindowInsetsSource::of(window_insets.clone());
         composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_source(insets_source));
+        let navigation_events = compose_navigation_event::NavigationEventDispatcher::new();
         UiHost {
             composition,
             lifecycle: HostLifecycle::new(),
@@ -155,7 +158,8 @@ impl UiHost {
             ),
             window_size: compose_runtime::mutable_state_of(size),
             prefetch_scheduler: crate::prefetch::PrefetchScheduler::default(),
-            back_dispatcher: crate::back::OnBackPressedDispatcher::new(),
+            navigation_events: navigation_events.clone(),
+            back_dispatcher: crate::back::OnBackPressedDispatcher::new(&navigation_events),
             saveable_registry: compose_runtime::SaveableStateRegistry::new(None),
             configuration: compose_runtime::mutable_state_of(
                 crate::configuration::Configuration::from_window(size, density, false),
@@ -374,6 +378,26 @@ impl UiHost {
         handled
     }
 
+    /// A back gesture starts (Android's, API 34 and up): the innermost enabled handler takes it, to
+    /// the end, which is [`on_back_pressed`](Self::on_back_pressed) or
+    /// [`on_back_cancelled`](Self::on_back_cancelled).
+    pub fn on_back_started(&mut self, event: crate::back::BackEventCompat) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        self.back_dispatcher.dispatch_on_back_started(event);
+    }
+
+    /// It goes on.
+    pub fn on_back_progressed(&mut self, event: crate::back::BackEventCompat) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        self.back_dispatcher.dispatch_on_back_progressed(event);
+    }
+
+    /// It's given up.
+    pub fn on_back_cancelled(&mut self) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        self.back_dispatcher.dispatch_on_back_cancelled();
+    }
+
     /// Whether a `BackHandler` is enabled: the platform intercepts back only then. It changes
     /// with composition: platforms ask after each frame.
     pub fn has_enabled_back_handlers(&self) -> bool {
@@ -454,6 +478,7 @@ impl UiHost {
                 lifecycle: self.lifecycle.registry.lifecycle(),
                 view_models: Rc::new(self.lifecycle.view_models.clone()),
                 scheduler: self.prefetch_scheduler.clone(),
+                navigation_events: self.navigation_events.clone(),
                 back_dispatcher: self.back_dispatcher.clone(),
                 saveable_registry: self.saveable_registry.clone(),
                 props: self.props.clone(),
@@ -995,6 +1020,7 @@ struct HostLocals {
     lifecycle: compose_lifecycle::Lifecycle,
     view_models: Rc<ViewModelStore>,
     scheduler: crate::prefetch::PrefetchScheduler,
+    navigation_events: compose_navigation_event::NavigationEventDispatcher,
     back_dispatcher: crate::back::OnBackPressedDispatcher,
     saveable_registry: compose_runtime::SaveableStateRegistry,
     props: crate::configuration::HostProps,
@@ -1012,8 +1038,12 @@ impl HostLocals {
                 compose_lifecycle::LOCAL_VIEW_MODEL_STORE_OWNER.provides(Some(view_models)),
                 compose_lifecycle::LOCAL_LIFECYCLE_OWNER.provides(self.lifecycle.clone()),
                 crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(self.scheduler.clone())),
-                crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
-                    .provides(Some(self.back_dispatcher.clone())),
+                (
+                    compose_navigation_event::LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER
+                        .provides(Some(self.navigation_events.clone())),
+                    crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
+                        .provides(Some(self.back_dispatcher.clone())),
+                ),
                 compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
                     .provides(Some(self.saveable_registry.clone())),
                 crate::configuration::LOCAL_HOST_PROPS.provides(self.props.clone()),
