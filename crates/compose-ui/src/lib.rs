@@ -81,6 +81,7 @@ mod text;
 mod text_attributes;
 mod text_editing;
 mod text_input;
+mod text_measurer;
 mod text_range;
 mod text_savers;
 mod text_selection;
@@ -138,9 +139,11 @@ pub mod platform {
     pub use crate::semantics::{OtherSlot, OtherValue};
     pub use crate::semantics::{SemanticsSnapshot, set_semantics_cache_check};
     pub use crate::text::{
-        DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer,
-        TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,
+        DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, SharedTextMeasurer,
+        TextLayoutOptions, TextMeasurer, TextPosition, resolve_font_size_px, resolve_text_color,
+        resolve_text_unit_px,
     };
+    pub use crate::text_measurer::{CacheTextLayoutInput, TextLayoutCache};
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
     pub use crate::unit::round_to_int;
     pub use crate::word_boundary::{word_boundary, word_breaks};
@@ -186,7 +189,10 @@ pub use focus_properties::{
     FocusEnterExitBlock, FocusEnterExitScope, FocusProperties, FocusPropertiesModifierNode,
 };
 pub use focus_requester::{FocusRequester, FocusRequesterRefs};
-pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
+pub use font::{
+    FontFamily, FontFamilyResolver, FontStyle, FontSynthesis, FontWeight,
+    LOCAL_FONT_FAMILY_RESOLVER, create_font_family_resolver,
+};
 pub use graphics::{
     Color, CornerSize, CornerSizes, CustomShape, DrawStyle, Outline, Paint, PaintStyle,
     RECTANGLE_SHAPE, Shadow, Shape, Stroke, StrokeCap, StrokeJoin,
@@ -207,7 +213,7 @@ pub use interaction::{
     InteractionSource, Interactions, LatestInteraction, Listener, MutableInteractionSource, Press,
     PressInteraction,
 };
-pub use intl::{Locale, LocaleList};
+pub use intl::{LOCAL_LOCALE_LIST, Locale, LocaleList};
 pub use layout::{
     EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
@@ -295,6 +301,10 @@ pub use text_editing::{
     SetComposingTextCommand, SetSelectionCommand, TextFieldValue,
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
+pub use text_measurer::{
+    DEFAULT_TEXT_MEASURER_CACHE_SIZE, DrawTextLayoutOptions, DrawTextOptions, TextMeasureOptions,
+    TextMeasurer, TextPainter, remember_text_measurer,
+};
 pub use text_range::TextRange;
 pub use text_selection::Selectable;
 pub use text_style::TextStyle;

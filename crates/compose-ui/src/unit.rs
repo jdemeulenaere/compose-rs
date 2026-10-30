@@ -491,6 +491,11 @@ pub struct Size {
     pub height: f32,
 }
 
+impl Size {
+    /// As `Size.Unspecified`: neither a width nor a height.
+    pub const UNSPECIFIED: Size = Size { width: f32::NAN, height: f32::NAN };
+}
+
 /// A width and a height in `Dp`, as Compose's `DpSize`: what `Modifier.size` takes, from a
 /// `Dp` (square) or a `(width, height)` tuple.
 #[derive(Clone, Copy, PartialEq, Debug)]

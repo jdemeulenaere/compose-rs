@@ -2,6 +2,7 @@
 //! synthesis.
 
 use std::fmt;
+use std::rc::Rc;
 
 use compose_runtime::ComposeArg;
 
@@ -128,6 +129,49 @@ impl FontSynthesis {
     }
 }
 
+/// Resolves the fonts of a text's families, as Compose's `FontFamily.Resolver`, and with them
+/// reaches the platform's text stack: what a [`TextMeasurer`](crate::TextMeasurer) lays out with,
+/// and the host provides as [`LOCAL_FONT_FAMILY_RESOLVER`]. Compared by identity, as Compose's
+/// layout cache compares it; cloning shares it.
+#[derive(Clone)]
+pub struct FontFamilyResolver(Rc<ResolverInner>);
+
+struct ResolverInner {
+    platform: crate::text::SharedTextMeasurer,
+}
+
+impl FontFamilyResolver {
+    /// The platform's text stack, which lays out and draws what's resolved.
+    pub(crate) fn platform(&self) -> &crate::text::SharedTextMeasurer {
+        &self.0.platform
+    }
+}
+
+/// A new resolver over `platform`, as Compose's `createFontFamilyResolver`.
+pub fn create_font_family_resolver(
+    platform: &crate::text::SharedTextMeasurer,
+) -> FontFamilyResolver {
+    FontFamilyResolver(Rc::new(ResolverInner { platform: platform.clone() }))
+}
+
+impl PartialEq for FontFamilyResolver {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl fmt::Debug for FontFamilyResolver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "FontFamilyResolver({:p})", Rc::as_ptr(&self.0))
+    }
+}
+
+/// The host's font family resolver, as Compose's `LocalFontFamilyResolver`.
+pub static LOCAL_FONT_FAMILY_RESOLVER: compose_runtime::CompositionLocal<FontFamilyResolver> =
+    compose_runtime::CompositionLocal::new_static("LocalFontFamilyResolver", || {
+        panic!("CompositionLocal LocalFontFamilyResolver not present: a host provides it")
+    });
+
 macro_rules! compose_arg_by_eq {
     ($($type:ty),*) => {
         $(impl ComposeArg for $type {
@@ -138,4 +182,4 @@ macro_rules! compose_arg_by_eq {
     };
 }
 
-compose_arg_by_eq!(FontStyle, FontFamily, FontSynthesis);
+compose_arg_by_eq!(FontStyle, FontFamily, FontSynthesis, FontFamilyResolver);

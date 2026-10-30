@@ -140,6 +140,7 @@ struct JniText {
     layout: JMethodID,
     relayout: JMethodID,
     restyle: JMethodID,
+    painted: JMethodID,
     probe_layout: JMethodID,
     min_intrinsic_width: JMethodID,
     hit_test: JMethodID,
@@ -288,6 +289,27 @@ impl TextBackend for JniText {
             };
             check(env, "TextMeasurer.restyle");
             restyled.and_then(|value| value.z()).unwrap_or(false)
+        })
+    }
+
+    fn painted(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(IIII)Z`.
+            let painted = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.painted,
+                    ReturnType::Primitive(Primitive::Boolean),
+                    &[
+                        JValue::Int(previous as jint).as_jni(),
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Int(color as jint).as_jni(),
+                        JValue::Int(jint::from(decoration)).as_jni(),
+                    ],
+                )
+            };
+            check(env, "TextMeasurer.painted");
+            painted.and_then(|value| value.z()).unwrap_or(false)
         })
     }
 
@@ -588,6 +610,7 @@ fn create(
         ),
         relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIII)Z")),
         restyle: method(env, measurer, jni_str!("restyle"), jni_sig!("(IIII)Z")),
+        painted: method(env, measurer, jni_str!("painted"), jni_sig!("(IIII)Z")),
         probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIII)Z")),
         min_intrinsic_width: method(env, measurer, jni_str!("minIntrinsicWidth"), jni_sig!("(I)F")),
         hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),

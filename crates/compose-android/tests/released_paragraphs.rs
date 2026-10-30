@@ -30,8 +30,9 @@ use compose_foundation::*;
 use compose_runtime::{mutable_state_of, remember};
 use compose_ui::platform::Optimizations;
 use compose_ui::{
-    Density, IntSize, Offset, PointerEvent, Rect, UnitExt,
+    Color, Density, DrawTextOptions, IntSize, Offset, PointerEvent, Rect, TextStyle, UnitExt,
     platform::{ParagraphMetrics, UiHost},
+    remember_text_measurer,
 };
 
 // ---- A backend tracking the live paragraphs --------------------------------------------------
@@ -53,6 +54,13 @@ impl TextBackend for Live {
             line_count: lines as u32,
         };
         LaidOut { metrics, did_exceed_max_lines: false, max_intrinsic_width: None }
+    }
+    /// The one layout under another handle too.
+    fn painted(&mut self, previous: u32, handle: u32, _color: u32, _decoration: u8) -> bool {
+        let mut live = self.0.borrow_mut();
+        assert!(live.contains(&previous), "paragraph {previous} painted after its release");
+        live.insert(handle);
+        true
     }
     fn hit_test(&self, _handle: u32, _position: Offset) -> usize {
         0
@@ -324,6 +332,107 @@ fn a_changed_text_gives_its_groups_new_versions() {
         count.set(step);
         checked.frame();
         // A frame where nothing changes keeps every group.
+        checked.frame();
+    }
+    checked.assert_exercised();
+}
+
+/// What `draw_text` draws is kept by the recording drawing it (D1116): a text changing frame by
+/// frame in one boundary, the same text beside it in a kept group.
+#[test]
+fn draw_text_in_a_boundary_draws_only_live_paragraphs() {
+    let count = mutable_state_of(0u32);
+    let given = count.handle();
+    let mut checked = Checked::new(move || {
+        let measurer = remember_text_measurer!(0);
+        let still = measurer.clone();
+        Column!(modifier = Modifier.repaint_boundary(), {
+            let still = still.clone();
+            Box!(
+                modifier = Modifier.size(50.dp()).repaint_boundary().draw_behind(move |scope| {
+                    scope.draw_text(&still, "still", DrawTextOptions::default());
+                })
+            );
+            let measurer = measurer.clone();
+            Box!(
+                modifier = Modifier.size(50.dp()).repaint_boundary().draw_behind(move |scope| {
+                    let text = format!("count {}", given.get());
+                    scope.draw_text(&measurer, text, DrawTextOptions::default());
+                })
+            );
+        });
+    });
+    for step in 1..10 {
+        count.set(step);
+        checked.frame();
+        // A frame where nothing changes keeps every group.
+        checked.frame();
+    }
+    checked.assert_exercised();
+}
+
+/// A kept layout drawn in a new color each frame: a paragraph of its own for each paint, the
+/// old ones released as the recordings drawing them go.
+#[test]
+fn a_kept_layout_repainted_each_frame_draws_only_live_paragraphs() {
+    let count = mutable_state_of(0u32);
+    let given = count.handle();
+    let mut checked = Checked::new(move || {
+        let measurer = remember_text_measurer!();
+        Box!(
+            modifier = Modifier.size(50.dp()).repaint_boundary().draw_behind(move |scope| {
+                let color = Color::from_argb(0xFF00_0000 | given.get());
+                let style = TextStyle { color, ..TextStyle::DEFAULT };
+                scope.draw_text(
+                    &measurer,
+                    "the same layout",
+                    DrawTextOptions { style, ..DrawTextOptions::default() },
+                );
+            })
+        );
+    });
+    let live_at_start = checked.live.0.borrow().len();
+    for step in 1..10 {
+        count.set(step);
+        checked.frame();
+        // A frame where nothing changes keeps the group.
+        checked.frame();
+    }
+    checked.assert_exercised();
+    // The layout, the paint drawn, and at most the paint it replaced.
+    assert!(checked.live.0.borrow().len() <= live_at_start + 2);
+}
+
+/// A lazy list's items drawing with a shared measurer, scrolled with prefetching between frames:
+/// what a disposed item's recording kept goes with it, and no frame names it.
+#[test]
+fn draw_text_in_a_scrolled_lazy_list_draws_only_live_paragraphs() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut checked = Checked::with(legacy(), move || {
+        let measurer = remember_text_measurer!();
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 200.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                let measurer = measurer.clone();
+                scope.items(300, move |index| {
+                    let measurer = measurer.clone();
+                    Box!(
+                        modifier =
+                            Modifier.fill_max_width().height(40.dp()).draw_behind(move |scope| {
+                                let text = format!("item {index}");
+                                scope.draw_text(&measurer, text, DrawTextOptions::default());
+                            })
+                    );
+                });
+            }
+        );
+    });
+    for step in 0..60 {
+        state.dispatch_raw_delta(if step % 6 == 5 { -90.0 } else { 37.0 });
+        checked.frame();
+        checked.prefetch();
         checked.frame();
     }
     checked.assert_exercised();

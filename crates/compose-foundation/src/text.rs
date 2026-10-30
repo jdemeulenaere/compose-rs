@@ -176,7 +176,7 @@ pub(crate) fn height_of_lines(
     let density = scope.density();
     let options =
         TextLayoutOptions { direction: scope.layout_direction(), ..TextLayoutOptions::default() };
-    let measurer = scope.text_measurer();
+    let mut measurer = scope.text_measurer();
     let mut height = |text: &str| {
         let paragraph = measurer.layout(text, style, options, Constraints::unbounded(), &density);
         let height = measurer.metrics(paragraph).size.height;
@@ -472,7 +472,7 @@ impl TextNode {
         let relaid = match (current, self.constraints) {
             (Some(paragraph), Some(old)) => new_layout_will_be_different(
                 reuses_at_same_width(scope),
-                scope.text_measurer(),
+                &mut *scope.text_measurer(),
                 paragraph,
                 self.options,
                 old,
@@ -485,7 +485,7 @@ impl TextNode {
         }
         self.density = Some(density);
         self.direction = direction;
-        let measurer = scope.text_measurer();
+        let mut measurer = scope.text_measurer();
         // As Compose's new `Paragraph` from the `ParagraphIntrinsics` it keeps, where the
         // measurer keeps them too; otherwise laid out anew.
         let paragraph = match current.and_then(|old| measurer.relayout(old, constraints)) {
@@ -503,6 +503,7 @@ impl TextNode {
                 )
             }
         };
+        drop(measurer);
         self.paragraph = Some(paragraph);
         // The highlight follows the new layout.
         self.selection_rects = match &self.selection {
@@ -523,13 +524,13 @@ impl TextNode {
         direction: compose_ui::LayoutDirection,
     ) -> ParagraphHandle {
         let reuse = reuses_at_same_width(scope);
-        let measurer = scope.text_measurer();
+        let mut measurer = scope.text_measurer();
         if let (Some(paragraph), Some(old)) = (self.paragraph, self.constraints)
             && self.density == Some(density)
             && self.direction == direction
             && !new_layout_will_be_different(
                 reuse,
-                measurer,
+                &mut *measurer,
                 paragraph,
                 self.options,
                 old,
@@ -543,7 +544,7 @@ impl TextNode {
             && probe.direction == direction
             && !new_layout_will_be_different(
                 reuse,
-                measurer,
+                &mut *measurer,
                 probe.paragraph,
                 self.options,
                 probe.constraints,
@@ -589,7 +590,7 @@ impl LayoutModifierNode for TextNode {
         if std::mem::take(&mut self.restyle)
             && let Some(old) = self.paragraph
         {
-            let measurer = scope.text_measurer();
+            let mut measurer = scope.text_measurer();
             self.paragraph = measurer.restyle(old, &self.style);
             if self.paragraph.is_none() {
                 measurer.release(old);
@@ -625,6 +626,9 @@ impl LayoutModifierNode for TextNode {
                     overflow: self.options.overflow,
                     density,
                     layout_direction: direction,
+                    font_family_resolver: scope
+                        .current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
+                    default_locale_list: scope.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
                     constraints,
                 };
                 let result =
@@ -715,8 +719,8 @@ impl TextNode {
             }
             _ => self.probe_paragraph(scope, Constraints::unbounded(), density, direction),
         };
-        let measurer = scope.text_measurer();
-        let max = match measurer.max_intrinsic_width(paragraph) {
+        let own_width = scope.text_measurer().max_intrinsic_width(paragraph);
+        let max = match own_width {
             Some(width) => width.ceil() as i32,
             None => {
                 let unbounded =

@@ -2,9 +2,11 @@
 //! its own text stack (docs/07-platforms.md). `FixedTextMeasurer` lays text out with a fixed
 //! advance per character, for layout tests that shouldn't depend on fonts.
 
+use std::cell::{Ref, RefCell, RefMut};
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use compose_runtime::ComposeArg;
 
@@ -155,6 +157,8 @@ pub struct TextLayoutResult {
     pub did_overflow_width: bool,
     /// The paragraph is taller than `size`, or had more lines than `max_lines`.
     pub did_overflow_height: bool,
+    /// What a draw scope draws of it, shared by its clones and copies (D1116).
+    pub(crate) drawable: Rc<crate::text_measurer::DrawableParagraphs>,
 }
 
 impl TextLayoutResult {
@@ -176,6 +180,7 @@ impl TextLayoutResult {
             layout_input,
             multi_paragraph,
             size,
+            drawable: Rc::default(),
         }
     }
 
@@ -187,7 +192,19 @@ impl TextLayoutResult {
 
     /// The same layout, from another input at another size, as Compose's `copy`.
     pub fn copy(&self, layout_input: TextLayoutInput, size: IntSize) -> TextLayoutResult {
-        TextLayoutResult::new(layout_input, self.multi_paragraph.clone(), size)
+        match &self.drawable.measured {
+            Some(measured) => TextLayoutResult::of_measured(
+                layout_input,
+                measured,
+                self.multi_paragraph.clone(),
+                self.drawable.clone(),
+                size,
+            ),
+            None => TextLayoutResult {
+                drawable: self.drawable.clone(),
+                ..TextLayoutResult::new(layout_input, self.multi_paragraph.clone(), size)
+            },
+        }
     }
 
     pub fn get_line_start(&self, line: usize) -> usize {
@@ -406,6 +423,17 @@ pub trait TextMeasurer: std::any::Any {
     ) -> Option<ParagraphHandle> {
         None
     }
+    /// A new paragraph with `paragraph`'s layout in `style`'s paint, as [`restyle`](Self::restyle)
+    /// makes, `paragraph` staying as it is: what Compose's `Paragraph.paint(color, …)` draws of a
+    /// layout kept (a result drawn in another color, D1116). `None` (the default) when the
+    /// measurer can't: the caller lays the text out anew in that paint.
+    fn painted(
+        &mut self,
+        _paragraph: ParagraphHandle,
+        _style: &TextStyle,
+    ) -> Option<ParagraphHandle> {
+        None
+    }
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
     /// Whether the paragraph runs right to left (its first strong character's direction), as
     /// `TextLayoutResult.getParagraphDirection`: Left and Right move the other way.
@@ -444,6 +472,105 @@ pub trait TextMeasurer: std::any::Any {
     /// The paragraph's text, for dumps and semantics.
     fn text(&self, paragraph: ParagraphHandle) -> &str;
     fn release(&mut self, paragraph: ParagraphHandle);
+}
+
+/// The platform's text measurer, shared by the tree that lays its nodes' texts out and draws them
+/// and by the [`TextMeasurer`](crate::TextMeasurer)s made over it, which measure from anywhere
+/// (composition, layout, a draw scope, an event), as Compose's text stack is reached from
+/// anywhere. Cloning shares it. Each use borrows it: what's borrowed is given back before
+/// another node, a callback or a measurement can run (D1115).
+#[derive(Clone)]
+pub struct SharedTextMeasurer(Rc<SharedMeasurer>);
+
+struct SharedMeasurer {
+    measurer: RefCell<Box<dyn TextMeasurer>>,
+    /// Paragraphs nothing keeps any more: a [`ParagraphKeeper`] can be dropped while the measurer
+    /// is borrowed, or by a recording being replaced.
+    dropped: Arc<Mutex<Vec<ParagraphHandle>>>,
+}
+
+/// Keeps a paragraph of the platform's measurer: the last one dropped gives it back, at the next
+/// [`SharedTextMeasurer::release_dropped`]. What a recording holds of what `draw_text` drew: like
+/// the rest of a display list, it can be sent to another thread (D270), which never touches the
+/// measurer.
+#[derive(Clone)]
+pub(crate) struct ParagraphKeeper(Arc<KeeperInner>);
+
+struct KeeperInner {
+    handle: ParagraphHandle,
+    dropped: Arc<Mutex<Vec<ParagraphHandle>>>,
+}
+
+impl ParagraphKeeper {
+    pub(crate) fn handle(&self) -> ParagraphHandle {
+        self.0.handle
+    }
+}
+
+impl Drop for KeeperInner {
+    fn drop(&mut self) {
+        self.dropped.lock().unwrap_or_else(PoisonError::into_inner).push(self.handle);
+    }
+}
+
+impl fmt::Debug for ParagraphKeeper {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ParagraphKeeper({:?})", self.0.handle)
+    }
+}
+
+impl SharedTextMeasurer {
+    pub fn new(measurer: Box<dyn TextMeasurer>) -> SharedTextMeasurer {
+        SharedTextMeasurer(Rc::new(SharedMeasurer {
+            measurer: RefCell::new(measurer),
+            dropped: Arc::default(),
+        }))
+    }
+
+    /// Panics if it's borrowed mutably, as a `RefCell`.
+    pub fn borrow(&self) -> Ref<'_, dyn TextMeasurer> {
+        Ref::map(self.0.measurer.borrow(), |measurer| &**measurer)
+    }
+
+    /// Panics if it's borrowed, as a `RefCell`.
+    pub fn borrow_mut(&self) -> RefMut<'_, dyn TextMeasurer> {
+        RefMut::map(self.0.measurer.borrow_mut(), |measurer| &mut **measurer)
+    }
+
+    /// Gives `paragraph` back to the measurer, as [`TextMeasurer::release`].
+    pub fn release(&self, paragraph: ParagraphHandle) {
+        self.borrow_mut().release(paragraph);
+    }
+
+    /// Whether `other` is this very measurer.
+    pub fn ptr_eq(&self, other: &SharedTextMeasurer) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// Keeps `paragraph`, until the keeper's last clone is dropped.
+    pub(crate) fn keeper(&self, paragraph: ParagraphHandle) -> ParagraphKeeper {
+        ParagraphKeeper(Arc::new(KeeperInner {
+            handle: paragraph,
+            dropped: self.0.dropped.clone(),
+        }))
+    }
+
+    /// Gives back the paragraphs nothing keeps any more, each draw pass and before a measurer's
+    /// layout. They're out of every recording, so a frame drawn after this names none of them
+    /// (D1116).
+    pub fn release_dropped(&self) {
+        let dropped = {
+            let mut dropped = self.0.dropped.lock().unwrap_or_else(PoisonError::into_inner);
+            if dropped.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *dropped)
+        };
+        let mut measurer = self.borrow_mut();
+        for paragraph in dropped {
+            measurer.release(paragraph);
+        }
+    }
 }
 
 /// The default font size when a style leaves it unspecified, as Compose's (`DefaultFontSize`).

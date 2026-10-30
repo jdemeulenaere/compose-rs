@@ -2223,7 +2223,7 @@ mod randomized_inner_layers {
         labels: Labels,
     }
 
-    impl TextMeasurer for Labeled {
+    impl compose_ui::platform::TextMeasurer for Labeled {
         fn layout(
             &mut self,
             text: &str,

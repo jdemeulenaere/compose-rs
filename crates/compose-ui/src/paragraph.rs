@@ -125,6 +125,8 @@ pub struct TextLayoutInput {
     pub overflow: TextOverflow,
     pub density: Density,
     pub layout_direction: crate::alignment::LayoutDirection,
+    pub font_family_resolver: crate::font::FontFamilyResolver,
+    pub default_locale_list: crate::intl::LocaleList,
     pub constraints: crate::constraints::Constraints,
 }
 

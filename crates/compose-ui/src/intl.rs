@@ -140,3 +140,8 @@ impl ComposeArg for LocaleList {
         Rc::ptr_eq(&self.locales, &other.locales) || self == other
     }
 }
+
+/// The locales of the text below, as Compose's `LocalLocaleList`: none until the platform's are
+/// read (docs/parity/ui-text-and-test.md, "locale").
+pub static LOCAL_LOCALE_LIST: compose_runtime::CompositionLocal<LocaleList> =
+    compose_runtime::CompositionLocal::new_static("LocalLocaleList", LocaleList::empty);

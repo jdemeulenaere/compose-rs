@@ -341,7 +341,7 @@ fn render(rule: &mut crate::ComposeTestRule, window: Option<NodeId>) -> Captured
     let optimizations = rule.host.optimizations();
     let pixels = rule.host.with_tree(|tree| {
         let list = tree.window_display_list(window);
-        renderer(&list, size, tree.text_measurer_ref(), optimizations)
+        renderer(&list, size, &*tree.text_measurer_ref(), optimizations)
     });
     CapturedImage::new(size.width, size.height, pixels)
 }

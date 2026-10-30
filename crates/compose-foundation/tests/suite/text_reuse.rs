@@ -12,7 +12,9 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::{FixedTextMeasurer, UiHost};
-use compose_ui::{Constraints, Density, IntSize, TextAlign, TextOverflow, TextStyle};
+use compose_ui::{
+    Constraints, Density, IntSize, TextAlign, TextOverflow, TextStyle, remember_text_measurer,
+};
 
 pub(crate) const SHORT: &str = "Short label";
 pub(crate) const CENTERED: &str = "Centered";
@@ -294,4 +296,90 @@ fn layout_affecting_attributes_are_composes() {
     ] {
         assert!(!base.has_same_layout_affecting_attributes(&other), "{other:?}");
     }
+}
+
+/// A host counting its layouts, whose one node draws `draw` on each frame `tick` asks.
+fn counted_drawing(
+    tick: compose_runtime::MutableState<u32>,
+    draw: impl Fn(&mut compose_ui::DrawScope<'_>, &compose_ui::TextMeasurer, u32) + 'static,
+) -> (UiHost, compose_test::TextLayoutCounter) {
+    let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
+    let mut host = UiHost::new(IntSize::new(400, 400), Density::new(1.0), Box::new(measurer));
+    let draw = std::rc::Rc::new(draw);
+    host.set_content(move || {
+        let measurer = remember_text_measurer!();
+        let draw = draw.clone();
+        Box!(
+            modifier = Modifier.fill_max_size().draw_behind(move |scope| {
+                draw(scope, &measurer, tick.get());
+            })
+        );
+    });
+    host.frame();
+    (host, counter)
+}
+
+fn colored(step: u32) -> compose_ui::Color {
+    compose_ui::Color::from_argb(0xFF00_0000 | step)
+}
+
+#[test]
+fn drawing_a_measured_text_in_a_new_color_keeps_its_layout() {
+    let owner = compose_runtime::mutable_state_of(1u32);
+    let tick = owner.handle();
+    let (mut host, counter) = counted_drawing(tick, |scope, measurer, step| {
+        scope.draw_text(
+            measurer,
+            "Hello",
+            compose_ui::DrawTextOptions {
+                style: TextStyle { color: colored(step), ..TextStyle::DEFAULT },
+                ..Default::default()
+            },
+        );
+    });
+    for step in 2..6 {
+        tick.set(step);
+        host.frame();
+    }
+    let counts = counter.of("Hello");
+    assert_eq!(counts.fresh, 1, "{counts:?}");
+    assert_eq!(counts.restyled, 4, "{counts:?}");
+}
+
+#[test]
+fn drawing_a_layout_again_in_the_same_paint_paints_nothing_new() {
+    let owner = compose_runtime::mutable_state_of(1u32);
+    let tick = owner.handle();
+    let (mut host, counter) = counted_drawing(tick, |scope, measurer, _| {
+        let result = measurer.measure("Hello", compose_ui::TextMeasureOptions::default());
+        let gradient = compose_ui::Brush::linear_gradient(vec![
+            compose_ui::Color::RED,
+            compose_ui::Color::BLUE,
+        ]);
+        // NaN's alpha, a gradient and a solid brush: each the same paint again the next time.
+        scope.draw_text_layout_with_brush(&result, gradient, Default::default());
+    });
+    for step in 2..6 {
+        tick.set(step);
+        host.frame();
+    }
+    let counts = counter.of("Hello");
+    assert_eq!((counts.fresh, counts.restyled), (1, 1), "{counts:?}");
+}
+
+#[test]
+fn a_solid_brush_is_the_same_paint_again_the_next_time() {
+    let owner = compose_runtime::mutable_state_of(1u32);
+    let tick = owner.handle();
+    let (mut host, counter) = counted_drawing(tick, |scope, measurer, _| {
+        let result = measurer.measure("Hello", compose_ui::TextMeasureOptions::default());
+        let solid = compose_ui::Brush::solid(compose_ui::Color::RED);
+        scope.draw_text_layout_with_brush(&result, solid, Default::default());
+    });
+    for step in 2..6 {
+        tick.set(step);
+        host.frame();
+    }
+    let counts = counter.of("Hello");
+    assert_eq!((counts.fresh, counts.restyled), (1, 1), "{counts:?}");
 }

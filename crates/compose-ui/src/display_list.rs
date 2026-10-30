@@ -145,6 +145,9 @@ pub struct DisplayList {
     pub kept: Vec<DrawGroup>,
     /// A translation before this index isn't merged into: a group's operations stay its own.
     pub(crate) merge_floor: usize,
+    /// What `draw_text` drew: kept as long as this recording, which names their handles in `ops`
+    /// (D1116).
+    pub(crate) laid_out_paragraphs: Vec<crate::text::ParagraphKeeper>,
 }
 
 /// Where a recording draws a repaint boundary's group: before its operation `at`. `key` is the
@@ -224,6 +227,7 @@ impl DisplayList {
         self.merge_floor = 0;
         self.boundaries.clear();
         self.shaders.clear();
+        self.laid_out_paragraphs.clear();
     }
 
     pub fn push(&mut self, op: DrawOp) {

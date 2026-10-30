@@ -307,8 +307,8 @@ impl IntrinsicMeasureScope<'_> {
         self.tree.visible_window()
     }
 
-    pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
-        &mut *self.tree.text_measurer
+    pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn TextMeasurer> {
+        self.tree.text_measurer.borrow_mut()
     }
 
     /// The data `measurable`'s modifiers give its parent (weight, alignment), as

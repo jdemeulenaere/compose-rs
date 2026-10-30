@@ -21,7 +21,7 @@ fn render(content: impl Fn() + 'static) -> RasterRenderer {
     host.frame();
     let mut renderer = RasterRenderer::new(40, 40);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     renderer
 }

@@ -39,6 +39,7 @@ pub trait TextMeasurer {
     fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32>; // its widest segment between line breaks
     fn relayout(&mut self, paragraph: ParagraphHandle, constraints: Constraints) -> Option<ParagraphHandle>; // the same text at new constraints
     fn restyle(&mut self, paragraph: ParagraphHandle, style: &TextStyle) -> Option<ParagraphHandle>; // the same layout in a new paint
+    fn painted(&mut self, paragraph: ParagraphHandle, style: &TextStyle) -> Option<ParagraphHandle>; // that, the first staying (D1116)
     fn paragraph(&self, paragraph: ParagraphHandle) -> Rc<dyn Paragraph>; // Compose's queries, outliving the handle
     fn release(&mut self, paragraph: ParagraphHandle);
 }

@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use compose_android::serialize::{GroupCache, Resources, Writer, tag, write_display_list};
 use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_runtime::platform;
+use compose_ui::platform::TextMeasurer;
 use compose_ui::platform::*;
 use compose_ui::*;
 

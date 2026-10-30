@@ -158,7 +158,7 @@ fn a_path_reset_each_frame_renders_as_it_is() {
         host.frame();
         let mut renderer = RasterRenderer::new(100, 100);
         host.with_tree(|tree| {
-            renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+            renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
         });
         assert_eq!(renderer.pixel(inside, 50), Color::RED, "width {wide}");
         assert_eq!(renderer.pixel(outside, 50), Color::WHITE, "width {wide}");

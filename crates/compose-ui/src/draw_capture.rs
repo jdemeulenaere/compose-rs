@@ -151,7 +151,7 @@ impl HeldParagraphs {
     }
 
     /// Those of the captures that went are let go.
-    pub(crate) fn sweep(&mut self, measurer: &mut dyn TextMeasurer) {
+    pub(crate) fn sweep(&mut self, measurer: &crate::text::SharedTextMeasurer) {
         if self.captures.is_empty() {
             return;
         }
@@ -159,7 +159,7 @@ impl HeldParagraphs {
         while index < self.captures.len() {
             if self.captures[index].0.strong_count() == 0 {
                 let (_, paragraphs) = self.captures.swap_remove(index);
-                self.let_go(&paragraphs, measurer);
+                self.let_go(&paragraphs, &mut *measurer.borrow_mut());
             } else {
                 index += 1;
             }

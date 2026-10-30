@@ -17,7 +17,7 @@ use compose_ui::{
 
 /// How many times a text was laid out: anew (`layout`, `layout_annotated`), or again from what
 /// the measurer kept of it (`relayout`); and how many times its layout was kept in a new paint
-/// (`restyle`, no layout).
+/// (`restyle` or `painted`, no layout).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutCounts {
     pub fresh: usize,
@@ -100,6 +100,18 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
     ) -> ParagraphHandle {
         self.counter.count(text.as_str(), |counts| counts.fresh += 1);
         self.inner.layout_annotated(text, style, options, constraints, density)
+    }
+
+    /// No new layout, as `restyle`, and counted with it.
+    fn painted(
+        &mut self,
+        paragraph: ParagraphHandle,
+        style: &TextStyle,
+    ) -> Option<ParagraphHandle> {
+        let painted = self.inner.painted(paragraph, style)?;
+        let text = self.inner.text(paragraph).to_string();
+        self.counter.count(&text, |counts| counts.restyled += 1);
+        Some(painted)
     }
 
     fn layout_probe(

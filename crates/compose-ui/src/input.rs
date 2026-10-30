@@ -563,7 +563,7 @@ impl EventContext<'_> {
     }
 
     /// The text measurer, for handlers that hit-test their paragraphs (a text field's tap).
-    pub fn text_measurer(&mut self) -> &mut dyn crate::text::TextMeasurer {
+    pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn crate::text::TextMeasurer> {
         self.context.tree.text_measurer()
     }
 

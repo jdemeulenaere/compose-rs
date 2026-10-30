@@ -1065,7 +1065,7 @@ pub fn Gauge(fraction: f32) {
 
 - `DrawScope`'s calls take the geometry first and a `Paint` last, where Compose takes the color or brush first: `Paint::fill(color)`, `Paint::stroke(color, width)`, `Paint::stroke_with(color, width, cap)`, and `.with_alpha(a)` on either.
 - Transforms and clips are scoped by a closure: `scope.rotate(degrees, pivot, |scope| …)`, `translate`, `scale`, `inset`, `clip_rect`, `clip_path`.
-- There's no `drawText` ([Differences](differences.md#drawing-and-graphics)).
+- `drawText(textMeasurer, text, …)` is `scope.draw_text(&measurer, text, DrawTextOptions { .. })`, and its overloads over a `TextLayoutResult` are `scope.draw_text_layout(&result, color, DrawTextLayoutOptions { .. })` and `draw_text_layout_with_brush` ([Differences](differences.md#drawing-and-graphics)).
 
 ### `drawBehind` and `drawWithContent`
 

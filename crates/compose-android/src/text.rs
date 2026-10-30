@@ -53,6 +53,12 @@ pub trait TextBackend: 'static {
     fn restyle(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
         false
     }
+    /// Gives paragraph `previous`'s layout, as paragraph `handle` too, the paint of `color` (ARGB)
+    /// and `decoration`, as `restyle`, `previous` staying as it is. False (the default: a backend
+    /// keeping nothing) adds nothing.
+    fn painted(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
+        false
+    }
     /// Paragraph `handle`'s width with every soft line break taken (its widest segment between
     /// line break opportunities), as Compose's `minIntrinsicWidth`. `None` (the default) when the
     /// backend doesn't know it.
@@ -256,6 +262,29 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             return None;
         }
         let entry = self.paragraphs.remove(&previous).expect("checked above");
+        self.paragraphs.insert(handle, entry);
+        Some(ParagraphHandle(handle as u64))
+    }
+
+    /// A new handle for the same layout in `style`'s paint, `paragraph` staying: Kotlin draws the
+    /// one `Layout` in each paint, as Compose's `Paragraph.paint(color, …)`.
+    fn painted(
+        &mut self,
+        paragraph: ParagraphHandle,
+        style: &TextStyle,
+    ) -> Option<ParagraphHandle> {
+        let previous = paragraph.0 as u32;
+        let entry = self.paragraphs.get(&previous)?;
+        let entry = Entry {
+            text: entry.text.clone(),
+            laid_out: entry.laid_out,
+            right_to_left: entry.right_to_left,
+        };
+        let handle = self.next_handle();
+        let (color, decoration) = paint_of(style);
+        if !self.backend.painted(previous, handle, color, decoration) {
+            return None;
+        }
         self.paragraphs.insert(handle, entry);
         Some(ParagraphHandle(handle as u64))
     }

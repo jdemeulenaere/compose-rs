@@ -15,4 +15,5 @@ mod review_rtl;
 mod review_skia;
 mod review_text;
 mod skia;
+mod text_painter;
 mod text_reuse;

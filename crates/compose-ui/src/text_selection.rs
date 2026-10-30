@@ -178,8 +178,8 @@ impl UiTree {
     fn offset_in(&mut self, entry: &Entry, position: Offset) -> usize {
         let local = position - entry.origin;
         self.node_and_measurer(entry.node)
-            .and_then(|(value, (measurer, _))| {
-                value.chain[entry.index].selectable()?.offset_at(local, measurer)
+            .and_then(|(value, (mut measurer, _))| {
+                value.chain[entry.index].selectable()?.offset_at(local, &mut *measurer)
             })
             .unwrap_or(0)
     }
@@ -363,10 +363,13 @@ impl UiTree {
             let range = span.and_then(|span| range_of(span, order));
             let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
-            if let Some((value, (measurer, _))) = self.node_and_measurer(entry.node)
-                && let Some(selectable) = value.chain[entry.index].selectable()
-                && selectable.set_selection(range, measurer)
-            {
+            let changed =
+                self.node_and_measurer(entry.node).is_some_and(|(value, (mut measurer, _))| {
+                    value.chain[entry.index]
+                        .selectable()
+                        .is_some_and(|text| text.set_selection(range, &mut *measurer))
+                });
+            if changed {
                 self.invalidate_draw_of(entry.node);
             }
         }

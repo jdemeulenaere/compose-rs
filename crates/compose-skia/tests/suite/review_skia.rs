@@ -137,7 +137,7 @@ fn graphics_layers_replay_through_skia() {
     host.frame();
     let mut renderer = RasterRenderer::new(100, 200);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     assert_eq!(renderer.pixel(28, 28), Color::RED, "scaled past its bounds");
     assert_eq!(renderer.pixel(32, 32), Color::WHITE);
@@ -201,12 +201,12 @@ fn a_frames_groups_draw_what_its_flattened_list_does() {
     flattened.set_optimizations(compose::ui::platform::Optimizations::NONE);
     let groups = host.with_tree(|tree| {
         let list = tree.display_list();
-        walked.render(list, Color::WHITE, 1.0, tree.text_measurer_ref());
+        walked.render(list, Color::WHITE, 1.0, &*tree.text_measurer_ref());
         let flat = list.flatten();
         let mut plain = DisplayList::default();
         plain.ops = flat.ops;
         plain.shaders = flat.shaders;
-        flattened.render(&plain, Color::WHITE, 1.0, tree.text_measurer_ref());
+        flattened.render(&plain, Color::WHITE, 1.0, &*tree.text_measurer_ref());
         list.groups.len()
     });
     assert!(groups >= 3, "{groups} groups");

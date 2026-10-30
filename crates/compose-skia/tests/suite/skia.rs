@@ -58,7 +58,7 @@ fn the_counter_renders_with_skia() {
     host.frame();
     let mut renderer = RasterRenderer::new(640, 400);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     // The first button's fill, in the theme's primary color, at its left edge (16 dp padding,
     // then the pill's straight part).
@@ -117,7 +117,7 @@ fn images_decode_and_draw_with_skia() {
     host.frame();
     let mut renderer = RasterRenderer::new(32, 32);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::BLUE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::BLUE, 1.0, &*tree.text_measurer_ref())
     });
     assert_eq!(renderer.pixel(2, 8), Color::RED);
     assert_eq!(renderer.pixel(13, 8), Color::WHITE);
@@ -152,7 +152,7 @@ fn shadows_darken_beneath_an_elevated_shape() {
     host.frame();
     let mut renderer = RasterRenderer::new(200, 200);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     // Under the shape's bottom edge (the light is above), darker than the background; far
     // away, untouched.
@@ -239,7 +239,7 @@ fn annotated_text_draws_each_span_in_its_style() {
     ui.on_node_with_text("aaaabbbb").assert_exists();
     let mut renderer = RasterRenderer::new(300, 100);
     ui.host().with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     let mut colors = std::collections::HashSet::new();
     for y in 0..40 {
@@ -280,7 +280,7 @@ fn overlapping_pixels(
     let mut renderer = RasterRenderer::new(40, 20);
     renderer.set_optimizations(host.optimizations());
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     (renderer.pixel(25, 10), renderer.pixel(5, 10))
 }
@@ -342,7 +342,7 @@ fn overflowing_pixels(optimizations: compose::ui::platform::Optimizations) -> (C
     let mut renderer = RasterRenderer::new(40, 20);
     renderer.set_optimizations(host.optimizations());
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     (renderer.pixel(10, 10), renderer.pixel(30, 10))
 }
@@ -408,7 +408,7 @@ fn layer_pixels(
     let mut renderer = RasterRenderer::new(40, 40);
     renderer.set_optimizations(host.optimizations());
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).map(|(x, y)| renderer.pixel(x, y)).collect()
 }
@@ -462,7 +462,7 @@ fn a_clip_clips_to_its_rounded_outline() {
     host.frame();
     let mut renderer = RasterRenderer::new(40, 40);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     assert_eq!(renderer.pixel(1, 1), Color::WHITE, "outside the corner");
     assert_eq!(renderer.pixel(20, 20), Color::RED);
@@ -508,7 +508,7 @@ fn review_a_modulated_alpha_fades_a_nested_offscreen_layer_as_one() {
     host.frame();
     let mut renderer = RasterRenderer::new(40, 20);
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     let overlap = renderer.pixel(25, 10);
     let near = |a: u8, b: u8| a.abs_diff(b) <= 2;

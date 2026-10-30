@@ -58,7 +58,7 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
 pub(crate) type HandlerServices<'a> =
-    (&'a mut dyn TextMeasurer, &'a dyn crate::clipboard::ClipboardManager);
+    (std::cell::RefMut<'a, dyn TextMeasurer>, &'a dyn crate::clipboard::ClipboardManager);
 
 /// A node of the UI tree: a generational index, so a stale id never reaches a new node.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -307,7 +307,7 @@ pub struct UiTree {
     slots: Vec<Slot>,
     free: Vec<u32>,
     root: NodeId,
-    pub(crate) text_measurer: Box<dyn TextMeasurer>,
+    pub(crate) text_measurer: crate::text::SharedTextMeasurer,
     /// The paragraphs `Modifier.capture_content`'s captures still draw.
     pub(crate) held_paragraphs: crate::draw_capture::HeldParagraphs,
     pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
@@ -464,7 +464,7 @@ impl UiTree {
             slots: vec![Slot { generation: 0, node: Some(root) }],
             free: Vec::new(),
             root: NodeId { index: 0, generation: 0 },
-            text_measurer,
+            text_measurer: crate::text::SharedTextMeasurer::new(text_measurer),
             held_paragraphs: Default::default(),
             clipboard: Rc::new(crate::clipboard::MemoryClipboard::default()),
             uri_handler: Rc::new(crate::platform_services::PlatformUriHandler::headless()),
@@ -704,14 +704,19 @@ impl UiTree {
         }
     }
 
-    pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
-        &mut *self.text_measurer
+    pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn TextMeasurer> {
+        self.text_measurer.borrow_mut()
+    }
+
+    /// The text measurer itself, as what's measured apart from the tree shares it.
+    pub fn shared_text_measurer(&self) -> &crate::text::SharedTextMeasurer {
+        &self.text_measurer
     }
 
     /// The text measurer, shared: to render the display list with (`display_list()`) without
     /// copying it.
-    pub fn text_measurer_ref(&self) -> &dyn TextMeasurer {
-        &*self.text_measurer
+    pub fn text_measurer_ref(&self) -> std::cell::Ref<'_, dyn TextMeasurer> {
+        self.text_measurer.borrow()
     }
 
     /// The display list of the last draw.
@@ -739,7 +744,7 @@ impl UiTree {
         if slot.generation != node.generation {
             return None;
         }
-        Some((slot.node.as_mut()?, (&mut *self.text_measurer, &*self.clipboard)))
+        Some((slot.node.as_mut()?, (self.text_measurer.borrow_mut(), &*self.clipboard)))
     }
 
     /// Replaces the clipboard (the host gives the system's): what text fields use, and
@@ -1232,7 +1237,7 @@ impl UiTree {
                     self.release_delegates(&mut *removed.node);
                 }
                 let mut context = ReleaseContext {
-                    text_measurer: &mut *self.text_measurer,
+                    text_measurer: &self.text_measurer,
                     held_paragraphs: &mut self.held_paragraphs,
                 };
                 removed.node.on_release(&mut context);
@@ -1710,7 +1715,7 @@ impl UiTree {
                 }
             }
             let mut context = ReleaseContext {
-                text_measurer: &mut *self.text_measurer,
+                text_measurer: &self.text_measurer,
                 held_paragraphs: &mut self.held_paragraphs,
             };
             for entry in &mut value.chain {

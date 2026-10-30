@@ -39,6 +39,7 @@ mod single_drawing_extent;
 mod span_style;
 #[path = "../support/mod.rs"]
 mod support;
+mod text_measurer;
 mod text_range;
 mod text_savers;
 mod text_style;

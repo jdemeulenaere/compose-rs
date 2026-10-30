@@ -1071,7 +1071,7 @@ impl TextFieldNode {
             Some(transformed) => transformed.text,
             None => text,
         };
-        let measurer = scope.text_measurer();
+        let mut measurer = scope.text_measurer();
         let kept = self.intrinsics.as_ref().filter(|kept| {
             kept.text == text
                 && kept.style == self.style
@@ -1104,7 +1104,7 @@ impl TextFieldNode {
                 paragraph
             }
         };
-        read(measurer, paragraph)
+        read(&mut *measurer, paragraph)
     }
 
     /// The size `measure` gives it at `constraints`, as Compose's text field's default

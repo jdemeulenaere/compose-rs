@@ -232,7 +232,7 @@ impl NodeContext<'_> {
     }
 
     /// The text measurer, for a node that lays text out or gives paragraphs back.
-    pub fn text_measurer(&mut self) -> &mut dyn crate::text::TextMeasurer {
+    pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn crate::text::TextMeasurer> {
         self.tree.text_measurer()
     }
 

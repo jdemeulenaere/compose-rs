@@ -125,7 +125,9 @@ impl UiTree {
         if !self.needs_draw {
             return false;
         }
-        self.held_paragraphs.sweep(&mut *self.text_measurer);
+        self.held_paragraphs.sweep(&self.text_measurer);
+        // What the last frame's drawing let go of: its frame names none of them (D1116).
+        self.text_measurer.release_dropped();
         let observer = self.observer.clone();
         let mut recording = mem::take(&mut self.display_list);
         // The boundaries the last frame drew that this one won't, still composed: kept drawn
@@ -558,7 +560,11 @@ impl UiTree {
         let capture = value.chain.iter().find_map(|entry| entry.node.draw_capture()).cloned();
         if let Some(capture) = capture {
             if changed {
-                self.held_paragraphs.store(&capture, groups.to_vec(), &mut *self.text_measurer);
+                self.held_paragraphs.store(
+                    &capture,
+                    groups.to_vec(),
+                    &mut *self.text_measurer.borrow_mut(),
+                );
             } else {
                 capture.refresh_layers(groups);
             }

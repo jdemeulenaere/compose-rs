@@ -466,7 +466,7 @@ fn a_text_replaced_inside_a_boundary_draws_its_new_paragraph() {
         host.frame();
         let list = host.display_list();
         let texts: Vec<String> = host.with_tree(|tree| {
-            let measurer: &dyn TextMeasurer = tree.text_measurer_ref();
+            let measurer = tree.text_measurer_ref();
             list.ops
                 .iter()
                 .filter_map(|op| match op {

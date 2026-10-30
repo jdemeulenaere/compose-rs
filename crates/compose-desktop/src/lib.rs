@@ -398,7 +398,7 @@ impl App {
             let background = shown.background;
             let renderer = &mut shown.renderer;
             shown.host.with_tree(|tree| {
-                renderer.render(tree.display_list(), background, 1.0, tree.text_measurer_ref())
+                renderer.render(tree.display_list(), background, 1.0, &*tree.text_measurer_ref())
             });
         }
         let rendered = Instant::now();

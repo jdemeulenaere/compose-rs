@@ -123,7 +123,7 @@ fn desktop_frame(criterion: &mut Criterion) {
     let mut frame = |ui: &mut ComposeTestRule| {
         click_frame_then(ui, &checkbox, 3, |ui| {
             ui.host().with_tree(|tree| {
-                renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+                renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
             });
         })
     };

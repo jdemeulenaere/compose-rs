@@ -1350,7 +1350,7 @@ impl dyn ModifierNode {
 
 /// What a node reaches when released (`ModifierNode::on_release`).
 pub struct ReleaseContext<'a> {
-    pub text_measurer: &'a mut dyn crate::text::TextMeasurer,
+    pub text_measurer: &'a crate::text::SharedTextMeasurer,
     pub(crate) held_paragraphs: &'a mut crate::draw_capture::HeldParagraphs,
 }
 

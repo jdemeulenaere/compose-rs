@@ -61,7 +61,7 @@ static ALLOCATOR: Counting = Counting;
 fn present(host: &mut UiHost, renderer: &mut RasterRenderer, window: &mut [u32]) -> usize {
     host.frame();
     host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, &*tree.text_measurer_ref())
     });
     renderer.copy_pixels_to(window);
     window.len()

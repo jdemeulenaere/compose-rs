@@ -511,6 +511,9 @@ impl UiHost {
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
             let constants = HostLocals {
+                font_family_resolver: self.with_tree(|tree| {
+                    crate::font::create_font_family_resolver(tree.shared_text_measurer())
+                }),
                 lifecycle: self.lifecycle.registry.lifecycle(),
                 view_models: Rc::new(self.lifecycle.view_models.clone()),
                 scheduler: self.prefetch_scheduler.clone(),
@@ -1173,6 +1176,7 @@ impl Drop for HostLifecycle {
 
 /// The root's locals that never change, provided outermost.
 struct HostLocals {
+    font_family_resolver: crate::font::FontFamilyResolver,
     lifecycle: compose_lifecycle::Lifecycle,
     view_models: Rc<ViewModelStore>,
     scheduler: crate::prefetch::PrefetchScheduler,
@@ -1201,6 +1205,8 @@ impl HostLocals {
                     crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
                         .provides(Some(self.back_dispatcher.clone())),
                     crate::focus_manager::LOCAL_WINDOW_INFO.provides(self.window_info.clone()),
+                    crate::font::LOCAL_FONT_FAMILY_RESOLVER
+                        .provides(self.font_family_resolver.clone()),
                 ),
                 compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
                     .provides(Some(self.saveable_registry.clone())),

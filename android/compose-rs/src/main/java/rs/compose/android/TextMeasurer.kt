@@ -334,6 +334,22 @@ internal class TextMeasurer(
     }
 
     /**
+     * Gives paragraph [previous]'s layout, as paragraph [handle] too, the paint of [color] (ARGB)
+     * and [decoration], [previous] staying as it is: the one `Layout` drawn in each paint
+     * ([drawInPaint]), as Compose paints a layout it keeps in another color (`Paragraph.paint`).
+     * False (nothing changed) without [previous].
+     */
+    fun painted(previous: Int, handle: Int, color: Int, decoration: Int): Boolean {
+        val layout = layouts.get(previous) ?: return false
+        val kept = intrinsics.get(previous) ?: return false
+        layouts.put(handle, layout)
+        lastLines.get(previous)?.let { lastLines.put(handle, it) }
+        intrinsics.put(handle, kept.inPaint(color, decoration))
+        if (collectingLaidOut) laidOut.add(handle)
+        return true
+    }
+
+    /**
      * Lays out paragraph [previous]'s text again as paragraph [handle], between [minWidth] and
      * [maxWidth] (`Int.MAX_VALUE`: unbounded), from what [previous] kept of it ([Intrinsics]: no
      * measure of the text), as Compose's new `Paragraph` from the `ParagraphIntrinsics` its cache

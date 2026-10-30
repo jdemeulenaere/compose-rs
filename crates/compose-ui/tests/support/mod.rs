@@ -219,7 +219,8 @@ pub fn click(host: &mut UiHost, x: f32, y: f32) {
 /// The measurer's live paragraphs, through the host's tree.
 pub fn live_paragraphs(host: &UiHost) -> usize {
     host.with_tree(|tree| {
-        let measurer: &mut dyn TextMeasurer = tree.text_measurer();
+        let mut measurer = tree.text_measurer();
+        let measurer: &mut dyn compose_ui::platform::TextMeasurer = &mut *measurer;
         // The headless host's measurer is the fixed one.
         let any = measurer as &mut dyn std::any::Any;
         any.downcast_mut::<FixedTextMeasurer>().map_or(0, |measurer| measurer.live())

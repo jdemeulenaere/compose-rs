@@ -675,6 +675,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D1112 | [text](decisions/text.md#d1112) | current |
 | D1113 | [text](decisions/text.md#d1113) | reverted, to be redone in the IME step |
 | D1114 | [text](decisions/text.md#d1114) | current |
+| D1115 | [text](decisions/text.md#d1115) | current |
+| D1116 | [text](decisions/text.md#d1116) | current |
+| D1117 | [text](decisions/text.md#d1117) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

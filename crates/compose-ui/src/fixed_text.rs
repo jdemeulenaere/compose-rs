@@ -758,6 +758,23 @@ impl TextMeasurer for FixedTextMeasurer {
         Some(restyled)
     }
 
+    /// A copy of the layout: its paragraphs have no paint.
+    fn painted(&mut self, handle: ParagraphHandle, _style: &TextStyle) -> Option<ParagraphHandle> {
+        let kept = self.paragraphs.get(handle.0 as usize)?.as_ref()?;
+        let copy = FixedParagraph {
+            measured: kept.measured.clone(),
+            input: FixedInput {
+                text: kept.input.text.clone(),
+                style: kept.input.style,
+                options: kept.input.options,
+                constraints: kept.input.constraints,
+                density: kept.input.density,
+            },
+            full: kept.full.clone(),
+        };
+        Some(self.store(copy))
+    }
+
     fn hit_test(&self, handle: ParagraphHandle, position: Offset) -> TextPosition {
         let layout = self.layout_of(handle);
         if layout.lines.is_empty() {
