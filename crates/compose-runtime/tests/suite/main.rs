@@ -24,6 +24,7 @@ mod model;
 mod pausable;
 mod produce_state;
 mod recomposer;
+mod recomposer_api;
 mod restart;
 mod restoration;
 mod reusable;

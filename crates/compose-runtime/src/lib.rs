@@ -42,6 +42,7 @@ mod node_tree;
 mod observe;
 mod pausable;
 pub mod platform;
+mod recomposer;
 mod remember;
 mod reusable;
 mod runtime;
@@ -89,6 +90,10 @@ pub use local::{
     current_composition_local_map, with_composition_local, with_composition_locals,
 };
 pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};
+pub use recomposer::{
+    CancellationHandle, CompositionContext, Recomposer, RecomposerInfo, RecomposerState,
+    running_recomposers, with_running_recomposer,
+};
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,

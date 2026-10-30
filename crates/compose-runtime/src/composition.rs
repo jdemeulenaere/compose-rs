@@ -10,6 +10,7 @@ use crate::applier::{Applier, ErasedApplier};
 use crate::composer::{Frame, Mode, NodeOp, apply_node_op, current, flush_node_moves, run_walk};
 use crate::error::{ComposeError, misuse};
 use crate::hash::key_of;
+use crate::recomposer::{CompositionContext, Recomposer};
 use crate::remember::dispatch_forgotten;
 use crate::runtime::{
     ActivePass, CompositionData, CompositionId, Deferred, Runtime, remove_siblings, request_frames,
@@ -41,6 +42,22 @@ impl Composition {
         });
         register_exit_guard();
         Composition { id, _not_send: PhantomData }
+    }
+
+    /// A composition emitting nodes into `applier`, under `parent`, as `Composition(applier,
+    /// parent)`.
+    pub fn with_parent<A: Applier>(applier: A, parent: CompositionContext) -> Composition {
+        let composition = Composition::new(applier);
+        with_runtime(|runtime| {
+            composition.data(runtime).recomposer = Some(parent.recomposer);
+        });
+        composition
+    }
+
+    /// What it's under, as `parent`.
+    pub fn parent(&self) -> CompositionContext {
+        let recomposer = with_runtime(|runtime| self.data(runtime).recomposer);
+        recomposer.unwrap_or_else(Recomposer::current_thread).as_context()
     }
 
     /// A composition whose content can be reused and deactivated, as
@@ -528,7 +545,7 @@ pub(crate) struct Pass {
 }
 
 impl Pass {
-    fn begin(id: CompositionId, mode: Mode) -> Option<Pass> {
+    pub(crate) fn begin(id: CompositionId, mode: Mode) -> Option<Pass> {
         Pass::begin_as(id, mode, PassKind::Whole, None)
     }
 
@@ -633,7 +650,13 @@ impl Pass {
     ///
     /// The pass is over before any of that runs, so effects, observers and drops may compose
     /// other compositions (a popup from an effect), and a frame requester may recompose at once.
-    pub(crate) fn finish(mut self) {
+    pub(crate) fn finish(self) {
+        apply_work(self.finish_composing());
+    }
+
+    /// Ends the pass's composing: what [`finish`](Pass::finish) does before the work, which a
+    /// frame of several compositions applies once they've all composed (D796, D1301).
+    pub(crate) fn finish_composing(mut self) -> Composed {
         let resume = self.kind == PassKind::Resume;
         let (op, applier) = with_runtime(|runtime| {
             let Runtime {
@@ -704,8 +727,7 @@ impl Pass {
         if self.kind == PassKind::Whole {
             crate::pausable::finish_pass_regions(self.id);
         }
-        let composed = self.end_composing(applier);
-        apply_work(composed);
+        self.end_composing(applier)
     }
 
     /// Composing is over: the pass's snapshot left and applied, as Compose applies it before the
@@ -733,7 +755,7 @@ impl Pass {
 }
 
 /// A pass that's composed, its snapshot's apply done: what [`apply_work`] needs.
-struct Composed {
+pub(crate) struct Composed {
     id: CompositionId,
     applier: Rc<RefCell<dyn ErasedApplier>>,
     deferred: Deferred,
@@ -743,7 +765,7 @@ struct Composed {
 
 /// The pass's work, in what was current before it: deferred changes, retired cells, and what the
 /// apply came to.
-fn apply_work(composed: Composed) {
+pub(crate) fn apply_work(composed: Composed) {
     use crate::snapshots::Committed;
     let Composed { id, applier, mut deferred, mut finishing, committed } = composed;
     let observer_panic = match committed {

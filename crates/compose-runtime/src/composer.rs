@@ -1610,6 +1610,17 @@ impl Composer {
         }
     }
 
+    /// Schedules `action` for the end of the frame of this composition's recomposer, as
+    /// `Composer.scheduleFrameEndCallback`.
+    pub fn schedule_frame_end_callback(
+        &self,
+        action: impl FnOnce() + 'static,
+    ) -> crate::recomposer::CancellationHandle {
+        let recomposer = crate::runtime::composing_recomposer()
+            .unwrap_or_else(crate::recomposer::Recomposer::current_thread);
+        recomposer.schedule_frame_end_callback(action)
+    }
+
     /// Ends a replace, movable or node group.
     pub fn end_group(&self) {
         let op = with_runtime(|runtime| runtime.end_group(None));

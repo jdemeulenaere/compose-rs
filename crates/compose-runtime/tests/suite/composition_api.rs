@@ -765,3 +765,12 @@ fn reusable_content_in_paused_reused_content_keeps_order() {
     let views = composition.with_applier(|applier: &mut ViewApplier| top_text(applier));
     assert_eq!(views, ["linear", "After 1"]);
 }
+
+/// Deactivating needs what's paused to be done with, as Compose's says.
+#[test]
+#[should_panic(expected = "paused composition")]
+fn deactivating_while_paused_panics() {
+    let composition = Composition::pausable(ViewApplier::new());
+    let _paused = composition.set_pausable_content(|| Text("Some text"));
+    composition.deactivate();
+}

@@ -103,12 +103,17 @@ pub fn DisposableEffect<K: ComposeArg>(
 struct LaunchedEffectImpl {
     task: Cell<Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>>>,
     job: Cell<Option<Job>>,
+    /// The recomposer of its composition, if not the thread's default: its tasks are its.
+    recomposer: Option<crate::recomposer::Recomposer>,
 }
 
 impl RememberObserver for LaunchedEffectImpl {
     fn on_remembered(&self) {
         if let Some(task) = self.task.take() {
-            self.job.set(Some(crate::executor::launch(task)));
+            self.job.set(Some(match self.recomposer {
+                Some(recomposer) => recomposer.launch_effect(task),
+                None => crate::executor::launch(task),
+            }));
         }
     }
 
@@ -132,6 +137,7 @@ pub fn LaunchedEffect<K: ComposeArg>(
     remember_observer_keyed(keys, || LaunchedEffectImpl {
         task: Cell::new(Some(Box::pin(block))),
         job: Cell::new(None),
+        recomposer: crate::runtime::composing_recomposer(),
     });
 }
 
@@ -152,7 +158,11 @@ impl RememberObserver for ScopeObserver {
 /// `rememberCoroutineScope()`: launch tasks from handlers (`scope.launch(async move { … })`);
 /// they are cancelled when the call leaves the composition.
 pub fn remember_coroutine_scope() -> CoroutineScope {
-    remember_observer(|| ScopeObserver(CoroutineScope::new())).0.handle()
+    remember_observer(|| {
+        ScopeObserver(CoroutineScope::of_recomposer(crate::runtime::composing_recomposer()))
+    })
+    .0
+    .handle()
 }
 
 /// A state holding the latest `value` this call was given, as Compose's

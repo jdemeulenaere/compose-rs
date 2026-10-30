@@ -245,6 +245,14 @@ pub(crate) fn request_frames() {
     }
 }
 
+/// The recomposer of the composition composing now, if not the thread's default.
+pub(crate) fn composing_recomposer() -> Option<crate::recomposer::Recomposer> {
+    with_runtime(|runtime| {
+        let active = runtime.active?;
+        runtime.compositions.get(active.composition)?.recomposer
+    })
+}
+
 /// Whether frame requests are waiting: after an invalidation, `request_frames` is due.
 pub(crate) fn frames_requested(runtime: &Runtime) -> bool {
     !runtime.frame_requests.is_empty()
@@ -398,10 +406,17 @@ pub(crate) fn invalidate_scope_parts(
     }
     if !data.pending {
         data.pending = true;
-        if let Some(requester) = &data.frame_requester {
-            frame_requests.push(requester.clone());
-            return true;
+        let requester = data.frame_requester.clone();
+        let mut requested = false;
+        if let Some(requester) = requester {
+            frame_requests.push(requester);
+            requested = true;
         }
+        if let Some(wake) = &compositions.recomposer_wake {
+            frame_requests.push(wake.clone());
+            requested = true;
+        }
+        return requested;
     }
     false
 }
@@ -495,6 +510,8 @@ pub(crate) struct CompositionData {
     /// [`Composition::dispose`](crate::Composition::dispose) was called: it's closed for good.
     pub disposed: bool,
     pub frame_requester: Option<Rc<dyn Fn()>>,
+    /// The recomposer it's under, if not the thread's default.
+    pub recomposer: Option<crate::recomposer::Recomposer>,
     pub deferred: Deferred,
     /// The paused composition in progress, if any (Compose's `pendingPausedComposition`).
     pub paused: Option<Box<crate::pausable::Paused>>,
@@ -512,6 +529,7 @@ impl CompositionData {
             closed: false,
             disposed: false,
             frame_requester: None,
+            recomposer: None,
             deferred: Deferred::default(),
             paused: None,
         }
@@ -545,13 +563,22 @@ pub(crate) struct Compositions {
     live: usize,
     /// Live compositions closed at thread exit.
     pub closed: usize,
+    /// What an invalidation asks while a recomposer's loop is running.
+    pub recomposer_wake: Option<Rc<dyn Fn()>>,
     /// The generation of new entries (odd): after a reset, above every earlier one.
     base: u32,
 }
 
 impl Compositions {
     const fn new() -> Compositions {
-        Compositions { entries: Vec::new(), free: Vec::new(), live: 0, closed: 0, base: 1 }
+        Compositions {
+            entries: Vec::new(),
+            free: Vec::new(),
+            live: 0,
+            closed: 0,
+            recomposer_wake: None,
+            base: 1,
+        }
     }
 
     pub fn alloc(&mut self, data: CompositionData) -> CompositionId {

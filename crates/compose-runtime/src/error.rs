@@ -15,6 +15,12 @@ pub enum ComposeError {
     NotComposing,
     /// The content of a disposed composition was set.
     Disposed,
+    /// A recomposer's loop was started while it was running.
+    RecomposerRunning,
+    /// A recomposer's loop was started once it's cancelled or closed.
+    RecomposerShutDown,
+    /// The thread's default recomposer was cancelled or closed.
+    DefaultRecomposerShutDown,
     /// A pass was started while another one was running on this thread.
     PassInProgress,
     /// `end_group` or `end_restart_group` had no matching start, or closed the wrong kind of group.
@@ -57,6 +63,11 @@ impl fmt::Display for ComposeError {
                 );
             }
             ComposeError::Disposed => "the composition is disposed",
+            ComposeError::RecomposerRunning => "the recomposer is already running",
+            ComposeError::RecomposerShutDown => "the recomposer is cancelled or closed",
+            ComposeError::DefaultRecomposerShutDown => {
+                "the thread's default recomposer can't be cancelled or closed"
+            }
             ComposeError::NotComposing => "the composer was used outside a composition pass",
             ComposeError::PassInProgress => {
                 "a composition pass is already running on this thread (one pass at a time)"

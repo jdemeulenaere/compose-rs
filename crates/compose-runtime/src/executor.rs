@@ -153,7 +153,7 @@ impl Ord for Timer {
 }
 
 /// A task waiting for the next frame: the frame's time once dispatched.
-type FrameAwaiter = (Rc<Cell<Option<u64>>>, Waker);
+type FrameAwaiter = (Rc<Cell<Option<u64>>>, Waker, Option<TaskKey>);
 
 struct Executor {
     tasks: Vec<TaskSlot>,
@@ -481,7 +481,7 @@ pub fn dispatch_frame() -> u64 {
     {
         let _quiet = QuietWakes::new(&shared);
         let mut awaiters = UnwokenAwaiters(awaiters.into_iter());
-        for (time, waker) in awaiters.0.by_ref() {
+        for (time, waker, _) in awaiters.0.by_ref() {
             time.set(Some(now));
             waker.wake();
         }
@@ -512,6 +512,17 @@ impl Drop for UnwokenAwaiters {
 }
 
 /// Whether a task waits for a frame: the host should run one.
+/// The tasks waiting for a frame.
+pub(crate) fn frame_awaiting_jobs() -> Vec<Job> {
+    with_executor(|executor| {
+        executor
+            .frame_awaiters
+            .iter()
+            .filter_map(|(.., task)| task.map(|key| Job { key }))
+            .collect()
+    })
+}
+
 pub fn has_frame_awaiters() -> bool {
     with_executor(|executor| !executor.frame_awaiters.is_empty())
 }
@@ -679,21 +690,31 @@ impl<R, F: FnOnce(u64) -> R> Future for WithFrame<F> {
             return Poll::Ready(on_frame(time));
         }
         assert!(self.on_frame.is_some(), "polled after it completed");
+        // With a recomposer's loop running or paused, its effects' frames are its concern.
+        let hooked = crate::recomposer::frames_hooked();
+        if hooked && crate::recomposer::frame_held_back(context.waker()) {
+            return Poll::Pending;
+        }
         // Polled again while waiting: its registration is replaced (with this poll's waker).
         let registered = self.time.is_some();
         let time = self.time.get_or_insert_with(|| Rc::new(Cell::new(None))).clone();
+        let task = if hooked { CURRENT_TASK.try_with(Cell::get).ok().flatten() } else { None };
         let shared = with_executor(|executor| {
             if registered {
-                executor.frame_awaiters.retain(|(awaiting, _)| !Rc::ptr_eq(awaiting, &time));
+                executor.frame_awaiters.retain(|(awaiting, ..)| !Rc::ptr_eq(awaiting, &time));
             }
             // The first awaiter since the last frame asks the host for the next; the host
             // already runs it for the others (it runs frames while `has_frame_awaiters`).
             let first = executor.frame_awaiters.is_empty();
-            executor.frame_awaiters.push((time, context.waker().clone()));
+            executor.frame_awaiters.push((time, context.waker().clone(), task));
             first.then(|| executor.shared.clone())
         });
         if let Some(shared) = shared {
             shared.wake_host();
+        }
+        // A recomposer's loop has a frame to do, for its effects' awaiters to go first.
+        if hooked {
+            crate::recomposer::frame_awaited();
         }
         Poll::Pending
     }
@@ -705,7 +726,7 @@ impl<F> Drop for WithFrame<F> {
         if let Some(time) = &self.time {
             let _ = EXECUTOR.try_with(|executor| {
                 if let Ok(mut executor) = executor.try_borrow_mut() {
-                    executor.frame_awaiters.retain(|(awaiting, _)| !Rc::ptr_eq(awaiting, time));
+                    executor.frame_awaiters.retain(|(awaiting, ..)| !Rc::ptr_eq(awaiting, time));
                 }
             });
         }
@@ -754,6 +775,8 @@ pub struct CoroutineScope {
 struct ScopeInner {
     jobs: RefCell<Vec<Job>>,
     cancelled: Cell<bool>,
+    /// The recomposer whose effects its tasks count as, if not the thread's default.
+    recomposer: Option<crate::recomposer::Recomposer>,
 }
 
 impl CoroutineScope {
@@ -762,7 +785,16 @@ impl CoroutineScope {
     /// cancel the tasks it launched.
     #[track_caller]
     pub fn new() -> Owned<CoroutineScope> {
-        let inner = ScopeInner { jobs: RefCell::new(Vec::new()), cancelled: Cell::new(false) };
+        CoroutineScope::of_recomposer(None)
+    }
+
+    /// A scope of its own whose tasks are effects of `recomposer`'s.
+    #[track_caller]
+    pub(crate) fn of_recomposer(
+        recomposer: Option<crate::recomposer::Recomposer>,
+    ) -> Owned<CoroutineScope> {
+        let inner =
+            ScopeInner { jobs: RefCell::new(Vec::new()), cancelled: Cell::new(false), recomposer };
         Owned::new(inner, |inner| CoroutineScope { inner })
     }
 
@@ -776,7 +808,10 @@ impl CoroutineScope {
             cancel(key);
             return Job { key };
         };
-        let job = Job { key: spawn(Box::pin(future)) };
+        let job = match inner.recomposer {
+            Some(recomposer) => recomposer.launch_effect(future),
+            None => Job { key: spawn(Box::pin(future)) },
+        };
         let mut jobs = inner.jobs.borrow_mut();
         jobs.retain(Job::is_active);
         jobs.push(job);
