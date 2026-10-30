@@ -38,13 +38,14 @@ fn toggling_one_item_recomposes_one_row() {
     ui.on_all_nodes(has_role(Role::Checkbox)).get(1).perform_click();
     let recomposed = ui.recomposition_counts().since(&before);
     // The row's content reads `done`, so the layout invoking it re-runs it: one checkbox, and
-    // nothing above the row (not even `TodoRow`'s own body).
+    // nothing above the row (not even `TodoRow`'s own body). Twice: its transition's target, written
+    // in the scope that reads it, is heard at the apply, as Compose's (D793).
     assert_one_row(&recomposed);
 }
 
 fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) {
     let names = recomposed.names();
-    assert_eq!(recomposed.scopes_named("Checkbox"), 1, "{names:?}");
+    assert_eq!(recomposed.scopes_named("Checkbox"), 2, "{names:?}");
     assert_eq!(recomposed.scopes_named("TodoAppWith"), 0, "{names:?}");
     assert!(recomposed.scopes_named("TodoRow") <= 1, "{names:?}");
     // The button the pointer left composes again for each frame of its elevation's animation
@@ -53,7 +54,7 @@ fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) 
     let animating = ["Button", "Box", "Layout"];
     let total: u64 =
         names.iter().filter(|(name, _)| !animating.contains(name)).map(|(_, count)| count).sum();
-    assert!(total <= 3, "{names:?}");
+    assert!(total <= 4, "{names:?}");
     assert!(recomposed.scopes_named("Button") <= 12, "{names:?}");
 }
 

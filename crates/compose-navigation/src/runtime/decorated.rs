@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use compose_runtime::{
-    Callback, ComposeArg, DisposableEffect, OwnedState, composable, key, mutable_state_of_with,
-    referential_equality_policy, remember, remember_keyed,
+    Callback, ComposeArg, DisposableEffect, RecomposeScope, composable, current_recompose_scope,
+    key, remember, remember_keyed,
 };
 
 use super::back_stack::NavList;
@@ -57,10 +57,16 @@ impl<T: PartialEq + 'static> ComposeArg for Decoration<T> {
 /// `update` here is `state`'s write. `last` is what's compared: reading the state there would
 /// subscribe what decorates to what it writes.
 struct Place<T: 'static> {
-    state: Rc<OwnedState<Decoration<T>>>,
-    last: RefCell<Decoration<T>>,
+    shown: Rc<Shown<T>>,
     content: Rc<dyn Fn(T)>,
     decorated: RefCell<NavEntry<T>>,
+}
+
+/// What a place's content shows, as a `ComposableLambda`'s block: changing it invalidates the scopes
+/// that read it (`trackWrite`), not as a state's write, heard by whatever read it since as well.
+struct Shown<T: 'static> {
+    decoration: RefCell<Decoration<T>>,
+    readers: RefCell<Vec<RecomposeScope>>,
 }
 
 /// Keys by `==`, as Kotlin's `remember(backStack.toList())`.
@@ -181,23 +187,37 @@ fn decorate_entry<T: Clone + PartialEq + 'static>(
     key(entry.content_key().clone(), || {
         let decoration = Decoration { entry: entry.clone(), decorators: decorators.clone() };
         let place: Rc<Place<T>> = remember(|| {
-            let state =
-                Rc::new(mutable_state_of_with(decoration.clone(), referential_equality_policy()));
+            let shown = Rc::new(Shown {
+                decoration: RefCell::new(decoration.clone()),
+                readers: RefCell::new(Vec::new()),
+            });
             let content: Rc<dyn Fn(T)> = {
-                let (state, tracking) = (state.clone(), tracking.clone());
-                Rc::new(move |_| show_decorated(&state.handle().get(), &tracking))
+                let (shown, tracking) = (shown.clone(), tracking.clone());
+                Rc::new(move |_| {
+                    let scope = current_recompose_scope();
+                    let mut readers = shown.readers.borrow_mut();
+                    if !readers.contains(&scope) {
+                        readers.push(scope);
+                    }
+                    drop(readers);
+                    let decoration = shown.decoration.borrow().clone();
+                    show_decorated(&decoration, &tracking)
+                })
             };
             let decorated =
                 RefCell::new(NavEntry::with_content(entry, content.clone(), CONTENT_GROUP));
-            Rc::new(Place { state, last: RefCell::new(decoration.clone()), content, decorated })
+            Rc::new(Place { shown, content, decorated })
         });
-        if !place.last.borrow().same(&decoration) {
-            if place.last.borrow().entry != decoration.entry {
+        if !place.shown.decoration.borrow().same(&decoration) {
+            if place.shown.decoration.borrow().entry != decoration.entry {
                 *place.decorated.borrow_mut() =
                     NavEntry::with_content(entry, place.content.clone(), CONTENT_GROUP);
             }
-            *place.last.borrow_mut() = decoration.clone();
-            place.state.handle().set(decoration);
+            *place.shown.decoration.borrow_mut() = decoration;
+            let readers = std::mem::take(&mut *place.shown.readers.borrow_mut());
+            for reader in readers {
+                reader.invalidate();
+            }
         }
         place.decorated.borrow().clone()
     })

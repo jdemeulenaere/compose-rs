@@ -403,7 +403,7 @@ fn the_total_duration_is_the_longest_values() {
 
 // Compose: compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/TransitionTest.kt, testRecompositionCountWhenPassingTransition
 #[test]
-fn passing_a_transition_composes_once_per_change() {
+fn passing_a_transition_composes_once_for_its_old_value_and_twice_for_a_change() {
     let show = mutable_state_of(false);
     let state = mutable_state_of(MutableTransitionState::new(false));
     let (show_handle, state_handle) = (show.handle(), state.handle());
@@ -431,7 +431,9 @@ fn passing_a_transition_composes_once_per_change() {
     show.set(true);
     state.get().set_target_state(true);
     ui.wait_for_idle();
-    assert_eq!(counts.get(), (1, 1));
+    // Twice with it shown: the transition's target, written in the scope that reads it, is heard at
+    // the apply, as Compose's (D793).
+    assert_eq!(counts.get(), (1, 2));
 }
 
 // Compose: compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/TransitionTest.kt, animateFloatCallerRecompositionCount
@@ -623,20 +625,30 @@ fn a_composition_writing_a_measured_state_asks_for_no_other_frame() {
             })
         });
         Box!(modifier = modifier);
-        let transition = update_transition(handle.get(), None);
-        let _ = transition.animate_float(|_| tween(100).into(), |state| *state as f32);
-        plays.borrow_mut().push(transition.play_time_nanos());
+        if handle.get() >= 2 {
+            let transition = update_transition(handle.get(), None);
+            let _ = transition.animate_float(|_| tween(100).into(), |state| *state as f32);
+            plays.borrow_mut().push(transition.play_time_nanos());
+        }
     });
     trigger.set(1);
     ui.advance_time_by_frame();
     assert_eq!(measured_values.borrow().last(), Some(&1), "measured with the write");
     assert!(!ui.host().has_pending_work(), "the write asks for no other frame");
+    // A transition's target is read in the scope that writes it: its apply invalidates it, as
+    // Compose's (D793), the transition's first frame then at play time 0, the next 16 ms on.
+    trigger.set(2);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
     let composed = play_times.borrow().len();
+    trigger.set(3);
+    ui.advance_time_by_frame();
+    assert_eq!(measured_values.borrow().last(), Some(&3));
+    assert!(ui.host().has_pending_work(), "the scope read what it wrote");
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
-    // The transition's first frame is at play time 0, the next 16 ms on.
     let plays = play_times.borrow();
-    assert_eq!(&plays[composed..], &[16_000_000][..], "{plays:?}");
+    assert_eq!(&plays[composed..], &[0, 0, 16_000_000][..], "{plays:?}");
 }
 
 thread_local! {

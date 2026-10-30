@@ -11,7 +11,8 @@ use std::task::{Context, Poll};
 
 use super::SnapshotId;
 use super::global::{
-    Applied, ChangeSet, ObserverFrame, ObserverHandle, StateObserverFn, merged_with, send,
+    Applied, ChangeSet, ObserverFrame, ObserverHandle, OuterPass, StateObserverFn, merged_with,
+    send,
 };
 use super::id_set::IdSet;
 use super::records::{ApplyViews, Merged, View};
@@ -81,8 +82,6 @@ pub(crate) struct SnapshotInner {
     /// How many read-only snapshots share its id: nested in a read-only one, it's the same view,
     /// and the id stays open until the last goes.
     sharers: Rc<Cell<u32>>,
-    /// A pass's: its writes invalidated their readers at once.
-    of_pass: Cell<bool>,
     applied: Cell<bool>,
     disposed: Cell<bool>,
     deactivated: Cell<bool>,
@@ -119,7 +118,6 @@ impl SnapshotInner {
             previous_pins: RefCell::new(Vec::new()),
             nested: Cell::new(1),
             sharers,
-            of_pass: Cell::new(false),
             applied: Cell::new(false),
             disposed: Cell::new(false),
             deactivated: Cell::new(false),
@@ -438,11 +436,7 @@ fn apply_root(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
     with_runtime(|runtime| inner.close(&mut runtime.snapshots));
     inner.applied.set(true);
     // A new global snapshot, which sees this one, and what changed is told.
-    let invalidated = inner.of_pass.get();
-    super::global::send_with(
-        true,
-        Some(Applied { states: modified, snapshot: handle, invalidated }),
-    );
+    super::global::send_with(true, Some(Applied { states: modified, snapshot: handle }));
     // Pinned until the observers have run: they may take nested snapshots of it.
     with_runtime(|runtime| inner.release_pins(&mut runtime.snapshots));
     super::global::reclaim_records();
@@ -858,8 +852,8 @@ impl Snapshot {
     /// States made until now count as initialized: a later write to one is a change the apply
     /// observers hear, as `Snapshot.notifyObjectsInitialized()` (a state written in the global
     /// snapshot that made it isn't one, as in Compose). In the global snapshot it advances it, as
-    /// `advanceGlobalSnapshot`, so what changed is sent; during a pass only the id advances. In a
-    /// mutable snapshot, that one advances; in a read-only one nothing happens.
+    /// `advanceGlobalSnapshot`, so what changed is sent. In a mutable snapshot, a pass's too, that one
+    /// advances; in a read-only one nothing happens.
     pub fn notify_objects_initialized() {
         let current = with_runtime(|runtime| runtime.snapshots.current().cloned());
         match current {
@@ -1115,8 +1109,7 @@ fn nested_mutable(
 /// cells, and what observes the pass goes on observing.
 pub(crate) struct PassSnapshot {
     snapshot: SnapshotRef,
-    outer: Option<SnapshotRef>,
-    outer_read_only: bool,
+    outer: Option<OuterPass>,
     /// Nothing else could have written during the pass.
     alone: bool,
 }
@@ -1128,6 +1121,10 @@ fn commit_by_apply(inner: SnapshotRef) -> Committed {
     match result {
         Ok(SnapshotApplyResult::Success) => Committed::Applied,
         Ok(SnapshotApplyResult::Failure(_)) => Committed::Conflict,
+        // Nothing applied: a policy's merge panicked. Otherwise an apply observer.
+        Err(panic) if snapshot.0.inner.as_ref().is_some_and(|inner| !inner.applied.get()) => {
+            Committed::MergePanicked(panic)
+        }
         Err(panic) => Committed::ObserverPanicked(panic),
     }
 }
@@ -1137,19 +1134,25 @@ pub(crate) enum Committed {
     Applied,
     /// Something outside it wrote what it wrote: composition failed, as `applyAndCheck`.
     Conflict,
+    /// A policy's `merge` panicked: nothing applied, as a conflict, the panic going on.
+    MergePanicked(Box<dyn std::any::Any + Send>),
     /// An apply observer panicked, the snapshot applied: to go on once the pass's work has run.
     ObserverPanicked(Box<dyn std::any::Any + Send>),
 }
 
 impl PassSnapshot {
-    /// Takes it and makes it current, in the runtime's borrow (no user code): no apply notifications
-    /// here, as the pass's entry points sent.
-    pub(crate) fn begin(snapshots: &mut Snapshots) -> PassSnapshot {
+    /// Panics if a pass can't begin now, as `takeMutableSnapshot`: before it changes anything.
+    pub(crate) fn check_can_begin(snapshots: &Snapshots) {
         if snapshots.read_only()
             || snapshots.current().is_some_and(|current| current.kind.read_only())
         {
             panic!("Cannot create a mutable snapshot of a read-only snapshot");
         }
+    }
+
+    /// Takes it and makes it current, in the runtime's borrow (no user code): no apply notifications
+    /// here, as the pass's entry points sent.
+    pub(crate) fn begin(snapshots: &mut Snapshots) -> PassSnapshot {
         let snapshot = match snapshots.current().cloned() {
             Some(parent) => nested_mutable(snapshots, &parent, None, None, ReadContext::NONE),
             None => {
@@ -1177,23 +1180,32 @@ impl PassSnapshot {
                 snapshot
             }
         };
-        snapshot.of_pass.set(true);
-        let (outer, outer_read_only) = snapshots.begin_pass(snapshot.clone());
-        PassSnapshot { snapshot, outer, outer_read_only, alone: false }
+        let outer = snapshots.begin_pass(snapshot.clone());
+        PassSnapshot { snapshot, outer: Some(outer), alone: false }
     }
 
     /// What it replaced is current again; composing is over.
     pub(crate) fn leave(&mut self, snapshots: &mut Snapshots) {
         self.alone = snapshots.pass_alone();
-        snapshots.end_pass(self.outer.take(), self.outer_read_only);
+        if let Some(outer) = self.outer.take() {
+            snapshots.end_pass(outer);
+        }
     }
 
     /// Applies it, once left. With nothing else having written in the pass, there's nothing to
     /// decide (D794): what it wrote stands, what's to tell is told, and its object is the next
     /// pass's.
     pub(crate) fn commit(self) -> Committed {
+        let committed = self.apply();
+        // A pair no walk took (a write found equivalent to what's there now) isn't the next's.
+        let _ = try_with_runtime(|runtime| runtime.snapshots.end_of_applies());
+        committed
+    }
+
+    fn apply(self) -> Committed {
         let inner = self.snapshot;
-        if inner.kind != Kind::Mutable || inner.nested.get() != 1 || !self.alone {
+        // A nested snapshot still open holds the object, so it's not reused; its pins are its own.
+        if inner.kind != Kind::Mutable || !self.alone {
             return commit_by_apply(inner);
         }
         let mut modified = std::mem::take(&mut *inner.modified.borrow_mut());
@@ -1201,7 +1213,9 @@ impl PassSnapshot {
         let quiet = with_runtime(|runtime| {
             let snapshots = &mut runtime.snapshots;
             inner.close(snapshots);
-            let quiet = modified.is_empty() && !snapshots.has_changes();
+            let quiet = modified.is_empty()
+                && !snapshots.has_changes()
+                && !snapshots.has_told_during_pass();
             if quiet {
                 snapshots.advance_global_silently();
                 inner.release_pins(snapshots);
@@ -1216,7 +1230,7 @@ impl PassSnapshot {
             let told = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 super::global::send_with(
                     true,
-                    Some(Applied { states: modified, snapshot: &handle, invalidated: true }),
+                    Some(Applied { states: modified, snapshot: &handle }),
                 );
             }));
             panic = told.err();
@@ -1233,12 +1247,6 @@ impl PassSnapshot {
             Some(panic) => Committed::ObserverPanicked(panic),
             None => Committed::Applied,
         }
-    }
-
-    /// A pass that panicked: what it wrote is discarded.
-    pub(crate) fn discard(mut self) {
-        let _ = try_with_runtime(|runtime| self.leave(&mut runtime.snapshots));
-        drop(MutableSnapshot(Snapshot::owning(self.snapshot)));
     }
 }
 
@@ -1295,5 +1303,83 @@ impl<F: Future> Future for SnapshotFuture<F> {
         let this = Pin::into_inner(self);
         let future = this.future.as_mut();
         this.snapshot.enter(|| future.poll(context))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::mutable_state_of;
+
+    fn begin() -> PassSnapshot {
+        with_runtime(|runtime| PassSnapshot::begin(&mut runtime.snapshots))
+    }
+
+    fn leave(pass: &mut PassSnapshot) {
+        with_runtime(|runtime| pass.leave(&mut runtime.snapshots));
+    }
+
+    fn plain_in_a_pass() -> bool {
+        with_runtime(|runtime| runtime.snapshots.plain() && runtime.snapshots.isolated())
+    }
+
+    /// `begin_as` refuses a pass in a pass today; composition-context's will nest (D796): what a
+    /// child's snapshot changes comes back at its end, and what the outer must know goes on.
+    #[test]
+    fn a_pass_nested_in_a_pass_restores_the_outers_state() {
+        let state = mutable_state_of(0);
+        let handle = state.handle();
+        let mut outer = begin();
+        assert!(plain_in_a_pass());
+        let outer_snapshot = Snapshot::current();
+
+        let mut child = begin();
+        assert!(plain_in_a_pass(), "of a plain pass, it's plain, and key 0");
+        assert_ne!(Snapshot::current(), outer_snapshot);
+        handle.set(1);
+        leave(&mut child);
+        assert_eq!(Snapshot::current(), outer_snapshot);
+        assert!(plain_in_a_pass());
+        assert_eq!(handle.get(), 0, "not applied yet");
+        assert!(matches!(child.commit(), Committed::Applied));
+        assert_eq!(handle.get(), 1, "applied to the outer");
+
+        // A child that wasn't alone: so isn't the outer, and its taint is the outer's no more.
+        let mut child = begin();
+        Snapshot::global(|| {});
+        assert!(!plain_in_a_pass(), "`Snapshot::global` ran");
+        leave(&mut child);
+        assert!(plain_in_a_pass(), "the outer's taint is its own");
+        assert!(matches!(child.commit(), Committed::Applied));
+        with_runtime(|runtime| assert!(!runtime.snapshots.pass_alone()));
+
+        // A taint is inherited.
+        Snapshot::global(|| {});
+        assert!(!plain_in_a_pass());
+        let mut child = begin();
+        assert!(!plain_in_a_pass(), "inherited");
+        leave(&mut child);
+        assert!(matches!(child.commit(), Committed::Applied));
+
+        leave(&mut outer);
+        assert!(matches!(outer.commit(), Committed::Applied));
+        assert_eq!(state.get(), 1);
+        assert!(with_runtime(|runtime| !runtime.snapshots.isolated()));
+    }
+
+    /// A pass nested in a user's snapshot isn't plain, nor what nests in it.
+    #[test]
+    fn a_pass_nested_in_a_users_snapshot_isnt_plain() {
+        let snapshot = Snapshot::take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            let mut pass = begin();
+            assert!(!with_runtime(|runtime| runtime.snapshots.plain()));
+            let mut child = begin();
+            assert!(!with_runtime(|runtime| runtime.snapshots.plain()));
+            leave(&mut child);
+            assert!(matches!(child.commit(), Committed::Applied));
+            leave(&mut pass);
+            assert!(matches!(pass.commit(), Committed::Applied));
+        });
     }
 }

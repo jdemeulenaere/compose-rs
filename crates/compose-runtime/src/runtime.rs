@@ -406,6 +406,22 @@ pub(crate) fn invalidate_scope_parts(
     false
 }
 
+/// Whether the pass will still reach `id`'s scope: an invalidation is imminent, as
+/// `tryImminentInvalidation`, and what it reads is read again in this pass.
+pub(crate) fn scope_is_ahead(
+    scopes: &Scopes,
+    compositions: &Compositions,
+    pass: &PassFrames<'_>,
+    id: ScopeId,
+) -> bool {
+    let Some(scope) = scopes.get(id) else { return false };
+    if pass.composition != scope.composition {
+        return false;
+    }
+    let table = &compositions.data(scope.composition).table;
+    ahead_of_the_pass(table, pass.frames, scope.group).is_some()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CompositionId {
     pub index: u32,

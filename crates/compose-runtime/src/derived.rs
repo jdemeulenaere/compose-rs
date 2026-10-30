@@ -118,7 +118,9 @@ impl<T: 'static> StateObjectCell for DerivedCell<T> {
     fn valid_at(&self, mark: (SnapshotId, u32)) -> bool {
         let records = self.records.borrow();
         let record = &records.head.data;
-        records.rest.is_empty() && record.result.is_some() && record.valid_at.get() == mark
+        // The head marked with this snapshot and this write counter: a second record since would have
+        // taken a new version, so it's still what's read.
+        record.result.is_some() && record.valid_at.get() == mark
     }
 
     fn collect_dependencies(&self, into: &mut Vec<StateId>) {
@@ -264,7 +266,8 @@ impl<T: 'static> DerivedCell<T> {
             return;
         }
         let saw = self.global_value.replace(Some(valid.result.clone()));
-        if saw.is_some_and(|saw| !(self.equivalent)(&valid.result, &saw)) {
+        // Not known: a reader is told.
+        if saw.is_none_or(|saw| !(self.equivalent)(&valid.result, &saw)) {
             let id = self.id.get().expect("an allocated derived state");
             crate::state::invalidate_result_readers(id);
         }
@@ -333,7 +336,7 @@ impl<T: 'static> DerivedCell<T> {
         let told = in_global
             && if self.in_other_snapshots.get() {
                 let saw = self.global_value.borrow();
-                saw.as_ref().is_some_and(|saw| !(self.equivalent)(&value, saw))
+                saw.as_ref().is_none_or(|saw| !(self.equivalent)(&value, saw))
             } else {
                 differs
             };

@@ -122,6 +122,8 @@ fn an_animation_frame_neither_recomposes_nor_remeasures_the_rest() {
     let (mut ui, visible) = panel(fade_in(), fade_out());
     visible.set(true);
     ui.wait_for_idle();
+    // Its start's frames: what the transition wrote and read is heard at the apply (D793).
+    ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     let before = ui.recomposition_counts();
     let stats = {

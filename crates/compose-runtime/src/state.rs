@@ -252,7 +252,6 @@ impl Cells {
         id: StateId,
         global: crate::snapshots::SnapshotId,
         version: u32,
-        pending: bool,
         modified: &mut Vec<StateId>,
     ) {
         // An `edit` may have freed its own state.
@@ -266,23 +265,18 @@ impl Cells {
                 entry.in_global_modified = true;
                 modified.push(id);
             }
-            entry.pending |= pending;
+            entry.pending = true;
         }
     }
 
     /// Records a state as changed in the global snapshot, its record written already.
-    pub(crate) fn record_modified(
-        &mut self,
-        id: StateId,
-        pending: bool,
-        modified: &mut Vec<StateId>,
-    ) {
+    pub(crate) fn record_modified(&mut self, id: StateId, modified: &mut Vec<StateId>) {
         let Ok(entry) = self.entry(id) else { return };
         if !entry.in_global_modified {
             entry.in_global_modified = true;
             modified.push(id);
         }
-        entry.pending |= pending;
+        entry.pending = true;
     }
 
     /// Whether the state, which now has several records, wasn't listed as such.
@@ -290,6 +284,15 @@ impl Cells {
         match self.entry(id) {
             Ok(entry) => !std::mem::replace(&mut entry.in_extra, true),
             Err(_) => false,
+        }
+    }
+
+    /// A send during a pass took this state off the global snapshot's list: its readers hear at the
+    /// pass's apply.
+    pub(crate) fn sent_for_later(&mut self, id: StateId) {
+        if let Ok(entry) = self.entry(id) {
+            entry.in_global_modified = false;
+            entry.pending = false;
         }
     }
 
@@ -658,13 +661,27 @@ pub(crate) fn observed_keys(runtime: &mut Runtime, id: StateId, observer: u32) -
         .collect()
 }
 
-/// Invalidates what read a cell in its latest run, pruning the others: a write in composition
-/// (D703) or, `sent`, the send of one outside it (D751). Composables and observations are told;
-/// for the derived states that read it, and those reading them, nothing is computed here: the
-/// composables that read one are invalidated on the condition that its value changed, which the
-/// pass reaching them checks (Compose's conditional invalidation), and one that an observation
-/// read is queued, for the send to validate outside the borrow. One nobody reads isn't computed.
-pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
+/// What's telling of a state's change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Told {
+    /// A send of what the global snapshot wrote: its flags say whether it's due.
+    Sent,
+    /// A write in a pass's snapshot, as `recordWriteOf`: that composition's readers, at once. One
+    /// the pass will still reach reads the new value in this pass: the apply skips that pair, as
+    /// Compose's `observationsProcessed` (D793).
+    InPass,
+    /// A snapshot's apply, as `addPendingInvalidationsLocked`: everything that read it, but those
+    /// pairs. The composition's are for the next pass, what they read being old.
+    Applied,
+}
+
+/// Invalidates what read a cell in its latest run, pruning the others, as `told` says. Composables
+/// and observations are told; for the derived states that read it, and those reading them, nothing
+/// is computed here: the composables that read one are invalidated on the condition that its value
+/// changed, which the pass reaching them checks (Compose's conditional invalidation), and one that
+/// an observation read is queued, for the send to validate outside the borrow. One nobody reads
+/// isn't computed.
+pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, told: Told) {
     let Runtime {
         cells,
         scopes,
@@ -677,15 +694,28 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
         ..
     } = runtime;
     let Ok(entry) = cells.entry(id) else { return };
-    if sent {
+    if told == Told::Sent {
         entry.in_global_modified = false;
         if !std::mem::take(&mut entry.pending) {
             return;
         }
     }
+    let composing = active.filter(|_| told == Told::InPass).map(|active| active.composition.index);
     entry.readers.retain(|reader| {
         if !scopes.is_current(reader.scope, reader.epoch) {
             return false;
+        }
+        if let Some(composition) = composing {
+            if !scopes.get(reader.scope).is_some_and(|scope| scope.composition == composition) {
+                return true;
+            }
+            if let Some(pass) = PassFrames::of(*active, frames)
+                && crate::runtime::scope_is_ahead(scopes, compositions, &pass, reader.scope)
+            {
+                snapshots.note_read_again(id, reader.scope);
+            }
+        } else if told == Told::Applied && snapshots.take_read_again(id, reader.scope) {
+            return true;
         }
         invalidate_scope_parts(
             scopes,
@@ -705,6 +735,8 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
             }
             match observers.dirty_cell(read) {
                 Some(cell) => derived.push(cell),
+                // Observations hear at the apply, as `SnapshotStateObserver`.
+                None if composing.is_some() => {}
                 None => {
                     if let Some(notify) = observers.invalidate(read) {
                         frame_requests.push(notify);
@@ -727,6 +759,11 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
             if !scopes.is_current(reader.scope, reader.epoch) {
                 return false;
             }
+            if let Some(composition) = composing
+                && !scopes.get(reader.scope).is_some_and(|scope| scope.composition == composition)
+            {
+                return true;
+            }
             invalidate_scope_parts(
                 scopes,
                 compositions,
@@ -747,7 +784,7 @@ pub(crate) fn invalidate_cell(runtime: &mut Runtime, id: StateId, sent: bool) {
                 None => observed = true,
             }
         }
-        if observed && !entry.in_derived_queue {
+        if observed && composing.is_none() && !entry.in_derived_queue {
             entry.in_derived_queue = true;
             snapshots.queue_derived(cell);
         }
@@ -1765,6 +1802,12 @@ impl<T: 'static> Drop for OwnedState<T> {
     fn drop(&mut self) {
         retire(self.handle.id);
     }
+}
+
+/// Whether no snapshot is about: reads and writes on their plain paths. For tests.
+#[doc(hidden)]
+pub fn snapshot_paths_are_plain() -> bool {
+    with_runtime(|runtime| !runtime.snapshots.isolated())
 }
 
 /// The number of records a state holds (one, unless snapshots need older values), and the

@@ -191,6 +191,8 @@ compose-rs at parity before and after snapshots' step S6 (each pass composes in 
 
 No instruction count moves, and frame durations stay within what three sessions vary by: with so few, a p-value can't go below 0.10, so a change of a few percent wouldn't show; the counts are what says there's none.
 
+Retaken on the final tree, after the review of S6 (against main at e402f320; D793, D796-D799: a reader of what a pass wrote after writing it composes once more, as Compose's): one session of 3 counter runs a side, a clean release installed. Instructions per frame on the main thread: scroll 0.377 M to 0.380 M (+0.8 %), the stress animation 4.389 M to 4.400 M (+0.2 %), a navigation 107.08 M to 107.13 M (+0.0 %, per navigation); all threads +0.3 %, +0.0 %, +0.0 %. With one session a p-value says little (0.70, 0.10, 0.40); the ranges of the two sides touch or nearly, within 1 %. Frame durations weren't retaken.
+
 | | feed scroll before | after | stress animation before | after |
 |---|---|---|---|---|
 | main p50 / p90 / p99 (ms) | 1.35 / 2.29 / 3.45 | 1.37 / 2.27 / 3.49 | 2.22 / 4.35 / 7.00 | 2.24 / 4.59 / 7.36 |
