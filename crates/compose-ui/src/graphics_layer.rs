@@ -348,8 +348,12 @@ impl LayerProperties {
     }
 
     /// What it draws at `point`: `map`'s inverse, as a layer's `mapOffset(inverse = true)`. A scale
-    /// of none has nothing there: no point is in anything then.
+    /// of none has nothing there: infinite, as Compose's `Offset.Infinite`, so no point is in
+    /// anything then.
     pub(crate) fn unmap(&self, point: Offset) -> Offset {
+        if self.scale.0 == 0.0 || self.scale.1 == 0.0 {
+            return Offset::new(f32::INFINITY, f32::INFINITY);
+        }
         let (x, y) = (
             point.x - self.pivot.x - self.translation.x,
             point.y - self.pivot.y - self.translation.y,
@@ -359,6 +363,19 @@ impl LayerProperties {
             self.pivot.x + (x * cos + y * sin) / self.scale.0,
             self.pivot.y + (y * cos - x * sin) / self.scale.1,
         )
+    }
+
+    /// What `map` does, as a matrix.
+    pub(crate) fn matrix(&self) -> crate::path::Matrix {
+        use crate::path::Matrix;
+        let mut matrix = Matrix::translation(0.0 - self.pivot.x, 0.0 - self.pivot.y);
+        matrix.post_concat(&Matrix::scaling(self.scale.0, self.scale.1));
+        matrix.post_concat(&Matrix::rotation(self.rotation));
+        matrix.post_concat(&Matrix::translation(
+            self.pivot.x + self.translation.x,
+            self.pivot.y + self.translation.y,
+        ));
+        matrix
     }
 
     fn transforms(&self) -> bool {

@@ -58,6 +58,7 @@ mod legacy;
 mod locals;
 mod modifier_memoization;
 mod modifiers_api;
+mod motion_frame_of_reference;
 mod mouse_wheel;
 mod mutator_mutex;
 mod nested_fling;

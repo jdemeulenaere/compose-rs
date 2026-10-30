@@ -848,11 +848,13 @@ impl LayoutModifierNode for ScrollNode {
         let offset = if self.reverse_scrolling { value - max } else { -value };
         // Relatively: a horizontal scroll's content starts at the right in a right-to-left
         // layout, and scrolls toward the left.
-        if self.vertical {
-            scope.place_relative(&placeable, 0, offset);
-        } else {
-            scope.place_relative(&placeable, offset, 0);
-        }
+        scope.with_motion_frame_of_reference_placement(|scope| {
+            if self.vertical {
+                scope.place_relative(&placeable, 0, offset);
+            } else {
+                scope.place_relative(&placeable, offset, 0);
+            }
+        });
         scope.layout(width, height)
     }
 }

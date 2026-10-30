@@ -1631,7 +1631,7 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut actions = mem::take(&mut self.pending_actions);
         let context = NodeContext {
-            tree: &mut *self,
+            tree: crate::tree_access::TreeAccess::new(&mut *self),
             node,
             index: None,
             entry: id,
@@ -1640,6 +1640,7 @@ impl UiTree {
             place: *place,
             traverse_key: None,
         };
+        let _open = context.tree.open();
         let mut context = EventContext {
             context,
             actions: &mut actions,

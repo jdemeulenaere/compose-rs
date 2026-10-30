@@ -2383,6 +2383,8 @@ impl MeasurePolicy for LazyGridLayout {
                 scope.place_relative(placeable, main, cross);
             }
         };
+        // Under a motion frame of reference, as `LazyGridMeasure`: a scroll isn't a move of its own.
+        m.scope.set_motion_frame_of_reference_placement(true);
         for &(line, main) in ahead_lines.iter().chain(&placed).chain(&beyond_lines) {
             let (start, end, _) = m.measured_line(line).expect("a line measured");
             for &(placeable, cross) in &m.cells[start..end] {
@@ -2401,6 +2403,7 @@ impl MeasurePolicy for LazyGridLayout {
         if let Some((_, placeable, at)) = &sticking {
             place(m.scope, placeable, *at, 0);
         }
+        m.scope.set_motion_frame_of_reference_placement(false);
         // The items in view for `layout_info`, as Compose's `visibleItemsInfo`: those of the lines
         // laid out from the first under the start padding to the last in view.
         let mut laid = state.laid_out.begin();

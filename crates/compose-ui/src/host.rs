@@ -148,10 +148,14 @@ impl UiHost {
         // Modifier nodes' handles reach the tree through the composition, when it's free.
         let applier = composition.applier_ref::<UiTree>();
         let key = composition.with_applier(|tree: &mut UiTree| tree.key);
+        let peeked = applier.clone();
         crate::node_context::set_tree_borrow(
             key,
             Rc::new(move |f: &mut dyn FnMut(&mut UiTree)| {
                 applier.try_with(|tree| f(tree)).is_some()
+            }),
+            Rc::new(move |f: &mut dyn FnMut(&mut UiTree)| {
+                peeked.try_peek(|tree| f(tree)).is_some()
             }),
         );
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
@@ -282,6 +286,17 @@ impl UiHost {
 
     pub fn size(&self) -> IntSize {
         self.size
+    }
+
+    /// Where the root is on the screen, as Compose's `localToScreen` and `positionOnScreen` ask of
+    /// the view: what coordinates add, and, when it moves, what their readers are told of.
+    pub fn set_window_origin(&mut self, origin: crate::unit::Offset) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        let moved =
+            self.composition.with_applier(|tree: &mut UiTree| tree.set_window_origin(origin));
+        if moved {
+            self.wake();
+        }
     }
 
     pub fn resize(&mut self, size: IntSize) {

@@ -240,7 +240,7 @@ impl NodeContext<'_> {
         if start < self.tree.get(self.node).map_or(0, |value| value.chain.len()) {
             branches.push((self.node, start));
         } else if self.tree.get(self.node).is_some() {
-            push_children(self.tree, self.node, z_order, &mut branches);
+            push_children(&self.tree, self.node, z_order, &mut branches);
         }
         branches
     }
@@ -270,7 +270,7 @@ impl NodeContext<'_> {
                         return;
                     }
                 }
-                None => push_children(self.tree, node, z_order, &mut branches),
+                None => push_children(&self.tree, node, z_order, &mut branches),
             }
         }
     }

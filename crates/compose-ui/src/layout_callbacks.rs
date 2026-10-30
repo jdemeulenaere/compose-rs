@@ -20,49 +20,23 @@ use crate::node_context::NodeContext;
 use crate::tree::{LayoutNode, NodeId, UiTree};
 use crate::unit::{IntSize, Offset, Rect};
 
-/// Where a laid-out node is, as Compose's `LayoutCoordinates` (a snapshot rather than a live
-/// object): the size and position of the layer at the modifier reporting it (inside the layout
-/// modifiers before it in the chain), in pixels.
+use crate::coordinates::{LayoutCoordinates, with_position_reads_of};
+use crate::placement::CoordinateReader;
+
+/// What a position-aware node last told its callback: a change is told, the same isn't. In the
+/// window's terms: the host's origin moving moves it too (`onPositionedIsCalledWhenComposeContainerPositionChanged`).
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct LayoutCoordinates {
-    size: IntSize,
-    position_in_root: Offset,
-    clipped_bounds: Rect,
-}
-
-impl LayoutCoordinates {
-    /// The size, as `LayoutCoordinates.size`.
-    pub fn size(&self) -> IntSize {
-        self.size
-    }
-
-    /// The top left in the root (the window's content), as `positionInRoot()`.
-    pub fn position_in_root(&self) -> Offset {
-        self.position_in_root
-    }
-
-    /// The top left in the window, as `positionInWindow()`: the root fills the window.
-    pub fn position_in_window(&self) -> Offset {
-        self.position_in_root
-    }
-
-    /// The bounds in the root, clipped by the clipping ancestors (a scroll's viewport, `clip`),
-    /// as `boundsInRoot()`: empty when clipped away.
-    pub fn bounds_in_root(&self) -> Rect {
-        self.clipped_bounds
-    }
-
-    /// The bounds in the window, as `boundsInWindow()`.
-    pub fn bounds_in_window(&self) -> Rect {
-        self.clipped_bounds
-    }
+pub(crate) struct CoordinatesValues {
+    pub(crate) size: IntSize,
+    pub(crate) position_in_root: Offset,
+    pub(crate) clipped_bounds: Rect,
+    pub(crate) origin: Offset,
 }
 
 /// A node told its layer was measured and placed, as Compose's `LayoutAwareModifierNode`.
 ///
 /// `on_remeasured` runs where the layer was measured, its reads not observed; the context may
-/// invalidate, not measure. `on_placed` runs after the layout, with today's snapshot of the
-/// coordinates, the outer nodes first (the placement pass will run it in place: D1186).
+/// invalidate, not measure. `on_placed` runs after the layout, the outer nodes first (D1186).
 pub trait LayoutAwareModifierNode {
     /// The layer it's in was placed, or laid out again.
     fn on_placed(&mut self, _coordinates: LayoutCoordinates, _context: &mut NodeContext<'_>) {}
@@ -197,7 +171,16 @@ impl ModifierNode for OnPlacedNode {
 impl LayoutAwareModifierNode for OnPlacedNode {
     fn on_placed(&mut self, coordinates: LayoutCoordinates, context: &mut NodeContext<'_>) {
         let callback = self.callback.clone();
-        context.run_after_layout(move || callback(coordinates));
+        context.run_after_layout(move || {
+            // Outside the tree, as what a placing of Compose's `onPlaced` asks counts.
+            let (tree, node) = coordinates.node_in_tree();
+            let (_, reads) = with_position_reads_of(node, || callback(coordinates));
+            crate::node_context::peek_tree(tree, &mut |tree: &mut UiTree| {
+                if tree.get(node).is_some() {
+                    tree.note_reader(node, reads, true);
+                }
+            });
+        });
     }
 }
 
@@ -205,7 +188,7 @@ struct OnGloballyPositionedElement(Callback<dyn Fn(LayoutCoordinates)>);
 
 struct OnGloballyPositionedNode {
     callback: Callback<dyn Fn(LayoutCoordinates)>,
-    last: Option<LayoutCoordinates>,
+    last: Option<CoordinatesValues>,
 }
 
 impl ModifierNodeElement for OnGloballyPositionedElement {
@@ -240,8 +223,9 @@ impl GlobalPositionAwareModifierNode for OnGloballyPositionedNode {
         coordinates: LayoutCoordinates,
         context: &mut NodeContext<'_>,
     ) {
-        if self.last != Some(coordinates) {
-            self.last = Some(coordinates);
+        let values = context.tree.values_of(coordinates);
+        if self.last != values {
+            self.last = values;
             let callback = self.callback.clone();
             context.run_after_layout(move || callback(coordinates));
         }
@@ -305,7 +289,7 @@ impl UiTree {
     /// told; with `keep`, a state's change, what it computes for the node's group is what the
     /// frame's drawing uses, observed as there.
     pub(crate) fn note_layer_change(&mut self, node: NodeId, keep: bool) {
-        if self.positioned.is_empty() {
+        if self.positioned.is_empty() && self.coordinate_readers.is_empty() {
             return;
         }
         let Some(value) = self.get(node) else { return };
@@ -343,7 +327,45 @@ impl UiTree {
         if moved {
             self.node_mut(node).layer_moved = true;
             self.layers_moved.push(node);
+            self.place_readers_under(node);
         }
+    }
+
+    /// `node`'s graphics layer moved what's under it: a block that asked where it is there runs,
+    /// which a layout's check would find only if a layout came.
+    fn place_readers_under(&mut self, node: NodeId) {
+        for index in 0..self.coordinate_readers.len() {
+            let reader = self.coordinate_readers[index].node;
+            let mut current = Some(reader);
+            while let Some(id) = current {
+                if id == node {
+                    if self.position_of_reader(reader) != self.coordinate_readers[index].position {
+                        self.mark_needs_placement(reader);
+                    }
+                    break;
+                }
+                current =
+                    self.get(id).and_then(|value| if value.overlay { None } else { value.parent });
+            }
+        }
+    }
+
+    /// Where the root is on the screen: what's told of it, if it moved.
+    pub(crate) fn set_window_origin(&mut self, origin: Offset) -> bool {
+        if self.window_origin == origin {
+            return false;
+        }
+        self.window_origin = origin;
+        for index in 0..self.coordinate_readers.len() {
+            let reader = self.coordinate_readers[index].node;
+            if self.get(reader).is_some() {
+                self.mark_needs_placement(reader);
+            }
+        }
+        // Position-aware nodes hear it: told what's changed.
+        self.laid_out_since_callbacks = true;
+        self.needs_draw = true;
+        true
     }
 
     /// An updated element changed a layer of `node` while composing, as
@@ -354,6 +376,10 @@ impl UiTree {
         }
         compose_runtime::snapshots::Snapshot::without_read_observation(|| {
             self.note_layer_change(node, false);
+            // A layer gone says nothing of itself.
+            if !self.coordinate_readers.is_empty() {
+                self.place_readers_under(node);
+            }
         });
     }
 
@@ -367,6 +393,7 @@ impl UiTree {
     ) -> LayerProperties {
         let value = self.node(node);
         let layer = value.layer_of(index);
+        let _open = self.focus_requests.window.open_to_read(self);
         graphics.properties(
             value.density,
             value.layout_direction,
@@ -379,6 +406,12 @@ impl UiTree {
     fn forget_layers_no_one_listens_to(&mut self) {
         self.position_listeners = self.position_listeners.wrapping_add(1);
         for &node in &self.positioned {
+            if self.get(node).is_some() {
+                let layer = self.node(node).layers.len() - 1;
+                self.map_to_root(node, layer, None, Offset::ZERO);
+            }
+        }
+        for &CoordinateReader { node, .. } in &self.coordinate_readers {
             if self.get(node).is_some() {
                 let layer = self.node(node).layers.len() - 1;
                 self.map_to_root(node, layer, None, Offset::ZERO);
@@ -441,8 +474,7 @@ impl UiTree {
                     continue;
                 }
                 let own = entry.own;
-                let layer = self.node(node).layer_of(index);
-                let coordinates = self.coordinates(node, layer, index);
+                let coordinates = self.coordinates_at(node, index);
                 self.with_entry(node, index, |modifier_node, context| {
                     let _ = dispatch_with_context(
                         modifier_node,
@@ -481,8 +513,7 @@ impl UiTree {
                 continue;
             }
             let own = entry.own;
-            let layer = self.node(node).layer_of(index);
-            let coordinates = self.coordinates(node, layer, index);
+            let coordinates = self.coordinates_at(node, index);
             // The node, or each of its delegates that wants to know.
             self.with_entry(node, index, |modifier_node, context| {
                 let _ = dispatch_with_context(
@@ -548,7 +579,7 @@ impl UiTree {
             return None;
         }
         let entry = self.first_semantics_entry(node, layer);
-        let coordinates = self.coordinates(node, layer, entry);
+        let coordinates = self.coordinate_values(node, layer, entry);
         let size = self.node(node).layers[layer].measured;
         Some((coordinates.position_in_root, size, coordinates.clipped_bounds))
     }
@@ -682,10 +713,19 @@ impl UiTree {
         true
     }
 
-    /// The coordinates of layer `layer` of `node`, for its chain entry `entry`: its bounds
-    /// clipped by the clipping modifiers around it (its own before the entry, and its
-    /// ancestors').
-    fn coordinates(&mut self, node: NodeId, layer: usize, entry: usize) -> LayoutCoordinates {
+    /// What `coordinates` report, if they're there: a position-aware node's change.
+    pub(crate) fn values_of(
+        &mut self,
+        coordinates: LayoutCoordinates,
+    ) -> Option<CoordinatesValues> {
+        let (node, index) = coordinates.entry_in(self)?;
+        let layer = self.node(node).layer_of(index);
+        Some(self.coordinate_values(node, layer, index))
+    }
+
+    /// Layer `layer` of `node`, for its chain entry `entry`: its bounds clipped by the clipping
+    /// modifiers around it (its own before the entry, and its ancestors').
+    fn coordinate_values(&mut self, node: NodeId, layer: usize, entry: usize) -> CoordinatesValues {
         let size = self.node(node).layers[layer].size;
         let origin = self.map_to_root(node, layer, Some(entry), Offset::ZERO);
         let mut bounds = self.rect_in_root(node, layer, Some(entry), size);
@@ -697,7 +737,13 @@ impl UiTree {
             let value = self.node(id);
             current = if value.overlay { None } else { value.parent };
         }
-        LayoutCoordinates { size, position_in_root: origin, clipped_bounds: bounds }
+        let window_origin = self.window_origin;
+        CoordinatesValues {
+            size,
+            position_in_root: origin,
+            clipped_bounds: bounds,
+            origin: window_origin,
+        }
     }
 
     /// `bounds` clipped by the clipping modifiers of `id`, those before chain entry `before_entry`
@@ -752,7 +798,7 @@ impl UiTree {
     /// Where `point`, in layer `layer` of `node`, is in the root: through each layer's offset
     /// and the graphics layers' transforms (`node`'s before its chain entry `before_entry`,
     /// all of its ancestors'), as Compose's `localToRoot`.
-    fn map_to_root(
+    pub(crate) fn map_to_root(
         &self,
         node: NodeId,
         layer: usize,
@@ -815,14 +861,14 @@ impl UiTree {
 }
 
 /// Where layer `layer` of `value` is, in the node's own coordinates (its first layer's).
-fn layer_origin(value: &LayoutNode, layer: usize) -> Offset {
+pub(crate) fn layer_origin(value: &LayoutNode, layer: usize) -> Offset {
     value.layers[1..=layer].iter().fold(Offset::ZERO, |origin, entry| {
         origin + Offset::new(entry.offset.x as f32, entry.offset.y as f32)
     })
 }
 
 /// The intersection of two rectangles (empty at the first's top left if they don't meet).
-fn intersect(a: Rect, b: Rect) -> Rect {
+pub(crate) fn intersect(a: Rect, b: Rect) -> Rect {
     let rect = Rect::new(
         a.left.max(b.left),
         a.top.max(b.top),

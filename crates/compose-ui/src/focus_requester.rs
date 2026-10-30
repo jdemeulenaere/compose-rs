@@ -27,6 +27,8 @@ use crate::unit::{Offset, Rect};
 pub(crate) struct FocusRequests {
     /// The window's whole size, as `WindowInfo::container_size` tells it.
     pub(crate) container_size: Cell<crate::unit::IntSize>,
+    /// What a pass opens for queries on coordinates (D1211).
+    pub(crate) window: crate::tree_access::TreeWindow,
     pub(crate) pending: RefCell<Vec<FocusRequest>>,
     /// The tree's key in the thread's registry, for what holds only this.
     pub(crate) tree_key: Cell<u32>,

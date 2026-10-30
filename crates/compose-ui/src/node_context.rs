@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 use crate::alignment::LayoutDirection;
+use crate::coordinates::LayoutCoordinates;
 use crate::focus_requester::FocusRequests;
 use crate::modifier::ModifierNode;
 use crate::node_chain::{EntryId, entry_state};
@@ -46,7 +47,7 @@ pub(crate) enum Invalidation {
 /// out of its chain meanwhile, so through it the node reaches the rest of the tree, never
 /// itself.
 pub struct NodeContext<'a> {
-    pub(crate) tree: &'a mut UiTree,
+    pub(crate) tree: crate::tree_access::TreeAccess<'a>,
     pub(crate) node: NodeId,
     /// The entry's index in its chain while the callback runs; `None` for an entry out of its
     /// chain (removed by a chain change, detached before it's released).
@@ -63,6 +64,18 @@ pub struct NodeContext<'a> {
 }
 
 impl NodeContext<'_> {
+    /// The coordinates of the layout the node is in, as `requireLayoutCoordinates`: the nearest
+    /// layout modifier's after it, or the layout node's own.
+    ///
+    /// # Panics
+    ///
+    /// If the node isn't attached, as Compose's.
+    pub fn require_layout_coordinates(&self) -> LayoutCoordinates {
+        assert!(self.state() & entry_state::ATTACHED != 0, "compose-ui: the node isn't attached");
+        let index = self.index.expect("compose-ui: the node isn't attached");
+        self.tree.coordinates_at(self.node, index)
+    }
+
     fn state(&self) -> u8 {
         match self.index {
             Some(index) if !self.delegated => self.tree.node(self.node).chain[index].state,
@@ -81,7 +94,7 @@ impl NodeContext<'_> {
     /// Its `out_state` is copied back by who asks.
     pub(crate) fn reborrow(&mut self) -> NodeContext<'_> {
         NodeContext {
-            tree: &mut *self.tree,
+            tree: self.tree.reborrow(),
             node: self.node,
             index: self.index,
             entry: self.entry,
@@ -102,7 +115,7 @@ impl NodeContext<'_> {
     ) -> R {
         let traverse_key = entry.traverse_key();
         let mut context = NodeContext {
-            tree: &mut *self.tree,
+            tree: self.tree.reborrow(),
             node: self.node,
             index: self.index,
             entry: entry.id(),
@@ -318,6 +331,8 @@ impl NodeContext<'_> {
             self.invalidate(Invalidation::Measurement);
         } else if self.index.is_none() {
             // Out of its chain: nothing of the measurement is it.
+            // It runs measuring code, under a reference to the tree.
+            let _shut = self.tree.shut();
             self.tree.remeasure_now(self.node);
         } else if !self.tree.remeasure_after.contains(&self.node) {
             self.tree.remeasure_after.push(self.node);
@@ -359,6 +374,8 @@ struct Registration {
     requests: Weak<FocusRequests>,
     /// Runs a function with the tree if it's free; set by its host.
     borrow: Option<Rc<TreeBorrow>>,
+    /// The same to read it, which a composition running doesn't stop.
+    peek: Option<Rc<TreeBorrow>>,
 }
 
 type TreeBorrow = dyn Fn(&mut dyn FnMut(&mut UiTree)) -> bool;
@@ -378,7 +395,7 @@ pub(crate) fn register_tree(requests: &Rc<FocusRequests>) -> u32 {
         next.get()
     });
     requests.tree_key.set(key);
-    let registration = Registration { requests: Rc::downgrade(requests), borrow: None };
+    let registration = Registration { requests: Rc::downgrade(requests), borrow: None, peek: None };
     TREES.with(|trees| trees.borrow_mut().insert(key, registration));
     key
 }
@@ -390,10 +407,11 @@ pub(crate) fn unregister_tree(key: u32) {
 }
 
 /// Sets how handles borrow the tree of `key` (its host's composition holds it).
-pub(crate) fn set_tree_borrow(key: u32, borrow: Rc<TreeBorrow>) {
+pub(crate) fn set_tree_borrow(key: u32, borrow: Rc<TreeBorrow>, peek: Rc<TreeBorrow>) {
     TREES.with(|trees| {
         if let Some(registration) = trees.borrow_mut().get_mut(&key) {
             registration.borrow = Some(borrow);
+            registration.peek = Some(peek);
         }
     });
 }
@@ -423,6 +441,9 @@ pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> 
             Box::new(crate::fixed_text::FixedTextMeasurer::new()),
         )
     });
+    // The pointer in its window would find the stand-in.
+    let window = tree.focus_requests.clone();
+    let open = window.window.close();
     let real = std::mem::replace(tree, stand_in);
     TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(real));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(block));
@@ -430,6 +451,7 @@ pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> 
         .with(|slot| slot.borrow_mut().pop())
         .expect("compose-ui: the tree set aside for a block is there as it returns");
     let stand_in = std::mem::replace(tree, real);
+    window.window.reopen(open);
     STAND_IN.with(|slot| *slot.borrow_mut() = Some(stand_in));
     result.unwrap_or_else(|panic| {
         // Caught above it, the next change finds no transaction under way.
@@ -465,6 +487,24 @@ pub(crate) fn with_free_tree(key: u32, f: &mut dyn FnMut(&mut UiTree)) -> bool {
     })
 }
 
+/// Runs `read` with the tree of `key` to read it, if nothing borrows it: set aside for a block,
+/// or free, a composition under way or not. Returns whether it ran.
+pub(crate) fn peek_tree(key: u32, read: &mut dyn FnMut(&mut UiTree)) -> bool {
+    let set_aside = TREE_SET_ASIDE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.last().is_some_and(|tree| tree.key == key) { slot.pop() } else { None }
+    });
+    if let Some(mut tree) = set_aside {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(&mut tree)));
+        TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(tree));
+        return result.map(|_| true).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+    let Some(peek) = TREES.with(|trees| trees.borrow().get(&key)?.peek.clone()) else {
+        return false;
+    };
+    peek(read)
+}
+
 impl NodeHandle {
     /// The layout node and the entry or delegate it names.
     pub(crate) fn place(&self) -> (NodeId, EntryId) {
@@ -474,6 +514,18 @@ impl NodeHandle {
     /// The key of its tree.
     pub(crate) fn tree_key(&self) -> u32 {
         self.tree
+    }
+
+    /// The coordinates of the layout it's in, as `requireLayoutCoordinates`: the nearest layout
+    /// modifier's after it, or the node's own.
+    ///
+    /// # Panics
+    ///
+    /// If the node isn't attached, as Compose's.
+    pub fn require_layout_coordinates(&self) -> LayoutCoordinates {
+        assert!(self.is_attached(), "compose-ui: the node isn't attached");
+        let found = LayoutCoordinates::of_entry(self.tree, self.node, self.entry);
+        found.expect("compose-ui: its tree is busy or the node has no chain entry")
     }
 
     /// Whether the node is attached, as `isAttached`.

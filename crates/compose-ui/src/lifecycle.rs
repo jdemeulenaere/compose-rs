@@ -14,6 +14,7 @@ use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state, traverse_ke
 use crate::node_context::{Invalidation, NodeContext};
 use crate::nodes::Taken;
 use crate::tree::{NodeId, UiTree};
+use crate::tree_access::TreeAccess;
 
 thread_local! {
     /// A default lifecycle callback of `ModifierNode` ran (debug builds' check of built-ins).
@@ -132,7 +133,7 @@ impl UiTree {
         self.entries_running += 1;
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let mut context = NodeContext {
-                tree: &mut *self,
+                tree: TreeAccess::new(&mut *self),
                 node,
                 index: Some(index),
                 entry: id,
@@ -141,6 +142,7 @@ impl UiTree {
                 place: index,
                 traverse_key,
             };
+            let _open = context.tree.open();
             f(&mut *taken, &mut context)
         }));
         self.entries_running -= 1;
@@ -461,7 +463,7 @@ impl UiTree {
             if alive && entry.state & entry_state::ATTACH_RAN != 0 {
                 let traverse_key = traverse_key_of(&mut *entry.node, entry.own);
                 let mut context = NodeContext {
-                    tree: &mut *self,
+                    tree: TreeAccess::new(&mut *self),
                     node,
                     index: None,
                     entry: entry.id,
@@ -470,7 +472,9 @@ impl UiTree {
                     place: *place,
                     traverse_key,
                 };
+                let open = context.tree.open();
                 detach_with_delegates(&mut *entry.node, &mut context);
+                drop(open);
                 entry.state = context.out_state;
             }
         }

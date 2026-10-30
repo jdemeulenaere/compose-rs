@@ -148,6 +148,9 @@ pub struct LayoutNode {
     /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
     /// size places the parent again, doesn't measure it.
     pub(crate) measured_in_block: bool,
+    /// Which layers (the first 8) a motion frame of reference placed
+    /// (`with_motion_frame_of_reference_placement`).
+    pub(crate) motion_layers: u8,
     /// In `UiTree::layers_moved`.
     pub(crate) layer_moved: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
@@ -228,6 +231,7 @@ impl LayoutNode {
             placements: None,
             needs_placement: false,
             content_placed_in: 0,
+            motion_layers: 0,
             subtree_needs_placement: false,
             measured_in_block: false,
             layer_moved: false,
@@ -266,6 +270,19 @@ impl LayoutNode {
 
     /// The layer chain entry `index` measures and draws in: the number of layout modifier
     /// nodes before it.
+    #[cold]
+    pub(crate) fn note_motion(&mut self, layer: usize, motion: bool) {
+        if layer < 8 {
+            let bit = 1u8 << layer;
+            self.motion_layers =
+                if motion { self.motion_layers | bit } else { self.motion_layers & !bit };
+        }
+    }
+
+    pub(crate) fn placed_in_motion(&self, layer: usize) -> bool {
+        layer < 8 && self.motion_layers & (1 << layer) != 0
+    }
+
     pub(crate) fn layer_of(&self, index: usize) -> usize {
         self.chain[..index].iter().filter(|entry| entry.kinds.any(NodeKinds::LAYOUT)).count()
     }
@@ -379,6 +396,11 @@ pub struct UiTree {
     /// is good only if they kept it since (`GraphicsLayerNode::note_transform`), so a layer no
     /// one under it listens to any more doesn't run its block for nothing.
     pub(crate) position_listeners: u32,
+    /// The nodes whose placing code last asked where they are: it runs again once they aren't
+    /// there (D1212).
+    pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// Where the host's root is on the screen (`UiHost::set_window_origin`).
+    pub(crate) window_origin: Offset,
     /// The last `EntryId` given to a chain entry.
     pub(crate) next_entry: u64,
     /// The last semantics id given (the root's is 0).
@@ -499,6 +521,8 @@ impl UiTree {
             placed_layers: Vec::new(),
             layers_moved: Vec::new(),
             position_listeners: 0,
+            coordinate_readers: Vec::new(),
+            window_origin: Offset::ZERO,
             next_entry: 0,
             last_semantics_id: 0,
             window_insets: crate::configuration::WindowInsetsSource::NONE,

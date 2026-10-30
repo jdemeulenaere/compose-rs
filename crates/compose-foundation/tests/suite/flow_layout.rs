@@ -36,7 +36,10 @@ fn recorded(count: usize) -> Recorded {
 fn bounds_into(recorded: &Recorded, index: usize) -> Modifier {
     let recorded = recorded.clone();
     Modifier.on_globally_positioned(move |coordinates: LayoutCoordinates| {
-        recorded.borrow_mut()[index] = Some(coordinates.bounds_in_root());
+        // Where and how large, as Compose's tests read: `boundsInRoot()` of no height is zeros.
+        let (at, size) = (coordinates.position_in_root(), coordinates.size());
+        let bounds = Rect::new(at.x, at.y, at.x + size.width as f32, at.y + size.height as f32);
+        recorded.borrow_mut()[index] = Some(bounds);
     })
 }
 
