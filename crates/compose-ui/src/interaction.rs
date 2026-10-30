@@ -245,6 +245,17 @@ pub(crate) struct Ongoing {
     focuses: Vec<Focus>,
     hovers: Vec<HoverEnter>,
     drags: Vec<DragStart>,
+    /// All of them in the order they started.
+    order: Vec<Started>,
+}
+
+/// One under way, for `Ongoing::order`.
+#[derive(Clone, Copy, PartialEq)]
+enum Started {
+    Press(Press),
+    Focus(Focus),
+    Hover(HoverEnter),
+    Drag(DragStart),
 }
 
 impl Ongoing {
@@ -260,6 +271,17 @@ impl Ongoing {
         !self.focuses.is_empty()
     }
 
+    /// The kind of the one that started last and hasn't ended, as `interactions.lastOrNull()` where
+    /// Compose's components keep such a list.
+    fn latest(&self) -> Option<LatestInteraction> {
+        self.order.last().map(|started| match started {
+            Started::Press(_) => LatestInteraction::Press,
+            Started::Focus(_) => LatestInteraction::Focus,
+            Started::Hover(_) => LatestInteraction::Hover,
+            Started::Drag(_) => LatestInteraction::Drag,
+        })
+    }
+
     pub(crate) fn apply(&mut self, interaction: &Interaction) {
         fn remove<T: PartialEq>(list: &mut Vec<T>, item: &T) {
             if let Some(index) = list.iter().position(|value| value == item) {
@@ -267,23 +289,53 @@ impl Ongoing {
             }
         }
         match interaction {
-            Interaction::Press(PressInteraction::Press(press)) => self.presses.push(*press),
+            Interaction::Press(PressInteraction::Press(press)) => {
+                self.presses.push(*press);
+                self.order.push(Started::Press(*press));
+            }
             Interaction::Press(PressInteraction::Release(press))
             | Interaction::Press(PressInteraction::Cancel(press)) => {
-                remove(&mut self.presses, press)
+                remove(&mut self.presses, press);
+                remove(&mut self.order, &Started::Press(*press));
             }
-            Interaction::Focus(FocusInteraction::Focus(focus)) => self.focuses.push(*focus),
+            Interaction::Focus(FocusInteraction::Focus(focus)) => {
+                self.focuses.push(*focus);
+                self.order.push(Started::Focus(*focus));
+            }
             Interaction::Focus(FocusInteraction::Unfocus(focus)) => {
-                remove(&mut self.focuses, focus)
+                remove(&mut self.focuses, focus);
+                remove(&mut self.order, &Started::Focus(*focus));
             }
-            Interaction::Hover(HoverInteraction::Enter(enter)) => self.hovers.push(*enter),
-            Interaction::Hover(HoverInteraction::Exit(enter)) => remove(&mut self.hovers, enter),
-            Interaction::Drag(DragInteraction::Start(start)) => self.drags.push(*start),
-            Interaction::Drag(DragInteraction::Stop(start))
-            | Interaction::Drag(DragInteraction::Cancel(start)) => remove(&mut self.drags, start),
+            Interaction::Hover(HoverInteraction::Enter(enter)) => {
+                self.hovers.push(*enter);
+                self.order.push(Started::Hover(*enter));
+            }
+            Interaction::Hover(HoverInteraction::Exit(enter)) => {
+                remove(&mut self.hovers, enter);
+                remove(&mut self.order, &Started::Hover(*enter));
+            }
+            Interaction::Drag(DragInteraction::Start(begun)) => {
+                self.drags.push(*begun);
+                self.order.push(Started::Drag(*begun));
+            }
+            Interaction::Drag(DragInteraction::Stop(begun))
+            | Interaction::Drag(DragInteraction::Cancel(begun)) => {
+                remove(&mut self.drags, begun);
+                remove(&mut self.order, &Started::Drag(*begun));
+            }
             Interaction::Custom(_) => {}
         }
     }
+}
+
+/// The kind of a component's latest interaction under way (`InteractionSource::latest_ongoing`).
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LatestInteraction {
+    Press,
+    Focus,
+    Hover,
+    Drag,
 }
 
 /// Which of the source's derived states.
@@ -308,6 +360,8 @@ struct SourceInner {
     ongoing: RefCell<Ongoing>,
     /// The derived states, made when first read.
     states: [OnceCell<OwnedState<bool>>; 4],
+    /// `is_latest_ongoing`'s for each kind, the same.
+    latest: [OnceCell<OwnedState<bool>>; 4],
 }
 
 impl SourceInner {
@@ -341,6 +395,7 @@ impl InteractionSource {
                 listeners: RefCell::new(Vec::new()),
                 ongoing: RefCell::new(Ongoing::default()),
                 states: Default::default(),
+                latest: Default::default(),
             }),
         }
     }
@@ -437,8 +492,42 @@ impl InteractionSource {
         self.inner.state(Kind::Dragged).get()
     }
 
+    /// Whether the interaction that started last and hasn't ended is of this kind, as Compose's
+    /// `animateElevation`'s `interactions.lastOrNull()`, which it saves each component a collection
+    /// for. A state read for this kind alone: what cares for a hover isn't composed again by a press
+    /// that changes nothing for it. Compose-rs's own.
+    #[doc(hidden)]
+    pub fn is_latest_ongoing(&self, kind: LatestInteraction) -> bool {
+        let inner = &self.inner;
+        inner.latest[kind as usize]
+            .get_or_init(|| {
+                compose_runtime::mutable_state_of(inner.ongoing.borrow().latest() == Some(kind))
+            })
+            .get()
+    }
+
+    /// The kind of the one that started last and hasn't ended, not a state read.
+    #[doc(hidden)]
+    pub fn latest_ongoing_now(&self) -> Option<LatestInteraction> {
+        self.inner.ongoing.borrow().latest()
+    }
+
     fn send(&self, interaction: Interaction) {
         self.inner.ongoing.borrow_mut().apply(&interaction);
+        let latest = self.inner.ongoing.borrow().latest();
+        let kinds = [
+            LatestInteraction::Press,
+            LatestInteraction::Focus,
+            LatestInteraction::Hover,
+            LatestInteraction::Drag,
+        ];
+        for kind in kinds {
+            if let Some(state) = self.inner.latest[kind as usize].get()
+                && state.try_get() != Some(latest == Some(kind))
+            {
+                state.set(latest == Some(kind));
+            }
+        }
         for (index, state) in self.inner.states.iter().enumerate() {
             if let Some(state) = state.get() {
                 let kind = [Kind::Pressed, Kind::Focused, Kind::Hovered, Kind::Dragged][index];

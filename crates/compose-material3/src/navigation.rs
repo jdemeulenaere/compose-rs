@@ -317,8 +317,9 @@ fn NavigationLabel(
         compose_animation::animate_color_as_state(color, spec, "NavigationItemTextColor", None)
             .get();
     let style = MaterialTheme::typography().label_medium.clone();
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style.clone()), || {
+    CompositionLocalProvider(
+        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style.clone())),
+        || {
             let label = label.clone();
             Box(
                 modifier.clone(),
@@ -326,8 +327,8 @@ fn NavigationLabel(
                 false,
                 compose_runtime::callback(move |_| label()),
             );
-        });
-    });
+        },
+    );
 }
 
 /// As Compose's `NavigationBarItemLayout` and `NavigationRailItemLayout`: the pill's size from the

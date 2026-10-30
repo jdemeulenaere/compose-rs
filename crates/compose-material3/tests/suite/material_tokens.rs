@@ -174,3 +174,43 @@ fn the_local_text_styles_default_is_materials_default_text_style() {
     assert_eq!(style.line_height_style, Some(DEFAULT_LINE_HEIGHT_STYLE));
     assert_eq!(TextStyle { line_height_style: None, ..style }, TextStyle::DEFAULT);
 }
+
+/// A clickable card's drag has its elevation (`CardElevation.draggedElevation`), and disabled it's
+/// the disabled one at once.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Card.kt, animateElevation
+#[test]
+fn a_cards_shadow_takes_its_dragged_elevation() {
+    let source = compose_ui::MutableInteractionSource::new();
+    let hoisted = source.clone();
+    let mut ui = compose_test(move || {
+        let hoisted = hoisted.clone();
+        MaterialTheme!({
+            Card!(
+                on_click = Some(|| {}),
+                elevation = CardElevation {
+                    default_elevation: compose_ui::Dp(1.0),
+                    pressed_elevation: compose_ui::Dp(1.0),
+                    focused_elevation: compose_ui::Dp(1.0),
+                    hovered_elevation: compose_ui::Dp(1.0),
+                    dragged_elevation: compose_ui::Dp(6.0),
+                    disabled_elevation: compose_ui::Dp(0.0),
+                },
+                interaction_source = Some(hoisted.clone()),
+                {}
+            );
+        });
+    });
+    let shadow = |ui: &mut ComposeTestRule| {
+        let list = ui.host().display_list();
+        let layers = list.groups.iter().filter_map(|group| group.layer.as_ref());
+        layers.map(|layer| layer.shadow_elevation).fold(0.0, f32::max)
+    };
+    assert_eq!(shadow(&mut ui), 1.0);
+    let start = compose_ui::DragStart::new();
+    source.try_emit(compose_ui::DragInteraction::Start(start));
+    ui.wait_for_idle();
+    assert_eq!(shadow(&mut ui), 6.0);
+    source.try_emit(compose_ui::DragInteraction::Stop(start));
+    ui.wait_for_idle();
+    assert_eq!(shadow(&mut ui), 1.0);
+}

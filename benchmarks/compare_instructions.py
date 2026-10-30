@@ -67,12 +67,16 @@ def build(checkout, target):
         example.parent.mkdir(exist_ok=True)
         shutil.copy(HERE / "examples" / f"{EXAMPLE}.rs", example)
     try:
-        subprocess.run(
+        built = subprocess.run(
             ["cargo", "build", "--release", "-p", "compose-benchmarks", "--example", EXAMPLE],
             cwd=checkout,
             env={**os.environ, "CARGO_TARGET_DIR": str(target)},
-            check=True,
         )
+        if built.returncode != 0:
+            lent = "This checkout's example, lent to it, doesn't compile there. " if (
+                checkout != HERE.parent
+            ) else ""
+            sys.exit(f"{EXAMPLE} doesn't build in {checkout}. {lent}See the errors above.")
     finally:
         if checkout != HERE.parent:
             if theirs is None:
@@ -80,6 +84,10 @@ def build(checkout, target):
             else:
                 example.write_bytes(theirs)
     return target / "release/examples" / EXAMPLE
+
+
+def target_key(of):
+    return hashlib.sha1(of.encode()).hexdigest()[:12]
 
 
 def retired(binary, scenario, iterations):
@@ -120,12 +128,11 @@ def main():
         subprocess.run(["tar", "-x", "-C", source], input=archive.stdout, check=True)
         base = source
     base = base.resolve()
-    # A base of its own, or another's binary stays: Cargo finds nothing newer than what it built, the
-    # package's hash leaving out where the checkout is.
-    key = hashlib.sha1((commit or str(base)).encode()).hexdigest()[:12]
+    # A target of its own for each, or another's binary stays: Cargo finds nothing newer than what it
+    # built, the package's hash leaving out where the checkout is.
     binaries = {
-        "base": build(base, scratch / f"base-target-{key}"),
-        "this": build(repo, scratch / "this-target"),
+        "base": build(base, scratch / f"base-target-{target_key(commit or str(base))}"),
+        "this": build(repo, scratch / f"this-target-{target_key(str(repo))}"),
     }
     wanted = [
         (name, int(count)) for name, count in (one.split(":") for one in args.scenarios)

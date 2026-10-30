@@ -1242,16 +1242,17 @@ fn a_filter_chips_icon_comes_and_goes_with_the_scheme() {
     assert_each_property_animates_with(&[DefaultEffects, FastEffects], going);
 }
 
-/// With `shapes`, coming and going on fast spatial and default effects.
+/// With `shapes`, coming and going on fast spatial, its alpha on default effects, as
+/// `SelectableChip`'s second overload.
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
 #[test]
-fn a_shaped_filter_chips_icon_comes_with_the_scheme() {
-    assert_each_property_animates_with(&[FastSpatial], |scheme| {
-        let shows = mutable_state_of(false);
+fn a_shaped_filter_chips_icon_comes_and_goes_with_the_scheme() {
+    let run = |at_first: bool, scheme: MotionScheme| {
+        let shows = mutable_state_of(at_first);
         let read = shows.handle();
         let mut ui = themed(scheme, move || {
             let leading = read.get().then_some(|| {
-                Box!(modifier = Modifier.size(18.dp()));
+                Box!(modifier = Modifier.size(18.dp()).background(Color::RED));
             });
             FilterChip!(
                 false,
@@ -1261,38 +1262,27 @@ fn a_shaped_filter_chips_icon_comes_with_the_scheme() {
                 leading_icon = leading,
             );
         });
-        shows.set(true);
+        shows.set(!at_first);
         to_halfway(&mut ui);
         let left = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left;
-        // Compact beside it: 8, 18 and 4, 30 in all, from the 16 before.
-        vec![along(left, 16.0, 30.0)]
-    });
-}
-
-/// With `shapes`, going on fast spatial too.
-// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, SelectableChip
-#[test]
-fn a_shaped_filter_chips_icon_goes_with_the_scheme() {
-    assert_each_property_animates_with(&[FastSpatial], |scheme| {
-        let shows = mutable_state_of(true);
-        let read = shows.handle();
-        let mut ui = themed(scheme, move || {
-            let leading = read.get().then_some(|| {
-                Box!(modifier = Modifier.size(18.dp()));
-            });
-            FilterChip!(
-                false,
-                || {},
-                || Box!(modifier = Modifier.size((30.dp(), 18.dp())).test_tag("label")),
-                shapes = FilterChipDefaults::shapes(),
-                leading_icon = leading,
-            );
+        let list = ui.host().display_list();
+        let layers = list.groups.iter().filter_map(|group| group.layer.as_ref());
+        let alpha = layers.fold(1.0f32, |alpha, layer| alpha.min(layer.alpha));
+        // Compact beside it: 8, 18 and 4, 30 in all, against the 16 with none.
+        let (from, to) = if at_first { (30.0, 16.0) } else { (16.0, 30.0) };
+        let faded = if at_first {
+            // Gone, or at 1 with its layer not there.
+            if alpha == 1.0 { 1.0 } else { 1.0 - alpha }
+        } else {
+            alpha
+        };
+        vec![along(left, from, to), faded]
+    };
+    for at_first in [false, true] {
+        assert_each_property_animates_with(&[FastSpatial, DefaultEffects], |scheme| {
+            run(at_first, scheme)
         });
-        shows.set(false);
-        to_halfway(&mut ui);
-        let left = ui.on_node_unmerged(has_test_tag("label")).fetch_semantics_node().bounds.left;
-        vec![along(left, 30.0, 16.0)]
-    });
+    }
 }
 
 /// A button's and an icon button's corners on default effects, "to prevent any bounce".

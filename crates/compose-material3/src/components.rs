@@ -292,50 +292,60 @@ pub(crate) struct Elevations {
     pub pressed: Dp,
     pub focused: Dp,
     pub hovered: Dp,
-    /// A chip's alone: the others' are their default, and don't read the state.
+    /// A chip's and a card's: the others' have none, this being their default.
     pub dragged: Dp,
     pub disabled: Dp,
 }
 
 /// The interaction an elevation follows, as material3's `animateElevation` tells them apart.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ElevationInteraction {
+pub(crate) enum ElevationInteraction {
     Press,
     Hover,
     Focus,
     Drag,
 }
 
-/// The elevation of a component in its interaction state, and the interaction it is that of
-/// (`None` at rest or disabled), as `interaction_elevation` picks it: a press, then a hover,
-/// then a focus, each only when its elevation differs from the default (so only those states
-/// are read, and compose again).
-fn elevation_and_interaction(
+/// The elevation of a component in its interaction state, and the interaction going on (`None` at
+/// rest or disabled), as `animateElevation`: the one that started last wins
+/// (`interactions.lastOrNull()`). Only the kinds whose elevation isn't the default are read, so what
+/// doesn't change it isn't composed again: a button's press, where only a hover raises it.
+pub(crate) fn elevation_and_interaction(
     elevations: Elevations,
     enabled: bool,
     source: &compose_ui::MutableInteractionSource,
 ) -> (Dp, Option<ElevationInteraction>) {
+    use compose_ui::LatestInteraction as Latest;
     if !enabled {
         return (elevations.disabled, None);
     }
     let default = elevations.default;
-    if elevations.pressed != default && source.is_pressed() {
-        (elevations.pressed, Some(ElevationInteraction::Press))
-    } else if elevations.hovered != default && source.is_hovered() {
-        (elevations.hovered, Some(ElevationInteraction::Hover))
-    } else if elevations.focused != default && source.is_focused() {
-        (elevations.focused, Some(ElevationInteraction::Focus))
-    } else if elevations.dragged != default && source.is_dragged() {
-        (elevations.dragged, Some(ElevationInteraction::Drag))
+    let is = |elevation: Dp, kind| elevation != default && source.is_latest_ongoing(kind);
+    let target = if is(elevations.pressed, Latest::Press) {
+        elevations.pressed
+    } else if is(elevations.hovered, Latest::Hover) {
+        elevations.hovered
+    } else if is(elevations.focused, Latest::Focus) {
+        elevations.focused
+    } else if is(elevations.dragged, Latest::Drag) {
+        elevations.dragged
     } else {
-        (default, None)
-    }
+        default
+    };
+    let interaction = source.latest_ongoing_now().map(|latest| match latest {
+        Latest::Press => ElevationInteraction::Press,
+        Latest::Hover => ElevationInteraction::Hover,
+        Latest::Focus => ElevationInteraction::Focus,
+        Latest::Drag => ElevationInteraction::Drag,
+    });
+    (target, interaction)
 }
 
-/// A component's elevation animated as material3 1.4's `animateElevation` does (read from its
+/// A component's elevation animated as material3's `animateElevation` does (read from its
 /// `ElevationDefaults`): to a new interaction's in 120 ms (`FastOutSlowInEasing`), back from a
 /// hover in 120 ms and from a press, a drag or a focus in 150 ms (`CubicBezierEasing(0.4, 0,
-/// 0.6, 1)`), at once with neither an interaction before nor one now (enabled or disabled).
+/// 0.6, 1)`). At once when disabled, whatever it was doing ("No transition when moving to a disabled
+/// state"), and with neither an interaction before nor one now.
 fn animated_elevation(
     elevations: Elevations,
     enabled: bool,
@@ -349,11 +359,11 @@ fn animated_elevation(
         AnimationSpec::Tween(TweenSpec { duration_millis, delay_millis: 0, easing })
     };
     let outgoing = Easing::cubic_bezier(0.4, 0.0, 0.6, 1.0);
-    let spec = match (interaction, previous) {
-        (Some(_), _) => tween(120, FAST_OUT_SLOW_IN_EASING),
-        (None, Some(ElevationInteraction::Hover)) => tween(120, outgoing),
-        (None, Some(_)) => tween(150, outgoing),
-        (None, None) => compose_animation::snap(0).into(),
+    let spec = match (enabled, interaction, previous) {
+        (false, _, _) | (true, None, None) => compose_animation::snap(0).into(),
+        (true, Some(_), _) => tween(120, FAST_OUT_SLOW_IN_EASING),
+        (true, None, Some(ElevationInteraction::Hover)) => tween(120, outgoing),
+        (true, None, Some(_)) => tween(150, outgoing),
     };
     crate::lazy_animation::animate_lazily(target, spec, |start: Dp, stop: Dp, fraction| {
         Dp(start.0 + (stop.0 - start.0) * fraction)
@@ -423,8 +433,12 @@ pub(crate) fn surface(
         None => surface_modifier(modifier, shape, color, border, shadow_elevation)
             .then_custom(BlockPointer),
     };
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-        CompositionLocalProvider(LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation), || {
+    CompositionLocalProvider(
+        (
+            LOCAL_CONTENT_COLOR.provides(content_color),
+            LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation),
+        ),
+        || {
             let content = content.clone();
             Box(
                 modifier.clone(),
@@ -432,8 +446,8 @@ pub(crate) fn surface(
                 true,
                 compose_runtime::callback(move |_| content()),
             );
-        });
-    });
+        },
+    );
 }
 
 /// The elevation surfaces around add up to, as Compose's `LocalAbsoluteTonalElevation`.

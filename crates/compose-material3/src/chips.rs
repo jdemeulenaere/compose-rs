@@ -155,8 +155,11 @@ pub struct ChipElevation {
 pub type SelectableChipElevation = ChipElevation;
 
 impl ChipElevation {
-    /// All at `elevation`, dragged at the 8 dp of the tokens: the flat chips'.
-    const fn flat(elevation: Dp) -> ChipElevation {
+    /// All at `elevation`, dragged at the 8 dp of the tokens: the flat chips', as
+    /// `assistChipElevation(elevation)`, `suggestionChipElevation(elevation)` and
+    /// `inputChipElevation(elevation)`, whose other parameters default to it. Change others with
+    /// struct update.
+    pub const fn flat(elevation: Dp) -> ChipElevation {
         ChipElevation {
             elevation,
             pressed_elevation: elevation,
@@ -246,39 +249,40 @@ impl ChipShapes {
     }
 }
 
-/// A flat chip's `border`: its default, for its state (a default can't read `enabled`), none, or
-/// one's own. A `BorderStroke` or an `Option` of one converts, `None` being no border as Compose's.
+/// What a flat chip's `border` takes: its default for its state (a default can't read `enabled`),
+/// none, or one's own. A `BorderStroke` or an `Option` of one converts, `None` being no border as
+/// Compose's. Not Compose's deprecated `ChipBorder`, whose place it doesn't take (D1039).
 #[derive(Clone, PartialEq, Debug)]
-pub enum ChipBorder {
+pub enum ChipBorderChoice {
     Default,
     None,
     Stroke(BorderStroke),
 }
 
-impl From<BorderStroke> for ChipBorder {
-    fn from(border: BorderStroke) -> ChipBorder {
-        ChipBorder::Stroke(border)
+impl From<BorderStroke> for ChipBorderChoice {
+    fn from(border: BorderStroke) -> ChipBorderChoice {
+        ChipBorderChoice::Stroke(border)
     }
 }
 
-impl From<Option<BorderStroke>> for ChipBorder {
-    fn from(border: Option<BorderStroke>) -> ChipBorder {
-        border.map_or(ChipBorder::None, ChipBorder::Stroke)
+impl From<Option<BorderStroke>> for ChipBorderChoice {
+    fn from(border: Option<BorderStroke>) -> ChipBorderChoice {
+        border.map_or(ChipBorderChoice::None, ChipBorderChoice::Stroke)
     }
 }
 
-impl compose_runtime::ComposeArg for ChipBorder {
+impl compose_runtime::ComposeArg for ChipBorderChoice {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
 }
 
-impl ChipBorder {
+impl ChipBorderChoice {
     fn or_else(self, default: impl FnOnce() -> BorderStroke) -> Option<BorderStroke> {
         match self {
-            ChipBorder::Default => Some(default()),
-            ChipBorder::None => None,
-            ChipBorder::Stroke(border) => Some(border),
+            ChipBorderChoice::Default => Some(default()),
+            ChipBorderChoice::None => None,
+            ChipBorderChoice::Stroke(border) => Some(border),
         }
     }
 }
@@ -387,13 +391,23 @@ impl AssistChipDefaults {
         ChipElevation::flat(Dp(0.0))
     }
 
-    /// As `assistChipBorder(enabled)`.
+    /// As `assistChipBorderChoice(enabled)`.
     pub fn assist_chip_border(enabled: bool) -> BorderStroke {
         let scheme = MaterialTheme::color_scheme();
         BorderStroke::new(
             Dp(1.0),
             if enabled { scheme.outline_variant } else { scheme.on_surface.with_alpha(0.12) },
         )
+    }
+
+    /// As `assistChipBorder(enabled, borderColor, disabledBorderColor, borderWidth)`.
+    pub fn assist_chip_border_with(
+        enabled: bool,
+        border_color: Color,
+        disabled_border_color: Color,
+        border_width: Dp,
+    ) -> BorderStroke {
+        BorderStroke::new(border_width, if enabled { border_color } else { disabled_border_color })
     }
 
     /// As `elevatedAssistChipColors()`.
@@ -483,9 +497,31 @@ impl FilterChipDefaults {
         ChipElevation { hovered_elevation: Dp(1.0), ..ChipElevation::flat(Dp(0.0)) }
     }
 
-    /// As `filterChipBorder(enabled, selected)`: selected, a hairline nobody sees.
+    /// As `filterChipBorderChoice(enabled, selected)`: selected, a hairline nobody sees.
     pub fn filter_chip_border(enabled: bool, selected: bool) -> BorderStroke {
         selectable_border(enabled, selected)
+    }
+
+    /// As `filterChipBorder(enabled, selected, borderColor, selectedBorderColor, disabledBorderColor,
+    /// disabledSelectedBorderColor, borderWidth, selectedBorderWidth)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn filter_chip_border_with(
+        enabled: bool,
+        selected: bool,
+        border_color: Color,
+        selected_border_color: Color,
+        disabled_border_color: Color,
+        disabled_selected_border_color: Color,
+        border_width: Dp,
+        selected_border_width: Dp,
+    ) -> BorderStroke {
+        let color = match (enabled, selected) {
+            (true, false) => border_color,
+            (true, true) => selected_border_color,
+            (false, false) => disabled_border_color,
+            (false, true) => disabled_selected_border_color,
+        };
+        BorderStroke::new(if selected { selected_border_width } else { border_width }, color)
     }
 
     /// As `elevatedFilterChipColors()`.
@@ -534,7 +570,7 @@ fn default_chip_shapes() -> ChipShapes {
     }
 }
 
-/// `filterChipBorder` and `inputChipBorder`, the same tokens: 1 dp unselected, a transparent
+/// `filterChipBorderChoice` and `inputChipBorderChoice`, the same tokens: 1 dp unselected, a transparent
 /// hairline selected.
 fn selectable_border(enabled: bool, selected: bool) -> BorderStroke {
     let scheme = MaterialTheme::color_scheme();
@@ -614,9 +650,34 @@ impl InputChipDefaults {
         ChipElevation::flat(Dp(0.0))
     }
 
-    /// As `inputChipBorder(enabled, selected)`.
+    /// As `inputChipBorderChoice(enabled, selected)`.
     pub fn input_chip_border(enabled: bool, selected: bool) -> BorderStroke {
         selectable_border(enabled, selected)
+    }
+
+    /// As `inputChipBorder(enabled, selected, borderColor, selectedBorderColor, disabledBorderColor,
+    /// disabledSelectedBorderColor, borderWidth, selectedBorderWidth)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn input_chip_border_with(
+        enabled: bool,
+        selected: bool,
+        border_color: Color,
+        selected_border_color: Color,
+        disabled_border_color: Color,
+        disabled_selected_border_color: Color,
+        border_width: Dp,
+        selected_border_width: Dp,
+    ) -> BorderStroke {
+        FilterChipDefaults::filter_chip_border_with(
+            enabled,
+            selected,
+            border_color,
+            selected_border_color,
+            disabled_border_color,
+            disabled_selected_border_color,
+            border_width,
+            selected_border_width,
+        )
     }
 
     /// As `shape`.
@@ -670,9 +731,24 @@ impl SuggestionChipDefaults {
         ChipElevation::flat(Dp(0.0))
     }
 
-    /// As `suggestionChipBorder(enabled)`.
+    /// As `suggestionChipBorderChoice(enabled)`.
     pub fn suggestion_chip_border(enabled: bool) -> BorderStroke {
         AssistChipDefaults::assist_chip_border(enabled)
+    }
+
+    /// As `suggestionChipBorder(enabled, borderColor, disabledBorderColor, borderWidth)`.
+    pub fn suggestion_chip_border_with(
+        enabled: bool,
+        border_color: Color,
+        disabled_border_color: Color,
+        border_width: Dp,
+    ) -> BorderStroke {
+        AssistChipDefaults::assist_chip_border_with(
+            enabled,
+            border_color,
+            disabled_border_color,
+            border_width,
+        )
     }
 
     /// As `elevatedSuggestionChipColors()`.
@@ -789,9 +865,10 @@ fn chip(parts: ChipParts) {
 /// The text style of a chip's label, and its color.
 fn provide_label_style(color: Color, content: impl Fn() + 'static) {
     let style = MaterialTheme::typography().label_large.clone();
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), move || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style.clone()), &content);
-    });
+    CompositionLocalProvider(
+        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style.clone())),
+        &content,
+    );
 }
 
 /// An icon centered in a box, or a spacer of no width, as `ChipContent`'s ends.
@@ -969,14 +1046,14 @@ pub fn AssistChip(
     #[default(Some(crate::AssistChipDefaults::assist_chip_elevation()))] elevation: Option<
         ChipElevation,
     >,
-    #[default(crate::ChipBorder::Default)] border: impl Into<ChipBorder>,
+    #[default(crate::ChipBorderChoice::Default)] border: impl Into<ChipBorderChoice>,
     #[default(crate::AssistChipDefaults::horizontal_arrangement())] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
     #[default(crate::AssistChipDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
-    let border: ChipBorder = border;
+    let border: ChipBorderChoice = border;
     let border = border.or_else(|| AssistChipDefaults::assist_chip_border(enabled));
     plain_chip(
         on_click,
@@ -1048,13 +1125,13 @@ pub fn SuggestionChip(
     #[default(Some(crate::SuggestionChipDefaults::suggestion_chip_elevation()))] elevation: Option<
         ChipElevation,
     >,
-    #[default(crate::ChipBorder::Default)] border: impl Into<ChipBorder>,
+    #[default(crate::ChipBorderChoice::Default)] border: impl Into<ChipBorderChoice>,
     #[default(crate::SuggestionChipDefaults::horizontal_arrangement())]
     horizontal_arrangement: impl Into<HorizontalArrangement>,
     #[default(crate::SuggestionChipDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
-    let border: ChipBorder = border;
+    let border: ChipBorderChoice = border;
     let border = border.or_else(|| SuggestionChipDefaults::suggestion_chip_border(enabled));
     plain_chip(
         on_click,
@@ -1167,7 +1244,7 @@ pub fn FilterChip(
     #[default(Some(crate::FilterChipDefaults::filter_chip_elevation()))] elevation: Option<
         SelectableChipElevation,
     >,
-    #[default(crate::ChipBorder::Default)] border: impl Into<ChipBorder>,
+    #[default(crate::ChipBorderChoice::Default)] border: impl Into<ChipBorderChoice>,
     #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(crate::FilterChipDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -1192,7 +1269,7 @@ pub fn FilterChip(
             FilterChipDefaults::horizontal_arrangement()
         }
     });
-    let border: ChipBorder = border;
+    let border: ChipBorderChoice = border;
     let border = border.or_else(|| FilterChipDefaults::filter_chip_border(enabled, selected));
     selectable_with(
         selected,
@@ -1297,7 +1374,7 @@ pub fn InputChip(
     #[default(Some(crate::InputChipDefaults::input_chip_elevation()))] elevation: Option<
         SelectableChipElevation,
     >,
-    #[default(crate::ChipBorder::Default)] border: impl Into<ChipBorder>,
+    #[default(crate::ChipBorderChoice::Default)] border: impl Into<ChipBorderChoice>,
     #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(None)] content_padding: impl Into<Option<PaddingValues>>,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
@@ -1325,7 +1402,7 @@ pub fn InputChip(
     let padding = content_padding.unwrap_or_else(|| {
         InputChipDefaults::content_padding(has_avatar, has_leading, has_trailing)
     });
-    let border: ChipBorder = border;
+    let border: ChipBorderChoice = border;
     let border = border.or_else(|| InputChipDefaults::input_chip_border(enabled, selected));
     let opacity = if enabled { 1.0 } else { 0.38 };
     let avatar = avatar.map(|avatar: Callback| {
@@ -1439,20 +1516,21 @@ pub fn Badge(
         .clip(pill);
     match content {
         Some(content) => {
-            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-                CompositionLocalProvider(
+            CompositionLocalProvider(
+                (
+                    LOCAL_CONTENT_COLOR.provides(content_color),
                     LOCAL_TEXT_STYLE.provides(typography.label_small.clone()),
-                    || {
-                        let content = content.clone();
-                        Box(
-                            modifier.clone().padding((4.dp(), 0.dp())),
-                            Alignment::CENTER,
-                            false,
-                            compose_runtime::callback(move |_| content()),
-                        );
-                    },
-                );
-            });
+                ),
+                || {
+                    let content = content.clone();
+                    Box(
+                        modifier.clone().padding((4.dp(), 0.dp())),
+                        Alignment::CENTER,
+                        false,
+                        compose_runtime::callback(move |_| content()),
+                    );
+                },
+            );
         }
         None => Box(modifier, Alignment::CENTER, false, compose_runtime::callback(|_| {})),
     }

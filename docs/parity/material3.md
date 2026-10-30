@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1040): 32 source files (21,836 lines), 79 modules with 1002 `#[test]`s; the statuses below are the current ones.
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1041): 32 source files (21,968 lines), 79 modules with 1009 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -249,7 +249,7 @@ From `compose/material3/material3/api/current.txt` (`restricted_current.txt` is 
 
 ### Chips
 
-Complete (D1039): every kind, the `shapes` overloads as a `shapes` parameter, `ChipColors`, `SelectableChipColors`, `ChipElevation` (`SelectableChipElevation`, the same struct), `ChipShapes` and each `*ChipDefaults`. `ChipBorder`, Compose's deprecated class, is here what a flat chip's `border` takes: its default, none, or one's own (a default can't read `enabled`). Colors change by struct update, as `ButtonColors`.
+Complete (D1039): every kind, the `shapes` overloads as a `shapes` parameter, `ChipColors`, `SelectableChipColors`, `ChipElevation` (`SelectableChipElevation`, the same struct), `ChipShapes` and each `*ChipDefaults`. `ChipBorderChoice` is what a flat chip's `border` takes: its default, none, or one's own (a default can't read `enabled`; Compose's deprecated `ChipBorder` isn't carried). Colors and other elevations change by struct update, as `ButtonColors`; `ChipElevation::flat` is `assistChipElevation(elevation)`'s one word; `*_border_with` are the borders' parameters.
 
 ### Cards, surfaces, dividers, icons
 

@@ -40,8 +40,8 @@ impl compose_runtime::ComposeArg for ButtonColors {
 }
 
 /// A button's elevation in each of its states, as Compose's `ButtonElevation`: the shadow
-/// follows the press, focus and hover (snapping to the state's value, where Compose animates
-/// over 90 to 150 ms), the tonal elevation is the resting one.
+/// follows the press, focus and hover (animated, `surface`), the tonal elevation is the resting
+/// one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ButtonElevation {
     pub default_elevation: Dp,
@@ -57,53 +57,28 @@ impl ButtonElevation {
         if enabled { self.default_elevation } else { self.disabled_elevation }
     }
 
-    /// The shadow's elevation in the state `interaction_source` reports (state reads: pressed,
-    /// then hovered, then focused), as `shadowElevation(enabled, interactionSource)`.
+    /// The shadow's elevation for the interaction `interaction_source` last began, a state read, as
+    /// `shadowElevation(enabled, interactionSource)`.
     pub fn shadow_elevation(
         &self,
         enabled: bool,
         interaction_source: &MutableInteractionSource,
     ) -> Dp {
-        interaction_elevation(
-            enabled,
-            self.default_elevation,
-            self.pressed_elevation,
-            self.focused_elevation,
-            self.hovered_elevation,
-            self.disabled_elevation,
-            interaction_source,
-        )
+        let elevations = Elevations {
+            default: self.default_elevation,
+            pressed: self.pressed_elevation,
+            focused: self.focused_elevation,
+            hovered: self.hovered_elevation,
+            dragged: self.default_elevation,
+            disabled: self.disabled_elevation,
+        };
+        crate::components::elevation_and_interaction(elevations, enabled, interaction_source).0
     }
 }
 
 impl compose_runtime::ComposeArg for ButtonElevation {
     fn same(&self, other: &Self) -> bool {
         self == other
-    }
-}
-
-/// The elevation for the interaction going on. The states are read only when they make a
-/// difference, so a component whose elevation doesn't change isn't composed again on a hover.
-pub(crate) fn interaction_elevation(
-    enabled: bool,
-    default: Dp,
-    pressed: Dp,
-    focused: Dp,
-    hovered: Dp,
-    disabled: Dp,
-    interaction_source: &MutableInteractionSource,
-) -> Dp {
-    if !enabled {
-        return disabled;
-    }
-    if pressed != default && interaction_source.is_pressed() {
-        pressed
-    } else if hovered != default && interaction_source.is_hovered() {
-        hovered
-    } else if focused != default && interaction_source.is_focused() {
-        focused
-    } else {
-        default
     }
 }
 

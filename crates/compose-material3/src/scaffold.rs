@@ -180,8 +180,8 @@ impl CardDefaults {
 }
 
 /// A card's elevation in each of its states, as Compose's `CardElevation`: the shadow follows a
-/// clickable card's press, focus and hover (snapping, where Compose animates; nothing drags a
-/// card here, so `dragged_elevation` isn't used yet), the tonal elevation is the resting one.
+/// clickable card's press, focus, hover and drag (animated, `surface`), the tonal elevation is the
+/// resting one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CardElevation {
     pub default_elevation: Dp,
@@ -206,15 +206,22 @@ impl CardElevation {
         interaction_source: Option<&MutableInteractionSource>,
     ) -> Dp {
         match interaction_source {
-            Some(interaction_source) => crate::button::interaction_elevation(
-                enabled,
-                self.default_elevation,
-                self.pressed_elevation,
-                self.focused_elevation,
-                self.hovered_elevation,
-                self.disabled_elevation,
-                interaction_source,
-            ),
+            Some(interaction_source) => {
+                let elevations = crate::components::Elevations {
+                    default: self.default_elevation,
+                    pressed: self.pressed_elevation,
+                    focused: self.focused_elevation,
+                    hovered: self.hovered_elevation,
+                    dragged: self.dragged_elevation,
+                    disabled: self.disabled_elevation,
+                };
+                crate::components::elevation_and_interaction(
+                    elevations,
+                    enabled,
+                    interaction_source,
+                )
+                .0
+            }
             None => self.default_elevation,
         }
     }
@@ -261,7 +268,7 @@ pub fn Card(
             pressed: elevation.pressed_elevation,
             focused: elevation.focused_elevation,
             hovered: elevation.hovered_elevation,
-            dragged: elevation.default_elevation,
+            dragged: elevation.dragged_elevation,
             disabled: elevation.disabled_elevation,
         }),
     });

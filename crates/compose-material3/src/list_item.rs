@@ -740,8 +740,9 @@ impl compose_runtime::ComposeArg for PolicyKey {
 /// A part of the item in a box, in `color` and `style`, as Compose's `ContentDecorator` and its
 /// siblings.
 fn decorator(color: Color, style: compose_ui::TextStyle, content: Callback) {
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+    CompositionLocalProvider(
+        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style)),
+        || {
             let content = content.clone();
             Box(
                 Modifier,
@@ -749,8 +750,8 @@ fn decorator(color: Color, style: compose_ui::TextStyle, content: Callback) {
                 false,
                 compose_runtime::callback(move |_| content()),
             );
-        });
-    });
+        },
+    );
 }
 
 /// The leading or trailing content: `padding` away from the rest, and its minimum interactive
@@ -767,19 +768,22 @@ fn side_decorator(
     let minimum = LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.current();
     let minimum = if minimum.is_specified() { minimum } else { Dp(0.0) };
     let reduced = Dp((minimum.0 - around.0).max(0.0));
-    CompositionLocalProvider(LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.provides(reduced), || {
-        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
-                let content = content.clone();
-                Box(
-                    Modifier.padding(padding),
-                    Alignment::TOP_START,
-                    false,
-                    compose_runtime::callback(move |_| content()),
-                );
-            });
-        });
-    });
+    CompositionLocalProvider(
+        (
+            LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.provides(reduced),
+            LOCAL_CONTENT_COLOR.provides(color),
+            LOCAL_TEXT_STYLE.provides(style),
+        ),
+        || {
+            let content = content.clone();
+            Box(
+                Modifier.padding(padding),
+                Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| content()),
+            );
+        },
+    );
 }
 
 /// Lays an item's parts out as Compose's `InteractiveListItemMeasurePolicy`: the leading and

@@ -119,7 +119,7 @@ fn a_selectable_chip_is_a_checkbox_with_its_selection() {
     }
     for tag in ["b", "e", "g"] {
         assert_eq!(role(&mut ui, tag), Some(Role::Checkbox), "{tag}");
-        ui.on_node_with_tag(tag).assert_is_enabled().assert_is_selected();
+        ui.on_node_with_tag(tag).assert_is_enabled().assert_is_selected().assert_has_click_action();
     }
     for tag in ["c", "f"] {
         assert_eq!(role(&mut ui, tag), Some(Role::Checkbox), "{tag}");
@@ -1356,4 +1356,170 @@ fn a_plain_chips_ends_are_in_their_colors() {
         );
     });
     assert_eq!(COLORS.get(), (Color::GREEN, Color::BLUE));
+}
+
+/// The last interaction to begin wins, not a fixed order: a hover, then a focus, is the focus's,
+/// and the hover's again when it ends.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, animateElevation
+#[test]
+fn the_last_interaction_to_begin_wins() {
+    use compose_ui::{Focus, FocusInteraction, HoverEnter, HoverInteraction};
+    let source = compose_ui::MutableInteractionSource::new();
+    let hoisted = source.clone();
+    let mut ui = rule(move || {
+        ElevatedFilterChip!(
+            false,
+            || {},
+            || Text!("a"),
+            elevation = Some(ChipElevation {
+                elevation: 2.dp(),
+                pressed_elevation: 5.dp(),
+                focused_elevation: 7.dp(),
+                hovered_elevation: 9.dp(),
+                dragged_elevation: 11.dp(),
+                disabled_elevation: 0.dp(),
+            }),
+            interaction_source = Some(hoisted.clone())
+        );
+    });
+    let enter = HoverEnter::new();
+    source.try_emit(HoverInteraction::Enter(enter));
+    ui.wait_for_idle();
+    assert_eq!(the_shadow(&mut ui), 9.0);
+    let focus = Focus::new();
+    source.try_emit(FocusInteraction::Focus(focus));
+    ui.wait_for_idle();
+    assert_eq!(the_shadow(&mut ui), 7.0);
+    // The focus over, the hover's again.
+    source.try_emit(FocusInteraction::Unfocus(focus));
+    ui.wait_for_idle();
+    assert_eq!(the_shadow(&mut ui), 9.0);
+    source.try_emit(HoverInteraction::Exit(enter));
+    ui.wait_for_idle();
+    assert_eq!(the_shadow(&mut ui), 2.0);
+}
+
+/// Disabled, the shadow's at the disabled elevation at once, not by the way back from a press.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, animateElevation
+#[test]
+fn disabling_a_chip_snaps_its_shadow() {
+    use compose_ui::{Press, PressInteraction};
+    let enabled = mutable_state_of(true);
+    let read = enabled.handle();
+    let source = compose_ui::MutableInteractionSource::new();
+    let hoisted = source.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let hoisted = hoisted.clone();
+        MaterialTheme!({
+            ElevatedAssistChip!(
+                || {},
+                || Text!("a"),
+                enabled = read.get(),
+                elevation = Some(ChipElevation {
+                    elevation: 2.dp(),
+                    pressed_elevation: 5.dp(),
+                    focused_elevation: 2.dp(),
+                    hovered_elevation: 2.dp(),
+                    dragged_elevation: 2.dp(),
+                    disabled_elevation: 0.dp(),
+                }),
+                interaction_source = Some(hoisted.clone())
+            );
+        });
+    });
+    source.try_emit(PressInteraction::Press(Press::new(compose_ui::Offset::ZERO)));
+    ui.advance_time_by(std::time::Duration::from_millis(500));
+    assert_eq!(the_shadow(&mut ui), 5.0);
+    enabled.set(false);
+    // A frame to compose it, a frame for its effect: not the 150 ms of the way back.
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(the_shadow(&mut ui), 0.0);
+}
+
+/// An icon that stays takes the chip's new colors: it isn't the one kept from before.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, rememberRetainedState
+#[test]
+fn an_icons_color_follows_the_state_while_its_there() {
+    thread_local! {
+        static COLOR: Cell<Color> = const { Cell::new(Color::UNSPECIFIED) };
+    }
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = rule(move || {
+        FilterChip!(
+            read.get(),
+            || {},
+            || Text!("a"),
+            leading_icon = Some(|| COLOR.set(LOCAL_CONTENT_COLOR.current()))
+        );
+    });
+    let scheme = light_color_scheme();
+    assert_eq!(COLOR.get(), scheme.primary);
+    selected.set(true);
+    ui.wait_for_idle();
+    assert_eq!(COLOR.get(), scheme.on_secondary_container);
+}
+
+/// An icon there from the start is simply there on the first frame.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, AnimatingChipContent
+#[test]
+fn an_icon_there_at_first_doesnt_animate_in() {
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            FilterChip!(
+                false,
+                || {},
+                || Text!("Label", modifier = Modifier.test_tag("label")),
+                leading_icon = Some(|| Icon18("leading"))
+            );
+        });
+    });
+    assert_eq!(left(&mut ui, "label"), 34.0);
+    assert_eq!(the_shadow(&mut ui), 0.0);
+    let list = ui.host().display_list();
+    let faded =
+        list.groups.iter().filter_map(|group| group.layer.as_ref()).any(|it| it.alpha < 1.0);
+    assert!(!faded);
+}
+
+/// `flat` raises all the states but the drag's, as `assistChipElevation(elevation = 4.dp)`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, assistChipElevation
+#[test]
+fn a_flat_elevation_raises_every_state() {
+    assert_eq!(
+        ChipElevation::flat(4.dp()),
+        ChipElevation {
+            elevation: 4.dp(),
+            pressed_elevation: 4.dp(),
+            focused_elevation: 4.dp(),
+            hovered_elevation: 4.dp(),
+            dragged_elevation: 8.dp(),
+            disabled_elevation: 4.dp(),
+        }
+    );
+}
+
+/// The borders' colors by state and their widths.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, assistChipBorder
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Chip.kt, filterChipBorder
+#[test]
+fn a_borders_parameters_go_by_the_state() {
+    let (a, b, c, d) = (Color::RED, Color::GREEN, Color::BLUE, Color::BLACK);
+    for border in [
+        AssistChipDefaults::assist_chip_border_with,
+        SuggestionChipDefaults::suggestion_chip_border_with,
+    ] {
+        assert_eq!(border(true, a, b, 2.dp()), BorderStroke::new(2.dp(), a));
+        assert_eq!(border(false, a, b, 2.dp()), BorderStroke::new(2.dp(), b));
+    }
+    for border in
+        [FilterChipDefaults::filter_chip_border_with, InputChipDefaults::input_chip_border_with]
+    {
+        let of = |enabled, selected| border(enabled, selected, a, b, c, d, 2.dp(), 3.dp());
+        assert_eq!(of(true, false), BorderStroke::new(2.dp(), a));
+        assert_eq!(of(true, true), BorderStroke::new(3.dp(), b));
+        assert_eq!(of(false, false), BorderStroke::new(2.dp(), c));
+        assert_eq!(of(false, true), BorderStroke::new(3.dp(), d));
+    }
 }

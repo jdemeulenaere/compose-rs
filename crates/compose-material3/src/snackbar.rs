@@ -532,20 +532,17 @@ pub fn ContentSnackbar(
                             );
                             if let Some(action) = action.clone() {
                                 CompositionLocalProvider(
-                                    LOCAL_CONTENT_COLOR.provides(action_content_color),
+                                    (
+                                        LOCAL_CONTENT_COLOR.provides(action_content_color),
+                                        LOCAL_TEXT_STYLE.provides(typography.label_large.clone()),
+                                    ),
                                     || {
-                                        CompositionLocalProvider(
-                                            LOCAL_TEXT_STYLE
-                                                .provides(typography.label_large.clone()),
-                                            || {
-                                                let action = action.clone();
-                                                Box(
-                                                    Modifier,
-                                                    Alignment::TOP_START,
-                                                    false,
-                                                    compose_runtime::callback(move |_| action()),
-                                                );
-                                            },
+                                        let action = action.clone();
+                                        Box(
+                                            Modifier,
+                                            Alignment::TOP_START,
+                                            false,
+                                            compose_runtime::callback(move |_| action()),
                                         );
                                     },
                                 );

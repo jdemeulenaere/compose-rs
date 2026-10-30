@@ -59,7 +59,7 @@ pub use button::{
 };
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
 pub use chips::{
-    AssistChip, AssistChipDefaults, Badge, BadgedBox, ChipBorder, ChipColors, ChipElevation,
+    AssistChip, AssistChipDefaults, Badge, BadgedBox, ChipBorderChoice, ChipColors, ChipElevation,
     ChipShapes, ElevatedAssistChip, ElevatedFilterChip, ElevatedSuggestionChip, FilterChip,
     FilterChipDefaults, InputChip, InputChipDefaults, SelectableChipColors,
     SelectableChipElevation, SuggestionChip, SuggestionChipDefaults,

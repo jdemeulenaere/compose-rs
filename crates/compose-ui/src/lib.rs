@@ -198,7 +198,8 @@ pub use input::{
 pub use input_mode::{InputMode, InputModeManager, LOCAL_INPUT_MODE_MANAGER};
 pub use interaction::{
     DragInteraction, DragStart, Focus, FocusInteraction, HoverEnter, HoverInteraction, Interaction,
-    InteractionSource, Interactions, Listener, MutableInteractionSource, Press, PressInteraction,
+    InteractionSource, Interactions, LatestInteraction, Listener, MutableInteractionSource, Press,
+    PressInteraction,
 };
 pub use intl::{Locale, LocaleList};
 pub use layout::{

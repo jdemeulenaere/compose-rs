@@ -75,9 +75,10 @@ fn FieldLabel(progress: compose_runtime::State<f32>, color: Color, focused: bool
         .get();
     }
     Box!({
-        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style.clone()), &*label);
-        });
+        CompositionLocalProvider(
+            (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style.clone())),
+            &*label,
+        );
     });
 }
 
@@ -556,13 +557,11 @@ fn decorated_field(
                     });
                     Box!(modifier = placeholder_modifier, {
                         CompositionLocalProvider(
-                            LOCAL_CONTENT_COLOR.provides(placeholder_color),
-                            || {
-                                CompositionLocalProvider(
-                                    LOCAL_TEXT_STYLE.provides(style.clone()),
-                                    &*placeholder,
-                                );
-                            },
+                            (
+                                LOCAL_CONTENT_COLOR.provides(placeholder_color),
+                                LOCAL_TEXT_STYLE.provides(style.clone()),
+                            ),
+                            &*placeholder,
                         );
                     });
                 }

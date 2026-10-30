@@ -26,18 +26,18 @@ pub struct FloatingActionButtonElevation {
 }
 
 impl FloatingActionButtonElevation {
-    /// The shadow's elevation in the state `interaction_source` reports, as
+    /// The shadow's elevation for the interaction `interaction_source` last began, as
     /// `shadowElevation(interactionSource)`.
     pub fn shadow_elevation(&self, interaction_source: &MutableInteractionSource) -> Dp {
-        crate::button::interaction_elevation(
-            true,
-            self.default_elevation,
-            self.pressed_elevation,
-            self.focused_elevation,
-            self.hovered_elevation,
-            self.default_elevation,
-            interaction_source,
-        )
+        let elevations = Elevations {
+            default: self.default_elevation,
+            pressed: self.pressed_elevation,
+            focused: self.focused_elevation,
+            hovered: self.hovered_elevation,
+            dragged: self.default_elevation,
+            disabled: self.default_elevation,
+        };
+        crate::components::elevation_and_interaction(elevations, true, interaction_source).0
     }
 
     /// The tonal elevation: the resting one, as `tonalElevation()`.

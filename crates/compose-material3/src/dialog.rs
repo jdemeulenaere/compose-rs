@@ -170,9 +170,10 @@ fn provide_content_color_text_style(
     content: impl FnOnce(),
 ) {
     let merged = LOCAL_TEXT_STYLE.current().merge(&style);
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(merged), content);
-    });
+    CompositionLocalProvider(
+        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(merged)),
+        content,
+    );
 }
 
 /// As Compose's `AlertDialogContent`.

@@ -139,6 +139,36 @@ fn each_buttons_corners_come_in_when_pressed() {
     }
 }
 
+/// A real press, as `button_withAnimatedShape_pressedShape`'s `down(center)`.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ButtonTest.kt, button_withAnimatedShape_pressedShape
+#[test]
+fn a_finger_down_brings_a_buttons_corners_in() {
+    let mut ui = rule(|| {
+        Box!({
+            Button!(
+                || {},
+                shapes = ButtonDefaults::shapes(),
+                modifier = Modifier.test_tag(TAG),
+                colors = ButtonColors {
+                    container_color: Color::BLUE,
+                    ..ButtonDefaults::button_colors()
+                },
+                |_: RowScope| {
+                    Text!("Button");
+                }
+            );
+        });
+    });
+    let height = bounds(&mut ui, TAG).height();
+    assert_eq!(corner_of(&mut ui, Color::BLUE), height / 2.0);
+    ui.on_node_with_tag(TAG).perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+    });
+    ui.wait_for_idle();
+    assert_eq!(corner_of(&mut ui, Color::BLUE), 8.0);
+}
+
 /// Without `shapes`, it stays the shape, however it's pressed.
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Button.kt, Button
 #[test]
