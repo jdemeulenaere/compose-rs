@@ -896,6 +896,10 @@ fn every_entry_point_of_the_host_is_a_turn() {
     let handle = count.handle();
     let mut host = host(move || {
         handle.get();
+        // The insets ask for a frame only of what read them (D1365).
+        let insets = LOCAL_WINDOW_INSETS_SOURCE.current();
+        insets.insets(InsetsType::StatusBars);
+        insets.cutout_path();
         BackHandler!(on_back = move || handle.update(|count| count + 1));
         Leaf(Modifier.size(20.dp()).then_custom(EveryEvent { count: handle }));
     });
@@ -904,7 +908,7 @@ fn every_entry_point_of_the_host_is_a_turn() {
     host.frame();
     let density = Density::new(2.0);
     type Event<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
-    let events: [Event; 13] = [
+    let events: [Event; 14] = [
         ("send_pointer_left", &|host| {
             host.send_pointer(PointerEvent::moved(Offset::new(5.0, 5.0), false));
             host.frame();
@@ -930,6 +934,9 @@ fn every_entry_point_of_the_host_is_a_turn() {
                 status_bars: Insets::new(1, 2, 3, 4),
                 ..Default::default()
             });
+        }),
+        ("set_window_cutout_path", &|host| {
+            host.set_window_cutout_path(Some(Path::new()));
         }),
         ("request_focus", &|host| host.request_focus(node)),
         ("send_text", &|host| {

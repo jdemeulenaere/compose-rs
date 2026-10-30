@@ -886,7 +886,9 @@ impl WindowInsetsModifiers for Modifier {
         }))
     }
     fn ime_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("imePadding", |holder: &Holder| holder.kind(InsetsType::Ime)))
+        self.then_custom(SystemPadding("imePadding", |holder: &Holder| {
+            holder.kind(InsetsType::Ime)
+        }))
     }
     fn navigation_bars_padding(self) -> Modifier {
         self.then_custom(SystemPadding("navigationBarsPadding", |holder: &Holder| {

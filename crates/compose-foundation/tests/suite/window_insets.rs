@@ -727,9 +727,10 @@ fn nested_paddings_removed_together_leave_their_children_what_their_ancestors_co
         Box!(modifier = outer, {
             let heard = heard.clone();
             Box!(
-                modifier = inner.clone().on_consumed_window_insets_changed(
-                    move |insets: WindowInsets| heard.set(insets.get_top(&density()))
-                )
+                modifier =
+                    inner.clone().on_consumed_window_insets_changed(move |insets: WindowInsets| {
+                        heard.set(insets.get_top(&density()))
+                    })
             );
         });
     });
@@ -1040,11 +1041,8 @@ fn recalculated_insets_losing_their_fixed_constraints_settle() {
     let counted = measures.clone();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let counted = counted.clone();
-        let size = if handle.get() {
-            Modifier.wrap_content_size()
-        } else {
-            Modifier.fill_max_size()
-        };
+        let size =
+            if handle.get() { Modifier.wrap_content_size() } else { Modifier.fill_max_size() };
         Box!(modifier = Modifier.padding(10.dp()).then(size).recalculate_window_insets(), {
             let counted = counted.clone();
             Box!(

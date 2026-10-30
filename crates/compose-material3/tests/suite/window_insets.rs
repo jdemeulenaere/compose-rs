@@ -39,6 +39,15 @@ fn the_components_default_insets_are_the_system_bars_and_a_cutouts() {
         assert_eq!(NavigationBarDefaults::window_insets(), visual().only(horizontal_bottom));
         assert_eq!(NavigationRailDefaults::window_insets(), visual().only(start_vertical));
         assert_eq!(ScaffoldDefaults::content_window_insets(), visual());
+        let safe = || WindowInsets::safe_drawing();
+        assert_eq!(
+            BottomSheetDefaults::modal_window_insets(),
+            safe().only(WindowInsetsSides::BOTTOM + WindowInsetsSides::TOP)
+        );
+        assert_eq!(
+            BottomSheetDefaults::standard_window_insets(),
+            safe().only(WindowInsetsSides::BOTTOM)
+        );
         done.set(true);
     });
     assert!(checked.get());
@@ -360,4 +369,98 @@ fn a_sheets_content_pads_what_its_offset_doesnt_cover() {
     assert_eq!(sheet.height(), 200.0);
     // 48 up from the window's bottom; no top padding: it's far below the status bar.
     assert_eq!(sheet.bottom, 800.0 - 48.0);
+    // Its top is the sheet's: the content's column isn't padded by the status bar.
+    assert_eq!(sheet.top, 800.0 - 48.0 - 200.0);
+}
+
+/// A sheet reaching the window's top: its offset covers none of the status bar, so its content pads
+/// by all of it.
+#[test]
+fn a_sheet_at_the_windows_top_pads_its_content_by_the_status_bar() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 800), || {
+        ModalBottomSheet!(
+            || {},
+            sheet_state = remember_bottom_sheet_state!(
+                SheetValue::Hidden,
+                enabled_values = &[SheetValue::Hidden, SheetValue::Expanded]
+            ),
+            drag_handle = None::<fn()>,
+            |_| {
+                Box!(modifier = Modifier.test_tag("sheet").fill_max_size());
+            }
+        );
+    });
+    ui.host().set_window_insets(PlatformWindowInsets {
+        status_bars: Insets::new(0, 24, 0, 0),
+        system_bars: Insets::new(0, 24, 0, 0),
+        ..PlatformWindowInsets::default()
+    });
+    ui.wait_for_idle();
+    assert_eq!(bounds(&mut ui, "sheet").top, 24.0);
+}
+
+/// Where the title of a medium bar's second row is, under `sent`.
+fn medium_title(sent: PlatformWindowInsets) -> compose_ui::Rect {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || {
+        MediumTopAppBar!({
+            Text!("Title", modifier = Modifier.test_tag("title"));
+        });
+    });
+    ui.host().set_window_insets(sent);
+    ui.wait_for_idle();
+    bounds(&mut ui, "title")
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, mediumTopAppBar_expanded_positioning
+// (their second row under the insets: its sides only, the first row having taken the top)
+#[test]
+fn a_two_row_bars_second_row_pads_only_its_sides() {
+    let plain = medium_title(PlatformWindowInsets::default());
+    let padded = medium_title(PlatformWindowInsets {
+        system_bars: Insets::new(30, 24, 20, 0),
+        ..PlatformWindowInsets::default()
+    });
+    assert_eq!(padded.left - plain.left, 30.0);
+    assert_eq!(padded.top - plain.top, 24.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarTest.kt, navigationBar_respectContentPadding
+// (the bar's layout around `windowInsets`: its row inside them)
+#[test]
+fn a_navigation_bar_pads_its_row_by_its_insets() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || {
+        NavigationBar!(
+            modifier = Modifier.test_tag("bar"),
+            window_insets = WindowInsets::new(10.dp(), 20.dp(), 30.dp(), 40.dp()),
+            |_| {
+                Box!(modifier = Modifier.test_tag("item").fill_max_size());
+            }
+        );
+    });
+    let bar = bounds(&mut ui, "bar");
+    assert_eq!((bar.width(), bar.height()), (400.0, 20.0 + 80.0 + 40.0));
+    let item = bounds(&mut ui, "item");
+    assert_eq!((item.left, item.top, item.right, item.bottom), (10.0, 20.0, 370.0, 100.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScaffoldTest.kt, scaffold_insetsTests_snackbarRespectsHorizontalInsets
+// (a snackbar and a button filling what they're given: the constraints inside the insets)
+#[test]
+fn the_button_and_the_snackbar_are_measured_inside_the_insets() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || {
+        Scaffold!(
+            snackbar_host = {
+                Box!(modifier = Modifier.fill_max_width().height(10.dp()).test_tag("snackbar"));
+            },
+            floating_action_button = {
+                Box!(modifier = Modifier.fill_max_size().test_tag("fab"));
+            },
+            content_window_insets = WindowInsets::new(10.dp(), 0.dp(), 15.dp(), 3.dp()),
+            |_: PaddingValues| {}
+        );
+    });
+    let snackbar = bounds(&mut ui, "snackbar");
+    assert_eq!((snackbar.left, snackbar.width()), (10.0, 400.0 - 10.0 - 15.0));
+    let fab = bounds(&mut ui, "fab");
+    assert_eq!((fab.width(), fab.height()), (400.0 - 10.0 - 15.0, 600.0 - 3.0));
 }

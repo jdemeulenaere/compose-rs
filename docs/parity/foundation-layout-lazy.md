@@ -31,8 +31,8 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 |---|---|---|
 | `covered` | 13 | 132 |
 | `ported` | 17 | 421 |
-| `port` | 13 | 92 |
-| `partial` | 24 | 834 |
+| `port` | 12 | 79 |
+| `partial` | 25 | 847 |
 | `feature:<name>` | 108 | 1,517 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
@@ -79,7 +79,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SpacerTest.kt | 6 | Spacer sized by size/width/height, inside smaller containers | port |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt | 8 | `Modifier.visible(false)`: not drawn, keeps space, not clickable or focusable | feature:layout-modifiers |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsControllerTest.kt | 11 | `imeNestedScroll`: scrolling and flinging the IME open or closed | feature:ime-nested-scroll (Android IME animation controller, D1361) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsDeviceTest.kt | 13 | Insets on a real device: consumption flag on the view, visibility at start, IME padding switching fields | port (the listener exists, `ComposeRsInsets`, D1358; these run on a device, an Android-host test in `compose-android`, not run in the window-insets piece: the phone was reserved) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsDeviceTest.kt | 13 | Insets on a real device: consumption flag on the view, visibility at start, IME padding switching fields | partial (the listener exists, `ComposeRsInsets`, D1358. Run by hand on a Pixel 8 Pro, not as tests: `insetsSetAtStart`, `startVisibilityNavigationBarsVisible`, `startVisibilityStatusBarsVisible`, `startVisibilityImeNotVisible`. Not run: the rest, the consumption flag's, the re-attached view's and `imePadding_updatesCorrectly_whenFocusSwitchesBetweenBasicTextFields`: the keyboard probe was refused on the phone) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsIgnoringVisibilityTest.kt | 11 | `is*Visible`, `*IgnoringVisibility` insets | ported (`window_insets.rs`, 11 grouped in 2) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsListenerUnsetTest.kt | 1 | Insets update after the view's listener is unset during an animation | port (on a device, as WindowInsetsDeviceTest; `@Ignore`d in Compose) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsPaddingTest.kt | 50 | `*Padding` modifiers per inset kind, `consumeWindowInsets`, `recalculateWindowInsets`, IME animation | partial (`window_insets.rs`: 42 of 50, the host's insets standing for the device's. Not ported: the 6 `animateImeInsets*` and `disableConsuming`, the Android listener's, on a device as WindowInsetsDeviceTest; `consumeWindowInsets_movableContent_updateWhileUnattached`, feature:movable-content in the runtime. `assertIsConsumed` is the view's, not checked here) |
@@ -335,7 +335,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `BoxScope.matchParentSize`, `Arrangement.Absolute` (Left, Right, Center, SpaceBetween/Around/Evenly, `spacedBy`, `aligned`), `Modifier.visible`.
 - **intrinsics:** done (D1200–D1205): `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and Compose's intrinsics on every layout here. Flow layouts, `FlexBox` and `Grid` bring theirs.
 - **alignment-lines:** `paddingFrom` (Dp and TextUnit), `paddingFromBaseline`, `RowScope.alignBy` (line or lambda), `alignByBaseline`, `ColumnScope.alignBy`.
-- **flow-layout:** done (D1350–D1353; `flow_layout.rs`): `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*), `FlowRowOverflowScope`/`FlowColumnOverflowScope` (*exp*, `shownItemCount`, `totalItemCount`). The `overflow` overloads and `ContextualFlow*` are deprecated.
+- **flow-layout:** done (D1350–D1353; `flow_layout.rs`): `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*). The `overflow` overloads and `ContextualFlow*` are deprecated, and `FlowRowOverflowScope`/`FlowColumnOverflowScope` go with them: not here.
 - **flexbox:** `FlexBox`, `FlexBoxConfig`/`FlexBoxConfigScope`, `FlexConfig`/`FlexConfigScope`, `FlexBoxScope.flex`, `FlexDirection`, `FlexWrap`, `FlexJustifyContent`, `FlexAlignItems`, `FlexAlignSelf`, `FlexAlignContent`, `FlexBasis`. They are stable at tip, added 2025-12-08, after 1.12.
 - **grid-layout:** `Grid`, `GridConfigurationScope` (`row`/`column` by Dp, % or `Fr`, `gap`s, `area`, `minmax`), `GridScope.gridItem` (index, area, ranges), `GridTrackSize` (Fixed, Flex, MinMax, Percentage, Auto, MinContent, MaxContent), `Fr`, `GridFlow`, `columns`/`rows`. Stable, added 2025-12-09. Don't confuse it with lazy grids.
 - **ruler-fit:** `Modifier.fitInside(RectRulers)`, `fitOutside(RectRulers)`.

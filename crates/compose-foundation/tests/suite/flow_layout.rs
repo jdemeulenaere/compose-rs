@@ -1217,3 +1217,59 @@ fn a_flows_intrinsics_show_what_its_maximum_items_and_lines_allow() {
         assert_eq!(laid.placed(), 2, "case {index}");
     }
 }
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testFlowRow_wrapsWithWeights
+// (with spacing: what weights share leaves out the spacing, and what rounding leaves goes one pixel
+// at a time from the first, as RowColumnMeasureHelper's)
+#[test]
+fn weights_share_what_the_spacing_leaves_and_the_rounding_remainder_goes_first_to_first() {
+    let bounds = recorded(3);
+    let recording = bounds.clone();
+    let _ui = rule(100, move || {
+        let recording = recording.clone();
+        FlowRow!(
+            modifier = Modifier.width(100.dp()),
+            horizontal_arrangement = Arrangement::spaced_by(10.dp()),
+            max_items_in_each_row = 3,
+            move |scope| {
+                for index in 0..3 {
+                    let modifier = Modifier.height(5.dp()).then(bounds_into(&recording, index));
+                    Box!(modifier = modifier.weight(scope, 1.0));
+                }
+            }
+        );
+    });
+    // 80 left: 26.67 each, 27 rounded, 81 together: one pixel less on the first.
+    let lefts_and_widths: Vec<_> =
+        (0..3).map(|index| (rect(&bounds, index).left, rect(&bounds, index).width())).collect();
+    assert_eq!(lefts_and_widths, [(0.0, 26.0), (36.0, 27.0), (73.0, 27.0)]);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testFlowRow_wrapsToTheNextLine_withExactSpaceNeeded
+// (at a fractional density: lines wrap by the spacing rounded up, D1352)
+#[test]
+fn a_line_wraps_by_its_spacing_rounded_up_at_a_fractional_density() {
+    let height_in = |width: f32| {
+        let size = size_cell();
+        let recording = size.clone();
+        let mut ui = rule(200, move || {
+            let recording = recording.clone();
+            FlowRow!(
+                modifier = Modifier.width(compose_ui::Dp(width / 1.25)).then(size_into(&recording)),
+                // 6.25 px: 7 up, where rounding would say 6.
+                horizontal_arrangement = Arrangement::spaced_by(5.dp()),
+                |_| {
+                    for _ in 0..2 {
+                        Box!(modifier = Modifier.size(16.dp()));
+                    }
+                }
+            );
+        });
+        ui.host().set_density(compose_ui::Density::new(1.25));
+        ui.wait_for_idle();
+        size.get().height
+    };
+    // Items of 20 px: 47 px fit them on a line, 46 don't.
+    assert_eq!(height_in(47.0), 20);
+    assert_eq!(height_in(46.0), 40);
+}

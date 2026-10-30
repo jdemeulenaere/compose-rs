@@ -313,6 +313,7 @@ impl UiHost {
     /// The display cutout's outline, if the platform reports one, which foundation's
     /// `WindowInsets::cutout_path` reads.
     pub fn set_window_cutout_path(&mut self, path: Option<crate::path::Path>) {
+        let _turn = compose_runtime::platform::Turn::begin();
         self.window_insets.report_cutout_path(path);
     }
 
@@ -438,27 +439,28 @@ impl UiHost {
                                 crate::view_configuration::LOCAL_VIEW_CONFIGURATION
                                     .provides(gestures),
                                 move || {
-                            compose_runtime::CompositionLocalProvider(
-                                crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
-                                move || {
-                                    let size = window.get();
                                     compose_runtime::CompositionLocalProvider(
-                                        LOCAL_CONSTRAINTS_HINT.provides(Some(
-                                            crate::constraints::Constraints::fixed(
-                                                size.width,
-                                                size.height,
-                                            ),
-                                        )),
+                                        crate::alignment::LOCAL_LAYOUT_DIRECTION
+                                            .provides(direction.get()),
                                         move || {
+                                            let size = window.get();
                                             compose_runtime::CompositionLocalProvider(
-                                                crate::configuration::LOCAL_CONFIGURATION
-                                                    .provides(configuration.get()),
-                                                move || Content(content),
+                                                LOCAL_CONSTRAINTS_HINT.provides(Some(
+                                                    crate::constraints::Constraints::fixed(
+                                                        size.width,
+                                                        size.height,
+                                                    ),
+                                                )),
+                                                move || {
+                                                    compose_runtime::CompositionLocalProvider(
+                                                        crate::configuration::LOCAL_CONFIGURATION
+                                                            .provides(configuration.get()),
+                                                        move || Content(content),
+                                                    )
+                                                },
                                             )
                                         },
                                     )
-                                },
-                            )
                                 },
                             )
                         },

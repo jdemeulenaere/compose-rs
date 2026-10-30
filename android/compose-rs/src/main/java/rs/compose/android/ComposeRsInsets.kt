@@ -22,11 +22,14 @@ import android.view.WindowInsetsAnimation
  * waterfall); then 5 ignoring visibility (status bars, navigation bars, caption bar, system
  * bars, tappable element); then the keyboard animation's source and target; then a mask of the
  * types hidden, by their index. They're sent when they change, so a keyboard sliding over content
- * that reads none of them costs a state write per changed frame.
+ * that reads none of them costs a state write per changed frame, and no frame.
+ *
+ * [send] says whether an animation's callback sent them: those run in the vsync's insets animation
+ * step, after the frame callbacks and with no traversal of their own (D1365).
  */
 internal class ComposeRsInsets(
     private val view: View,
-    private val send: (IntArray) -> Unit,
+    private val send: (values: IntArray, animating: Boolean) -> Unit,
     private val sendCutoutPath: (FloatArray?) -> Unit,
 ) : View.OnApplyWindowInsetsListener, Runnable {
     val values = IntArray(SIZE)
@@ -93,10 +96,10 @@ internal class ComposeRsInsets(
         }
     }
 
-    private fun sendIfChanged() {
+    private fun sendIfChanged(animating: Boolean = false) {
         if (!values.contentEquals(sent)) {
             values.copyInto(sent)
-            send(values)
+            send(values, animating)
         }
     }
 
@@ -104,7 +107,7 @@ internal class ComposeRsInsets(
     private fun consumed(insets: WindowInsets): WindowInsets = when {
         !consumes -> insets
         Build.VERSION.SDK_INT >= 30 -> WindowInsets.CONSUMED
-        else -> insets.consumeSystemWindowInsets().consumeDisplayCutout()
+        else -> insets.consumeDisplayCutout().consumeStableInsets().consumeSystemWindowInsets()
     }
 
     private fun put(index: Int, left: Int, top: Int, right: Int, bottom: Int) {
@@ -148,13 +151,14 @@ internal class ComposeRsInsets(
         }
         // API 29: from the system windows' insets, as WindowInsetsCompat: the status bar at the
         // top, the navigation bar up to the stable insets, the keyboard above them; the stable
-        // insets stand for those ignoring visibility; everything but a keyboard that's not there
-        // shown.
+        // insets stand for those ignoring visibility. Shown: what has insets, of the status and
+        // navigation bars, the keyboard and a cutout; no caption bar (so no system bars, which
+        // include it); the rest always.
         val system = insets.systemWindowInsets
         val stable = insets.stableInsets
         val navigationBottom = minOf(system.bottom, stable.bottom)
         val ime = api29ImeBottom(insets)
-        put(STATUS_BARS, 0, maxOf(stable.top, system.top), 0, 0)
+        put(STATUS_BARS, 0, system.top, 0, 0)
         put(NAVIGATION_BARS, system.left, 0, system.right, navigationBottom)
         put(IME, 0, 0, 0, ime)
         put(SYSTEM_BARS, system.left, system.top, system.right, navigationBottom)
@@ -169,11 +173,23 @@ internal class ComposeRsInsets(
             cutout?.safeInsetRight ?: 0,
             cutout?.safeInsetBottom ?: 0,
         )
-        put(IGNORING_VISIBILITY, 0, stable.top, 0, 0)
+        put(IGNORING_VISIBILITY, 0, maxOf(stable.top, system.top), 0, 0)
         put(IGNORING_VISIBILITY + 1, stable.left, 0, stable.right, stable.bottom)
         put(IGNORING_VISIBILITY + 3, stable)
         put(IGNORING_VISIBILITY + 4, insets.tappableElementInsets)
-        values[HIDDEN] = if (ime == 0) 1 shl IME else 0
+        var hidden = (1 shl CAPTION_BAR) or (1 shl SYSTEM_BARS)
+        if (system.top == 0) hidden = hidden or (1 shl STATUS_BARS)
+        if (system.left == 0 && system.right == 0 && navigationBottom == 0) {
+            hidden = hidden or (1 shl NAVIGATION_BARS)
+        }
+        if (ime == 0) hidden = hidden or (1 shl IME)
+        if (cutout == null ||
+            cutout.safeInsetLeft == 0 && cutout.safeInsetTop == 0 &&
+            cutout.safeInsetRight == 0 && cutout.safeInsetBottom == 0
+        ) {
+            hidden = hidden or (1 shl DISPLAY_CUTOUT)
+        }
+        values[HIDDEN] = hidden
     }
 
     @TargetApi(31)
@@ -244,7 +260,7 @@ internal class ComposeRsInsets(
                         runningAnimations: MutableList<WindowInsetsAnimation>,
                     ): WindowInsets {
                         target.update(insets)
-                        target.sendIfChanged()
+                        target.sendIfChanged(animating = true)
                         return target.consumed(insets)
                     }
 
@@ -260,7 +276,7 @@ internal class ComposeRsInsets(
                                 target.putIme(TARGET, insets)
                             }
                             if (allFinished) target.update(insets)
-                            target.sendIfChanged()
+                            target.sendIfChanged(animating = true)
                         }
                         if (allFinished) target.savedInsets = null
                     }
@@ -272,6 +288,7 @@ internal class ComposeRsInsets(
     companion object {
         const val STATUS_BARS = 0
         const val NAVIGATION_BARS = 1
+        const val CAPTION_BAR = 2
         const val IME = 3
         const val DISPLAY_CUTOUT = 4
         const val SYSTEM_BARS = 5

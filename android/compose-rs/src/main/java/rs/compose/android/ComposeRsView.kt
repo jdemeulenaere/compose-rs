@@ -188,23 +188,29 @@ class ComposeRsView @JvmOverloads constructor(
     /** The window's insets, as the content reads them (see [ComposeRsInsets]). */
     private val insets = ComposeRsInsets(
         this,
-        send = { values ->
+        send = { values, animating ->
             if (host != 0L) {
                 ComposeRsNative.setWindowInsets(host, values)
-                requestFrame()
+                frameBeforeDraw(animating)
             }
         },
         sendCutoutPath = { points ->
             if (host != 0L) {
                 ComposeRsNative.setWindowCutoutPath(host, points)
-                requestFrame()
+                frameBeforeDraw(animating = false)
             }
         },
     )
 
     /**
-     * Whether the view consumes the window's insets, so the views below it don't get them, as
-     * Compose's `AbstractComposeView.consumeWindowInsets`. False by default.
+     * Whether the view returns the window's insets consumed to whatever dispatched them, as
+     * Compose's `AbstractComposeView.consumeWindowInsets`: its later siblings don't get them, and an
+     * animation of them stops here. It has no views below it. False by default.
+     *
+     * A view pads by the insets it's given. Inside Kotlin Compose's `AndroidView` those are reduced
+     * by its distance from the window's edges; under a plain parent that pads itself without
+     * consuming them (`setPadding` in a listener returning the insets), they aren't, so its content
+     * pads a second time: consume them in the parent.
      */
     var consumeWindowInsets: Boolean
         get() = insets.consumes
@@ -512,6 +518,24 @@ class ComposeRsView @JvmOverloads constructor(
 
     /** Prefetch work was left when the window hid: scheduled again when it shows. */
     private var prefetchLeft = false
+
+    /**
+     * The insets changed: if what read them asked for a frame, it's made before this vsync's
+     * traversal draws, not at the next vsync. They arrive in a traversal (dispatched before its
+     * layout; the first time, in an `AndroidView`, reduced during its layout, after [create] made
+     * the first frame with them whole, D1365) or, [animating], in the vsync's insets animation step,
+     * after the frame callbacks, with no traversal unless it's asked for. A view whose content reads
+     * none has no frame requested: nothing happens.
+     */
+    private fun frameBeforeDraw(animating: Boolean) {
+        if (!frameRequested) return
+        if (!showFramePending) {
+            showFramePending = true
+            viewTreeObserver.addOnPreDrawListener(showFrame)
+        }
+        if (animating) invalidate()
+    }
+
     private val showFrame = object : ViewTreeObserver.OnPreDrawListener {
         override fun onPreDraw(): Boolean {
             viewTreeObserver.removeOnPreDrawListener(this)
