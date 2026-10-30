@@ -340,8 +340,36 @@ fn subcomposition(c: &mut Criterion) {
     });
 }
 
+fn movable_content(c: &mut Criterion) {
+    // Ten texts' worth of content, moved between two parents each iteration.
+    let first = mutable_state_of(true);
+    let handle = first.handle();
+    let content = movable_content_of(|| {
+        for _ in 0..10 {
+            ComposeNode::<Tree>(|| 0u64, |_| {});
+        }
+    });
+    let composition = Composition::new(Tree::new());
+    composition.set_content(move || {
+        if handle.get() {
+            content();
+            ComposeNode::<Tree>(|| 1u64, |_| {});
+        } else {
+            ComposeNode::<Tree>(|| 1u64, |_| {});
+            content();
+        }
+    });
+    c.bench_function("move content of 10 nodes", |b| {
+        b.iter(|| {
+            first.update(|value| !value);
+            composition.recompose()
+        })
+    });
+}
+
 criterion_group!(
     benches,
+    movable_content,
     effects_under_a_running_recomposer,
     subcomposition,
     counter_click,

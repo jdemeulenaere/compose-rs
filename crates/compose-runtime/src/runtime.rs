@@ -498,6 +498,16 @@ pub(crate) struct Deferred {
     pub repeated_releases: bool,
 }
 
+impl Deferred {
+    pub fn is_empty(&self) -> bool {
+        self.deactivated_nodes.is_empty()
+            && self.released_nodes.is_empty()
+            && self.removed_values.is_empty()
+            && self.remembered.is_empty()
+            && self.side_effects.is_empty()
+    }
+}
+
 /// A side effect to run at the end of a pass.
 pub(crate) enum DeferredEffect {
     /// Recorded with `Composer::record_side_effect`.
@@ -835,6 +845,37 @@ impl RemovalStep {
 /// Compose's slot table holds them, so remember observers are forgotten in the reverse of that
 /// order (D714).
 fn remove_subtree(
+    table: &mut SlotTable,
+    deferred: &mut Deferred,
+    scopes: &mut Scopes,
+    stack: &mut Vec<RemovalStep>,
+    root: u32,
+) {
+    if table.movable.parking
+        && table[root].flags
+            & (crate::slot_table::MOVABLE
+                | crate::slot_table::MOVABLE_PENDING
+                | crate::slot_table::CONTAINS_MOVABLE)
+            != 0
+        && crate::movable::park_in(table, root)
+    {
+        return;
+    }
+    remove_group_and_children(table, deferred, scopes, stack, root);
+}
+
+/// Removes what was parked: its nodes are out of the tree, so they're released, not removed.
+pub(crate) fn remove_parked_group(
+    table: &mut SlotTable,
+    deferred: &mut Deferred,
+    scopes: &mut Scopes,
+    stack: &mut Vec<RemovalStep>,
+    group: u32,
+) {
+    remove_group_and_children(table, deferred, scopes, stack, group);
+}
+
+fn remove_group_and_children(
     table: &mut SlotTable,
     deferred: &mut Deferred,
     scopes: &mut Scopes,

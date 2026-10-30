@@ -516,7 +516,15 @@ impl Recomposer {
         };
         let id = inner.next_callback.get();
         inner.next_callback.set(id + 1);
+        let first = inner.frame_end_callbacks.borrow().is_empty();
         inner.frame_end_callbacks.borrow_mut().push((id, Box::new(action)));
+        // The default's frames are the host's: it's asked for one as for any frame awaited, and
+        // ends it with `platform::run_frame_end_callbacks`.
+        if first && inner.is_default {
+            crate::executor::launch(async {
+                with_frame_nanos(|_| ()).await;
+            });
+        }
         drop(inner);
         self.update_state();
         CancellationHandle { recomposer: *self, id }
@@ -757,6 +765,23 @@ pub async fn with_running_recomposer<R>(block: impl AsyncFnOnce(Recomposer) -> R
     recomposer.join().await;
     drop(shutdown);
     result
+}
+
+/// The end of a frame of the thread's default recomposer, which hosts run themselves: its frame-end
+/// callbacks, as [`perform_frame`] does for a recomposer's.
+pub fn run_frame_end_callbacks() {
+    let default = DEFAULT.try_with(|default| default.borrow().as_ref().map(|owner| owner.handle()));
+    let Ok(Some(default)) = default else { return };
+    let Some(inner) = default.inner.try_get() else { return };
+    if inner.frame_end_callbacks.borrow().is_empty() {
+        return;
+    }
+    let callbacks = std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut());
+    drop(inner);
+    for (_, callback) in callbacks {
+        callback();
+    }
+    default.update_state();
 }
 
 /// The frame of `recomposer` at `frame_time_nanos`, as the body of Compose's `withFrameNanos`:

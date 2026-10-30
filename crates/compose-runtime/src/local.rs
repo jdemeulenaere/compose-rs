@@ -463,6 +463,24 @@ fn entries_visible_from(
     }
 }
 
+/// Whether what's provided at two provider groups of a composition is the same.
+pub(crate) fn same_locals_at(
+    compositions: &Compositions,
+    composition: u32,
+    first: u32,
+    second: u32,
+) -> bool {
+    let data = compositions.data(composition);
+    let visible = |group| entries_visible_from(compositions, data, group);
+    let (first, second) = (visible(first), visible(second));
+    first.len() == second.len()
+        && first.iter().all(|entry| {
+            second
+                .iter()
+                .any(|other| other.local == entry.local && Rc::ptr_eq(&other.holder, &entry.holder))
+        })
+}
+
 /// Whether a provider above the provider group starting now provides `local`.
 fn provided_above(local: u64) -> bool {
     with_runtime(|runtime| {

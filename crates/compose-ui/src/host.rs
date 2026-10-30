@@ -667,6 +667,8 @@ impl UiHost {
         drop(draw);
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
+        // The default recomposer's frame ends here, until the hosts move onto `perform_frame` (C4).
+        compose_runtime::platform::run_frame_end_callbacks();
         // `LaunchedEffect`s started by the pass take their first step.
         compose_runtime::platform::run_ready();
         // What the pass and its effects wrote needs the next frame.

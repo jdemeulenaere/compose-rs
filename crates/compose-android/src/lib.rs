@@ -82,6 +82,11 @@ thread_local! {
 struct RetainedViewModels {
     last_token: i64,
     stores: std::collections::HashMap<i64, compose_lifecycle::ViewModelStore>,
+    /// What each keeps of retained values across hosts, per view, as an activity's `retain` (D1306).
+    values: std::collections::HashMap<
+        i64,
+        std::rc::Rc<compose_runtime::retain::RetainedValuesStoreRegistry>,
+    >,
 }
 
 /// A view model store outliving the hosts given it, for the holder Kotlin keeps in a view tree's
@@ -91,6 +96,8 @@ pub fn new_retained_view_model_store() -> i64 {
     RETAINED_VIEW_MODELS.with_borrow_mut(|retained| {
         retained.last_token += 1;
         retained.stores.insert(retained.last_token, compose_lifecycle::ViewModelStore::new());
+        let values = compose_runtime::retain::RetainedValuesStoreRegistry::new();
+        retained.values.insert(retained.last_token, values);
         retained.last_token
     })
 }
@@ -101,13 +108,26 @@ pub fn retained_view_model_store(token: i64) -> Option<compose_lifecycle::ViewMo
     RETAINED_VIEW_MODELS.with_borrow(|retained| retained.stores.get(&token).cloned())
 }
 
-/// Forgets `token`'s store and clears it: its holder is cleared for good.
+/// The retained values stores of `token`, by view, if it's not been cleared.
+#[doc(hidden)]
+pub fn retained_values_stores(
+    token: i64,
+) -> Option<std::rc::Rc<compose_runtime::retain::RetainedValuesStoreRegistry>> {
+    RETAINED_VIEW_MODELS.with_borrow(|retained| retained.values.get(&token).cloned())
+}
+
+/// Forgets `token`'s stores and clears them: its holder is cleared for good.
 #[doc(hidden)]
 pub fn clear_retained_view_model_store(token: i64) {
-    // Out of the borrow: a view model's `on_cleared` runs any code.
-    let store = RETAINED_VIEW_MODELS.with_borrow_mut(|retained| retained.stores.remove(&token));
+    // Out of the borrow: a view model's `on_cleared` and a value's `on_retired` run any code.
+    let (store, values) = RETAINED_VIEW_MODELS.with_borrow_mut(|retained| {
+        (retained.stores.remove(&token), retained.values.remove(&token))
+    });
     if let Some(store) = store {
         store.clear();
+    }
+    if let Some(values) = values {
+        values.dispose();
     }
 }
 

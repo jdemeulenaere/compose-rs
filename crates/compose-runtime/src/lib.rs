@@ -39,12 +39,14 @@ mod frame_clock;
 mod hash;
 mod immutable_list;
 mod local;
+mod movable;
 mod node_tree;
 mod observe;
 mod pausable;
 pub mod platform;
 mod recomposer;
 mod remember;
+pub mod retain;
 mod reusable;
 mod runtime;
 pub mod saveable;
@@ -91,6 +93,7 @@ pub use local::{
     ProvidedValues, current_composition_local_anchor, current_composition_local_context,
     current_composition_local_map, with_composition_local, with_composition_locals,
 };
+pub use movable::{movable_content_of, movable_content_of_with, movable_content_with_receiver_of};
 pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};
 pub use recomposer::{
     CancellationHandle, Recomposer, RecomposerInfo, RecomposerState, running_recomposers,

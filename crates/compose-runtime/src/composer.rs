@@ -1181,6 +1181,7 @@ pub(crate) fn apply_node_op(op: NodeOp) {
     if op == NodeOp::None {
         return;
     }
+    crate::movable::flush_detached();
     let work = with_runtime(|runtime| {
         if let (
             Some(NodeOp::Move { parent: pending_parent, from, to, count }),

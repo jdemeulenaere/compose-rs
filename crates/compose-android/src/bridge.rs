@@ -1047,7 +1047,21 @@ fn create(
     {
         ui.restore_state(state);
     }
-    ui.set_content(content);
+    // What the content retains outlives this host, under the same holder as its view models, by
+    // the view's id, as its instance state is: a view with none keeps nothing.
+    let get_id = method(env, view, jni_str!("getId"), jni_sig!("()I"));
+    // SAFETY: `getId` is `()I`.
+    let view_id = unsafe {
+        env.call_method_unchecked(view, get_id, ReturnType::Primitive(Primitive::Int), &[])
+    }
+    .and_then(|id| id.i())
+    .unwrap_or(-1);
+    match crate::retained_values_stores(view_model_store).filter(|_| view_id != -1) {
+        Some(stores) => ui.set_content(move || {
+            stores.LocalRetainedValuesStoreProvider(view_id, content);
+        }),
+        None => ui.set_content(content),
+    }
     let host = Box::new(Host {
         input_mode,
         ui,

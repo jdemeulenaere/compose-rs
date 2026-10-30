@@ -415,3 +415,18 @@ fn a_focus_changes_state_shows_at_the_next_frame() {
     ui.advance_time_by_frame();
     ui.on_node_with_text("focused: true").assert_exists();
 }
+
+/// A host's frame ends with the default recomposer's frame-end callbacks, and asks for one for them
+/// if nothing else does, as Compose's frames do.
+#[test]
+fn a_host_frame_runs_frame_end_callbacks() {
+    let mut ui = ComposeTestRule::empty(default_host());
+    ui.set_content(|| {});
+    ui.wait_for_idle();
+    let ran = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = ran.clone();
+    Recomposer::current_thread().schedule_frame_end_callback(move || flag.set(true));
+    assert!(!ran.get());
+    ui.wait_for_idle();
+    assert!(ran.get());
+}

@@ -636,6 +636,10 @@ pub(crate) fn composite_key_hash_at(
             group = entry.parent;
             continue;
         }
+        // What's in movable content hashes alike wherever it moves.
+        if entry.flags & crate::slot_table::MOVABLE != 0 {
+            return hash.rotate_left(3) ^ entry.key;
+        }
         // Groups of one key under one parent (two calls of a composable: keys here are per
         // composable, where Compose's are per call site) are told apart by their order among
         // themselves, whichever branch each is (Compose's `rGroupIndex` counts them all, so

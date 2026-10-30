@@ -18,7 +18,7 @@ use crate::runtime::{
     try_with_runtime, with_runtime,
 };
 use crate::scope::ScopeId;
-use crate::slot_table::{GroupKind, NONE, SENTINEL};
+use crate::slot_table::{GroupKind, NONE, SENTINEL, SlotValue};
 use crate::state::CellValue;
 
 /// The key of the restart group that holds a composition's content.
@@ -794,6 +794,7 @@ impl Pass {
                 ..
             } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
+            data.table.movable.parking = kind == PassKind::Whole;
             let sentinel = &mut data.table[SENTINEL];
             let dirty = sentinel.dirty && !resume;
             if !resume {
@@ -861,7 +862,7 @@ impl Pass {
     /// frame of several compositions applies once they've all composed (D796, D1301).
     pub(crate) fn finish_composing(mut self) -> Composed {
         let resume = self.kind == PassKind::Resume;
-        let (op, applier) = with_runtime(|runtime| {
+        let (op, applier, late) = with_runtime(|runtime| {
             let Runtime {
                 compositions,
                 scopes,
@@ -922,9 +923,19 @@ impl Pass {
             if !resume {
                 table[SENTINEL].node_count = frame.node_index - frame.node_start;
             }
-            (op, data.applier.clone())
+            // Movable content: the sentinel's frame goes on for it.
+            let late = table.movable.has_work();
+            if late {
+                frames.push(Frame { cursor: NONE, ..frame });
+            } else {
+                table.movable.parking = false;
+            }
+            (op, data.applier.clone(), late)
         });
         apply_node_op(op);
+        if late {
+            finish_movable_content(self.id);
+        }
         flush_node_moves();
         // Paused content the pass reached or removed.
         if self.kind == PassKind::Whole {
@@ -939,7 +950,7 @@ impl Pass {
     fn end_composing(&mut self, applier: Rc<RefCell<dyn ErasedApplier>>) -> Composed {
         let mut snapshot = self.snapshot.take().expect("the pass's snapshot");
         let outer = self.outer.take();
-        let (deferred, freeing) = with_runtime(|runtime| {
+        let (deferred, freeing, removed_content) = with_runtime(|runtime| {
             snapshot.leave(&mut runtime.snapshots);
             let freeing = if outer.is_some() { Vec::new() } else { runtime.cells.end_pass() };
             match outer {
@@ -955,13 +966,13 @@ impl Pass {
             let data = runtime.compositions.get_mut(self.id).expect("a live composition");
             data.composing = false;
             data.finishing = true;
-            (std::mem::take(&mut data.deferred), freeing)
+            (std::mem::take(&mut data.deferred), freeing, data.table.movable.removed.take())
         });
         // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
         let finishing = Finishing { id: self.id, freeing };
         let committed = snapshot.commit();
-        Composed { id: self.id, frame: 0, applier, deferred, finishing, committed }
+        Composed { id: self.id, frame: 0, applier, deferred, removed_content, finishing, committed }
     }
 }
 
@@ -1155,6 +1166,33 @@ pub(crate) fn run_unapplied(id: CompositionId) {
     }
 }
 
+/// What's left of a pass for its movable content, once it has composed what it was going to: each
+/// placeholder takes what's parked of it or composes new, which may make more of either; what's
+/// still parked is removed then.
+fn finish_movable_content(id: CompositionId) {
+    let index = id.index;
+    loop {
+        let pending = with_runtime(|runtime| {
+            let pending = runtime.compositions.data(index).table.movable.pending;
+            if pending != 0 {
+                runtime.begin_movable_walk(index);
+            }
+            pending
+        });
+        if pending == 0 {
+            break;
+        }
+        run_walk(0);
+        flush_node_moves();
+    }
+    with_runtime(|runtime| {
+        runtime.remove_parked(index);
+        let frame = runtime.frames.pop().expect("the sentinel frame");
+        runtime.compositions.data_mut(index).table[SENTINEL].node_count =
+            frame.node_index - frame.node_start;
+    });
+}
+
 /// A pass that's composed, its snapshot's apply done: what [`apply_work`] needs.
 pub(crate) struct Composed {
     pub(crate) id: CompositionId,
@@ -1162,6 +1200,8 @@ pub(crate) struct Composed {
     pub(crate) frame: u64,
     applier: Rc<RefCell<dyn ErasedApplier>>,
     deferred: Deferred,
+    /// What's removed of movable content that stayed parked: after the rest.
+    removed_content: Option<Box<Deferred>>,
     finishing: Finishing,
     committed: crate::snapshots::Committed,
 }
@@ -1170,7 +1210,8 @@ pub(crate) struct Composed {
 /// apply came to.
 pub(crate) fn apply_work(composed: Composed) {
     use crate::snapshots::Committed;
-    let Composed { id, applier, mut deferred, mut finishing, committed, .. } = composed;
+    let Composed { id, applier, mut deferred, removed_content, mut finishing, committed, .. } =
+        composed;
     // The one it's using now, if it's lent.
     let applier = with_runtime(|runtime| crate::context::resolve_applier(&runtime.lent, &applier));
     let observer_panic = match committed {
@@ -1202,6 +1243,13 @@ pub(crate) fn apply_work(composed: Composed) {
         runtime.compositions.get(id).is_none_or(|data| data.disposed || data.closed)
     });
     apply_deferred(&applier, &mut deferred, !disposed);
+    if let Some(mut removed) = removed_content {
+        applier
+            .try_borrow_mut()
+            .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
+            .on_begin_changes();
+        apply_deferred(&applier, &mut removed, false);
+    }
     // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
     let freeing = std::mem::take(&mut finishing.freeing);
     let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));
@@ -1404,6 +1452,7 @@ struct Disposal {
     root_node: crate::applier::NodeRef,
     deferred: Deferred,
     top_level_nodes: u32,
+    poisoned: bool,
 }
 
 impl Disposal {
@@ -1435,6 +1484,18 @@ impl Disposal {
     }
 
     fn empty(runtime: &mut Runtime, id: CompositionId, mut data: CompositionData) -> Disposal {
+        // What a pass that panicked had parked.
+        data.table.movable.parking = false;
+        for parked in std::mem::take(&mut data.table.movable.parked) {
+            let Runtime { scopes, removal_stack, .. } = &mut *runtime;
+            crate::runtime::remove_parked_group(
+                &mut data.table,
+                &mut data.deferred,
+                scopes,
+                removal_stack,
+                parked.group(),
+            );
+        }
         // It's its parent's no more; those under it compose on, by their owners.
         if let Some(place) = data.parent.take() {
             runtime.compositions.remove_child(place);
@@ -1447,7 +1508,8 @@ impl Disposal {
         let first = data.table[SENTINEL].first_child;
         remove_siblings(&mut data.table, &mut deferred, scopes, removal_stack, first, NONE);
         data.table[SENTINEL].first_child = NONE;
-        let top_level_nodes = if data.poisoned { 0 } else { data.table[SENTINEL].node_count };
+        let poisoned = data.poisoned;
+        let top_level_nodes = if poisoned { 0 } else { data.table[SENTINEL].node_count };
         data.table[SENTINEL].node_count = 0;
         Disposal {
             id,
@@ -1456,6 +1518,7 @@ impl Disposal {
             data: Some(data),
             deferred,
             top_level_nodes,
+            poisoned,
         }
     }
 
@@ -1469,6 +1532,16 @@ impl Disposal {
             // Below a node of its parent's, what it holds may have been released with that node.
             if self.top_level_nodes > 0 && applier.contains(self.root_node) {
                 applier.remove(self.root_node, 0, self.top_level_nodes as usize);
+            }
+        }
+        // What a panic left never remembered is abandoned first, as Compose's abandon set.
+        if self.poisoned {
+            for value in &self.deferred.removed_values {
+                if let SlotValue::Observer(observer) = value
+                    && observer.abandon_later()
+                {
+                    observer.dispatch_forgotten();
+                }
             }
         }
         // Its data stays where a node's `on_detach` finds its providers, even if one panics.

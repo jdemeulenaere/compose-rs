@@ -122,6 +122,13 @@ pub(crate) struct Group {
 pub(crate) const PROVIDER: u8 = 1;
 /// `Group::flags`: a reusable group whose content is deactivated.
 pub(crate) const DEACTIVATED: u8 = 2;
+/// `Group::flags`: the group of a call of movable content.
+pub(crate) const MOVABLE: u8 = 4;
+/// `Group::flags`: movable content's placeholder: it takes what's removed or composes new when the
+/// pass has composed what it was going to.
+pub(crate) const MOVABLE_PENDING: u8 = 8;
+/// `Group::flags`: a group that holds, or held, movable content: a removal looks in it.
+pub(crate) const CONTAINS_MOVABLE: u8 = 16;
 
 impl Group {
     pub fn is_provider(&self) -> bool {
@@ -161,12 +168,17 @@ pub(crate) struct SlotTable {
     /// removed with one still reads it in its `on_detach`, as Compose's reads its map, and
     /// their ids don't come back before those ran (`free_retired_providers`).
     retired_providers: Vec<u32>,
+    pub movable: crate::movable::MovableState,
 }
 
 impl SlotTable {
     pub fn new() -> SlotTable {
-        let mut table =
-            SlotTable { groups: Vec::new(), free: Vec::new(), retired_providers: Vec::new() };
+        let mut table = SlotTable {
+            groups: Vec::new(),
+            free: Vec::new(),
+            retired_providers: Vec::new(),
+            movable: Default::default(),
+        };
         let sentinel = table.alloc(GroupKind::Root, 0, 0, NONE);
         debug_assert_eq!(sentinel, SENTINEL);
         table

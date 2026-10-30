@@ -1013,6 +1013,7 @@ impl CompositionTest {
                 advance_clock(FRAME);
                 dispatch_frame();
                 self.composition().recompose();
+                run_frame_end_callbacks();
                 run_ready();
                 if self.changes() != before {
                     changed_frames += 1;
