@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 46 | 726 |
+| `ported` | 47 | 733 |
 | `port` | 1 | 1 |
-| `partial` | 26 | 845 |
-| `feature:<name>` | 89 | 1,292 |
+| `partial` | 27 | 885 |
+| `feature:<name>` | 87 | 1,245 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -236,7 +236,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableTest.kt | 71 | `draggable`: axes, start/stop, velocity, reverse, enabled, interaction source, `startDragImmediately`, nested drags, indirect pointer, newest callbacks | partial (`draggable.rs`, 49 tests porting 52 of its 71, on the port of `DragGestureNode` (D1458). Left: the 14 indirect-pointer tests (feature:pointer-input-types), `gestureState`'s two reading Compose's internals, the inspector's, the modifier's equality and a mouse's secondary button (events here don't say which button)) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/LazyListFocusableInteractionTest.kt | 19 | A focused item stays in view when the list's viewport shrinks | partial (focus brings items into view: `review_rtl.rs`, `lazy_api.rs::a_reversed_list_brings_a_focused_item_into_view`; keeping the focused item in view on a viewport resize is missing (feature:keep-focused-in-view); AndroidView cases n/a) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/MouseWheelScrollable2DTest.kt | 2 | Wheel on `scrollable2D`, velocity | feature:scrollable2d |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt | 40 | `Modifier.overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, overscroll on scrollables (drag, fling, reverse, nested) | feature:overscroll |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt | 40 | `Modifier.overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, overscroll on scrollables (drag, fling, reverse, nested) | partial (`overscroll.rs`: the 24 on events and the effect's remembering. Left: 7 stretch and 2 glow drawing tests, `zeroSizedEffect`, `notAttachedEffect` and `testOverscrollModifierDrawsOnce` on the real effect, with Android's stretch (D1464); `modifierUndelegatesNodeOnDetach`, `modifierDoesNotAddAlreadyAttachedNode` and `modifierIsProducingEquals` have no meaning for a `modifier()` (D1464); the inspector test is n/a) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollAccessibilityTest.kt | 9 | Accessibility scroll actions on `verticalScroll`/`horizontalScroll` | covered (`compose-android/tests/accessibility_scroll.rs`, `lazy.rs::a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollFocusableInteractionTest.kt | 19 | A focused child of a scroll stays in view on resize | partial (as LazyListFocusableInteractionTest: feature:keep-focused-in-view) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt | 42 | `verticalScroll`/`horizontalScroll`: small/large content, `reverseScrolling`, `scrollTo`, `animateScrollTo`, swipes, coercion, RTL, `isScrollInProgress`, nested | partial (`scroll_state.rs`: 12 tests porting 21 (content fitting or not, scroll to the end, reversed, `canScroll*`, viewport size, coercion of `scrollTo`, `animateScrollTo` and a shrinking range, a fling stopped by a touch, semantics enabled or not, swipes each way, the maximum known before placement), in the three configurations; `onMaxValueUpdate_shouldNotGenerateExtraMeasurements` fails (D870: a scroll measures the scroller's node again); `scroll.rs`, `rtl.rs`. Missing: `performScrollTo` (harness), state restoration, overscroll, `scrollIndicatorState` (feature:scroll-indicator-state), inspector tests n/a, the measure-count and resize-before-placement tests; the five intrinsics tests are ported in `intrinsics.rs`) |
@@ -253,7 +253,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/focus/LazyListFocusableInteractionTest.kt | 1 | Scrolling a column up and down with a focused item doesn't crash | ported (`port_rows.rs`: a focusable item, where its is an `AndroidView`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableDecayAnimationTest.kt | 1 | `animateToWithDecay` | ported (`anchored_draggable.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableGestureTest.kt | 18 | Swipes settle by positional and velocity thresholds, disabled, nested | ported (`anchored_draggable.rs`) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableOverscrollTest.kt | 7 | Overscroll gets out-of-bounds deltas and velocity | feature:anchored-draggable (+ overscroll) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableOverscrollTest.kt | 7 | Overscroll gets out-of-bounds deltas and velocity | ported (`overscroll.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/anchoredDraggable/AnchoredDraggableStateTest.kt | 45 | `AnchoredDraggableState`: target, current, settled, progress, `updateAnchors`, `snapTo`/`animateTo`, `confirmValueChange`, saver | ported (`anchored_draggable.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/AwaitEachGestureTest.kt | 3 | `awaitEachGesture` loops and cancellation | feature:gesture-detectors |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/gestures/AwaitLongPressOrCancellationTest.kt | 9 | `awaitLongPressOrCancellation` | feature:gesture-detectors |
@@ -353,7 +353,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - the parameters `enabled`, `flingBehavior`, `reverseScrolling` and `overscrollEffect` of `verticalScroll`/`horizontalScroll`.
 - **scroll-indicator-state:** `ScrollIndicatorState` (`scrollOffset`, `contentSize`, `viewportSize`) on `ScrollState`, the lazy states and `PagerState`.
 - **scrollable2d:** `Scrollable2DState`, `rememberScrollable2DState`, `Scroll2DScope`, `Modifier.scrollable2D`, and the `Offset` forms of `scrollBy`/`animateScrollBy`/`stopScroll`.
-- **overscroll:** `OverscrollEffect` (`applyToScroll`, `applyToFling`, `isInProgress`, `node`), `OverscrollFactory`, `LocalOverscrollFactory`, `rememberOverscrollEffect`, `Modifier.overscroll`, `withoutVisualEffect`, `withoutEventHandling`, `rememberPlatformOverscrollFactory` (Android glow and stretch).
+- **overscroll:** Done (D1464) but for `rememberPlatformOverscrollFactory`, Android's glow and stretch, and the local factory read by `verticalScroll`/`scrollable` without an effect given: `OverscrollEffect` (`applyToScroll`, `applyToFling`, `isInProgress`, `node`), `OverscrollFactory`, `LocalOverscrollFactory`, `rememberOverscrollEffect`, `Modifier.overscroll`, `withoutVisualEffect`, `withoutEventHandling`, `rememberPlatformOverscrollFactory` (Android glow and stretch).
 - **draggable:** done (D1458).
 - **gesture-detectors:**
   - `awaitEachGesture`, `awaitFirstDown(requireUnconsumed, pass)`, `waitForUpOrCancellation(pass)`;
@@ -365,7 +365,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `detectTransformGestures`, `calculatePan`, `calculateZoom`, `calculateRotation`, `calculateCentroid`, `calculateCentroidSize`;
   - `Modifier.transformable` (with and without `canPan`), `TransformableState`, `rememberTransformableState`, `TransformScope`;
   - `animateBy`, `animatePanBy`, `animateRotateBy`, `animateZoomBy`, `panBy`, `rotateBy`, `zoomBy`, `stopTransformation`.
-- **anchored-draggable:** Done (D1463) but for the `overscrollEffect` parameter, the deprecated constructors and `settle(velocity)`: `AnchoredDraggableState` (both constructors, `anchoredDrag`, `dispatchRawDelta`, `progress(from, to)`, `requireOffset`, `settle(spec)`, `updateAnchors`, `currentValue`, `targetValue`, `settledValue`, `offset`, `lastVelocity`, `isAnimationRunning`, `Saver()`), `DraggableAnchors {}`, `DraggableAnchorsConfig`, `Modifier.anchoredDraggable` (both overloads), `AnchoredDragScope`, `AnchoredDraggableDefaults` (`flingBehavior`, `PositionalThreshold`, `SnapAnimationSpec`, `DecayAnimationSpec`), `animateTo`, `animateToWithDecay`, `snapTo`, `forEach`.
+- **anchored-draggable:** Done (D1463, `overscrollEffect` D1464) but for the deprecated constructors and `settle(velocity)`: `AnchoredDraggableState` (both constructors, `anchoredDrag`, `dispatchRawDelta`, `progress(from, to)`, `requireOffset`, `settle(spec)`, `updateAnchors`, `currentValue`, `targetValue`, `settledValue`, `offset`, `lastVelocity`, `isAnimationRunning`, `Saver()`), `DraggableAnchors {}`, `DraggableAnchorsConfig`, `Modifier.anchoredDraggable` (both overloads), `AnchoredDragScope`, `AnchoredDraggableDefaults` (`flingBehavior`, `PositionalThreshold`, `SnapAnimationSpec`, `DecayAnimationSpec`), `animateTo`, `animateToWithDecay`, `snapTo`, `forEach`.
 - **snapping:** Done (D1462): `SnapLayoutInfoProvider` (interface, and for `LazyListState`/`LazyGridState`), `SnapPosition` (Start, Center, End), `snapFlingBehavior`, `rememberSnapFlingBehavior` (for a provider, a `LazyListState` or a `LazyGridState`).
 - **bring-into-view:** `BringIntoViewRequester()`, `Modifier.bringIntoViewRequester`, `bringIntoView(rect)`. compose-rs only brings focused nodes into view, through its internal `ModifierNode::bring_into_view`.
 - **lazy-layout-info:** done (D859).
@@ -373,8 +373,8 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `animateScrollToItem`, `requestScrollToItem`, `scroll(priority) {}`, `dispatchRawDelta`;
   - `isScrollInProgress`, `interactionSource`, `lastScrolledForward`/`Backward`;
   - `LazyLayoutScrollScope` (and `LazyLayoutScrollScope(state, scrollScope)` for each state), the `Saver` as a value.
-- **lazy-list-params:** `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect`. `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
-- **grid-parity:** done but for `overscrollEffect` (with overscroll) and `LazyGridItemScope`'s `animateItem` (with animate-item), D1451.
+- **lazy-list-params:** done: `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect` (D1464). `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
+- **grid-parity:** done but for `LazyGridItemScope`'s `animateItem` (with animate-item), D1451; `overscrollEffect` D1464.
 - **cache-window:** done for lists and grids (D892). Left: `LazyStaggeredGridDefaults.cacheWindow(state)`, with staggered grids.
 - **lazy-semantics:** items in lazy layouts expose `CollectionInfo`/`CollectionItemInfo`, `ScrollToIndex`, `IndexForKey` and `scrollByOffset` (ui semantics properties), so `performScrollToIndex`/`performScrollToKey` work.
 - **pinnable:** (Started, D1282: `LOCAL_PINNABLE_CONTAINER`, `PinnableContainer` and `PinnedHandle` in ui, lazy items pinned one at a time by what's focusable; the rest of this waits.) `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
@@ -442,7 +442,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
    - Tests: VisibleTest, parts of OffsetTest, PaddingTest, PaddingValuesTest, SizeTest, BoxTest and RowColumnTest.
    - Depends on: none (`visible` needs a node that skips drawing, hit testing and focus).
    - Size: M. Experimental: no.
-8. **grid-parity.** **Done** but for `overscrollEffect` and `animateItem`, which come with their features (D1451).
+8. **grid-parity.** **Done** but for `animateItem`, which comes with its feature (D1451); `overscrollEffect` D1464.
    - API: grids' `reverse_layout`, `sticky_header`, `GridCells::FixedSize`, `GridCells::Custom` for `calculateCrossAxisCellSizes`, the cross-axis arrangement, `LazyGridItemScope::cross_axis_cell_count`, `LazyGridItemInfo::UNKNOWN_ROW`/`UNKNOWN_COLUMN`.
    - Tests: LazyGridsReverseLayoutTest, LazyGridHeadersTest, LazyGridTest, LazyArrangementsTest (grid), LazyGridSpanTest, LazyGridsContentPaddingTest, LazyGridLayoutInfoTest, LazyGridRequestScrollTest.
 9. **draggable.** Done (D1458).
@@ -485,7 +485,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: the four `anchoredDraggable` files, DraggableAnchorsTest.
     - Depends on: draggable, snapping (`TargetedFlingBehavior`), the decay specs (animation), overscroll (for its overscroll tests).
     - Size: M–L. Then move material3's private `Anchored` onto it. Experimental: no.
-17. **overscroll.**
+17. **overscroll.** The events are done (D1464): the effect, its factory, the parameters. Left: Android's stretch and glow (a `RenderEffect` or `EdgeEffect` in the replayer), with StretchOverscrollIntegrationTest, StretchOverscrollScreenshotTest and the drawing tests of OverscrollTest.
     - API: `OverscrollEffect`, `overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, `rememberPlatformOverscrollFactory`; the `overscrollEffect` parameters.
     - Does: edge effects; Android's stretch.
     - Tests: OverscrollTest, StretchOverscrollIntegrationTest, StretchOverscrollScreenshotTest, AnchoredDraggableOverscrollTest, ScrollableAreaTest, parts of LazyListTest and LazyListsContentPaddingTest.

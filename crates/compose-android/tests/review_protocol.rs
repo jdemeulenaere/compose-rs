@@ -420,6 +420,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
             compose_foundation::layout::Arrangement::TOP,
             compose_foundation::Alignment::START,
             None,
+            None,
             true,
             None,
             callback(move |scope: compose_foundation::LazyListScope| {

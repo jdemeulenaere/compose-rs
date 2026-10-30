@@ -20,6 +20,7 @@ use compose_ui::{
 use crate::fling::Fling;
 use crate::gestures::Orientation;
 use crate::mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
+use crate::overscroll::OverscrollEffect;
 use crate::scroll::same_fling;
 
 pub use compose_ui::LocalBoxFuture;
@@ -619,6 +620,23 @@ pub trait ScrollableModifier {
     ) -> Modifier
     where
         S: ScrollableState + ComposeArg + Clone + 'static;
+
+    /// With an effect given the deltas, as `Modifier.scrollable(state, orientation,
+    /// overscrollEffect, enabled, reverseDirection, flingBehavior, interactionSource)`. It's not
+    /// drawn here: as Compose's, apply [`overscroll`](crate::OverscrollModifier::overscroll) too.
+    #[allow(clippy::too_many_arguments)]
+    fn scrollable_overscroll<S>(
+        self,
+        state: S,
+        orientation: Orientation,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        reverse_direction: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        interaction_source: Option<MutableInteractionSource>,
+    ) -> Modifier
+    where
+        S: ScrollableState + ComposeArg + Clone + 'static;
 }
 
 impl ScrollableModifier for Modifier {
@@ -641,7 +659,32 @@ impl ScrollableModifier for Modifier {
     where
         S: ScrollableState + ComposeArg + Clone + 'static,
     {
+        self.scrollable_overscroll(
+            state,
+            orientation,
+            None,
+            enabled,
+            reverse_direction,
+            fling_behavior,
+            interaction_source,
+        )
+    }
+
+    fn scrollable_overscroll<S>(
+        self,
+        state: S,
+        orientation: Orientation,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        reverse_direction: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        interaction_source: Option<MutableInteractionSource>,
+    ) -> Modifier
+    where
+        S: ScrollableState + ComposeArg + Clone + 'static,
+    {
         self.then_custom(ScrollableElement {
+            overscroll: overscroll_effect,
             dyn_state: Rc::new(state.clone()),
             state,
             orientation,
@@ -663,6 +706,7 @@ struct ScrollableElement<S> {
     reverse_direction: bool,
     fling_behavior: Option<Rc<dyn FlingBehavior>>,
     interaction_source: Option<MutableInteractionSource>,
+    overscroll: Option<Rc<dyn OverscrollEffect>>,
 }
 
 pub(crate) struct ScrollableNode {
@@ -674,6 +718,7 @@ pub(crate) struct ScrollableNode {
     reverse_direction: bool,
     fling_behavior: Option<Rc<dyn FlingBehavior>>,
     interaction_source: Option<MutableInteractionSource>,
+    overscroll: Option<Rc<dyn OverscrollEffect>>,
     drag: crate::scroll::DragScroller,
 }
 
@@ -691,6 +736,7 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
             reverse_direction: self.reverse_direction,
             fling_behavior: self.fling_behavior.clone(),
             interaction_source: self.interaction_source.clone(),
+            overscroll: self.overscroll.clone(),
             drag: crate::scroll::DragScroller::along(self.orientation == Orientation::Vertical),
         }
     }
@@ -718,6 +764,7 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
         node.reverse_direction = self.reverse_direction;
         node.fling_behavior = self.fling_behavior.clone();
         node.interaction_source = self.interaction_source.clone();
+        node.overscroll = self.overscroll.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -763,6 +810,7 @@ impl compose_ui::KeyInputModifierNode for ScrollableNode {
             interaction_source: interaction_source.as_ref(),
             state_source: false,
             set_outer: None,
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_key_event(event, self.vertical, !self.reverse_direction, context, &driver)
     }
@@ -848,6 +896,7 @@ impl PointerInputModifierNode for ScrollableNode {
             interaction_source: interaction_source.as_ref(),
             state_source: false,
             set_outer: None,
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_pointer_event(
             event,

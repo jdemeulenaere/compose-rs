@@ -12,6 +12,8 @@ use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::rc::Rc;
 
+use crate::OverscrollModifier;
+
 use compose_runtime::{ComposeArg, ImmutableList, ObjectHandle, Owned, composable};
 use compose_ui::{
     Constraints, Density, Dp, IntOffset, IntSize, Layout, Measurable, MeasurePolicy, MeasureResult,
@@ -1009,6 +1011,9 @@ pub fn LazyVerticalGrid(
         HorizontalArrangement,
     >,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
+        Rc<dyn crate::OverscrollEffect>,
+    >,
     #[default(true)] user_scroll_enabled: bool,
     #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
@@ -1031,6 +1036,7 @@ pub fn LazyVerticalGrid(
             .0,
         horizontal_arrangement.0,
         fling_behavior,
+        overscroll_effect,
         user_scroll_enabled,
         cache_window,
         content,
@@ -1053,6 +1059,9 @@ pub fn LazyHorizontalGrid(
     #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
+        Rc<dyn crate::OverscrollEffect>,
+    >,
     #[default(true)] user_scroll_enabled: bool,
     #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
@@ -1074,6 +1083,7 @@ pub fn LazyHorizontalGrid(
             .0,
         vertical_arrangement.0,
         fling_behavior,
+        overscroll_effect,
         user_scroll_enabled,
         cache_window,
         content,
@@ -1127,6 +1137,7 @@ fn LazyGrid(
     arrangement: MainAxisArrangement,
     cross_arrangement: MainAxisArrangement,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    overscroll_effect: Option<Rc<dyn crate::OverscrollEffect>>,
     user_scroll_enabled: bool,
     cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
@@ -1179,12 +1190,14 @@ fn LazyGrid(
     };
     let modifier = modifier
         .clip(compose_ui::RECTANGLE_SHAPE)
+        .overscroll(overscroll_effect.clone())
         .then_custom(LazyScrollElement {
             state: list,
             vertical,
             reverse,
             enabled: user_scroll_enabled,
             fling_behavior,
+            overscroll: overscroll_effect,
         })
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
         .focus_group();

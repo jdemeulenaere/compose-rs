@@ -30,10 +30,10 @@ pub use scrollable::{
 };
 pub(crate) use scrollable::{DragSession, ScrollCore};
 pub use snapping::{
-    MIN_FLING_VELOCITY, SnapFlingBehavior, SnapLayoutInfoProvider, SnapPosition,
-    TargetedFlingBehavior, grid_snap_layout_info_provider, list_snap_layout_info_provider,
-    remember_grid_snap_fling_behavior, remember_list_snap_fling_behavior,
-    remember_snap_fling_behavior, snap_fling_behavior,
+    CustomSnapPosition, MIN_FLING_VELOCITY, SnapFlingBehavior, SnapLayoutInfoProvider,
+    SnapPosition, TargetedFlingBehavior, grid_snap_layout_info_provider,
+    list_snap_layout_info_provider, remember_grid_snap_fling_behavior,
+    remember_list_snap_fling_behavior, remember_snap_fling_behavior, snap_fling_behavior,
 };
 
 use compose_runtime::ComposeArg;

@@ -44,6 +44,10 @@ pub trait SnapLayoutInfoProvider {
     fn calculate_snap_offset(&self, velocity: f32) -> f32;
 }
 
+/// Where a [`SnapPosition::Custom`] puts an item, given the layout's size, the item's, the paddings
+/// before and after it, its index and the items' count.
+pub type CustomSnapPosition = Rc<dyn Fn(i32, i32, i32, i32, usize, usize) -> i32>;
+
 /// Where in the viewport an item lands, as `SnapPosition`.
 #[derive(Clone)]
 pub enum SnapPosition {
@@ -55,7 +59,7 @@ pub enum SnapPosition {
     End,
     /// By a function of the layout's size, the item's, the paddings before and after it, its index
     /// and the items' count, as an implementation of Compose's interface.
-    Custom(Rc<dyn Fn(i32, i32, i32, i32, usize, usize) -> i32>),
+    Custom(CustomSnapPosition),
 }
 
 impl SnapPosition {

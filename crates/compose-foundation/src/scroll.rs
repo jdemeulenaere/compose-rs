@@ -7,6 +7,9 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+
+use crate::overscroll::{OverscrollEffect, OverscrollModifier, PerformFling, same_overscroll};
+use compose_ui::Velocity;
 use std::task::Poll;
 
 use compose_animation::AnimationSpec;
@@ -254,6 +257,26 @@ pub trait ScrollModifiers {
         fling_behavior: Option<Rc<dyn FlingBehavior>>,
         reverse_scrolling: bool,
     ) -> Modifier;
+    /// With an effect drawn here and given its deltas, as `Modifier.verticalScroll(state,
+    /// overscrollEffect, enabled, flingBehavior, reverseScrolling)`.
+    fn vertical_scroll_overscroll(
+        self,
+        state: ScrollState,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier;
+    /// As `Modifier.horizontalScroll(state, overscrollEffect, enabled, flingBehavior,
+    /// reverseScrolling)`.
+    fn horizontal_scroll_overscroll(
+        self,
+        state: ScrollState,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier;
 }
 
 impl ScrollModifiers for Modifier {
@@ -280,6 +303,43 @@ impl ScrollModifiers for Modifier {
             enabled,
             fling_behavior,
             reverse_scrolling,
+            overscroll: None,
+        })
+    }
+
+    fn vertical_scroll_overscroll(
+        self,
+        state: ScrollState,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier {
+        self.overscroll(overscroll_effect.clone()).then_custom(ScrollElement {
+            state,
+            vertical: true,
+            enabled,
+            fling_behavior,
+            reverse_scrolling,
+            overscroll: overscroll_effect,
+        })
+    }
+
+    fn horizontal_scroll_overscroll(
+        self,
+        state: ScrollState,
+        overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier {
+        self.overscroll(overscroll_effect.clone()).then_custom(ScrollElement {
+            state,
+            vertical: false,
+            enabled,
+            fling_behavior,
+            reverse_scrolling,
+            overscroll: overscroll_effect,
         })
     }
 
@@ -296,6 +356,7 @@ impl ScrollModifiers for Modifier {
             enabled,
             fling_behavior,
             reverse_scrolling,
+            overscroll: None,
         })
     }
 }
@@ -305,6 +366,7 @@ struct ScrollElement {
     vertical: bool,
     enabled: bool,
     fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    overscroll: Option<Rc<dyn OverscrollEffect>>,
     reverse_scrolling: bool,
 }
 
@@ -330,6 +392,7 @@ impl ModifierNodeElement for ScrollElement {
             enabled: self.enabled,
             fling_behavior: self.fling_behavior.clone(),
             reverse_scrolling: self.reverse_scrolling,
+            overscroll: self.overscroll.clone(),
             drag: DragScroller::along(self.vertical),
             laid_out: 0,
             rtl: false,
@@ -353,6 +416,7 @@ impl ModifierNodeElement for ScrollElement {
         node.enabled = self.enabled;
         node.fling_behavior = self.fling_behavior.clone();
         node.reverse_scrolling = self.reverse_scrolling;
+        node.overscroll = self.overscroll.clone();
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -361,6 +425,7 @@ impl ModifierNodeElement for ScrollElement {
             && other.enabled == self.enabled
             && other.reverse_scrolling == self.reverse_scrolling
             && same_fling(&other.fling_behavior, &self.fling_behavior)
+            && same_overscroll(&other.overscroll, &self.overscroll)
     }
 
     fn name(&self) -> &'static str {
@@ -432,6 +497,7 @@ pub(crate) struct ScrollNode {
     vertical: bool,
     enabled: bool,
     fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    overscroll: Option<Rc<dyn OverscrollEffect>>,
     reverse_scrolling: bool,
     drag: DragScroller,
     /// The offset the last layout used.
@@ -511,6 +577,7 @@ impl KeyInputModifierNode for ScrollNode {
             interaction_source: None,
             state_source: true,
             set_outer: None,
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_key_event(event, self.vertical, reverse, context, &driver)
     }
@@ -746,6 +813,7 @@ impl PointerInputModifierNode for ScrollNode {
             interaction_source: None,
             state_source: true,
             set_outer: None,
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_pointer_event(
             event,
@@ -787,6 +855,38 @@ pub(crate) struct ScrollDriver<'a> {
     /// `Modifier.scrollable` without one reports nothing, as Compose's.
     pub state_source: bool,
     pub set_outer: Option<&'a OuterSetter>,
+    /// What gets the drags' and flings' deltas around the scrolling (D1464).
+    pub overscroll: Option<&'a Rc<dyn OverscrollEffect>>,
+}
+
+/// The effect to go through, as `shouldDispatchOverscroll`: none when nothing can scroll, unless
+/// it's showing.
+fn dispatching_overscroll<'a>(
+    effect: Option<&'a Rc<dyn OverscrollEffect>>,
+    state: &Rc<dyn ScrollableState>,
+) -> Option<&'a Rc<dyn OverscrollEffect>> {
+    effect.filter(|effect| {
+        state.can_scroll_forward() || state.can_scroll_backward() || effect.is_in_progress()
+    })
+}
+
+/// `scroll` (pixels towards the end, before a reversal), around `effect` if any, which sees the
+/// pointer's way, as `scrollByWithOverscroll`.
+fn through_overscroll(
+    effect: Option<&Rc<dyn OverscrollEffect>>,
+    vertical: bool,
+    delta: f32,
+    source: NestedScrollSource,
+    scroll: &mut dyn FnMut(f32) -> f32,
+) -> f32 {
+    let Some(effect) = effect else {
+        return scroll(delta);
+    };
+    let axis =
+        |value: f32| if vertical { Offset::new(0.0, value) } else { Offset::new(value, 0.0) };
+    let along = |offset: Offset| if vertical { offset.y } else { offset.x };
+    let mut perform = |pointer: Offset| axis(-scroll(-along(pointer)));
+    -along(effect.apply_to_scroll(axis(-delta), source, &mut perform))
 }
 
 /// Tells a lazy list's scope the nested-scroll parents its next deltas come through (`None`
@@ -838,6 +938,7 @@ pub(crate) struct ScrollTarget {
     pub state: Rc<dyn ScrollableState>,
     pub fling_behavior: Option<Rc<dyn FlingBehavior>>,
     pub set_outer: Option<OuterSetter>,
+    pub overscroll: Option<Rc<dyn OverscrollEffect>>,
     pub chain: NestedScrollChain,
     pub vertical: bool,
     pub reverse: bool,
@@ -920,12 +1021,20 @@ impl ScrollTarget {
                             );
                             if reverse { -used } else { used }
                         };
-                        let used = dispatch_scroll(
-                            &flung.chain,
+                        let used = through_overscroll(
+                            dispatching_overscroll(flung.overscroll.as_ref(), &flung.state),
                             flung.vertical,
                             delta,
                             NestedScrollSource::SideEffect,
-                            &mut own,
+                            &mut |delta| {
+                                dispatch_scroll(
+                                    &flung.chain,
+                                    flung.vertical,
+                                    delta,
+                                    NestedScrollSource::SideEffect,
+                                    &mut own,
+                                )
+                            },
                         );
                         if reverse { -used } else { used }
                     },
@@ -954,13 +1063,47 @@ impl ScrollTarget {
     /// it ended, as Compose's `onScrollStopped`.
     pub(crate) fn launch_fling(self, velocity: f32) -> Job {
         CoroutineScope::new().launch(async move {
-            let pre = self.chain.pre_fling(self.axis(-velocity)).await;
-            let velocity = velocity + self.along(pre);
-            // Interrupted, what interrupted it goes on, and no one hears of the fling.
-            if let Ok(left) = self.do_fling(velocity).await {
-                self.chain.post_fling(self.axis(-(velocity - left)), self.axis(-left)).await;
-            }
+            let Some(effect) = dispatching_overscroll(self.overscroll.as_ref(), &self.state) else {
+                let _ = self.perform_fling(velocity).await;
+                return;
+            };
+            let effect = effect.clone();
+            let target = self.clone();
+            let perform: PerformFling = Rc::new(move |pointer: Velocity| {
+                let target = target.clone();
+                Box::pin(async move {
+                    let velocity = if target.vertical { -pointer.y } else { -pointer.x };
+                    let Some(left) = target.perform_fling(velocity).await else {
+                        // As Compose's cancellation through `applyToFling`.
+                        compose_runtime::platform::cancel_current_task();
+                        return std::future::pending().await;
+                    };
+                    let consumed = -(velocity - left);
+                    if target.vertical {
+                        Velocity::new(0.0, consumed)
+                    } else {
+                        Velocity::new(consumed, 0.0)
+                    }
+                })
+            });
+            let pointer = if self.vertical {
+                Velocity::new(0.0, -velocity)
+            } else {
+                Velocity::new(-velocity, 0.0)
+            };
+            effect.apply_to_fling(pointer, perform).await;
         })
+    }
+
+    /// `launch_fling`'s fling, as `onScrollStopped`'s `performFling`: returns the velocity left when
+    /// the connections have had their part, or `None` if it was interrupted: what interrupted it
+    /// goes on, and no one hears of the fling.
+    async fn perform_fling(&self, velocity: f32) -> Option<f32> {
+        let pre = self.chain.pre_fling(self.axis(-velocity)).await;
+        let velocity = velocity + self.along(pre);
+        let left = self.do_fling(velocity).await.ok()?;
+        let post = self.chain.post_fling(self.axis(-(velocity - left)), self.axis(-left)).await;
+        Some(left + self.along(post))
     }
 }
 
@@ -997,6 +1140,8 @@ pub(crate) struct DragScroller {
     chain: NestedScrollChain,
     /// The axis, given from the node's update, for what its targets scroll.
     vertical: bool,
+    /// The driver's effect as of the last event, for a cancellation to end its fling.
+    overscroll: Option<Rc<dyn OverscrollEffect>>,
 }
 
 /// A scrollable as the nested-scroll parent of the scrollables inside it: what they leave
@@ -1154,11 +1299,18 @@ impl DragScroller {
         // A drag's deltas: through the scroll scope of the scroll of the user-input priority it
         // holds while it lasts, so it stops a fling or an animation and the state says it's
         // scrolling.
+        self.overscroll = driver.overscroll.cloned();
         let chain = &self.chain;
         let set_outer = driver.set_outer;
         let drag_by = |session: &Option<DragSession>, delta: f32| {
             if let Some(scope) = session.as_ref().and_then(DragSession::scope) {
-                scroll_through(&scope, set_outer, chain, vertical, reverse, delta);
+                through_overscroll(
+                    dispatching_overscroll(driver.overscroll, driver.state),
+                    vertical,
+                    delta,
+                    NestedScrollSource::UserInput,
+                    &mut |delta| scroll_through(&scope, set_outer, chain, vertical, reverse, delta),
+                );
             }
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
@@ -1186,7 +1338,10 @@ impl DragScroller {
                     // A press during a scroll (a fling, an animated scroll, an app's own) stops
                     // it and drags at once, as Compose's `startDragImmediately`, and is taken:
                     // the item under it isn't clicked (D883).
-                    if flinging || driver.state.is_scroll_in_progress() {
+                    if flinging
+                        || driver.state.is_scroll_in_progress()
+                        || driver.overscroll.is_some_and(|effect| effect.is_in_progress())
+                    {
                         event.consume();
                         drag.scrolling = true;
                         Self::begin_scroll(&mut self.session, &mut self.dragged, driver);
@@ -1316,6 +1471,7 @@ impl DragScroller {
             state: driver.state.clone(),
             fling_behavior: driver.fling_behavior.cloned(),
             set_outer: driver.set_outer.cloned(),
+            overscroll: driver.overscroll.cloned(),
             chain: self.chain.clone(),
             vertical: self.vertical,
             reverse,
@@ -1337,9 +1493,25 @@ impl DragScroller {
         self.end_drag(DragInteraction::Cancel);
         if self.drag.take().is_some_and(|drag| drag.scrolling) {
             let chain = self.chain.clone();
+            let effect = self.overscroll.clone();
             CoroutineScope::new().launch(async move {
-                chain.pre_fling(Offset::ZERO).await;
-                chain.post_fling(Offset::ZERO, Offset::ZERO).await;
+                let hear = {
+                    let chain = chain.clone();
+                    move |_: Velocity| -> LocalBoxFuture<'static, Velocity> {
+                        let chain = chain.clone();
+                        Box::pin(async move {
+                            chain.pre_fling(Offset::ZERO).await;
+                            chain.post_fling(Offset::ZERO, Offset::ZERO).await;
+                            Velocity::ZERO
+                        })
+                    }
+                };
+                match effect {
+                    Some(effect) => effect.apply_to_fling(Velocity::ZERO, Rc::new(hear)).await,
+                    None => {
+                        hear(Velocity::ZERO).await;
+                    }
+                }
             });
         }
     }

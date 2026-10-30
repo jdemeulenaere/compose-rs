@@ -13,12 +13,14 @@ use compose_animation::{
 };
 use compose_runtime::{ComposeArg, CoroutineScope, OwnedState, composable, mutable_state_of};
 use compose_ui::{
-    Density, Dp, EventContext, Modifier, ModifierNodeElement, MutableInteractionSource, Offset,
-    Velocity,
+    Density, Dp, EventContext, Modifier, ModifierNodeElement, MutableInteractionSource,
+    NestedScrollSource, Offset, Velocity,
 };
 
 use super::drag_gesture::{Deltas, DragBehavior, DragGestureNode};
 use super::scrollable::LocalBoxFuture;
+use crate::overscroll::{OverscrollEffect, PerformFling, same_overscroll};
+
 use super::snapping::{SnapLayoutInfoProvider, snap_fling_behavior};
 use super::{FlingBehavior, Orientation, ScrollScope};
 use crate::mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
@@ -849,6 +851,9 @@ pub struct AnchoredDraggableOptions {
     pub start_drag_immediately: Option<bool>,
     /// `None`: the default, by half the distance and 125 dp a second, a tween.
     pub fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    /// Given the deltas and velocities past the anchors; not drawn here: as Compose's, apply
+    /// [`overscroll`](crate::OverscrollModifier::overscroll) too.
+    pub overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
 }
 
 impl Default for AnchoredDraggableOptions {
@@ -859,6 +864,7 @@ impl Default for AnchoredDraggableOptions {
             interaction_source: None,
             start_drag_immediately: None,
             fling_behavior: None,
+            overscroll_effect: None,
         }
     }
 }
@@ -890,6 +896,7 @@ struct AnchoredInputs<T: Clone + PartialEq + 'static> {
     reverse_direction: Option<bool>,
     start_drag_immediately: Option<bool>,
     fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    overscroll_effect: Option<Rc<dyn OverscrollEffect>>,
 }
 
 struct AnchoredBehavior<T: Clone + PartialEq + 'static> {
@@ -906,6 +913,24 @@ impl<T: Clone + PartialEq + 'static> AnchoredBehavior<T> {
         let reverse = inputs.reverse_direction.unwrap_or(self.rtl.get() && horizontal);
         let value = if horizontal { along.x } else { along.y };
         if reverse { -value } else { value }
+    }
+
+    /// A delta along the axis as an offset, as `toOffset`.
+    fn offset_of(&self, value: f32) -> Offset {
+        if self.inputs.borrow().orientation == Orientation::Horizontal {
+            Offset::new(value, 0.0)
+        } else {
+            Offset::new(0.0, value)
+        }
+    }
+
+    /// An offset's value along the axis, as `toFloat`.
+    fn on_axis_of(&self, offset: Offset) -> f32 {
+        if self.inputs.borrow().orientation == Orientation::Horizontal {
+            offset.x
+        } else {
+            offset.y
+        }
     }
 
     fn fling(&self) -> Rc<dyn FlingBehavior> {
@@ -944,9 +969,25 @@ impl<T: Clone + PartialEq + 'static> DragBehavior for AnchoredBehavior<T> {
                     let (deltas, behavior, inner) =
                         (deltas.clone(), behavior.clone(), inner.clone());
                     async move {
+                        let effect = behavior.inputs.borrow().overscroll_effect.clone();
                         while let Some(delta) = deltas.next().await {
                             let delta = behavior.one_directional(delta);
-                            scope.drag_to(inner.new_offset_for_delta(delta), 0.0);
+                            let Some(effect) = &effect else {
+                                scope.drag_to(inner.new_offset_for_delta(delta), 0.0);
+                                continue;
+                            };
+                            let mut perform = |delta: Offset| {
+                                let new_offset =
+                                    inner.new_offset_for_delta(behavior.on_axis_of(delta));
+                                let consumed = new_offset - inner.offset.get();
+                                scope.drag_to(new_offset, 0.0);
+                                behavior.offset_of(consumed)
+                            };
+                            effect.apply_to_scroll(
+                                behavior.offset_of(delta),
+                                NestedScrollSource::UserInput,
+                                &mut perform,
+                            );
                         }
                     }
                 })
@@ -958,24 +999,42 @@ impl<T: Clone + PartialEq + 'static> DragBehavior for AnchoredBehavior<T> {
 
     fn on_drag_stopped(&self, scope: CoroutineScope, velocity: Velocity) {
         let velocity = self.one_directional(Offset::new(velocity.x, velocity.y));
-        let fling = self.fling();
-        let state = self.inputs.borrow().state.clone();
+        let (fling, state, effect, horizontal) = {
+            let inputs = self.inputs.borrow();
+            (
+                self.fling(),
+                inputs.state.clone(),
+                inputs.overscroll_effect.clone(),
+                inputs.orientation == Orientation::Horizontal,
+            )
+        };
         scope.launch(async move {
-            let inner = state.inner.clone();
-            let _ = state
-                .anchored_drag(MutatePriority::Default, |drag, _| {
-                    let (inner, fling) = (inner.clone(), fling.clone());
-                    async move {
-                        let moving = ScrollScope::new(move |pixels| {
-                            let new_offset = inner.new_offset_for_delta(pixels);
-                            let consumed = new_offset - inner.offset.get();
-                            drag.drag_to(new_offset, 0.0);
-                            consumed
-                        });
-                        fling.perform_fling(moving, velocity).await;
-                    }
+            let Some(effect) = effect else {
+                let _ = anchored_fling(&state, &fling, velocity).await;
+                return;
+            };
+            let on_axis = move |value: f32| {
+                if horizontal { Velocity::new(value, 0.0) } else { Velocity::new(0.0, value) }
+            };
+            let perform: PerformFling = Rc::new(move |available: Velocity| {
+                let (state, fling) = (state.clone(), fling.clone());
+                Box::pin(async move {
+                    let available = if horizontal { available.x } else { available.y };
+                    let left = anchored_fling(&state, &fling, available).await.unwrap_or(0.0);
+                    let offset = state.require_offset();
+                    let anchors = state.anchors();
+                    // Its velocity for the effect only at the first or last anchor, as Compose's,
+                    // which names what `fling` leaves "consumed" here.
+                    on_axis(
+                        if offset >= anchors.max_position() || offset <= anchors.min_position() {
+                            left
+                        } else {
+                            available
+                        },
+                    )
                 })
-                .await;
+            });
+            effect.apply_to_fling(on_axis(velocity), perform).await;
         });
     }
 
@@ -983,6 +1042,32 @@ impl<T: Clone + PartialEq + 'static> DragBehavior for AnchoredBehavior<T> {
         let inputs = self.inputs.borrow();
         inputs.start_drag_immediately.unwrap_or_else(|| inputs.state.is_animation_running())
     }
+}
+
+/// Flings to an anchor in a drag of `state`'s, as the node's `fling`; returns the velocity left.
+async fn anchored_fling<T: Clone + PartialEq + 'static>(
+    state: &AnchoredDraggableState<T>,
+    fling: &Rc<dyn FlingBehavior>,
+    velocity: f32,
+) -> Result<f32, MutationInterrupted> {
+    let left = Rc::new(Cell::new(velocity));
+    let inner = state.inner.clone();
+    let noted = left.clone();
+    state
+        .anchored_drag(MutatePriority::Default, |drag, _| {
+            let (inner, fling, noted) = (inner.clone(), fling.clone(), noted.clone());
+            async move {
+                let moving = ScrollScope::new(move |pixels| {
+                    let new_offset = inner.new_offset_for_delta(pixels);
+                    let consumed = new_offset - inner.offset.get();
+                    drag.drag_to(new_offset, 0.0);
+                    consumed
+                });
+                noted.set(fling.perform_fling(moving, velocity).await);
+            }
+        })
+        .await?;
+    Ok(left.get())
 }
 
 struct AnchoredElement<T: Clone + PartialEq + 'static> {
@@ -999,6 +1084,7 @@ impl<T: Clone + PartialEq + 'static> AnchoredElement<T> {
             reverse_direction: self.options.reverse_direction,
             start_drag_immediately: self.options.start_drag_immediately,
             fling_behavior: self.options.fling_behavior.clone(),
+            overscroll_effect: self.options.overscroll_effect.clone(),
         }
     }
 }
@@ -1056,6 +1142,7 @@ impl<T: Clone + PartialEq + 'static> ModifierNodeElement for AnchoredElement<T> 
             && self.options.start_drag_immediately == other.options.start_drag_immediately
             && fling_same
             && source_same
+            && same_overscroll(&self.options.overscroll_effect, &other.options.overscroll_effect)
     }
 
     fn name(&self) -> &'static str {

@@ -19,6 +19,7 @@ mod image;
 pub mod layout;
 pub mod lazy;
 mod mutator;
+mod overscroll;
 mod scroll;
 pub mod scrollbar;
 pub mod shape;
@@ -62,6 +63,10 @@ pub use lazy::{
     lazy_layout_cache_window_with, remember_lazy_grid_state, remember_lazy_list_state,
 };
 pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
+pub use overscroll::{
+    LOCAL_OVERSCROLL_FACTORY, OverscrollEffect, OverscrollFactory, OverscrollModifier,
+    PerformFling, remember_overscroll_effect, without_event_handling, without_visual_effect,
+};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,

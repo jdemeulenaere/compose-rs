@@ -54,6 +54,7 @@ use compose_ui::{
     PrefetchScheduler, Rect, VerticalAlignment,
 };
 
+use crate::OverscrollModifier;
 use crate::gestures::{
     LocalBoxFuture, ScrollBlock, ScrollScope, ScrollableState, ScrollableStateExt,
 };
@@ -1817,6 +1818,9 @@ pub fn LazyColumn(
     #[default(None)] vertical_arrangement: impl Into<Option<VerticalArrangement>>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
+        Rc<dyn crate::OverscrollEffect>,
+    >,
     #[default(true)] user_scroll_enabled: bool,
     #[default(None)] cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
@@ -1838,6 +1842,7 @@ pub fn LazyColumn(
             .0,
         Alignment::new(horizontal_alignment.bias, -1.0),
         fling_behavior,
+        overscroll_effect,
         user_scroll_enabled,
         cache_window,
         content,
@@ -1856,6 +1861,9 @@ pub fn LazyRow(
     #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
+        Rc<dyn crate::OverscrollEffect>,
+    >,
     #[default(true)] user_scroll_enabled: bool,
     #[default(None)] cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
@@ -1877,6 +1885,7 @@ pub fn LazyRow(
             .0,
         Alignment::new(-1.0, vertical_alignment.bias),
         fling_behavior,
+        overscroll_effect,
         user_scroll_enabled,
         cache_window,
         content,
@@ -1894,6 +1903,7 @@ fn LazyList(
     arrangement: MainAxisArrangement,
     alignment: Alignment,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    overscroll_effect: Option<Rc<dyn crate::OverscrollEffect>>,
     user_scroll_enabled: bool,
     cache_window: Option<Rc<dyn LazyLayoutCacheWindow>>,
     content: impl Fn(LazyListScope) + 'static,
@@ -1928,12 +1938,14 @@ fn LazyList(
     };
     let modifier = modifier
         .clip(compose_ui::RECTANGLE_SHAPE)
+        .overscroll(overscroll_effect.clone())
         .then_custom(LazyScrollElement {
             state,
             vertical,
             reverse,
             enabled: user_scroll_enabled,
             fling_behavior,
+            overscroll: overscroll_effect,
         })
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
         .focus_group();
@@ -3171,6 +3183,7 @@ struct LazyScrollElement {
     reverse: bool,
     enabled: bool,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    overscroll: Option<Rc<dyn crate::OverscrollEffect>>,
 }
 
 pub(crate) struct LazyScrollNode {
@@ -3181,6 +3194,7 @@ pub(crate) struct LazyScrollNode {
     reverse: bool,
     enabled: bool,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    overscroll: Option<Rc<dyn crate::OverscrollEffect>>,
     drag: DragScroller,
     /// Tells the state's scroll scope the parents around a drag's, a fling's or a wheel turn's
     /// deltas: built once (not on each pass of each event), the axis and the mirroring it names
@@ -3212,6 +3226,7 @@ impl ModifierNodeElement for LazyScrollElement {
             reverse: self.reverse,
             enabled: self.enabled,
             fling_behavior: self.fling_behavior.clone(),
+            overscroll: self.overscroll.clone(),
             drag: DragScroller::along(self.vertical),
             set_outer: outer_setter(self.state, axis.clone()),
             outer_axis: axis,
@@ -3232,6 +3247,7 @@ impl ModifierNodeElement for LazyScrollElement {
         node.drag.set_vertical(self.vertical);
         node.reverse = self.reverse;
         node.fling_behavior = self.fling_behavior.clone();
+        node.overscroll = self.overscroll.clone();
         if node.enabled && !self.enabled {
             node.drag.cancel();
             node.drag.stop_fling();
@@ -3245,6 +3261,7 @@ impl ModifierNodeElement for LazyScrollElement {
             && other.enabled == self.enabled
             && other.state.same(&self.state)
             && same_fling(&other.fling_behavior, &self.fling_behavior)
+            && crate::overscroll::same_overscroll(&other.overscroll, &self.overscroll)
     }
 
     fn name(&self) -> &'static str {
@@ -3333,6 +3350,7 @@ impl compose_ui::KeyInputModifierNode for LazyScrollNode {
             interaction_source: None,
             state_source: true,
             set_outer: Some(&self.set_outer),
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_key_event(event, self.vertical, reverse, context, &driver)
     }
@@ -3469,6 +3487,7 @@ impl PointerInputModifierNode for LazyScrollNode {
             interaction_source: None,
             state_source: true,
             set_outer: Some(&self.set_outer),
+            overscroll: self.overscroll.as_ref(),
         };
         self.drag.on_pointer_event(
             event,
