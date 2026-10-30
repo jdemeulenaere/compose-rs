@@ -378,7 +378,8 @@ pub fn NavigationRail(
                         Dp::UNSPECIFIED,
                     ))
                     .padding((Dp(0.0), 4.dp()))
-                    .selectable_group(),
+                    .selectable_group()
+                    .semantics(|config| config.set_is_traversal_group(true)),
                 Arrangement::spaced_by(4.dp()).into(),
                 Alignment::CENTER_HORIZONTALLY,
                 compose_runtime::callback(move |column: ColumnScope| {

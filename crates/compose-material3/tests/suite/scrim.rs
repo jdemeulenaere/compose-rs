@@ -113,3 +113,13 @@ fn a_scrim_draws_its_color_at_its_alpha() {
     let dump = ui.dump_display_list();
     assert!(dump.contains(&format!("{:?}", Color::BLACK.with_alpha(0.5))), "{dump}");
 }
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrimTest.kt, scrim_traversalIndex_isSet
+#[test]
+fn a_scrims_traversal_index_is_after_the_content() {
+    let mut ui = compose_test(|| {
+        Scrim!(Some("Close"), modifier = Modifier.test_tag("scrim"));
+    });
+    ui.on_node_with_tag("scrim")
+        .assert(expect_value(&compose_ui::SemanticsProperties::TRAVERSAL_INDEX, 1.0));
+}

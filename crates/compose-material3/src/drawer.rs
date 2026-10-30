@@ -407,6 +407,7 @@ pub fn ModalNavigationDrawer(
                             close,
                             enabled: gestures_enabled,
                             description: Some("Close navigation menu".into()),
+                            traversal_index: None,
                         }),
                     Alignment::TOP_START,
                     false,
@@ -423,12 +424,24 @@ pub fn ModalNavigationDrawer(
                     }),
                 );
             }
-            // The sheet, composed and measured even while closed (placed only while shown), as
-            // Compose's: its width gives the closed offset. Opened, its first focusable takes the
+            // The sheet, composed, measured and placed even while closed, as Compose's: its width
+            // gives the closed offset. Opened, its first focusable takes the
             // focus, as Compose's `LaunchedEffect(isOpen) { focusRequester.requestFocus() }`.
             let drawer_content = drawer_content.clone();
+            // Its pane, dismissed while open, as Compose's: refused by `confirm_state_change`.
+            let pane = Modifier.semantics(move |config| {
+                config.set_pane_title(NAVIGATION_MENU);
+                if state.is_open() {
+                    config.dismiss(None, move || {
+                        if state.confirm_state_change(DrawerValue::Closed) {
+                            scope.launch(async move { state.close().await });
+                        }
+                        true
+                    });
+                }
+            });
             Box(
-                Modifier.focus_requester(focus_requester),
+                pane.focus_requester(focus_requester),
                 Alignment::TOP_START,
                 false,
                 compose_runtime::callback(move |_| drawer_content()),
@@ -437,6 +450,9 @@ pub fn ModalNavigationDrawer(
     );
 }
 
+/// `Strings.NavigationMenu`.
+const NAVIGATION_MENU: &str = "Navigation menu";
+
 /// The scrim's input: a click closes the drawer (with gestures enabled), as Compose's scrim's
 /// `detectTapGestures`; it takes the pointer from the content beneath, and is no focus stop.
 /// Bottom sheets' scrims are the same, with their own `description`.
@@ -444,12 +460,15 @@ pub(crate) struct ScrimElement {
     pub close: compose_runtime::Callback,
     pub enabled: bool,
     pub description: Option<compose_ui::SharedString>,
+    /// Its place in the traversal, for `Scrim`'s (after the content, `traversalIndex = 1f`).
+    pub traversal_index: Option<f32>,
 }
 
 pub(crate) struct ScrimNode {
     close: compose_runtime::Callback,
     enabled: bool,
     description: Option<compose_ui::SharedString>,
+    traversal_index: Option<f32>,
     pressed: Option<compose_ui::PointerId>,
 }
 
@@ -460,6 +479,7 @@ impl compose_ui::ModifierNodeElement for ScrimElement {
             close: self.close.clone(),
             enabled: self.enabled,
             description: self.description.clone(),
+            traversal_index: self.traversal_index,
             pressed: None,
         }
     }
@@ -467,11 +487,13 @@ impl compose_ui::ModifierNodeElement for ScrimElement {
         node.close = self.close.clone();
         node.enabled = self.enabled;
         node.description = self.description.clone();
+        node.traversal_index = self.traversal_index;
     }
     fn same(&self, other: &Self) -> bool {
         other.close.ptr_eq(&self.close)
             && other.enabled == self.enabled
             && other.description == self.description
+            && other.traversal_index == self.traversal_index
     }
     fn name(&self) -> &'static str {
         "drawer_scrim"
@@ -534,6 +556,9 @@ impl compose_ui::SemanticsModifierNode for ScrimNode {
         if let Some(description) = &self.description {
             config.set_content_description(description.clone());
         }
+        if let Some(index) = self.traversal_index {
+            config.set_traversal_index(index);
+        }
         if self.enabled {
             let close = self.close.clone();
             config.on_click(None, move || {
@@ -578,11 +603,10 @@ impl MeasurePolicy for DrawerLayout {
         if let Some(inner) = self.state.inner() {
             inner.width.set(sheet.width.max(1) as f32);
         }
-        // Read while measuring: a frame of the slide places the sheet again only.
-        if scrim.is_some() {
-            let hidden = 1.0 - self.state.fraction();
-            scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
-        }
+        // Read while measuring: a frame of the slide places the sheet again only. Closed, off
+        // the start, as Compose's offset: placed, and so in the semantics, as Compose's.
+        let hidden = 1.0 - self.state.fraction();
+        scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
         scope.layout(width, height)
     }
 
@@ -614,8 +638,7 @@ pub fn ModalDrawerSheet(
                 DrawerDefaults::MAXIMUM_DRAWER_WIDTH,
                 Dp::UNSPECIFIED,
             ))
-            .fill_max_height()
-            .semantics(|config| config.set_content_description("Navigation menu")),
+            .fill_max_height(),
         drawer_shape,
         drawer_container_color,
         content_color,

@@ -50,7 +50,7 @@ fn search_filters_the_cards() {
 #[test]
 fn the_menu_opens_the_drawer() {
     let mut ui = ComposeTestRule::with_manual_clock(gallery::Gallery);
-    ui.on_node_with_text("About").assert_does_not_exist();
+    ui.on_node_with_text("About").assert_is_not_displayed();
     ui.on_node(described("Menu")).perform_click();
     ui.advance_time_by(std::time::Duration::from_millis(400));
     ui.on_node_with_text("About").perform_click();

@@ -197,3 +197,18 @@ fn a_scrollable_tab_row_sizes_its_tabs_and_scrolls_to_the_selected_one() {
     assert!((middle - 200.0).abs() <= 1.0, "{sixth:?}");
     drop(owner);
 }
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationRailTest.kt, defaultSemantics
+#[test]
+fn a_rails_items_are_a_traversal_group() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            NavigationRail!({
+                NavigationRailItem!(true, || {}, {}, modifier = Modifier.test_tag("item"));
+            });
+        });
+    });
+    ui.on_node_with_tag("item")
+        .on_parent()
+        .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
+}

@@ -52,7 +52,7 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
-    ui.on_node_with_tag("sheet").assert_does_not_exist();
+    ui.on_node_with_tag("sheet").assert_is_not_displayed();
     ui.on_node_with_tag("open").perform_click();
     ui.advance_time_by(Duration::from_millis(16 * 4));
     let sliding = sheet_left(&mut ui);
@@ -74,7 +74,7 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
     ui.host().send_pointer(PointerEvent::press(Offset::new(600.0, 300.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(600.0, 300.0)));
     ui.advance_time_by(Duration::from_millis(400));
-    ui.on_node_with_tag("sheet").assert_does_not_exist();
+    ui.on_node_with_tag("sheet").assert_is_not_displayed();
     assert!(state.is_closed());
 }
 
@@ -114,7 +114,7 @@ fn back_closes_an_open_drawer_and_passes_through_a_closed_one() {
     assert!(ui.host().on_back_pressed());
     ui.advance_time_by(Duration::from_millis(400));
     assert!(state.is_closed());
-    ui.on_node_with_tag("sheet").assert_does_not_exist();
+    ui.on_node_with_tag("sheet").assert_is_not_displayed();
     assert!(!ui.host().has_enabled_back_handlers());
 }
 

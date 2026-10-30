@@ -382,20 +382,43 @@ pub fn SnackbarHost(
         "SnackbarHost",
         compose_runtime::callback(move |_| {
             let Some(data) = shown.clone() else { return };
-            match snackbar.clone() {
-                Some(snackbar) => snackbar(data),
-                None => Snackbar(
-                    data,
-                    Modifier,
-                    false,
-                    SnackbarDefaults::shape(),
-                    SnackbarDefaults::color(),
-                    SnackbarDefaults::content_color(),
-                    SnackbarDefaults::action_color(),
-                    SnackbarDefaults::action_content_color(),
-                    SnackbarDefaults::dismiss_action_content_color(),
-                ),
-            }
+            // As `FadeInFadeOutWithScale`'s item: announced while it's the one shown, and
+            // dismissed by accessibility.
+            let visible = host_state.current_snackbar_data().is_some();
+            let on_dismiss = data.clone();
+            let snackbar = snackbar.clone();
+            compose_foundation::layout::Box(
+                Modifier.semantics(move |config| {
+                    if visible {
+                        config.set_live_region(compose_ui::LiveRegionMode::Polite);
+                    }
+                    let on_dismiss = on_dismiss.clone();
+                    config.dismiss(None, move || {
+                        on_dismiss.dismiss();
+                        true
+                    });
+                    config.set_pane_title("Alert");
+                }),
+                compose_ui::Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| {
+                    let data = data.clone();
+                    match snackbar.clone() {
+                        Some(snackbar) => snackbar(data),
+                        None => Snackbar(
+                            data,
+                            Modifier,
+                            false,
+                            SnackbarDefaults::shape(),
+                            SnackbarDefaults::color(),
+                            SnackbarDefaults::content_color(),
+                            SnackbarDefaults::action_color(),
+                            SnackbarDefaults::action_content_color(),
+                            SnackbarDefaults::dismiss_action_content_color(),
+                        ),
+                    }
+                }),
+            );
         }),
     );
 }

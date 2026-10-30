@@ -13,7 +13,8 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
     BackHandler, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
-    PointerEvent, SemanticsActions, UnitExt, platform::FixedTextMeasurer,
+    PointerEvent, SemanticsActions, SemanticsProperties, UnitExt,
+    platform::FixedTextMeasurer,
 };
 
 const DRAWER_TAG: &str = "drawer";
@@ -69,7 +70,7 @@ fn an_open_drawers_sheet_is_at_the_start() {
 #[test]
 fn a_closed_drawers_sheet_is_not_displayed() {
     let mut ui = compose_test(drawer(DrawerValue::Closed, Modifier));
-    ui.on_node_with_tag("content").assert_does_not_exist();
+    ui.on_node_with_tag("content").assert_is_not_displayed();
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_testOffset_customWidthSmaller_whenOpen
@@ -144,14 +145,14 @@ fn a_sheets_content_keeps_inside_its_insets() {
 #[test]
 fn open_and_close_slide_the_sheet_in_and_out() {
     let mut ui = compose_test(drawer(DrawerValue::Closed, Modifier));
-    ui.on_node_with_tag("content").assert_does_not_exist();
+    ui.on_node_with_tag("content").assert_is_not_displayed();
     let drawer = state();
     launch(async move { drawer.open().await });
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "content").left, 0.0);
     launch(async move { drawer.close().await });
     ui.wait_for_idle();
-    ui.on_node_with_tag("content").assert_does_not_exist();
+    ui.on_node_with_tag("content").assert_is_not_displayed();
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_snapTo
@@ -167,7 +168,7 @@ fn snap_to_opens_and_closes_at_once() {
     state().snap_to(DrawerValue::Closed);
     ui.wait_for_idle();
     assert_eq!(state().current_value(), DrawerValue::Closed);
-    ui.on_node_with_tag("content").assert_does_not_exist();
+    ui.on_node_with_tag("content").assert_is_not_displayed();
 }
 
 fn click_at(ui: &mut ComposeTestRule, point: Offset) {
@@ -310,7 +311,6 @@ fn the_current_value_changes_only_once_released() {
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_confirmStateChangeRespect
-// (the scrim's click instead of the dismiss semantics action, which compose-rs lacks)
 #[test]
 fn a_drawer_whose_confirmation_refuses_closing_stays_open() {
     let mut ui = compose_test(swipe_drawer(LayoutDirection::Ltr, false));
@@ -318,6 +318,11 @@ fn a_drawer_whose_confirmation_refuses_closing_stays_open() {
     assert_eq!(state().current_value(), DrawerValue::Open);
     // The scrim, beyond the 360 dp sheet.
     click_at(&mut ui, Offset::new(390.0, 400.0));
+    assert_eq!(state().current_value(), DrawerValue::Open);
+    // The pane's dismiss action.
+    ui.on_node(expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into()))
+        .perform_semantics_action(&SemanticsActions::DISMISS);
+    ui.wait_for_idle();
     assert_eq!(state().current_value(), DrawerValue::Open);
 }
 
@@ -330,7 +335,7 @@ fn the_scrim_is_a_clickable_node_only_while_open() {
     scrim.assert_exists();
     scrim.perform_semantics_action(&SemanticsActions::ON_CLICK);
     ui.wait_for_idle();
-    ui.on_node_with_tag("content").assert_does_not_exist();
+    ui.on_node_with_tag("content").assert_is_not_displayed();
     ui.on_node_with_content_description("Close navigation menu").assert_does_not_exist();
 }
 
@@ -454,4 +459,62 @@ fn back_while_closing_goes_to_the_handler_around() {
     ui.wait_for_idle();
     assert_settled(DrawerValue::Closed);
     assert!(back_pressed.get());
+}
+
+/// A drawer in `state`, its sheet tagged.
+fn drawer_of(state: DrawerState) -> impl Fn() + 'static {
+    move || {
+        MaterialTheme!({
+            ModalNavigationDrawer!(
+                {
+                    ModalDrawerSheet!(modifier = Modifier.test_tag(DRAWER_TAG), |_| {
+                        Box!(modifier = Modifier.fill_max_size());
+                    });
+                },
+                drawer_state = state,
+                {
+                    Box!(modifier = Modifier.fill_max_size());
+                }
+            );
+        });
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_hasPaneTitle
+#[test]
+fn a_drawers_pane_has_its_title() {
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
+    let mut ui = compose_test(drawer_of(*state));
+    ui.on_node_unmerged(has_test_tag(DRAWER_TAG))
+        .on_parent()
+        .assert(expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into()));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_noDismissActionWhenClosed_hasDismissActionWhenOpen
+#[test]
+fn a_drawer_has_a_dismiss_action_only_while_open() {
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
+    let handle = *state;
+    let mut ui = compose_test(drawer_of(handle));
+    let pane = || has_test_tag(DRAWER_TAG);
+    ui.on_node_unmerged(pane()).on_parent().assert(key_not_defined(&SemanticsActions::DISMISS));
+    compose_runtime::platform::launch(async move { handle.open().await });
+    ui.wait_for_idle();
+    ui.on_node_unmerged(pane()).on_parent().assert(key_is_defined(&SemanticsActions::DISMISS));
+    ui.on_node_unmerged(pane()).on_parent().perform_semantics_action(&SemanticsActions::DISMISS);
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), DrawerValue::Closed);
+    ui.on_node_unmerged(pane()).on_parent().assert(key_not_defined(&SemanticsActions::DISMISS));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_drawerContainerIsOffScreen_whenClosed
+#[test]
+fn a_closed_drawers_pane_is_off_screen() {
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
+    let mut ui = compose_test(drawer_of(*state));
+    let bounds = ui
+        .on_node_unmerged(expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into()))
+        .fetch_semantics_node()
+        .bounds;
+    assert_eq!(bounds.left, -360.0);
 }

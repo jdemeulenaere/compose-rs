@@ -37,6 +37,7 @@ pub fn Scrim(
             close: compose_runtime::callback(move || on_click()),
             enabled: true,
             description: content_description,
+            traversal_index: Some(1.0),
         }),
         None => modifier,
     };

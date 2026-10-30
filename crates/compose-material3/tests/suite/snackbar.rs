@@ -3,7 +3,7 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -105,4 +105,35 @@ fn a_message_alone_is_a_short_snackbar() {
     assert_eq!(visuals.action_label, None);
     assert!(!visuals.with_dismiss_action);
     assert_eq!(visuals.duration, SnackbarDuration::Short);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SnackbarHostTest.kt, snackbarHost_semantics
+#[test]
+fn a_snackbar_is_a_polite_pane_with_a_dismiss_action() {
+    let state = SnackbarHostState::new();
+    let host = *state;
+    let result = Rc::new(Cell::new(None));
+    let seen = result.clone();
+    let mut ui = compose_test(move || {
+        SnackbarHost!(
+            host,
+            snackbar = Some(|data: SnackbarData| {
+                Snackbar!(data);
+            })
+        );
+    });
+    compose_runtime::platform::launch(async move {
+        seen.set(Some(host.show_snackbar("1").await));
+    });
+    ui.wait_for_idle();
+    let mut pane =
+        ui.on_node(expect_value(&compose_ui::SemanticsProperties::PANE_TITLE, "Alert".into()));
+    pane.assert(expect_value(
+        &compose_ui::SemanticsProperties::LIVE_REGION,
+        compose_ui::LiveRegionMode::Polite,
+    ));
+    pane.assert(key_is_defined(&compose_ui::SemanticsActions::DISMISS));
+    pane.perform_semantics_action(&compose_ui::SemanticsActions::DISMISS);
+    ui.wait_for_idle();
+    assert_eq!(result.get(), Some(SnackbarResult::Dismissed));
 }

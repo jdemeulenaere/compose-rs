@@ -780,7 +780,40 @@ pub fn ModalBottomSheet(
     } else {
         sheet_modifier
     }
-    .semantics(|config| config.set_content_description("Bottom sheet"));
+    .semantics(|config| {
+        config.set_pane_title("Bottom Sheet");
+        config.set_traversal_index(0.0);
+    });
+    // The drag handle's actions, by the sheet's value, while its gestures are on, as Compose's.
+    let handle_semantics = {
+        let (state, scope, dismiss) = (sheet_state, scope, dismiss.clone());
+        move |config: &mut compose_ui::SemanticsConfiguration| {
+            if !sheet_gestures_enabled {
+                return;
+            }
+            let on_dismiss = dismiss.clone();
+            config.dismiss(Some("Dismiss bottom sheet".into()), move || {
+                on_dismiss();
+                true
+            });
+            if state.current_value() == SheetValue::PartiallyExpanded {
+                config.expand(Some("Expand bottom sheet".into()), move || {
+                    if state.confirms(SheetValue::Expanded) {
+                        scope.launch(async move { state.expand().await });
+                    }
+                    true
+                });
+            } else if state.has_partially_expanded_state() {
+                config.collapse(Some("Collapse bottom sheet".into()), move || {
+                    if state.confirms(SheetValue::PartiallyExpanded) {
+                        scope.launch(async move { state.partial_expand().await });
+                    }
+                    true
+                });
+            }
+        }
+    };
+    let handle_semantics = Rc::new(handle_semantics);
     // A click on the drag handle expands the sheet, dismisses it once expanded, as Compose's.
     let handle_click = {
         let (state, scope, dismiss) = (sheet_state, scope, dismiss.clone());
@@ -801,9 +834,11 @@ pub fn ModalBottomSheet(
         compose_runtime::callback(move || {
             let (dismiss, content, drag_handle, handle_click) =
                 (dismiss.clone(), content.clone(), drag_handle.clone(), handle_click.clone());
+            let handle_semantics = handle_semantics.clone();
             let sheet_modifier = sheet_modifier.clone();
             Layout(
-                Modifier,
+                // Read in order: the sheet, then the scrim's close (`Scrim`'s traversal index).
+                Modifier.semantics(|config| config.set_is_traversal_group(true)),
                 policy.clone(),
                 compose_runtime::callback(move || {
                     Box(
@@ -820,6 +855,7 @@ pub fn ModalBottomSheet(
                                 close: dismiss.clone(),
                                 enabled: properties.should_dismiss_on_click_outside,
                                 description: Some("Close sheet".into()),
+                                traversal_index: Some(1.0),
                             }),
                         Alignment::TOP_START,
                         false,
@@ -827,6 +863,7 @@ pub fn ModalBottomSheet(
                     );
                     let (content, drag_handle, handle_click) =
                         (content.clone(), drag_handle.clone(), handle_click.clone());
+                    let handle_semantics = handle_semantics.clone();
                     crate::components::Surface(
                         sheet_modifier.clone().fill_max_width(),
                         shape,
@@ -838,6 +875,7 @@ pub fn ModalBottomSheet(
                         compose_runtime::callback(move || {
                             let (drag_handle, handle_click) =
                                 (drag_handle.clone(), handle_click.clone());
+                            let handle_semantics = handle_semantics.clone();
                             let content = content.clone();
                             Column(
                                 Modifier
@@ -848,10 +886,14 @@ pub fn ModalBottomSheet(
                                 compose_runtime::callback(move |column: ColumnScope| {
                                     if let Some(drag_handle) = drag_handle.clone() {
                                         let click = handle_click.clone();
+                                        let semantics = handle_semantics.clone();
                                         Box(
                                             Modifier
                                                 .align(column, Alignment::CENTER_HORIZONTALLY)
-                                                .clickable(move || click()),
+                                                .clickable(move || click())
+                                                .semantics_with(true, move |config| {
+                                                    semantics(config)
+                                                }),
                                             Alignment::TOP_START,
                                             false,
                                             compose_runtime::callback(move |_| drag_handle()),

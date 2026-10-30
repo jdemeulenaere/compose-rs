@@ -405,3 +405,15 @@ fn the_right_to_left_alert_dialog_golden() {
     let title = bounds(&mut ui, "title");
     assert_eq!(title.right, dialog.right - 24.0);
 }
+
+/// The dialog's pane, as `BasicAlertDialog`'s `paneTitle`.
+#[test]
+fn a_dialog_is_a_pane() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            BasicAlertDialog!(|| {}, modifier = Modifier.test_tag("dialog"), {});
+        });
+    });
+    ui.on_node_with_tag("dialog")
+        .assert(expect_value(&compose_ui::SemanticsProperties::PANE_TITLE, "Dialog".into()));
+}

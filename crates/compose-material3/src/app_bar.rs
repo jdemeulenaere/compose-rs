@@ -633,7 +633,7 @@ fn single_row_top_app_bar(
     // Its `Surface` clips with a layer, as Compose's: a frame drawing what's around it again
     // keeps the bar's drawing (D251, D522).
     crate::components::surface(
-        modifier.then(container),
+        modifier.then(container).semantics(|config| config.set_is_traversal_group(true)),
         compose_ui::RECTANGLE_SHAPE,
         Color::TRANSPARENT,
         colors.title_content_color,
@@ -732,7 +732,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
     let window_insets = bar.window_insets;
     // Its `Surface` clips with a layer, as the small bar's (D251, D522).
     crate::components::surface(
-        bar.modifier.then(container),
+        bar.modifier.then(container).semantics(|config| config.set_is_traversal_group(true)),
         compose_ui::RECTANGLE_SHAPE,
         Color::TRANSPARENT,
         colors.title_content_color,
@@ -814,6 +814,9 @@ fn top_app_bar_row(
             let mut title_modifier = Modifier.padding((HORIZONTAL_PADDING, 0.dp()));
             if hide_title_semantics {
                 title_modifier = title_modifier.clear_and_set_semantics(|_| {});
+            } else {
+                title_modifier =
+                    title_modifier.semantics(|config| config.set_is_traversal_group(true));
             }
             if let Some(alpha) = &title_alpha {
                 title_modifier = title_modifier.then(alpha.clone());

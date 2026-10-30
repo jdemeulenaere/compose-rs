@@ -302,3 +302,15 @@ fn a_bottom_app_bar_is_80_dp_its_fab_at_the_end() {
     // The action at the start, after the 4 dp padding (and its touch target's 4).
     assert_eq!(bounds(&mut ui, "action").left, 8.0);
 }
+
+/// A top app bar is a traversal group, as `isTraversalGroup = true` on its container.
+#[test]
+fn a_top_app_bar_is_a_traversal_group() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            TopAppBar!({ Text!("Title") }, modifier = Modifier.test_tag("bar"));
+        });
+    });
+    ui.on_node_with_tag("bar")
+        .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
+}

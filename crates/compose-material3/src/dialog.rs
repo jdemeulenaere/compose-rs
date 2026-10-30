@@ -81,12 +81,15 @@ pub fn BasicAlertDialog(
         compose_runtime::callback(move || {
             let content = content.clone();
             Box(
-                modifier.clone().size_in(compose_ui::SizeSpec::bounds(
-                    DIALOG_MIN_WIDTH,
-                    Dp::UNSPECIFIED,
-                    DIALOG_MAX_WIDTH,
-                    Dp::UNSPECIFIED,
-                )),
+                modifier
+                    .clone()
+                    .size_in(compose_ui::SizeSpec::bounds(
+                        DIALOG_MIN_WIDTH,
+                        Dp::UNSPECIFIED,
+                        DIALOG_MAX_WIDTH,
+                        Dp::UNSPECIFIED,
+                    ))
+                    .semantics(|config| config.set_pane_title("Dialog")),
                 Alignment::TOP_START,
                 true,
                 compose_runtime::callback(move |_| content()),

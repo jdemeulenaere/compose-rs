@@ -219,3 +219,112 @@ fn a_shown_empty_short_sheet_reconciles_with_its_content() {
 fn a_shown_empty_tall_sheet_reconciles_with_its_content() {
     reconciles(0.6);
 }
+
+/// A modal sheet in `state`, its drag handle and content tagged.
+fn modal_sheet_of(state: SheetState) -> impl Fn() + 'static {
+    move || {
+        MaterialTheme!({
+            ModalBottomSheet!(
+                || {},
+                sheet_state = state,
+                drag_handle = Some(|| {
+                    compose_foundation::layout::Spacer(Modifier.test_tag("handle").size(44.dp()));
+                }),
+                |_| {
+                    compose_foundation::layout::Spacer(Modifier.size(400.dp()));
+                }
+            );
+        });
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SheetStateTest.kt, the semantic action of its confirmValueChange test
+#[test]
+fn a_refused_dismiss_action_leaves_the_sheet() {
+    let state = SheetState::new(
+        &[SheetValue::Hidden, SheetValue::PartiallyExpanded, SheetValue::Expanded],
+        || 56.0,
+        || 125.0,
+        SheetValue::PartiallyExpanded,
+        |value| value != SheetValue::Hidden,
+    );
+    let mut ui = compose_test(modal_sheet_of(*state));
+    ui.on_node_unmerged(has_test_tag("handle"))
+        .on_parent()
+        .perform_semantics_action(&compose_ui::SemanticsActions::DISMISS);
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+}
+
+/// The drag handle's actions by the sheet's value, as `BottomSheet`'s semantics: half way,
+/// expand and dismiss; expanded, collapse and dismiss; each moves it.
+#[test]
+fn a_drag_handles_actions_move_the_sheet() {
+    let state = SheetState::new(
+        &[SheetValue::Hidden, SheetValue::PartiallyExpanded, SheetValue::Expanded],
+        || 56.0,
+        || 125.0,
+        SheetValue::PartiallyExpanded,
+        |_| true,
+    );
+    let mut ui = compose_test(modal_sheet_of(*state));
+    let handle = || has_test_tag("handle");
+    ui.on_node_unmerged(handle())
+        .on_parent()
+        .assert(key_is_defined(&compose_ui::SemanticsActions::EXPAND))
+        .assert(key_not_defined(&compose_ui::SemanticsActions::COLLAPSE))
+        .assert(key_is_defined(&compose_ui::SemanticsActions::DISMISS));
+    ui.on_node_unmerged(handle())
+        .on_parent()
+        .perform_semantics_action(&compose_ui::SemanticsActions::EXPAND);
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), SheetValue::Expanded);
+    ui.on_node_unmerged(handle())
+        .on_parent()
+        .assert(key_not_defined(&compose_ui::SemanticsActions::EXPAND))
+        .assert(key_is_defined(&compose_ui::SemanticsActions::COLLAPSE));
+    ui.on_node_unmerged(handle())
+        .on_parent()
+        .perform_semantics_action(&compose_ui::SemanticsActions::COLLAPSE);
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+    ui.on_node_unmerged(handle())
+        .on_parent()
+        .perform_semantics_action(&compose_ui::SemanticsActions::DISMISS);
+    ui.wait_for_idle();
+    assert_eq!(state.current_value(), SheetValue::Hidden);
+}
+
+/// With its gestures off, a sheet's drag handle has no actions, as `if (gesturesEnabled)`; its
+/// pane has its title and comes first.
+#[test]
+fn a_sheets_pane_has_its_title_and_gestures_off_no_actions() {
+    let state = SheetState::new(
+        &[SheetValue::Hidden, SheetValue::PartiallyExpanded, SheetValue::Expanded],
+        || 56.0,
+        || 125.0,
+        SheetValue::PartiallyExpanded,
+        |_| true,
+    );
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            ModalBottomSheet!(
+                || {},
+                sheet_state = handle,
+                sheet_gestures_enabled = false,
+                drag_handle = Some(|| {
+                    compose_foundation::layout::Spacer(Modifier.test_tag("handle").size(44.dp()));
+                }),
+                |_| {
+                    compose_foundation::layout::Spacer(Modifier.size(400.dp()));
+                }
+            );
+        });
+    });
+    ui.on_node_unmerged(has_test_tag("handle"))
+        .on_parent()
+        .assert(key_not_defined(&compose_ui::SemanticsActions::DISMISS));
+    ui.on_node(expect_value(&compose_ui::SemanticsProperties::PANE_TITLE, "Bottom Sheet".into()))
+        .assert(expect_value(&compose_ui::SemanticsProperties::TRAVERSAL_INDEX, 0.0));
+}
