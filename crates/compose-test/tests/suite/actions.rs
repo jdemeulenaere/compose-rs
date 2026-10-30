@@ -292,6 +292,7 @@ fn printing_nodes_lists_their_properties_and_relatives() {
         "Printing with useUnmergedTree = 'false'\n\
          Node #X at (l=X, t=X, r=X, b=X)px\n\
          Text = '[Hello]'\n\
+         Actions = [GetTextLayoutResult]\n\
          Has X sibling"
     );
     let many = ui.on_root().on_children().print_to_string(0);
@@ -300,9 +301,11 @@ fn printing_nodes_lists_their_properties_and_relatives() {
         "Printing with useUnmergedTree = 'false'\n\
          X) Node #X at (l=X, t=X, r=X, b=X)px\n\
          Text = '[Hello]'\n\
+         Actions = [GetTextLayoutResult]\n\
          Has X sibling\n\
          X) Node #X at (l=X, t=X, r=X, b=X)px\n\
          Text = '[World]'\n\
+         Actions = [GetTextLayoutResult]\n\
          Has X sibling"
     );
 }
@@ -339,10 +342,11 @@ fn printing_the_root_draws_the_hierarchy() {
          |    Focused = 'false'\n    \
          |    Role = 'Button'\n    \
          |    Text = '[Button]'\n    \
-         |    Actions = [OnClick, RequestFocus]\n    \
+         |    Actions = [GetTextLayoutResult, OnClick, RequestFocus]\n    \
          |    MergeDescendants = 'true'\n    \
          |-Node #X at (l=X, t=X, r=X, b=X)px\n      \
-         Text = '[Hello]'"
+         Text = '[Hello]'\n      \
+         Actions = [GetTextLayoutResult]"
     );
 }
 

@@ -1479,6 +1479,25 @@ pub trait SemanticsModifierNode {
     /// state, but not depend on anything else that changes unannounced.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration);
 
+    /// What one of the semantics actions it offered through `*_of_node` asks of it (a text field's
+    /// state being its own, an action that isn't a closure over shared state, D1299), with the
+    /// tree free. Returns whether it did it.
+    fn perform_text_action(
+        &mut self,
+        _action: TextAction,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        false
+    }
+
+    /// Its text's layout, for `get_text_layout_result_of_node`.
+    fn text_layout_result(
+        &mut self,
+        _context: &mut EventContext<'_>,
+    ) -> Option<crate::text::TextLayoutResult> {
+        None
+    }
+
     /// Whether its layout node merges its descendants' semantics, as
     /// `shouldMergeDescendantSemantics` (or `apply_semantics` setting
     /// `is_merging_semantics_of_descendants`).
@@ -1536,6 +1555,24 @@ pub trait FocusEventModifierNode {
 /// A node `NodeContext::request_focus` and its like act from, on the targets at and below it, as
 /// `FocusRequesterModifierNode`.
 pub trait FocusRequesterModifierNode {}
+
+/// What a semantics action offered through `*_of_node` asks of a modifier node
+/// (`SemanticsModifierNode::perform_text_action`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TextAction {
+    /// `OnClick`: the field takes the focus and shows its keyboard.
+    Click,
+    /// `SetSelection`: from `start` to `end`, byte offsets of the text as shown.
+    SetSelection {
+        start: i32,
+        end: i32,
+    },
+    CopyText,
+    CutText,
+    PasteText,
+    /// `OnImeAction`: the action the field's keyboard offers.
+    ImeAction,
+}
 
 /// A node that receives key and text events while it or a descendant has focus, as
 /// `KeyInputModifierNode`. Returning true consumes the event.

@@ -229,7 +229,7 @@ pub use modifier::{
     FocusEventModifierNode, FocusRequesterModifierNode, FocusTargetModifierNode, InspectorInfo,
     KeyInputModifierNode, LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement,
     PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode, ReleaseContext, RowScope,
-    SemanticsModifierNode, SizeSpec, WeightScope,
+    SemanticsModifierNode, SizeSpec, TextAction, WeightScope,
 };
 pub use modifier_local::{
     ModifierLocal, ModifierLocalMap, ModifierLocalModifierNode, ModifierLocalReadScope,

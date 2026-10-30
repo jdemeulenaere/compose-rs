@@ -130,6 +130,7 @@ mod semantics_tree;
 mod shadow;
 mod shape_parity;
 mod snapping;
+mod text_field_semantics;
 mod text_input;
 mod text_reuse;
 mod text_selection_colors;

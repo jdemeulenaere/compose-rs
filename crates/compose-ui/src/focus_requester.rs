@@ -85,6 +85,8 @@ pub(crate) enum FocusRequest {
     Requester(FocusRequester, RequesterOperation),
     /// What a node asks of the targets at and below it, its own running.
     Entry(NodeId, EntryId, RequesterOperation),
+    /// A semantics action bound to the node's modifier nodes (D1299).
+    TextAction(NodeId, crate::modifier::TextAction),
 }
 
 /// What's asked of a requester's nodes.
@@ -193,6 +195,7 @@ impl UiTree {
             FocusRequest::Entry(node, entry, operation) => {
                 self.perform_on_entry(node, entry, operation)
             }
+            FocusRequest::TextAction(node, action) => self.perform_text_action(node, action),
         }
     }
 

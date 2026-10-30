@@ -1429,6 +1429,52 @@ impl SemanticsConfiguration {
         );
     }
 
+    /// compose-rs's: offers `OnClick`, asking this node's modifier nodes
+    /// (`SemanticsModifierNode::perform_text_action`), bound as `request_focus_of_node` (D1299).
+    pub fn on_click_of_node(&mut self) {
+        self.set(&SemanticsActions::ON_CLICK, AccessibilityAction { label: None, action: None });
+    }
+
+    /// As `on_click_of_node`, for `SetSelection`.
+    pub fn set_selection_of_node(&mut self) {
+        self.set(
+            &SemanticsActions::SET_SELECTION,
+            AccessibilityAction { label: None, action: None },
+        );
+    }
+
+    /// As `on_click_of_node`, for `CopyText`.
+    pub fn copy_text_of_node(&mut self) {
+        self.set(&SemanticsActions::COPY_TEXT, AccessibilityAction { label: None, action: None });
+    }
+
+    /// As `on_click_of_node`, for `CutText`.
+    pub fn cut_text_of_node(&mut self) {
+        self.set(&SemanticsActions::CUT_TEXT, AccessibilityAction { label: None, action: None });
+    }
+
+    /// As `on_click_of_node`, for `PasteText`.
+    pub fn paste_text_of_node(&mut self) {
+        self.set(&SemanticsActions::PASTE_TEXT, AccessibilityAction { label: None, action: None });
+    }
+
+    /// As `on_click_of_node`, for `OnImeAction`.
+    pub fn on_ime_action_of_node(&mut self, ime_action: ImeAction) {
+        self.set(&SemanticsProperties::IME_ACTION, ime_action);
+        self.set(
+            &SemanticsActions::ON_IME_ACTION,
+            AccessibilityAction { label: None, action: None },
+        );
+    }
+
+    /// As `on_click_of_node`, for `GetTextLayoutResult`.
+    pub fn get_text_layout_result_of_node(&mut self) {
+        self.set(
+            &SemanticsActions::GET_TEXT_LAYOUT_RESULT,
+            AccessibilityAction { label: None, action: None },
+        );
+    }
+
     pub fn page_up(&mut self, label: Option<SharedString>, action: impl Fn() -> bool + 'static) {
         self.set_action(&SemanticsActions::PAGE_UP, label, Rc::new(action));
     }

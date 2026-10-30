@@ -769,6 +769,29 @@ impl DrawModifierNode for TextNode {
 impl SemanticsModifierNode for TextNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.set_text(self.text.text().clone());
+        config.get_text_layout_result_of_node();
+    }
+
+    fn text_layout_result(
+        &mut self,
+        context: &mut compose_ui::EventContext<'_>,
+    ) -> Option<TextLayoutResult> {
+        let (paragraph, constraints) = (self.paragraph?, self.constraints?);
+        let input = compose_ui::TextLayoutInput {
+            text: self.text.clone(),
+            style: self.style.clone(),
+            max_lines: self.options.max_lines,
+            soft_wrap: self.options.soft_wrap,
+            overflow: self.options.overflow,
+            density: self.density?,
+            layout_direction: self.direction,
+            font_family_resolver: context.current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
+            default_locale_list: context.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
+            constraints,
+        };
+        let measurer = context.text_measurer();
+        let size = constraints.constrain(measurer.metrics(paragraph).size);
+        Some(TextLayoutResult::new(input, measurer.paragraph(paragraph), size))
     }
 }
 

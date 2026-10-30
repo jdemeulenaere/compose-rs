@@ -172,6 +172,7 @@ impl ModifierNodeElement for TextFieldElement {
             visual_transformation: self.visual_transformation.clone(),
             mapping: None,
             shown_text: None,
+            cursor_to_end: Default::default(),
         }
     }
 
@@ -179,6 +180,10 @@ impl ModifierNodeElement for TextFieldElement {
         if node.value != self.value {
             node.value = self.value.clone();
             node.awaiting_value = false;
+            if node.cursor_to_end.take() {
+                node.cursor = self.value.len();
+                node.anchor = self.value.len();
+            }
         }
         if node.text != self.value
             || node.style != self.style
@@ -326,6 +331,8 @@ pub(crate) struct TextFieldNode {
     text: String,
     /// The application's value, as composition last gave it.
     value: String,
+    /// A service set the text: when the application's value changes, the cursor's at its end.
+    cursor_to_end: Rc<std::cell::Cell<bool>>,
     /// An edit was made: unless the application changes `value` by the next measurement, the
     /// edit is undone.
     awaiting_value: bool,
@@ -1692,7 +1699,10 @@ impl SemanticsModifierNode for TextFieldNode {
         config.set_is_editable(editable);
         if editable {
             let on_value_change = self.on_value_change.clone();
+            let (current, cursor_to_end) = (self.text.clone(), self.cursor_to_end.clone());
             config.set_text_action(None, move |text| {
+                // The cursor goes to the end of it, as a text committed over all there was.
+                cursor_to_end.set(text.as_str() != current);
                 on_value_change(text.as_str().to_string());
                 true
             });
@@ -1703,6 +1713,118 @@ impl SemanticsModifierNode for TextFieldNode {
         } else {
             config.disabled();
         }
+        // As Compose's `CoreTextFieldSemanticsModifier`.
+        config.get_text_layout_result_of_node();
+        config.set_selection_of_node();
+        config.on_click_of_node();
+        config.on_ime_action_of_node(
+            self.keyboard_options.to_ime_options(self.single_line).ime_action,
+        );
+        if self.anchor != self.cursor && !self.visual_transformation.is_password() {
+            config.copy_text_of_node();
+            if editable {
+                config.cut_text_of_node();
+            }
+        }
+        if editable {
+            config.paste_text_of_node();
+        }
+    }
+
+    fn perform_text_action(
+        &mut self,
+        action: compose_ui::TextAction,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        use compose_ui::TextAction as Action;
+        let editable = self.enabled && !self.read_only;
+        match action {
+            Action::Click => {
+                context.request_focus();
+                if !self.read_only {
+                    context.show_software_keyboard();
+                }
+                true
+            }
+            Action::SetSelection { start, end } => {
+                if !self.enabled {
+                    return false;
+                }
+                let shown_length =
+                    self.shown_text.as_ref().map_or(self.text.len(), |shown| shown.len());
+                let within = |offset: i32| offset >= 0 && offset as usize <= shown_length;
+                if !within(start) || !within(end) {
+                    return false;
+                }
+                let at = |field: &Self, offset: i32| {
+                    floor_char_boundary(&field.text, field.original_of(offset as usize))
+                };
+                let (anchor, cursor) = (at(self, start), at(self, end));
+                if (anchor, cursor) == (self.anchor, self.cursor) {
+                    return false;
+                }
+                self.commit_composition(context);
+                self.anchor = anchor;
+                self.cursor = cursor;
+                self.preferred_x = None;
+                context.invalidate_measure();
+                context.invalidate_semantics();
+                true
+            }
+            Action::CopyText | Action::CutText => {
+                let selected = self.selection();
+                if selected.is_empty() || self.visual_transformation.is_password() {
+                    return false;
+                }
+                let is_cut = action == Action::CutText;
+                if is_cut && !editable {
+                    return false;
+                }
+                let selected = self.text[selected].to_string();
+                context.clipboard().set_text(&selected);
+                if is_cut {
+                    self.replace_selection("", false, context);
+                }
+                true
+            }
+            Action::PasteText => {
+                if !editable {
+                    return false;
+                }
+                if let Some(pasted) = context.clipboard().get_text() {
+                    self.insert(&pasted, false, context);
+                }
+                true
+            }
+            Action::ImeAction => {
+                let action = self.keyboard_options.to_ime_options(self.single_line).ime_action;
+                self.on_ime_action(action, context);
+                true
+            }
+        }
+    }
+
+    fn text_layout_result(
+        &mut self,
+        context: &mut EventContext<'_>,
+    ) -> Option<compose_ui::TextLayoutResult> {
+        let (paragraph, constraints) = (self.paragraph?, self.constraints?);
+        let text = self.shown_text.clone().unwrap_or_else(|| self.display_text().into_owned());
+        let input = compose_ui::TextLayoutInput {
+            text: text.into(),
+            style: self.style.clone(),
+            max_lines: if self.single_line { 1 } else { u32::MAX },
+            soft_wrap: !self.single_line,
+            overflow: compose_ui::TextOverflow::Clip,
+            density: self.density?,
+            layout_direction: self.direction,
+            font_family_resolver: context.current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
+            default_locale_list: context.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
+            constraints,
+        };
+        let measurer = context.text_measurer();
+        let size = constraints.constrain(measurer.metrics(paragraph).size);
+        Some(compose_ui::TextLayoutResult::new(input, measurer.paragraph(paragraph), size))
     }
 }
 

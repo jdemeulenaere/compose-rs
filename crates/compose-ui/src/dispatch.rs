@@ -644,6 +644,89 @@ impl UiTree {
         (consumed, previewed, actions)
     }
 
+    /// The modifier nodes of `node` with semantics, or their delegates that have: with what they
+    /// run in.
+    fn semantics_entries(&mut self, node: NodeId) -> Vec<(usize, EntryId)> {
+        let mut entries = Vec::new();
+        let Some(value) = self.get_mut(node) else { return entries };
+        for (index, entry) in value.chain.iter_mut().enumerate() {
+            if !entry.kinds.any(NodeKinds::SEMANTICS) {
+                continue;
+            }
+            dispatch_for_kind(
+                &mut *entry.node,
+                entry.own,
+                NodeKinds::SEMANTICS,
+                EntryId::NO_DELEGATE,
+                &mut |_, delegate| entries.push((index, delegate)),
+            );
+        }
+        entries
+    }
+
+    /// Asks `node`'s modifier nodes for `action`, until one does it (D1299). What it queues for
+    /// the application runs as the tree is freed.
+    pub(crate) fn perform_text_action(
+        &mut self,
+        node: NodeId,
+        action: crate::modifier::TextAction,
+    ) -> bool {
+        let mut actions = Vec::new();
+        let mut requests = Requests::default();
+        let mut done = false;
+        for (index, delegate) in self.semantics_entries(node) {
+            done = self
+                .with_event_context(
+                    node,
+                    index,
+                    delegate,
+                    &mut actions,
+                    &mut requests,
+                    None,
+                    false,
+                    |modifier_node, context| {
+                        modifier_node
+                            .as_semantics()
+                            .is_some_and(|it| it.perform_text_action(action, context))
+                    },
+                )
+                .unwrap_or(false);
+            if done {
+                break;
+            }
+        }
+        self.apply_requests(requests, &mut actions);
+        self.pending_actions.append(&mut actions);
+        done
+    }
+
+    /// Adds `node`'s modifier nodes' text layouts to `out`: whether one had any.
+    pub(crate) fn text_layout_results(
+        &mut self,
+        node: NodeId,
+        out: &mut Vec<crate::text::TextLayoutResult>,
+    ) -> bool {
+        let mut actions = Vec::new();
+        let mut requests = Requests::default();
+        let before = out.len();
+        for (index, delegate) in self.semantics_entries(node) {
+            let result = self.with_event_context(
+                node,
+                index,
+                delegate,
+                &mut actions,
+                &mut requests,
+                None,
+                false,
+                |modifier_node, context| {
+                    modifier_node.as_semantics().and_then(|it| it.text_layout_result(context))
+                },
+            );
+            out.extend(result.flatten());
+        }
+        out.len() > before
+    }
+
     /// Sends committed text to the focused node and its ancestors until one takes it.
     pub fn dispatch_text(&mut self, text: &str) -> (bool, Vec<Action>) {
         self.dispatch_to_key_path(|handler, context| handler.on_text_input(text, context))

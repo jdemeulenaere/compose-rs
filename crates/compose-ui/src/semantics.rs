@@ -320,6 +320,7 @@ impl UiTree {
             );
         }
         self.bind_request_focus(node, &mut config);
+        self.bind_text_actions(node, &mut config);
         let (layer, bounds_entry) = merging_bounds.or(first_bounds).unwrap_or((0, 0));
         OwnSemantics { config, layer, bounds_entry, has_bounds: first_bounds.is_some() }
     }
@@ -469,6 +470,72 @@ impl UiTree {
                     crate::focus_requester::FocusRequest::Node(node),
                 ),
                 None => false,
+            });
+        }
+    }
+
+    /// Binds what a node's semantics offered through `*_of_node`: performing one asks its modifier
+    /// nodes, with the tree free, as `bind_request_focus` (D1299).
+    fn bind_text_actions(&self, node: NodeId, config: &mut SemanticsConfiguration) {
+        use crate::modifier::TextAction;
+        use SemanticsActions as A;
+        // All who offer any of them offer this one.
+        let unbound =
+            config.get(&A::GET_TEXT_LAYOUT_RESULT).is_some_and(|action| action.action.is_none());
+        if !unbound {
+            return;
+        }
+        let requests = std::rc::Rc::downgrade(&self.focus_requests);
+        {
+            let requests = requests.clone();
+            config.get_text_layout_result(None, move |out| {
+                let Some(requests) = requests.upgrade() else { return false };
+                let key = requests.tree_key.get();
+                crate::focus_requester::on_free_tree(key, |tree| {
+                    tree.text_layout_results(node, out)
+                })
+                .unwrap_or(false)
+            });
+        }
+        let perform = move |action: TextAction| {
+            let requests = requests.clone();
+            move || match requests.upgrade() {
+                Some(requests) => crate::focus_requester::perform_or_queue(
+                    &requests,
+                    crate::focus_requester::FocusRequest::TextAction(node, action),
+                ),
+                None => false,
+            }
+        };
+        let unbound =
+            |config: &SemanticsConfiguration,
+             key: &'static SemanticsPropertyKey<AccessibilityAction<ActionFn>>| {
+                config.get(key).is_some_and(|action| action.action.is_none())
+            };
+        if unbound(config, &A::ON_CLICK) {
+            config.on_click(None, perform(TextAction::Click));
+        }
+        if unbound(config, &A::COPY_TEXT) {
+            config.copy_text(None, perform(TextAction::CopyText));
+        }
+        if unbound(config, &A::CUT_TEXT) {
+            config.cut_text(None, perform(TextAction::CutText));
+        }
+        if unbound(config, &A::PASTE_TEXT) {
+            config.paste_text(None, perform(TextAction::PasteText));
+        }
+        if unbound(config, &A::ON_IME_ACTION) {
+            let ime_action = config.get(&SemanticsProperties::IME_ACTION).copied();
+            config.on_ime_action(
+                ime_action.unwrap_or_default(),
+                None,
+                perform(TextAction::ImeAction),
+            );
+        }
+        if config.get(&A::SET_SELECTION).is_some_and(|action| action.action.is_none()) {
+            let requests = perform;
+            config.set_selection(None, move |start, end, _traversal| {
+                requests(TextAction::SetSelection { start, end })()
             });
         }
     }

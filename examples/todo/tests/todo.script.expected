@@ -5,7 +5,7 @@
 > assert "milk"
 > semantics
 [0,0 400x800] 
-  [16,16 298x56] editable_text="" tag="draft" editable focusable focused merged TextSelectionRange=TextRange(0, 0)
+  [16,16 298x56] editable_text="" tag="draft" clickable editable focusable focused merged TextSelectionRange=TextRange(0, 0) ImeAction=Default
   [314,24 70x40] role=Button text=["Add"] clickable focusable merged
   [16,76 70x40] role=Button text=["All"] clickable disabled merged
   [94,76 91x40] role=Button text=["Active"] clickable focusable merged
@@ -20,7 +20,7 @@
 > click "Done"
 > semantics
 [0,0 400x800] 
-  [16,16 298x56] editable_text="" tag="draft" editable focusable focused merged TextSelectionRange=TextRange(0, 0)
+  [16,16 298x56] editable_text="" tag="draft" clickable editable focusable focused merged TextSelectionRange=TextRange(0, 0) ImeAction=Default
   [314,24 70x40] role=Button text=["Add"] clickable focusable merged
   [16,76 70x40] role=Button text=["All"] clickable focusable merged
   [94,76 91x40] role=Button text=["Active"] clickable focusable merged
@@ -33,7 +33,7 @@ StackMeasurePolicy [0,0 400x800]
     RowColumnMeasurePolicy [0,0 368x56]
       BoxMeasurePolicy [0,0 298x56] Modifier.weight(1, true).test_tag("draft").semantics(merge = true).focus_on_tap.pointer_hover_icon {tag="draft" merged}
         TextFieldDecoration [0,0 298x56] Modifier.size(280.dp.._ x 56.dp.._).on_focus_changed.draw_behind
-          EmptyMeasurePolicy [16,19 266x18] Modifier.TextField {editable_text="" editable focusable focused part_of_parent TextSelectionRange=TextRange(0, 0)}
+          EmptyMeasurePolicy [16,19 266x18] Modifier.TextField {editable_text="" clickable editable focusable focused part_of_parent TextSelectionRange=TextRange(0, 0) ImeAction=Default}
           EmptyMeasurePolicy [0,54 298x2] Modifier.size(_ x 2.dp).background(#FF6750A4, Rectangle)
       BoxMeasurePolicy [298,4 70x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 70x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
