@@ -245,6 +245,17 @@ impl<T: Animate> Animation<T> for TargetBasedAnimation<T> {
     }
 }
 
+/// The play time `delta_nanos` after an animation's start under a motion duration `scale`
+/// (D827), as Compose's `doAnimationFrameWithScale`: Kotlin's `(delta / durationScale).toLong()`,
+/// a `Long` divided by a `Float` (in floats), or the animation's whole duration at 0.
+pub(crate) fn scaled_play_time(
+    delta_nanos: i64,
+    scale: f32,
+    duration_nanos: impl FnOnce() -> i64,
+) -> i64 {
+    if scale == 0.0 { duration_nanos() } else { (delta_nanos as f32 / scale) as i64 }
+}
+
 /// Compose's `DelayedAnimationTest`, of its internal `delayed(spec, nanos)` wrapper: compose-rs
 /// delays the animation (`TargetBasedAnimation::delayed`), not the spec, so the specs'
 /// comparison (`comparison`) has nothing to compare.

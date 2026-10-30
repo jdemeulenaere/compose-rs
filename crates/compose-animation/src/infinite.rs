@@ -50,6 +50,10 @@ trait InfiniteAnimation: ToolingEntry {
     /// frame's time, so a value whose call moves to another transition goes on where it was.
     fn on_play_time_changed(&self, frame_time_nanos: u64);
     fn is_finished(&self) -> bool;
+    /// Its play time starts again at the next frame, as `reset`.
+    fn reset(&self);
+    /// At the target, starting again at the next frame, as `skipToEnd`.
+    fn skip_to_end(&self);
 }
 
 impl TransitionInner {
@@ -77,22 +81,33 @@ impl TransitionInner {
 
     /// Sets each value still animating, as `onFrame`.
     fn on_frame(&self, frame_time_nanos: u64) {
-        // By index, without holding the list: a value's write runs no user code today, but a
-        // borrow held across it would make any that adds a value panic.
+        self.for_each_animation(|animation| {
+            if !animation.is_finished() {
+                animation.on_play_time_changed(frame_time_nanos);
+            }
+        });
+    }
+
+    /// Calls `each` with each of its values, by index, without holding the list: a value's
+    /// write runs no user code today, but a borrow held across it would make any that adds a
+    /// value panic.
+    fn for_each_animation(&self, each: impl Fn(&dyn InfiniteAnimation)) {
         let mut index = 0;
         loop {
             let animation = self.animations.borrow().get(index).cloned();
             let Some(animation) = animation else { break };
-            if !animation.is_finished() {
-                animation.on_play_time_changed(frame_time_nanos);
-            }
+            each(&*animation);
             index += 1;
         }
     }
 
     /// The transition's task, as `InfiniteTransition.run`'s `LaunchedEffect`: each frame, the
-    /// values still animating move on; with none, it waits for one.
+    /// values still animating move on; with none, it waits for one. A new motion duration scale
+    /// starts them over; at 0 they are at their targets until the scale is above 0 (D827).
     async fn run(self: Rc<TransitionInner>) {
+        let mut scale = 1.0f32;
+        // The time the scale last changed, or the first frame's.
+        let mut start = None;
         loop {
             std::future::poll_fn(|context| {
                 if self.is_running() {
@@ -106,7 +121,24 @@ impl TransitionInner {
             // An infinite animation's frame: a test rule advancing its clock by itself stops
             // it, as Compose's test `InfiniteAnimationPolicy` (D901).
             let time = with_infinite_animation_frame_nanos(|time| time).await;
-            self.on_frame(time);
+            let current_scale = compose_ui::motion_duration_scale();
+            if current_scale != scale && !(current_scale.is_nan() && scale.is_nan()) {
+                scale = current_scale;
+                start = Some(time);
+                self.for_each_animation(|animation| animation.reset());
+            }
+            let start = *start.get_or_insert(time);
+            if scale == 0.0 {
+                self.for_each_animation(|animation| animation.skip_to_end());
+                compose_ui::await_positive_motion_duration_scale().await;
+            } else if scale == 1.0 {
+                self.on_frame(time);
+            } else {
+                // Compose's `((currentTimeNanos - startTimeNanos) / durationScale).toLong()`, a
+                // `Long` divided by a `Float` (in floats), after the frame times the values read.
+                let play_time = ((time - start) as f32 / scale) as u64;
+                self.on_frame(start + play_time);
+            }
         }
     }
 }
@@ -200,6 +232,15 @@ impl<T: Animate> InfiniteAnimation for TransitionAnimationState<T> {
 
     fn is_finished(&self) -> bool {
         self.is_finished.get()
+    }
+
+    fn reset(&self) {
+        self.start_on_the_next_frame.set(true);
+    }
+
+    fn skip_to_end(&self) {
+        self.value.set(self.target_value.borrow().clone());
+        self.start_on_the_next_frame.set(true);
     }
 }
 

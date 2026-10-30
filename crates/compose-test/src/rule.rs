@@ -57,6 +57,8 @@ pub struct ComposeTestRule {
     next_frame: Option<u64>,
     /// The policy installed for infinite animations (D901), removed with the rule.
     policy: Rc<dyn Fn() -> bool>,
+    /// Whether the rule set the thread's motion duration scale, put back to 1 with it (D827).
+    scaled: bool,
     /// Whether finders wait for idle first, as Compose's implicit wait
     /// (`run_without_implicit_wait` turns it off for its block).
     implicit_wait: bool,
@@ -120,6 +122,7 @@ impl ComposeTestRule {
             origin_nanos,
             next_frame: None,
             policy,
+            scaled: false,
             implicit_wait: true,
             bounds_tolerance: DEFAULT_BOUNDS_TOLERANCE,
             input: InputState::default(),
@@ -479,6 +482,14 @@ impl ComposeTestRule {
 
     // ---- The main clock -----------------------------------------------------------------------
 
+    /// Animations run at `scale` (5: five times as long; 0: they end at once), as a
+    /// `MotionDurationScale` in `ComposeUiTestConfig`'s `effectContext`: the thread's scale
+    /// (`compose_ui::set_motion_duration_scale`), put back to 1 when the rule goes (D827).
+    pub fn set_motion_duration_scale(&mut self, scale: f32) {
+        compose_ui::set_motion_duration_scale(scale);
+        self.scaled = true;
+    }
+
     /// Whether `wait_for_idle` moves the clock (a frame at a time while one is needed), as
     /// `mainClock.autoAdvance`. Infinite animations run only while it doesn't (D901).
     pub fn set_auto_advance(&mut self, auto_advance: bool) {
@@ -705,6 +716,9 @@ impl ComposeTestRule {
 impl Drop for ComposeTestRule {
     /// Takes its infinite-animation policy away, unless another rule's replaced it.
     fn drop(&mut self) {
+        if self.scaled {
+            compose_ui::set_motion_duration_scale(1.0);
+        }
         if platform::infinite_animation_policy()
             .is_some_and(|policy| Rc::ptr_eq(&policy, &self.policy))
         {

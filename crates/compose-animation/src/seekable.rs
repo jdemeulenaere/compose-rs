@@ -559,6 +559,13 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
         if idle {
             return Ok(());
         }
+        // At a motion duration scale of 0 (or NaN), the animations end at once (D827).
+        let scale = compose_ui::motion_duration_scale();
+        if scale <= 0.0 || scale.is_nan() {
+            self.end_all_animations();
+            self.inner.last_frame_time_nanos.set(AnimationConstants::UNSPECIFIED_TIME);
+            return Ok(());
+        }
         if self.inner.last_frame_time_nanos.get() == AnimationConstants::UNSPECIFIED_TIME {
             // A frame for the start time.
             self.first_frame(mutation).await?;
@@ -591,20 +598,28 @@ impl<S: Clone + PartialEq + 'static> SeekableTransitionState<S> {
     }
 
     async fn animate_one_frame(&self, mutation: u64) -> Step {
+        let scale = compose_ui::motion_duration_scale();
+        if scale <= 0.0 || scale.is_nan() {
+            self.end_all_animations();
+            return Ok(());
+        }
         if self.inner.last_frame_time_nanos.get() == AnimationConstants::UNSPECIFIED_TIME {
             return self.first_frame(mutation).await;
         }
         let time = with_frame_nanos(|time| time).await as i64;
         self.check(mutation)?;
-        self.on_animation_frame(time);
+        self.on_animation_frame(time, scale);
         Ok(())
     }
 
-    /// A frame of the animations, as `animateOneFrameLambda`.
-    fn on_animation_frame(&self, frame_time_nanos: i64) {
+    /// A frame of the animations, as `animateOneFrameLambda`: the time since the last frame
+    /// scaled by the motion duration scale (D827).
+    fn on_animation_frame(&self, frame_time_nanos: i64, scale: f32) {
         let last = self.inner.last_frame_time_nanos.get();
         let delta =
             if last == AnimationConstants::UNSPECIFIED_TIME { 0 } else { frame_time_nanos - last };
+        let delta =
+            if scale <= 0.0 || scale.is_nan() { 0 } else { round(delta as f64 / f64::from(scale)) };
         self.inner.last_frame_time_nanos.set(frame_time_nanos);
         let initial = self.inner.initial_value_animations.borrow().clone();
         if !initial.is_empty() {
@@ -763,7 +778,7 @@ mod tests {
         let animation = Rc::new(linear(100_000_000));
         *state.inner.current_animation.borrow_mut() = Some(animation.clone());
         state.inner.last_frame_time_nanos.set(AnimationConstants::UNSPECIFIED_TIME);
-        state.on_animation_frame(100_000_000);
+        state.on_animation_frame(100_000_000, 1.0);
         assert_eq!(animation.progress_nanos.get(), 0);
         assert_eq!(state.fraction(), 0.0);
     }

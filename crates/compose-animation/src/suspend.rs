@@ -183,6 +183,7 @@ impl<T: Animate> AnimationState<T> {
         let initial_value = animation.value_from_nanos(0);
         let initial_velocity = animation.velocity_vector_from_nanos(0);
         let infinite = animation.is_infinite();
+        let scale_at_start = compose_ui::motion_duration_scale();
         let start = if start_time_nanos == AnimationConstants::UNSPECIFIED_TIME {
             frame(infinite).await
         } else {
@@ -201,10 +202,12 @@ impl<T: Animate> AnimationState<T> {
         // If cancelled (dropped) while running, the state stops, unless another animation
         // moved it since.
         let guard = StopOnDrop { scope: &scope, state: self };
-        scope.frame(start, animation, self, &mut block);
+        scope.frame(start, animation, self, &mut block, scale_at_start);
         while scope.is_running.get() {
+            // The scale where the task runs, before its frame, as Compose's.
+            let scale = compose_ui::motion_duration_scale();
             let time = frame(infinite).await;
-            scope.frame(time, animation, self, &mut block);
+            scope.frame(time, animation, self, &mut block, scale);
         }
         std::mem::forget(guard);
     }
@@ -315,8 +318,13 @@ impl<T: Animate> AnimationScope<T> {
         animation: &dyn Animation<T>,
         state: &AnimationState<T>,
         block: &mut impl FnMut(&AnimationScope<T>),
+        scale: f32,
     ) {
-        let play_time = frame_time_nanos - self.start_time_nanos;
+        let play_time = crate::animation::scaled_play_time(
+            frame_time_nanos - self.start_time_nanos,
+            scale,
+            || animation.duration_nanos(),
+        );
         self.last_frame_time_nanos.set(frame_time_nanos);
         self.value.set(animation.value_from_nanos(play_time));
         self.velocity_vector.set(animation.velocity_vector_from_nanos(play_time));

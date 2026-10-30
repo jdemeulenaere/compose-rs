@@ -32,17 +32,17 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 23 | 170 |
+| `ported` | 25 | 174 |
 | `port` | 0 | 0 |
 | `partial` | 9 | 127 |
-| `feature:<name>` | 60 | 714 |
+| `feature:<name>` | 58 | 710 |
 | `n/a` | 2 | 9 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 19 / 145 | 0 | 3 / 19 | 8 / 48 | 0 |
+| animation-core | 30 | 212 | 0 | 21 / 149 | 0 | 3 / 19 | 6 / 44 | 0 |
 | animation | 15 | 238 | 0 | 4 / 25 | 0 | 3 / 40 | 8 / 173 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -69,7 +69,6 @@ By module:
 | captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
 | nav-transitions | 1 | 5 |
-| motion-duration-scale | 2 | 4 |
 | predictive-back | 1 | 2 |
 
 Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
@@ -101,7 +100,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | ported | `animation_objects.rs` |
 | 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | ported | `deferred_target.rs` |
 | 7 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt` | 5 | Compose's internal `delayed(spec, nanos)` wrapper: duration, values, velocity, zero, equality | partial | 4 ported (`animation.rs`'s unit tests, on `TargetBasedAnimation::delayed`: compose-rs delays the animation, not the spec); `comparison` n/a: no delayed specs to compare (D821) |
-| 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | `feature:motion-duration-scale` | also needs suspend-animate's `animate()` |
+| 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | ported | `duration_scale.rs` (16 ms frames, not 10) |
 | 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | ported | `easing.rs` |
 | 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | ported | `animation_objects.rs` |
 | 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | ported | `keyframe_animation.rs`; `testNotEquals0` inverted there: keyframes built alike are equal (D816) |
@@ -115,7 +114,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | ported | `easing.rs` (the custom easing an `Easing::Function`) |
 | 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | ported | `converters.rs`, with fractions: Compose's `Int` converter truncates, as compose-rs's now does |
 | 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | `feature:deferred-transition` | new at the tip, not experimental |
-| 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | `feature:motion-duration-scale` | also needs transition-state (child transitions) and seekable-transition |
+| 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | ported | `duration_scale.rs`, the rule's `set_motion_duration_scale` for `effectContext` (D827) |
 | 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | ported | `easing.rs`: the evaluation against the curve sampled by its parameter, not bitmaps |
 | 24 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/InfiniteTransitionTest.kt` | 1 | `rememberInfiniteTransition`: keyframes Reverse float and tween color, frame by frame | ported | `infinite_transition.rs`, through 2.1 s of frames (Compose's loop compares nanoseconds with 2100: it checks one frame) |
 | 25 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/PathEasingTest.kt` | 12 | `PathEasing`: bounds, invalid paths, compare to cubic, quads, overshoot | `feature:path-easing` |  |
@@ -273,7 +272,7 @@ Deprecated and left out:
 | `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | missing (new at this tip) | deferred-transition |
 | `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
 | `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | present (`animations()`, `label()`, `animate_*_with(…, label)`, D818) | transition-state |
-| `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult); `MotionDurationScale` honoured by every animation | missing | motion-duration-scale |
+| `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult, D901); `MotionDurationScale` honoured by `Animatable`, `animate`, transitions and infinite transitions | present (`motion_duration_scale`, `with_motion_duration_scale`, `set_motion_duration_scale`, D827) | motion-duration-scale |
 | `Rect.VectorConverter`, `IntSize.VectorConverter` (clamped at 0), `DpOffset.VectorConverter`; `TwoWayConverter(to, from)` factory | present (`Animate` impls; compose-ui has `DpOffset`); `TwoWayConverter(to, from)` is an `Animate` impl | more-converters |
 | `VisibilityThreshold` for `Int`, `IntOffset`, `IntSize`, `Offset`, `Size`, `Rect`, `Dp`, `DpOffset` | present: the `VisibilityThreshold` constants, Compose's values (D800) | more-converters |
 
@@ -478,7 +477,9 @@ One entry per feature. Sizes:
 - **Tests:** `PhysicsAnimationTest` (1), `AnimatableTest` (1), `SingleValueAnimationTest` (1), `TransitionTest` (2).
 - **Dependencies:** none.
 
-#### motion-duration-scale (S–M, not exp.)
+#### motion-duration-scale (S–M, not exp.): done but Android's animator scale and two frame loops of their own (D827)
+
+- **Done:** the scale of the thread and of a task's future, read by `Animatable`, `animate`, `Transition`, `SeekableTransitionState` and `InfiniteTransition`; the test rule's and `ComposeUiTestConfig`'s. **Left:** `ComposeRsView` passing Android's `ANIMATOR_DURATION_SCALE` on (Kotlin, not buildable here); `animate_scroll_by` and Material 3's tabs, whose own frame loops ignore the scale.
 
 - **API:** `MotionDurationScale` (a runtime/ui coroutine-context element: a scale of 0 finishes animations at once, as Android's animator scale), honoured by every animation; `with_infinite_animation_frame_nanos`/`_millis` and the `InfiniteAnimationPolicy` they consult.
 - **Tests:** `DurationScaleTest`, `DurationScaleTransitionTest`.
@@ -502,7 +503,7 @@ One entry per feature. Sizes:
 
 #### seekable-transition (L, not exp.): done (D821)
 
-- **Done:** `SeekableTransitionState` (`seek_to`, `seek_to_with`, `animate_to`, `animate_to_with`, `snap_to`, `fraction`, `current_state`, `target_state`; an interrupted call cancels its task, D823), `remember_transition` over the `TransitionState` trait, the transition's seeking (initial-value animations, the observed total duration). Left: `DurationScaleTransitionTest` (motion-duration-scale) and `AnimatedVisibilityTest.testSeekingAnimatedVisibility` (Compose's tooling `setPlaytimeAfterInitialAndTargetStateEstablished`).
+- **Done:** `SeekableTransitionState` (`seek_to`, `seek_to_with`, `animate_to`, `animate_to_with`, `snap_to`, `fraction`, `current_state`, `target_state`; an interrupted call cancels its task, D823), `remember_transition` over the `TransitionState` trait, the transition's seeking (initial-value animations, the observed total duration). Left: `AnimatedVisibilityTest.testSeekingAnimatedVisibility` (Compose's tooling `setPlaytimeAfterInitialAndTargetStateEstablished`).
 
 - **API:** `SeekableTransitionState` (`seek_to(fraction, target)`, `animate_to(target, spec)`, `snap_to`, `fraction`), and Transition support for seeking (Compose's internal `delayed` wrapper).
 - **What it does:** drives a transition from a gesture. This is the basis of predictive back.
@@ -758,7 +759,6 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, `print_to_string`, and `set_content`; `perform_click` is a touch click. docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
 
 - **`advance_time_by` rounds up to whole frames**, as Compose's `advanceTimeBy(ms)` (`ceil(ms / 16) × 16`, D900); `advance_time_by_ignoring_frame_duration` is `ignoreFrameDuration = true`. A frame comes a frame duration after something needs one, as Compose's.
-- **No `MotionDurationScale`** to put in the test context (feature motion-duration-scale).
 
 ### compose-rs behaviour suspected to differ from Compose's
 

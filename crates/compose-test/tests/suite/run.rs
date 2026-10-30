@@ -326,3 +326,28 @@ fn a_test_past_its_timeout_fails() {
         );
     }
 }
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/CustomEffectContextTest.kt, motionDurationScale_defaultValue
+/// compose-rs has no absent scale: its default is the 1 Compose's animations read for none.
+#[test]
+fn the_motion_duration_scale_of_a_test_is_1_by_default() {
+    run_compose_ui_test(|ui| {
+        let seen = Rc::new(Cell::new(-1.0f32));
+        let recorded = seen.clone();
+        ui.set_content(move || recorded.set(compose_ui::motion_duration_scale()));
+        ui.run_on_idle(|_| assert_eq!(seen.get(), 1.0));
+    });
+}
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/CustomEffectContextTest.kt, motionDurationScale_propagatedToCoroutines
+#[test]
+fn the_motion_duration_scale_of_the_config_reaches_the_composition() {
+    let config = ComposeUiTestConfig { motion_duration_scale: 0.0, ..Default::default() };
+    run_compose_ui_test_with(config, |ui| {
+        let seen = Rc::new(Cell::new(-1.0f32));
+        let recorded = seen.clone();
+        ui.set_content(move || recorded.set(compose_ui::motion_duration_scale()));
+        ui.run_on_idle(|_| assert_eq!(seen.get(), 0.0));
+    });
+    assert_eq!(compose_ui::motion_duration_scale(), 1.0);
+}

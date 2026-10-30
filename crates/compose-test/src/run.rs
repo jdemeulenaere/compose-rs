@@ -66,9 +66,9 @@ pub struct TestFailurePolicy {
     pub failure_handlers: Vec<TestFailureHandler>,
 }
 
-/// How `run_compose_ui_test_with` sets its rule up, as Compose's `ComposeUiTestConfig`. Its
-/// `effectContext`, `runTestContext` and `inputMode` have no compose-rs counterpart yet (no
-/// `MotionDurationScale`, test dispatchers or input mode).
+/// How `run_compose_ui_test_with` sets its rule up, as Compose's `ComposeUiTestConfig`. Of its
+/// `effectContext`, only the motion duration scale has a counterpart (D827); `runTestContext` and
+/// `inputMode` have none yet (no test dispatchers or input mode).
 #[derive(Clone)]
 pub struct ComposeUiTestConfig {
     /// The whole test's real-time timeout, as `testTimeout` (one minute): a wait past it, or
@@ -77,6 +77,8 @@ pub struct ComposeUiTestConfig {
     /// The bounds assertions' tolerance given none (`Dp::UNSPECIFIED`: 0.5 dp), as
     /// `boundsAssertionTolerance`.
     pub bounds_assertion_tolerance: Dp,
+    /// The scale animations run at, as a `MotionDurationScale` in `effectContext` (D827).
+    pub motion_duration_scale: f32,
     pub failure_policy: TestFailurePolicy,
 }
 
@@ -85,6 +87,7 @@ impl Default for ComposeUiTestConfig {
         ComposeUiTestConfig {
             test_timeout: DEFAULT_IDLE_TIMEOUT,
             bounds_assertion_tolerance: Dp::UNSPECIFIED,
+            motion_duration_scale: 1.0,
             failure_policy: TestFailurePolicy::default(),
         }
     }
@@ -106,6 +109,9 @@ pub fn run_compose_ui_test_with<R>(
     rule.set_test_timeout(config.test_timeout);
     if config.bounds_assertion_tolerance.is_specified() {
         rule.set_bounds_assertion_tolerance(config.bounds_assertion_tolerance);
+    }
+    if config.motion_duration_scale != 1.0 {
+        rule.set_motion_duration_scale(config.motion_duration_scale);
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let result = block(&mut rule);

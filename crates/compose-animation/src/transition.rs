@@ -533,14 +533,17 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
         self.wake();
     }
 
-    /// A frame of the root transition, as `onFrame(frameTimeNanos, durationScale)`.
-    fn on_frame(&self, frame_time_nanos: i64) {
+    /// A frame of the root transition, as `onFrame(frameTimeNanos, durationScale)`: the play
+    /// time scaled (D827); at a scale of 0 (or NaN) the values end at once.
+    fn on_frame(&self, frame_time_nanos: i64, scale: f32) {
         if !self.is_running_untracked() {
             self.on_transition_start(frame_time_nanos);
         }
-        let play_time = frame_time_nanos - self.start_time_untracked.get();
+        let delta = frame_time_nanos - self.start_time_untracked.get();
+        let to_end = scale <= 0.0 || scale.is_nan();
+        let play_time = if to_end { delta } else { round_half_up(delta as f64 / f64::from(scale)) };
         self.set_play_time(play_time);
-        self.frame_at(play_time, false);
+        self.frame_at(play_time, to_end);
     }
 
     fn on_transition_start(&self, frame_time_nanos: i64) {
@@ -609,8 +612,13 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
                 }
             })
             .await;
-            let inner = self.clone();
-            with_frame_nanos(move |time| inner.on_frame(time as i64)).await;
+            // Read as the frame loop starts, not each frame, as Compose's: the scale of the
+            // composition's effects (the thread's).
+            let scale = compose_ui::motion_duration_scale();
+            while self.should_run() {
+                let inner = self.clone();
+                with_frame_nanos(move |time| inner.on_frame(time as i64, scale)).await;
+            }
         }
     }
 }
@@ -1629,4 +1637,9 @@ impl<T: Animate> ToolingEntry for TransitionAnimationState<T> {
     fn animation_spec(&self) -> AnimationSpec {
         self.animation_spec.borrow().clone()
     }
+}
+
+/// Kotlin's `roundToLong`: half up.
+fn round_half_up(value: f64) -> i64 {
+    (value + 0.5).floor() as i64
 }

@@ -336,7 +336,8 @@ impl<T: Animate> Animatable<T> {
         let mut started = None;
         if start_time != AnimationConstants::UNSPECIFIED_TIME {
             started = Some(start_time);
-            let ended = self.frame(animation, start_time, start_time);
+            let scale = compose_ui::motion_duration_scale();
+            let ended = self.frame(animation, start_time, start_time, scale);
             block(self);
             if let Some(reason) = ended {
                 return AnimationResult {
@@ -350,6 +351,8 @@ impl<T: Animate> Animatable<T> {
         // stop (Compose's `callWithFrameNanos`, D901).
         let infinite = animation.is_infinite();
         loop {
+            // The scale where the task runs, before its frame, as Compose's.
+            let scale = compose_ui::motion_duration_scale();
             let time = if infinite {
                 compose_runtime::with_infinite_animation_frame_nanos(|time| time).await
             } else {
@@ -359,7 +362,7 @@ impl<T: Animate> Animatable<T> {
                 return interrupted();
             }
             let begin = *started.get_or_insert(time);
-            let ended = self.frame(animation, time, begin);
+            let ended = self.frame(animation, time, begin, scale);
             block(self);
             if let Some(reason) = ended {
                 return AnimationResult {
@@ -371,16 +374,19 @@ impl<T: Animate> Animatable<T> {
         }
     }
 
-    /// Sets the value and velocity at `frame_time`, as Compose's `doAnimationFrame`: how the
-    /// animation ended, if it did.
+    /// Sets the value and velocity at `frame_time`, as Compose's `doAnimationFrameWithScale`:
+    /// how the animation ended, if it did.
     fn frame(
         &self,
         animation: &dyn Animation<T>,
         frame_time: i64,
         start_time: i64,
+        scale: f32,
     ) -> Option<AnimationEndReason> {
         let inner = &self.inner;
-        let play_time = frame_time - start_time;
+        let play_time = crate::animation::scaled_play_time(frame_time - start_time, scale, || {
+            animation.duration_nanos()
+        });
         inner.last_frame_time.set(frame_time);
         let value = animation.value_from_nanos(play_time);
         inner.velocity.set(animation.velocity_vector_from_nanos(play_time));
