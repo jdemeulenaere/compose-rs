@@ -170,6 +170,12 @@ internal object ComposeRsNative {
         text: String,
     ): Boolean
 
+    /**
+     * Where the characters of virtual view [id] are, in the view: four floats each, not a number
+     * for one not shown. Null with no layout.
+     */
+    @JvmStatic external fun characterLocations(host: Long, id: Int, start: Int, length: Int): FloatArray?
+
     /** What the content's `remember_saveable`s hold, for the saved instance state, or null. */
     @JvmStatic external fun saveState(host: Long): ByteArray?
 

@@ -1120,6 +1120,12 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// Where the first text laid out at or below `node` is in the root: what its semantics'
+    /// `GetTextLayoutResult` is relative to.
+    pub fn text_layout_origin(&self, node: NodeId) -> Option<crate::unit::Offset> {
+        self.with_tree(|tree| tree.text_layout_origin(node))
+    }
+
     /// The semantics tree as live handles, as `RootForTest.semanticsOwner`.
     pub fn semantics_owner(&self) -> crate::semantics_node::SemanticsOwner {
         let key = self.with_tree(|tree| tree.focus_requests.tree_key.get());

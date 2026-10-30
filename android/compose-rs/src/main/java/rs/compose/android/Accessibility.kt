@@ -3,6 +3,7 @@ package rs.compose.android
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipboardManager
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
 import android.util.SparseArray
@@ -68,6 +69,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         val selectionStart: Int,
         val selectionEnd: Int,
         val granularities: Int,
+        val testTag: String,
         /** What a service may ask (`accessibility::action`'s codes), with their labels. */
         val actionCodes: IntArray,
         val actionLabels: Array<String>,
@@ -224,6 +226,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         val event = AccessibilityEvent.obtain(type)
         event.packageName = view.context.packageName
         event.isEnabled = true
+        markSensitive(event, id)
         // Never read out: a service's echo of a key typed in a password goes by this.
         event.isPassword = password
         event.className = when (kind) {
@@ -342,6 +345,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             val selectionStart = buffer.getInt()
             val selectionEnd = buffer.getInt()
             val granularities = buffer.get().toInt()
+            val testTag = buffer.readString()
             val actionCount = buffer.get().toInt() and 0xFF
             val actionCodes = IntArray(actionCount)
             val actionLabels = Array(actionCount) {
@@ -351,7 +355,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             val node = Node(
                 id, parent, bounds, flags, role, text, description, editableText, state, error,
                 paneTitle, range, scroll, before, drawingOrder, className, roleDescription,
-                spokenState, selectionStart, selectionEnd, granularities, actionCodes, actionLabels,
+                spokenState, selectionStart, selectionEnd, granularities, testTag, actionCodes,
+                actionLabels,
             )
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
@@ -365,19 +370,47 @@ internal class Accessibility(private val view: ComposeRsView) :
         return String(bytes, Charsets.UTF_8)
     }
 
+    /** Whether only an accessibility tool, as Compose's, may be told of [node]. */
+    private fun hiddenFromService(node: Node, fromTool: Boolean): Boolean =
+        node.flags and SENSITIVE != 0 && !fromTool
+
+    /** As `AccessibilityManagerCompat`: before API 34, nothing says, and all are. */
+    private fun isRequestFromAccessibilityTool(): Boolean =
+        Build.VERSION.SDK_INT < 34 || manager.isRequestFromAccessibilityTool
+
     override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
         refresh()
+        val fromTool = isRequestFromAccessibilityTool()
         if (virtualViewId == HOST_VIEW_ID) {
             val info = newNodeInfo(view, View.NO_ID)
             view.onInitializeAccessibilityNodeInfo(info)
-            for (root in roots) info.addChild(view, root)
+            for (root in roots) {
+                if (nodes.get(root)?.let { hiddenFromService(it, fromTool) } != true) info.addChild(view, root)
+            }
             return info
         }
         val node = nodes.get(virtualViewId) ?: return null
+        if (hiddenFromService(node, fromTool)) return null
         val info = newNodeInfo(view, virtualViewId)
         info.packageName = view.context.packageName
         info.setParent(view, if (node.parent == -1) View.NO_ID else node.parent)
-        for (child in node.children) info.addChild(view, child)
+        for (child in node.children) {
+            if (nodes.get(child)?.let { hiddenFromService(it, fromTool) } != true) info.addChild(view, child)
+        }
+        if (Build.VERSION.SDK_INT >= 34) info.setAccessibilityDataSensitive(node.flags and SENSITIVE != 0)
+        if (node.testTag.isNotEmpty() && node.flags and TAG_IS_RESOURCE_ID != 0) {
+            info.viewIdResourceName = node.testTag
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            val keys = ArrayList<String>(3)
+            keys.add(EXTRA_ID_KEY)
+            val text = if (node.flags and EDITABLE != 0) node.editableText else node.text
+            if (text.isNotEmpty() && node.flags and TEXT_LAID_OUT != 0) {
+                keys.add(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+            }
+            if (node.testTag.isNotEmpty()) keys.add(EXTRA_TEST_TAG_KEY)
+            info.availableExtraData = keys
+        }
         val location = IntArray(2)
         view.getLocationOnScreen(location)
         val screen = Rect(node.bounds)
@@ -464,10 +497,53 @@ internal class Accessibility(private val view: ComposeRsView) :
         return info
     }
 
+    /** What a service asks of [virtualViewId] beyond its info, as Compose's. */
+    @android.annotation.SuppressLint("NewApi")
+    override fun addExtraDataToAccessibilityNodeInfo(
+        virtualViewId: Int,
+        info: AccessibilityNodeInfo,
+        extraDataKey: String,
+        arguments: Bundle?,
+    ) {
+        refresh()
+        val node = nodes.get(virtualViewId) ?: return
+        when (extraDataKey) {
+            EXTRA_ID_KEY -> info.extras.putInt(extraDataKey, virtualViewId)
+            EXTRA_TEST_TAG_KEY -> if (arguments != null && node.testTag.isNotEmpty()) {
+                info.extras.putCharSequence(extraDataKey, node.testTag)
+            }
+            AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY -> {
+                if (arguments == null || node.flags and TEXT_LAID_OUT == 0) return
+                val start = arguments.getInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, -1)
+                val length = arguments.getInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, -1)
+                val text = if (node.flags and EDITABLE != 0) node.editableText else node.text
+                if (length <= 0 || start < 0 || start >= text.length) return
+                val floats = view.characterLocations(virtualViewId, start, length) ?: return
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
+                val rects = Array(length) { at ->
+                    val left = floats[at * 4]
+                    if (left.isNaN()) {
+                        null
+                    } else {
+                        RectF(
+                            left + origin[0],
+                            floats[at * 4 + 1] + origin[1],
+                            floats[at * 4 + 2] + origin[0],
+                            floats[at * 4 + 3] + origin[1],
+                        )
+                    }
+                }
+                info.extras.putParcelableArray(extraDataKey, rects)
+            }
+        }
+    }
+
     override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
         if (virtualViewId == HOST_VIEW_ID) return view.performAccessibilityAction(action, arguments)
         refresh()
         val node = nodes.get(virtualViewId) ?: return false
+        if (hiddenFromService(node, isRequestFromAccessibilityTool())) return false
         // As Compose's delegate: the accessibility focus moves to a disabled node, and a text is
         // read through; its other actions aren't among those it has (`actions_of`, D1255).
         return when (action) {
@@ -575,11 +651,19 @@ internal class Accessibility(private val view: ComposeRsView) :
         else -> CUSTOM_ACTION_BASE + code
     }
 
+    /** A sensitive node's event goes to accessibility tools only. */
+    private fun markSensitive(event: AccessibilityEvent, id: Int) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            event.setAccessibilityDataSensitive((nodes.get(id)?.flags ?: 0) and SENSITIVE != 0)
+        }
+    }
+
     private fun send(virtualViewId: Int, type: Int) {
         val parent = view.parent ?: return
         val event = AccessibilityEvent.obtain(type)
         event.setSource(view, virtualViewId)
         event.packageName = view.context.packageName
+        markSensitive(event, virtualViewId)
         parent.requestSendAccessibilityEvent(view, event)
     }
 
@@ -631,6 +715,13 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val LIVE_ASSERTIVE = 1 shl 19
         const val LONG_CLICKABLE = 1 shl 20
         const val IMPORTANT = 1 shl 21
+        const val SENSITIVE = 1 shl 22
+        const val TAG_IS_RESOURCE_ID = 1 shl 23
+        const val TEXT_LAID_OUT = 1 shl 24
+
+        // As Compose's delegate, which services and tests read by name.
+        const val EXTRA_ID_KEY = "androidx.compose.ui.semantics.id"
+        const val EXTRA_TEST_TAG_KEY = "androidx.compose.ui.semantics.testTag"
         const val CLICKABLE = 1
 
         // `accessibility::action`'s, those treated apart here.

@@ -1537,6 +1537,40 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performTextAction
     )
 }
 
+/// `ComposeRsNative.characterLocations(host, id, start, length)`: where virtual view `id`'s
+/// characters are (`accessibility::character_locations`), four floats each, not a number for one
+/// not shown; null with no layout.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_characterLocations<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    id: jint,
+    start: jint,
+    length: jint,
+) -> JFloatArray<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    let locations = crate::accessibility::find(tree, id).and_then(|node| {
+        crate::accessibility::character_locations(&mut host.ui, node, start, length)
+    });
+    with_env(&mut env, |env| {
+        let Some(locations) = locations else { return Ok(JFloatArray::default()) };
+        let floats: Vec<f32> = locations
+            .iter()
+            .flat_map(|rect| match rect {
+                Some(rect) => [rect.left, rect.top, rect.right, rect.bottom],
+                None => [f32::NAN; 4],
+            })
+            .collect();
+        let array = env.new_float_array(floats.len())?;
+        array.set_region(env, 0, &floats)?;
+        Ok::<_, jni::errors::Error>(array)
+    })
+    .unwrap_or_default()
+}
+
 /// `ComposeRsNative.nodeAt(host, x, y)`: the virtual view a touch there finds (`accessibility::
 /// node_at`), -1 for none.
 #[unsafe(no_mangle)]

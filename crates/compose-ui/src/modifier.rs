@@ -1498,6 +1498,11 @@ pub trait SemanticsModifierNode {
         None
     }
 
+    /// How far `text_layout_result`'s text is moved from the node (a field scrolled within it).
+    fn text_layout_offset(&self) -> crate::unit::Offset {
+        crate::unit::Offset::ZERO
+    }
+
     /// Whether its layout node merges its descendants' semantics, as
     /// `shouldMergeDescendantSemantics` (or `apply_semantics` setting
     /// `is_merging_semantics_of_descendants`).

@@ -727,6 +727,38 @@ impl UiTree {
         out.len() > before
     }
 
+    /// Where the first text laid out at or below `node` is in the root, as the origin of its
+    /// `TextLayoutResult`'s coordinates.
+    pub(crate) fn text_layout_origin(&mut self, node: NodeId) -> Option<Offset> {
+        let mut actions = Vec::new();
+        let mut requests = Requests::default();
+        let mut nodes = vec![node];
+        while let Some(node) = nodes.pop() {
+            for (index, delegate) in self.semantics_entries(node) {
+                let moved = self.with_event_context(
+                    node,
+                    index,
+                    delegate,
+                    &mut actions,
+                    &mut requests,
+                    None,
+                    false,
+                    |modifier_node, context| {
+                        let text = modifier_node.as_semantics()?;
+                        text.text_layout_result(context).map(|_| text.text_layout_offset())
+                    },
+                );
+                if let Some(moved) = moved.flatten() {
+                    let layer = self.node(node).layer_of(index);
+                    let origin = self.layer_origin(node, layer);
+                    return Some(Offset::new(origin.x - moved.x, origin.y - moved.y));
+                }
+            }
+            nodes.extend(self.node(node).children.iter().rev().map(|child| child.node));
+        }
+        None
+    }
+
     /// Sends committed text to the focused node and its ancestors until one takes it.
     pub fn dispatch_text(&mut self, text: &str) -> (bool, Vec<Action>) {
         self.dispatch_to_key_path(|handler, context| handler.on_text_input(text, context))

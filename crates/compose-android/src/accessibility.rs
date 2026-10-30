@@ -51,6 +51,12 @@ pub mod flag {
     pub const LONG_CLICKABLE: u32 = 1 << 20;
     /// It means something to a service, as `isImportantForAccessibility`.
     pub const IMPORTANT: u32 = 1 << 21;
+    /// Only an accessibility tool is told of it, as `isSensitiveData`.
+    pub const SENSITIVE: u32 = 1 << 22;
+    /// Its test tag is its resource id, as `testTagsAsResourceId`.
+    pub const TAG_IS_RESOURCE_ID: u32 = 1 << 23;
+    /// Its characters' places can be asked for (`character_locations`).
+    pub const TEXT_LAID_OUT: u32 = 1 << 24;
 }
 
 /// What a service reads that isn't the application's words, which `Accessibility.kt` finds in the
@@ -238,9 +244,24 @@ pub fn write_tree_with_cursor(
     out.bytes.clear();
     custom.assign(root);
     let before = compose_ui::traversal_before(root);
+    let tags_are_ids = tags_are_resource_ids(root, false);
     for (order, child) in in_written_order(root) {
-        write_node(child, -1, root.bounds, &before, custom, cursor, order, out);
+        let inherited = Inherited { clip: root.bounds, tags_are_ids };
+        write_node(child, -1, inherited, &before, custom, cursor, order, out);
     }
+}
+
+/// What a node gets from those around it.
+#[derive(Clone, Copy)]
+struct Inherited {
+    /// What the scrolling containers around it clip it to.
+    clip: Rect,
+    /// Whether its test tag is a resource id, unless it says otherwise.
+    tags_are_ids: bool,
+}
+
+fn tags_are_resource_ids(node: &SemanticsSnapshot, around: bool) -> bool {
+    node.unmerged_config().get(&P::TEST_TAGS_AS_RESOURCE_ID).copied().unwrap_or(around)
 }
 
 /// Children with their drawing order, as a node has them: by `traversal_index` for a merging
@@ -345,6 +366,12 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
     set(&mut flags, determinate_range(node).is_some(), flag::RANGE);
     set(&mut flags, config.contains(&P::HEADING), flag::HEADING);
     set(&mut flags, compose_ui::is_screen_reader_focusable(node), flag::SCREEN_READER_FOCUSABLE);
+    set(&mut flags, config.get(&P::IS_SENSITIVE_DATA) == Some(&true), flag::SENSITIVE);
+    set(
+        &mut flags,
+        node.unmerged_config().contains(&A::GET_TEXT_LAYOUT_RESULT),
+        flag::TEXT_LAID_OUT,
+    );
     match node.unmerged_config().get(&P::LIVE_REGION) {
         Some(compose_ui::LiveRegionMode::Polite) => flags |= flag::LIVE_POLITE,
         Some(compose_ui::LiveRegionMode::Assertive) => flags |= flag::LIVE_ASSERTIVE,
@@ -442,13 +469,13 @@ pub fn state_description_of(node: &SemanticsSnapshot) -> (u8, u8) {
 /// who a service reads it before (i32, -1 for none), its drawing order (u32), its class name (a
 /// length and UTF-8 bytes), its role description, its state and that state's percent (three
 /// `spoken`-code u8s), its selection (2 × i32, -1 for none) and how it's moved through (u8, 0:
-/// it isn't, `movement_granularities`), and its actions (a count: u8; each `action`'s u8 and a
-/// label).
+/// it isn't, `movement_granularities`), its test tag (a length and UTF-8 bytes), and its actions
+/// (a count: u8; each `action`'s u8 and a label).
 #[allow(clippy::too_many_arguments)]
 fn write_node(
     node: &SemanticsSnapshot,
     parent: i32,
-    clip: Rect,
+    around: Inherited,
     before: &HashMap<i32, i32>,
     custom: &KeptCustomActions,
     cursor: &TextCursor,
@@ -457,7 +484,9 @@ fn write_node(
 ) {
     let config = &node.config;
     let id = virtual_id(node);
+    let clip = around.clip;
     let visible = clipped(node.bounds, clip);
+    let tags_are_ids = tags_are_resource_ids(node, around.tags_are_ids);
     let bounds = visible.unwrap_or(node.bounds);
     let scroll = scroll_range(node);
     let mut flags = flags(node);
@@ -466,6 +495,9 @@ fn write_node(
     }
     if node.rtl {
         flags |= flag::RTL;
+    }
+    if tags_are_ids {
+        flags |= flag::TAG_IS_RESOURCE_ID;
     }
     if let Some((range, horizontal)) = scroll {
         flags |= flag::SCROLL;
@@ -527,6 +559,7 @@ fn write_node(
     out.u32(selection_start as u32);
     out.u32(selection_end as u32);
     out.u8(movement_granularities(node) as u8);
+    write_string(out, text_of(node.unmerged_config().get(&P::TEST_TAG)));
     let actions = actions_of(node, custom);
     out.u8(actions.len() as u8);
     for (action, label) in &actions {
@@ -536,15 +569,17 @@ fn write_node(
     // A scrolling container clips what's in it.
     let inner =
         if scroll.is_some() { visible.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
+    let inherited = Inherited { clip: inner, tags_are_ids };
     for (order, child) in in_written_order(node) {
-        write_node(child, id, inner, before, custom, cursor, order, out);
+        write_node(child, id, inherited, before, custom, cursor, order, out);
     }
 }
 
 /// The class name and role description a service reads, from the node's own configuration, as
 /// Compose's delegate: a field's or a text's, a role's where nothing's below it (an image's only
-/// if it's what's focused on), a scrolling container's so a service scrolls it.
-pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, u8) {
+/// if it's what's focused on), a scrolling container's so a service scrolls it; last, what the
+/// application says it is (`accessibility_class_name`).
+pub fn class_and_role(node: &SemanticsSnapshot) -> (&str, u8) {
     let own = node.unmerged_config();
     let mut class = "android.view.View";
     let mut role_description = spoken::NONE;
@@ -583,6 +618,9 @@ pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, u8) {
         if own.contains(&P::VERTICAL_SCROLL_AXIS_RANGE) {
             class = "android.widget.ScrollView";
         }
+    }
+    if let Some(named) = own.get(&P::ACCESSIBILITY_CLASS_NAME) {
+        class = named.as_str();
     }
     (class, role_description)
 }
@@ -1312,6 +1350,39 @@ pub fn perform_text_action(
         }
         _ => false,
     }
+}
+
+/// Where `node`'s characters are, as Compose's `getBoundingBoxes`: `length` of them from `start`, in
+/// UTF-16 units; in the view's pixels, each cut to what's shown of the node and `None` if none of it
+/// is or it's past the text. `None` without a layout.
+pub fn character_locations(
+    ui: &mut UiHost,
+    node: &SemanticsSnapshot,
+    start: i32,
+    length: i32,
+) -> Option<Vec<Option<Rect>>> {
+    let layout = text_layout_of(ui, node)?;
+    let origin = ui.text_layout_origin(node.id)?;
+    let text = layout.layout_input.text.text().clone();
+    let units = utf16_length(text.as_str());
+    Some(
+        (0..length)
+            .map(|at| {
+                let unit = start + at;
+                if unit >= units {
+                    return None;
+                }
+                let bounds = layout.get_bounding_box(byte_offset(text.as_str(), unit as usize));
+                let in_root = Rect::new(
+                    bounds.left + origin.x,
+                    bounds.top + origin.y,
+                    bounds.right + origin.x,
+                    bounds.bottom + origin.y,
+                );
+                clipped(in_root, node.bounds)
+            })
+            .collect(),
+    )
 }
 
 /// `node`'s text's layout, if it has one.

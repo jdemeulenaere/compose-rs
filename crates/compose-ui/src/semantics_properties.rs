@@ -786,6 +786,13 @@ pub mod SemanticsProperties {
         SemanticsPropertyKey::new("Focused").for_accessibility();
     pub static IS_TRAVERSAL_GROUP: SemanticsPropertyKey<bool> =
         SemanticsPropertyKey::new("IsTraversalGroup");
+    /// As `SemanticsPropertiesAndroid.TestTagsAsResourceId`: for what's below it too.
+    pub static TEST_TAGS_AS_RESOURCE_ID: SemanticsPropertyKey<bool> =
+        SemanticsPropertyKey::with_merge_policy("TestTagsAsResourceId", parent_only);
+    /// As `SemanticsPropertiesAndroid.AccessibilityClassName`.
+    pub static ACCESSIBILITY_CLASS_NAME: SemanticsPropertyKey<SharedString> =
+        SemanticsPropertyKey::with_merge_policy("AccessibilityClassName", parent_only)
+            .for_accessibility();
     pub static IS_SENSITIVE_DATA: SemanticsPropertyKey<bool> =
         SemanticsPropertyKey::new("IsSensitiveData");
     pub static HIDE_FROM_ACCESSIBILITY: SemanticsPropertyKey<()> =
@@ -1133,6 +1140,16 @@ impl SemanticsConfiguration {
 
     pub fn set_is_traversal_group(&mut self, group: bool) {
         self.set(&SemanticsProperties::IS_TRAVERSAL_GROUP, group);
+    }
+
+    /// As `testTagsAsResourceId`: test tags here and below are Android's resource ids.
+    pub fn set_test_tags_as_resource_id(&mut self, as_resource_id: bool) {
+        self.set(&SemanticsProperties::TEST_TAGS_AS_RESOURCE_ID, as_resource_id);
+    }
+
+    /// As `accessibilityClassName`: what a service is told it is, whatever else it says.
+    pub fn set_accessibility_class_name(&mut self, class_name: impl Into<SharedString>) {
+        self.set(&SemanticsProperties::ACCESSIBILITY_CLASS_NAME, class_name.into());
     }
 
     pub fn set_is_sensitive_data(&mut self, sensitive: bool) {

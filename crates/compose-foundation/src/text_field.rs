@@ -1804,6 +1804,10 @@ impl SemanticsModifierNode for TextFieldNode {
         }
     }
 
+    fn text_layout_offset(&self) -> Offset {
+        self.scroll
+    }
+
     fn text_layout_result(
         &mut self,
         context: &mut EventContext<'_>,

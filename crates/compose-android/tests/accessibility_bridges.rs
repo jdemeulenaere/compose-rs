@@ -10,8 +10,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_android::accessibility::{
-    Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, class_and_role,
-    flag, perform_action, spoken, write_tree,
+    Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, character_locations,
+    class_and_role, flag, perform_action, spoken, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -85,19 +85,20 @@ fn a_nodes_class_and_role_come_from_its_own_configuration() {
     });
     let of = |tag| {
         let node = tagged(&host, tag);
-        class_and_role(&node)
+        let (class, role) = class_and_role(&node);
+        (class.to_string(), role)
     };
-    assert_eq!(of("button"), ("android.widget.Button", spoken::NONE));
-    assert_eq!(of("checkbox"), ("android.widget.CheckBox", spoken::NONE));
-    assert_eq!(of("radio"), ("android.widget.RadioButton", spoken::NONE));
-    assert_eq!(of("image"), ("android.widget.ImageView", spoken::NONE));
-    assert_eq!(of("dropdown"), ("android.widget.Spinner", spoken::NONE));
-    assert_eq!(of("picker"), ("android.widget.NumberPicker", spoken::NONE));
-    assert_eq!(of("tab"), ("android.view.View", spoken::TAB));
-    assert_eq!(of("switch"), ("android.view.View", spoken::SWITCH));
-    assert_eq!(of("over a child"), ("android.view.View", spoken::NONE));
-    assert_eq!(of("text"), ("android.widget.TextView", spoken::NONE));
-    assert_eq!(of("plain"), ("android.view.View", spoken::NONE));
+    assert_eq!(of("button"), ("android.widget.Button".to_string(), spoken::NONE));
+    assert_eq!(of("checkbox"), ("android.widget.CheckBox".to_string(), spoken::NONE));
+    assert_eq!(of("radio"), ("android.widget.RadioButton".to_string(), spoken::NONE));
+    assert_eq!(of("image"), ("android.widget.ImageView".to_string(), spoken::NONE));
+    assert_eq!(of("dropdown"), ("android.widget.Spinner".to_string(), spoken::NONE));
+    assert_eq!(of("picker"), ("android.widget.NumberPicker".to_string(), spoken::NONE));
+    assert_eq!(of("tab"), ("android.view.View".to_string(), spoken::TAB));
+    assert_eq!(of("switch"), ("android.view.View".to_string(), spoken::SWITCH));
+    assert_eq!(of("over a child"), ("android.view.View".to_string(), spoken::NONE));
+    assert_eq!(of("text"), ("android.widget.TextView".to_string(), spoken::NONE));
+    assert_eq!(of("plain"), ("android.view.View".to_string(), spoken::NONE));
 }
 
 // ---- Actions ------------------------------------------------------------------------------------
@@ -251,6 +252,7 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
         at += 4;
         skip_string(&mut at);
         at += 12;
+        skip_string(&mut at);
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -1296,4 +1298,143 @@ fn the_kotlin_says_what_rust_chose() {
     ] {
         assert!(kotlin.contains(line), "Accessibility.kt lacks {line:?}");
     }
+}
+
+// ---- What a node says of itself beyond its info (D1652) -----------------------------------------
+
+/// Record flags by test tag: what `write_tree` wrote for each tagged node.
+fn written_flags(host: &UiHost, tags: &[&str]) -> Vec<u32> {
+    let root = host.accessibility_tree();
+    let mut out = Writer::default();
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    let records = records(&out.bytes);
+    tags.iter()
+        .map(|tag| {
+            let id = by_tag(&root, tag).expect("tagged").semantics_id;
+            records.iter().find(|record| record.0 == id).expect("written").1
+        })
+        .collect()
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testTestTagsAsResourceId
+#[test]
+fn test_tags_are_resource_ids_where_the_nearest_around_says_so() {
+    let host = host_of(|| {
+        Column!({
+            Box!(modifier = Modifier.size(10.dp()).test_tag("none"));
+            Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(true)), {
+                Box!(modifier = Modifier.size(10.dp()).test_tag("on"));
+            });
+            Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(false)), {
+                Box!(modifier = Modifier.size(10.dp()).test_tag("off"));
+            });
+            Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(true)), {
+                Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(false)), {
+                    Box!(modifier = Modifier.size(10.dp()).test_tag("off inside on"));
+                });
+            });
+            Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(false)), {
+                Box!(modifier = Modifier.semantics(|it| it.set_test_tags_as_resource_id(true)), {
+                    Box!(modifier = Modifier.size(10.dp()).test_tag("on inside off"));
+                });
+            });
+        });
+    });
+    let tags = ["none", "on", "off", "off inside on", "on inside off"];
+    let ids: Vec<bool> = written_flags(&host, &tags)
+        .into_iter()
+        .map(|flags| flags & flag::TAG_IS_RESOURCE_ID != 0)
+        .collect();
+    assert_eq!(ids, [false, true, false, false, true]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testCreateAccessibilityNodeInfo_visibleToToolIfSensitiveData, testCreateAccessibilityNodeInfo_visibleToNontoolIfNotSensitiveData, testCreateAccessibilityNodeInfo_hiddenFromNontoolIfSensitiveData
+#[test]
+fn sensitive_data_says_so_in_its_record() {
+    let host = host_of(|| {
+        Column!({
+            BasicText!(
+                "secret",
+                modifier =
+                    Modifier.test_tag("sensitive").semantics(|it| it.set_is_sensitive_data(true))
+            );
+            BasicText!("plain", modifier = Modifier.test_tag("plain"));
+            // What's merged in makes it all sensitive, as Compose reads its merged configuration.
+            Box!(modifier = Modifier.test_tag("merged").clickable(|| {}), {
+                BasicText!(
+                    "secret",
+                    modifier = Modifier.semantics(|it| it.set_is_sensitive_data(true))
+                );
+            });
+        });
+    });
+    let flags = written_flags(&host, &["sensitive", "plain", "merged"]);
+    let sensitive: Vec<bool> = flags.into_iter().map(|it| it & flag::SENSITIVE != 0).collect();
+    assert_eq!(sensitive, [true, false, true]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, className_overwrittenBy_explicitaccessibilityClassNameProperty, explicitaccessibilityClassNameProperty_setsClassName
+#[test]
+fn the_class_the_application_names_wins() {
+    let host = host_of(|| {
+        Box!(
+            modifier = Modifier
+                .size(10.dp())
+                .test_tag("named")
+                .clickable_with(
+                    ClickableOptions { role: Some(Role::Button), ..Default::default() },
+                    || {},
+                )
+                .semantics(|it| it.set_accessibility_class_name("com.example.Thing"))
+        );
+    });
+    assert_eq!(class_and_role(&tagged(&host, "named")).0, "com.example.Thing");
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testCharacterLocations_withSemanticsBeforePadding_reportsCorrectBoundingBoxes
+#[test]
+fn characters_are_found_inside_what_is_around_their_text() {
+    let mut host = host_of(|| {
+        BasicText!("text", modifier = Modifier.semantics(|_| {}).padding(24.dp()).test_tag("text"));
+    });
+    let node = tagged(&host, "text");
+    let places = character_locations(&mut host, &node, 0, 1).expect("laid out");
+    let place = places[0].expect("shown");
+    assert_eq!((place.left, place.top), (24.0, 24.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAddExtraDataToAccessibilityNodeInfo_notMerged
+#[test]
+fn a_fields_characters_are_found_and_those_past_it_are_not() {
+    let mut host = host_of(|| {
+        BasicTextField!(String::from("texy"), |_| {}, modifier = Modifier.test_tag("field"));
+    });
+    let node = tagged(&host, "field");
+    assert_ne!(flags_of(&node) & flag::TEXT_LAID_OUT, 0);
+    let places = character_locations(&mut host, &node, 3, 2).expect("laid out");
+    assert!(places[0].is_some());
+    assert!(places[1].is_none(), "past the text");
+    let first = character_locations(&mut host, &node, 0, 1).expect("laid out")[0].expect("shown");
+    let last = places[0].expect("shown");
+    assert!(first.left < last.left);
+}
+
+#[test]
+fn nothing_laid_out_has_no_character_locations() {
+    let mut host = host_of(|| {
+        Box!(modifier = Modifier.size(10.dp()).test_tag("box").semantics(|_| {}));
+    });
+    let node = tagged(&host, "box");
+    assert_eq!(flags_of(&node) & flag::TEXT_LAID_OUT, 0);
+    assert!(character_locations(&mut host, &node, 0, 1).is_none());
+}
+
+/// A node's flags, as written: found in the record of the tree it's in.
+fn flags_of(node: &SemanticsSnapshot) -> u32 {
+    let mut out = Writer::default();
+    let mut wrapped = node.clone();
+    wrapped.children.clear();
+    let root = SemanticsSnapshot { children: vec![wrapped], ..node.clone() };
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    records(&out.bytes)[0].1
 }
