@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod annotated_string;
 mod annotated_string_builder;
+mod coordinates_in_passes;
 mod delegating_nodes;
 mod dp_offset;
 mod focus_tests;
@@ -20,6 +21,7 @@ mod node_invalidation;
 mod node_locals;
 mod node_traversal;
 mod observer_nodes;
+mod only_unsafe_module;
 mod paragraph;
 mod paragraph_style;
 mod parent_data;

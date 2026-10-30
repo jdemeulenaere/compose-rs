@@ -171,8 +171,7 @@ impl Matrix {
         }
     }
 
-    /// Inverts it, as `invert()`: all zeros if it can't be (Compose's leaves it as it is, its
-    /// `isIdentity` true of no such matrix, and maps what follows through nothing useful).
+    /// Inverts it, as `invert()`: a singular one stays as it is.
     pub fn invert(&mut self) {
         let m = self.values;
         let (a00, a01, a02, a03) = (m[0], m[1], m[2], m[3]);
@@ -193,7 +192,6 @@ impl Matrix {
         let b11 = a22 * a33 - a23 * a32;
         let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
         if det == 0.0 {
-            self.values = [0.0; 16];
             return;
         }
         let i = 1.0 / det;

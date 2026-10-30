@@ -484,12 +484,21 @@ impl UiTree {
             self.mark_entry_detached(entry.id, &mut state);
             self.forget_entry_reads(entry.id, state);
             self.release_delegates(&mut *entry.node);
-            let mut context = ReleaseContext {
-                text_measurer: &self.text_measurer,
-                held_paragraphs: &mut self.held_paragraphs,
-            };
-            entry.node.on_release(&mut context);
+            self.release_node(entry.node);
         }
+    }
+
+    /// Tells `node`, out of the tree, it's released, and drops it: what it runs may ask where
+    /// something is, the only part of the tree in hand being the text measurer.
+    pub(crate) fn release_node(&mut self, mut node: Box<dyn crate::modifier::ModifierNode>) {
+        let access = TreeAccess::new(&mut *self);
+        let _open = access.open();
+        let mut context = ReleaseContext {
+            text_measurer: &access.text_measurer,
+            held_paragraphs: &access.held_paragraphs,
+        };
+        node.on_release(&mut context);
+        drop(node);
     }
 
     /// Detaches and releases now the entries chain changes of the pass removed from the nodes of

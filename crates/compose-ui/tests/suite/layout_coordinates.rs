@@ -578,6 +578,39 @@ fn a_node_told_it_was_placed_or_positioned_asks_there() {
 
 // ---- A node's own -------------------------------------------------------------------------------
 
+/// In its `on_detach`, a node is still attached, as Compose's: its coordinates answer.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatableNode.kt, requireLayoutCoordinates
+#[test]
+fn a_node_detaching_has_coordinates() {
+    struct Detaching(Rc<Cell<bool>>);
+    impl ModifierNode for Detaching {
+        fn on_detach(&mut self, context: &mut NodeContext<'_>) {
+            context.require_layout_coordinates();
+            self.0.set(true);
+        }
+    }
+    struct DetachingElement(Rc<Cell<bool>>);
+    impl ModifierNodeElement for DetachingElement {
+        type Node = Detaching;
+        fn create(&self) -> Detaching {
+            Detaching(self.0.clone())
+        }
+        fn update(&self, _: &mut Detaching) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    let on = mutable_state_of(true);
+    let told_it = Rc::new(Cell::new(false));
+    let (t, o) = (told_it.clone(), on.handle());
+    let mut host = host(move || {
+        Leaf(if o.get() { sized(1).then_custom(DetachingElement(t.clone())) } else { sized(1) });
+    });
+    on.set(false);
+    host.frame();
+    assert!(told_it.get());
+}
+
 #[derive(Default)]
 struct Coordinates {
     handle: Cell<Option<NodeHandle>>,
@@ -1226,6 +1259,324 @@ fn a_child_of_a_parent_no_longer_placed_doesn_t_run_its_block() {
     place.set(false);
     host.frame();
     assert_eq!(blocks.get(), 0);
+}
+
+// ---- Popups ---------------------------------------------------------------------------------------
+
+/// What's in a popup: the root is the popup's, the window carries where it's placed.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/layout/LayoutCoordinates.kt, positionInRoot, boundsInRoot
+#[test]
+fn in_a_popup_the_root_is_its_own_and_the_window_carries_where_it_is() {
+    let kept = told();
+    let k = kept.clone();
+    let _host = host(move || {
+        let k = k.clone();
+        Popup!(offset = IntOffset::new(10, 10), {
+            Leaf(keep(&k).then(sized(5)));
+        });
+    });
+    let coordinates = of(&kept);
+    assert_eq!(coordinates.position_in_root(), Offset::ZERO);
+    assert_eq!(coordinates.bounds_in_root(), Rect::new(0.0, 0.0, 5.0, 5.0));
+    assert_eq!(coordinates.position_in_window(), Offset::new(10.0, 10.0));
+    assert_eq!(coordinates.window_to_local(Offset::new(10.0, 10.0)), Offset::ZERO);
+    let root = coordinates.find_root_coordinates();
+    assert_eq!(root.parent_layout_coordinates(), None, "a popup's content is a root");
+    assert_eq!(root.position_in_parent(), Offset::ZERO);
+}
+
+/// A reader in a popup hears of its anchor's move in the same layout: the popup's placed after
+/// the placement pass.
+#[test]
+fn a_reader_in_a_popup_sees_its_anchor_move_at_once() {
+    let offset = mutable_state_of((5, 5));
+    let at = Rc::new(Cell::new(Offset::ZERO));
+    let runs = Rc::new(Cell::new(0));
+    let (a, r, o) = (at.clone(), runs.clone(), offset.handle());
+    let mut host = host(move || {
+        let (a, r) = (a.clone(), r.clone());
+        Stack!(modifier = moved_by(o).then(sized(10)), {
+            let (a, r) = (a.clone(), r.clone());
+            Popup!({
+                let a = a.clone();
+                Leaf(reading(&r, move |coordinates| a.set(coordinates.position_in_window())));
+            });
+        });
+    });
+    offset.set((12, 5));
+    host.frame();
+    assert_eq!(at.get(), Offset::new(12.0, 5.0));
+}
+
+// ---- Readers, past the root's position -------------------------------------------------------------
+
+/// A parent and grandparent moving by opposite amounts: its position in its parent changed, its
+/// position in the root didn't.
+#[test]
+fn a_block_asking_its_position_in_its_parent_hears_opposite_moves() {
+    let by = mutable_state_of(0);
+    let at = Rc::new(Cell::new(Offset::new(-1.0, -1.0)));
+    let runs = Rc::new(Cell::new(0));
+    let (a, r, b) = (at.clone(), runs.clone(), by.handle());
+    let backwards = measure_policy(move |scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        scope.place(&placeable, -b.get(), 0);
+        scope.layout(placeable.width, placeable.height)
+    });
+    let mut host = host(move || {
+        let (a, r) = (a.clone(), r.clone());
+        Layout(
+            moved_by_x(b),
+            backwards.clone(),
+            callback(move || {
+                let a = a.clone();
+                Leaf(reading(&r, move |coordinates| a.set(coordinates.position_in_parent())));
+            }),
+        );
+    });
+    by.set(5);
+    host.frame();
+    assert_eq!(at.get(), Offset::new(-5.0, 0.0));
+}
+
+/// Asking where something else is relative to itself is asking where it is.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, localPositionOf's `nodeCoordinator.onCoordinatesUsed()`
+#[test]
+fn a_block_asking_from_its_coordinates_as_the_source_runs_again() {
+    let (offset, again) = (mutable_state_of((0, 0)), mutable_state_of(0));
+    let other = told();
+    let runs = Rc::new(Cell::new(0));
+    let (r, o, k, a) = (runs.clone(), offset.handle(), other.clone(), again.handle());
+    let mut host = host(move || {
+        let (r, k) = (r.clone(), k.clone());
+        Stack!(modifier = keep(&k), {
+            let (r, k) = (r.clone(), k.clone());
+            Stack!(modifier = moved_by(o), {
+                let k = k.clone();
+                Leaf(reading(&r, move |coordinates| {
+                    a.get();
+                    if let Some(other) = k.get() {
+                        other.local_position_of(&coordinates, Offset::ZERO);
+                    }
+                }));
+            });
+        });
+    });
+    // Run once more, with `other` known: now it asks.
+    again.set(1);
+    host.frame();
+    let asked = runs.get();
+    offset.set((2, 2));
+    host.frame();
+    assert_eq!(runs.get(), asked + 1);
+}
+
+// ---- Bounding boxes: the clips on the way ----------------------------------------------------------
+
+/// Siblings: their common parent's clip isn't on the way.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, localBoundingBoxOf
+#[test]
+fn a_common_parent_s_clip_doesn_t_clip_a_sibling() {
+    let (first, second) = (told(), told());
+    let (f, s) = (first.clone(), second.clone());
+    let _host = host(move || {
+        let (f, s) = (f.clone(), s.clone());
+        Stack!(modifier = sized(10).clip_to_bounds(), {
+            Leaf(keep(&f).then(sized(5)));
+            Leaf(moved(8, 0).then(keep(&s)).then(sized(5)));
+        });
+    });
+    let (first, second) = (of(&first), of(&second));
+    assert_eq!(first.local_bounding_box_of(&second, true), Rect::new(8.0, 0.0, 13.0, 5.0));
+}
+
+/// On the way down too, as `fromParentRect`.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentRect
+#[test]
+fn a_clip_on_the_way_down_clips() {
+    let (outer, inner) = (told(), told());
+    let (o, i) = (outer.clone(), inner.clone());
+    let _host = host(move || {
+        let (o, i) = (o.clone(), i.clone());
+        Stack!(modifier = keep(&o).then(sized(30)), {
+            let i = i.clone();
+            Stack!(modifier = moved(10, 0).then(sized(10)).clip_to_bounds(), {
+                Leaf(keep(&i).then(sized(5)));
+            });
+        });
+    });
+    let (outer, inner) = (of(&outer), of(&inner));
+    // Its 30 × 30, in the child's coordinates, within the 10 × 10 clip around the child.
+    assert_eq!(inner.local_bounding_box_of(&outer, true), Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(inner.local_bounding_box_of(&outer, false), Rect::new(-10.0, 0.0, 20.0, 30.0));
+}
+
+// ---- Matrices and what can't be undone --------------------------------------------------------------
+
+// Compose: compose/ui/ui-graphics/src/commonMain/kotlin/androidx/compose/ui/graphics/Matrix.kt, invert
+#[test]
+fn inverting_a_singular_matrix_leaves_it_as_it_is() {
+    let mut matrix = Matrix::scaling(0.0, 2.0);
+    let before = matrix;
+    matrix.invert();
+    assert_eq!(matrix, before);
+    let mut matrix = Matrix::translation(3.0, 4.0);
+    matrix.post_concat(&Matrix::scaling(2.0, 2.0));
+    matrix.invert();
+    assert_eq!(matrix.map(Offset::new(6.0, 8.0)), Offset::ZERO);
+}
+
+/// A layer that can't be undone: infinite for a point, nothing at all for a matrix.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/OwnedLayer.kt, mapOffset's `Offset.Infinite`
+#[test]
+fn a_scale_of_nothing_answers_infinity_and_a_matrix_leaves_it_out() {
+    let (parent, child) = (told(), told());
+    let (p, c) = (parent.clone(), child.clone());
+    let _host = host(move || {
+        let c = c.clone();
+        Stack!(modifier = keep(&p), {
+            Leaf(
+                moved(1, 0)
+                    .then(sized(10))
+                    .graphics_layer(|layer| layer.scale_x = 0.0)
+                    .then(keep(&c)),
+            );
+        });
+    });
+    let (parent, child) = (of(&parent), of(&child));
+    let at = child.local_position_of(&parent, Offset::ZERO);
+    assert!(at.x.is_infinite() && at.y.is_infinite(), "{at:?}");
+    let mut matrix = Matrix::new();
+    child.transform_from(&parent, &mut matrix);
+    assert_eq!(matrix.map(Offset::ZERO), Offset::new(-1.0, 0.0));
+}
+
+/// Through a rotation, up and through the window.
+// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, testPxLocalToGlobalUsesOwnerPosition
+#[test]
+fn a_rotation_is_on_the_way_to_the_root() {
+    let child = told();
+    let c = child.clone();
+    let _host = host(move || {
+        Leaf(sized(10).graphics_layer(|layer| layer.rotation_z = 90.0).then(keep(&c)));
+    });
+    let child = of(&child);
+    assert!(close(child.local_to_root(Offset::ZERO), Offset::new(10.0, 0.0)));
+    assert!(close(child.window_to_local(Offset::new(10.0, 0.0)), Offset::ZERO));
+}
+
+// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, nodeCoordinatorParentCoordinates
+#[test]
+fn parent_coordinates_are_the_nearest_outside() {
+    let (outer, middle, inner) = (told(), told(), told());
+    let (o, m, i) = (outer.clone(), middle.clone(), inner.clone());
+    let _host = host(move || {
+        Leaf(keep(&o).then(padded(1)).then(keep(&m)).then(padded(2)).then(keep(&i)).then(sized(3)));
+    });
+    let (outer, middle, inner) = (of(&outer), of(&middle), of(&inner));
+    assert_eq!(inner.parent_coordinates(), Some(middle));
+    assert_eq!(middle.parent_coordinates(), Some(outer));
+    assert_eq!(outer.parent_coordinates(), outer.parent_layout_coordinates());
+    assert_eq!(outer.size(), IntSize::new(9, 9));
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/layout/LayoutCoordinates.kt, findRootCoordinates
+#[test]
+fn the_root_s_coordinates_are_its_outermost() {
+    let child = told();
+    let c = child.clone();
+    let _host = host(move || {
+        let c = c.clone();
+        Popup!(offset = IntOffset::new(1, 1), {
+            Leaf(keep(&c).then(sized(5)));
+        });
+    });
+    let child = of(&child);
+    let root = child.find_root_coordinates();
+    assert_eq!(root.parent_coordinates(), None, "nothing outside it");
+    // The host's root has no modifiers: an overlay's node, with one, has its outermost.
+    let inner = told();
+    let i = inner.clone();
+    let _host = support::host(move || {
+        let i = i.clone();
+        Stack!(modifier = Modifier.overlay(Rc::new(WindowPosition), false).then(padded(1)), {
+            Leaf(keep(&i).then(sized(5)));
+        });
+    });
+    assert_eq!(of(&inner).find_root_coordinates().size(), IntSize::new(7, 7));
+}
+
+/// A motion frame placing a modifier's content, on the way in as on the way out.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, ancestorToLocal's `includeMotionFrameOfReference`
+#[test]
+fn a_motion_frame_inside_a_node_is_left_out_both_ways() {
+    let (outer, inner) = (told(), told());
+    let (o, i) = (outer.clone(), inner.clone());
+    let _host = host(move || {
+        let scrolled = Modifier.layout(|scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            scope.with_motion_frame_of_reference_placement(|scope| {
+                scope.place(&placeable, 0, -50);
+            });
+            scope.layout(placeable.width, placeable.height)
+        });
+        Leaf(keep(&o).then(scrolled).then(keep(&i)).then(sized(5)));
+    });
+    let (outer, inner) = (of(&outer), of(&inner));
+    assert_eq!(outer.local_position_of_with(&inner, Offset::ZERO, false), Offset::ZERO);
+    assert_eq!(inner.local_position_of_with(&outer, Offset::ZERO, false), Offset::ZERO);
+    assert_eq!(inner.local_position_of_with(&outer, Offset::ZERO, true), Offset::new(0.0, 50.0));
+    assert!(inner.introduces_motion_frame_of_reference());
+    assert!(!outer.introduces_motion_frame_of_reference());
+}
+
+/// Only the coordinator a layer's placing places: not a graphics layer's inside it.
+#[test]
+fn a_motion_frame_is_of_one_coordinator() {
+    let (first, second) = (told(), told());
+    let (f, s) = (first.clone(), second.clone());
+    let _host = host(move || {
+        let (f, s) = (f.clone(), s.clone());
+        Layout(
+            Modifier,
+            measure_policy(|scope, measurables, constraints| {
+                let placeable = scope.measure(measurables[0], constraints);
+                scope.with_motion_frame_of_reference_placement(|scope| {
+                    scope.place(&placeable, 0, 3);
+                });
+                scope.layout(placeable.width, placeable.height)
+            }),
+            callback(move || {
+                Leaf(
+                    keep(&f)
+                        .graphics_layer(|layer| layer.alpha = 0.5)
+                        .then(keep(&s))
+                        .then(sized(5)),
+                );
+            }),
+        );
+    });
+    assert!(of(&first).introduces_motion_frame_of_reference());
+    assert!(!of(&second).introduces_motion_frame_of_reference());
+}
+
+// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, nodeCoordinatorSameWithReplacementModifier
+#[test]
+fn a_layer_replaced_by_one_of_its_kind_keeps_its_coordinates() {
+    let which = mutable_state_of(1.0f32);
+    let (kept, w) = (told(), which.handle());
+    let k = kept.clone();
+    let mut host = host(move || {
+        let alpha = w.get();
+        Leaf(
+            Modifier.graphics_layer(move |layer| layer.alpha = alpha).then(keep(&k)).then(sized(5)),
+        );
+    });
+    let before = of(&kept).parent_coordinates();
+    which.set(0.5);
+    host.frame();
+    assert_eq!(of(&kept).parent_coordinates(), before);
+    assert!(before.is_some_and(|coordinates| coordinates.is_attached()));
 }
 
 // ---- Motion frames of reference ------------------------------------------------------------------

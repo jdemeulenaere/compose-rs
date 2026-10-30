@@ -15,6 +15,7 @@ use crate::modifier::ModifierNode;
 use crate::node_chain::{EntryId, NodeKinds, entry_state};
 use crate::node_context::NodeContext;
 use crate::tree::{NodeId, UiTree};
+use crate::tree_access::TreeRef;
 
 /// A key shared by the nodes a traversal looks for, as `TraversableNode.traverseKey`. Compared
 /// by address, so declare one as a `static` (a `const` would be a new one at each use).
@@ -150,7 +151,7 @@ impl NodeContext<'_> {
         f: &mut Visitor<'_>,
     ) -> ControlFlow<()> {
         let own = self.tree.node(node).chain[index].own;
-        self.tree.with_entry(node, index, |modifier_node, context| {
+        self.tree.enter().with_entry(node, index, |modifier_node, context| {
             dispatch_with_context(modifier_node, own, kinds, include_delegates, context, f)
         })
     }
@@ -285,36 +286,42 @@ impl NodeContext<'_> {
         f: &mut dyn FnMut(&mut dyn ModifierNode, &mut NodeContext<'_>) -> TraverseDescendantsAction,
     ) {
         let branches = self.first_branches(z_order);
-        self.tree.walk_subtree_if(branches, kinds, z_order, f);
+        self.tree.enter().walk_subtree_if(branches, kinds, z_order, f);
     }
 
     /// Finds the nearest traversable node above this one with `key`, as
     /// `findNearestAncestor(key)`: nodes before it in its chain and its ancestors', delegates
-    /// included. A node's own running code never finds it: it's out of its chain.
+    /// included. A node's own running code never finds it: it's out of its chain. What's in hand
+    /// is part of the tree: coordinates asked meanwhile find it busy.
     pub fn find_nearest_ancestor_with_key(
         &mut self,
         key: &'static TraverseKey,
-    ) -> Option<&mut dyn TraversableNode> {
-        let found = self.find_ancestor(&mut |node| {
+    ) -> Option<TreeRef<'_, dyn TraversableNode>> {
+        let (node, index, delegate) = self.find_ancestor(&mut |node| {
             node.as_traversable().is_some_and(|node| node.traverse_key() == key)
         })?;
-        found.as_traversable()
+        self.tree.hold(|tree| {
+            tree.get_mut(node)?.chain.get_mut(index)?.resolve(delegate)?.as_traversable()
+        })
     }
 
     /// Finds the nearest node above this one of type `T` and this node's key, as
     /// `findNearestAncestor()`: nodes before it in its chain and its ancestors', delegates
-    /// included.
-    pub fn find_nearest_ancestor<T: TraversableNode>(&mut self) -> Option<&mut T> {
+    /// included. What's in hand is part of the tree: coordinates asked meanwhile find it busy.
+    pub fn find_nearest_ancestor<T: TraversableNode>(&mut self) -> Option<TreeRef<'_, T>> {
         let own = self.traverse_key;
-        let found = self.find_ancestor(&mut |node| matching::<T>(node, own).is_some())?;
-        found.downcast_mut::<T>()
+        let (node, index, delegate) =
+            self.find_ancestor(&mut |node| matching::<T>(node, own).is_some())?;
+        self.tree.hold(|tree| {
+            tree.get_mut(node)?.chain.get_mut(index)?.resolve(delegate)?.downcast_mut::<T>()
+        })
     }
 
     /// The nearest ancestor that `matches`, delegates included.
     fn find_ancestor(
         &mut self,
         matches: &mut dyn FnMut(&mut dyn ModifierNode) -> bool,
-    ) -> Option<&mut dyn ModifierNode> {
+    ) -> Option<(NodeId, usize, EntryId)> {
         let mut found: Option<(NodeId, usize, EntryId)> = None;
         self.visit_ancestors(NodeKinds::TRAVERSABLE, true, &mut |node, context| {
             if !matches(node) {
@@ -330,9 +337,9 @@ impl NodeContext<'_> {
         let entry = self.tree.get(node)?.chain.get(index)?;
         if entry.state & entry_state::DELEGATING != 0 {
             let id = entry.id;
-            self.tree.delegates_noted.push((node, id));
+            self.tree.enter().delegates_noted.push((node, id));
         }
-        self.tree.get_mut(node)?.chain.get_mut(index)?.resolve(delegate)
+        Some((node, index, delegate))
     }
 
     /// Calls `f` with each traversable node above this one with `key`, nearest first, until it

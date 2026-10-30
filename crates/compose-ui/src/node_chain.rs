@@ -54,6 +54,9 @@ impl NodeKinds {
     pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
     /// A graphics layer (`graphics_layer`, `clip`, `alpha`, …).
     pub const GRAPHICS_LAYER: NodeKinds = NodeKinds(1 << 25);
+    /// A node with a `hit_clip` when it was made: what clip walks of coordinates count without
+    /// asking it (a graphics layer's clip is its last block's).
+    pub const HIT_CLIP: NodeKinds = NodeKinds(1 << 31);
     /// An overlay (`Modifier.overlay`: a popup's or a dialog's window).
     pub const OVERLAY: NodeKinds = NodeKinds(1 << 26);
     /// `Modifier.focus_requester`.
@@ -71,6 +74,7 @@ impl NodeKinds {
     /// `bring_into_view`, `as_selectable`) the tree asks the delegates too (D1194).
     const DELEGATED: NodeKinds = NodeKinds(
         NodeKinds::ANY.0
+            | NodeKinds::HIT_CLIP.0
             | NodeKinds::LAYOUT.0
             | NodeKinds::DRAW.0
             | NodeKinds::SEMANTICS.0
@@ -151,6 +155,7 @@ impl NodeKinds {
         // an update changes, so the selection walks ask each node.
         add(node.is_repaint_boundary(), NodeKinds::REPAINT_BOUNDARY);
         add(node.draw_capture().is_some(), NodeKinds::DRAW_CAPTURE);
+        add(node.hit_clip().is_some(), NodeKinds::HIT_CLIP);
         add(node.is_beyond_bounds_layout(), NodeKinds::BEYOND_BOUNDS_LAYOUT);
         add(
             node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some(),
@@ -339,6 +344,14 @@ impl ChainEntry {
         viewport: crate::unit::IntSize,
     ) -> Option<crate::unit::Rect> {
         crate::delegation::bring_into_view_of(&mut *self.node, rect, viewport)
+    }
+
+    /// Whether it clips, as a query asks: running no block and no node's code.
+    pub(crate) fn clips(&self) -> bool {
+        match self.node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>() {
+            Some(graphics) => graphics.clips(),
+            None => self.kinds.any(NodeKinds::HIT_CLIP),
+        }
     }
 
     /// Its selectable: its node's, or a delegate's.

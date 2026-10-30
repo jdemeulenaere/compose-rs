@@ -1,24 +1,26 @@
 //! The access window: how a [`LayoutCoordinates`](crate::LayoutCoordinates) held by application
-//! code answers while its tree is in a pass. The crate's only `unsafe`, its tests running under
-//! Miri (`cargo +nightly miri test -p compose-ui --lib tree_access`), as the design's answers ask
-//! (docs/parity/design/placement-and-lookahead.md §4.2, D1211).
+//! code answers while its tree is in a pass. The crate's only `unsafe`, its tests under Miri in
+//! both borrow models (docs/09-testing.md, "Miri"; D1211, D1214).
 //!
 //! A pass holds `&mut UiTree`, and calls application code (a measure policy, a placement block, a
 //! node's callback, a draw) that may ask a handle where it is. So a scope passed to application
-//! code holds a [`TreeAccess`] instead of a `&mut UiTree`: a raw pointer, from which each of the
-//! scope's own methods derives a reference that ends as the method does. While the application
-//! code runs, the same pointer is in the tree's [`TreeWindow`], and a query derives its reference
-//! from it. So two references to the tree are never used alternately:
+//! code holds a [`TreeAccess`] instead of a `&mut UiTree`: a raw pointer. While the application
+//! code runs the same pointer is in the tree's [`TreeWindow`], and a query derives a shared
+//! reference from it. What makes that sound is enforced, not audited:
 //!
-//! - **Open:** `open` around application code that a pass calls, with nothing derived from the
-//!   pointer alive. What a site borrowed from the tree before (a chain entry) it must have put
-//!   down: a query may read any of it.
-//! - **Shut:** `shut` around what a scope does that may reach other application code: there, a
-//!   reference derived from the pointer is alive up the stack. Closed, a query there is busy: an
-//!   answer of nothing, never undefined behaviour.
+//! - **Open:** [`TreeAccess::open`] around application code a pass calls. Its guard borrows the
+//!   tree for the access's lifetime, so nothing else uses the tree until it's dropped, and
+//!   nothing derived from the pointer is alive at that moment: the access is all a site has.
+//! - **Entered:** the only way to a `&mut UiTree` from an access is [`TreeAccess::enter`], whose
+//!   guard closes the window while it lives. So whatever a scope's method reaches, application
+//!   code in it finds the tree busy (its answer is nothing), or opens the window again with a
+//!   pointer of its own from a site inside: there's no way to query under a live `&mut`.
+//! - **Reads:** [`TreeAccess`]'s `Deref` hands out `&UiTree`, which a query's `&UiTree` may
+//!   overlap. A query runs no application code and writes nothing but `Cell`s
+//!   (`coordinates.rs`), so reads nest.
 //!
-//! A window always holds the pointer of the innermost open site, as each `open` and `shut` puts
-//! back what it found when it ends, a panic included.
+//! A window holds the pointer of the innermost site, as each guard puts back what it found, a
+//! panic included.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -28,72 +30,28 @@ use std::ptr::NonNull;
 use crate::tree::UiTree;
 
 /// Where a tree's pass publishes its pointer for queries. It's in the tree's requests, which its
-/// handles reach through the thread's registry, not through the tree.
+/// handles reach through the thread's registry, not through the tree: `open` costs a store.
 #[derive(Default)]
-pub(crate) struct TreeWindow {
-    tree: Cell<Option<NonNull<UiTree>>>,
-    /// The pointer is from a shared reference, with others alive: only `read` may use it.
-    read_only: Cell<bool>,
-}
+pub(crate) struct TreeWindow(Cell<Option<NonNull<UiTree>>>);
 
 impl TreeWindow {
-    /// Closes the window, for what moves the tree away from where its pointer points: what it
-    /// held, for `reopen`.
-    pub(crate) fn close(&self) -> Option<NonNull<UiTree>> {
-        self.tree.take()
-    }
-
-    pub(crate) fn reopen(&self, value: Option<NonNull<UiTree>>) {
-        self.tree.set(value);
-    }
-
-    /// Opens the window to read `tree` until what it returns is dropped: for application code
-    /// run with shared references into the tree alive (a graphics layer's block, its node in
-    /// hand). A query needing the tree alone finds it busy.
-    #[inline]
-    #[must_use]
-    pub(crate) fn open_to_read<'t>(&'t self, tree: &'t UiTree) -> ReadGuard<'t> {
-        ReadGuard {
-            window: self,
-            previous: self.tree.replace(Some(NonNull::from(tree))),
-            was_read_only: self.read_only.replace(true),
-        }
-    }
-
-    /// Runs `read` with the tree if a pass opened the window. Reads nest (a query running a
-    /// graphics layer's block, which asks another).
+    /// Runs `read` with the tree if a pass opened the window. Reads nest.
     pub(crate) fn read<R>(&self, read: impl FnOnce(&UiTree) -> R) -> Option<R> {
-        let tree = self.tree.get()?;
-        // SAFETY: the window holds a pointer only between `TreeAccess::open` and the end of what
-        // it returned, on this thread (the requests are `!Sync`), with no reference derived from
-        // it alive but other reads: see the module's documentation. The pointer's lifetime is
-        // that of the `&mut UiTree` it came from, alive up the stack.
+        let tree = self.0.get()?;
+        // SAFETY: the window holds a pointer only while a site's guard lives (`TreeAccess::open`
+        // or `open_to_read`), on this thread (the requests are `!Sync`), with no `&mut` derived
+        // from it alive (`TreeAccess::enter` closes the window). Its lifetime is that of the
+        // reference it came from, which the guard borrows.
         Some(read(unsafe { tree.as_ref() }))
     }
 
-    /// Runs `query` with the tree if a pass opened the window, closed meanwhile: what it runs (a
-    /// graphics layer's block, a modifier node's clip) finds the tree busy.
-    pub(crate) fn exclusive<R>(&self, query: impl FnOnce(&mut UiTree) -> R) -> Option<R> {
-        if self.read_only.get() {
-            return None;
-        }
-        let mut tree = self.tree.get()?;
-        let _restore = Restore { window: self, value: self.tree.take() };
-        // SAFETY: as in `read`, and with the window closed no other reference can be derived from
-        // the pointer until this one is gone.
-        Some(query(unsafe { tree.as_mut() }))
-    }
-}
-
-/// Puts a window back as it was.
-struct Restore<'w> {
-    window: &'w TreeWindow,
-    value: Option<NonNull<UiTree>>,
-}
-
-impl Drop for Restore<'_> {
-    fn drop(&mut self) {
-        self.window.tree.set(self.value);
+    /// Opens the window to read `tree` until what it returns is dropped: for application code a
+    /// pass runs holding only shared references into the tree (a graphics layer's block, its
+    /// node in hand).
+    #[inline]
+    #[must_use]
+    pub(crate) fn open_to_read<'t>(&'t self, tree: &'t UiTree) -> ReadGuard<'t> {
+        ReadGuard { window: self, previous: self.0.replace(Some(NonNull::from(tree))) }
     }
 }
 
@@ -101,14 +59,12 @@ impl Drop for Restore<'_> {
 pub(crate) struct ReadGuard<'t> {
     window: &'t TreeWindow,
     previous: Option<NonNull<UiTree>>,
-    was_read_only: bool,
 }
 
 impl Drop for ReadGuard<'_> {
     #[inline]
     fn drop(&mut self) {
-        self.window.tree.set(self.previous);
-        self.window.read_only.set(self.was_read_only);
+        self.window.0.set(self.previous);
     }
 }
 
@@ -119,34 +75,49 @@ pub(crate) struct TreeAccess<'a> {
 }
 
 impl<'a> TreeAccess<'a> {
+    #[inline]
     pub(crate) fn new(tree: &'a mut UiTree) -> TreeAccess<'a> {
         TreeAccess { tree: NonNull::from(tree), _tree: PhantomData }
     }
 
     /// This access again, for as long as the borrow.
+    #[inline]
     pub(crate) fn reborrow(&mut self) -> TreeAccess<'_> {
         TreeAccess { tree: self.tree, _tree: PhantomData }
     }
 
-    /// Opens the window until what it returns is dropped: for application code a pass calls.
+    /// Opens the window until what it returns is dropped, for application code a pass calls. It
+    /// borrows the tree all that time.
     #[inline]
     #[must_use]
-    pub(crate) fn open(&self) -> WindowGuard {
-        self.set_window(Some(self.tree))
-    }
-
-    /// Closes the window until what it returns is dropped: for what a scope does that may reach
-    /// other application code.
-    #[inline]
-    #[must_use]
-    pub(crate) fn shut(&self) -> WindowGuard {
-        self.set_window(None)
-    }
-
-    #[inline]
-    fn set_window(&self, value: Option<NonNull<UiTree>>) -> WindowGuard {
+    pub(crate) fn open(&self) -> WindowGuard<'a> {
         let window = &self.deref().focus_requests.window;
-        WindowGuard { tree: self.tree, previous: window.tree.replace(value) }
+        WindowGuard {
+            tree: self.tree,
+            previous: window.0.replace(Some(self.tree)),
+            _tree: PhantomData,
+        }
+    }
+
+    /// The tree to change or to do what may run other code: the window's closed meanwhile.
+    #[inline]
+    pub(crate) fn enter(&mut self) -> Entered<'_> {
+        let window = &self.deref().focus_requests.window;
+        Entered { tree: self.tree, previous: window.0.take(), _tree: PhantomData }
+    }
+
+    /// What `find` finds in the tree, for as long as the caller wants it: the window's closed
+    /// meanwhile.
+    pub(crate) fn hold<'s, T: ?Sized>(
+        &'s mut self,
+        find: impl FnOnce(&'s mut UiTree) -> Option<&'s mut T>,
+    ) -> Option<TreeRef<'s, T>> {
+        let mut tree = self.tree;
+        let entered = self.enter();
+        // SAFETY: as `Entered::deref_mut`, for `'s`: `entered` lives as long as what's found, in
+        // one value, and borrows this access meanwhile.
+        let value = find(unsafe { tree.as_mut() })?;
+        Some(TreeRef { value, _entered: entered })
     }
 }
 
@@ -155,39 +126,87 @@ impl Deref for TreeAccess<'_> {
 
     #[inline]
     fn deref(&self) -> &UiTree {
-        // SAFETY: from the `&'a mut UiTree` this access took, which nothing else uses for `'a`:
-        // only what this access gives out, and each ends before the next (the borrow checker's
-        // for this access; for a window's, the module's documentation).
+        // SAFETY: from the `&'a mut UiTree` this access took, which nothing else uses for `'a`.
+        // Any `&mut` from it is through `enter`, which borrows this access mutably.
         unsafe { self.tree.as_ref() }
     }
 }
 
-impl DerefMut for TreeAccess<'_> {
+/// What `open` returns: puts the window back when dropped.
+pub(crate) struct WindowGuard<'a> {
+    tree: NonNull<UiTree>,
+    previous: Option<NonNull<UiTree>>,
+    _tree: PhantomData<&'a mut UiTree>,
+}
+
+impl Drop for WindowGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: the guard borrows the tree for `'a`, so what it points to is alive and nothing
+        // but its access has used it; nothing derived from it is alive as it ends.
+        unsafe { self.tree.as_ref() }.focus_requests.window.0.set(self.previous);
+    }
+}
+
+/// The tree, its window closed, as `TreeAccess::enter` gives it.
+pub(crate) struct Entered<'s> {
+    tree: NonNull<UiTree>,
+    previous: Option<NonNull<UiTree>>,
+    _tree: PhantomData<&'s mut UiTree>,
+}
+
+impl Deref for Entered<'_> {
+    type Target = UiTree;
+
+    #[inline]
+    fn deref(&self) -> &UiTree {
+        // SAFETY: the window's closed, so nothing else derives from the pointer while this lives,
+        // and this borrows the access mutably.
+        unsafe { self.tree.as_ref() }
+    }
+}
+
+impl DerefMut for Entered<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut UiTree {
-        // SAFETY: as in `deref`.
+        // SAFETY: as `deref`.
         unsafe { self.tree.as_mut() }
     }
 }
 
-/// What `open` and `shut` return: puts the window back when dropped.
-pub(crate) struct WindowGuard {
-    tree: NonNull<UiTree>,
-    previous: Option<NonNull<UiTree>>,
-}
-
-impl Drop for WindowGuard {
+impl Drop for Entered<'_> {
     #[inline]
     fn drop(&mut self) {
-        // SAFETY: the guard is dropped in the scope that made it, with the tree's `&mut` still
-        // alive up the stack and nothing derived from its pointer alive: a site's guard ends
-        // after the application code it wraps, a `shut`'s after the scope's call.
-        unsafe { self.tree.as_ref() }.focus_requests.window.tree.set(self.previous);
+        // SAFETY: as `WindowGuard::drop`: nothing from `deref_mut` outlives `self`.
+        unsafe { self.tree.as_ref() }.focus_requests.window.0.set(self.previous);
     }
 }
 
-// Under Miri: `cargo +nightly miri test -p compose-ui --lib tree_access`. Each runs a real tree's
-// passes with application code asking coordinates in the middle of them.
+/// Something in the tree a node has in hand (an ancestor it found, the text measurer): what asks
+/// where something is meanwhile finds the tree busy, as this has part of it.
+pub struct TreeRef<'s, T: ?Sized> {
+    value: &'s mut T,
+    _entered: Entered<'s>,
+}
+
+impl<T: ?Sized> Deref for TreeRef<'_, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        self.value
+    }
+}
+
+impl<T: ?Sized> DerefMut for TreeRef<'_, T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut T {
+        self.value
+    }
+}
+
+// Each runs a real tree's passes with application code asking coordinates in the middle of them;
+// the rest of the boundary is in the suite's `coordinates_in_passes`.
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -372,21 +391,14 @@ mod tests {
         assert_eq!(seen.get(), Offset::new(6.0, 8.0));
     }
 
-    /// Asked with nothing open while the tree's borrowed: nothing, a debug build saying so.
+    /// Asked with nothing open while the tree's borrowed: zeros, no panic.
     #[test]
     fn a_tree_busy_answers_nothing() {
         let kept: Kept = Rc::default();
         let k = kept.clone();
         let host = host(move || leaf(at(3, 4).then(keep(&k))));
         let coordinates = kept.get().expect("positioned");
-        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            host.with_tree(|_| coordinates.position_in_root())
-        }));
-        if cfg!(debug_assertions) {
-            assert!(answer.is_err());
-        } else {
-            assert_eq!(answer.ok(), Some(Offset::ZERO));
-        }
+        assert_eq!(host.with_tree(|_| coordinates.position_in_root()), Offset::ZERO);
         assert_eq!(coordinates.position_in_root(), Offset::new(3.0, 4.0), "free again");
     }
 

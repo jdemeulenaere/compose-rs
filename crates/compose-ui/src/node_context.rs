@@ -71,9 +71,9 @@ impl NodeContext<'_> {
     ///
     /// If the node isn't attached, as Compose's.
     pub fn require_layout_coordinates(&self) -> LayoutCoordinates {
-        assert!(self.state() & entry_state::ATTACHED != 0, "compose-ui: the node isn't attached");
-        let index = self.index.expect("compose-ui: the node isn't attached");
-        self.tree.coordinates_at(self.node, index)
+        assert!(self.is_attached(), "compose-ui: the node isn't attached");
+        // In its `on_detach`, out of its chain: where it was.
+        self.tree.coordinates_at(self.node, self.index.unwrap_or(self.place))
     }
 
     fn state(&self) -> u8 {
@@ -83,10 +83,12 @@ impl NodeContext<'_> {
         }
     }
 
-    fn state_mut(&mut self) -> &mut u8 {
+    fn add_state(&mut self, flag: u8) {
         match self.index {
-            Some(index) if !self.delegated => &mut self.tree.node_mut(self.node).chain[index].state,
-            _ => &mut self.out_state,
+            Some(index) if !self.delegated => {
+                self.tree.enter().node_mut(self.node).chain[index].state |= flag;
+            }
+            _ => self.out_state |= flag,
         }
     }
 
@@ -142,17 +144,23 @@ impl NodeContext<'_> {
     /// A handle naming this node from outside its callbacks.
     pub fn handle(&mut self) -> NodeHandle {
         let attached = self.is_attached();
-        let state = self.state_mut();
-        if *state & entry_state::HAS_HANDLE == 0 {
-            *state |= entry_state::HAS_HANDLE;
+        if self.state() & entry_state::HAS_HANDLE == 0 {
+            self.add_state(entry_state::HAS_HANDLE);
             if attached {
                 self.tree.focus_requests.attached_entries.borrow_mut().insert(self.entry.0);
             }
         }
+        // A delegate's chain entry is its owner's: where it is in the chain, for what's asked of it
+        // with nothing but a shared look at the tree.
+        let owner = match self.index {
+            Some(index) => self.tree.node(self.node).chain[index].id,
+            None => self.entry,
+        };
         NodeHandle {
             tree: self.tree.key,
             node: self.node,
             entry: self.entry,
+            owner,
             _not_send: PhantomData,
         }
     }
@@ -184,7 +192,7 @@ impl NodeContext<'_> {
     /// Panics if the node isn't attached, as Compose's (`requireOwner`).
     pub fn coroutine_scope(&mut self) -> compose_runtime::CoroutineScope {
         assert!(self.is_attached(), "compose-ui: a node's coroutine scope while it isn't attached");
-        *self.state_mut() |= entry_state::HAS_SCOPE;
+        self.add_state(entry_state::HAS_SCOPE);
         **self
             .tree
             .focus_requests
@@ -200,14 +208,14 @@ impl NodeContext<'_> {
     /// may write state the layout reads and use handles (`NodeHandle::with_node`). Asked
     /// outside a pass (from a task), it asks for a frame, which runs it.
     pub fn side_effect(&mut self, effect: impl FnOnce() + 'static) {
-        self.tree.side_effects.push(Box::new(effect));
+        self.tree.enter().side_effects.push(Box::new(effect));
         self.tree.focus_requests.wake();
     }
 
     /// Runs `action` after the layout under way, outside the tree: what a `Modifier` lambda
     /// told of a layout goes through (D172).
     pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
-        self.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+        self.tree.enter().layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
     }
 
     /// The density where its layout node is composed, as `requireDensity()`.
@@ -248,7 +256,7 @@ impl NodeContext<'_> {
     /// the guard goes: don't hold it through a [`TextMeasurer::measure`](crate::TextMeasurer) or a
     /// result's query, which borrow it too and panic.
     pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn crate::text::TextMeasurer> {
-        self.tree.text_measurer()
+        self.tree.text_measurer.borrow_mut()
     }
 
     fn invalidate(&mut self, what: Invalidation) {
@@ -266,7 +274,8 @@ impl NodeContext<'_> {
             requests.wake();
             return;
         }
-        self.tree.invalidate_entry_at(self.node, self.index, what);
+        let (node, index) = (self.node, self.index);
+        self.tree.enter().invalidate_entry_at(node, index, what);
     }
 
     /// Draws again what the node draws in, as `DrawModifierNode.invalidateDraw`.
@@ -332,10 +341,11 @@ impl NodeContext<'_> {
         } else if self.index.is_none() {
             // Out of its chain: nothing of the measurement is it.
             // It runs measuring code, under a reference to the tree.
-            let _shut = self.tree.shut();
-            self.tree.remeasure_now(self.node);
+            let node = self.node;
+            self.tree.enter().remeasure_now(node);
         } else if !self.tree.remeasure_after.contains(&self.node) {
-            self.tree.remeasure_after.push(self.node);
+            let node = self.node;
+            self.tree.enter().remeasure_after.push(node);
         }
     }
 
@@ -344,7 +354,7 @@ impl NodeContext<'_> {
     /// answers `as_observer`), once; observing again replaces what the last observation read.
     /// Works detached too: the call comes if the node is attached when the write is told.
     pub fn observe_reads<R>(&mut self, block: impl FnOnce() -> R) -> R {
-        *self.state_mut() |= entry_state::OBSERVES;
+        self.add_state(entry_state::OBSERVES);
         let requests = self.tree.focus_requests.clone();
         requests.observe_entry_reads(self.node, self.entry, block)
     }
@@ -366,6 +376,8 @@ pub struct NodeHandle {
     tree: u32,
     node: NodeId,
     entry: EntryId,
+    /// The chain entry it's in: `entry`, or the one whose delegate it is.
+    owner: EntryId,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -441,9 +453,6 @@ pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> 
             Box::new(crate::fixed_text::FixedTextMeasurer::new()),
         )
     });
-    // The pointer in its window would find the stand-in.
-    let window = tree.focus_requests.clone();
-    let open = window.window.close();
     let real = std::mem::replace(tree, stand_in);
     TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(real));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(block));
@@ -451,7 +460,6 @@ pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> 
         .with(|slot| slot.borrow_mut().pop())
         .expect("compose-ui: the tree set aside for a block is there as it returns");
     let stand_in = std::mem::replace(tree, real);
-    window.window.reopen(open);
     STAND_IN.with(|slot| *slot.borrow_mut() = Some(stand_in));
     result.unwrap_or_else(|panic| {
         // Caught above it, the next change finds no transaction under way.
@@ -524,7 +532,7 @@ impl NodeHandle {
     /// If the node isn't attached, as Compose's.
     pub fn require_layout_coordinates(&self) -> LayoutCoordinates {
         assert!(self.is_attached(), "compose-ui: the node isn't attached");
-        let found = LayoutCoordinates::of_entry(self.tree, self.node, self.entry);
+        let found = LayoutCoordinates::of_entry(self.tree, self.node, self.owner);
         found.expect("compose-ui: its tree is busy or the node has no chain entry")
     }
 

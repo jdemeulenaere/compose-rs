@@ -1351,14 +1351,14 @@ impl dyn ModifierNode {
 /// What a node reaches when released (`ModifierNode::on_release`).
 pub struct ReleaseContext<'a> {
     pub text_measurer: &'a crate::text::SharedTextMeasurer,
-    pub(crate) held_paragraphs: &'a mut crate::draw_capture::HeldParagraphs,
+    pub(crate) held_paragraphs: &'a std::cell::RefCell<crate::draw_capture::HeldParagraphs>,
 }
 
 impl ReleaseContext<'_> {
     /// Releases the paragraph of a node leaving, or leaves it to what captured it to draw later
     /// (`Modifier.capture_content`).
     pub fn release_paragraph(&mut self, paragraph: crate::text::ParagraphHandle) {
-        if !self.held_paragraphs.release_later(paragraph) {
+        if !self.held_paragraphs.borrow_mut().release_later(paragraph) {
             self.text_measurer.release(paragraph);
         }
     }

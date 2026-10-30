@@ -276,7 +276,8 @@ impl IntrinsicMeasureScope<'_> {
         &self,
         local: &compose_runtime::CompositionLocal<T>,
     ) -> T {
-        self.tree.node(self.node).locals.get(local)
+        let locals = self.tree.node(self.node).locals;
+        locals.get(local)
     }
 
     /// The direction of the layout, as `IntrinsicMeasureScope.layoutDirection`.
@@ -354,21 +355,20 @@ impl IntrinsicMeasureScope<'_> {
                 Some(self.node),
                 "compose-ui: a layout asked the intrinsic size of a node that isn't its child"
             );
-            let child = self.tree.node_mut(measurable.node);
+            let mut tree = self.tree.enter();
+            let child = tree.node_mut(measurable.node);
             // Measured again after it was asked, as Compose's `onIntrinsicsQueried`: its
             // default intrinsics run its measuring code, which may keep what it saw.
             child.constraints = None;
             child.intrinsics_asked = true;
-            self.tree.node_mut(self.node).children_intrinsics_asked = true;
+            tree.node_mut(self.node).children_intrinsics_asked = true;
         } else {
             assert_eq!(
                 measurable.node, self.node,
                 "compose-ui: a layout modifier asked the intrinsic size of another node's content"
             );
         }
-        // It runs another node's code, under a reference to the tree.
-        let _shut = self.tree.shut();
-        self.tree.intrinsic(measurable.node, measurable.layer as usize, kind, value)
+        self.tree.enter().intrinsic(measurable.node, measurable.layer as usize, kind, value)
     }
 
     /// A measure scope where measuring a child asks its intrinsic `kind` and placing does
@@ -480,9 +480,7 @@ impl<'a> MeasureScope<'a> {
             return Placeable { measurable, width, height, measured };
         }
         let node = self.base.node;
-        // It may run another node's measuring code, under a reference to the tree.
-        let _shut = self.base.tree.shut();
-        let tree = &mut *self.base.tree;
+        let mut tree = self.base.tree.enter();
         let size = if measurable.layer == 0 {
             assert_eq!(
                 tree.parent_of(measurable.node),
@@ -518,7 +516,11 @@ impl<'a> MeasureScope<'a> {
     /// frame (D172). Nothing runs from an intrinsic measurement, which isn't the layout's.
     pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
         if self.intrinsic.is_none() {
-            self.base.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+            self.base
+                .tree
+                .enter()
+                .layout_callbacks
+                .push(crate::input::Action::Run(Box::new(action)));
         }
     }
 
@@ -537,7 +539,8 @@ impl<'a> MeasureScope<'a> {
         self.placed = true;
         let measurable = placeable.measurable;
         let layer = measurable.layer as usize;
-        self.base.tree.place_in_run(measurable.node, layer, position, self.run, self.motion);
+        let (run, motion) = (self.run, self.motion);
+        self.base.tree.enter().place_in_run(measurable.node, layer, position, run, motion);
     }
 
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left
@@ -575,7 +578,10 @@ impl<'a> MeasureScope<'a> {
                 "compose-ui: a measurement placed a child and left its placing to a block too"
             );
             let (node, layer, run) = (self.base.node, self.layer, self.run);
-            self.base.tree.set_placement_block(node, layer, run, Rc::new(block));
+            // Dropped here, the window open: what it captured is application code's.
+            let earlier =
+                self.base.tree.enter().set_placement_block(node, layer, run, Rc::new(block));
+            drop(earlier);
         }
         result
     }

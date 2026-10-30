@@ -1640,7 +1640,8 @@ impl UiTree {
             place: *place,
             traverse_key: None,
         };
-        let _open = context.tree.open();
+        // Over before the tree is used again, which its guard's borrow says.
+        let open = context.tree.open();
         let mut context = EventContext {
             context,
             actions: &mut actions,
@@ -1660,6 +1661,7 @@ impl UiTree {
                 }
             }
         }
+        drop(open);
         actions.append(&mut self.pending_actions);
         self.pending_actions = actions;
         self.apply_focus_node_requests(requests);

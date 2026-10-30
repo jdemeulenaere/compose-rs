@@ -9,10 +9,9 @@
 
 use std::cell::Cell;
 
-use compose_runtime::snapshots::Snapshot;
 use smallvec::SmallVec;
 
-use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
+use crate::graphics_layer::{GraphicsLayerNode, LayerMap};
 use crate::node_chain::{EntryId, NodeKinds};
 use crate::node_context::{peek_tree, requests_of};
 use crate::path::Matrix;
@@ -21,9 +20,8 @@ use crate::unit::{IntSize, Offset, Rect};
 
 /// As Compose's `LayoutCoordinates`: where something a node lays out is, live. `Copy`, `'static`,
 /// and never stale: once what it names is gone it answers `is_attached() == false` and zeros
-/// (Compose's fails for most). Asked while its tree is busy where no pass opened its window (a
-/// graphics layer's block run while drawing, a semantics block), it answers the same way, and a
-/// debug build panics.
+/// (Compose's fails for most). Asked where its tree is busy (docs/06-ui.md, "Coordinates in a
+/// pass"), it answers the same way.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct LayoutCoordinates {
     tree: u32,
@@ -43,8 +41,8 @@ struct Place {
 /// One step of the way from one place to another.
 enum Step {
     Move(Offset),
-    Layer(LayerProperties),
-    Unlayer(LayerProperties),
+    Layer(LayerMap),
+    Unlayer(LayerMap),
 }
 
 impl Step {
@@ -56,14 +54,18 @@ impl Step {
         }
     }
 
-    fn matrix(&self) -> Matrix {
+    /// Makes `matrix` do this too. What can't be undone is left out, as Compose's `invert` leaves
+    /// a singular matrix as it is.
+    fn apply_to(&self, matrix: &mut Matrix) {
         match self {
-            Step::Move(by) => Matrix::translation(by.x, by.y),
-            Step::Layer(layer) => layer.matrix(),
+            Step::Move(by) => matrix.post_concat(&Matrix::translation(by.x, by.y)),
+            Step::Layer(layer) => matrix.post_concat(&layer.matrix()),
             Step::Unlayer(layer) => {
-                let mut matrix = layer.matrix();
-                matrix.invert();
-                matrix
+                if layer.invertible() {
+                    let mut inverse = layer.matrix();
+                    inverse.invert();
+                    matrix.post_concat(&inverse);
+                }
             }
         }
     }
@@ -97,44 +99,19 @@ impl LayoutCoordinates {
         LayoutCoordinates { tree, node, end }
     }
 
-    /// Runs `read` with the tree, its reads not observed (a position isn't a read of a graphics
-    /// layer's block). `None` if the tree is gone or busy.
+    /// Runs `read` with the tree: in a pass, through its window, else through the registry. It
+    /// runs no application code: a graphics layer's answers are its last run's. `None` if the tree
+    /// is gone or busy.
     fn read<R>(&self, read: impl FnOnce(&UiTree) -> R) -> Option<R> {
         let requests = requests_of(self.tree)?;
         let mut read = Some(read);
+        if let Some(result) = requests.window.read(|tree| (read.take().expect("once"))(tree)) {
+            return Some(result);
+        }
         let mut result = None;
-        Snapshot::without_read_observation(|| {
-            let free = peek_tree(self.tree, &mut |tree: &mut UiTree| {
-                if let Some(read) = read.take() {
-                    result = Some(read(tree));
-                }
-            });
-            if !free && let Some(read) = read.take() {
-                result = requests.window.read(read);
-                if result.is_none() {
-                    busy();
-                }
-            }
-        });
-        result
-    }
-
-    /// `read` for what needs the tree alone (a modifier node's clip is asked of it mutably).
-    fn exclusive<R>(&self, query: impl FnOnce(&mut UiTree) -> R) -> Option<R> {
-        let requests = requests_of(self.tree)?;
-        let mut query = Some(query);
-        let mut result = None;
-        Snapshot::without_read_observation(|| {
-            let free = peek_tree(self.tree, &mut |tree: &mut UiTree| {
-                if let Some(query) = query.take() {
-                    result = Some(query(tree));
-                }
-            });
-            if !free && let Some(query) = query.take() {
-                result = requests.window.exclusive(query);
-                if result.is_none() {
-                    busy();
-                }
+        peek_tree(self.tree, &mut |tree: &mut UiTree| {
+            if let Some(read) = read.take() {
+                result = Some(read(tree));
             }
         });
         result
@@ -151,12 +128,12 @@ impl LayoutCoordinates {
         .flatten()
     }
 
-    /// The coordinates of entry or delegate `entry` of `node`.
+    /// The coordinates of chain entry `entry` of `node`.
     pub(crate) fn of_entry(tree: u32, node: NodeId, entry: EntryId) -> Option<LayoutCoordinates> {
         let handle = LayoutCoordinates::new(tree, node, None);
         handle
-            .exclusive(|tree| {
-                let index = tree.entry_index(node, entry)?;
+            .read(|tree| {
+                let index = tree.get(node)?.chain.iter().position(|it| it.id == entry)?;
                 Some(tree.coordinates_at(node, index))
             })
             .flatten()
@@ -215,17 +192,23 @@ impl LayoutCoordinates {
         parent.map(|parent| LayoutCoordinates::new(self.tree, parent, None))
     }
 
-    /// `local` in the root, as `localToRoot`.
+    /// `local` in the root, as `localToRoot`: a popup's content's own, whose root it's placed
+    /// from in the window.
     pub fn local_to_root(&self, local: Offset) -> Offset {
         self.read_position(|tree, place| {
-            tree.map_to_root(place.node, place.layer, Some(place.before), local)
+            let at = tree.map_to_root(place.node, place.layer, Some(place.before), local);
+            let popup = tree.popup_origin(place.node);
+            Offset::new(at.x - popup.x, at.y - popup.y)
         })
         .unwrap_or(Offset::ZERO)
     }
 
-    /// `local` in the window, as `localToWindow`: the root fills the window.
+    /// `local` in the window, as `localToWindow`: the root fills it, and a popup's is placed in it.
     pub fn local_to_window(&self, local: Offset) -> Offset {
-        self.local_to_root(local)
+        self.read_position(|tree, place| {
+            tree.map_to_root(place.node, place.layer, Some(place.before), local)
+        })
+        .unwrap_or(Offset::ZERO)
     }
 
     /// `window` here, as `windowToLocal`.
@@ -285,7 +268,7 @@ impl LayoutCoordinates {
     /// The bounding box here of `source`, as `localBoundingBoxOf`: clipped by the clips on the way
     /// with `clip_bounds`, `Rect` of zeros if that leaves nothing.
     pub fn local_bounding_box_of(&self, source: &LayoutCoordinates, clip_bounds: bool) -> Rect {
-        self.exclusive(|tree| {
+        self.read(|tree| {
             note_position_read(self.node);
             note_position_read(source.node);
             let (to, from) = (tree.find_place(self)?, tree.find_place(source)?);
@@ -301,7 +284,7 @@ impl LayoutCoordinates {
         self.read_position(|tree, place| {
             note_position_read(source.node);
             let Some(from) = tree.find_place(source) else { return };
-            tree.walk(from, place, true, &mut |step| matrix.post_concat(&step.matrix()));
+            tree.walk(from, place, true, &mut |step| step.apply_to(matrix));
         });
     }
 
@@ -309,7 +292,7 @@ impl LayoutCoordinates {
     pub fn transform_to_screen(&self, matrix: &mut Matrix) {
         *matrix = Matrix::new();
         self.read_position(|tree, place| {
-            tree.walk_to_root(place, &mut |step| matrix.post_concat(&step.matrix()));
+            tree.walk_to_root(place, &mut |step| step.apply_to(matrix));
             let origin = tree.window_origin;
             matrix.post_concat(&Matrix::translation(origin.x, origin.y));
         });
@@ -319,7 +302,12 @@ impl LayoutCoordinates {
     pub fn introduces_motion_frame_of_reference(&self) -> bool {
         self.read(|tree| {
             let place = tree.find_place(self)?;
-            Some(tree.node(place.node).placed_in_motion(place.layer))
+            let value = tree.node(place.node);
+            // The coordinator a layer's placing places: its outermost, and no graphics layer's
+            // inside it.
+            let outermost = (value.entries_of_layer(place.layer).start..place.before)
+                .all(|index| !value.chain[index].kinds.any(NodeKinds::GRAPHICS_LAYER));
+            Some(outermost && value.placed_in_motion(place.layer))
         })
         .flatten()
         .unwrap_or(false)
@@ -410,15 +398,6 @@ impl LayoutCoordinates {
 /// What ends a coordinator: a layout modifier, and a graphics layer (Compose's is one).
 const COORDINATOR_ENDS: NodeKinds = NodeKinds::LAYOUT.with(NodeKinds::GRAPHICS_LAYER);
 
-/// A query found its tree busy.
-#[cold]
-fn busy() {
-    debug_assert!(
-        std::thread::panicking(),
-        "compose-ui: coordinates asked where their tree can't answer: docs/06-ui.md, Layout"
-    );
-}
-
 fn bounding_box_of(points: &[Offset]) -> Rect {
     let min = |pick: fn(&Offset) -> f32| points.iter().map(pick).fold(f32::INFINITY, f32::min);
     let max = |pick: fn(&Offset) -> f32| points.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
@@ -428,7 +407,9 @@ fn bounding_box_of(points: &[Offset]) -> Rect {
 impl UiTree {
     /// The coordinates entry `index` of `node` is in: the next one ending a coordinator.
     pub(crate) fn coordinates_at(&self, node: NodeId, index: usize) -> LayoutCoordinates {
-        let value = self.node(node);
+        let Some(value) = self.get(node) else {
+            return LayoutCoordinates::new(self.key, node, None);
+        };
         let end = (value.chain.get(index..).unwrap_or_default().iter())
             .find(|entry| entry.kinds.any(COORDINATOR_ENDS))
             .map(|entry| entry.id);
@@ -529,10 +510,13 @@ impl UiTree {
         visit(Step::Move(Offset::new(0.0 - back.x, 0.0 - back.y)));
     }
 
-    /// The transform of chain entry `index` of `node`, if it's a graphics layer.
-    fn layer_at(&self, node: NodeId, index: usize) -> Option<LayerProperties> {
-        let graphics = self.node(node).chain[index].node.downcast_ref::<GraphicsLayerNode>()?;
-        Some(self.properties_of_layer(node, index, graphics))
+    /// How chain entry `index` of `node` moves points, if it's a graphics layer: its last run's.
+    fn layer_at(&self, node: NodeId, index: usize) -> Option<LayerMap> {
+        let value = self.node(node);
+        let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()?;
+        let layer = value.layer_of(index);
+        let origin = crate::layout_callbacks::layer_origin(value, layer);
+        Some(graphics.layer_map(origin, value.layers[layer].measured.into()))
     }
 
     /// Where a node's top left is in its parent's content, as a step, if `motion` or not placed
@@ -640,54 +624,70 @@ impl UiTree {
     }
 
     /// The bounding box in `to` of `from`, clipped by the clips on the way with `clip_bounds`,
-    /// as `localBoundingBoxOf`.
-    fn bounding_box(&mut self, from: Place, to: Place, clip_bounds: bool) -> Rect {
-        let of_place = |tree: &UiTree, place: Place, size: IntSize| {
+    /// as `localBoundingBoxOf`: up from `from` to the common coordinator and down to `to`, the
+    /// clips of those in between, not its own.
+    fn bounding_box(&self, from: Place, to: Place, clip_bounds: bool) -> Rect {
+        let of_place = |place: Place, size: IntSize| {
             let (width, height) = (size.width as f32, size.height as f32);
             let corners = [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)]
-                .map(|(x, y)| tree.map_between(place, to, Offset::new(x, y)));
+                .map(|(x, y)| self.map_between(place, to, Offset::new(x, y)));
             bounding_box_of(&corners)
         };
-        let size = self.node(from.node).layers[from.layer].measured;
-        let mut bounds = of_place(self, from, size);
-        // As `localBoundingBoxOf`: zeros once what it goes through leaves nothing, and only then.
-        let or_zeros = |bounds: Rect| {
-            if from != to && (bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
-                Rect::new(0.0, 0.0, 0.0, 0.0)
-            } else {
-                bounds
+        let mut bounds = of_place(from, self.node(from.node).layers[from.layer].measured);
+        if clip_bounds {
+            self.clips_between(from, to, &mut |place, size| {
+                bounds = crate::layout_callbacks::intersect(bounds, of_place(place, size));
+            });
+        }
+        // Zeros once what it goes through leaves nothing, and only then.
+        if from != to && (bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
+            return Rect::new(0.0, 0.0, 0.0, 0.0);
+        }
+        bounds
+    }
+
+    /// Visits the clips between `from` and `to`, each as the place and size of what it clips to.
+    fn clips_between(&self, from: Place, to: Place, visit: &mut dyn FnMut(Place, IntSize)) {
+        let mut clips = |node: NodeId, entries: std::ops::Range<usize>| {
+            let value = self.node(node);
+            for index in entries {
+                if value.chain[index].clips() {
+                    let layer = value.layer_of(index);
+                    let place = Place { node, layer, before: index + 1 };
+                    visit(place, value.layers[layer].measured);
+                }
             }
         };
-        if !clip_bounds {
-            return or_zeros(bounds);
-        }
-        let up = self.path_to_root(from.node);
-        let common = self.path_to_root(to.node);
-        for &node in &up {
-            let meets = common.contains(&node);
-            // Those of `from`'s node before it; the rest's all; in the common node, those inside
-            // `to`.
-            let end = if node == from.node { from.before } else { self.node(node).chain.len() };
-            let start = if node == to.node { to.before } else { 0 };
-            let mut layer = 0;
-            for index in 0..end {
-                let value = self.node_mut(node);
-                let is_layout = value.chain[index].kinds.any(NodeKinds::LAYOUT);
-                let (size, density) = (value.layers[layer].measured, value.density);
-                if index >= start && value.chain[index].hit_clip_at(size.into(), density).is_some()
-                {
-                    let place = Place { node, layer, before: index };
-                    let clip = of_place(self, place, size);
-                    bounds = crate::layout_callbacks::intersect(bounds, clip);
-                }
-                if is_layout {
-                    layer += 1;
-                }
+        let (up, down) = (self.path_to_root(from.node), self.path_to_root(to.node));
+        let all = |node: NodeId| self.node(node).chain.len();
+        let Some(meeting) = up.iter().position(|node| down.contains(node)) else {
+            for &node in &up {
+                clips(node, 0..if node == from.node { from.before } else { all(node) });
             }
-            if meets {
-                break;
+            for &node in &down {
+                clips(node, 0..if node == to.node { to.before } else { all(node) });
             }
+            return;
+        };
+        let common = up[meeting];
+        for &node in &up[..meeting] {
+            clips(node, 0..if node == from.node { from.before } else { all(node) });
         }
-        or_zeros(bounds)
+        let at = if common == from.node { from.before } else { all(common) };
+        let at_end = if common == to.node { to.before } else { all(common) };
+        let middle = at.min(at_end);
+        clips(common, middle..at);
+        clips(common, middle..at_end);
+        let way_down = down.iter().position(|node| *node == common).expect("the common node");
+        for &node in down[..way_down].iter().rev() {
+            clips(node, 0..if node == to.node { to.before } else { all(node) });
+        }
+    }
+
+    /// Where a popup's root is in the window, for what's in one.
+    fn popup_origin(&self, node: NodeId) -> Offset {
+        let top = *self.path_to_root(node).last().expect("a node");
+        let value = self.node(top);
+        if value.overlay { value.overlay_origin } else { Offset::ZERO }
     }
 }

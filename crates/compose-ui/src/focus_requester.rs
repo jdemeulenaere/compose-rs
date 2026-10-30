@@ -709,7 +709,8 @@ impl NodeContext<'_> {
             self.tree.focus_requests.push(FocusRequest::Entry(self.node, self.entry, operation));
             return true;
         }
-        self.tree.perform_on_entry(self.node, self.entry, operation)
+        let (node, entry) = (self.node, self.entry);
+        self.tree.enter().perform_on_entry(node, entry, operation)
     }
 
     /// As `FocusRequesterModifierNode.requestFocus()`: the first target at or below this node is
@@ -745,7 +746,7 @@ impl NodeContext<'_> {
     /// pass ends, or at the next frame from a callback outside one.
     pub fn invalidate_focus_properties(&mut self) {
         if self.tree.a_window_has_active(|_| true) {
-            self.tree.focus.recheck_active = true;
+            self.tree.enter().focus.recheck_active = true;
             self.tree.focus_requests.wake();
         }
     }
@@ -753,7 +754,8 @@ impl NodeContext<'_> {
     /// The state of the target this context is of (a chain entry or a delegate), as
     /// `focusState`; `Inactive` if it's none.
     pub fn focus_state(&mut self) -> FocusState {
-        self.tree.focus_state_at_entry(self.node, self.entry)
+        let (node, entry) = (self.node, self.entry);
+        self.tree.enter().focus_state_at_entry(node, entry)
     }
 }
 

@@ -117,6 +117,8 @@ impl UiTree {
     /// kept boundary drawing it is drawn again in this frame. A measurement it invalidates is
     /// left to the next frame, which the write asked for (as before boundaries kept anything).
     pub fn draw(&mut self) -> bool {
+        // Drawing runs what they'd have run for a query.
+        self.new_layers.clear();
         self.apply_observed_writes();
         // Boundaries measured ahead that a platform doesn't draw ahead (or not yet) are
         // forgotten once this frame places them, or they go.
@@ -126,7 +128,7 @@ impl UiTree {
         if !self.needs_draw {
             return false;
         }
-        self.held_paragraphs.sweep(&self.text_measurer);
+        self.held_paragraphs.get_mut().sweep(&self.text_measurer);
         let observer = self.observer.clone();
         let mut recording = mem::take(&mut self.display_list);
         // The boundaries the last frame drew that this one won't, still composed: kept drawn
@@ -562,7 +564,7 @@ impl UiTree {
         let capture = value.chain.iter().find_map(|entry| entry.node.draw_capture()).cloned();
         if let Some(capture) = capture {
             if changed {
-                self.held_paragraphs.store(
+                self.held_paragraphs.get_mut().store(
                     &capture,
                     groups.to_vec(),
                     &mut *self.text_measurer.borrow_mut(),
@@ -838,8 +840,14 @@ impl UiTree {
                         let mut access = TreeAccess::new(&mut *self);
                         let open = access.open();
                         let mut content = |list: &mut DisplayList| {
-                            let _shut = access.shut();
-                            access.draw_chain(node, index + 1, next_layer, origins, list, observer)
+                            access.enter().draw_chain(
+                                node,
+                                index + 1,
+                                next_layer,
+                                origins,
+                                list,
+                                observer,
+                            )
                         };
                         let mut content_scope = crate::draw_modifiers::ContentDrawScope {
                             scope: &mut scope,
@@ -936,8 +944,7 @@ impl UiTree {
                     locals,
                 };
                 let mut content = |list: &mut DisplayList| {
-                    let _shut = access.shut();
-                    access.draw_chain(node, index + 1, next_layer, origins, list, observer)
+                    access.enter().draw_chain(node, index + 1, next_layer, origins, list, observer)
                 };
                 if draw.draws_content() {
                     let mut content_scope = crate::draw_modifiers::ContentDrawScope {

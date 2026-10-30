@@ -49,6 +49,10 @@ impl UiTree {
             self.place_readers_moved(root);
         }
         self.position_overlays();
+        // Where the popups just went is where their readers are.
+        if !self.coordinate_readers.is_empty() {
+            self.place_readers_moved(root);
+        }
         self.needs_draw = true;
         self.laid_out_since_callbacks = true;
         true
@@ -406,12 +410,11 @@ impl UiTree {
         constraints: Constraints,
     ) -> IntSize {
         let value = self.node_mut(node);
-        // Its last measurement's block is over, whatever this one does.
-        if let Some(placements) = &mut value.placements
-            && let Some(block) = placements.blocks.get_mut(layer)
-        {
-            *block = None;
-        }
+        // Its last measurement's block is over, whatever this one does. Dropped with nothing of
+        // the tree in hand: what it captured is application code's.
+        let earlier = value.placements.as_mut().and_then(|it| it.blocks.get_mut(layer)?.take());
+        drop(earlier);
+        let value = self.node_mut(node);
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.

@@ -326,6 +326,7 @@ pub use text_range::TextRange;
 pub use text_selection::Selectable;
 pub use text_style::TextStyle;
 pub use traversal::{TraversableNode, TraverseDescendantsAction, TraverseKey};
+pub use tree_access::TreeRef;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
     TextUnitType, UnitExt,

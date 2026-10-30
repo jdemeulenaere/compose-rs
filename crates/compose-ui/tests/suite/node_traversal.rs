@@ -1112,7 +1112,7 @@ fn nearest_with_key<N: ModifierNode>(
     key: &'static TraverseKey,
 ) -> Option<&'static str> {
     at::<N, _>(label, |context| {
-        context.find_nearest_ancestor_with_key(key).map(|found| describe(found).0)
+        context.find_nearest_ancestor_with_key(key).map(|found| describe(&*found).0)
     })
 }
 

@@ -237,6 +237,11 @@ impl UiTree {
     /// and the coordinates of the position-aware nodes, if anything was laid out or a layer
     /// around them moved.
     pub fn take_layout_callbacks(&mut self) -> Vec<Action> {
+        if !self.new_layers.is_empty()
+            && (!self.placed_layers.is_empty() || !self.positioned.is_empty())
+        {
+            self.run_new_layers();
+        }
         // What the nodes delegated while measured.
         if !self.delegates_noted.is_empty() {
             self.layout_nodes_told = true;
@@ -331,6 +336,40 @@ impl UiTree {
         }
     }
 
+    /// Runs the blocks of the layers new or updated since a draw, for what's about to ask where
+    /// it is in this layout, as Compose's run when they're placed: a query runs none. The one
+    /// that's its node's group's keeps its answer for the draw; an inner layer's runs again there.
+    pub(crate) fn run_new_layers(&mut self) {
+        let observer = self.observer.clone();
+        for node in std::mem::take(&mut self.new_layers) {
+            let Some(value) = self.get(node).filter(|value| !value.deactivated) else { continue };
+            let group_layer = value.retained.as_ref().and_then(|retained| retained.layer_entry);
+            for index in 0..value.chain.len() {
+                let value = self.node(node);
+                let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()
+                else {
+                    continue;
+                };
+                if !graphics.has_block() {
+                    continue;
+                }
+                if group_layer == Some(index as u16) {
+                    let Some(properties) = self.layer_properties(node, observer.as_deref()) else {
+                        continue;
+                    };
+                    let value = self.node_mut(node);
+                    let (density, direction) = (value.density, value.layout_direction);
+                    let retained = value.retained.as_mut().expect("its group");
+                    retained.layer_ahead = Some((properties, density, direction));
+                } else {
+                    compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+                        self.properties_of_layer(node, index, graphics);
+                    });
+                }
+            }
+        }
+    }
+
     /// `node`'s graphics layer moved what's under it: a block that asked where it is there runs,
     /// which a layout's check would find only if a layout came.
     fn place_readers_under(&mut self, node: NodeId) {
@@ -339,7 +378,8 @@ impl UiTree {
             let mut current = Some(reader);
             while let Some(id) = current {
                 if id == node {
-                    if self.position_of_reader(reader) != self.coordinate_readers[index].position {
+                    if self.signature_of_reader(reader) != self.coordinate_readers[index].signature
+                    {
                         self.mark_needs_placement(reader);
                     }
                     break;
@@ -371,8 +411,12 @@ impl UiTree {
     /// An updated element changed a layer of `node` while composing, as
     /// `NodeCoordinator.updateLayerBlock`: its block's reads aren't the composing scope's.
     pub(crate) fn note_updated_layer(&mut self, node: NodeId) {
-        if let Some(retained) = self.node_mut(node).retained.as_mut() {
+        let value = self.node_mut(node);
+        if let Some(retained) = value.retained.as_mut() {
             retained.layer_ahead = None;
+        }
+        if value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
+            self.new_layers.push(node);
         }
         compose_runtime::snapshots::Snapshot::without_read_observation(|| {
             self.note_layer_change(node, false);
@@ -714,10 +758,7 @@ impl UiTree {
     }
 
     /// What `coordinates` report, if they're there: a position-aware node's change.
-    pub(crate) fn values_of(
-        &mut self,
-        coordinates: LayoutCoordinates,
-    ) -> Option<CoordinatesValues> {
+    pub(crate) fn values_of(&self, coordinates: LayoutCoordinates) -> Option<CoordinatesValues> {
         let (node, index) = coordinates.entry_in(self)?;
         let layer = self.node(node).layer_of(index);
         Some(self.coordinate_values(node, layer, index))
@@ -725,7 +766,7 @@ impl UiTree {
 
     /// Layer `layer` of `node`, for its chain entry `entry`: its bounds clipped by the clipping
     /// modifiers around it (its own before the entry, and its ancestors').
-    fn coordinate_values(&mut self, node: NodeId, layer: usize, entry: usize) -> CoordinatesValues {
+    fn coordinate_values(&self, node: NodeId, layer: usize, entry: usize) -> CoordinatesValues {
         let size = self.node(node).layers[layer].size;
         let origin = self.map_to_root(node, layer, Some(entry), Offset::ZERO);
         let mut bounds = self.rect_in_root(node, layer, Some(entry), size);
@@ -748,21 +789,20 @@ impl UiTree {
 
     /// `bounds` clipped by the clipping modifiers of `id`, those before chain entry `before_entry`
     /// if it's given.
-    fn clip_by_node(&mut self, id: NodeId, before_entry: Option<usize>, bounds: &mut Rect) {
+    fn clip_by_node(&self, id: NodeId, before_entry: Option<usize>, bounds: &mut Rect) {
+        let value = self.node(id);
         let mut layer_of_entry = 0;
-        for index in 0..self.node(id).chain.len() {
+        for index in 0..value.chain.len() {
             if before_entry.is_some_and(|before| index >= before) {
                 break;
             }
-            let value = self.node_mut(id);
-            let size = value.layers[layer_of_entry].size;
-            let density = value.density;
-            let is_layout = value.chain[index].kinds.any(NodeKinds::LAYOUT);
-            if value.chain[index].hit_clip_at(size.into(), density).is_some() {
+            let entry = &value.chain[index];
+            if entry.clips() {
+                let size = value.layers[layer_of_entry].size;
                 let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
                 *bounds = intersect(*bounds, clip);
             }
-            if is_layout {
+            if entry.kinds.any(NodeKinds::LAYOUT) {
                 layer_of_entry += 1;
             }
         }
@@ -830,9 +870,11 @@ impl UiTree {
                 else {
                     continue;
                 };
-                let properties = self.properties_of_layer(current, index, graphics);
-                graphics.note_transform(&properties, self.position_listeners);
-                points = points.map(|point| properties.map(point));
+                let layer = value.layer_of(index);
+                let map = graphics
+                    .layer_map(layer_origin(value, layer), value.layers[layer].measured.into());
+                graphics.note_transform(&map, self.position_listeners);
+                points = points.map(|point| map.map(point));
             }
             if value.overlay {
                 return points.map(|point| point + value.overlay_origin);
@@ -849,6 +891,28 @@ impl UiTree {
                 None => return points,
             }
         }
+    }
+
+    /// `point` of layer `layer` of `node`, through what's in the node and its own position, in its
+    /// parent's content (or the window, for a popup's root).
+    pub(crate) fn map_out_of_node(&self, node: NodeId, layer: usize, point: Offset) -> Offset {
+        let value = self.node(node);
+        let mut point = point + layer_origin(value, layer);
+        for index in (0..value.chain.len()).rev() {
+            let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() else {
+                continue;
+            };
+            let layer = value.layer_of(index);
+            let map =
+                graphics.layer_map(layer_origin(value, layer), value.layers[layer].measured.into());
+            graphics.note_transform(&map, self.position_listeners);
+            point = map.map(point);
+        }
+        if value.overlay {
+            return point + value.overlay_origin;
+        }
+        let position = value.layers[0].offset;
+        point + Offset::new(position.x as f32, position.y as f32)
     }
 
     /// Registers `node` as having position-aware modifier nodes (from its chain refresh).

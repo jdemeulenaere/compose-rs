@@ -148,6 +148,8 @@ pub struct LayoutNode {
     /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
     /// size places the parent again, doesn't measure it.
     pub(crate) measured_in_block: bool,
+    /// Where it is in `UiTree::coordinate_readers`, or `u32::MAX`.
+    pub(crate) reader_at: u32,
     /// Which layers (the first 8) a motion frame of reference placed
     /// (`with_motion_frame_of_reference_placement`).
     pub(crate) motion_layers: u8,
@@ -231,6 +233,7 @@ impl LayoutNode {
             placements: None,
             needs_placement: false,
             content_placed_in: 0,
+            reader_at: u32::MAX,
             motion_layers: 0,
             subtree_needs_placement: false,
             measured_in_block: false,
@@ -326,7 +329,7 @@ pub struct UiTree {
     root: NodeId,
     pub(crate) text_measurer: crate::text::SharedTextMeasurer,
     /// The paragraphs `Modifier.capture_content`'s captures still draw.
-    pub(crate) held_paragraphs: crate::draw_capture::HeldParagraphs,
+    pub(crate) held_paragraphs: std::cell::RefCell<crate::draw_capture::HeldParagraphs>,
     pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
     /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
     /// `LOCAL_HAPTIC_FEEDBACK`.
@@ -399,6 +402,8 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// Nodes whose graphics layers came or were updated since the last draw (`run_new_layers`).
+    pub(crate) new_layers: Vec<NodeId>,
     /// Where the host's root is on the screen (`UiHost::set_window_origin`).
     pub(crate) window_origin: Offset,
     /// The last `EntryId` given to a chain entry.
@@ -522,6 +527,7 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            new_layers: Vec::new(),
             window_origin: Offset::ZERO,
             next_entry: 0,
             last_semantics_id: 0,
@@ -1260,11 +1266,7 @@ impl UiTree {
                 if removed.state & entry_state::DELEGATING != 0 {
                     self.release_delegates(&mut *removed.node);
                 }
-                let mut context = ReleaseContext {
-                    text_measurer: &self.text_measurer,
-                    held_paragraphs: &mut self.held_paragraphs,
-                };
-                removed.node.on_release(&mut context);
+                self.release_node(removed.node);
             }
         }
         if !detaching.is_empty() {
@@ -1738,14 +1740,18 @@ impl UiTree {
                     self.release_delegates(&mut *entry.node);
                 }
             }
+            // As `release_node`: what they run may ask where something is.
+            let access = crate::tree_access::TreeAccess::new(&mut *self);
+            let open = access.open();
             let mut context = ReleaseContext {
-                text_measurer: &self.text_measurer,
-                held_paragraphs: &mut self.held_paragraphs,
+                text_measurer: &access.text_measurer,
+                held_paragraphs: &access.held_paragraphs,
             };
             for entry in &mut value.chain {
                 entry.node.on_release(&mut context);
             }
             drop(value);
+            drop(open);
         }
     }
 }
