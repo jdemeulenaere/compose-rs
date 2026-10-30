@@ -567,6 +567,15 @@ internal class Accessibility(private val view: ComposeRsView) :
                 send(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                 true
             }
+            android.R.id.accessibilityActionShowOnScreen -> {
+                if (node.flags and DISABLED != 0) return false
+                when (view.showSemanticsOnScreen(virtualViewId)) {
+                    // Nothing here scrolls it: what's around the view may.
+                    -1 -> view.requestRectangleOnScreen(node.bounds)
+                    0 -> false
+                    else -> true
+                }
+            }
             else -> {
                 val index = node.actionCodes.indexOfFirst { androidAction(it) == action }
                 if (index < 0) return false

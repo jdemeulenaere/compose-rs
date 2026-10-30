@@ -176,6 +176,9 @@ internal object ComposeRsNative {
      */
     @JvmStatic external fun characterLocations(host: Long, id: Int, start: Int, length: Int): FloatArray?
 
+    /** Scrolls what's around virtual view [id] to show it: 1 it did, 0 not, -1 nothing scrolls. */
+    @JvmStatic external fun showOnScreen(host: Long, id: Int): Int
+
     /** What the content's `remember_saveable`s hold, for the saved instance state, or null. */
     @JvmStatic external fun saveState(host: Long): ByteArray?
 

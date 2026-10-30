@@ -1876,6 +1876,21 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_characterLocation
     .unwrap_or_default()
 }
 
+/// `ComposeRsNative.showOnScreen(host, id)`: `accessibility::show_on_screen`: 1 scrolled, 0 not, -1
+/// nothing around it scrolls.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_showOnScreen(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jint,
+) -> jint {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    crate::accessibility::show_on_screen(&mut host.ui, tree, id).map_or(-1, i32::from)
+}
+
 /// `ComposeRsNative.nodeAt(host, x, y)`: the virtual view a touch there finds (`accessibility::
 /// node_at`), -1 for none.
 #[unsafe(no_mangle)]

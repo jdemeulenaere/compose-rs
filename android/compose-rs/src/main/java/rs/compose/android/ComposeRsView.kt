@@ -881,6 +881,9 @@ class ComposeRsView @JvmOverloads constructor(
         return ComposeRsNative.performAction(host, id, action, value)
     }
 
+    internal fun showSemanticsOnScreen(id: Int): Int =
+        if (host != 0L) ComposeRsNative.showOnScreen(host, id) else 0
+
     internal fun characterLocations(id: Int, start: Int, length: Int): FloatArray? =
         if (host != 0L) ComposeRsNative.characterLocations(host, id, start, length) else null
 

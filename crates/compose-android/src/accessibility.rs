@@ -1347,7 +1347,10 @@ pub fn perform_action(
         }
         action::SCROLL_FIRST..=8 => {
             let direction = 1u8 << (code - action::SCROLL_FIRST);
-            let Some((x, y)) = scroll_amount(found, direction, shown) else {
+            // A page is the active viewport where the node says what that is.
+            let page = viewport_of(ui, found)
+                .map_or(shown, |it| Rect::new(0.0, 0.0, it.length, it.length));
+            let Some((x, y)) = scroll_amount(found, direction, page) else {
                 return false;
             };
             ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
@@ -1607,6 +1610,120 @@ fn set_selection(
         cursor.told.push(told);
     }
     true
+}
+
+/// What a scrolling node says of its viewport, as Compose's `getScrollViewportLength` and
+/// `getScrollViewportPadding`: its length without the content padding, and the padding.
+struct ScrollViewport {
+    length: f32,
+    padding: Option<(f32, f32)>,
+}
+
+fn viewport_of(ui: &mut UiHost, node: &SemanticsSnapshot) -> Option<ScrollViewport> {
+    let action = ui.semantics_action(node.id, &A::GET_SCROLL_VIEWPORT_LENGTH)?;
+    let mut said = Vec::new();
+    if !action(&mut said) {
+        return None;
+    }
+    let length = *said.first()?;
+    let padding = (said.len() > 2).then(|| (said[1], said[2]));
+    Some(ScrollViewport { length, padding })
+}
+
+/// Which of the two ends is the least to move to line up `a` or `b`; nothing if they'd move
+/// opposite ways, the target being past the viewport at both or inside it at both.
+fn least_scroll(a: f32, b: f32) -> f32 {
+    let sign = |it: f32| if it == 0.0 { 0.0 } else { it.signum() };
+    if sign(a) != sign(b) {
+        0.0
+    } else if a.abs() < b.abs() {
+        a
+    } else {
+        b
+    }
+}
+
+/// `viewport` less a scrolling node's content padding, as Compose's
+/// `insetViewportByContentPadding`: unless there's no room left.
+fn inside_content_padding(ui: &mut UiHost, scroller: &SemanticsSnapshot, viewport: Rect) -> Rect {
+    let Some((before, after)) = viewport_of(ui, scroller).and_then(|it| it.padding) else {
+        return viewport;
+    };
+    let own = scroller.unmerged_config();
+    let (mut left, mut right, mut top, mut bottom) = (0.0, 0.0, 0.0, 0.0);
+    if let Some(range) = own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE) {
+        (left, right) =
+            if range.reverse_scrolling != scroller.rtl { (after, before) } else { (before, after) };
+    }
+    if let Some(range) = own.get(&P::VERTICAL_SCROLL_AXIS_RANGE) {
+        (top, bottom) = if range.reverse_scrolling { (after, before) } else { (before, after) };
+    }
+    let across = viewport.width() > left + right;
+    let along = viewport.height() > top + bottom;
+    Rect::new(
+        if across { viewport.left + left } else { viewport.left },
+        if along { viewport.top + top } else { viewport.top },
+        if across { viewport.right - right } else { viewport.right },
+        if along { viewport.bottom - bottom } else { viewport.bottom },
+    )
+}
+
+/// Scrolls what's around virtual view `id` for all of it to show, the least it can, as Compose's
+/// `scrollOntoScreen`: each scrolling node around it, nearest first, what the nearer ones moved it
+/// taken into account. Whether one scrolled; `None` if none is around it, and the view is to ask
+/// for the rectangle itself (`requestRectangleOnScreen`).
+pub fn show_on_screen(ui: &mut UiHost, tree: &SemanticsSnapshot, id: i32) -> Option<bool> {
+    fn path<'a>(
+        node: &'a SemanticsSnapshot,
+        id: i32,
+        out: &mut Vec<&'a SemanticsSnapshot>,
+    ) -> bool {
+        if virtual_id(node) == id {
+            return true;
+        }
+        out.push(node);
+        if node.children.iter().any(|child| path(child, id, out)) {
+            return true;
+        }
+        out.pop();
+        false
+    }
+    let target = find(tree, id)?;
+    let mut around = Vec::new();
+    path(tree, id, &mut around);
+    around.retain(|node| node.unmerged_config().contains(&A::SCROLL_BY));
+    if around.is_empty() {
+        return None;
+    }
+    let mut scrolled = false;
+    let (mut moved_x, mut moved_y) = (0.0, 0.0);
+    for scroller in around.iter().rev() {
+        let viewport = inside_content_padding(ui, scroller, scroller.bounds);
+        let bounds = target.bounds;
+        let (left, top) = (bounds.left + moved_x, bounds.top + moved_y);
+        let (right, bottom) = (bounds.right + moved_x, bounds.bottom + moved_y);
+        let dx = least_scroll(left - viewport.left, right - viewport.right);
+        let dy = least_scroll(top - viewport.top, bottom - viewport.bottom);
+        // As `ScrollBy` takes it: towards the content's end.
+        let own = scroller.unmerged_config();
+        let mut x = dx;
+        if own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE).is_some_and(|it| it.reverse_scrolling) {
+            x = -x;
+        }
+        if target.rtl {
+            x = -x;
+        }
+        let mut y = dy;
+        if own.get(&P::VERTICAL_SCROLL_AXIS_RANGE).is_some_and(|it| it.reverse_scrolling) {
+            y = -y;
+        }
+        let done =
+            ui.perform_semantics_action_with(scroller.id, &A::SCROLL_BY, |scroll| scroll(x, y));
+        scrolled |= done;
+        moved_x -= dx;
+        moved_y -= dy;
+    }
+    Some(scrolled)
 }
 
 /// The scroll range of `node` along its axis (horizontal: `true`), from its own
