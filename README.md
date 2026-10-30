@@ -170,10 +170,10 @@ Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 r
 | `single_drawing_fade` | on | Fades a layer holding one drawing by its paint, not offscreen (as `ModulateAlpha`) | Stress animation: RenderThread work −42 %; GPU caches +31 % unless the next flag is on too |
 | `flush_layers_before_dropped_paths` | on | Flushes HWUI's layers before a frame that drops a stroked path (Android) | Frees a frame's worth of path masks: −28 MB of graphics memory without offscreen layers (D510) |
 | `reuse_paragraph_at_same_layout_width` | on | Keeps a text's paragraph while the width it's laid out at stays the same | Width-changing screen: 14 times fewer text layouts, main-thread work −52 % (D551); no change elsewhere |
-| `keep_items_behind` | off | Keeps two items behind the scroll composed, with their recordings | Faster first frame on a fling reversal (D375); main thread p50 +5 % |
-| `prefetch_two_ahead` | off | Prefetches two items ahead, not one | No change in frame durations |
+| `keep_items_behind` | off | The default cache window keeps two items' worth behind the scroll, with their recordings | Faster first frame on a fling reversal (D375); main thread p50 +5 % (measured at Compose 1.12.1's one-item strategy) |
+| `prefetch_two_ahead` | off | The default cache window holds another item's worth ahead | No change in frame durations (measured at Compose 1.12.1's one-item strategy) |
 | `prefetch_budget_recent_maximum` | off | Budgets prefetch steps by their recent maximum, with a margin, on the vsync's phase | Fewer steps past the vsync (D341, D381); no change in round 14 |
-| `prefetch_at_rest` | off | Prefetches after a layout at rest too, not only on scrolls | No change |
+| `prefetch_at_rest` | off | The default cache window fills after a layout at rest too, not only on scrolls | No change (measured at Compose 1.12.1's one-item strategy) |
 | `grid_lines_beyond` | off | Composes and places two grid lines beyond each side | Not measured (no grid scenario) |
 | `paragraph_render_nodes` | off | Records each paragraph into a render node of its own (Android) | A cost on the feed: main thread p90 +11 % |
 

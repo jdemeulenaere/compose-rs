@@ -8,8 +8,8 @@
 //! composed by a restartable composable of their own, each item one too: a scroll recomposes
 //! neither the list's caller nor the items that stay.
 //!
-//! After its first layout and after each scroll, the next items in the scroll direction are
-//! composed and measured between frames (prefetch, as Compose's `LazyListPrefetchStrategy`), so
+//! After each scroll, the next items in the scroll direction are composed and measured between
+//! frames, as many as its cache window holds (prefetch, as Compose's `LazyLayoutCacheWindow`), so
 //! the frame reaching them finds them ready. A focus search leaving the list asks it for the
 //! next items, laid out beyond its bounds for the search (D477).
 //!

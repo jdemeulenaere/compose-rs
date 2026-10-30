@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 17 | 421 |
+| `ported` | 24 | 481 |
 | `port` | 12 | 79 |
 | `partial` | 25 | 847 |
-| `feature:<name>` | 108 | 1,517 |
+| `feature:<name>` | 101 | 1,457 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -99,8 +99,8 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListBeyondBoundsAndExtraItemsTest.kt | 2 | Beyond-bounds items placed with `beyondBoundsItemCount` items | feature:beyond-bounds-api |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListBeyondBoundsItemCountTest.kt | 3 | The internal `beyondBoundsItemCount` parameter | n/a: internal parameter, not public API |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListBeyondBoundsTest.kt | 10 | `BeyondBoundsLayout.layout` requests through the modifier local: items laid out per direction | feature:beyond-bounds-api (compose-rs's own mechanism is focus-driven: `lazy.rs` tab tests) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListCacheWindowParityTest.kt | 13 | A `LazyLayoutCacheWindow` set up to behave like the old one-item strategy | feature:cache-window |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListCacheWindowTest.kt | 18 | Cache window: initial fill, small scrolls fill the window, kept items not disposed or recomposed, dataset changes | feature:cache-window |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListCacheWindowParityTest.kt | 13 | A `LazyLayoutCacheWindow` set up to behave like the old one-item strategy | ported (`lazy_cache_window.rs`: all 13, `parity_*`, in both orientations) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListCacheWindowTest.kt | 18 | Cache window: initial fill, small scrolls fill the window, kept items not disposed or recomposed, dataset changes | ported (`lazy_cache_window.rs`: 17, in both orientations, `smallScrollBackwardShouldFillEntireWindow` given the body its name asks for, Compose's scrolling nothing; `lookahead_sizeChange_cacheClearedCorrectly` is n/a with `isCacheWindowLookaheadCheckEnabled` off. `scrollForward_shouldNotDisposeItemsInWindow` holds as after Compose's next measurement, D894; it found the negative initial offset compose-rs clamped) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListFocusMoveCompositionCountTest.kt | 6 | A focus move beyond bounds composes a bounded number of items (various sizes, nesting) | covered (`review_d475.rs::tab_past_unfocusable_rows_finds_the_next_and_leaves_few_composed`, `review_d486.rs`, `lazy.rs::tab_lays_out_the_next_row…`; port the large and different-size cases) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListFocusMoveTest.kt | 9 | 2D and 1D focus moves among visible, just-beyond, far and nested items, with user scroll off | covered (`lazy.rs` tab and move-focus tests, `review_d475.rs`, `review_d479.rs`; the `userScrollEnabled = false` variants are worth porting) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt | 16 | Sticky headers: shown, replaced, pushed, with pinned items, in the content padding, empty header | partial (`lazy_list_headers.rs`: 7 tests porting 10. Left: the two `beyondBoundsItemCount = 1` tests and the three focus tests, which compose every item with it (internal: drop, or rewrite them to scroll first), and `withPinnedItem` (needs `LocalPinnableContainer`: feature:pinnable)) |
@@ -111,9 +111,9 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListMovableContentTest.kt | 2 | A list in `movableContentOf` keeps its position when moved | feature:movable-content (runtime) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListNestedPrefetchingTest.kt | 6 | Nested lists' items prefetched with the parent's, cancellation, constraints, automatic count | port (`prefetch_parity.rs::a_request_composes_its_nested_lists_first_items_before_measuring`; `overridingNestedPrefetchCountIsRespected` uses the deprecated `LazyListPrefetchStrategy(n)`: n/a) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPinnableContainerTest.kt | 19 | `LocalPinnableContainer` pinning keeps items composed and placed | feature:pinnable (compose-rs pins the focused item internally: `review_lazy2.rs::a_focused_item_stays_pinned…`) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPrefetchPrecedenceTest.kt | 4 | The default is the cache window; the flag-off fallback; an explicit window or strategy wins | feature:cache-window |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPrefetchPrecedenceTest.kt | 4 | The default is the cache window; the flag-off fallback; an explicit window or strategy wins | ported (`lazy_cache_window.rs`: 2; the other 2 are n/a, the fallback flag and the deprecated strategy not being ported, D892) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPrefetchStrategyTest.kt | 7 | Callbacks of a custom `LazyListPrefetchStrategy` | n/a: `LazyListPrefetchStrategy` is `@Deprecated` at tip |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPrefetcherTest.kt | 13 | The one-item-ahead prefetch: forward/backward, twice, reverse, padding, sticky header, cancellation | covered (`prefetch_parity.rs`, `prefetch.rs`, which mirror 1.12.1's default. At tip this file pins the deprecated strategy, and the cache-window rows supersede it: see Tip differences) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListPrefetcherTest.kt | 13 | The one-item-ahead prefetch: forward/backward, twice, reverse, padding, sticky header, cancellation | covered (`prefetch_parity.rs`, `prefetch.rs`, at the default window now. At tip this file pins the deprecated strategy, and the cache-window rows supersede it: see Tip differences) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListRequestScrollTest.kt | 9 | `requestScrollToItem` across data changes | ported (`lazy_request_scroll.rs`: 9 tests; `performScrollToIndex` as `scroll_to_item` until feature:lazy-semantics) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListScrollIndicatorTest.kt | 13 | `scrollIndicatorState` offsets and sizes | feature:scroll-indicator-state |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListSlotsReuseTest.kt | 10 | Scrolled-off items kept for reuse (max per type), reuse on scroll back, content types | covered (`lazy_reuse.rs`: 19 tests, including up to seven per type, content types, own slot on scroll back) |
@@ -134,8 +134,8 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyArrangementsTest.kt | 33 | Grid main-axis arrangements, spacing, RTL | port (main axis exists; cross-axis arrangement other than spacing needs feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyCustomKeysTest.kt | 21 | Keyed grid items keep state through edits | covered (`review_round6.rs::a_keyed_grid_keeps_each_items_state_by_its_key`, `lazy_grid_reuse.rs` reorder and insert tests; port the remaining edit cases) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridBeyondBoundsTest.kt | 10 | `BeyondBoundsLayout` requests on grids | feature:beyond-bounds-api |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowParityTest.kt | 12 | Grid cache window configured like the old strategy | feature:cache-window |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowTest.kt | 8 | Grid cache window fill and keep | feature:cache-window |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowParityTest.kt | 12 | Grid cache window configured like the old strategy | ported (`lazy_cache_window.rs`: 11, `grid_parity_*`, in both orientations; `prefetchingForwardAndBackwardReverseLayout` waits for grids' `reverseLayout`, feature:grid-parity) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowTest.kt | 8 | Grid cache window fill and keep | ported (`lazy_cache_window.rs`: all 8, in both orientations) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridHeadersTest.kt | 14 | `LazyGridScope.stickyHeader` | feature:grid-parity |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemAppearanceAnimationTest.kt | 10 | Grid `animateItem` fade-in | feature:animate-item |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemDisappearanceAnimationTest.kt | 13 | Grid `animateItem` fade-out | feature:animate-item |
@@ -143,9 +143,9 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt | 17 | Grid `layoutInfo` (rows/columns/spans, viewport) | partial (`lazy_grid_layout_info.rs`: 14 tests, the 17 not reversed; the reversed configurations need feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridNestedPrefetchingTest.kt | 6 | Nested prefetch from grid items | port (as the list's; one test uses a deprecated strategy: n/a) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPinnableContainerTest.kt | 13 | Pinning grid items | feature:pinnable |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetchPrecedenceTest.kt | 4 | Grid default is the cache window | feature:cache-window |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetchPrecedenceTest.kt | 4 | Grid default is the cache window | ported (`lazy_cache_window.rs`: 2; the other 2 are n/a, as the list's) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetchStrategyTest.kt | 6 | Custom `LazyGridPrefetchStrategy` callbacks | n/a: `@Deprecated` at tip |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetcherTest.kt | 12 | Grid line prefetch (1.12.1's default strategy) | covered (`prefetch.rs::a_grid_prefetches_its_next_rows`, `prefetch_parity.rs::a_grid_prefetches_the_next_line…`, `review_grid_d450.rs`; deprecated at tip, as the list's) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPrefetcherTest.kt | 12 | Grid line prefetch (1.12.1's default strategy) | covered (`prefetch.rs::a_grid_prefetches_its_next_rows`, `prefetch_parity.rs::a_grid_prefetches_the_next_line…`, `review_grid_d450.rs`, at the default window now; deprecated at tip, as the list's) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridRequestScrollTest.kt | 9 | `requestScrollToItem` on grids | partial (`lazy_request_scroll.rs`: 8 of 9; the reversed one after feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridScrollIndicatorTest.kt | 11 | Grid `scrollIndicatorState` | feature:scroll-indicator-state (+ grid-parity for the sticky case) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSlotsReuseTest.kt | 10 | Grid slot reuse | covered (`lazy_grid_reuse.rs`: 13 tests) |
@@ -166,7 +166,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutStateRestorationTest.kt | 6 | Saveable state of items (also nested, custom keys, reorders) restored | port (exists: `lazy_reuse.rs::an_item_scrolled_back_gets_its_saved_state_and_no_other_items`, `saveable_state_holder.rs`; restoration across a recreated host and nested lists not tested) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutTest.kt | 19 | The public `LazyLayout`: item provider, measure scope, `LazyLayoutPrefetchState` scheduling and cancelling, approach | feature:lazy-layout-public |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/lazy/MutableIntervalListTest.kt | 19 | `MutableIntervalList` add and search | feature:lazy-layout-public (compose-rs's private `Items` interval search could take an adapted copy now) |
-| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogicTest.kt | 1 | Lane resize resets the cache-window strategy | feature:cache-window |
+| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogicTest.kt | 1 | Lane resize resets the cache-window strategy | ported (`cache_window.rs`, `a_change_of_lanes_starts_the_window_over`) |
 
 ### Lazy staggered grids (`lazy.staggeredgrid`)
 
@@ -282,7 +282,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 
 ## Tip differences to adopt
 
-The user's direction: compose-rs's parity mode follows androidx-main's tip, not 1.12.1, and the Compose benchmark app will move to tip-of-tree Compose. Today compose-rs mirrors 1.12.1's lazy prefetch (docs/15, "Compose's defaults (version 1.12.1)" (a), (b), (f); docs/06; `crates/compose-foundation/src/lazy/prefetch.rs`). The differences below are from a diff of foundation 1.12.1's sources jar, from the local Gradle cache (`foundation-android-1.12.1-sources.jar`), against the tip. Paths are under `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/`.
+The user's direction: compose-rs's parity mode follows androidx-main's tip, not 1.12.1, and the Compose benchmark app will move to tip-of-tree Compose. Items 1 to 4 are adopted (D892, D893, D894: `crates/compose-foundation/src/lazy/cache_window.rs`, `prefetch.rs`); until then compose-rs mirrored 1.12.1's lazy prefetch, which the benchmark app still runs (docs/15, "Compose's defaults (version 1.12.1)" (a), (b), (f)). The differences below are from a diff of foundation 1.12.1's sources jar, from the local Gradle cache (`foundation-android-1.12.1-sources.jar`), against the tip. Paths are under `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/`.
 
 1. **Lists and grids prefetch with a cache window by default, not the one-item strategy.**
    - At tip, `LazyColumn`/`LazyRow` take `cacheWindow: LazyLayoutCacheWindow = LazyListDefaults.cacheWindow(state)` (`lazy/LazyDsl.kt:349`, `:481`).
@@ -305,7 +305,7 @@ The user's direction: compose-rs's parity mode follows androidx-main's tip, not 
    - **Urgency:** a request is urgent when it's for the item right after the last visible one and `|delta| >= ` that item's lane's overflow past the viewport end (`:490-496`). 1.12.1 required `lastItem.offset + size + spacing - viewportEndOffset < -delta`: the spacing and the strict comparison differ.
    - **Dataset changes:** a change of item count or size, or of a visible item's key, refills or resets the ahead bounds (`onVisibleItemsUpdated`, `:188-286`).
    - Pinned by `LazyListCacheWindowTest` (18), `LazyGridCacheWindowTest` (8), `LazyStaggeredGridCacheWindowTest` (15), `CacheWindowLogicTest` (1) and `PagerCacheWindowTest` (7). `LazyListCacheWindowParityTest` and `LazyGridCacheWindowParityTest` pin a window configured to mimic the old strategy.
-4. **Pausable composition in prefetch is always on.** The flag `isPausableCompositionInPrefetchEnabled` is gone, and so is the non-pausable path (`performFullComposition` and `compositionTimeNanos`): compare `lazy/layout/LazyLayoutPrefetchState.kt:617-624` with 1.12.1's `:623-641`. compose-rs keeps `ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled` (`crates/compose-foundation/src/flags.rs`): that flag no longer exists in Compose.
+4. **Pausable composition in prefetch is always on.** The flag `isPausableCompositionInPrefetchEnabled` is gone, and so is the non-pausable path (`performFullComposition` and `compositionTimeNanos`): compare `lazy/layout/LazyLayoutPrefetchState.kt:617-624` with 1.12.1's `:623-641`. compose-rs's flag and its whole compositions went with it (D892).
 5. **Nested prefetch** is unchanged in substance: the count comes from `realizedNestedPrefetchCount`, else 2 (`DefaultNestedPrefetchCount`, `lazy/LazyListCacheWindowStrategy.kt:157`), as compose-rs does now (D599). `LazyListNestedPrefetchingTest.automaticNestedPrefetchingBasedOnNumberOfVisibleItems` pins it.
 6. **APIs that changed status.** These are now `@Deprecated`:
    - `LazyListPrefetchStrategy`, `LazyGridPrefetchStrategy` and their scopes;
@@ -322,7 +322,7 @@ The user's direction: compose-rs's parity mode follows androidx-main's tip, not 
 7. **Draggable velocity.** `isDraggableVelocityTrackerFixEnabled` was `false` in 1.12.1 and is `true` at tip (`ComposeFoundationFlags.kt:228`, `gestures/Draggable.kt`). It tracks velocity per pointer and adds the events that don't move at the gesture's start. `isDraggableInitialPassConsumptionFixEnabled` (`:206`: a drag that starts immediately consumes in the initial pass) and `isDraggableZeroDeltaConsumptionEnabled` (`:258`: zero-delta moves consumed once a drag started) are new and on. compose-rs's draggable and scroll velocity (`crates/compose-foundation/src/fling.rs`) should be checked against these. DraggableTest's velocity tests pin them.
 8. **Lazy measurement** itself (`lazy/LazyListMeasure.kt`) changed only around the item animator (`isLazyListItemAnimatorVisibleBoundsFixEnabled`, item animations always run through `onMeasured`) and in passing the prefetch state. Content padding, sticky headers and the scroll consumption that compose-rs mirrors (D649 and the rows it revises) are unchanged.
 
-The benchmarks (docs/12, docs/15, docs/16) compare against 1.12.1. Moving parity to tip changes what "parity mode" prefetches (items 1 to 4), so the benchmark numbers need to be taken again once both sides move. compose-rs's own `PREFETCH_TWO_AHEAD`, `KEEP_ITEMS_BEHIND` and `PREFETCH_AT_REST` optimizations overlap the cache window's ahead window, behind window and non-scroll caching; deciding how they map is a decision for the coordinator, not this ledger.
+The benchmarks (docs/12, docs/15, docs/16): rounds from D892 on compare compose-rs at tip against the Kotlin app's Compose 1.12.1, until the app moves to tip-of-tree (D705). What parity mode prefetches changed (items 1 to 4), so the device's numbers need taking again. compose-rs's own `PREFETCH_TWO_AHEAD`, `KEEP_ITEMS_BEHIND` and `PREFETCH_AT_REST` are parameters of the default window now, and leave a window the app gives alone (D893).
 
 ## Public API compose-rs lacks
 
@@ -374,12 +374,12 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `animateScrollToItem`, `requestScrollToItem`, `scroll(priority) {}`, `dispatchRawDelta`;
   - `isScrollInProgress`, `interactionSource`, `lastScrolledForward`/`Backward`;
   - `LazyLayoutScrollScope` (and `LazyLayoutScrollScope(state, scrollScope)` for each state), the `Saver` as a value.
-- **lazy-list-params:** `LazyColumn`/`LazyRow`'s `flingBehavior`, `overscrollEffect` and `cacheWindow`. `reverseLayout`, `userScrollEnabled` and `contentPadding` exist.
+- **lazy-list-params:** `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect`. `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
 - **grid-parity:** on `LazyVerticalGrid`/`LazyHorizontalGrid`:
-  - parameters: `reverseLayout`, `userScrollEnabled`, `flingBehavior`, `overscrollEffect`, `cacheWindow`;
+  - parameters: `reverseLayout`, `userScrollEnabled`, `flingBehavior`, `overscrollEffect` (`cacheWindow` exists);
   - the cross-axis arrangement beyond its spacing;
   - `GridCells.FixedSize`, a public `GridCells` interface (`calculateCrossAxisCellSizes`) for custom cells, `LazyGridScope.stickyHeader`, `LazyGridItemScope` (for `animateItem`), the `LazyGridItemInfo.UnknownRow/Column` constants.
-- **cache-window:** `LazyLayoutCacheWindow` (interface: ahead and behind windows, `isNonScrollCachingEnabled`), `LazyLayoutCacheWindow(ahead: Dp, behind: Dp, …)`, `LazyLayoutCacheWindow(aheadFraction, behindFraction, …)`, `LazyListDefaults.cacheWindow(state)`, `LazyGridDefaults.cacheWindow(state)`, `LazyStaggeredGridDefaults.cacheWindow(state)`.
+- **cache-window:** done for lists and grids (D892). Left: `LazyStaggeredGridDefaults.cacheWindow(state)`, with staggered grids.
 - **lazy-semantics:** items in lazy layouts expose `CollectionInfo`/`CollectionItemInfo`, `ScrollToIndex`, `IndexForKey` and `scrollByOffset` (ui semantics properties), so `performScrollToIndex`/`performScrollToKey` work.
 - **pinnable:** `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
 - **beyond-bounds-api:** ui's `BeyondBoundsLayout` (`ModifierLocalBeyondBoundsLayout`, `layout(direction) {}`) answered by lazy layouts. compose-rs answers focus searches only.
@@ -396,7 +396,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - info and scopes: `PagerLayoutInfo`, `PageInfo`, `PagerScope`.
 - **keep-focused-in-view:** no API. Compose's scrollables keep a focused child in view when their viewport shrinks (`ContentInViewNode`).
 - **system-gesture-exclusion:** `Modifier.systemGestureExclusion()`, with a rect lambda (Android).
-- **flags:** `ComposeFoundationFlags` (*exp*). compose-rs mirrors only the pausable-prefetch flag, which tip removed.
+- **flags:** `ComposeFoundationFlags` (*exp*). compose-rs has none now: the pausable-prefetch flag it mirrored went as the tip's did (D892).
 
 What compose-rs has in this area: `Box`, `Row`, `Column`, `Spacer`, `BoxWithConstraints`; the arrangements (no `Absolute`); padding, size, fill, wrap, `aspect_ratio`, `default_min_size`, `offset(x, y)`, `weight`, `align`; window insets (`window_insets.rs`: every kind, consumption, sizes); `vertical_scroll`/`horizontal_scroll` with `ScrollState` (value, max, viewport, `scroll_to`); `draggable` (axis, reverse, callbacks); `detect_tap_gestures`, `detect_drag_gestures`, `await_first_down`, `wait_for_up_or_cancellation`, `await_touch_slop_or_cancellation`; nested scroll; `LazyColumn`/`LazyRow` (keys, content types, sticky headers, content padding, reverse layout, `user_scroll_enabled`, `fill_parent_max_*`, saveable item state, reuse, prefetch, beyond-bounds focus search); `LazyVerticalGrid`/`LazyHorizontalGrid` (Fixed/Adaptive, spans, content types, padding); Compose Desktop's scrollbars and tooltips.
 
@@ -404,12 +404,10 @@ What compose-rs has in this area: `Box`, `Row`, `Column`, `Spacer`, `BoxWithCons
 
 Each entry gives the Compose API, what it does, the test files that need it (by file name), its dependencies, its size (S < 1 day, M a few days, L 1–2 weeks, XL multi-week), and whether it's experimental in Compose.
 
-1. **cache-window** (tip parity).
-   - API: `LazyLayoutCacheWindow` and its factories, `LazyListDefaults`/`LazyGridDefaults.cacheWindow`, the `cacheWindow` parameter.
-   - Does: the dynamic default window replaces the one-item strategy as the parity mode's prefetch (Tip differences 1–4), with the old strategy kept only behind compose-rs's flag if wanted.
-   - Tests: LazyListCacheWindowTest, LazyListCacheWindowParityTest, LazyListPrefetchPrecedenceTest, LazyGridCacheWindowTest, LazyGridCacheWindowParityTest, LazyGridPrefetchPrecedenceTest, CacheWindowLogicTest; later PagerCacheWindowTest and LazyStaggeredGridCacheWindowTest.
-   - Depends on: nothing missing (the visible items' average size is internal).
-   - Size: L. Experimental: no.
+1. **cache-window** (tip parity). **Done for lists and grids** (D892, D893, D894).
+   - API: `LazyLayoutCacheWindow` and its factories, `LazyListDefaults`/`LazyGridDefaults.cacheWindow`, the `cache_window` parameter.
+   - Does: the dynamic default window replaces the one-item strategy as the parity mode's prefetch (Tip differences 1–4); the old strategy isn't kept, being deprecated at tip.
+   - Tests: LazyListCacheWindowTest, LazyListCacheWindowParityTest, LazyListPrefetchPrecedenceTest, LazyGridCacheWindowTest, LazyGridCacheWindowParityTest, LazyGridPrefetchPrecedenceTest, CacheWindowLogicTest are ported. Later, with their features: PagerCacheWindowTest and LazyStaggeredGridCacheWindowTest.
 2. **mutator-mutex.**
    - API: `MutatorMutex`, `MutatePriority`.
    - Does: one mutation at a time, a higher or equal priority cancelling the running one, as scrolls and drags take turns.
@@ -586,7 +584,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - API: `movableContentOf`.
     - Tests: LazyListMovableContentTest.
 
-**lazy-list-params** (`flingBehavior`, `overscrollEffect` and `cacheWindow` on `LazyColumn`/`LazyRow`) has no entry of its own: each parameter comes with the feature it carries (scrollable, overscroll, cache-window). Size S each.
+**lazy-list-params** (`flingBehavior` and `overscrollEffect` on `LazyColumn`/`LazyRow`) has no entry of its own: each parameter comes with the feature it carries (scrollable, overscroll). Size S each.
 
 ### Suggested order
 
@@ -662,7 +660,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 - **Lazy items are composed in rounds** within a frame, not during measurement. Tests that count recompositions of items or callers (`LazyColumnTest.recompositionOrder`, `LazyListTest` composition-count tests) can see different orders. The count of items composed per frame should match (D487, D492). Compare against `review_lazy.rs::scrolling_one_row_composes_only_the_rows_coming_into_range`.
 - **Lazy lists compose no `beyondBoundsItemCount` items** (Compose's is internal and 0 by default, the same). With compose-rs's recommended optimizations, items are kept behind and two are prefetched ahead. Lazy tests about what's composed must set `Optimizations::NONE` to match Compose.
 - **Grids compose `BEYOND` (2) lines beyond each side** only with the `GRID_LINES_BEYOND` optimization. Compose places none, so set `NONE` for `LazyGridTest`/`LazyGridPrefetcherTest` ports.
-- **Prefetch at tip** differs from compose-rs's parity mode: see [Tip differences to adopt](#tip-differences-to-adopt). Until cache-window lands, keep porting `LazyListPrefetcherTest` against 1.12.1's rules (as `prefetch_parity.rs` does), and mark those ports as pinning the deprecated strategy.
+- **Prefetch at tip** is compose-rs's parity mode (D892): `LazyListPrefetcherTest`'s ports (`prefetch_parity.rs`) run at the default window, and that file pins the deprecated strategy in Compose.
 - **`detect_tap_gestures`' `on_press`** is a plain callback. Compose's gets a `PressGestureScope` whose `tryAwaitRelease` reports whether the press was released or cancelled. Caught by `TapGestureDetectorTest`'s press tests.
 - **Pointer events carry one change each.** A Compose `PointerEvent` carries every pointer's change at once. Two-finger tests (`DragGestureDetectorTest.twoFingerDrag_*`, `TransformGestureDetectorTest`, `TransformableTest`) need the ui change first.
 - **The gesture detectors live in `compose_ui::PointerInputScope`**, not foundation. A port in compose-foundation's suite imports them from `compose_ui`; re-exporting them under `compose::foundation::gestures` would match Compose's package.

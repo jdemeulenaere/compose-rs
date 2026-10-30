@@ -143,10 +143,10 @@ What compose-rs does beyond Compose's work is a flag of `Optimization::ALL` (`co
 | `single_drawing_fade` | on | fades a layer holding one fill by its paint, `ModulateAlpha`-like, when the fill provably lies within the layer's bounds; never a stroke (an offscreen layer, `Auto`) (D521, D648) |
 | `performance_hint` | on | the main thread and the RenderThread in a hint session of compose-rs's own (HWUI's session only) (D390, D500, D568, D581, D610) |
 | `reuse_paragraph_at_same_layout_width` | on | keeps a paragraph when new width bounds lay it out at the same width (lays it out again) (D551) |
-| `prefetch_two_ahead` | off | prefetches two items (grid lines) ahead (one) (D156, D560) |
+| `prefetch_two_ahead` | off | the default cache window holds another item's (grid line's) worth ahead (the items' average size and spacing, in 10 to 50 % of the viewport); a window the app gives isn't touched (D156, D560, D893) |
 | `prefetch_budget_recent_maximum` | off | budgets a step by the larger of its average and a fading recent maximum, a 0.5 ms margin and the idle time's pace, gives a request short of time up until the next scroll, and runs to the vsync on the frame time's phase (the average, 0 when urgent; kept queued; the last frame's time plus an interval) (D340, D341, D381, D561) |
-| `prefetch_at_rest` | off | prefetches after a layout at rest too (on scrolls only) (D470, D562) |
-| `keep_items_behind` | off | keeps two items behind the scroll composed, disposes those beyond between frames, and lists their groups so Android keeps their recordings (deactivates in the measurement that leaves them) (D375, D380, D563) |
+| `prefetch_at_rest` | off | the default cache window fills after a layout at rest too (on scrolls only); a window the app gives isn't touched (D470, D562, D893) |
+| `keep_items_behind` | off | the default cache window keeps two items' worth behind the scroll, and frames list unplaced groups so Android keeps their recordings (nothing behind; a window the app gives isn't touched, the listing applies to it) (D375, D380, D563, D893) |
 | `draw_prefetched_ahead` | on | Android: draws and records a prefetched item's groups, and its paragraphs, in the same idle time (nothing records before a frame places it) (D322, D350, D564) |
 | `grid_lines_beyond` | off | grids compose and place two lines beyond each side (the lines in view) (D456, D565) |
 | `flush_layers_before_dropped_paths` | on | Android: a frame dropping a stroked path draws a 1 x 1 compositing layer first, so HWUI flushes its layers (no such layer) (D510, D566) |

@@ -296,7 +296,7 @@ fn a_scroll_forward_keeps_the_items_in_the_window() {
             compose_list(ListArgs { first: 3, ..ListArgs::new(vertical, viewport_window()) });
         list.scroll_by(ITEM * 2.5);
         assert_eq!(list.state.first_visible_item_index(), 5);
-        // As after Compose's next measurement, which here is the one after the prefetching: item
+        // As after Compose's next measurement; here it has gone with the prefetching: item
         // 5's half out leaves the 1.5 items' window room for item 4 only. Compose's item 3 stays
         // until then, as the window it composes by is the one before the scroll (`keepAroundItems`),
         // and its test ends there; its backward one forces that measurement (D892).
@@ -371,6 +371,25 @@ fn Noted(tag: String, tags: Tags) {
 fn Tagged(tag: String, tags: Tags, vertical: bool) {
     Noted(tag.clone(), tags);
     Spacer(main_axis(vertical, ITEM).test_tag(tag));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/CacheWindowLogic.kt, onVisibleItemsUpdated: a refill fills only a window with non-scroll caching, and resets the other's bounds
+#[test]
+fn more_items_at_rest_fill_only_a_window_caching_at_rest() {
+    for vertical in ORIENTATIONS {
+        for (caching, filled) in [(true, true), (false, false)] {
+            let window = lazy_layout_cache_window_fraction_with(1.0, 1.0, caching);
+            let count = mutable_state_of(2usize);
+            let mut list = compose_list(ListArgs {
+                count: Some(count.handle()),
+                ..ListArgs::new(vertical, window)
+            });
+            assert!(list.displayed(0) && list.displayed(1));
+            count.set(100);
+            idle(&mut list.ui);
+            assert_eq!(list.seen.exists(2), filled, "{caching}: {:?}", list.seen.live);
+        }
+    }
 }
 
 /// A list of items by key, one of them a nested row with two cells.

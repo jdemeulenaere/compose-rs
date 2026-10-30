@@ -1,10 +1,11 @@
-//! Prefetch as Compose 1.12.1's, the default (D560): one item ahead in the scroll direction and
-//! none behind; a request cancelled when the direction turns, or once its item isn't the next
-//! one; urgent when the same scroll again would reach the item; each step only while the time
-//! left exceeds that step's average for the item's content type (any time left when urgent), a
-//! step that doesn't fit leaving the request for the next idle time; a request composing the
-//! first items of the lazy lists in its item. And each of compose-rs's own behaviours, switched
-//! on by its optimization (D560-D565).
+//! Prefetch at the default, as Compose's at the tip (D705, D892): the window's one item's worth
+//! ahead (at rows of the sizes here, in 10 to 50 % of the viewport) and none behind; a request
+//! cancelled when the direction turns, or once its item leaves the window; urgent when the same
+//! scroll again would reach the item; each step only while the time left exceeds that step's
+//! average for the item's content type (any time left when urgent), a step that doesn't fit
+//! leaving the request for the next idle time; a request composing the first items of the lazy
+//! lists in its item. And each of compose-rs's own behaviours, switched on by its optimization
+//! (D560-D565, D893). The window's own rules are in `lazy_cache_window.rs`.
 
 #![allow(non_snake_case)]
 

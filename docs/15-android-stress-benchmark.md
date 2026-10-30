@@ -84,6 +84,40 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
 - **Edge to edge (D647).** Both apps' content fills the window, under the system bars: the Kotlin app calls `enableEdgeToEdge()` (Android 15+ enforces it for its target SDK) and Material's defaults keep the top app bar's content and the scaffold's content clear of the bars (`TopAppBarDefaults.windowInsets`, `ScaffoldDefaults.contentWindowInsets`, the system bars). compose-rs's Material defaults are Compose's too (D1359; its screens passed them by hand until then, D647). The viewports are those of before but the feeds' (D649, below): until D647 bench-rs's view fitted the system windows (`fitsSystemWindows`) and its screens took no insets, which laid them out the same but left the bars' strips to the window's background. The feeds' navigation bar strips differed until D649: Kotlin's feed takes the scaffold's padding as `contentPadding` and draws its posts under the bar, and compose-rs's took it as `Modifier.padding`; since D649 compose-rs's does as Kotlin's, its `content_padding` laying out items under the padding as Compose's. Both read the bars' insets while laying out.
 - **The theme.** Both apps always use Material's light theme, whatever the device's dark mode: the Kotlin app's `MaterialTheme {}` and compose-rs's screens (`bench_color_scheme`, D645). Until D645 compose-rs followed the system's theme, which only mattered once the device was left in dark mode (round 16's setup, D642).
 
+## Parity mode at the tip (D705, D892-D894)
+
+Since D892 compose-rs's parity mode follows androidx-main's tip, not the Kotlin app's 1.12.1. **Rounds from here on compare compose-rs at the tip with the app's Compose 1.12.1, until the app moves to tip-of-tree.** Every round below was taken before that: they compare 1.12.1's rules on both sides and stand as such, and no number below has been taken again, as that needs the device. "Compose's defaults" below stays the app's, as long as it's at 1.12.1.
+
+What changes at parity, on both lists:
+
+| | The app's 1.12.1, and compose-rs's rounds below | compose-rs now, and Compose at the tip |
+|---|---|---|
+| What's prefetched | The next item, or a grid's line | The window: the items in view's average size with the spacing, in 10 to 50 % of the viewport (`DynamicLazyLayoutCacheWindow`) |
+| On a small item | One ahead | As many as 10 % of the viewport holds: more than the old one |
+| On an item larger than half the viewport | One ahead, always | None until the last item in view overflows the viewport by less than the window: fewer requests, later, on a screen of such items |
+| When it's requested | After each scroll, again if its item moved on | The window's room grows with the scroll; a request at a time, the next when the last is done |
+| Prefetched items | Cancelled once not the next one | Kept while in the window, cancelled out of it |
+| The composition | Pausable, or whole with the flag off | Pausable, always |
+
+What to expect of the next round, not yet measured: on the stress list and the feed, whose items are near or above 10 % of the viewport, prefetched items and composition work should move little, with requests later on the largest items; the janky frames compose-rs didn't have at 1.12.1's rules may come back on those, and that's the first thing to read. Comparing `Prefetch steps` and the prefetch tables with the app's reads a difference of rules until the app moves.
+
+**Headless** (`benchmarks/benches/lazy.rs`, the parity flags; 4 interleaved rounds on a Mac other agents were loading, fastest of each, main 170ce82b against D892). The composing frames compose what they did: the feed 300 items in 779 frames, the stress list 303 in 341, the grid 300 in 195, both sides; these benches run no idle time.
+
+| Frame or request | main | D892 | |
+|---|---|---|---|
+| Scroll the feed 200 px | 14.25 µs | 14.41 µs | +1.1 % |
+| Scroll the stress list 200 px | 20.65 µs | 21.13 µs | +2.3 % |
+| Scroll the grid 200 px | 18.73 µs | 18.59 µs | -0.7 % |
+| Scroll the feed a pixel | 2.42 µs | 2.55 µs | +5.3 % |
+| Scroll the stress list a pixel | 2.91 µs | 2.80 µs | -3.7 % |
+| Scroll the grid a pixel | 4.93 µs | 4.81 µs | -2.3 % |
+| Prefetch the stress list, an idle time per request (156 items by requests; main 146) | 29.23 µs | 29.39 µs | +0.5 % |
+| 20 µs idle times | 32.74 µs | 30.60 µs | -6.5 % |
+| 12 µs idle times | 38.02 µs | 31.87 µs | -16.2 % |
+| 8 µs idle times | 34.09 µs | 37.32 µs | +9.5 % |
+
+The one-pixel frames turn the direction each frame, which restarts the window each time, Compose's rule as well; the three disagree in sign, so they are within this load's noise, as are the 200 px frames. Prefetching costs what it did per item, at 23.5 to 26.0 µs in prefetch against 21.9 to 27.1 µs. At 8 µs idle times the pass that counts them is erratic on both sides (26 µs to 4.6 ms an item, thousands of idle times each, in most rounds of each): such idle times often end before a step fits. The bench's `whole` budget went with whole compositions.
+
 ## Compose's defaults (version 1.12.1)
 
 What the Kotlin app gets by default, read from the sources jars of Compose BOM 2026.09.00 (foundation, ui, ui-graphics 1.12.1; material3 1.4.0), since D540. Compose 1.12's AARs require `compileSdk` 37, so the Kotlin apps compile against API 37 and keep `targetSdk` 36 (no runtime behaviour opted in); the compose-rs library and bench-rs stay on 36. File names are under `androidx/compose/…` in each jar, `commonMain` unless marked `android`. Everything in (a), (b) and (f) is the same in 1.11.4 (rounds 1 to 13), whose prefetch files differ only in the Robolectric check; in (c) and (d), 1.12 adds layer outsets, which nothing here uses.

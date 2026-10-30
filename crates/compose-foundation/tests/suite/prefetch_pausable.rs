@@ -1,4 +1,4 @@
-//! Prefetch with pausable composition, Compose 1.12.1's default (D590-D596): a request composes
+//! Prefetch with pausable composition, at the tip Compose's only way (D590-D596, D892): a request composes
 //! its item in a paused composition, gated by the averages of a stretch and a pause, pausing at
 //! the runtime's pause points once the time left is no more than those averages, resuming after
 //! the next frame, applied once complete (gated by its own average), then its nested lists'

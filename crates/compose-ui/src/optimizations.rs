@@ -73,15 +73,16 @@ impl Optimization {
         summary: "keep a text's paragraph when the width it's laid out at stays the same",
     };
 
-    /// Lazy lists prefetch two items ahead in the scroll direction (a grid: two lines), not
-    /// Compose's one (`LazyListPrefetchStrategy`: `last.index + 1`), so a fast fling's frames
-    /// find the item after the next composed too (D156, D560).
+    /// The default cache window of lazy lists (a grid: lines) holds another item's worth ahead,
+    /// beyond Compose's (`DynamicLazyLayoutCacheWindow`: the items' average size and spacing, in
+    /// 10 to 50 % of the viewport), so a fast fling's frames find the item after the next composed
+    /// too (D156, D893). A window the app gives isn't touched.
     pub const PREFETCH_TWO_AHEAD: Optimization = Optimization {
         bit: 3,
         name: "prefetch_two_ahead",
         default: false,
         draws: false,
-        summary: "prefetch two items ahead of the scroll, not one",
+        summary: "the default cache window holds another item's worth ahead of the scroll",
     };
 
     /// A prefetch step (composing an item, measuring it) starts only if the time left exceeds,
@@ -100,28 +101,29 @@ impl Optimization {
         summary: "budget prefetch steps by their recent maximum with a margin, on the vsync's phase",
     };
 
-    /// Lazy lists also prefetch at rest, after a first layout or a jump, towards the last scroll
-    /// direction (the end before any), so a fling's first frames find the next items composed
-    /// (D470). Compose prefetches only on scrolls (`onScroll`) (D562).
+    /// The default cache window of lazy lists also fills at rest, after a first layout or a jump,
+    /// towards the last scroll direction (the end before any), so a fling's first frames find the
+    /// next items composed (D470, D893): its `is_non_scroll_caching_enabled`. Compose's default
+    /// window fills only on scrolls (D562). A window the app gives isn't touched.
     pub const PREFETCH_AT_REST: Optimization = Optimization {
         bit: 5,
         name: "prefetch_at_rest",
         default: false,
         draws: false,
-        summary: "prefetch the next items after a layout at rest, not only on scrolls",
+        summary: "the default cache window fills after a layout at rest, not only on scrolls",
     };
 
-    /// Lazy lists keep up to two composed items behind the scroll, so a fling reversing finds
-    /// the first items it wants composed, and items beyond are disposed between frames, by the
-    /// next prefetch's composition (D375); a frame lists the kept items' groups, so Android
-    /// keeps their recordings (D380). Compose deactivates an item in the measurement it leaves,
-    /// and keeps none behind (D563).
+    /// The default cache window of lazy lists keeps two items' worth behind the scroll, so a fling
+    /// reversing finds the first items it wants composed (D375, D893); a frame lists the kept
+    /// items' groups, so Android keeps their recordings (D380), for any window keeping items
+    /// behind. Compose's default window keeps none behind, and deactivates an item in the
+    /// measurement after the one it leaves (D563).
     pub const KEEP_ITEMS_BEHIND: Optimization = Optimization {
         bit: 6,
         name: "keep_items_behind",
         default: false,
         draws: false,
-        summary: "keep two items behind the scroll composed, and their recordings",
+        summary: "the default cache window keeps two items' worth behind the scroll, with their recordings",
     };
 
     /// Android: the items a prefetch measured are drawn ahead in the same idle time (their
@@ -137,8 +139,8 @@ impl Optimization {
     };
 
     /// Lazy grids compose and place two lines beyond each side of their viewport (D456).
-    /// Compose's grids compose the lines in view (`beyondBoundsItemCount` 0) and prefetch one
-    /// line ahead (D565).
+    /// Compose's grids compose the lines in view (`beyondBoundsItemCount` 0), and prefetch by
+    /// their cache window from there (D565, D893).
     pub const GRID_LINES_BEYOND: Optimization = Optimization {
         bit: 8,
         name: "grid_lines_beyond",
