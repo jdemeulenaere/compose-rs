@@ -1,12 +1,12 @@
 //! What the platform tells the content, as Compose's `androidx.compose.ui.platform` locals: the
 //! configuration ([`LOCAL_CONFIGURATION`]: screen size, orientation, font scale, density, dark
-//! mode), the window's insets ([`LOCAL_PLATFORM_WINDOW_INSETS`]: system bars, the keyboard,
-//! a display cutout), and, for an app embedded in a platform UI, the properties the platform
+//! mode), the window's insets ([`LOCAL_WINDOW_INSETS_SOURCE`]: system bars, the keyboard, a
+//! display cutout), and, for an app embedded in a platform UI, the properties the platform
 //! passes it and the events it sends back ([`LOCAL_HOST_PROPS`], [`LOCAL_HOST_EVENTS`]). The
 //! host provides them (`UiHost::set_configuration`, `set_window_insets`, `props`,
 //! `set_event_listener`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -281,42 +281,197 @@ impl compose_runtime::ComposeArg for PlatformWindowInsets {
     }
 }
 
-/// The window's insets, for content reading them in composition (a change recomposes it);
-/// foundation's `WindowInsets` read them through [`LOCAL_WINDOW_INSETS_SOURCE`] where they're
-/// used instead.
-pub static LOCAL_PLATFORM_WINDOW_INSETS: CompositionLocal<PlatformWindowInsets> =
-    CompositionLocal::new("LocalPlatformWindowInsets", PlatformWindowInsets::default);
+/// The host's window insets, a state per type (D1363), as Compose's `WindowInsetsHolder`, each made
+/// when it's first read: a host whose content reads none has no states, and a keyboard's frame
+/// measures again only what read the keyboard's insets. Set by `UiHost::set_window_insets`.
+pub(crate) struct HostInsets {
+    /// The insets last reported, what a state made later starts from.
+    reported: Cell<PlatformWindowInsets>,
+    /// The insets by [`InsetsSlot`].
+    insets: [OnceCell<OwnedState<Insets>>; INSETS_SLOTS],
+    /// Whether each type is shown, by `InsetsType`.
+    visible: [OnceCell<OwnedState<bool>>; InsetsType::ALL.len()],
+    /// The cutout's outline, a state as soon as it's read.
+    cutout_path: OnceCell<OwnedState<CutoutPath>>,
+    reported_cutout_path: RefCell<CutoutPath>,
+}
 
-/// The host's window insets, as the state it sets them in (`UiHost::set_window_insets`): what
-/// foundation's system `WindowInsets` (`status_bars()`, `ime()`, …) keep and read where they're
-/// used, so a read while measuring is observed and only the layouts that read it measure again
-/// (Compose's `WindowInsetsHolder`, one per view). Without a host, none: zero insets.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct WindowInsetsSource(
-    Option<(MutableState<PlatformWindowInsets>, MutableState<CutoutPath>)>,
-);
+const INSETS_SLOTS: usize = InsetsType::ALL.len() + 7;
+
+/// Which of the reported insets a state holds.
+#[derive(Clone, Copy)]
+enum InsetsSlot {
+    Type(InsetsType),
+    /// One of the five types the platform reports ignoring visibility: `ignoring_index`.
+    IgnoringVisibility(usize),
+    ImeAnimationSource,
+    ImeAnimationTarget,
+}
+
+impl InsetsSlot {
+    const fn index(self) -> usize {
+        match self {
+            InsetsSlot::Type(kind) => kind as usize,
+            InsetsSlot::IgnoringVisibility(index) => InsetsType::ALL.len() + index,
+            InsetsSlot::ImeAnimationSource => InsetsType::ALL.len() + 5,
+            InsetsSlot::ImeAnimationTarget => InsetsType::ALL.len() + 6,
+        }
+    }
+
+    fn of(index: usize) -> InsetsSlot {
+        match index.checked_sub(InsetsType::ALL.len()) {
+            None => InsetsSlot::Type(InsetsType::ALL[index]),
+            Some(5) => InsetsSlot::ImeAnimationSource,
+            Some(6) => InsetsSlot::ImeAnimationTarget,
+            Some(index) => InsetsSlot::IgnoringVisibility(index),
+        }
+    }
+
+    fn read(self, insets: &PlatformWindowInsets) -> Insets {
+        match self {
+            InsetsSlot::Type(kind) => insets.get(kind),
+            InsetsSlot::IgnoringVisibility(0) => insets.status_bars_ignoring_visibility,
+            InsetsSlot::IgnoringVisibility(1) => insets.navigation_bars_ignoring_visibility,
+            InsetsSlot::IgnoringVisibility(2) => insets.caption_bar_ignoring_visibility,
+            InsetsSlot::IgnoringVisibility(3) => insets.system_bars_ignoring_visibility,
+            InsetsSlot::IgnoringVisibility(_) => insets.tappable_element_ignoring_visibility,
+            InsetsSlot::ImeAnimationSource => insets.ime_animation_source,
+            InsetsSlot::ImeAnimationTarget => insets.ime_animation_target,
+        }
+    }
+}
+
+/// The index among the five types reported ignoring visibility.
+const fn ignoring_index(kind: InsetsType) -> usize {
+    match kind {
+        InsetsType::StatusBars => 0,
+        InsetsType::NavigationBars => 1,
+        InsetsType::CaptionBar => 2,
+        InsetsType::SystemBars => 3,
+        _ => 4,
+    }
+}
+
+impl HostInsets {
+    pub(crate) fn new() -> HostInsets {
+        HostInsets {
+            reported: Cell::new(PlatformWindowInsets::default()),
+            insets: std::array::from_fn(|_| OnceCell::new()),
+            visible: std::array::from_fn(|_| OnceCell::new()),
+            cutout_path: OnceCell::new(),
+            reported_cutout_path: RefCell::new(CutoutPath::default()),
+        }
+    }
+
+    /// The platform reports `insets`: the states read so far change where they differ.
+    pub(crate) fn report(&self, insets: PlatformWindowInsets) {
+        self.reported.set(insets);
+        for (index, state) in self.insets.iter().enumerate() {
+            if let Some(state) = state.get() {
+                state.set(InsetsSlot::of(index).read(&insets));
+            }
+        }
+        for (kind, state) in InsetsType::ALL.into_iter().zip(&self.visible) {
+            if let Some(state) = state.get() {
+                state.set(insets.is_visible(kind));
+            }
+        }
+    }
+
+    pub(crate) fn report_cutout_path(&self, path: Option<crate::path::Path>) {
+        let path = CutoutPath(path);
+        if let Some(state) = self.cutout_path.get() {
+            state.set(path.clone());
+        }
+        *self.reported_cutout_path.borrow_mut() = path;
+    }
+
+    fn insets(&self, slot: InsetsSlot) -> Insets {
+        self.insets[slot.index()]
+            .get_or_init(|| mutable_state_of(slot.read(&self.reported.get())))
+            .get()
+    }
+
+    fn is_visible(&self, kind: InsetsType) -> bool {
+        self.visible[kind as usize]
+            .get_or_init(|| mutable_state_of(self.reported.get().is_visible(kind)))
+            .get()
+    }
+
+    fn cutout_path(&self) -> Option<crate::path::Path> {
+        self.cutout_path
+            .get_or_init(|| mutable_state_of(self.reported_cutout_path.borrow().clone()))
+            .get()
+            .0
+    }
+}
+
+/// The host's window insets (`UiHost::set_window_insets`): what foundation's system `WindowInsets`
+/// (`status_bars()`, `ime()`, …) keep and read where they're used, each its type's state, so a read
+/// while measuring is observed and only the layouts that read that type measure again (Compose's
+/// `WindowInsetsHolder`, one per view). Without a host, none: zero insets, every type visible.
+#[derive(Clone, Default)]
+pub struct WindowInsetsSource(Option<Rc<HostInsets>>);
 
 impl WindowInsetsSource {
     /// No host: zero insets, every type visible.
     pub const NONE: WindowInsetsSource = WindowInsetsSource(None);
 
-    pub(crate) fn of(
-        insets: MutableState<PlatformWindowInsets>,
-        cutout_path: MutableState<CutoutPath>,
-    ) -> WindowInsetsSource {
-        WindowInsetsSource(Some((insets, cutout_path)))
+    pub(crate) fn of(insets: Rc<HostInsets>) -> WindowInsetsSource {
+        WindowInsetsSource(Some(insets))
     }
 
-    /// The insets now: a read of the host's state (observed while composing, measuring or
-    /// drawing). Zero once the host is gone.
-    pub fn get(&self) -> PlatformWindowInsets {
-        self.0.and_then(|(insets, _)| insets.try_get()).unwrap_or_default()
+    fn slot(&self, slot: InsetsSlot) -> Insets {
+        self.0.as_ref().map_or(Insets::ZERO, |host| host.insets(slot))
     }
 
-    /// The display cutout's outline now, if the platform reports one: a read of the host's state,
-    /// as Compose's `WindowInsetsHolder.cutoutPath`.
+    /// The insets of `kind` now: a read of its state.
+    pub fn insets(&self, kind: InsetsType) -> Insets {
+        self.slot(InsetsSlot::Type(kind))
+    }
+
+    /// The insets of `kind` were it shown, of the types the platform reports them for (status
+    /// bars, navigation bars, caption bar, system bars, tappable element).
+    pub fn insets_ignoring_visibility(&self, kind: InsetsType) -> Insets {
+        self.slot(InsetsSlot::IgnoringVisibility(ignoring_index(kind)))
+    }
+
+    /// The keyboard's insets where its animation started.
+    pub fn ime_animation_source(&self) -> Insets {
+        self.slot(InsetsSlot::ImeAnimationSource)
+    }
+
+    /// The keyboard's insets where its animation will end.
+    pub fn ime_animation_target(&self) -> Insets {
+        self.slot(InsetsSlot::ImeAnimationTarget)
+    }
+
+    /// Whether `kind` is shown now.
+    pub fn is_visible(&self, kind: InsetsType) -> bool {
+        self.0.as_ref().is_none_or(|host| host.is_visible(kind))
+    }
+
+    /// The display cutout's outline now, if the platform reports one: a read of its state, as
+    /// Compose's `WindowInsetsHolder.cutoutPath`.
     pub fn cutout_path(&self) -> Option<crate::path::Path> {
-        self.0.and_then(|(_, path)| path.try_get()).and_then(|path| path.0)
+        self.0.as_ref().and_then(|host| host.cutout_path())
+    }
+}
+
+impl PartialEq for WindowInsetsSource {
+    /// The same host's.
+    fn eq(&self, other: &WindowInsetsSource) -> bool {
+        match (&self.0, &other.0) {
+            (Some(first), Some(second)) => Rc::ptr_eq(first, second),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for WindowInsetsSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WindowInsetsSource")
     }
 }
 
@@ -351,7 +506,7 @@ impl crate::node_context::NodeContext<'_> {
     /// `WindowInsetsHolder` (`requireView()`): what an insets padding attached outside
     /// composition reads (`Modifier.system_bars_padding()`).
     pub fn window_insets_source(&self) -> WindowInsetsSource {
-        self.tree.window_insets
+        self.tree.window_insets.clone()
     }
 }
 

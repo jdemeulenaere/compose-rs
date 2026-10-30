@@ -164,6 +164,42 @@ fn padding_with_bars(top_bar: Option<i32>, bottom_bar: Option<i32>) -> PaddingVa
     padding.get()
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScaffoldTest.kt, scaffold_providesInsets_respectCollapsedTopAppBar
+#[test]
+fn a_bar_collapsed_to_nothing_still_takes_the_place_of_the_inset() {
+    let top = padding_with_bars(Some(0), None);
+    assert_eq!((top.top, top.bottom), (0.dp(), 3.dp()));
+    let bottom = padding_with_bars(None, Some(0));
+    assert_eq!((bottom.top, bottom.bottom), (5.dp(), 0.dp()));
+}
+
+/// A bar emptied at the same size (0 tall) gives its side back to the insets: the slot's state
+/// measures the scaffold again though its size didn't change.
+#[test]
+fn a_collapsed_bar_removed_gives_its_side_back_to_the_inset() {
+    let shown = mutable_state_of(true);
+    let handle = shown.handle();
+    let padding = Rc::new(Cell::new(PaddingValues::ZERO));
+    let into = padding.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 400), move || {
+        let into = into.clone();
+        Scaffold!(
+            top_bar = {
+                if handle.get() {
+                    Box!(modifier = Modifier.fill_max_width().required_height(0.dp()));
+                }
+            },
+            content_window_insets = WindowInsets::new(0.dp(), 5.dp(), 0.dp(), 3.dp()),
+            |padding: PaddingValues| into.set(padding)
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(padding.get().top, 0.dp());
+    shown.set(false);
+    ui.wait_for_idle();
+    assert_eq!(padding.get().top, 5.dp());
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScaffoldTest.kt, scaffold_providesInsets_respectTopAppBar,
 // scaffold_respectsProvidedInsets and scaffold_providesInsets_respectsBottomAppBar
 #[test]

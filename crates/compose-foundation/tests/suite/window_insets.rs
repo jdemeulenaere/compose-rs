@@ -705,6 +705,125 @@ fn removing_two_paddings_at_once_leaves_their_children_what_their_ancestors_cons
     assert_eq!(consumed.get(), 5);
 }
 
+/// Two layout nodes, one inside the other, each losing its padding in one pass. The outer's leaves
+/// first with the inner's already out of its chain, so the inner's, leaving next, still holds what
+/// the outer consumed: what's below must look for its nearest ancestor, not take that (D1355).
+#[test]
+fn nested_paddings_removed_together_leave_their_children_what_their_ancestors_consumed() {
+    let padded = mutable_state_of(true);
+    let handle = padded.handle();
+    let consumed = Rc::new(Cell::new(-1));
+    let heard = consumed.clone();
+    let mut ui = rule(move || {
+        let heard = heard.clone();
+        let (outer, inner) = if handle.get() {
+            (
+                Modifier.window_insets_padding(WindowInsets::new(0, 10, 0, 0)),
+                Modifier.window_insets_padding(WindowInsets::new(0, 20, 0, 0)),
+            )
+        } else {
+            (Modifier, Modifier)
+        };
+        Box!(modifier = outer, {
+            let heard = heard.clone();
+            Box!(
+                modifier = inner.clone().on_consumed_window_insets_changed(
+                    move |insets: WindowInsets| heard.set(insets.get_top(&density()))
+                )
+            );
+        });
+    });
+    assert_eq!(consumed.get(), 20);
+    padded.set(false);
+    ui.wait_for_idle();
+    assert_eq!(consumed.get(), 0);
+}
+
+/// What D1355 says of a node consuming nothing new: it tells nothing below, so a scaffold's doesn't
+/// visit the screen; one that consumes does, once.
+#[test]
+fn a_node_consuming_nothing_new_doesnt_walk_what_is_below_it() {
+    let many = |modifier: Modifier| {
+        Box!(modifier = modifier, {
+            for index in 0..50 {
+                key(index, || Box!(modifier = Modifier.size(1.dp())));
+            }
+        });
+    };
+    let walks = compose_foundation::layout::consumed_insets_walks();
+    let _ui = rule(move || {
+        many(Modifier.on_consumed_window_insets_changed(|_: WindowInsets| {}));
+    });
+    assert_eq!(compose_foundation::layout::consumed_insets_walks(), walks);
+    let _ui = rule(move || {
+        many(Modifier.consume_window_insets(WindowInsets::new(0, 1, 0, 0)));
+    });
+    assert_eq!(compose_foundation::layout::consumed_insets_walks(), walks + 1);
+}
+
+/// A keyboard's frame measures again what read the keyboard's insets, not what read the system
+/// bars', as Compose's states per type (D1363): with Material's defaults, every scaffold and bar.
+#[test]
+fn a_change_of_one_type_measures_only_what_read_it() {
+    struct Reads(Rc<Cell<u32>>);
+    impl WindowInsetsProvider for Reads {
+        fn get_left(&self, _: &Density, _: LayoutDirection) -> i32 {
+            self.0.set(self.0.get() + 1);
+            0
+        }
+        fn get_top(&self, _: &Density) -> i32 {
+            0
+        }
+        fn get_right(&self, _: &Density, _: LayoutDirection) -> i32 {
+            0
+        }
+        fn get_bottom(&self, _: &Density) -> i32 {
+            0
+        }
+    }
+    impl std::fmt::Display for Reads {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("Reads")
+        }
+    }
+    let (bars, keyboard) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (into_bars, into_keyboard) = (bars.clone(), keyboard.clone());
+    let mut ui = rule(move || {
+        let bars = WindowInsets::system_bars()
+            .union(WindowInsets::from_provider(Reads(into_bars.clone())));
+        let keyboard =
+            WindowInsets::ime().union(WindowInsets::from_provider(Reads(into_keyboard.clone())));
+        Box!(modifier = Modifier.window_insets_padding(bars));
+        Box!(modifier = Modifier.window_insets_padding(keyboard));
+    });
+    let (bars_before, keyboard_before) = (bars.get(), keyboard.get());
+    send(&mut ui, of(InsetsType::Ime, Insets::new(0, 0, 0, 100)));
+    assert!(keyboard.get() > keyboard_before);
+    assert_eq!(bars.get(), bars_before);
+}
+
+/// A host's insets are reported before anything reads them: what's read first is what was reported
+/// last, and a host whose content reads none makes no state.
+#[test]
+fn insets_reported_before_they_are_read_are_what_is_read() {
+    let shown = mutable_state_of(false);
+    let handle = shown.handle();
+    let bounds = bounds_cell();
+    let recorded = bounds.clone();
+    let mut ui = rule(move || {
+        if handle.get() {
+            let recorded = recorded.clone();
+            Box!(modifier = Modifier.fill_max_size().status_bars_padding(), {
+                Box!(modifier = Modifier.fill_max_size().then(bounds_into(&recorded)));
+            });
+        }
+    });
+    send(&mut ui, of(InsetsType::StatusBars, Insets::new(0, 30, 0, 0)));
+    shown.set(true);
+    ui.wait_for_idle();
+    assert_eq!(rect(&bounds), inside(Insets::new(0, 30, 0, 0)));
+}
+
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsPaddingTest.kt, removedPaddingModifierUpdatesChildren
 #[test]
 fn removing_an_ancestors_padding_updates_what_its_children_consume() {
@@ -871,6 +990,90 @@ fn recalculated_insets_follow_the_content_where_it_moves() {
             "nested {nested}"
         );
     }
+}
+
+/// How many times `modifier`'s node is measured over five more frames, once settled, inside what
+/// `wrap` gives it.
+fn frames_measured_after_settling(content: impl Fn(Modifier) + 'static) -> u32 {
+    let measures = Rc::new(Cell::new(0));
+    let counted = measures.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let counted = counted.clone();
+        content(Modifier.layout(move |scope, measurable, constraints: compose_ui::Constraints| {
+            counted.set(counted.get() + 1);
+            let placeable = scope.measure(measurable, constraints);
+            scope.place(&placeable, 0, 0);
+            scope.layout(placeable.width, placeable.height)
+        }));
+    });
+    for _ in 0..3 {
+        ui.advance_time_by_frame();
+    }
+    let settled = measures.get();
+    for _ in 0..5 {
+        ui.advance_time_by_frame();
+    }
+    measures.get() - settled
+}
+
+/// Without fixed constraints it can't say what's around it and passes its ancestors' consumption
+/// on: its position isn't written, or the next measure would undo it, a frame every vsync (D1362).
+#[test]
+fn recalculated_insets_without_fixed_constraints_settle() {
+    let measured = frames_measured_after_settling(|counted| {
+        Box!(modifier = Modifier.padding(10.dp()), {
+            let counted = counted.clone();
+            Box!(modifier = Modifier.recalculate_window_insets().safe_drawing_padding(), {
+                Box!(modifier = counted.clone().size(20.dp()));
+            });
+        });
+    });
+    assert_eq!(measured, 0);
+}
+
+/// As above, from a fixed size to a wrapping one: it had written where it was, and forgets.
+#[test]
+fn recalculated_insets_losing_their_fixed_constraints_settle() {
+    let wrapping = mutable_state_of(false);
+    let handle = wrapping.handle();
+    let measures = Rc::new(Cell::new(0));
+    let counted = measures.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let counted = counted.clone();
+        let size = if handle.get() {
+            Modifier.wrap_content_size()
+        } else {
+            Modifier.fill_max_size()
+        };
+        Box!(modifier = Modifier.padding(10.dp()).then(size).recalculate_window_insets(), {
+            let counted = counted.clone();
+            Box!(
+                modifier = Modifier.safe_drawing_padding().layout(
+                    move |scope, measurable, constraints: compose_ui::Constraints| {
+                        counted.set(counted.get() + 1);
+                        let placeable = scope.measure(measurable, constraints);
+                        scope.place(&placeable, 0, 0);
+                        scope.layout(placeable.width, placeable.height)
+                    }
+                ),
+                {
+                    Box!(modifier = Modifier.size(20.dp()));
+                }
+            );
+        });
+    });
+    for _ in 0..3 {
+        ui.advance_time_by_frame();
+    }
+    wrapping.set(true);
+    for _ in 0..3 {
+        ui.advance_time_by_frame();
+    }
+    let settled = measures.get();
+    for _ in 0..5 {
+        ui.advance_time_by_frame();
+    }
+    assert_eq!(measures.get() - settled, 0);
 }
 
 // ---- Sizes --------------------------------------------------------------------------------------

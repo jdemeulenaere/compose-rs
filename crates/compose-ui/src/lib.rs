@@ -93,8 +93,8 @@ pub mod platform {
     pub use crate::brush::{Gradient, Shader, ShaderIndex};
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::configuration::{
-        Insets, InsetsType, InsetsVisibility, LOCAL_PLATFORM_WINDOW_INSETS,
-        LOCAL_WINDOW_INSETS_SOURCE, PlatformWindowInsets, WindowInsetsSource,
+        Insets, InsetsType, InsetsVisibility, LOCAL_WINDOW_INSETS_SOURCE, PlatformWindowInsets,
+        WindowInsetsSource,
     };
     /// Node kinds and how a node's dispatch by kind goes, for tests of the visitors
     /// (`NodeContext::visit_ancestors`, …), as Compose's internal `Nodes`: not for apps.

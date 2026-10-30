@@ -27,7 +27,7 @@ pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
 pub use flow::{FlowColumn, FlowColumnScope, FlowLayoutModifiers, FlowRow, FlowRowScope};
 pub use window_insets::{
     ConsumedInsets, InsetsLength, MutableWindowInsets, WindowInsets, WindowInsetsModifiers,
-    WindowInsetsProvider, WindowInsetsSides,
+    WindowInsetsProvider, WindowInsetsSides, consumed_insets_walks,
 };
 
 /// Scratch space for a policy's children, without allocating for up to 16 of them.

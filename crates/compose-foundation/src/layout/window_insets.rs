@@ -177,18 +177,11 @@ impl SystemKind {
     }
 
     fn resolve(self, source: &WindowInsetsSource) -> Insets {
-        let platform = source.get();
         match self {
-            SystemKind::Type(kind) => platform.get(kind),
-            SystemKind::IgnoringVisibility(kind) => match kind {
-                InsetsType::StatusBars => platform.status_bars_ignoring_visibility,
-                InsetsType::NavigationBars => platform.navigation_bars_ignoring_visibility,
-                InsetsType::CaptionBar => platform.caption_bar_ignoring_visibility,
-                InsetsType::SystemBars => platform.system_bars_ignoring_visibility,
-                _ => platform.tappable_element_ignoring_visibility,
-            },
-            SystemKind::ImeAnimationSource => platform.ime_animation_source,
-            SystemKind::ImeAnimationTarget => platform.ime_animation_target,
+            SystemKind::Type(kind) => source.insets(kind),
+            SystemKind::IgnoringVisibility(kind) => source.insets_ignoring_visibility(kind),
+            SystemKind::ImeAnimationSource => source.ime_animation_source(),
+            SystemKind::ImeAnimationTarget => source.ime_animation_target(),
         }
     }
 }
@@ -482,7 +475,7 @@ impl Side {
 // ---- The system's insets ------------------------------------------------------------------------
 
 /// The system's insets of a host, by type: Compose's `WindowInsetsHolder`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Holder(WindowInsetsSource);
 
 impl Holder {
@@ -491,37 +484,37 @@ impl Holder {
         Holder(LOCAL_WINDOW_INSETS_SOURCE.current())
     }
 
-    fn kind(self, kind: InsetsType) -> WindowInsets {
-        WindowInsets::of(Inner::System(self.0, SystemKind::Type(kind)))
+    fn kind(&self, kind: InsetsType) -> WindowInsets {
+        WindowInsets::of(Inner::System(self.0.clone(), SystemKind::Type(kind)))
     }
 
-    fn ignoring_visibility(self, kind: InsetsType) -> WindowInsets {
-        WindowInsets::of(Inner::System(self.0, SystemKind::IgnoringVisibility(kind)))
+    fn ignoring_visibility(&self, kind: InsetsType) -> WindowInsets {
+        WindowInsets::of(Inner::System(self.0.clone(), SystemKind::IgnoringVisibility(kind)))
     }
 
-    fn system_bars(self) -> WindowInsets {
+    fn system_bars(&self) -> WindowInsets {
         self.kind(InsetsType::SystemBars)
     }
 
-    fn safe_drawing(self) -> WindowInsets {
+    fn safe_drawing(&self) -> WindowInsets {
         self.system_bars()
             .union(self.kind(InsetsType::Ime))
             .union(self.kind(InsetsType::DisplayCutout))
     }
 
-    fn safe_gestures(self) -> WindowInsets {
+    fn safe_gestures(&self) -> WindowInsets {
         self.kind(InsetsType::TappableElement)
             .union(self.kind(InsetsType::MandatorySystemGestures))
             .union(self.kind(InsetsType::SystemGestures))
             .union(self.kind(InsetsType::Waterfall))
     }
 
-    fn safe_content(self) -> WindowInsets {
+    fn safe_content(&self) -> WindowInsets {
         self.safe_drawing().union(self.safe_gestures())
     }
 
-    fn visible(self, kind: InsetsType) -> bool {
-        self.0.get().is_visible(kind)
+    fn visible(&self, kind: InsetsType) -> bool {
+        self.0.is_visible(kind)
     }
 }
 
@@ -883,40 +876,40 @@ impl WindowInsetsModifiers for Modifier {
         self.then_custom(SystemPadding("systemBarsPadding", Holder::system_bars))
     }
     fn display_cutout_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("displayCutoutPadding", |holder| {
+        self.then_custom(SystemPadding("displayCutoutPadding", |holder: &Holder| {
             holder.kind(InsetsType::DisplayCutout)
         }))
     }
     fn status_bars_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("statusBarsPadding", |holder| {
+        self.then_custom(SystemPadding("statusBarsPadding", |holder: &Holder| {
             holder.kind(InsetsType::StatusBars)
         }))
     }
     fn ime_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("imePadding", |holder| holder.kind(InsetsType::Ime)))
+        self.then_custom(SystemPadding("imePadding", |holder: &Holder| holder.kind(InsetsType::Ime)))
     }
     fn navigation_bars_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("navigationBarsPadding", |holder| {
+        self.then_custom(SystemPadding("navigationBarsPadding", |holder: &Holder| {
             holder.kind(InsetsType::NavigationBars)
         }))
     }
     fn caption_bar_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("captionBarPadding", |holder| {
+        self.then_custom(SystemPadding("captionBarPadding", |holder: &Holder| {
             holder.kind(InsetsType::CaptionBar)
         }))
     }
     fn waterfall_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("waterfallPadding", |holder| {
+        self.then_custom(SystemPadding("waterfallPadding", |holder: &Holder| {
             holder.kind(InsetsType::Waterfall)
         }))
     }
     fn system_gestures_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("systemGesturesPadding", |holder| {
+        self.then_custom(SystemPadding("systemGesturesPadding", |holder: &Holder| {
             holder.kind(InsetsType::SystemGestures)
         }))
     }
     fn mandatory_system_gestures_padding(self) -> Modifier {
-        self.then_custom(SystemPadding("mandatorySystemGesturesPadding", |holder| {
+        self.then_custom(SystemPadding("mandatorySystemGesturesPadding", |holder: &Holder| {
             holder.kind(InsetsType::MandatorySystemGestures)
         }))
     }
@@ -954,7 +947,7 @@ enum Consumer {
     /// `windowInsetsPadding`: pads by, and consumes, its insets.
     Padding(WindowInsets),
     /// The shorthands: the system's insets of its host, known once attached.
-    SystemPadding(fn(Holder) -> WindowInsets, WindowInsets),
+    SystemPadding(fn(&Holder) -> WindowInsets, WindowInsets),
     /// `consumeWindowInsets(insets)`.
     Consume(WindowInsets),
     /// `consumeWindowInsets(paddingValues)`.
@@ -965,6 +958,17 @@ enum Consumer {
     Recalculate(ValueInsets, Cell<IntSize>),
     /// The size modifiers: their insets, and those less what's consumed.
     Size(WindowInsets, Edge, WindowInsets),
+}
+
+thread_local! {
+    static CONSUMED_INSETS_WALKS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many times a node on this thread walked what's below it to tell it what it consumes: what
+/// tests of that cost count.
+#[doc(hidden)]
+pub fn consumed_insets_walks() -> u64 {
+    CONSUMED_INSETS_WALKS.get()
 }
 
 /// What the insets consuming nodes find each other by, as Compose's
@@ -1050,6 +1054,7 @@ impl ConsumingNode {
     /// Gives its descendants what it consumed, as `invalidateChildConsumedInsets`: the nearest
     /// consuming node down each branch.
     fn invalidate_child_consumed_insets(&self, context: &mut NodeContext<'_>) {
+        CONSUMED_INSETS_WALKS.set(CONSUMED_INSETS_WALKS.get() + 1);
         let consumed = self.consumed.clone();
         context.traverse_descendants::<ConsumingNode>(|child, context| {
             child.set_ancestor_consumed_insets(consumed.clone(), context);
@@ -1125,7 +1130,7 @@ impl ModifierNode for ConsumingNode {
     fn on_attach(&mut self, context: &mut NodeContext<'_>) {
         self.handle = Some(context.handle());
         if let Consumer::SystemPadding(getter, insets) = &mut self.consumer {
-            *insets = getter(Holder(context.window_insets_source()));
+            *insets = getter(&Holder(context.window_insets_source()));
         }
         self.ancestor = Self::nearest_ancestor_consumed(context);
         self.insets_invalidated(context);
@@ -1195,6 +1200,8 @@ impl LayoutModifierNode for ConsumingNode {
                     if value.get().is_some() {
                         value.set(None);
                     }
+                    // Nor will its position: it stays not known (D1362).
+                    root.set(IntSize::ZERO);
                     let placeable = scope.measure(content, constraints);
                     scope.place(&placeable, 0, 0);
                     return scope.layout(placeable.width, placeable.height);
@@ -1295,10 +1302,12 @@ impl compose_ui::GlobalPositionAwareModifierNode for ConsumingNode {
     /// a node is after the layout, which lays out again within the frame, D172).
     fn on_globally_positioned(&mut self, coordinates: LayoutCoordinates) -> Option<Action> {
         let Consumer::Recalculate(value, root) = &self.consumer else { return None };
-        if value.get().is_none() && coordinates.size() == IntSize::ZERO {
+        // Measured without fixed constraints, it passes its ancestors' consumption on: a position
+        // written here would be undone by the next measure, a frame every vsync (D1362).
+        let root = root.get();
+        if root == IntSize::ZERO {
             return None;
         }
-        let root = root.get();
         let position = coordinates.position_in_root();
         let size = coordinates.size();
         let (left, top) = (position.x.round() as i32, position.y.round() as i32);
@@ -1344,7 +1353,7 @@ impl ModifierNodeElement for PaddingElement {
 }
 
 /// The shorthand paddings' element: its name and the system's insets it pads by.
-struct SystemPadding(&'static str, fn(Holder) -> WindowInsets);
+struct SystemPadding(&'static str, fn(&Holder) -> WindowInsets);
 
 impl ModifierNodeElement for SystemPadding {
     type Node = ConsumingNode;
@@ -1362,7 +1371,7 @@ impl ModifierNodeElement for SystemPadding {
             handle.side_effect(move || {
                 handle.with_node::<ConsumingNode, _>(|node, context| {
                     if let Consumer::SystemPadding(_, insets) = &mut node.consumer {
-                        *insets = getter(Holder(context.window_insets_source()));
+                        *insets = getter(&Holder(context.window_insets_source()));
                     }
                     node.insets_invalidated(context);
                 });

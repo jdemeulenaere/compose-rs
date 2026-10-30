@@ -390,6 +390,14 @@ pub fn Scaffold(
     let content_color =
         content_color.or(MaterialTheme::color_scheme().content_color_for(container_color));
     let padding = remember(|| mutable_state_of(PaddingValues::ZERO));
+    let top_bar_present = remember(|| mutable_state_of(false));
+    let bottom_bar_present = remember(|| mutable_state_of(false));
+    let top_bar_slot = compose_runtime::remember_keyed((), || {
+        Rc::new(BarSlot { present: top_bar_present }) as Rc<dyn MeasurePolicy>
+    });
+    let bottom_bar_slot = compose_runtime::remember_keyed((), || {
+        Rc::new(BarSlot { present: bottom_bar_present }) as Rc<dyn MeasurePolicy>
+    });
     // The insets less what's consumed around it, as Compose's: read while measuring, so a change
     // measures it again and composes only the content that reads the padding.
     let (safe_insets, consumed) =
@@ -407,6 +415,8 @@ pub fn Scaffold(
         || {
             Rc::new(ScaffoldLayout {
                 padding,
+                top_bar_present,
+                bottom_bar_present,
                 fab_position: floating_action_button_position,
                 insets: safe_insets.as_window_insets(),
             }) as Rc<dyn MeasurePolicy>
@@ -432,10 +442,10 @@ pub fn Scaffold(
                         compose_runtime::callback(move |_| content()),
                     );
                 };
-                slot(top_bar.clone());
+                Layout(Modifier, top_bar_slot.clone(), top_bar.clone());
                 let content = content.clone();
                 slot(compose_runtime::callback(move || content(padding.get())));
-                slot(bottom_bar.clone());
+                Layout(Modifier, bottom_bar_slot.clone(), bottom_bar.clone());
                 slot(fab.clone());
                 slot(snackbar_host.clone());
             }),
@@ -443,10 +453,40 @@ pub fn Scaffold(
     });
 }
 
+/// A bar's slot: a box that says whether the bar emitted anything, as Compose's
+/// `topBarPlaceables.isEmpty()` and `bottomBarHeight == null`: no bar leaves its side to the
+/// insets, a bar collapsed to no height doesn't (D1364). State, so a slot emptied at the same size
+/// measures the scaffold again.
+struct BarSlot {
+    present: MutableState<bool>,
+}
+
+impl MeasurePolicy for BarSlot {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.present.set(!measurables.is_empty());
+        let (mut width, mut height) = (constraints.min_width, constraints.min_height);
+        let loose = constraints.loosen();
+        for measurable in measurables {
+            let placeable = scope.measure(*measurable, loose);
+            width = width.max(placeable.width);
+            height = height.max(placeable.height);
+            scope.place_relative(&placeable, 0, 0);
+        }
+        scope.layout(width, height)
+    }
+}
+
 /// Children: the top bar, the content, the bottom bar, the floating action button, the
 /// snackbar host (placed last: over the rest).
 struct ScaffoldLayout {
     padding: MutableState<PaddingValues>,
+    top_bar_present: MutableState<bool>,
+    bottom_bar_present: MutableState<bool>,
     fab_position: FabPosition,
     insets: WindowInsets,
 }
@@ -479,6 +519,8 @@ impl MeasurePolicy for ScaffoldLayout {
         let bottom = scope.measure(*bottom, loose);
         let fab = scope.measure(*fab, inside_insets);
         let snackbar = scope.measure(*snackbar, inside_insets);
+        let (top_present, bottom_present) =
+            (self.top_bar_present.get(), self.bottom_bar_present.get());
         // The content's padding: the bars' heights, or the insets where there's no bar, as
         // Compose's. Written as state the content reads, which composes it again (within the
         // frame) when they change.
@@ -486,9 +528,9 @@ impl MeasurePolicy for ScaffoldLayout {
         let to_dp = |pixels: i32| Dp(pixels as f32 / density.density);
         let padding = PaddingValues::new(
             insets.start,
-            if top.height == 0 { insets.top } else { to_dp(top.height) },
+            if top_present { to_dp(top.height) } else { insets.top },
             insets.end,
-            if bottom.height == 0 { insets.bottom } else { to_dp(bottom.height) },
+            if bottom_present { to_dp(bottom.height) } else { insets.bottom },
         );
         if self.padding.get() != padding {
             self.padding.set(padding);
@@ -500,7 +542,7 @@ impl MeasurePolicy for ScaffoldLayout {
         // The FAB 16 dp from the edges, above the bottom bar (over it for `EndOverlay`: above
         // the bottom inset then), and the snackbar above both, centered, as Compose's
         // `ScaffoldLayout`.
-        let mut above = if bottom.height == 0 { bottom_inset } else { bottom.height };
+        let mut above = if bottom_present { bottom.height } else { bottom_inset };
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
             let x = match self.fab_position {
@@ -510,8 +552,7 @@ impl MeasurePolicy for ScaffoldLayout {
                     width - fab.width - margin - end_inset
                 }
             };
-            let from_bottom = if bottom.height == 0 || self.fab_position == FabPosition::EndOverlay
-            {
+            let from_bottom = if !bottom_present || self.fab_position == FabPosition::EndOverlay {
                 fab.height + margin + bottom_inset
             } else {
                 bottom.height + fab.height + margin
