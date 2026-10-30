@@ -1037,6 +1037,19 @@ class SummarizeTest(unittest.TestCase):
         self.assertIn("memory stress_animation compose after_animation: Total PSS 50.0MB", text)
         self.assertNotIn("startup", text)
 
+    def test_an_animator_scale_other_than_1_is_a_problem(self):
+        """Animations' durations follow the setting (D836): a run under another scale says so."""
+        self.assertEqual(measure.animator_scale_problems("1.0\n"), [])
+        self.assertEqual(measure.animator_scale_problems("1"), [])
+        # Never set: 1.
+        self.assertEqual(measure.animator_scale_problems("null\n"), [])
+        self.assertEqual(measure.animator_scale_problems("0.5\n"),
+                         ["animator_duration_scale is 0.5, not 1"])
+        self.assertEqual(measure.animator_scale_problems("0"),
+                         ["animator_duration_scale is 0, not 1"])
+        self.assertEqual(measure.animator_scale_problems("?"),
+                         ["animator_duration_scale is ?, not 1"])
+
     def test_a_report_of_each_optimization(self):
         """`--optimizations each`: bench-rs's subjects only, with their lists and the thermal
         guard's record of each run."""

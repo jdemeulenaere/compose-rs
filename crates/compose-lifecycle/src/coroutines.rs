@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::task::{Poll, Waker};
 
@@ -57,17 +58,12 @@ impl Lifecycle {
         if self.current_state() == LifecycleState::Destroyed {
             handle.cancel();
         } else {
-            let observer = Rc::new(RefCell::new(None::<Rc<dyn LifecycleObserver>>));
-            let removed = observer.clone();
-            let added = self.add_observer_fn(move |lifecycle: &Lifecycle, _| {
+            self.add_observer(removing_itself(move |lifecycle, _, remove| {
                 if lifecycle.current_state() <= LifecycleState::Destroyed {
-                    if let Some(observer) = removed.borrow_mut().take() {
-                        lifecycle.remove_observer(&observer);
-                    }
+                    remove();
                     handle.cancel();
                 }
-            });
-            *observer.borrow_mut() = Some(added);
+            }));
         }
         handle
     }
@@ -179,33 +175,58 @@ impl Lifecycle {
         let told = outcome.clone();
         let block = Cell::new(Some(block));
         let up_to = LifecycleEvent::up_to(state);
-        // Told, it goes from the lifecycle at once, as AndroidX's.
-        let itself = Rc::new(RefCell::new(None::<Weak<dyn LifecycleObserver>>));
-        let removed = itself.clone();
-        let observer: Rc<dyn LifecycleObserver> =
-            Rc::new(move |lifecycle: &Lifecycle, event: LifecycleEvent| {
-                let result = if Some(event) == up_to {
-                    block.take().map(|block| Ok(block()))
-                } else if event == LifecycleEvent::OnDestroy {
-                    Some(Err(LifecycleDestroyed))
-                } else {
-                    None
-                };
-                if let Some(result) = result {
-                    if let Some(observer) = removed.borrow().as_ref().and_then(Weak::upgrade) {
-                        lifecycle.remove_observer(&observer);
-                    }
-                    *told.value.borrow_mut() = Some(result);
-                    if let Some(waker) = told.waker.borrow_mut().take() {
-                        waker.wake();
-                    }
+        // Told, it goes from the lifecycle before anything runs, and a block's failure is the
+        // waiter's, not the lifecycle's other observers', as AndroidX's `runCatching(block)`.
+        let observer = removing_itself(move |_, event, remove| {
+            let result = if Some(event) == up_to {
+                remove();
+                block.take().map(|block| Ok(catch_unwind(AssertUnwindSafe(block))))
+            } else if event == LifecycleEvent::OnDestroy {
+                remove();
+                Some(Err(LifecycleDestroyed))
+            } else {
+                None
+            };
+            if let Some(result) = result {
+                *told.value.borrow_mut() = Some(result);
+                if let Some(waker) = told.waker.borrow_mut().take() {
+                    waker.wake();
                 }
-            });
-        *itself.borrow_mut() = Some(Rc::downgrade(&observer));
+            }
+        });
         self.add_observer(observer.clone());
         let _observing = Observing { lifecycle: self.clone(), observer: Some(observer) };
-        wait(&outcome).await
+        match wait(&outcome).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(failure)) => resume_unwind(failure),
+            Err(destroyed) => Err(destroyed),
+        }
     }
+}
+
+/// An observer that can take itself off the lifecycle (`on_event`'s last argument), holding itself
+/// weakly: left there, it goes with the lifecycle.
+fn removing_itself<F>(on_event: F) -> Rc<dyn LifecycleObserver>
+where
+    F: Fn(&Lifecycle, LifecycleEvent, &dyn Fn()) + 'static,
+{
+    struct RemovingItself<F> {
+        itself: Weak<RemovingItself<F>>,
+        on_event: F,
+    }
+    impl<F: Fn(&Lifecycle, LifecycleEvent, &dyn Fn()) + 'static> LifecycleObserver
+        for RemovingItself<F>
+    {
+        fn on_state_changed(&self, source: &Lifecycle, event: LifecycleEvent) {
+            (self.on_event)(source, event, &|| {
+                if let Some(itself) = self.itself.upgrade() {
+                    let itself: Rc<dyn LifecycleObserver> = itself;
+                    source.remove_observer(&itself);
+                }
+            });
+        }
+    }
+    Rc::new_cyclic(|itself| RemovingItself { itself: itself.clone(), on_event })
 }
 
 async fn wait<R>(outcome: &Outcome<R>) -> R {
@@ -217,4 +238,37 @@ async fn wait<R>(outcome: &Outcome<R>) -> R {
         }
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lifecycle::LifecycleRegistry;
+
+    #[test]
+    fn an_observer_removing_itself_goes_with_its_lifecycle() {
+        let held = Rc::new(());
+        let (kept, registry) = (held.clone(), LifecycleRegistry::new());
+        registry.add_observer(removing_itself(move |_, _, _| {
+            let _ = &kept;
+        }));
+        assert_eq!(Rc::strong_count(&held), 2);
+        drop(registry);
+        assert_eq!(Rc::strong_count(&held), 1, "not held by itself");
+    }
+
+    #[test]
+    fn an_observer_removing_itself_leaves_the_lifecycle_and_is_freed() {
+        let held = Rc::new(());
+        let (kept, registry) = (held.clone(), LifecycleRegistry::new());
+        registry.add_observer(removing_itself(move |_, event, remove| {
+            let _ = &kept;
+            if event == LifecycleEvent::OnStart {
+                remove();
+            }
+        }));
+        registry.set_current_state(LifecycleState::Started);
+        assert_eq!(registry.observer_count(), 0);
+        assert_eq!(Rc::strong_count(&held), 1);
+    }
 }

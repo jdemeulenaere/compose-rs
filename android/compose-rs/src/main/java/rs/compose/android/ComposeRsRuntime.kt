@@ -61,46 +61,54 @@ object ComposeRsRuntime {
     }
 
     /**
-     * The developer option's and battery saver's `ANIMATOR_DURATION_SCALE`, as Compose's
-     * `MotionDurationScale` follows it (`WindowRecomposer.android.kt`): watched while a view
-     * shows, read again when the first one attaches.
+     * The setting `ANIMATOR_DURATION_SCALE`, as Compose's `MotionDurationScale` follows it
+     * (`WindowRecomposer.android.kt`): read and watched from the first animation's read of it, so
+     * a screen with no animation makes no call for it, until no view shows.
      */
     private val animatorScaleObserver = object : ContentObserver(handler) {
-        override fun onChange(selfChange: Boolean, uri: Uri?) = passAnimatorScale()
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            ComposeRsNative.setAnimatorDurationScale(animatorScale())
+        }
     }
 
     /** The application's context, which lives as long as this object. */
     @SuppressLint("StaticFieldLeak")
-    private var animatorScaleContext: Context? = null
+    private var applicationContext: Context? = null
 
-    private fun passAnimatorScale() {
-        val context = animatorScaleContext ?: return
-        ComposeRsNative.setAnimatorDurationScale(
-            Settings.Global.getFloat(
-                context.contentResolver,
-                Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f,
-            ),
+    private var animatorScaleWatched = false
+
+    private fun animatorScale(): Float =
+        Settings.Global.getFloat(
+            applicationContext?.contentResolver ?: return 1f,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
         )
-    }
 
-    internal fun attach(view: ComposeRsView) {
-        if (views.add(view) && views.size == 1) {
-            val context = view.context.applicationContext
-            animatorScaleContext = context
+    /** The first read since it was last watched, from Rust (`bridge.rs`), on the main thread. */
+    internal fun readAnimatorScale(): Float {
+        val context = applicationContext ?: return 1f
+        if (!animatorScaleWatched) {
+            animatorScaleWatched = true
             context.contentResolver.registerContentObserver(
                 Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),
                 false,
                 animatorScaleObserver,
             )
-            passAnimatorScale()
+        }
+        return animatorScale()
+    }
+
+    internal fun attach(view: ComposeRsView) {
+        if (views.add(view) && views.size == 1) {
+            applicationContext = view.context.applicationContext
         }
     }
 
     internal fun detach(view: ComposeRsView) {
-        if (views.remove(view) && views.isEmpty()) {
-            animatorScaleContext?.contentResolver?.unregisterContentObserver(animatorScaleObserver)
-            animatorScaleContext = null
+        if (views.remove(view) && views.isEmpty() && animatorScaleWatched) {
+            animatorScaleWatched = false
+            applicationContext?.contentResolver?.unregisterContentObserver(animatorScaleObserver)
+            ComposeRsNative.readAnimatorScaleAgain()
         }
     }
 }

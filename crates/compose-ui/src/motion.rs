@@ -15,6 +15,8 @@ thread_local! {
     static DEFAULT_SCALE: Cell<f32> = const { Cell::new(1.0) };
     /// The scale of the future being polled under `with_motion_duration_scale`, if any.
     static SCOPED_SCALE: Cell<Option<f32>> = const { Cell::new(None) };
+    /// Where the thread's scale is read from at its first use, a host's platform setting.
+    static SOURCE: Cell<Option<fn() -> f32>> = const { Cell::new(None) };
     /// What waits for the thread's scale to be above 0, by the id of its wait: each has one waker,
     /// the last, and takes it away when it's dropped (a task cancelled).
     static WAITING: RefCell<Vec<(u64, Waker)>> = const { RefCell::new(Vec::new()) };
@@ -25,7 +27,21 @@ thread_local! {
 /// innermost [`with_motion_duration_scale`] around the code polled, else the thread's (1 unless
 /// [`set_motion_duration_scale`] set another).
 pub fn motion_duration_scale() -> f32 {
-    SCOPED_SCALE.with(Cell::get).unwrap_or_else(|| DEFAULT_SCALE.with(Cell::get))
+    if let Some(scoped) = SCOPED_SCALE.with(Cell::get) {
+        return scoped;
+    }
+    if let Some(source) = SOURCE.with(Cell::get) {
+        set_motion_duration_scale(source());
+    }
+    DEFAULT_SCALE.with(Cell::get)
+}
+
+/// Has the thread's scale read from `source` the first time it's used, as Compose's
+/// `MotionDurationScaleImpl` starts observing the setting at the first read of `scaleFactor`: a
+/// screen with no animation doesn't pay for the platform's calls (D839). What a set does at once
+/// with its value, the first read does with `source`'s; a set before it takes `source`'s place.
+pub fn set_motion_duration_scale_source(source: fn() -> f32) {
+    SOURCE.with(|kept| kept.set(Some(source)));
 }
 
 /// Sets the thread's scale, as a host's `MotionDurationScale` (Android's animator scale) or a
@@ -34,6 +50,7 @@ pub fn motion_duration_scale() -> f32 {
 /// negative, as Compose's.
 pub fn set_motion_duration_scale(scale: f32) {
     assert!(scale >= 0.0 || scale.is_nan(), "negative scale factor");
+    SOURCE.with(|source| source.set(None));
     DEFAULT_SCALE.with(|default| default.set(scale));
     if scale > 0.0 {
         let waiting = WAITING.with(|waiting| std::mem::take(&mut *waiting.borrow_mut()));

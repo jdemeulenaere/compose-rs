@@ -268,6 +268,7 @@ impl UiHost {
     /// Moves the host's lifecycle, as its platform's does (an activity's, a window's focus). Once
     /// destroyed, it stays so. `Initialized` is `Created`: a lifecycle can't go back to it.
     pub fn set_lifecycle_state(&self, state: LifecycleState) {
+        let _turn = compose_runtime::platform::Turn::begin();
         let registry = &self.lifecycle.registry;
         if registry.current_state() != LifecycleState::Destroyed {
             registry.set_current_state(if state == LifecycleState::Initialized {
@@ -961,7 +962,6 @@ impl UiHost {
     }
 }
 
-/// The root's locals that never change, provided outermost.
 /// The host's lifecycle, as an Android view's owner or a desktop window's: resumed from the start
 /// unless the host says otherwise (a test's, D837), destroyed with it; and its view models, cleared
 /// then unless the platform keeps them (across a configuration change, D838).
@@ -990,6 +990,7 @@ impl Drop for HostLifecycle {
     }
 }
 
+/// The root's locals that never change, provided outermost.
 struct HostLocals {
     lifecycle: compose_lifecycle::Lifecycle,
     view_models: Rc<ViewModelStore>,
@@ -1003,7 +1004,7 @@ struct HostLocals {
 
 impl HostLocals {
     /// One provider for them all: each group more is what every local read above the content's
-    /// own providers walks (D839).
+    /// own providers walks (D842).
     fn provide(&self, content: impl FnOnce()) {
         let view_models: compose_lifecycle::ViewModelStoreOwnerRef = self.view_models.clone();
         compose_runtime::CompositionLocalProvider(

@@ -9,7 +9,10 @@ use std::rc::Rc;
 use compose_animation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::with_motion_duration_scale;
+use compose_ui::{
+    motion_duration_scale, set_motion_duration_scale, set_motion_duration_scale_source,
+    with_motion_duration_scale,
+};
 
 /// Runs `task` in a rule's clock, a frame at a time, until it ends.
 fn run(ui: &mut ComposeTestRule, task: impl std::future::Future<Output = ()> + 'static) {
@@ -392,4 +395,54 @@ fn an_infinite_transition_restarts_when_the_scale_changes_between_two_non_zero_v
     assert_eq!(value.get(), 0.0, "from the start at the first frame after");
     ui.advance_time_by_frame();
     assert_eq!(value.get(), 4.0, "at a quarter speed");
+}
+
+thread_local! {
+    static SOURCE_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn source() -> f32 {
+    SOURCE_READS.with(|reads| reads.set(reads.get() + 1));
+    0.5
+}
+
+/// A host's platform setting is read the first time a scale is, once (D839), as Compose's
+/// `MotionDurationScaleImpl` starts observing at the first read of `scaleFactor`.
+#[test]
+fn a_source_of_the_scale_is_read_at_its_first_use() {
+    SOURCE_READS.with(|reads| reads.set(0));
+    set_motion_duration_scale_source(source);
+    assert_eq!(SOURCE_READS.with(std::cell::Cell::get), 0);
+    assert_eq!(motion_duration_scale(), 0.5);
+    assert_eq!(motion_duration_scale(), 0.5);
+    assert_eq!(SOURCE_READS.with(std::cell::Cell::get), 1);
+    set_motion_duration_scale(1.0);
+}
+
+/// A set before the first read has the last word.
+#[test]
+fn a_set_takes_the_place_of_a_source_not_read_yet() {
+    SOURCE_READS.with(|reads| reads.set(0));
+    set_motion_duration_scale_source(source);
+    set_motion_duration_scale(3.0);
+    assert_eq!(motion_duration_scale(), 3.0);
+    assert_eq!(SOURCE_READS.with(std::cell::Cell::get), 0);
+    set_motion_duration_scale(1.0);
+}
+
+/// A task's own scale doesn't touch the thread's, so it doesn't read the source: Compose's
+/// `withContext(MotionDurationScale)` replaces the element whose getter would.
+#[test]
+fn a_task_s_own_scale_leaves_the_source_unread() {
+    SOURCE_READS.with(|reads| reads.set(0));
+    set_motion_duration_scale_source(source);
+    let seen = std::rc::Rc::new(std::cell::Cell::new(0.0));
+    let told = seen.clone();
+    compose_runtime::platform::launch(with_motion_duration_scale(2.0, async move {
+        told.set(motion_duration_scale());
+    }));
+    compose_runtime::platform::run_ready();
+    assert_eq!(seen.get(), 2.0);
+    assert_eq!(SOURCE_READS.with(std::cell::Cell::get), 0);
+    set_motion_duration_scale(1.0);
 }

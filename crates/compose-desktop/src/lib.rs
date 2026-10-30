@@ -137,6 +137,7 @@ struct FrameTimes {
 
 /// An open window: its winit window, its composition's host, and what draws and feeds it.
 struct Shown {
+    presence: WindowPresence,
     handle: Rc<WindowHandle>,
     window: Arc<winit::window::Window>,
     surface: softbuffer::Surface<Arc<winit::window::Window>, Arc<winit::window::Window>>,
@@ -164,6 +165,19 @@ struct Shown {
     pacing: bool,
     frames: u64,
     last_frame: Instant,
+}
+
+impl Shown {
+    fn follow_presence(&self) {
+        let minimized = self.window.is_minimized().unwrap_or(false);
+        self.host.set_lifecycle_state(self.presence.lifecycle_state(minimized));
+    }
+}
+
+impl Drop for Shown {
+    fn drop(&mut self) {
+        stop_for_closing(&self.host);
+    }
 }
 
 struct App {
@@ -225,6 +239,8 @@ impl App {
             if props.visible != shown.visible {
                 shown.visible = props.visible;
                 shown.window.set_visible(props.visible);
+                shown.presence.visible = props.visible;
+                shown.follow_presence();
                 if props.visible {
                     shown.window.request_redraw();
                 }
@@ -296,6 +312,10 @@ impl App {
         let optimizations = window_optimizations();
         host.set_optimizations(optimizations);
         update_configuration(&mut host, &window);
+        // Before the content: its effects hear no resume the window hasn't had.
+        let presence =
+            WindowPresence { visible: props.visible, focused: window.has_focus(), occluded: false };
+        host.set_lifecycle_state(presence.lifecycle_state(window.is_minimized().unwrap_or(false)));
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
         if !self.started {
@@ -320,6 +340,7 @@ impl App {
         self.windows.insert(
             id,
             Shown {
+                presence,
                 handle,
                 window,
                 surface,
@@ -484,14 +505,8 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if let Some(shown) = self.windows.get_mut(&id) {
             shown.accessibility.process_event(&shown.window, &event);
-            if matches!(event, WindowEvent::Focused(_) | WindowEvent::Occluded(_)) {
-                let focused = match event {
-                    WindowEvent::Focused(focused) => focused,
-                    _ => shown.window.has_focus(),
-                };
-                let occluded = matches!(event, WindowEvent::Occluded(true))
-                    || shown.window.is_minimized().unwrap_or(false);
-                shown.host.set_lifecycle_state(window_lifecycle_state(focused, occluded));
+            if shown.presence.hears(&event) {
+                shown.follow_presence();
             }
         }
         match event {
@@ -741,22 +756,47 @@ pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
     });
 }
 
-/// The window's configuration for its content (`LOCAL_CONFIGURATION`): its size in dp, its
-/// density, and the system's appearance as winit reports it (light when unknown). Desktop
-/// windows have no insets: they stay zero.
-/// A window's lifecycle, as Compose Desktop's: focused it's resumed, in the background started,
-/// minimized or hidden created (D837).
-fn window_lifecycle_state(focused: bool, occluded: bool) -> compose_lifecycle::LifecycleState {
-    use compose_lifecycle::LifecycleState::*;
-    if occluded {
-        Created
-    } else if focused {
-        Resumed
-    } else {
-        Started
+/// What a window's lifecycle follows: focused it's resumed, in the background started, hidden,
+/// covered or minimized created (D837, D841).
+#[derive(Clone, Copy, Debug)]
+struct WindowPresence {
+    visible: bool,
+    focused: bool,
+    occluded: bool,
+}
+
+impl WindowPresence {
+    /// Takes in `event`, if it's one of what it follows.
+    fn hears(&mut self, event: &WindowEvent) -> bool {
+        match *event {
+            WindowEvent::Focused(focused) => self.focused = focused,
+            WindowEvent::Occluded(occluded) => self.occluded = occluded,
+            _ => return false,
+        }
+        true
+    }
+
+    fn lifecycle_state(self, minimized: bool) -> compose_lifecycle::LifecycleState {
+        use compose_lifecycle::LifecycleState::*;
+        if !self.visible || self.occluded || minimized {
+            Created
+        } else if self.focused {
+            Resumed
+        } else {
+            Started
+        }
     }
 }
 
+/// A window closing is as an activity finishing: paused and stopped with its composition still
+/// there, destroyed once that's gone (when `host` drops), D841.
+fn stop_for_closing(host: &UiHost) {
+    host.set_lifecycle_state(compose_lifecycle::LifecycleState::Created);
+}
+
+/// The window's configuration for its content (`LOCAL_CONFIGURATION`): its size in dp, its
+/// density, and the system's appearance as winit reports it (light when unknown). Desktop
+/// windows have no insets: they stay zero.
 fn update_configuration(host: &mut UiHost, window: &winit::window::Window) {
     let physical = window.inner_size();
     let dark = window.theme() == Some(winit::window::Theme::Dark);
@@ -796,13 +836,70 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
+    use super::*;
     use compose_lifecycle::LifecycleState::*;
+    use std::cell::RefCell;
+
+    fn shown() -> WindowPresence {
+        WindowPresence { visible: true, focused: true, occluded: false }
+    }
 
     #[test]
     fn a_window_s_lifecycle_follows_its_focus_and_visibility() {
-        assert_eq!(super::window_lifecycle_state(true, false), Resumed);
-        assert_eq!(super::window_lifecycle_state(false, false), Started);
-        assert_eq!(super::window_lifecycle_state(true, true), Created);
-        assert_eq!(super::window_lifecycle_state(false, true), Created);
+        let mut presence = shown();
+        assert_eq!(presence.lifecycle_state(false), Resumed);
+        assert_eq!(presence.lifecycle_state(true), Created, "minimized");
+        presence.hears(&WindowEvent::Focused(false));
+        assert_eq!(presence.lifecycle_state(false), Started);
+        presence.hears(&WindowEvent::Occluded(true));
+        assert_eq!(presence.lifecycle_state(false), Created);
+    }
+
+    /// `Occluded(true)` and then a focus event: it's still covered.
+    #[test]
+    fn a_window_s_focus_doesn_t_forget_it_is_covered() {
+        let mut presence = shown();
+        assert!(presence.hears(&WindowEvent::Occluded(true)));
+        assert!(presence.hears(&WindowEvent::Focused(false)));
+        assert_eq!(presence.lifecycle_state(false), Created);
+        presence.hears(&WindowEvent::Focused(true));
+        assert_eq!(presence.lifecycle_state(false), Created);
+        presence.hears(&WindowEvent::Occluded(false));
+        assert_eq!(presence.lifecycle_state(false), Resumed);
+    }
+
+    #[test]
+    fn a_hidden_window_is_created_whatever_its_focus_says() {
+        let mut presence = shown();
+        presence.visible = false;
+        assert_eq!(presence.lifecycle_state(false), Created);
+        presence.visible = true;
+        assert_eq!(presence.lifecycle_state(false), Resumed);
+    }
+
+    #[test]
+    fn a_window_hears_only_what_it_follows() {
+        assert!(!shown().hears(&WindowEvent::CloseRequested));
+    }
+
+    /// D841: `LifecycleEventEffect(OnStop)` fires, as an activity finishing has it.
+    #[test]
+    fn a_window_closing_stops_with_its_composition_there_and_is_destroyed_after() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let (events, disposed) = (order.clone(), order.clone());
+        let mut host = UiHost::headless(10, 10);
+        host.lifecycle()
+            .add_observer_fn(move |_, event| events.borrow_mut().push(format!("{event:?}")));
+        host.set_content(move || {
+            let disposed = disposed.clone();
+            compose_runtime::DisposableEffect(0, move |scope| {
+                scope.on_dispose(move || disposed.borrow_mut().push("disposed".to_string()))
+            });
+        });
+        host.frame();
+        order.borrow_mut().clear();
+        stop_for_closing(&host);
+        drop(host);
+        assert_eq!(*order.borrow(), ["OnPause", "OnStop", "disposed", "OnDestroy"]);
     }
 }

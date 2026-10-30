@@ -9,10 +9,10 @@ internal object HostViewModels {
      * `LocalViewModelStoreOwner`; 0 without one: the host has a store of its own, lost with it.
      */
     fun tokenOf(view: View): Long {
-        if (androidXPresent) {
+        if (androidXPresent && AndroidXPresence.ofViewModels(view)) {
             try {
                 return AndroidXViewModels.tokenOf(view)
-            } catch (_: NoClassDefFoundError) {
+            } catch (_: LinkageError) {
                 // The app has no AndroidX view models (or R8 removed them).
                 androidXPresent = false
             }

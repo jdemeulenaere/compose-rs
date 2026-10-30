@@ -2975,6 +2975,17 @@ def configure(arguments, source):
     return mode, subjects, bits
 
 
+def animator_scale_problems(setting):
+    """What `settings get global animator_duration_scale` says may skew a report: both apps' durations
+    follow it (D836), and 1 is what the runs mean ("null": never set, 1)."""
+    value = setting.strip()
+    try:
+        unscaled = value == "null" or float(value) == 1.0
+    except ValueError:
+        unscaled = False
+    return [] if unscaled else [f"animator_duration_scale is {value}, not 1"]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -3046,6 +3057,8 @@ def main(argv=None):
     report = {"device": shell("getprop ro.product.model").strip(),
               "android": shell("getprop ro.build.version.release").strip(),
               "abi": shell("getprop ro.product.cpu.abi").strip(),
+              "animator_duration_scale": shell(
+                  "settings get global animator_duration_scale").strip(),
               "compile": arguments.compile,
               "scenarios": scenarios,
               # bench-rs's `-e optimizations` for each subject (None: the Compose app).
@@ -3059,6 +3072,9 @@ def main(argv=None):
               # Each CPU's capacity and highest frequency (kHz): what "work" and the little
               # cores' share are computed from.
               "cpu_capacities": {str(cpu): list(value) for cpu, value in capacities.items()}}
+    report["problems"] = animator_scale_problems(report["animator_duration_scale"])
+    for problem in report["problems"]:
+        print(f"warning: {problem}")
     report["apks"] = check_apks(arguments.out, report["abi"], arguments.allow_stale)
     report["target_sdk"] = {name: target_sdk(shell(f"dumpsys package {package}"))
                             for name, package in APPS.items()}

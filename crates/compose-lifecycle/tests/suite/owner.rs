@@ -269,8 +269,23 @@ fn a_host_s_lifecycle_is_destroyed_after_its_composition_is_disposed() {
     });
     ui.wait_for_idle();
     let lifecycle = ui.host().lifecycle();
+    struct Model {
+        base: ViewModelBase,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+    impl ViewModel for Model {
+        fn base(&self) -> &ViewModelBase {
+            &self.base
+        }
+        fn on_cleared(&self) {
+            self.order.borrow_mut().push("view models cleared");
+        }
+    }
+    ui.host()
+        .view_model_store()
+        .put("model", Rc::new(Model { base: ViewModelBase::new(), order: order.clone() }));
     drop(ui);
-    assert_eq!(*order.borrow(), ["composition disposed", "destroyed"]);
+    assert_eq!(*order.borrow(), ["composition disposed", "destroyed", "view models cleared"]);
     assert_eq!(lifecycle.current_state(), Destroyed);
     // Once destroyed, nothing moves it (a platform's late event).
 }

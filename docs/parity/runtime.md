@@ -258,6 +258,7 @@ From each module's `api/current.txt` (`restricted_current.txt` only to tell what
 
 | Feature | Compose APIs (package `androidx.compose.runtime` unless named) | compose-rs today |
 |---|---|---|
+| host-content-groups | not an API of Compose's: its compiler sees every `@Composable` lambda, so an `if` in `setContent { … }` has a group | a gap to close: the plain closures given to a host (`run_app(options, || …)`, `application(|| …)`, `compose_test(|| …)`, `UiHost::set_content`, `Composition::set_content`) get no region groups, so an `if` there silently passes state to the next sibling (docs/03; found porting `RememberViewModelStoreProviderTest`, D838) |
 | host-defaults | `compositionLocalWithHostDefaultOf`, `HostDefaultKey`, `HostDefaultProvider`, `LocalHostDefaultProvider` | none: the other local variants are done (local-variants) |
 | state-collections | `SnapshotStateList` (the `MutableList` API, `toList`, `SnapshotStateList(size, init)`), `SnapshotStateMap` (`MutableMap` API, `toMap`), `SnapshotStateSet` (`MutableSet` API, `toSet`), `mutableStateMapOf`, `mutableStateSetOf`, `toMutableStateMap`, element-wise `mutableStateListOf` | `mutable_state_list_of`/`mutable_state_list_from` give an `OwnedState<Vec<T>>`, edited whole through `edit`, every edit invalidating |
 | computed-state | `computedStateOf(policy, calculation)` | none |
@@ -327,6 +328,12 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 - **Does:** a local whose default the host gives (an Android view's, a desktop window's), through a provider local.
 - **Tests:** the 5 `CompositionLocalTests.hostDefault_*`.
 - **Depends on:** local-variants (done); hosts provide `LocalHostDefaultProvider` (ui area).
+
+### host-content-groups (M, needs a decision)
+- **Gap:** what Compose's compiler gives every content lambda, a closure given to a host doesn't get: `run_app(options, || …)`, `application(|| …)`, `compose_test(|| …)`, `UiHost::set_content`, `Composition::set_content`. A `#[composable]` function is the only thing the macro sees, so an `if` in such a closure has no group: with its branch gone, the next call of the same composable matches the group it left, and silently takes its `remember`s (docs/03). Tests port it unawares: `onDispose_doesNotAffectSiblingStores` failed for it, until its content was a function.
+- **Does:** an `if` at a host's root keeps its state to itself, whichever way the fix goes (a proc macro at those entry points, a lint or a debug check, the closures' own source).
+- **Tests:** a sibling after a removed `if` in each entry point's closure keeps its own state.
+- **Depends on:** nothing; not fixed with lifecycles.
 
 ### state-collections (M)
 - **APIs:** `SnapshotStateList<T>`, `SnapshotStateMap<K, V>`, `SnapshotStateSet<T>` with `mutable_state_list_of`, `mutable_state_map_of`, `mutable_state_set_of`, `to_mutable_state_list`, `to_mutable_state_map`: handles (as `MutableState`) with Rust-collection methods (`push`, `insert`, `remove`, `retain`, `get`, `len`, `iter`, `sort_by`, ranges for `subList`), reads subscribing, an unchanged write (`set` of an equal element) not invalidating.
@@ -433,8 +440,9 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 5. **composition-api (M)**, **recomposer (M)**, **frame-end-callback (S)**: host-level shape, unblocking `RecomposerTests` and the reuse and pausable API tests.
 6. **movable-content (L)**, then **retain (L)**.
 7. **composition-context (L)**, after the user decides on subcomposition (it also unblocks movable content across compositions and part of the ui area's `SubcomposeLayout`).
-8. **error-traces (M)**, **composition-tracing (S)**, **composition-observer (M, exp)**, **composition-data (M)**, **composable-annotations (S)**.
-9. **snapshot-isolation (XL)** last, after a decision revisiting D16; **remember-serializable** if serde is accepted.
+8. **host-content-groups (M)**, when its decision is made, before more tests are ported through `compose_test(|| …)` with branches.
+9. **error-traces (M)**, **composition-tracing (S)**, **composition-observer (M, exp)**, **composition-data (M)**, **composable-annotations (S)**.
+10. **snapshot-isolation (XL)** last, after a decision revisiting D16; **remember-serializable** if serde is accepted.
 
 ## Notes for the porting agents
 

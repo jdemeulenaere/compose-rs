@@ -16,7 +16,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 |---|---|---|---|
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/CommonLifecycleRegistryTest.kt` | 26 | ported | `compose-lifecycle/tests/suite/registry.rs` |
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/FastSafeIterableMapTest.kt` | 8 | n/a | an internal map: the registry's list walks by order of addition, checked by the registry's tests |
-| `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/WithLifecycleStateTest.kt` | 4 | ported | `with_state.rs` |
+| `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/WithLifecycleStateTest.kt` | 4 | ported | `with_state.rs`, with the observer gone before the block and its failure the waiter's |
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/RepeatOnLifecycleTest.kt` | 15 | partial | 12 ported, `repeat_on_lifecycle.rs` (the `NonCancellable` tear-down: a dropped future has none to wait for); n/a: the 3 with a `withContext(customJob)` or a dispatcher, no such things here |
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/FlowWithLifecycleTest.kt` | 12 | `feature:flows` | |
 | `lifecycle-runtime/src/androidDeviceTest/kotlin/androidx/lifecycle/PausingDispatcherTest.kt` | 24 | n/a | deprecated `launchWhen*` and its dispatcher |
@@ -47,7 +47,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/RememberViewModelStoreProviderTest.android.kt` | 8 | partial | 7 ported, `view_model_compose.rs`; `withDefaultArgs`: `feature:saved-state` |
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/RememberViewModelStoreOwnerTest.android.kt` | 8 | partial | 6 ported, `view_model_compose.rs`, the configuration change with a store kept across two hosts; 2: `feature:saved-state` |
 | `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/SavedStateHandleSaverTest.android.kt` | 9 | `feature:saved-state` | |
-| `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/ViewModelInComponentActivityTest.android.kt`, `ViewModelInAppCompatActivityTest.android.kt`, `ViewModelInFragmentTest.android.kt` | 5 | n/a | a device's activities and fragments; `ComposeRsView`'s side is D838 (built, not run) |
+| `lifecycle-viewmodel-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/viewmodel/compose/ViewModelInComponentActivityTest.android.kt`, `ViewModelInAppCompatActivityTest.android.kt`, `ViewModelInFragmentTest.android.kt` | 5 | n/a | a device's activities and fragments; `ComposeRsView`'s side is D838, checked on the Pixel with a probe (D840) |
 
 ## Public API
 
@@ -70,6 +70,6 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 
 ## Hosts
 
-`UiHost` provides its `Lifecycle` as `LOCAL_LIFECYCLE_OWNER`, destroyed once its composition is disposed: `set_lifecycle_state` moves it. On Android, `ComposeRsView` follows its view tree's `LifecycleOwner`, else its activity's callbacks. On the desktop, a window is resumed focused, started in the background, created minimized or hidden. Under a test rule, it's resumed, as a test's activity.
+`UiHost` provides its `Lifecycle` as `LOCAL_LIFECYCLE_OWNER`, destroyed once its composition is disposed: `set_lifecycle_state` moves it. On Android, `ComposeRsView` follows its view tree's `LifecycleOwner`, else its activity's callbacks, a visible window taken as resumed until they say otherwise (D840). On the desktop, a window is resumed focused, started in the background, created minimized, hidden or covered, and stops before its composition goes when it closes (D841). Under a test rule, it's resumed, as a test's activity.
 
-`UiHost` also provides a store as `LOCAL_VIEW_MODEL_STORE_OWNER`, cleared last when it goes. On Android, one kept in the view tree's `ViewModelStoreOwner` if it has one, so its models outlive a configuration change (`set_retained_view_model_store`, D838: built and linted, not run on a device).
+`UiHost` also provides a store as `LOCAL_VIEW_MODEL_STORE_OWNER`, cleared last when it goes. On Android, one kept in the view tree's `ViewModelStoreOwner` if it has one, so its models outlive a configuration change (`set_retained_view_model_store`, D838: `recreate()` kept and `finish()` cleared it on the Pixel, D840).

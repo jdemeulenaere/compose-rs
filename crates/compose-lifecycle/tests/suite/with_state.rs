@@ -12,16 +12,56 @@ fn a_block_runs_at_once_when_the_state_is_reached() {
     let owner = TestLifecycleOwner::new(LifecycleState::Resumed);
     let read = Rc::new(Cell::new(0));
     let toread = Rc::new(Cell::new(1));
-    let (seen, from) = (read.clone(), toread.clone());
+    let (seen, from, writer) = (read.clone(), toread.clone(), toread.clone());
     let lifecycle = owner.lifecycle();
     platform::launch(async move {
         let value = lifecycle.with_started(move || from.get()).await.unwrap();
         seen.set(value);
     });
-    // Whatever else was launched has not run in between: the first poll gives the result.
-    toread.set(1);
+    // Next in line: the block has run by then if its first poll ran it, not if it yielded first.
+    platform::launch(async move { writer.set(2) });
     platform::run_ready();
     assert_eq!(read.get(), 1);
+    assert_eq!(toread.get(), 2);
+}
+
+/// As AndroidX's `removeObserver(this)` before `runCatching(block)`: a block sees it gone.
+#[test]
+fn a_block_run_as_the_state_changes_finds_its_observer_gone() {
+    let owner = TestLifecycleOwner::new(LifecycleState::Created);
+    let count = Rc::new(Cell::new(usize::MAX));
+    let (seen, lifecycle, counted) = (count.clone(), owner.lifecycle(), owner.clone());
+    platform::launch(async move {
+        lifecycle.with_started(move || seen.set(counted.observer_count())).await.unwrap();
+    });
+    platform::run_ready();
+    assert_eq!(owner.observer_count(), 1);
+    owner.set_current_state(LifecycleState::Started);
+    assert_eq!(count.get(), 0);
+}
+
+/// As AndroidX's `co.resumeWith(runCatching(block))`: a block's failure is for who waits for it,
+/// and the lifecycle's other observers still hear the event.
+#[test]
+fn a_block_s_failure_reaches_its_waiter_not_the_lifecycle() {
+    let owner = TestLifecycleOwner::new(LifecycleState::Created);
+    let lifecycle = owner.lifecycle();
+    platform::launch(async move {
+        lifecycle.with_started(|| panic!("the block's failure")).await.unwrap();
+    });
+    platform::run_ready();
+    let heard = Rc::new(Cell::new(false));
+    let told = heard.clone();
+    owner.lifecycle().add_observer_fn(move |_, event| {
+        if event == LifecycleEvent::OnStart {
+            told.set(true);
+        }
+    });
+    owner.set_current_state(LifecycleState::Started);
+    assert!(heard.get(), "the observer after it heard the event");
+    assert_eq!(owner.current_state(), LifecycleState::Started);
+    let failure = std::panic::catch_unwind(platform::run_ready).unwrap_err();
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the block's failure"));
 }
 
 // Compose: lifecycle/lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/WithLifecycleStateTest.kt, testBlockRunsWithLifecycleStateChange

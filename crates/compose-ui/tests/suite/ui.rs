@@ -903,12 +903,14 @@ fn every_entry_point_of_the_host_is_a_turn() {
         BackHandler!(on_back = move || handle.update(|count| count + 1));
         Leaf(Modifier.size(20.dp()).then_custom(EveryEvent { count: handle }));
     });
+    // What a lifecycle's observer does, in `set_lifecycle_state`'s turn.
+    host.lifecycle().add_observer_fn(move |_, _| handle.update(|count| count + 1));
     let calls = HostCalls::of(&host);
     let node = host.with_tree(|tree| tree.focus_order()[0]);
     host.frame();
     let density = Density::new(2.0);
     type Event<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
-    let events: [Event; 14] = [
+    let events: [Event; 15] = [
         ("send_pointer_left", &|host| {
             host.send_pointer(PointerEvent::moved(Offset::new(5.0, 5.0), false));
             host.frame();
@@ -922,6 +924,9 @@ fn every_entry_point_of_the_host_is_a_turn() {
             host.set_view_configuration(Some(ViewConfiguration::at(density)));
         }),
         ("set_density", &|host| host.set_density(density)),
+        ("set_lifecycle_state", &|host| {
+            host.set_lifecycle_state(compose_lifecycle::LifecycleState::Started);
+        }),
         ("set_configuration", &|host| {
             host.set_configuration(Configuration::from_window(
                 IntSize::new(190, 90),

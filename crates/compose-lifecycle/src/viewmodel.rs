@@ -575,9 +575,14 @@ impl ViewModelProvider {
     }
 }
 
-/// The key a type's view model is under, as `ViewModelProviders.getDefaultKey`.
+/// The key a type's view model is under, as `ViewModelProviders.getDefaultKey`. A type's name isn't
+/// unique, so its id goes with it.
 pub(crate) fn default_key<T: 'static>() -> String {
-    format!("androidx.lifecycle.ViewModelProvider.DefaultKey:{}", std::any::type_name::<T>())
+    format!(
+        "androidx.lifecycle.ViewModelProvider.DefaultKey:{}:{:?}",
+        std::any::type_name::<T>(),
+        std::any::TypeId::of::<T>()
+    )
 }
 
 /// A key of a store, hashing what it's given, as Compose's `Any?` keys are told apart by `equals`.

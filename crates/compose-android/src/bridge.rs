@@ -28,6 +28,8 @@ use compose_ui::platform::Optimizations;
 static VM: OnceLock<JavaVM> = OnceLock::new();
 /// `ComposeRsNative`'s class and its `wake` method: what a task woken on any thread calls.
 static WAKE: OnceLock<(Global<JClass<'static>>, JStaticMethodID)> = OnceLock::new();
+/// `ComposeRsNative.readAnimatorScale`, of `WAKE`'s class.
+static READ_ANIMATOR_SCALE: OnceLock<JStaticMethodID> = OnceLock::new();
 
 pub(crate) fn set_vm(vm: JavaVM) {
     install_panic_hook();
@@ -544,6 +546,11 @@ fn create(
             .get_static_method_id(class, jni_str!("wake"), jni_sig!("()V"))
             .expect("compose-android: ComposeRsNative.wake");
         let _ = WAKE.set((class_ref, wake));
+        let read_scale = env
+            .get_static_method_id(class, jni_str!("readAnimatorScale"), jni_sig!("()F"))
+            .expect("compose-android: ComposeRsNative.readAnimatorScale");
+        let _ = READ_ANIMATOR_SCALE.set(read_scale);
+        crate::read_animator_duration_scale_with(read_animator_scale);
         // A task woken on any thread posts a tick to the main thread.
         platform::set_wake_handler(|| {
             let (Some(vm), Some((class, wake))) = (VM.get(), WAKE.get()) else { return };
@@ -791,6 +798,41 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_clearViewModelSto
     token: jlong,
 ) {
     crate::clear_retained_view_model_store(token);
+}
+
+/// The first read of the animator duration scale since the setting was last watched, on the main
+/// thread: the setting, watched from then on (`ComposeRsRuntime.readAnimatorScale`, D839).
+fn read_animator_scale() -> f32 {
+    let (Some(vm), Some((class, _)), Some(read)) =
+        (VM.get(), WAKE.get(), READ_ANIMATOR_SCALE.get())
+    else {
+        return 1.0;
+    };
+    vm.attach_current_thread(|env| -> jni::errors::Result<f32> {
+        // SAFETY: `read` is `()F`, static, of `class`.
+        let scale = unsafe {
+            env.call_static_method_unchecked(
+                class,
+                *read,
+                ReturnType::Primitive(Primitive::Float),
+                &[],
+            )
+        };
+        let scale = scale.and_then(|value| value.f());
+        check(env, "ComposeRsNative.readAnimatorScale");
+        scale
+    })
+    .unwrap_or(1.0)
+}
+
+/// `ComposeRsNative.readAnimatorScaleAgain()`: the setting's no longer watched (no view shows), so
+/// the next animation reads it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_readAnimatorScaleAgain(
+    _env: EnvUnowned,
+    _class: JClass,
+) {
+    crate::read_animator_duration_scale_with(read_animator_scale);
 }
 
 /// `ComposeRsNative.setAnimatorDurationScale(scale)`: the setting's value (`ComposeRsRuntime.kt`

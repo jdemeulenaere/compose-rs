@@ -302,10 +302,15 @@ class ComposeRsView @JvmOverloads constructor(
 
     private fun destroy() {
         if (host == 0L) return
-        lifecycleSource?.remove()
-        lifecycleSource = null
         // Given back if it's composed again (attached again, or a new view of the same id).
         savedState = ComposeRsNative.saveState(host)
+        destroyHost()
+    }
+
+    /** Ends [host] and all that goes with it. */
+    private fun destroyHost() {
+        lifecycleSource?.remove()
+        lifecycleSource = null
         cancelFrames()
         // (Destroying a host shown with hints hides it.)
         performanceHintShown = false
@@ -365,13 +370,7 @@ class ComposeRsView @JvmOverloads constructor(
         savedState = restored
         // Already composed (restored late): composed again from the saved state.
         if (host != 0L) {
-            cancelFrames()
-            performanceHintShown = false
-            ComposeRsNative.destroy(host)
-            host = 0L
-            drawing = null
-            measurer.clear()
-            replayer.clear()
+            destroyHost()
             create()
             invalidate()
         }

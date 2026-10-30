@@ -50,7 +50,26 @@ pub fn lifecycle_state(ordinal: i32) -> compose_lifecycle::LifecycleState {
 /// Compose's `MotionDurationScale` does (D836). The setting holds what `adb` puts in it: a negative
 /// one, which Compose would throw on while animating, is 0, not a crash of the app.
 pub fn set_animator_duration_scale(scale: f32) {
-    compose_ui::set_motion_duration_scale(if scale < 0.0 { 0.0 } else { scale });
+    compose_ui::set_motion_duration_scale(animator_duration_scale_of(scale));
+}
+
+fn animator_duration_scale_of(setting: f32) -> f32 {
+    if setting < 0.0 { 0.0 } else { setting }
+}
+
+thread_local! {
+    static ANIMATOR_DURATION_SCALE_READER: std::cell::Cell<fn() -> f32> =
+        const { std::cell::Cell::new(|| 1.0) };
+}
+
+/// Has the setting read with `read` the first time an animation on this thread needs it, not
+/// before: `ComposeRsRuntime` starts watching it then (D839).
+#[doc(hidden)]
+pub fn read_animator_duration_scale_with(read: fn() -> f32) {
+    ANIMATOR_DURATION_SCALE_READER.with(|reader| reader.set(read));
+    compose_ui::set_motion_duration_scale_source(|| {
+        animator_duration_scale_of(ANIMATOR_DURATION_SCALE_READER.with(std::cell::Cell::get)())
+    });
 }
 
 thread_local! {

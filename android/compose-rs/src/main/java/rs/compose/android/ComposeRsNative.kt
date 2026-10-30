@@ -51,6 +51,9 @@ internal object ComposeRsNative {
     /** `Settings.Global.ANIMATOR_DURATION_SCALE`: the main thread's animations follow it. */
     @JvmStatic external fun setAnimatorDurationScale(scale: Float)
 
+    /** The setting's not watched any more: the next animation calls [readAnimatorScale]. */
+    @JvmStatic external fun readAnimatorScaleAgain()
+
     /** Recomposes, lays out and draws what changed: [Frame] flags, and the next timer. */
     @JvmStatic external fun frame(host: Long): Long
 
@@ -164,6 +167,10 @@ internal object ComposeRsNative {
 
     /** Runs the timers due and the tasks woken: the next timer, and whether frames are wanted. */
     @JvmStatic external fun tick(): Long
+
+    /** An animation's first read of the setting (`bridge.rs`): it's watched from then on. */
+    @JvmStatic
+    fun readAnimatorScale(): Float = ComposeRsRuntime.readAnimatorScale()
 
     /** A task woke, on any thread: a tick on the main thread. */
     @JvmStatic

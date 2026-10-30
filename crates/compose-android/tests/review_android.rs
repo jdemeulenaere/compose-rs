@@ -274,6 +274,34 @@ fn a_negative_animator_duration_scale_is_0() {
     compose_android::set_animator_duration_scale(1.0);
 }
 
+/// `ComposeRsRuntime` reads the setting, and starts watching it, at the first animation's read, and
+/// not before: a screen with no animation pays nothing (D839). What it reads is as a set's.
+#[test]
+fn the_animator_duration_scale_is_read_at_its_first_use_alone() {
+    thread_local! {
+        static READS: Cell<u32> = const { Cell::new(0) };
+    }
+    fn read() -> f32 {
+        READS.with(|reads| reads.set(reads.get() + 1));
+        -1.0
+    }
+    compose_android::read_animator_duration_scale_with(read);
+    assert_eq!(READS.with(Cell::get), 0);
+    // The negative setting, as `set_animator_duration_scale` has it.
+    assert_eq!(compose_ui::motion_duration_scale(), 0.0);
+    assert_eq!(compose_ui::motion_duration_scale(), 0.0);
+    assert_eq!(READS.with(Cell::get), 1);
+    // The observer's update after that, and no read again.
+    compose_android::set_animator_duration_scale(2.0);
+    assert_eq!(compose_ui::motion_duration_scale(), 2.0);
+    assert_eq!(READS.with(Cell::get), 1);
+    // The last view gone, the watch stops: the next read reads it again.
+    compose_android::read_animator_duration_scale_with(read);
+    assert_eq!(compose_ui::motion_duration_scale(), 0.0);
+    assert_eq!(READS.with(Cell::get), 2);
+    compose_android::set_animator_duration_scale(1.0);
+}
+
 /// What `AndroidXViewModels.kt` holds: a store outliving hosts until it's cleared for good, with a
 /// token for each and none for 0 (a view with no owner keeps its own).
 #[test]
