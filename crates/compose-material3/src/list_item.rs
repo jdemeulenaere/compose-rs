@@ -157,7 +157,7 @@ impl ListItemColors {
 }
 
 /// A list item's shape in each state, as Compose's `ListItemShapes`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct ListItemShapes {
     pub shape: Shape,
     pub selected_shape: Shape,
@@ -178,15 +178,15 @@ impl ListItemShapes {
     /// default, as Compose's `shapeForInteraction` (which also animates between them).
     fn for_state(&self, selected: bool, pressed: bool, focused: bool, hovered: bool) -> Shape {
         if pressed {
-            self.pressed_shape
+            self.pressed_shape.clone()
         } else if selected {
-            self.selected_shape
+            self.selected_shape.clone()
         } else if focused {
-            self.focused_shape
+            self.focused_shape.clone()
         } else if hovered {
-            self.hovered_shape
+            self.hovered_shape.clone()
         } else {
-            self.shape
+            self.shape.clone()
         }
     }
 }
@@ -288,12 +288,12 @@ impl ListItemDefaults {
     pub fn shapes() -> ListItemShapes {
         let shapes = MaterialTheme::shapes();
         ListItemShapes {
-            shape: shapes.extra_small,
-            selected_shape: shapes.large,
-            pressed_shape: shapes.large,
-            focused_shape: shapes.large,
-            hovered_shape: shapes.medium,
-            dragged_shape: shapes.large,
+            shape: shapes.extra_small.clone(),
+            selected_shape: shapes.large.clone(),
+            pressed_shape: shapes.large.clone(),
+            focused_shape: shapes.large.clone(),
+            hovered_shape: shapes.medium.clone(),
+            dragged_shape: shapes.large.clone(),
         }
     }
 
@@ -311,7 +311,7 @@ impl ListItemDefaults {
         default_shapes: ListItemShapes,
     ) -> ListItemShapes {
         let (Shape::Rounded(corners), Shape::Rounded(large)) =
-            (default_shapes.shape, MaterialTheme::shapes().large)
+            (default_shapes.shape.clone(), MaterialTheme::shapes().large.clone())
         else {
             return default_shapes;
         };
@@ -573,12 +573,12 @@ fn interactive_list_item(
     let modifier = modifier
         .shadow_with(
             shadow,
-            shape,
+            shape.clone(),
             false,
             compose_ui::DEFAULT_SHADOW_COLOR,
             compose_ui::DEFAULT_SHADOW_COLOR,
         )
-        .background_with(container, shape)
+        .background_with(container, shape.clone())
         .clip(shape);
     let modifier = match click {
         Some(click) => modifier.combined_clickable_with(

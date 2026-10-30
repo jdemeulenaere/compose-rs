@@ -38,7 +38,7 @@ fn chip(
     role: Role,
     selected: Option<bool>,
 ) {
-    let shape = MaterialTheme::shapes().small;
+    let shape = MaterialTheme::shapes().small.clone();
     let typography = MaterialTheme::typography();
     // As Compose's `Surface`: the border, then the color, then the clip, so the clip doesn't
     // cut into the border's antialiased outer edge at the corners (D573).

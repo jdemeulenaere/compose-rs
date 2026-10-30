@@ -406,7 +406,7 @@ pub struct SnackbarDefaults;
 impl SnackbarDefaults {
     /// The extra-small shape, as `shape`.
     pub fn shape() -> Shape {
-        MaterialTheme::shapes().extra_small
+        MaterialTheme::shapes().extra_small.clone()
     }
 
     /// The inverse surface, as `color`.
@@ -755,7 +755,7 @@ pub fn PlainTooltip(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::MaterialTheme::color_scheme().inverse_on_surface)] content_color: Color,
     #[default(crate::MaterialTheme::color_scheme().inverse_surface)] container_color: Color,
-    #[default(crate::MaterialTheme::shapes().extra_small)] shape: Shape,
+    #[default(crate::MaterialTheme::shapes().extra_small.clone())] shape: Shape,
     content: impl Fn() + 'static,
 ) {
     let typography = MaterialTheme::typography();

@@ -60,22 +60,22 @@ impl FloatingActionButtonDefaults {
 
     /// The large shape (16 dp corners), as `shape`.
     pub fn shape() -> Shape {
-        MaterialTheme::shapes().large
+        MaterialTheme::shapes().large.clone()
     }
 
     /// The medium shape (12 dp), as `smallShape`.
     pub fn small_shape() -> Shape {
-        MaterialTheme::shapes().medium
+        MaterialTheme::shapes().medium.clone()
     }
 
     /// The extra-large shape (28 dp), as `largeShape`.
     pub fn large_shape() -> Shape {
-        MaterialTheme::shapes().extra_large
+        MaterialTheme::shapes().extra_large.clone()
     }
 
     /// As `extendedFabShape`.
     pub fn extended_fab_shape() -> Shape {
-        MaterialTheme::shapes().large
+        MaterialTheme::shapes().large.clone()
     }
 
     /// The primary container, as `containerColor`.

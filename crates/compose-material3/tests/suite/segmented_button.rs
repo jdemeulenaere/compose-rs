@@ -224,8 +224,8 @@ fn the_default_border_is_the_outline_1_dp_wide() {
             READ.with(|read| read.set(Some(SegmentedButtonDefaults::border_stroke(color))));
         });
     });
-    let border = READ.with(std::cell::Cell::get).expect("composed");
-    assert_eq!((border.color, border.width), (light_color_scheme().outline, 1.dp()));
+    let border = READ.with(std::cell::Cell::take).expect("composed");
+    assert_eq!(border, compose_foundation::BorderStroke::new(1.dp(), light_color_scheme().outline));
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SegmentedButtonTest.kt, segmentedButtonBorderColor_customColors_resolvesCorrectly
@@ -401,16 +401,13 @@ fn item_shapes_round_the_rows_ends() {
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::DrawRoundRect(_, radii, paint)
-                if matches!(paint.style, PaintStyle::Stroke(_)) =>
-            {
-                Some(*radii)
-            }
+            DrawOp::ClipRoundRect(_, radii) => Some(*radii),
             _ => None,
         })
         .collect();
-    // The first rounded at its start, the last at its end; the middle one (a rectangle) isn't
-    // a round rectangle.
+    // The items' clips: the first rounded at its start, the last at its end; the middle one (a
+    // rectangle) isn't a round rectangle. (Their borders, corners unequal, are paths, as
+    // Compose's `drawGenericBorder`.)
     assert_eq!(radii.len(), 2, "{radii:?}");
     assert!(radii[0][0] > 0.0 && radii[0][1] == 0.0, "{radii:?}");
     assert!(radii[1][0] == 0.0 && radii[1][1] > 0.0, "{radii:?}");

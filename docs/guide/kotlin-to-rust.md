@@ -1277,7 +1277,7 @@ Where Kotlin calls a constructor or `copy` with named arguments (`lightColorSche
 pub fn Banner(text: SharedString) {
     // `MaterialTheme.colorScheme`, `.typography`, `.shapes`: reads of composition locals.
     let colors = MaterialTheme::color_scheme();
-    Surface!(color = colors.primary_container, shape = MaterialTheme::shapes().medium, {
+    Surface!(color = colors.primary_container, shape = MaterialTheme::shapes().medium.clone(), {
         Text!(
             text,
             modifier = Modifier.padding(16.dp()),

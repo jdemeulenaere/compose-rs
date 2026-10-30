@@ -9,8 +9,7 @@
 //! difference on a phone's width, not on this 400 px root.
 //!
 //! Not ported: `sliderPosition_stepsThrowWhenLessThanZero` (`steps` is a `u32`),
-//! `slider_interactionSource_resetWhenDisposed` (compose-rs's interaction source keeps states,
-//! not an interaction stream), `slider_label_staysVisible_whenHoverExitsWhileStillPressedOrDragging`
+//! `slider_label_staysVisible_whenHoverExitsWhileStillPressedOrDragging`
 //! (no `Label`), `slider_onValueChangeFinishedWithSnackbar` (a snackbar shown from the callback;
 //! the callback is covered by the others), `slider_thumbPosition_staysSameWhenFocused` (ignored
 //! in Compose, b/447508701), the inset focus ring tests, the vertical and range sliders' tests
@@ -24,8 +23,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Dp, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset, PointerEvent,
-    ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
+    Dp, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, MutableInteractionSource, Offset,
+    PointerEvent, ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
 };
 
 const TAG: &str = "slider";
@@ -806,4 +805,99 @@ fn every_key_down_asks_for_a_value_even_at_the_ends() {
     ui.press_key(compose_ui::Key::MoveHome);
     ui.press_key(compose_ui::Key::MoveHome);
     assert_eq!(*asked.borrow(), [1.0, 1.0, 0.0, 0.0]);
+}
+
+/// A slider given `source`, shown while `shown`, tagged.
+fn with_source(
+    state: SliderState,
+    source: MutableInteractionSource,
+    shown: MutableState<bool>,
+) -> impl Fn() + 'static {
+    move || {
+        if shown.get() {
+            Slider!(
+                state,
+                move |new| state.set_value(new),
+                modifier = Modifier.test_tag(TAG),
+                interaction_source = Some(source.clone()),
+            );
+        }
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, slider_interactionSource_resetWhenDisposed
+#[test]
+fn a_press_under_way_ends_when_the_slider_leaves() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let shown = mutable_state_of(true);
+    let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
+    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.wait_for_idle();
+    assert!(source.is_pressed());
+    shown.set(false);
+    ui.wait_for_idle();
+    assert!(!source.is_pressed());
+}
+
+/// The slider's interactions, as `sliderTapModifier`'s and `draggable`'s: a press until the drag
+/// takes it, then a drag until the release.
+#[test]
+fn a_press_becomes_a_drag_in_the_interaction_source() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let shown = mutable_state_of(true);
+    let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
+    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.wait_for_idle();
+    assert!(source.is_pressed() && !source.is_dragged());
+    let moved = at + Offset::new(SLOP + 10.0, 0.0);
+    ui.host().send_pointer(PointerEvent::moved(moved, true));
+    ui.wait_for_idle();
+    assert!(!source.is_pressed() && source.is_dragged());
+    ui.host().send_pointer(PointerEvent::release(moved));
+    ui.wait_for_idle();
+    assert!(!source.is_pressed() && !source.is_dragged());
+}
+
+/// A tap ends its press with a release, and focus goes through the source too.
+#[test]
+fn a_tap_and_a_focus_go_through_the_interaction_source() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let shown = mutable_state_of(true);
+    let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
+    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert!(!source.is_pressed());
+    ui.on_node_with_tag(TAG).request_focus();
+    ui.wait_for_idle();
+    assert!(source.is_focused());
+    shown.set(false);
+    ui.wait_for_idle();
+    assert!(!source.is_focused());
+}
+
+/// `SetProgress` calls through on a disabled slider, as Compose's: refusing a disabled node's
+/// actions is the platform bridges' (D1255).
+#[test]
+fn a_disabled_sliders_set_progress_calls_through() {
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(material(move || {
+        Slider!(
+            handle,
+            move |new| handle.set_value(new),
+            modifier = Modifier.test_tag(TAG),
+            enabled = false,
+        );
+    }));
+    ui.on_node_with_tag(TAG).assert_is_not_enabled();
+    ui.on_node_with_tag(TAG)
+        .perform_semantics_action_with(&SemanticsActions::SET_PROGRESS, |set| assert!(set(0.5)));
+    assert_near(state.value(), 0.5);
 }

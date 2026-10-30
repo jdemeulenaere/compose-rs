@@ -29,7 +29,7 @@ fn seen(slot: &str) -> Color {
     SEEN.with(|seen| *seen.borrow().get(slot).unwrap_or_else(|| panic!("no {slot}")))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Appearance {
     shape: Option<Shape>,
     container_color: Option<Color>,
@@ -86,8 +86,11 @@ fn RecordingItem(
 fn test_menu(scheme: ColorScheme, enabled: bool, appearance: Appearance) -> ComposeTestRule {
     SEEN.with(|seen| seen.borrow_mut().clear());
     let mut ui = compose_test(move || {
+        let appearance = appearance.clone();
         MaterialTheme!(color_scheme = scheme, {
+            let appearance = appearance.clone();
             Box!(modifier = Modifier.test_tag("dropdown_menu").padding(20.dp()), {
+                let appearance = appearance.clone();
                 let shape = appearance.shape.unwrap_or_else(MenuDefaults::shape);
                 let container =
                     appearance.container_color.unwrap_or_else(MenuDefaults::container_color);

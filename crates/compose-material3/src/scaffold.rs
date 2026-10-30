@@ -163,17 +163,17 @@ impl CardDefaults {
     }
 
     pub fn shape() -> Shape {
-        MaterialTheme::shapes().medium
+        MaterialTheme::shapes().medium.clone()
     }
 
     /// As `elevatedShape`.
     pub fn elevated_shape() -> Shape {
-        MaterialTheme::shapes().medium
+        MaterialTheme::shapes().medium.clone()
     }
 
     /// As `outlinedShape`.
     pub fn outlined_shape() -> Shape {
-        MaterialTheme::shapes().medium
+        MaterialTheme::shapes().medium.clone()
     }
 }
 

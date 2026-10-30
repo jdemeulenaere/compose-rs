@@ -157,6 +157,7 @@ pub fn Switch(
                 role: Some(Role::Switch),
                 indication: compose_ui::Indication::NONE,
                 interaction_source: Some(interaction_source.clone()),
+                ..ClickableOptions::DEFAULT
             },
             on_checked_change,
         )),
@@ -171,7 +172,7 @@ pub fn Switch(
     let modifier = modifier
         .wrap_content_size()
         .required_size((SWITCH_WIDTH, SWITCH_HEIGHT))
-        .border_with(TRACK_OUTLINE_WIDTH, colors.border_color(enabled, checked), track)
+        .border_with(TRACK_OUTLINE_WIDTH, colors.border_color(enabled, checked), track.clone())
         .background_with(colors.track_color(enabled, checked), track);
     compose_foundation::layout::Box(
         modifier,

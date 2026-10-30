@@ -233,6 +233,7 @@ fn checkbox(
                 role: Some(Role::Checkbox),
                 indication,
                 interaction_source,
+                ..ClickableOptions::DEFAULT
             };
             // The toggle around the touch target, so all 48 dp take a press: compose-ui hit
             // tests a node's bounds only, where Compose's toggle (inside the touch target)

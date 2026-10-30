@@ -473,7 +473,7 @@ impl Typography {
 
 /// The theme's corner shapes, as Compose's `Shapes`; `Shapes::default()` is `Shapes()`
 /// (`ShapeDefaults`).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Shapes {
     pub extra_small: Shape,
     pub small: Shape,
@@ -596,7 +596,7 @@ pub const DEFAULT_TEXT_STYLE: TextStyle =
 #[composable]
 pub fn MaterialTheme(
     #[default(*crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
-    #[default(*crate::MaterialTheme::shapes())] shapes: Shapes,
+    #[default(Shapes::clone(&crate::MaterialTheme::shapes()))] shapes: Shapes,
     #[default(Typography::clone(&crate::MaterialTheme::typography()))] typography: Typography,
     content: impl Fn() + 'static,
 ) {
@@ -640,7 +640,7 @@ pub fn MaterialExpressiveTheme(
     if LOCAL_USING_EXPRESSIVE_THEME.current() {
         MaterialTheme(
             color_scheme.unwrap_or_else(|| *MaterialTheme::color_scheme()),
-            shapes.unwrap_or_else(|| *MaterialTheme::shapes()),
+            shapes.unwrap_or_else(|| Shapes::clone(&MaterialTheme::shapes())),
             typography.unwrap_or_else(|| Typography::clone(&MaterialTheme::typography())),
             content,
         );

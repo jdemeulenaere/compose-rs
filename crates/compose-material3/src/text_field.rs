@@ -44,7 +44,7 @@ impl OutlinedTextFieldDefaults {
 
     /// The outline's shape, as `OutlinedTextFieldDefaults.shape` (extra small).
     pub fn shape() -> Shape {
-        MaterialTheme::shapes().extra_small
+        MaterialTheme::shapes().extra_small.clone()
     }
 }
 

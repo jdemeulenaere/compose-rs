@@ -310,7 +310,7 @@ pub fn IconButton(
     let color = colors.content_color(enabled);
     let mut modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
-        .clip(shape)
+        .clip(shape.clone())
         .background_with(colors.container_color(enabled), shape);
     modifier = modifier.clickable_with(
         ClickableOptions {
@@ -350,7 +350,7 @@ pub fn IconToggleButton(
     let color = colors.content_color(enabled, checked);
     let modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
-        .clip(shape)
+        .clip(shape.clone())
         .background_with(colors.container_color(enabled, checked), shape)
         .toggleable_with(
             checked,

@@ -167,7 +167,9 @@ fn overload(
     let state = mutable_state_of(0);
     let handle = state.handle();
     let ui = compose_test(move || {
+        let shape = shape.clone();
         MaterialTheme!({
+            let shape = shape.clone();
             let modifier = match role {
                 Some(role) => Modifier.semantics(move |config| config.set_role(role)),
                 None => Modifier,
@@ -183,17 +185,23 @@ fn overload(
             let click = move || handle.set(handle.get() + 1);
             match kind {
                 Kind::Clickable => {
-                    ClickableSurface!(click, modifier = modifier, shape = shape, { content() });
+                    ClickableSurface!(click, modifier = modifier, shape = shape.clone(), {
+                        content()
+                    });
                 }
                 Kind::Selectable => {
-                    SelectableSurface!(on, click, modifier = modifier, shape = shape, {
+                    SelectableSurface!(on, click, modifier = modifier, shape = shape.clone(), {
                         content()
                     });
                 }
                 Kind::Toggleable => {
-                    ToggleableSurface!(on, move |_| click(), modifier = modifier, shape = shape, {
-                        content()
-                    });
+                    ToggleableSurface!(
+                        on,
+                        move |_| click(),
+                        modifier = modifier,
+                        shape = shape.clone(),
+                        { content() }
+                    );
                 }
             }
         });

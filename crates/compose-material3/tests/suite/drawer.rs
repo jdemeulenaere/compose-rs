@@ -180,7 +180,7 @@ fn an_open_drawer_takes_back_before_the_content() {
 /// semantics as the drawer opens and closes (the semantics kept per node, D1257).
 #[test]
 fn the_scrims_semantics_follow_the_drawer() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let drawer = *state;
     let gestures = mutable_state_of(true);
     let handle = gestures.handle();

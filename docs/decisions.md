@@ -507,39 +507,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D907 | [api-and-tooling](decisions/api-and-tooling.md#d907) | current |
 | D908 | [api-and-tooling](decisions/api-and-tooling.md#d908) | current |
 | D909 | [api-and-tooling](decisions/api-and-tooling.md#d909) | current |
-| D1050 | [ui-and-layout](decisions/ui-and-layout.md#d1050) | current |
-| D1051 | [ui-and-layout](decisions/ui-and-layout.md#d1051) | revised by [D1056](decisions/ui-and-layout.md#d1056) |
-| D1052 | [ui-and-layout](decisions/ui-and-layout.md#d1052) | revised by [D1062](decisions/ui-and-layout.md#d1062) |
-| D1053 | [ui-and-layout](decisions/ui-and-layout.md#d1053) | revised by [D1057](decisions/ui-and-layout.md#d1057) |
-| D1054 | [ui-and-layout](decisions/ui-and-layout.md#d1054) | revised by [D1055](decisions/android-drawing.md#d1055) |
-| D1055 | [android-drawing](decisions/android-drawing.md#d1055) | current |
-| D1056 | [ui-and-layout](decisions/ui-and-layout.md#d1056) | revised by [D1064](decisions/ui-and-layout.md#d1064) |
-| D1057 | [ui-and-layout](decisions/ui-and-layout.md#d1057) | revised by [D1061](decisions/ui-and-layout.md#d1061), [D1065](decisions/ui-and-layout.md#d1065) |
-| D1058 | [android-host-and-performance](decisions/android-host-and-performance.md#d1058) | current |
-| D1059 | [ui-and-layout](decisions/ui-and-layout.md#d1059) | revised by [D1063](decisions/ui-and-layout.md#d1063) |
-| D1060 | [ui-and-layout](decisions/ui-and-layout.md#d1060) | current |
-| D1061 | [ui-and-layout](decisions/ui-and-layout.md#d1061) | current |
-| D1062 | [ui-and-layout](decisions/ui-and-layout.md#d1062) | current |
-| D1063 | [ui-and-layout](decisions/ui-and-layout.md#d1063) | current |
-| D1064 | [ui-and-layout](decisions/ui-and-layout.md#d1064) | current |
-| D1065 | [ui-and-layout](decisions/ui-and-layout.md#d1065) | current |
-| D1066 | [ui-and-layout](decisions/ui-and-layout.md#d1066) | current |
-| D1067 | [android-host-and-performance](decisions/android-host-and-performance.md#d1067) | current |
-| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
-| D1101 | [text](decisions/text.md#d1101) | current |
-| D1102 | [text](decisions/text.md#d1102) | current |
-| D1103 | [text](decisions/text.md#d1103) | current |
-| D1104 | [text](decisions/text.md#d1104) | current |
-| D1105 | [text](decisions/text.md#d1105) | revised by [D1108](decisions/text.md#d1108), [D1109](decisions/text.md#d1109), [D1110](decisions/text.md#d1110), [D1111](decisions/text.md#d1111) |
-| D1106 | [text](decisions/text.md#d1106) | revised by [D1107](decisions/text.md#d1107) |
-| D1107 | [text](decisions/text.md#d1107) | current |
-| D1108 | [text](decisions/text.md#d1108) | revised by [D1114](decisions/text.md#d1114) |
-| D1109 | [text](decisions/text.md#d1109) | current |
-| D1110 | [text](decisions/text.md#d1110) | current |
-| D1111 | [text](decisions/text.md#d1111) | current |
-| D1112 | [text](decisions/text.md#d1112) | current |
-| D1113 | [text](decisions/text.md#d1113) | reverted, to be redone in the IME step |
-| D1114 | [text](decisions/text.md#d1114) | current |
 | D1000 | [text](decisions/text.md#d1000) | current |
 | D1001 | [ui-and-layout](decisions/ui-and-layout.md#d1001) | current |
 | D1002 | [ui-and-layout](decisions/ui-and-layout.md#d1002) | current |
@@ -563,6 +530,25 @@ The log is split by area into the files below, one table each, rows in number or
 | D1020 | [benchmarks](decisions/benchmarks.md#d1020) | current |
 | D1021 | [ui-and-layout](decisions/ui-and-layout.md#d1021) | current |
 | D1022 | [api-and-tooling](decisions/api-and-tooling.md#d1022) | current |
+| D1023 | [ui-and-layout](decisions/ui-and-layout.md#d1023) | current |
+| D1050 | [ui-and-layout](decisions/ui-and-layout.md#d1050) | current |
+| D1051 | [ui-and-layout](decisions/ui-and-layout.md#d1051) | revised by [D1056](decisions/ui-and-layout.md#d1056) |
+| D1052 | [ui-and-layout](decisions/ui-and-layout.md#d1052) | revised by [D1062](decisions/ui-and-layout.md#d1062) |
+| D1053 | [ui-and-layout](decisions/ui-and-layout.md#d1053) | revised by [D1057](decisions/ui-and-layout.md#d1057) |
+| D1054 | [ui-and-layout](decisions/ui-and-layout.md#d1054) | revised by [D1055](decisions/android-drawing.md#d1055) |
+| D1055 | [android-drawing](decisions/android-drawing.md#d1055) | current |
+| D1056 | [ui-and-layout](decisions/ui-and-layout.md#d1056) | revised by [D1064](decisions/ui-and-layout.md#d1064) |
+| D1057 | [ui-and-layout](decisions/ui-and-layout.md#d1057) | revised by [D1061](decisions/ui-and-layout.md#d1061), [D1065](decisions/ui-and-layout.md#d1065) |
+| D1058 | [android-host-and-performance](decisions/android-host-and-performance.md#d1058) | current |
+| D1059 | [ui-and-layout](decisions/ui-and-layout.md#d1059) | revised by [D1063](decisions/ui-and-layout.md#d1063) |
+| D1060 | [ui-and-layout](decisions/ui-and-layout.md#d1060) | current |
+| D1061 | [ui-and-layout](decisions/ui-and-layout.md#d1061) | current |
+| D1062 | [ui-and-layout](decisions/ui-and-layout.md#d1062) | current |
+| D1063 | [ui-and-layout](decisions/ui-and-layout.md#d1063) | current |
+| D1064 | [ui-and-layout](decisions/ui-and-layout.md#d1064) | current |
+| D1065 | [ui-and-layout](decisions/ui-and-layout.md#d1065) | current |
+| D1066 | [ui-and-layout](decisions/ui-and-layout.md#d1066) | current |
+| D1067 | [android-host-and-performance](decisions/android-host-and-performance.md#d1067) | current |
 | D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |
@@ -618,6 +604,3 @@ The log is split by area into the files below, one table each, rows in number or
 | D1264 | [ui-and-layout](decisions/ui-and-layout.md#d1264) | current |
 | D1265 | [ui-and-layout](decisions/ui-and-layout.md#d1265) | current |
 | D1266 | [ui-and-layout](decisions/ui-and-layout.md#d1266) | current |
-| D1019 | [ui-and-layout](decisions/ui-and-layout.md#d1019) | current |
-| D1020 | [benchmarks](decisions/benchmarks.md#d1020) | current |
-| D1022 | [api-and-tooling](decisions/api-and-tooling.md#d1022) | current |

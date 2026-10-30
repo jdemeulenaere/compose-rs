@@ -414,14 +414,14 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
 /// state, and `SetProgress` goes from the value now (the semantics kept per node, D1257).
 #[test]
 fn a_sliders_semantics_follow_its_value_focus_and_enabled_state() {
-    let value = mutable_state_of(0.0f32);
+    let value = SliderState::new(0.0, 0, (0.0, 1.0));
     let enabled = mutable_state_of(true);
-    let (handle, enabled_handle) = (value.handle(), enabled.handle());
+    let (state, enabled_handle) = (*value, enabled.handle());
     let mut ui = compose_test(move || {
         MaterialTheme!({
             Slider!(
-                handle.get(),
-                move |new| handle.set(new),
+                state,
+                move |new| state.set_value(new),
                 modifier = Modifier.test_tag("slider"),
                 enabled = enabled_handle.get(),
             );
@@ -435,7 +435,7 @@ fn a_sliders_semantics_follow_its_value_focus_and_enabled_state() {
             .map(|info| info.current)
     };
     assert_eq!(current(&mut ui), Some(0.0));
-    value.set(0.5);
+    value.set_value(0.5);
     assert_eq!(current(&mut ui), Some(0.5));
     ui.on_node_with_tag("slider").request_focus();
     ui.on_node_with_tag("slider").assert_is_focused();

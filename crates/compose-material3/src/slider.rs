@@ -9,12 +9,12 @@ use std::rc::Rc;
 use compose_foundation::layout::{Box, Spacer};
 use compose_runtime::{Callback, ObjectHandle, Owned, OwnedState, composable, mutable_state_of};
 use compose_ui::{
-    Alignment, Color, Constraints, Dp, DpSize, DrawScope, EventContext, FocusTargetModifierNode,
-    IntSize, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout, Measurable, MeasurePolicy,
-    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    MutableInteractionSource, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
-    PointerIcon, PointerInputModifierNode, Rect, SemanticsConfiguration, SemanticsModifierNode,
-    SizeSpec, UnitExt,
+    Alignment, Color, Constraints, Dp, DpSize, DragInteraction, DragStart, DrawScope, EventContext,
+    Focus, FocusInteraction, FocusTargetModifierNode, IntSize, Key, KeyEvent, KeyEventType,
+    KeyInputModifierNode, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
+    ModifierNode, ModifierNodeElement, MutableInteractionSource, Offset, Paint, PointerEvent,
+    PointerEventPass, PointerEventType, PointerIcon, PointerInputModifierNode, Press,
+    PressInteraction, Rect, SemanticsConfiguration, SemanticsModifierNode, SizeSpec, UnitExt,
 };
 
 use crate::components::minimum_interactive_component_size;
@@ -284,8 +284,8 @@ impl SliderDefaults {
     }
 
     /// The handle, as `SliderDefaults.Thumb`: a `thumb_size` pill in the thumb color, half as
-    /// wide while `interaction_source` is pressed or focused (a press or a drag of the slider),
-    /// a hand over it for a mouse.
+    /// wide while `interaction_source` has a press, a drag or a focus under way, a hand over it
+    /// for a mouse.
     pub fn thumb(
         interaction_source: MutableInteractionSource,
         modifier: Modifier,
@@ -293,7 +293,9 @@ impl SliderDefaults {
         enabled: bool,
         thumb_size: DpSize,
     ) {
-        let interacting = interaction_source.is_pressed() || interaction_source.is_focused();
+        let interacting = interaction_source.is_pressed()
+            || interaction_source.is_dragged()
+            || interaction_source.is_focused();
         let width = if interacting { thumb_size.width / 2.0 } else { thumb_size.width };
         let color = colors.thumb_color(enabled);
         Box(
@@ -715,8 +717,13 @@ struct SliderInputNode {
     on_value_change_finished: Option<Callback<dyn Fn()>>,
     enabled: bool,
     interaction_source: MutableInteractionSource,
-    /// A press, until it becomes a tap or a drag (or another handler takes it).
-    press: Option<Offset>,
+    /// A press, until it becomes a tap or a drag (or another handler takes it): where it went
+    /// down, and what it emitted.
+    press: Option<(Offset, Press)>,
+    /// The drag's interaction, while dragging.
+    drag: Option<DragStart>,
+    /// The focus's interaction, while focused.
+    focus: Option<Focus>,
     /// Dragging: the pointer's lead over the value's position (the touch slop, in the drag's
     /// direction), as Compose's drag that starts past the slop.
     drag_lag: Option<f32>,
@@ -736,6 +743,8 @@ impl ModifierNodeElement for SliderInput {
             enabled: self.enabled,
             interaction_source: self.interaction_source.clone(),
             press: None,
+            drag: None,
+            focus: None,
             drag_lag: None,
             focused: false,
             asked: Rc::new(Cell::new(None)),
@@ -748,7 +757,15 @@ impl ModifierNodeElement for SliderInput {
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
         node.enabled = self.enabled;
-        node.interaction_source = self.interaction_source.clone();
+        if node.interaction_source != self.interaction_source {
+            // What's under way ends on the old source and goes on on the new, as Compose's
+            // gestures, keyed on it, restart.
+            node.end_interactions();
+            node.interaction_source = self.interaction_source.clone();
+            if node.focused {
+                node.emit_focus(true);
+            }
+        }
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -769,6 +786,61 @@ impl ModifierNodeElement for SliderInput {
 }
 
 impl SliderInputNode {
+    /// A press's start, as `sliderTapModifier`'s `PressInteraction.Press`.
+    fn start_press(&mut self, position: Offset) {
+        let press = Press::new(position);
+        self.interaction_source.try_emit(PressInteraction::Press(press));
+        self.press = Some((position, press));
+    }
+
+    /// The press's end: `released`, a release, else (a drag or another handler took it) a
+    /// cancellation, as `tryAwaitRelease`. Whether there was one.
+    fn end_press(&mut self, released: bool) -> bool {
+        let Some((_, press)) = self.press.take() else { return false };
+        self.interaction_source.try_emit(if released {
+            PressInteraction::Release(press)
+        } else {
+            PressInteraction::Cancel(press)
+        });
+        true
+    }
+
+    /// A drag's start, as `draggable`'s `DragInteraction.Start`.
+    fn start_drag(&mut self) {
+        let start = DragStart::new();
+        self.interaction_source.try_emit(DragInteraction::Start(start));
+        self.drag = Some(start);
+    }
+
+    /// The drag's end: `stopped`, a stop, else a cancellation, as `draggable`'s.
+    fn end_drag(&mut self, stopped: bool) {
+        if let Some(start) = self.drag.take() {
+            self.interaction_source.try_emit(if stopped {
+                DragInteraction::Stop(start)
+            } else {
+                DragInteraction::Cancel(start)
+            });
+        }
+    }
+
+    /// A focus gained or lost, as `focusable`'s `FocusInteraction`.
+    fn emit_focus(&mut self, focused: bool) {
+        if focused {
+            let focus = Focus::new();
+            self.interaction_source.try_emit(FocusInteraction::Focus(focus));
+            self.focus = Some(focus);
+        } else if let Some(focus) = self.focus.take() {
+            self.interaction_source.try_emit(FocusInteraction::Unfocus(focus));
+        }
+    }
+
+    /// Ends what's under way, so the source doesn't stay pressed, dragged or focused.
+    fn end_interactions(&mut self) {
+        self.end_press(false);
+        self.end_drag(false);
+        self.emit_focus(false);
+    }
+
     /// The value at `x` (pixels from the slider's start), as `dispatchRawDelta`: mapped from
     /// half a thumb in to half a thumb before the end, snapped.
     fn value_at_offset(&self, x: f32) -> f32 {
@@ -823,10 +895,13 @@ impl SliderInputNode {
 
 impl ModifierNode for SliderInputNode {
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.press = None;
+        self.end_interactions();
         self.drag_lag = None;
         self.focused = false;
         self.asked.set(None);
+    }
+    fn on_detach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
+        self.end_interactions();
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
@@ -859,9 +934,8 @@ impl PointerInputModifierNode for SliderInputNode {
         let slop = context.density().to_px(8.dp());
         match event.kind {
             PointerEventType::Press if !event.consumed => {
-                self.press = Some(event.position);
+                self.start_press(event.position);
                 self.drag_lag = None;
-                self.interaction_source.set_pressed(true);
             }
             PointerEventType::Move if self.drag_lag.is_some() => {
                 event.consume();
@@ -869,11 +943,10 @@ impl PointerInputModifierNode for SliderInputNode {
                 self.change_to(value, context);
             }
             PointerEventType::Move => {
-                let Some(start) = self.press else { return };
+                let Some((start, _)) = self.press else { return };
                 if event.consumed {
                     // A scrolling parent (or another handler) took it.
-                    self.press = None;
-                    self.interaction_source.set_pressed(false);
+                    self.end_press(false);
                     return;
                 }
                 let moved = event.position.x - start.x;
@@ -886,6 +959,9 @@ impl PointerInputModifierNode for SliderInputNode {
                         lead
                     };
                     self.drag_lag = Some(lead);
+                    // The drag takes the press, as `draggable` consuming the tap detector's.
+                    self.end_press(false);
+                    self.start_drag();
                     self.set_dragging(true);
                     event.consume();
                     context.request_focus();
@@ -894,15 +970,13 @@ impl PointerInputModifierNode for SliderInputNode {
                 }
             }
             PointerEventType::Release => {
-                let pressed = self.press.take();
-                if pressed.is_some() || self.drag_lag.is_some() {
-                    self.interaction_source.set_pressed(false);
-                }
+                let pressed = self.end_press(true);
                 if self.drag_lag.take().is_some() {
                     event.consume();
+                    self.end_drag(true);
                     self.set_dragging(false);
                     self.finish(context);
-                } else if pressed.is_some() && !event.consumed {
+                } else if pressed && !event.consumed {
                     event.consume();
                     let value = self.value_at_offset(x);
                     self.change_to(value, context);
@@ -914,8 +988,9 @@ impl PointerInputModifierNode for SliderInputNode {
     }
 
     fn on_cancel_pointer_input(&mut self) {
-        if self.press.take().is_some() || self.drag_lag.take().is_some() {
-            self.interaction_source.set_pressed(false);
+        let pressed = self.end_press(false);
+        if pressed || self.drag_lag.take().is_some() {
+            self.end_drag(false);
             self.set_dragging(false);
         }
     }
@@ -927,7 +1002,7 @@ impl FocusTargetModifierNode for SliderInputNode {
     }
     fn on_focus_changed(&mut self, focused: bool, _context: &mut EventContext<'_>) {
         self.focused = focused;
-        self.interaction_source.set_focused(focused);
+        self.emit_focus(focused);
     }
 }
 
@@ -1003,14 +1078,12 @@ impl SemanticsModifierNode for SliderInputNode {
             steps: self.state.steps(),
         });
         // Moves to the value asked (in the range, at the nearest stop), as Compose's
-        // `setProgress`; no change from the state's value is no action.
-        let (state, enabled, asked) = (self.state, self.enabled, self.asked.clone());
+        // `setProgress`; no change from the state's value is no action. Whether enabled or not:
+        // refusing a disabled node's actions is the bridges' (D1255).
+        let (state, asked) = (self.state, self.asked.clone());
         let on_value_change = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
         config.set_progress(None, move |target| {
-            if !enabled {
-                return false;
-            }
             let value = nearest_stop(state, target);
             if value == asked.get().unwrap_or(state.value()) {
                 return false;

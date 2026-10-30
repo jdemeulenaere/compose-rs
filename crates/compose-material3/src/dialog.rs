@@ -32,7 +32,7 @@ impl AlertDialogDefaults {
 
     /// The extra-large shape, as `shape` (`DialogTokens.ContainerShape`).
     pub fn shape() -> compose_ui::Shape {
-        MaterialTheme::shapes().extra_large
+        MaterialTheme::shapes().extra_large.clone()
     }
 
     /// The high surface container, as `containerColor`.
@@ -177,7 +177,7 @@ fn alert_dialog_content(parts: &AlertDialogParts) {
     let parts = parts.clone();
     Surface(
         Modifier,
-        parts.shape,
+        parts.shape.clone(),
         parts.container_color,
         compose_ui::Color::UNSPECIFIED,
         parts.tonal_elevation,
@@ -501,7 +501,7 @@ impl MenuDefaults {
 
     /// The extra-small shape, as `shape`.
     pub fn shape() -> Shape {
-        MaterialTheme::shapes().extra_small
+        MaterialTheme::shapes().extra_small.clone()
     }
 
     /// The surface container, as `containerColor`.

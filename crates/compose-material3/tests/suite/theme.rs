@@ -263,51 +263,51 @@ fn rounded(radius: f32) -> Shape {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, extraSmallShape
 #[test]
 fn an_extra_small_card_has_4_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.extra_small), [4.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.extra_small.clone()), [4.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, smallShape
 #[test]
 fn a_small_card_has_8_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.small), [8.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.small.clone()), [8.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, mediumShape
 #[test]
 fn the_medium_golden_card_is_small() {
     // Compose's test draws `shapes.small` for its medium golden.
-    assert_eq!(card_corners(|shapes| shapes.small), [8.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.small.clone()), [8.0; 4]);
     assert_eq!(Shapes::default().medium, rounded(12.0));
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, largeShape
 #[test]
 fn a_large_card_has_16_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.large), [16.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.large.clone()), [16.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, largeIncreasedShape
 #[test]
 fn a_large_increased_card_has_20_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.large_increased), [20.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.large_increased.clone()), [20.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, extraLargeShape
 #[test]
 fn an_extra_large_card_has_28_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.extra_large), [28.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.extra_large.clone()), [28.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, extraLargeIncreasedShape
 #[test]
 fn an_extra_large_increased_card_has_32_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.extra_large_increased), [32.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.extra_large_increased.clone()), [32.0; 4]);
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ShapesScreenshotTest.kt, extraExtraLargeShape
 #[test]
 fn an_extra_extra_large_card_has_48_dp_corners() {
-    assert_eq!(card_corners(|shapes| shapes.extra_extra_large), [48.0; 4]);
+    assert_eq!(card_corners(|shapes| shapes.extra_extra_large.clone()), [48.0; 4]);
     assert_eq!(ShapeDefaults::EXTRA_EXTRA_LARGE, rounded(48.0));
 }
 

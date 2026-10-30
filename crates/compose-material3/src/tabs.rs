@@ -832,6 +832,7 @@ fn tab_modifier(
             role: Some(Role::Tab),
             indication: selected_content_color.into(),
             interaction_source,
+            ..ClickableOptions::DEFAULT
         },
         on_click,
     )

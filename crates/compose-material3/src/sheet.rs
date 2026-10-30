@@ -472,7 +472,7 @@ impl BottomSheetDefaults {
             Modifier.padding((Dp(0.0), 22.dp())).semantics(|config| {
                 config.set_content_description("Drag handle");
             }),
-            MaterialTheme::shapes().extra_large,
+            MaterialTheme::shapes().extra_large.clone(),
             color,
             Color::UNSPECIFIED,
             Dp(0.0),
