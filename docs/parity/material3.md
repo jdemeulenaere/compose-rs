@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1551): 35 source files (25,143 lines), 84 modules with 1166 `#[test]`s; the statuses below are the current ones.
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1552): 36 source files (25,795 lines), 85 modules with 1190 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -18,11 +18,11 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `ported` | 28 | 433 |
+| `ported` | 30 | 442 |
 | `covered` | 1 | 7 |
 | `port` | 15 | 182 |
-| `partial` | 39 | 1,119 |
-| `feature:<name>` | 74 | 995 |
+| `partial` | 41 | 1,132 |
+| `feature:<name>` | 70 | 973 |
 | `n/a` | 4 | 34 |
 | **Total** | **161** | **2,770** |
 
@@ -196,10 +196,10 @@ Screenshot tests (`*ScreenshotTest.kt`) compare against Android goldens, which c
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/carousel/CarouselTest.kt` | 17 | carousel scrolling updates state, initial item, snapping, uncontained no-snap, user scroll disabled, flings, max scroll offset, semantics bounds, centered hero carousel | `feature:carousel` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/internal/AccessibilityServiceStateProviderTest.kt` | 1 | internal accessibility-service state provider doesn't recompose | `n/a: internal Android accessibility-state provider` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/internal/DraggableAnchorsModifierTest.kt` | 3 | internal draggableAnchors: new state recalculates anchors, retargeting on layout change, lookahead removal | `port` | compose-rs's equivalent is `anchored.rs` (`Anchored`, D185); port the first two as unit tests; the lookahead one needs feature:lookahead. |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshBoxTest.kt` | 11 | PullToRefreshBox fractions, semantics visibility, indicator composition, pull behavior, fling consumption | `feature:pull-to-refresh` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshIndicatorScreenshotTest.kt` | 2 | indicator refreshing and not | `feature:pull-to-refresh` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshIndicatorTest.kt` | 4 | indicator display, offsets, pointer pass-through | `feature:pull-to-refresh` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshStateImplTest.kt` | 5 | refresh threshold, progress and offset scaling, capped position, restoration | `feature:pull-to-refresh` |  |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshBoxTest.kt` | 11 | PullToRefreshBox fractions, semantics visibility, indicator composition, pull behavior, fling consumption | `partial` | `suite/pull_to_refresh.rs` (9 of 11; `loadingIndicator_*` wait for `loading-indicator`, D1552). |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshIndicatorScreenshotTest.kt` | 2 | indicator refreshing and not | `partial` | What it draws is in `suite/pull_to_refresh.rs`; no images. |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshIndicatorTest.kt` | 4 | indicator display, offsets, pointer pass-through | `ported` | `suite/pull_to_refresh.rs`: the offset as the layer's translation. |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshStateImplTest.kt` | 5 | refresh threshold, progress and offset scaling, capped position, restoration | `ported` | `suite/pull_to_refresh.rs`, and what a mutation pass found these leave open. |
 | `compose/material3/material3/src/androidHostTest/kotlin/androidx/compose/material3/MaterialTransitionsTest.kt` | 12 | transition math: damped offsets, slide offsets, shared-axis and fade-through transforms | `feature:material-transitions` |  |
 | `compose/material3/material3/src/androidHostTest/kotlin/androidx/compose/material3/carousel/ArrangementTest.kt` | 9 | carousel arrangement fitting (large/medium/small sizes) | `feature:carousel` | Pure keyline math: portable before Pager exists. |
 | `compose/material3/material3/src/androidHostTest/kotlin/androidx/compose/material3/carousel/CarouselParallaxScrollEffectItemInfoTest.kt` | 4 | parallax item info properties, size, equality | `feature:carousel` |  |
@@ -359,7 +359,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `dismissible-permanent-drawers` (done, D1043) | `DismissibleNavigationDrawer`, `DismissibleDrawerSheet`, `PermanentNavigationDrawer`, `PermanentDrawerSheet` | Drawers that push the content aside, or always show | DismissibleNavigationDrawerTest, PermanentNavigationDrawerTest (25) | drawer-state-complete; semantics-gaps (pane title, dismiss action) | M | no |
 | `app-bar-row-column` | `AppBarRow`, `AppBarColumn`, `AppBarScope`, `AppBarOverflowIndicator`, `AppBarMenuState` | Rows and columns of app bar actions that overflow into a menu | AppBarRowTest, AppBarRowScreenshotTest, AppBarColumnTest, AppBarColumnScreenshotTest (22) | a menu (exists) | M | no |
 | `loading-indicator` | `LoadingIndicator`, `ContainedLoadingIndicator`, `LoadingIndicatorDefaults` | An indicator morphing between Material shapes | LoadingIndicatorScreenshotTest, LoadingIndicatorTest (22) | material-shapes; dep:graphics-shapes (`Morph`) | L (with material-shapes) | yes (expressive) |
-| `pull-to-refresh` | `PullToRefreshBox`, `Modifier.pullToRefresh`, `PullToRefreshState`, `rememberPullToRefreshState`, `PullToRefreshDefaults` | Pull a scrollable down past a threshold to refresh, with an indicator | PullToRefreshBoxTest, PullToRefreshIndicatorScreenshotTest, PullToRefreshIndicatorTest, PullToRefreshStateImplTest (22) | nested scroll (exists); progress-1.4 (the indicator's arc); loading-indicator for the expressive variant only | M | no |
+| `pull-to-refresh` (done but `LoadingIndicator`, D1552) | `PullToRefreshBox`, `Modifier.pullToRefresh`, `PullToRefreshState`, `rememberPullToRefreshState`, `PullToRefreshDefaults` | Pull a scrollable down past a threshold to refresh, with an indicator | PullToRefreshBoxTest, PullToRefreshIndicatorScreenshotTest, PullToRefreshIndicatorTest, PullToRefreshStateImplTest (22) | nested scroll (exists); progress-1.4 (the indicator's arc); loading-indicator for the expressive variant only | M | no |
 | `material-transitions` | `MaterialTransitions.FadeThrough`, `.HorizontalSharedAxis`, `.scrimColor` | Ready-made `ContentTransform`s for navigation, with predictive-back variants | MaterialTransitionsTest (device and host, 19) | dep:predictive-back; `ContentTransform` (exists in compose-animation; `MutableContentTransform` missing) | M | no |
 | `scroll-field` | `ScrollField`, `ScrollFieldState`, `rememberScrollFieldState`, `ScrollFieldColors`, `ScrollFieldDefaults` | A vertical wheel picker of numbers | ScrollFieldScreenshotTest, ScrollFieldTest (19) | dep:pager (vertical), dep:snapping | M | no |
 | `predictive-back` (component side) | predictive back in `ModalNavigationDrawer` and `DismissibleNavigationDrawer` (done, D1049), `ModalBottomSheet`, `SearchBar`, `MaterialTransitions` | Scale and offset the surfaces with the back gesture's progress | ModalBottomSheetScreenshotTest, ModalNavigationDrawerScreenshotTest (18), parts of SearchBarScreenshotTest | dep:predictive-back | M | no |

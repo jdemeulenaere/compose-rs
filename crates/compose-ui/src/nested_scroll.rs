@@ -156,6 +156,14 @@ impl Modifier {
     }
 }
 
+/// The node of `Modifier::nested_scroll`, for a node to delegate to, as
+/// `nestedScrollModifierNode(connection, dispatcher)`.
+pub fn nested_scroll_modifier_node(
+    connection: Rc<dyn NestedScrollConnection>,
+) -> impl ModifierNode {
+    NestedScrollNode { connection }
+}
+
 struct NestedScrollElement {
     connection: Rc<dyn NestedScrollConnection>,
 }

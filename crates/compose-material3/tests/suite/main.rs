@@ -37,6 +37,7 @@ mod modal_navigation_drawer;
 mod motion_scheme;
 mod progress_indicator;
 mod progress_indicator_screenshots;
+mod pull_to_refresh;
 mod range_slider;
 mod review_d479;
 mod review_d554_local;

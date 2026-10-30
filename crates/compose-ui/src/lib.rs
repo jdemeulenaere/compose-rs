@@ -233,7 +233,9 @@ pub use motion::{
     await_positive_motion_duration_scale, motion_duration_scale, set_motion_duration_scale,
     set_motion_duration_scale_source, with_motion_duration_scale,
 };
-pub use nested_scroll::{LocalBoxFuture, NestedScrollConnection, NestedScrollSource};
+pub use nested_scroll::{
+    LocalBoxFuture, NestedScrollConnection, NestedScrollSource, nested_scroll_modifier_node,
+};
 pub use node_context::{NodeContext, NodeHandle};
 pub use observer_node::ObserverModifierNode;
 pub use overlay::{PopupPositionProvider, WindowPosition};
