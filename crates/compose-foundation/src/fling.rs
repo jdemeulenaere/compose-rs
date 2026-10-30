@@ -70,13 +70,23 @@ impl Fling {
         }
     }
 
-    /// The distance covered at `fraction` (0 to 1) of the duration: the decay's value then.
-    pub(crate) fn distance_at(&self, fraction: f32) -> f32 {
-        if self.duration_nanos == 0 || fraction >= 1.0 {
+    /// The play time `elapsed_nanos` after its start, as Compose's `animateDecay` computes it under
+    /// a fling's scale of 1: `(elapsed / durationScale).toLong()`, a `Long` over a `Float`.
+    pub(crate) fn play_time_nanos(elapsed_nanos: u64) -> i64 {
+        (elapsed_nanos as f32 / 1.0) as i64
+    }
+
+    /// Whether it's over at `play_time_nanos`, as `isFinishedFromNanos`.
+    pub(crate) fn is_finished(&self, play_time_nanos: i64) -> bool {
+        play_time_nanos >= self.duration_nanos as i64
+    }
+
+    /// The distance covered at `play_time_nanos`: the decay's value then.
+    pub(crate) fn distance_at(&self, play_time_nanos: i64) -> f32 {
+        if self.is_finished(play_time_nanos) {
             return self.distance;
         }
-        let play_time = (f64::from(fraction.max(0.0)) * self.duration_nanos as f64) as i64;
-        self.spec.value_from_nanos(play_time, 0.0, self.velocity)
+        self.spec.value_from_nanos(play_time_nanos.max(0), 0.0, self.velocity)
     }
 }
 
@@ -88,9 +98,10 @@ mod tests {
     fn a_fling_goes_from_nothing_to_all_the_distance() {
         let fling = Fling::new(2000.0, 2.625);
         // Compose's spline starts a hundredth of a pixel in (its table's interpolation).
-        assert!(fling.distance_at(0.0).abs() < 0.01, "{}", fling.distance_at(0.0));
-        assert_eq!(fling.distance_at(1.0), fling.distance);
-        assert!(fling.distance_at(0.25) > 0.25 * fling.distance, "fast at first");
+        assert!(fling.distance_at(0).abs() < 0.01, "{}", fling.distance_at(0));
+        let duration = fling.duration_nanos as i64;
+        assert_eq!(fling.distance_at(duration), fling.distance);
+        assert!(fling.distance_at(duration / 4) > 0.25 * fling.distance, "fast at first");
     }
 
     #[test]
@@ -102,12 +113,11 @@ mod tests {
             assert_eq!(fling.distance, spec.target_value(0.0, velocity));
             assert_eq!(fling.duration_nanos as i64, spec.duration_nanos(0.0, velocity));
             for step in 0..10 {
-                let fraction = step as f32 / 10.0;
-                let play_time = (f64::from(fraction) * fling.duration_nanos as f64) as i64;
+                let play_time = fling.duration_nanos as i64 * step / 10;
                 assert_eq!(
-                    fling.distance_at(fraction),
+                    fling.distance_at(play_time),
                     spec.value_from_nanos(play_time, 0.0, velocity),
-                    "{velocity} at {fraction}"
+                    "{velocity} at {play_time}"
                 );
             }
         }

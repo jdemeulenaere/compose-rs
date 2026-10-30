@@ -810,3 +810,57 @@ fn a_shared_source_is_dragged_while_any_drag_goes_on() {
         assert!(!seen.is_dragged());
     });
 }
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Scrollable.kt, DefaultFlingBehavior.performFling (no test of Compose's: each frame's distance is the decay's at the play time Compose's `animateDecay` computes)
+#[test]
+fn a_default_fling_is_the_spline_based_decay_frame_by_frame() {
+    use compose_animation::{FloatDecayAnimationSpec, SplineBasedFloatDecayAnimationSpec};
+    let density = 2.625;
+    for velocity in [12_000.0f32, -5000.0, 800.0] {
+        let spec = SplineBasedFloatDecayAnimationSpec::new(compose_ui::Density::new(density));
+        let duration = spec.duration_nanos(0.0, velocity);
+        let mut ui = ComposeTestRule::with_manual_clock(|| {});
+        let distances = Rc::new(RefCell::new(Vec::new()));
+        let seen = distances.clone();
+        let covered = Rc::new(Cell::new(0.0f32));
+        let done = Rc::new(Cell::new(false));
+        let finished = done.clone();
+        let scope = compose_runtime::CoroutineScope::new();
+        scope.launch(async move {
+            let scroll = ScrollScope::new(move |delta| {
+                covered.set(covered.get() + delta);
+                seen.borrow_mut().push(covered.get());
+                delta
+            });
+            let behavior = DefaultFlingBehavior::new(density);
+            behavior.perform_fling(scroll, velocity).await;
+            finished.set(true);
+        });
+        // The first frame is its start.
+        ui.advance_time_by_frame();
+        let (mut expected, mut frame, mut last) = (0.0f32, 0u64, 0.0f32);
+        while !done.get() {
+            frame += 1;
+            ui.advance_time_by_frame();
+            // Kotlin's `(frameTime - startTime) / durationScale`, a `Long` over a `Float` of 1.
+            let elapsed = frame * 16_000_000;
+            let play_time = (elapsed as f32 / 1.0) as i64;
+            let target = if play_time >= duration {
+                spec.target_value(0.0, velocity)
+            } else {
+                spec.value_from_nanos(play_time, 0.0, velocity)
+            };
+            let delta = target - last;
+            last = target;
+            expected += delta;
+            assert_eq!(
+                distances.borrow().last().copied().unwrap_or(0.0),
+                expected,
+                "{velocity} px/s at frame {frame}"
+            );
+            assert!(frame < 1_000, "the fling never ended");
+        }
+        assert!(duration as u64 <= frame * 16_000_000, "it ends at its duration");
+        assert!(duration as u64 > (frame - 1) * 16_000_000, "not later: {frame} frames");
+    }
+}

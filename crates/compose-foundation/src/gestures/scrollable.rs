@@ -17,6 +17,7 @@ use compose_ui::{
     platform::NestedScrollChain,
 };
 
+use crate::fling::Fling;
 use crate::gestures::Orientation;
 use crate::mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 use crate::scroll::same_fling;
@@ -437,32 +438,27 @@ impl FlingBehavior for DefaultFlingBehavior {
             if initial_velocity.abs() <= 1.0 {
                 return initial_velocity;
             }
-            let course = crate::fling::Fling::new(initial_velocity, density);
+            let course = Fling::new(initial_velocity, density);
             let start = compose_runtime::with_frame_nanos(|time| time).await;
             let mut covered = 0.0f32;
             loop {
                 let now = compose_runtime::with_frame_nanos(|time| time).await;
-                let fraction = if course.duration_nanos == 0 {
-                    1.0
-                } else {
-                    now.saturating_sub(start) as f32 / course.duration_nanos as f32
-                };
-                let target = course.distance_at(fraction);
+                let play_time = Fling::play_time_nanos(now.saturating_sub(start));
+                let target = course.distance_at(play_time);
                 let delta = target - covered;
                 covered = target;
                 let used = if delta == 0.0 { 0.0 } else { scope.scroll_by(delta) };
                 // Its velocity there (the spline's slope), as Compose's `velocityLeft`.
                 let velocity_here = || {
-                    let step = 0.01f32.min(fraction);
-                    let seconds = course.duration_nanos as f32 / 1e9;
-                    (course.distance_at(fraction) - course.distance_at(fraction - step))
-                        / (step * seconds).max(f32::EPSILON)
+                    let step = (course.duration_nanos as i64 / 100).min(play_time);
+                    (target - course.distance_at(play_time - step))
+                        / (step as f32 / 1e9).max(f32::EPSILON)
                 };
                 // The node left, as Compose's catch of the fling's cancellation.
                 if scope.is_fling_cancelled() {
                     return velocity_here();
                 }
-                if fraction >= 1.0 {
+                if course.is_finished(play_time) {
                     return 0.0;
                 }
                 // An edge took less than asked: the fling ends there.

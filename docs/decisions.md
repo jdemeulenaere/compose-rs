@@ -25,7 +25,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 27 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 47 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 48 |
 
 ## Index by number
 
@@ -459,12 +459,13 @@ The log is split by area into the files below, one table each, rows in number or
 | D823 | [ui-and-layout](decisions/ui-and-layout.md#d823) | current |
 | D824 | [ui-and-layout](decisions/ui-and-layout.md#d824) | current |
 | D825 | [ui-and-layout](decisions/ui-and-layout.md#d825) | current |
-| D826 | [api-and-tooling](decisions/api-and-tooling.md#d826) | current |
+| D826 | [api-and-tooling](decisions/api-and-tooling.md#d826) | revised by [D832](api-and-tooling.md#d832) |
 | D827 | [ui-and-layout](decisions/ui-and-layout.md#d827) | current |
 | D828 | [ui-and-layout](decisions/ui-and-layout.md#d828) | revised by [D830](ui-and-layout.md#d830), [D831](ui-and-layout.md#d831) |
 | D829 | [ui-and-layout](decisions/ui-and-layout.md#d829) | current |
 | D830 | [ui-and-layout](decisions/ui-and-layout.md#d830) | current |
 | D831 | [ui-and-layout](decisions/ui-and-layout.md#d831) | current |
+| D832 | [api-and-tooling](decisions/api-and-tooling.md#d832) | current |
 | D850 | [ui-and-layout](decisions/ui-and-layout.md#d850) | current |
 | D851 | [api-and-tooling](decisions/api-and-tooling.md#d851) | current |
 | D852 | [ui-and-layout](decisions/ui-and-layout.md#d852) | current |
