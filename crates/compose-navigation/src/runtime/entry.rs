@@ -15,7 +15,18 @@ use super::metadata::NavMetadata;
 /// in the source: a closure's type is that place. Another closure's content at the same position
 /// replaces it; the same closure with another key keeps its state, as Kotlin's (a decorator or a
 /// display tells them apart).
-pub(crate) fn group_of<F: 'static>() -> u64 {
+///
+/// That place goes into a saved state's key, through the composite key hash of what's in the group:
+/// a `TypeId` isn't stable across toolchains, so a toolchain bump can reset `remember_saveable`
+/// values (D1400). Debug builds panic on an `F` that's exactly a `Box<dyn Fn(A)>` or a `fn(A)`, as
+/// all of those would share a place.
+pub(crate) fn group_of<F: 'static, A: 'static>() -> u64 {
+    debug_assert!(
+        TypeId::of::<F>() != TypeId::of::<Box<dyn Fn(A)>>()
+            && TypeId::of::<F>() != TypeId::of::<fn(A)>(),
+        "a `Box<dyn Fn>` or a `fn` pointer has no place of its own: its contents would share their \
+         state. Give a closure, or a function by its name"
+    );
     let mut hasher = DefaultHasher::new();
     TypeId::of::<F>().hash(&mut hasher);
     hasher.finish()
@@ -63,13 +74,35 @@ impl<T> ComposeArg for NavEntry<T> {
 }
 
 impl<T: Clone + 'static> NavEntry<T> {
-    /// `key` showing `content`, its content key made of what `key` prints and its type.
+    /// `key` showing `content`, its content key made of what `key` prints and its type: a `Debug`
+    /// that leaves out what tells keys apart (or that changes, for what's saved under it) needs
+    /// [`keyed`](Self::keyed).
+    ///
+    /// `content`'s group is its closure's place in the source, as a composable lambda's: another
+    /// closure at the position starts anew. What erases closures (a `Box<dyn Fn>`, a `fn` pointer,
+    /// a helper calling an `Rc<dyn Fn()>` it's given) shares one place, and so what it remembers;
+    /// debug builds panic on the first two.
     pub fn new<F: Fn(T) + 'static>(key: T, content: F) -> NavEntry<T>
     where
         T: fmt::Debug,
     {
         let content_key = default_content_key(&key);
-        NavEntry::make(key, content_key, NavMetadata::new(), Rc::new(content), group_of::<F>())
+        NavEntry::keyed(key, content_key, content)
+    }
+
+    /// `key` showing `content`, with `content_key`, not formatting `key`.
+    pub fn keyed<F: Fn(T) + 'static>(
+        key: T,
+        content_key: impl IntoContentKey,
+        content: F,
+    ) -> NavEntry<T> {
+        NavEntry::make(
+            key,
+            content_key.into_content_key(),
+            NavMetadata::new(),
+            Rc::new(content),
+            group_of::<F, T>(),
+        )
     }
 
     /// As `NavEntry(navEntry, content)`: `entry`'s key, content key and metadata, showing `content`.
@@ -80,7 +113,24 @@ impl<T: Clone + 'static> NavEntry<T> {
             inner.content_key.clone(),
             inner.metadata.clone(),
             Rc::new(content),
-            group_of::<F>(),
+            group_of::<F, T>(),
+        )
+    }
+
+    /// As `NavEntry(navEntry, content)`, with content that has its group already: what a decorated
+    /// entry is at each pass, one content for each place (D1402).
+    pub(crate) fn with_content(
+        entry: &NavEntry<T>,
+        content: Rc<dyn Fn(T)>,
+        content_group: u64,
+    ) -> NavEntry<T> {
+        let inner = &entry.inner;
+        NavEntry::make(
+            inner.key.clone(),
+            inner.content_key.clone(),
+            inner.metadata.clone(),
+            content,
+            content_group,
         )
     }
 
@@ -132,7 +182,9 @@ fn NavEntryContent<T: Clone + 'static>(entry: NavEntry<T>) {
     in_group(inner.content_group, || (inner.content)(inner.key.clone()));
 }
 
-/// Equal as Kotlin's: their key, content key and metadata, and the same content.
+/// Equal as Kotlin's: their key, content key and metadata, and the same content. A decorated entry
+/// has one content for its place, so it stays equal however it's decorated again; undecorated
+/// entries a provider's closures make anew at each pass don't (D1402).
 impl<T: PartialEq> PartialEq for NavEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         let (a, b) = (&self.inner, &other.inner);

@@ -1,6 +1,6 @@
 //! `NavEntry.contentKey`, Kotlin's `Any`.
 
-use std::any::Any;
+use std::any::{Any, type_name};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -23,7 +23,10 @@ impl<K: Hash + Eq + fmt::Debug + 'static> ErasedKey for K {
         other.as_any().downcast_ref::<K>().is_some_and(|other| other == self)
     }
 
+    /// With its type's name, as what's keyed by a hash alone (a `key(…)`, a saved state's place)
+    /// has no `==` to tell `IdA(1)` from `IdB(1)`.
     fn hash_with(&self, mut hasher: &mut dyn Hasher) {
+        type_name::<K>().hash(&mut hasher);
         self.hash(&mut hasher);
     }
 
@@ -33,7 +36,8 @@ impl<K: Hash + Eq + fmt::Debug + 'static> ErasedKey for K {
 }
 
 /// What identifies an entry's content and its decorators' state, as Kotlin's `Any`: any value with
-/// `==` and a hash, read back by type. Entries with equal keys share them.
+/// `==` and a hash, read back by type. Entries with equal keys share them. A `&str` becomes a
+/// `String`, so `downcast_ref::<String>()` reads either.
 #[derive(Clone)]
 pub struct ContentKey(Rc<dyn ErasedKey>);
 

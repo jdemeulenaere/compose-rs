@@ -22,7 +22,7 @@ fn a_result_sent_before_it_s_listened_to_waits() {
     let mut ui = compose_test(move || {
         let logged = logged.clone();
         ResultEffect!(
-            result_key = Some("testKey".to_string()),
+            result_key = Some("testKey"),
             result_event_bus = given.clone(),
             on_result = move |result: String| {
                 logged.borrow_mut().push(result);
@@ -45,7 +45,7 @@ fn a_result_removed_is_heard_by_nobody() {
     let mut ui = compose_test(move || {
         let logged = logged.clone();
         ResultEffect!(
-            result_key = Some("testKey".to_string()),
+            result_key = Some("testKey"),
             result_event_bus = given.clone(),
             on_result = move |result: String| {
                 logged.borrow_mut().push(result);
@@ -98,7 +98,7 @@ fn an_effect_hears_with_its_latest_closure() {
         let current = read.get();
         let seen = seen.clone();
         ResultEffect!(
-            result_key = Some("testKey".to_string()),
+            result_key = Some("testKey"),
             result_event_bus = given.clone(),
             on_result = move |result: String| {
                 *seen.borrow_mut() = format!("{result} with state {current}");
@@ -115,6 +115,78 @@ fn an_effect_hears_with_its_latest_closure() {
     bus.send_result_to("testKey", "event".to_string());
     ui.wait_for_idle();
     assert_eq!(*received.borrow(), "event with state updated");
+}
+
+/// What's sent before its key's removed is still read by what's listening, as a closed channel's.
+#[test]
+fn a_result_sent_and_removed_in_one_turn_is_still_heard() {
+    let bus = ResultEventBus::new();
+    let log = Log::default();
+    let (given, logged) = (bus.clone(), log.clone());
+    let mut ui = compose_test(move || {
+        let logged = logged.clone();
+        ResultEffect!(
+            result_key = Some("testKey"),
+            result_event_bus = given.clone(),
+            on_result = move |result: String| {
+                logged.borrow_mut().push(result);
+                async {}
+            }
+        );
+    });
+    ui.wait_for_idle();
+    bus.send_result_to("testKey", "sent".to_string());
+    bus.remove_result_of("testKey");
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["sent"]);
+}
+
+/// A result needn't be `Clone`: it's heard once.
+#[test]
+fn a_result_needn_t_be_clone() {
+    struct Opaque(i32);
+    let bus = ResultEventBus::new();
+    let heard = Rc::new(std::cell::Cell::new(0));
+    let (given, seen) = (bus.clone(), heard.clone());
+    let mut ui = compose_test(move || {
+        let seen = seen.clone();
+        ResultEffect!(
+            result_event_bus = given.clone(),
+            on_result = move |result: Opaque| {
+                seen.set(result.0);
+                async {}
+            }
+        );
+    });
+    ui.wait_for_idle();
+    bus.send_result(Opaque(4));
+    ui.wait_for_idle();
+    assert_eq!(heard.get(), 4);
+}
+
+/// A `&str` and a `String` are other types, and so other keys.
+#[test]
+fn a_type_s_key_tells_a_str_from_a_string() {
+    let bus = ResultEventBus::new();
+    let log = Log::default();
+    let (given, logged) = (bus.clone(), log.clone());
+    let mut ui = compose_test(move || {
+        let logged = logged.clone();
+        ResultEffect!(
+            result_event_bus = given.clone(),
+            on_result = move |result: String| {
+                logged.borrow_mut().push(result);
+                async {}
+            }
+        );
+    });
+    ui.wait_for_idle();
+    bus.send_result("a str");
+    ui.wait_for_idle();
+    assert!(log.borrow().is_empty());
+    bus.send_result("a string".to_string());
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["a string"]);
 }
 
 /// Each result is heard, in order, even several at a time, and a closure's wait holds up the next.

@@ -18,6 +18,7 @@ pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, KeptArguments, current};
 pub use crate::hash::key_of;
 pub use crate::local::resolve_lazy_computed;
+pub use crate::saveable::{Saveable, SavedValue};
 pub use compose_macros::call;
 
 /// Whether a panic that started after the guard was created is unwinding through it. A pass may

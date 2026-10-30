@@ -52,7 +52,7 @@ impl<T: 'static> NavEntryDecorator<T> {
         let inner = DecoratorInner {
             on_pop: Box::new(on_pop),
             decorate: Box::new(decorate),
-            group: group_of::<F>(),
+            group: group_of::<F, NavEntry<T>>(),
         };
         NavEntryDecorator { inner: Rc::new(inner) }
     }

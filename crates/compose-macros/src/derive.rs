@@ -164,3 +164,136 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         }
     })
 }
+
+pub(crate) fn expand_saveable(input: TokenStream) -> TokenStream {
+    match derive_saveable(input) {
+        Ok(tokens) => tokens,
+        Err(error) => error.to_compile_error(),
+    }
+}
+
+/// How `fields` are named in a pattern and a constructor, and what saves and restores them from
+/// `__items` starting at `first`.
+fn saveable_fields(
+    fields: &Fields,
+    first: usize,
+) -> (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) {
+    let (mut pattern, mut saves, mut restores) = (Vec::new(), Vec::new(), Vec::new());
+    for (index, field) in fields.iter().enumerate() {
+        let binding = format_ident!("__field_{}", index);
+        let at = first + index;
+        let restore = quote! {
+            <_ as ::compose::__private::Saveable>::restore(__items.get(#at)?)?
+        };
+        saves.push(quote! { ::compose::__private::Saveable::save(#binding) });
+        match &field.ident {
+            Some(name) => {
+                pattern.push(quote! { #name: #binding });
+                restores.push(quote! { #name: #restore });
+            }
+            None => {
+                pattern.push(quote! { #binding });
+                restores.push(restore);
+            }
+        }
+    }
+    (pattern, saves, restores)
+}
+
+/// `Name { … }`, `Name( … )` or `Name`, of what's given for its fields.
+fn shaped(fields: &Fields, path: TokenStream, parts: &[TokenStream]) -> TokenStream {
+    match fields {
+        Fields::Named(_) => quote! { #path { #(#parts),* } },
+        Fields::Unnamed(_) => quote! { #path ( #(#parts),* ) },
+        Fields::Unit => path,
+    }
+}
+
+fn derive_saveable(input: TokenStream) -> syn::Result<TokenStream> {
+    let mut input: DeriveInput = syn::parse2(input)?;
+    let parameters: Vec<String> =
+        input.generics.type_params().map(|param| param.ident.to_string()).collect();
+    let fields: Vec<syn::Field> = match &input.data {
+        Data::Struct(data) => data.fields.iter().cloned().collect(),
+        Data::Enum(data) => {
+            data.variants.iter().flat_map(|variant| variant.fields.iter().cloned()).collect()
+        }
+        Data::Union(data) => {
+            return Err(Error::new(data.union_token.span(), "a union can't derive `Saveable`"));
+        }
+    };
+    for field in fields {
+        let ty = &field.ty;
+        if mentions(quote!(#ty), &parameters) {
+            let predicate: syn::WherePredicate = parse_quote!(#ty: ::compose::__private::Saveable);
+            input.generics.make_where_clause().predicates.push(predicate);
+        }
+    }
+    let name = &input.ident;
+    let (save, restore) = match &input.data {
+        Data::Struct(data) => {
+            let (pattern, saves, restores) = saveable_fields(&data.fields, 0);
+            let binding = shaped(&data.fields, quote!(#name), &pattern);
+            let made = shaped(&data.fields, quote!(#name), &restores);
+            (
+                quote! {
+                    let #binding = self;
+                    ::compose::__private::SavedValue::List(::std::vec![#(#saves),*])
+                },
+                quote! { ::core::option::Option::Some(#made) },
+            )
+        }
+        Data::Enum(data) => {
+            let (mut save_arms, mut restore_arms) = (Vec::new(), Vec::new());
+            for variant in &data.variants {
+                let variant_name = &variant.ident;
+                let text = variant_name.to_string();
+                let (pattern, saves, restores) = saveable_fields(&variant.fields, 1);
+                let binding = shaped(&variant.fields, quote!(#name::#variant_name), &pattern);
+                let made = shaped(&variant.fields, quote!(#name::#variant_name), &restores);
+                save_arms.push(quote! {
+                    #binding => ::compose::__private::SavedValue::List(::std::vec![
+                        ::compose::__private::SavedValue::Text(::std::string::String::from(#text)),
+                        #(#saves),*
+                    ]),
+                });
+                restore_arms.push(quote! { #text => ::core::option::Option::Some(#made), });
+            }
+            (
+                quote! {
+                    match self {
+                        #(#save_arms)*
+                    }
+                },
+                quote! {
+                    let ::compose::__private::SavedValue::Text(__name) = __items.first()? else {
+                        return ::core::option::Option::None;
+                    };
+                    match __name.as_str() {
+                        #(#restore_arms)*
+                        _ => ::core::option::Option::None,
+                    }
+                },
+            )
+        }
+        Data::Union(_) => unreachable!("refused above"),
+    };
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        #[automatically_derived]
+        impl #impl_generics ::compose::__private::Saveable for #name #ty_generics #where_clause {
+            fn save(&self) -> ::compose::__private::SavedValue {
+                #save
+            }
+
+            fn restore(
+                __saved: &::compose::__private::SavedValue,
+            ) -> ::core::option::Option<Self> {
+                let ::compose::__private::SavedValue::List(__items) = __saved else {
+                    return ::core::option::Option::None;
+                };
+                #restore
+            }
+        }
+    })
+}

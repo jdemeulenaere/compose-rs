@@ -10,6 +10,7 @@ use compose_navigation::*;
 use compose_runtime::snapshots::mutable_state_list_from;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::platform::UiHost;
 
 fn panic_text(body: impl FnOnce()) -> String {
     let payload = catch_unwind(AssertUnwindSafe(body)).expect_err("it should have panicked");
@@ -30,7 +31,7 @@ fn an_entry_has_the_content_key_it_was_given() {
 // Compose: navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/EntryTest.kt, getFeatureMap
 #[test]
 fn an_entry_has_the_metadata_it_was_given() {
-    #[derive(PartialEq, Debug)]
+    #[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
     struct Marker;
     let metadata = NavMetadata::new().with("feature1", 1).with("feature2", Marker);
     let entry = NavEntry::new("myKey", |_| {}).with_metadata(metadata);
@@ -39,7 +40,7 @@ fn an_entry_has_the_metadata_it_was_given() {
     assert_eq!(entry.metadata().get_named::<String>("feature1"), None);
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 struct Home;
 
 /// Kotlin's `TestSubinterface1.Home` and `TestSubinterface2.Home`: printing the same.
@@ -76,8 +77,8 @@ fn keys_of_other_values_have_other_content_keys() {
 #[test]
 fn a_provider_gives_each_key_its_entry() {
     let provider = entry_provider(|scope| {
-        scope.entry("first", |_| {}).content_key("first");
-        scope.entry("second", |_| {}).content_key("second");
+        scope.entry("first", |_| {}).with_content_key("first");
+        scope.entry("second", |_| {}).with_content_key("second");
     });
     assert_eq!(*provider("first").content_key(), ContentKey::new("first"));
     assert_eq!(*provider("second").content_key(), ContentKey::new("second"));
@@ -89,13 +90,13 @@ fn a_provider_makes_an_entry_s_metadata() {
     let provider = entry_provider(|scope| {
         scope
             .entry("first", |_| {})
-            .content_key("first")
-            .metadata_of(|_| NavMetadata::new().with("feature1", 1));
+            .with_content_key("first")
+            .with_metadata_of(|_| NavMetadata::new().with("feature1", 1));
     });
     assert_eq!(provider("first").metadata().get_named::<i32>("feature1"), Some(&1));
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 struct Named(&'static str);
 
 // Compose: navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/EntryProviderTest.kt, entryProvider_getKeyArgsFromMetadataWithObject
@@ -104,8 +105,8 @@ fn an_entry_s_metadata_can_read_its_key() {
     let provider = entry_provider(|scope| {
         scope
             .entry(Named("testArg"), |_| {})
-            .content_key("first")
-            .metadata_of(|key| NavMetadata::new().with("arg1", key.0));
+            .with_content_key("first")
+            .with_metadata_of(|key| NavMetadata::new().with("arg1", key.0));
     });
     assert_eq!(provider(Named("testArg")).metadata().get_named::<&str>("arg1"), Some(&"testArg"));
 }
@@ -116,7 +117,7 @@ fn a_class_s_metadata_can_read_its_key() {
     let provider = entry_provider(|scope| {
         scope
             .entry_of::<Named, _>(|_| {})
-            .metadata_of(|key| NavMetadata::new().with("arg1", key.0));
+            .with_metadata_of(|key| NavMetadata::new().with("arg1", key.0));
     });
     assert_eq!(provider(Named("testArg")).metadata().get_named::<&str>("arg1"), Some(&"testArg"));
 }
@@ -149,7 +150,7 @@ fn a_fallback_makes_the_entry_of_a_key_with_none() {
     let provider = entry_provider_with_fallback(
         |key: i32| NavEntry::new(key, |_| {}).with_content_key("fallback"),
         |scope| {
-            scope.entry(1, |_| {}).content_key("one");
+            scope.entry(1, |_| {}).with_content_key("one");
         },
     );
     assert_eq!(*provider(1).content_key(), ContentKey::new("one"));
@@ -178,7 +179,7 @@ impl NavMetadataKey for LambdaKey {
 #[test]
 fn a_key_s_metadata_is_made_once() {
     let provider = entry_provider(|scope| {
-        scope.entry_of::<Home, _>(|_| {}).metadata_of(|_| {
+        scope.entry_of::<Home, _>(|_| {}).with_metadata_of(|_| {
             metadata(|scope| scope.put(&LambdaKey, Rc::new(|| "First".to_string())))
         });
     });
@@ -193,7 +194,7 @@ fn a_closure_in_metadata_reads_what_it_reads_now() {
     let value = Rc::new(std::cell::RefCell::new("start".to_string()));
     let read = value.clone();
     let provider = entry_provider(|scope| {
-        scope.entry_of::<Home, _>(|_| {}).metadata_of(move |_| {
+        scope.entry_of::<Home, _>(|_| {}).with_metadata_of(move |_| {
             let read = read.clone();
             metadata(|scope| scope.put(&LambdaKey, Rc::new(move || read.borrow().clone())))
         });
@@ -211,8 +212,8 @@ fn a_closure_in_metadata_reads_what_it_reads_now() {
 #[test]
 fn a_key_s_own_entry_goes_before_its_class_s() {
     let provider = entry_provider(|scope| {
-        scope.entry(Named("testArg"), |_| {}).content_key("first");
-        scope.entry_of::<Named, _>(|_| {}).content_key_of(|_| "second");
+        scope.entry(Named("testArg"), |_| {}).with_content_key("first");
+        scope.entry_of::<Named, _>(|_| {}).with_content_key_of(|_| "second");
     });
     assert_eq!(*provider(Named("testArg")).content_key(), ContentKey::new("first"));
     assert_eq!(*provider(Named("other")).content_key(), ContentKey::new("second"));
@@ -221,15 +222,15 @@ fn a_key_s_own_entry_goes_before_its_class_s() {
 /// Keys of an enum with a class for a variant: what isn't of it has none.
 #[test]
 fn a_class_takes_only_the_keys_of_it() {
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, PartialEq, Hash, Debug)]
     enum Screen {
         Details(Named),
         Other,
     }
     impl KeyClass<Screen> for Named {
-        fn from_key(key: &Screen) -> Option<Named> {
+        fn from_key(key: &Screen) -> Option<&Named> {
             match key {
-                Screen::Details(named) => Some(named.clone()),
+                Screen::Details(named) => Some(named),
                 Screen::Other => None,
             }
         }
@@ -241,7 +242,7 @@ fn a_class_takes_only_the_keys_of_it() {
         |scope| {
             scope
                 .entry_of::<Named, _>(move |key: Named| seen.borrow_mut().push(key.0))
-                .content_key_of(|key: &Named| key.0);
+                .with_content_key_of(|key: &Named| key.0);
         },
     );
     let entry = provider(Screen::Details(Named("a")));
@@ -252,7 +253,7 @@ fn a_class_takes_only_the_keys_of_it() {
     assert_eq!(*shown.borrow(), ["a"]);
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
 struct Payload;
 
 struct ObjectKey;
@@ -363,7 +364,7 @@ fn metadata_says_what_it_holds() {
     assert!(!metadata.contains(&Numbered(2)));
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 enum Data {
     One,
     Two,
@@ -467,6 +468,166 @@ fn another_closure_s_content_starts_anew_and_another_key_doesn_t() {
     assert_eq!(REMEMBERED.get(), 4, "the same closure, with another key");
 }
 
+/// `T`'s class takes what no other does, whatever their order, as Kotlin's classes are exact.
+#[test]
+fn every_key_s_class_doesn_t_shadow_a_variant_s() {
+    #[derive(Clone, PartialEq, Hash, Debug)]
+    enum Screen {
+        Details(Named),
+        Other,
+    }
+    impl KeyClass<Screen> for Named {
+        fn from_key(key: &Screen) -> Option<&Named> {
+            match key {
+                Screen::Details(named) => Some(named),
+                Screen::Other => None,
+            }
+        }
+    }
+    let provider = entry_provider(|scope: &mut EntryProviderScope<Screen>| {
+        scope.entry_of::<Screen, _>(|_| {}).with_content_key_of(|_| "every");
+        scope.entry_of::<Named, _>(|_| {}).with_content_key_of(|key: &Named| key.0);
+    });
+    assert_eq!(*provider(Screen::Details(Named("a"))).content_key(), ContentKey::new("a"));
+    assert_eq!(*provider(Screen::Other).content_key(), ContentKey::new("every"));
+}
+
+// Compose: navigation3/navigation3-runtime/src/commonMain/kotlin/androidx/navigation3/runtime/EntryProvider.kt, build
+/// A key with an entry of its own and of its class: its content and content key are its own, and its
+/// metadata its class's, as `build()` asks the class first.
+#[test]
+fn a_key_with_both_entries_has_its_class_s_metadata() {
+    let provider = entry_provider(|scope| {
+        scope
+            .entry(Named("a"), |_| {})
+            .with_content_key("own")
+            .with_metadata(NavMetadata::new().with("from", "own"));
+        scope
+            .entry_of::<Named, _>(|_| {})
+            .with_content_key_of(|_| "class")
+            .with_metadata(NavMetadata::new().with("from", "class"));
+    });
+    let entry = provider(Named("a"));
+    assert_eq!(*entry.content_key(), ContentKey::new("own"));
+    assert_eq!(entry.metadata().get_named::<&str>("from"), Some(&"class"));
+}
+
+/// Without a class, it's its own.
+#[test]
+fn a_key_s_own_metadata_goes_when_it_has_no_class() {
+    let provider = entry_provider(|scope| {
+        scope.entry(1, |_| {}).with_metadata(NavMetadata::new().with("from", "own"));
+    });
+    assert_eq!(provider(1).metadata().get_named::<&str>("from"), Some(&"own"));
+}
+
+/// Metadata compares as data, built apart: `==` for what has it, identity for a closure, as a Kotlin
+/// map's values.
+#[test]
+fn metadata_built_apart_with_equal_values_is_equal() {
+    assert_eq!(
+        NavMetadata::new().with("a", 1).with("b", "text"),
+        NavMetadata::new().with("b", "text").with("a", 1)
+    );
+    assert_ne!(NavMetadata::new().with("a", 1), NavMetadata::new().with("a", 2));
+    assert_ne!(NavMetadata::new().with("a", 1), NavMetadata::new().with("a", "1"));
+    assert_ne!(NavMetadata::new().with("a", 1), NavMetadata::new().with("b", 1));
+    assert_ne!(NavMetadata::new().with("a", 1), NavMetadata::new());
+    assert_eq!(
+        metadata(|scope| scope.put(&Numbered(1), 'a')),
+        metadata(|scope| scope.put(&Numbered(1), 'a'))
+    );
+    let closure: Rc<dyn Fn() -> String> = Rc::new(String::new);
+    let other: Rc<dyn Fn() -> String> = Rc::new(String::new);
+    assert_eq!(
+        metadata(|scope| scope.put(&LambdaKey, closure.clone())),
+        metadata(|scope| scope.put(&LambdaKey, closure.clone()))
+    );
+    assert_ne!(
+        metadata(|scope| scope.put(&LambdaKey, closure.clone())),
+        metadata(|scope| scope.put(&LambdaKey, other))
+    );
+}
+
+/// Values of other types with equal hashes and printing don't share a key's place.
+#[test]
+fn content_keys_of_other_types_differ_in_hash_too() {
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+    #[derive(PartialEq, Eq, Hash, Debug)]
+    struct IdA(i32);
+    #[derive(PartialEq, Eq, Hash, Debug)]
+    struct IdB(i32);
+    let hash = BuildHasherDefault::<DefaultHasher>::default();
+    let (a, b) = (ContentKey::new(IdA(1)), ContentKey::new(IdB(1)));
+    assert_ne!(a, b);
+    assert_ne!(hash.hash_one(&a), hash.hash_one(&b));
+    assert_eq!(hash.hash_one(&a), hash.hash_one(ContentKey::new(IdA(1))));
+    // A `&str` and a `String` are one key.
+    assert_eq!(
+        hash.hash_one(ContentKey::new("a")),
+        hash.hash_one(ContentKey::new("a".to_string()))
+    );
+}
+
+/// So entries with such keys don't share what they save.
+#[test]
+fn entries_of_keys_of_other_types_don_t_share_saved_state() {
+    #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+    struct IdA(i32);
+    #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+    struct IdB(i32);
+    let owner = mutable_state_list_from([1]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let decorator = remember_saveable_state_holder_nav_entry_decorator!();
+        let entries = remember_decorated_nav_entries!(
+            stack,
+            vec![decorator],
+            entry_provider = |key: i32| {
+                if key == 1 {
+                    NavEntry::keyed(key, IdA(1), |_| CountingScreen())
+                } else {
+                    NavEntry::keyed(key, IdB(1), |_| CountingScreen())
+                }
+            }
+        );
+        entries.last().unwrap().Content();
+    });
+    ui.wait_for_idle();
+    COUNTER.get().unwrap().set(2);
+    ui.wait_for_idle();
+    stack.push(2);
+    ui.wait_for_idle();
+    assert_eq!(COUNTER.get().unwrap().get(), 0);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn an_erased_closure_panics_in_debug_builds() {
+    let boxed: Box<dyn Fn(i32)> = Box::new(|_| {});
+    let text = panic_text(|| {
+        let _ = NavEntry::new(1, boxed);
+    });
+    assert!(text.contains("has no place of its own"), "{text}");
+    fn plain(_: i32) {}
+    let pointer: fn(i32) = plain;
+    let text = panic_text(|| {
+        let _ = NavEntry::new(1, pointer);
+    });
+    assert!(text.contains("has no place of its own"), "{text}");
+    // A function by its name has a place.
+    let _ = NavEntry::new(1, plain);
+}
+
+/// `keyed` doesn't format its key.
+#[test]
+fn a_key_with_no_debug_can_have_a_content_key() {
+    #[derive(Clone)]
+    struct Opaque;
+    let entry = NavEntry::keyed(Opaque, "given", |_| {});
+    assert_eq!(*entry.content_key(), ContentKey::new("given"));
+}
+
 /// An entry's content is a scope of its own: what it reads recomposes it alone.
 #[test]
 fn an_entry_s_content_recomposes_on_its_own() {
@@ -487,4 +648,79 @@ fn an_entry_s_content_recomposes_on_its_own() {
     state.set(1);
     ui.wait_for_idle();
     assert_eq!((outer_runs.get(), inner_runs.get()), (1, 2));
+}
+
+/// Popped from under the top, never shown again: what it saved is forgotten too.
+#[test]
+fn an_entry_popped_from_under_the_top_forgets_its_state() {
+    let owner = mutable_state_list_from([Data::One]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let decorator = remember_saveable_state_holder_nav_entry_decorator!();
+        let entries = remember_decorated_nav_entries!(
+            stack,
+            vec![decorator],
+            entry_provider = |key: Data| NavEntry::new(key, |_| CountingScreen())
+        );
+        entries.last().unwrap().Content();
+    });
+    ui.wait_for_idle();
+    COUNTER.get().unwrap().set(2);
+    ui.wait_for_idle();
+    stack.push(Data::Two);
+    ui.wait_for_idle();
+    stack.remove(0);
+    ui.wait_for_idle();
+    stack.insert(0, Data::One);
+    stack.remove(1);
+    ui.wait_for_idle();
+    assert_eq!(COUNTER.get().unwrap().get(), 0);
+}
+
+#[derive(Clone, PartialEq, Hash, Debug, Saveable)]
+enum Saved {
+    First,
+    Second(i32),
+}
+
+#[composable]
+fn SavedApp() {
+    let stack = remember_nav_back_stack([Saved::First]);
+    STACK.set(Some(stack));
+    let decorator = remember_saveable_state_holder_nav_entry_decorator!();
+    let entries = remember_decorated_nav_entries!(
+        stack,
+        vec![decorator],
+        entry_provider = |key: Saved| NavEntry::new(key, |_| CountingScreen())
+    );
+    entries.last().unwrap().Content();
+}
+
+thread_local! {
+    static STACK: Cell<Option<NavBackStack<Saved>>> = const { Cell::new(None) };
+}
+
+/// The stack and what each entry saved come back through bytes, the one below the top too.
+#[test]
+fn the_stack_and_an_entry_s_saved_state_survive_the_process() {
+    let mut ui = compose_test(SavedApp);
+    ui.wait_for_idle();
+    COUNTER.get().unwrap().set(3);
+    ui.wait_for_idle();
+    STACK.get().unwrap().push(Saved::Second(7));
+    ui.wait_for_idle();
+    COUNTER.get().unwrap().set(5);
+    ui.wait_for_idle();
+    let bytes = ui.host().save_state().to_bytes();
+    drop(ui);
+    let host = UiHost::headless(100, 100);
+    host.restore_state(SavedState::from_bytes(&bytes).expect("saved state bytes"));
+    let mut ui = ComposeTestRule::with_host(host, SavedApp);
+    ui.wait_for_idle();
+    let stack = STACK.get().unwrap();
+    assert_eq!(stack.iter_cloned().collect::<Vec<_>>(), [Saved::First, Saved::Second(7)]);
+    assert_eq!(COUNTER.get().unwrap().get(), 5);
+    stack.remove(1);
+    ui.wait_for_idle();
+    assert_eq!(COUNTER.get().unwrap().get(), 3);
 }

@@ -340,9 +340,10 @@ What compose-rs is to model (D704): a list of typed keys the app owns, mapped to
 | `entryProvider(fallback) { entry<K>(…); entry(key, …); addEntryProvider(…) }`, `EntryProviderScope`, `EntryDsl` | present: `entry_provider`, `entry_provider_with_fallback`, `entry`, `entry_of` with `KeyClass` (D1400) |
 | `NavEntryDecorator(onPop, decorate)`, `rememberDecoratedNavEntries(entries, decorators)`, `rememberDecoratedNavEntries(backStack, decorators, entryProvider)` | present: `NavEntryDecorator::new`, `with_on_pop`, `remember_decorated_nav_entries`, `remember_decorated_nav_entries_from` (D1400) |
 | `SaveableStateHolderNavEntryDecorator`, `rememberSaveableStateHolderNavEntryDecorator` | present (D1400) |
-| `NavKey`, `NavBackStack` (a snapshot-state list of keys), `rememberNavBackStack(vararg)`, `rememberNavBackStack(configuration, vararg)`, `NavBackStackSerializer`, `NavKeySerializer` | nav3-runtime (serialization becomes `Saveable`) |
+| `NavKey`, `NavBackStack` (a snapshot-state list of keys), `rememberNavBackStack(vararg)`, `NavBackStackSerializer`, `NavKeySerializer` | present: `NavKey`, `NavBackStack`, `remember_nav_back_stack`, `Saveable` for the serializers (D1400) |
+| `rememberNavBackStack(configuration, vararg)` | no analogue: nothing's registered, an enum holding its kinds of key (D1400) |
 | `NavMetadataKey`, `metadata { put(key, value) }`, `MetadataScope`, `Map.get/contains(NavMetadataKey)` | present: `NavMetadata` for the map (D1400) |
-| `ResultEventBus` (`sendResult`, `conflateAsState`, `removeResult`), `rememberResultEventBus`, `LocalResultEventBus`, `ResultEffect`, `ResultEventBusNavEntryDecorator`, `rememberResultEventBusNavEntryDecorator` | nav3-results |
+| `ResultEventBus` (`sendResult`, `conflateAsState`, `removeResult`), `rememberResultEventBus`, `LocalResultEventBus`, `ResultEffect`, `ResultEventBusNavEntryDecorator`, `rememberResultEventBusNavEntryDecorator` | present (D1401) |
 | `deeplink`: `DeepLinkMatcher` (+`Filter`, `MatchResult`, `mimeTypeFilter`), `DeepLinkRequest` (uri, `RequestExtras`, `mimeTypeExtra`), `UriDeepLinkMatcher`, `UriMatchResult`, `StaticKeyDeepLinkMatcher`, `BackStackMatcher`/`withBackStack`, `WrappedMatchResult`, `DeepLinkSerializer`, `RequestExtras`/`requestExtras {}`/`RequestExtrasKey`, `DeepLinkUri` | nav3-deep-links (optional) |
 | `DeepLinkRequest(Intent)`, `actionExtra`, `actionFilter`, `IntentExtrasKey`, `ActionExtrasKey` | n/a: Android `Intent`s |
 
@@ -643,15 +644,19 @@ nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and 
 - **nav3-runtime (L): done (D1400).** `NavEntry`, `entryProvider`, decorators and `rememberDecoratedNavEntries`, the saveable-state decorator, `NavKey`/`NavBackStack`/`rememberNavBackStack` over `Saveable`, metadata keys.
   - Tests: 8 runtime files (79 tests), `ported` but for the 4 of serializer configuration, which have no analogue.
 - **nav3-ui (L):** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`.
-  - Tests: 15 ui files (121 tests).
-  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (2 tests), the entry decorators over `compose-lifecycle` (lifecycle test).
+  - Tests: 15 ui files (121 tests), and `ResultEventBusNavEntryDecoratorTest` (5).
+  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (2 tests), the entry decorators over `compose-lifecycle` (lifecycle test), and movable content (`SceneSetupNavEntryDecorator`'s `movableContentOf`).
+  - Without movable content (D1404): single-pane scenes, dialogs and overlays ship first, the decorator keeping its shape. An entry moving between panes waits for it, from the composition context work, with the tests of `ListDetailSceneTest`, `HierarchicalSceneTest`, `BottomNavSceneDecoratorTest`'s list-detail, and the two-pane cases of `SceneStateTest`, `NavDisplayTest`, `NavDisplayLifecycleTest` and `NavDisplayScreenshotTest`.
 - **nav3-results (S): done but its decorator's tests (D1401).** `ResultEventBus`, `ResultEffect` and the decorator.
   - Tests: 3 files (5 tests) `ported`; `ResultEventBusNavEntryDecoratorTest` (5) needs `NavDisplay`, under nav3-ui.
-- **nav3-deep-links (L, optional):** URI patterns, matchers, argument decoding and synthetic back stacks.
+- **nav3-deep-links (L), last of Navigation 3 (D1404):** URI patterns, matchers, argument decoding and synthetic back stacks.
   - Tests: 8 files (211 tests).
   - Dependencies: a URI type and a decoding trait (the analogue of kotlinx.serialization), and a platform path delivering links: on Android an `Intent`, which is n/a, or a desktop URL handler.
 
-Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting beside it: its crate's users move then, and what's left of D291's goes.
+Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting beside it: its crate's users move then, and what's left of D291's goes. With `navigation3-ui`:
+
+- **Deleted:** `crates/compose-navigation/src/controller.rs`, `src/host.rs`, `tests/suite/navigation.rs`, and the `NavHost` parts of `tests/suite/review.rs`.
+- **Migrated:** `examples/gallery`, `examples/guide/src/navigation.rs`, `docs/guide/kotlin-to-rust.md`, `docs/guide/differences.md`, `docs/06-ui.md`, `docs/11-status.md`, `README.md`, and a comment in `crates/compose-ui/src/back.rs`.
 
 ### Suggested order
 

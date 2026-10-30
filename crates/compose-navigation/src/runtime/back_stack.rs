@@ -114,7 +114,7 @@ impl<T: 'static> NavBackStack<T> {
     /// Its last key off it, as `removeLastOrNull()`.
     pub fn remove_last_or_none(&self) -> Option<T>
     where
-        T: Clone + PartialEq,
+        T: Clone,
     {
         let last = self.base.len().checked_sub(1)?;
         Some(self.base.remove(last))

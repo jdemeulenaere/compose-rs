@@ -4,28 +4,63 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use compose_runtime::{ComposeArg, DisposableEffect, composable, key, remember, remember_keyed};
+use compose_runtime::{
+    ComposeArg, DisposableEffect, OwnedState, composable, key, mutable_state_of_with,
+    referential_equality_policy, remember, remember_keyed,
+};
 
 use super::back_stack::NavList;
 use super::content_key::ContentKey;
 use super::decorator::NavEntryDecorator;
 use super::entry::NavEntry;
 
-/// A list as a key: by its elements' `same`.
-struct Same<T>(Rc<Vec<T>>);
+/// The group of a decorated entry's content: one place in the source, as Kotlin's lambda.
+const CONTENT_GROUP: u64 = compose_runtime::__private::key_of("compose_navigation::decorated");
 
-impl<T> Clone for Same<T> {
+/// A list as a key, by `==`.
+struct Equal<T>(Rc<Vec<T>>);
+
+impl<T> Clone for Equal<T> {
     fn clone(&self) -> Self {
-        Same(self.0.clone())
+        Equal(self.0.clone())
     }
 }
 
-impl<T: ComposeArg> ComposeArg for Same<T> {
+impl<T: PartialEq + 'static> ComposeArg for Equal<T> {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-            || (self.0.len() == other.0.len()
-                && self.0.iter().zip(other.0.iter()).all(|(a, b)| a.same(b)))
+        Rc::ptr_eq(&self.0, &other.0) || self.0 == other.0
     }
+}
+
+/// What a place's content shows.
+struct Decoration<T: 'static> {
+    entry: NavEntry<T>,
+    decorators: Rc<Vec<NavEntryDecorator<T>>>,
+}
+
+impl<T> Clone for Decoration<T> {
+    fn clone(&self) -> Self {
+        Decoration { entry: self.entry.clone(), decorators: self.decorators.clone() }
+    }
+}
+
+/// What differs is what's written: the entry by `==`, the decorators by identity.
+impl<T: PartialEq + 'static> ComposeArg for Decoration<T> {
+    fn same(&self, other: &Self) -> bool {
+        self.entry == other.entry
+            && (Rc::ptr_eq(&self.decorators, &other.decorators)
+                || self.decorators == other.decorators)
+    }
+}
+
+/// A place among a call's entries: one content, as `ComposableLambdaImpl` is one lambda, whose
+/// `update` here is `state`'s write. `last` is what's compared: reading the state there would
+/// subscribe what decorates to what it writes.
+struct Place<T: 'static> {
+    state: Rc<OwnedState<Decoration<T>>>,
+    last: RefCell<Decoration<T>>,
+    content: Rc<dyn Fn(T)>,
+    decorated: RefCell<NavEntry<T>>,
 }
 
 /// Keys by `==`, as Kotlin's `remember(backStack.toList())`.
@@ -77,7 +112,7 @@ pub fn remember_decorated_nav_entries<T: Clone + PartialEq + 'static>(
 /// [`remember_decorated_nav_entries`] of entries, decorated already or not, as its other overload:
 /// `entry_decorators` go outside what they have.
 #[composable(non_restartable)]
-pub fn remember_decorated_nav_entries_from<T: Clone + 'static>(
+pub fn remember_decorated_nav_entries_from<T: Clone + PartialEq + 'static>(
     entries: impl NavList<NavEntry<T>>,
     #[default(Vec::new())] entry_decorators: impl NavList<NavEntryDecorator<T>>,
 ) -> Vec<NavEntry<T>> {
@@ -101,28 +136,43 @@ pub fn remember_decorated_nav_entries_from<T: Clone + 'static>(
 }
 
 /// `entry` with `decorators`, by its place among those with its content key, as `decorateEntry`.
-/// It's what calls `on_pop` for an entry popped while it was still shown (leaving with its pop
-/// animation, say): [`prepare_back_stack`] can't know of those.
-fn decorate_entry<T: Clone + 'static>(
+/// A place has one content, however it's decorated: `rememberComposableLambda` keeps one lambda
+/// for a place and updates what it calls, so what's shown follows a state, and entries of a place
+/// are equal whenever their key and metadata are. It's what calls `on_pop` for an entry popped while
+/// it was still shown (leaving with its pop animation, say): [`prepare_back_stack`] can't know of
+/// those. An entry can outlive its place, so the content holds its state rather than the slot.
+fn decorate_entry<T: Clone + PartialEq + 'static>(
     entry: &NavEntry<T>,
     decorators: &Rc<Vec<NavEntryDecorator<T>>>,
     tracking: &Rc<Tracking<T>>,
 ) -> NavEntry<T> {
     key(entry.content_key().clone(), || {
-        let made = (entry.clone(), decorators.clone(), tracking.clone());
-        remember_keyed((entry.clone(), Same(decorators.clone())), move || {
-            let (entry, decorators, tracking) = made;
-            let wrapped = entry.clone();
-            NavEntry::from_entry(&wrapped, move |_| show_decorated(&entry, &decorators, &tracking))
-        })
+        let decoration = Decoration { entry: entry.clone(), decorators: decorators.clone() };
+        let place: Rc<Place<T>> = remember(|| {
+            let state =
+                Rc::new(mutable_state_of_with(decoration.clone(), referential_equality_policy()));
+            let content: Rc<dyn Fn(T)> = {
+                let (state, tracking) = (state.clone(), tracking.clone());
+                Rc::new(move |_| show_decorated(&state.handle().get(), &tracking))
+            };
+            let decorated =
+                RefCell::new(NavEntry::with_content(entry, content.clone(), CONTENT_GROUP));
+            Rc::new(Place { state, last: RefCell::new(decoration.clone()), content, decorated })
+        });
+        if !place.last.borrow().same(&decoration) {
+            if place.last.borrow().entry != decoration.entry {
+                *place.decorated.borrow_mut() =
+                    NavEntry::with_content(entry, place.content.clone(), CONTENT_GROUP);
+            }
+            *place.last.borrow_mut() = decoration.clone();
+            place.state.handle().set(decoration);
+        }
+        place.decorated.borrow().clone()
     })
 }
 
-fn show_decorated<T: Clone + 'static>(
-    entry: &NavEntry<T>,
-    decorators: &Rc<Vec<NavEntryDecorator<T>>>,
-    tracking: &Rc<Tracking<T>>,
-) {
+fn show_decorated<T: Clone + 'static>(decoration: &Decoration<T>, tracking: &Rc<Tracking<T>>) {
+    let Decoration { entry, decorators } = decoration;
     let content_key = entry.content_key().clone();
     let tracking = tracking.clone();
     DisposableEffect(content_key.clone(), move |scope| {
@@ -151,10 +201,13 @@ fn show_decorated<T: Clone + 'static>(
 
 /// Follows the back stack, and calls `on_pop` for entries popped that aren't being shown, or never
 /// were, as `PrepareBackStack`.
-fn prepare_back_stack<T: Clone + 'static>(entries: &[NavEntry<T>], tracking: &Rc<Tracking<T>>) {
+fn prepare_back_stack<T: Clone + PartialEq + 'static>(
+    entries: &[NavEntry<T>],
+    tracking: &Rc<Tracking<T>>,
+) {
     *tracking.latest_keys.borrow_mut() =
         entries.iter().map(|entry| entry.content_key().clone()).collect();
-    let list = Same(Rc::new(entries.to_vec()));
+    let list = Equal(Rc::new(entries.to_vec()));
     for entry in entries {
         let content_key = entry.content_key().clone();
         tracking.in_back_stack.borrow_mut().insert(content_key.clone());

@@ -50,8 +50,9 @@ pub mod animation {
     pub use compose_animation::*;
 }
 
-/// `androidx.navigation.compose`: `NavController`, `NavHost` and `remember_nav_controller`, with
-/// typed destinations.
+/// Navigation 3's runtime (`androidx.navigation3.runtime`): `NavEntry`, `NavBackStack` and
+/// `remember_decorated_nav_entries`; and, until `NavDisplay` replaces them (D704), `NavController`
+/// and `NavHost`, with typed destinations.
 pub mod navigation {
     pub use compose_navigation::*;
 }

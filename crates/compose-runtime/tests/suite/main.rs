@@ -9,6 +9,7 @@ mod composition_and_derived_state;
 mod composition_local;
 mod composition_reusing;
 mod compound_hash_key;
+mod derive_saveable;
 mod derived_snapshot_state;
 mod effects;
 mod frame_clocks;

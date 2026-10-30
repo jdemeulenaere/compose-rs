@@ -11,7 +11,7 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::UiHost;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Saveable)]
 enum Key {
     Object,
     Class,
@@ -21,7 +21,7 @@ enum Key {
 }
 
 /// Kotlin's sealed class, of one object.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Saveable)]
 enum Sealed {
     One,
 }
@@ -42,32 +42,6 @@ impl Saveable for Argument {
         let SavedValue::Text(text) = saved else { return None };
         let (age, height) = text.split_once("--")?;
         Some(Argument { age: age.parse().ok()?, height: height.parse().ok()? })
-    }
-}
-
-impl Saveable for Key {
-    fn save(&self) -> SavedValue {
-        match self {
-            Key::Object => SavedValue::Text("object".to_string()),
-            Key::Class => SavedValue::Text("class".to_string()),
-            Key::Sealed(Sealed::One) => SavedValue::Text("sealed".to_string()),
-            Key::Data(value) => SavedValue::Int(i64::from(*value)),
-            Key::Argument(argument) => SavedValue::List(vec![argument.save()]),
-        }
-    }
-
-    fn restore(saved: &SavedValue) -> Option<Key> {
-        match saved {
-            SavedValue::Text(name) => match name.as_str() {
-                "object" => Some(Key::Object),
-                "class" => Some(Key::Class),
-                "sealed" => Some(Key::Sealed(Sealed::One)),
-                _ => None,
-            },
-            SavedValue::Int(value) => Some(Key::Data(i32::try_from(*value).ok()?)),
-            SavedValue::List(items) => Some(Key::Argument(Argument::restore(items.first()?)?)),
-            _ => None,
-        }
     }
 }
 

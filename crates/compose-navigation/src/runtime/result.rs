@@ -54,6 +54,7 @@ impl ResultChannel {
 
     /// The next result: `None` once closed and read to its end, as a channel's.
     async fn next(&self) -> Option<Rc<dyn Any>> {
+        let mut waiting = Waiting { channel: self, waker: None };
         std::future::poll_fn(|context| {
             if let Some(result) = self.results.borrow_mut().pop_front() {
                 return Poll::Ready(Some(result));
@@ -61,10 +62,38 @@ impl ResultChannel {
             if self.closed.get() {
                 return Poll::Ready(None);
             }
-            self.wakers.borrow_mut().push(context.waker().clone());
+            waiting.register(context.waker());
             Poll::Pending
         })
         .await
+    }
+}
+
+/// A wait for a result: its waker stays once in the channel's, and goes when it's dropped, a task
+/// cancelled leaving nothing to wake.
+struct Waiting<'a> {
+    channel: &'a ResultChannel,
+    waker: Option<Waker>,
+}
+
+impl Waiting<'_> {
+    fn register(&mut self, waker: &Waker) {
+        let mut wakers = self.channel.wakers.borrow_mut();
+        if let Some(old) = self.waker.take() {
+            wakers.retain(|other| !other.will_wake(&old));
+        }
+        if !wakers.iter().any(|other| other.will_wake(waker)) {
+            wakers.push(waker.clone());
+        }
+        self.waker = Some(waker.clone());
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if let Some(waker) = &self.waker {
+            self.channel.wakers.borrow_mut().retain(|other| !other.will_wake(waker));
+        }
     }
 }
 
@@ -86,7 +115,8 @@ impl ComposeArg for ChannelRef {
 
 /// Passes results between screens, as `ResultEventBus`: a handle. A [`ResultEffect`] hears each
 /// result of its key, one state of [`conflate_as_state`](Self::conflate_as_state) the latest. A
-/// key is a type's name, or one of the app's. Results aren't saved.
+/// key is a type's name, or one of the app's, so a `&str` sent isn't heard by what waits for a
+/// `String`, which are other types' keys. Results aren't saved.
 #[derive(Clone)]
 pub struct ResultEventBus {
     channel_map: Rc<OwnedStateMap<String, ChannelRef>>,
@@ -212,8 +242,8 @@ pub fn remember_result_event_bus() -> ResultEventBus {
 /// key is `result_key`, or `T`'s name without one, and its bus the local one by default.
 #[composable]
 #[allow(non_snake_case)]
-pub fn ResultEffect<T: 'static + Clone, F: Future<Output = ()> + 'static>(
-    #[default(None)] result_key: Option<String>,
+pub fn ResultEffect<T: 'static, F: Future<Output = ()> + 'static>(
+    #[default(None)] result_key: Option<impl Into<String>>,
     #[default(LocalResultEventBus::current())] result_event_bus: ResultEventBus,
     on_result: impl Fn(T) -> F + 'static,
 ) {
@@ -225,7 +255,8 @@ pub fn ResultEffect<T: 'static + Clone, F: Future<Output = ()> + 'static>(
     LaunchedEffect((result_key, channel), async move {
         let channel = bus.channel(&key);
         while let Some(result) = channel.0.next().await {
-            let result = result.downcast_ref::<T>().expect("a result of its key's type").clone();
+            let result = result.downcast::<T>().expect("a result of its key's type");
+            let result = Rc::try_unwrap(result).ok().expect("a result is heard once");
             (current.get())(result).await;
         }
     });
@@ -253,4 +284,26 @@ pub fn remember_result_event_bus_nav_entry_decorator<T: Clone + 'static>(
     #[default(remember_result_event_bus())] result_event_bus: ResultEventBus,
 ) -> NavEntryDecorator<T> {
     remember(|| ResultEventBusNavEntryDecorator::new(result_event_bus))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::task::{Context, Waker};
+
+    use super::*;
+
+    /// A wait given up leaves no waker behind, and one polled again stays once.
+    #[test]
+    fn a_wait_leaves_one_waker_and_takes_it_when_dropped() {
+        let channel = ResultChannel::default();
+        let mut context = Context::from_waker(Waker::noop());
+        {
+            let mut next = std::pin::pin!(channel.next());
+            assert!(next.as_mut().poll(&mut context).is_pending());
+            assert!(next.as_mut().poll(&mut context).is_pending());
+            assert_eq!(channel.wakers.borrow().len(), 1);
+        }
+        assert!(channel.wakers.borrow().is_empty());
+    }
 }

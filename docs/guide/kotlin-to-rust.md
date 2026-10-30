@@ -220,7 +220,7 @@ pub fn Draft() {
 }
 ```
 
-Saved values implement `Saveable`: numbers, `bool`, `char`, `String`, `Option`s, `Vec`s and tuples of them. An app's own types implement `Saveable` ([Navigation](#navigation) saves an enum), or go through a `saver(save, restore)` with `remember_saveable_with`. The state holders' `remember_*` functions (`remember_lazy_list_state!()`, `remember_scroll_state!()`) save their positions, as Compose's do.
+Saved values implement `Saveable`: numbers, `bool`, `char`, `String`, `Option`s, `Vec`s and tuples of them. An app's own types derive it (`#[derive(Saveable)]`), implement it ([Navigation](#navigation) saves an enum), or go through a `saver(save, restore)` with `remember_saveable_with`. The state holders' `remember_*` functions (`remember_lazy_list_state!()`, `remember_scroll_state!()`) save their positions, as Compose's do.
 
 ### `derivedStateOf`
 

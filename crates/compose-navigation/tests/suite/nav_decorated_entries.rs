@@ -50,24 +50,19 @@ fn seen() -> Vec<Vec<NavEntry<i32>>> {
     SEEN.with_borrow(Clone::clone)
 }
 
+/// What's the same at another place: the entry and the decorators.
 #[composable(non_restartable)]
-fn Decorating(stack: compose_runtime::snapshots::SnapshotStateList<i32>) {
+fn Decorating(
+    stack: compose_runtime::snapshots::SnapshotStateList<i32>,
+    decorators: ImmutableList<NavEntryDecorator<i32>>,
+    entry: NavEntry<i32>,
+) {
     let entries = remember_decorated_nav_entries!(
         stack,
-        vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})],
-        entry_provider = empty_entries
+        decorators,
+        entry_provider = move |_: i32| entry.clone()
     );
     SEEN.with_borrow_mut(|seen| seen.push(entries));
-}
-
-#[composable]
-fn InOneBranch(
-    state: MutableState<i32>,
-    stack: compose_runtime::snapshots::SnapshotStateList<i32>,
-) {
-    let value = state.get();
-    assert_ne!(value, 1, "should not reach this branch");
-    Decorating(stack);
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/DecoratedNavEntriesTest.kt, decoratedEntriesRemembered
@@ -76,13 +71,14 @@ fn decorated_entries_stay_through_a_recomposition() {
     SEEN.with_borrow_mut(Vec::clear);
     let (state, owner) = (mutable_state_of(2), state_list([1]));
     let (read, stack) = (state.handle(), owner.handle());
-    let decorators = vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})];
     let mut ui = compose_test(move || {
         let value = read.get();
         assert_ne!(value, 1, "should not reach this branch");
+        // A decorator made at each pass, as Kotlin's `listOf(NavEntryDecorator { … })` in a
+        // composable: what a scene's `==` relies on not to change (D1402).
         let entries = remember_decorated_nav_entries!(
             stack,
-            decorators.clone(),
+            vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})],
             entry_provider = empty_entries
         );
         SEEN.with_borrow_mut(|seen| seen.push(entries));
@@ -99,11 +95,13 @@ fn decorated_entries_stay_through_a_recomposition() {
 fn InTwoBranches(
     state: MutableState<i32>,
     stack: compose_runtime::snapshots::SnapshotStateList<i32>,
+    decorators: ImmutableList<NavEntryDecorator<i32>>,
+    entry: NavEntry<i32>,
 ) {
     if state.get() == 1 {
-        Decorating(stack);
+        Decorating(stack, decorators.clone(), entry.clone());
     } else {
-        Decorating(stack);
+        Decorating(stack, decorators.clone(), entry.clone());
     }
 }
 
@@ -113,13 +111,16 @@ fn another_place_decorates_anew() {
     SEEN.with_borrow_mut(Vec::clear);
     let (state, owner) = (mutable_state_of(1), state_list([1]));
     let (read, stack) = (state.handle(), owner.handle());
-    let mut ui = compose_test(move || InTwoBranches!(read, stack));
+    let decorators: ImmutableList<_> = vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})].into();
+    let entry = empty_entries(1);
+    let mut ui =
+        compose_test(move || InTwoBranches!(read, stack, decorators.clone(), entry.clone()));
     ui.wait_for_idle();
     state.set(2);
     ui.wait_for_idle();
     let seen = seen();
     assert_eq!(seen.len(), 2);
-    assert_ne!(seen[0], seen[1]);
+    assert_ne!(seen[0], seen[1], "nothing's changed but the place");
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/DecoratedNavEntriesTest.kt, decorator_called
@@ -344,16 +345,17 @@ thread_local! {
 }
 
 #[composable(non_restartable)]
-fn Redecorating(stack: compose_runtime::snapshots::SnapshotStateList<i32>) {
+fn Redecorating(
+    stack: compose_runtime::snapshots::SnapshotStateList<i32>,
+    decorators: ImmutableList<NavEntryDecorator<i32>>,
+    entry: NavEntry<i32>,
+) {
     let initial = remember_decorated_nav_entries!(
         stack,
-        vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})],
-        entry_provider = empty_entries
+        decorators.clone(),
+        entry_provider = move |_: i32| entry.clone()
     );
-    let redecorated = remember_decorated_nav_entries_from!(
-        initial.clone(),
-        vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})]
-    );
+    let redecorated = remember_decorated_nav_entries_from!(initial.clone(), decorators);
     REDECORATED.with_borrow_mut(|seen| seen.push((initial, redecorated)));
 }
 
@@ -367,17 +369,18 @@ fn redecorated_entries_stay_through_a_recomposition() {
     REDECORATED.with_borrow_mut(Vec::clear);
     let (state, owner) = (mutable_state_of(2), state_list([1]));
     let (read, stack) = (state.handle(), owner.handle());
-    let initial_decorators = vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})];
-    let additional = vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})];
     let mut ui = compose_test(move || {
         let value = read.get();
         assert_ne!(value, 1, "should not reach this branch");
         let initial = remember_decorated_nav_entries!(
             stack,
-            initial_decorators.clone(),
+            vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})],
             entry_provider = empty_entries
         );
-        let redecorated = remember_decorated_nav_entries_from!(initial.clone(), additional.clone());
+        let redecorated = remember_decorated_nav_entries_from!(
+            initial.clone(),
+            vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})]
+        );
         REDECORATED.with_borrow_mut(|seen| seen.push((initial, redecorated)));
     });
     ui.wait_for_idle();
@@ -392,11 +395,13 @@ fn redecorated_entries_stay_through_a_recomposition() {
 fn RedecoratingInTwoBranches(
     state: MutableState<i32>,
     stack: compose_runtime::snapshots::SnapshotStateList<i32>,
+    decorators: ImmutableList<NavEntryDecorator<i32>>,
+    entry: NavEntry<i32>,
 ) {
     if state.get() == 1 {
-        Redecorating(stack);
+        Redecorating(stack, decorators.clone(), entry.clone());
     } else {
-        Redecorating(stack);
+        Redecorating(stack, decorators.clone(), entry.clone());
     }
 }
 
@@ -406,7 +411,11 @@ fn another_place_redecorates_anew() {
     REDECORATED.with_borrow_mut(Vec::clear);
     let (state, owner) = (mutable_state_of(1), state_list([1]));
     let (read, stack) = (state.handle(), owner.handle());
-    let mut ui = compose_test(move || RedecoratingInTwoBranches!(read, stack));
+    let decorators: ImmutableList<_> = vec![NavEntryDecorator::new(|_: NavEntry<i32>| {})].into();
+    let entry = empty_entries(1);
+    let mut ui = compose_test(move || {
+        RedecoratingInTwoBranches!(read, stack, decorators.clone(), entry.clone());
+    });
     ui.wait_for_idle();
     state.set(2);
     ui.wait_for_idle();
@@ -584,13 +593,13 @@ fn an_entry_is_wrapped_again_with_a_decorator_removed() {
 }
 
 /// Kotlin's `DataClass`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
 struct Data(i32);
 
 /// A provider keying entries by the number in their key, as `entry<DataClass>({ it.arg }) {}`.
 fn by_number() -> impl Fn(Data) -> NavEntry<Data> + Clone + 'static {
     entry_provider(|scope| {
-        scope.entry_of::<Data, _>(|_| {}).content_key_of(|key: &Data| key.0);
+        scope.entry_of::<Data, _>(|_| {}).with_content_key_of(|key: &Data| key.0);
     })
 }
 
@@ -1243,4 +1252,143 @@ fn a_decorated_entry_stays_when_the_stack_is_reordered() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0][0], seen[1][1]);
     assert_eq!(seen[0][1], seen[1][0]);
+}
+
+/// A push and a pop rebuild every entry of the stack: what's decorated at a place stays equal, a
+/// provider's closures being made anew or not, and so what a scene or a lifecycle compares (D1402).
+#[test]
+fn a_decorated_entry_stays_equal_through_a_push_and_a_pop() {
+    SEEN.with_borrow_mut(Vec::clear);
+    let owner = state_list([1]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        let entries = remember_decorated_nav_entries!(
+            stack,
+            vec![NavEntryDecorator::new(|entry: NavEntry<i32>| entry.Content())],
+            entry_provider = |key: i32| NavEntry::new(key, |_| {})
+        );
+        SEEN.with_borrow_mut(|seen| seen.push(entries));
+    });
+    ui.wait_for_idle();
+    stack.push(2);
+    ui.wait_for_idle();
+    stack.remove(1);
+    ui.wait_for_idle();
+    let seen = seen();
+    assert_eq!(seen.first().unwrap()[0], seen.last().unwrap()[0]);
+    assert_eq!(seen[0][0], seen[1][0], "with the other on top");
+    assert_ne!(seen[1][0], seen[1][1]);
+}
+
+/// What isn't decorated has no place: a provider's closures made anew are other content. Accepted:
+/// `NavDisplay` always decorates, and the DSL's entries share their closure.
+#[test]
+fn undecorated_entries_of_new_closures_differ_and_the_dsl_s_don_t() {
+    assert_ne!(NavEntry::new(1, |_| {}), NavEntry::new(1, |_| {}));
+    let provider = entry_provider(|scope| {
+        scope.entry(1, |_| {});
+    });
+    assert_eq!(provider(1), provider(1));
+}
+
+/// Decorated again with another decorator, the place's content is the same, and what it shows is
+/// the new one's.
+#[test]
+fn a_place_s_content_follows_what_it_s_decorated_with() {
+    let log = Log::default();
+    let decorators = state_list([pop_or_show("first", &log)]);
+    let handle = decorators.handle();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let kept = seen.clone();
+    let mut ui = compose_test(move || {
+        let entries =
+            remember_decorated_nav_entries!(vec![1], handle, entry_provider = empty_entries);
+        kept.borrow_mut().push(entries[0].clone());
+        entries[0].Content();
+    });
+    ui.wait_for_idle();
+    handle.set(0, pop_or_show("second", &log));
+    ui.wait_for_idle();
+    assert_eq!(log_of(&log), ["first", "second"]);
+    let seen = seen.borrow();
+    assert_eq!(seen.first(), seen.last());
+}
+
+fn pop_or_show(name: &'static str, log: &Log) -> NavEntryDecorator<i32> {
+    let log = log.clone();
+    NavEntryDecorator::new(move |entry: NavEntry<i32>| {
+        log.borrow_mut().push(name.to_string());
+        entry.Content();
+    })
+}
+
+thread_local! {
+    static NEXT_STATE: Cell<u32> = const { Cell::new(0) };
+    static DECORATOR_STATE: Cell<u32> = const { Cell::new(0) };
+}
+
+fn remembering_in_decorator() {
+    DECORATOR_STATE.set(remember(|| {
+        NEXT_STATE.set(NEXT_STATE.get() + 1);
+        NEXT_STATE.get()
+    }));
+}
+
+/// Another decorator's closure at a position starts anew, as Kotlin's lambda, and the same closure's
+/// doesn't.
+#[test]
+fn another_decorator_at_a_position_resets_its_state() {
+    NEXT_STATE.set(0);
+    fn same_place() -> NavEntryDecorator<i32> {
+        NavEntryDecorator::new(|entry: NavEntry<i32>| {
+            remembering_in_decorator();
+            entry.Content();
+        })
+    }
+    let other = NavEntryDecorator::new(|entry: NavEntry<i32>| {
+        remembering_in_decorator();
+        entry.Content();
+    });
+    let owner = state_list([same_place()]);
+    let decorators = owner.handle();
+    let mut ui = compose_test(move || {
+        let entries =
+            remember_decorated_nav_entries!(vec![1], decorators, entry_provider = empty_entries);
+        entries[0].Content();
+    });
+    ui.wait_for_idle();
+    assert_eq!(DECORATOR_STATE.get(), 1);
+    decorators.set(0, same_place());
+    ui.wait_for_idle();
+    assert_eq!(DECORATOR_STATE.get(), 1, "the same closure, another decorator");
+    decorators.set(0, other);
+    ui.wait_for_idle();
+    assert_eq!(DECORATOR_STATE.get(), 2, "another closure");
+}
+
+/// A place's entry follows what it's made of, when entries share a content key and differ in the
+/// rest.
+#[test]
+fn a_decorated_entry_has_its_entry_s_latest_metadata() {
+    SEEN.with_borrow_mut(Vec::clear);
+    let state = mutable_state_of(1);
+    let read = state.handle();
+    let mut ui = compose_test(move || {
+        let entries = remember_decorated_nav_entries!(
+            vec![read.get()],
+            vec![NavEntryDecorator::new(|entry: NavEntry<i32>| entry.Content())],
+            entry_provider = |key: i32| {
+                NavEntry::keyed(key, "shared", |_| {})
+                    .with_metadata(NavMetadata::new().with("key", key))
+            }
+        );
+        SEEN.with_borrow_mut(|seen| seen.push(entries));
+    });
+    ui.wait_for_idle();
+    state.set(2);
+    ui.wait_for_idle();
+    let seen = seen();
+    assert_eq!(seen[0][0].metadata().get_named::<i32>("key"), Some(&1));
+    assert_eq!(seen[1][0].metadata().get_named::<i32>("key"), Some(&2));
+    assert_ne!(seen[0][0], seen[1][0]);
 }

@@ -53,7 +53,7 @@ mod state;
 pub use background::{Background, spawn_background};
 pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
-pub use compose_macros::{ComposeArg, composable};
+pub use compose_macros::{ComposeArg, Saveable, composable};
 pub use compose_node::{
     ComposeNode, ComposeNodeWithContent, ComposeNodeWithSkippableUpdate, ReusableComposeNode,
     ReusableComposeNodeWithContent, ReusableComposeNodeWithSkippableUpdate, SkippableUpdater,
