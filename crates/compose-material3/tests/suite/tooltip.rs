@@ -170,7 +170,7 @@ fn a_rich_tooltip_takes_a_size() {
 }
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
-    ui.on_node_with_tag_unmerged(tag).fetch_semantics_node().bounds
+    ui.on_node_with_tag_unmerged(tag).fetch_semantics_snapshot().bounds
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipTest.kt, plainTooltip_content_padding
@@ -717,7 +717,7 @@ fn a_clickable_anchor_has_the_long_click_too() {
         );
     });
     advance(&mut ui, 16);
-    let node = ui.on_node_with_tag(ANCHOR).fetch_semantics_node();
+    let node = ui.on_node_with_tag(ANCHOR).fetch_semantics_snapshot();
     assert!(node.config.contains(&SemanticsActions::ON_CLICK));
     assert!(node.config.contains(&SemanticsActions::ON_LONG_CLICK));
     // And the action shows it.
@@ -746,7 +746,7 @@ fn a_plain_anchor_has_the_long_click_on_the_box() {
             );
         });
         advance(&mut ui, 16);
-        let node = ui.on_node_with_tag("box").fetch_semantics_node();
+        let node = ui.on_node_with_tag("box").fetch_semantics_snapshot();
         assert_eq!(node.config.contains(&SemanticsActions::ON_LONG_CLICK), enabled);
     }
 }
@@ -1119,7 +1119,7 @@ fn the_popup_has_a_pane_title_and_a_live_region() {
     advance(&mut ui, FADE);
     let node = ui
         .on_node(expect_value(&SemanticsProperties::PANE_TITLE, "tooltip".into()))
-        .fetch_semantics_node();
+        .fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&SemanticsProperties::LIVE_REGION),
         Some(&compose_ui::LiveRegionMode::Assertive)
@@ -1149,7 +1149,7 @@ fn the_long_click_is_on_the_clickable_while_there_is_one() {
     advance(&mut ui, 16);
     let long_click = |ui: &mut ComposeTestRule| {
         ui.on_node_with_tag_unmerged("box")
-            .fetch_semantics_node()
+            .fetch_semantics_snapshot()
             .config
             .contains(&SemanticsActions::ON_LONG_CLICK)
     };
@@ -1538,7 +1538,7 @@ fn a_drawer_item_takes_the_long_click_too() {
         });
     });
     advance(&mut ui, 16);
-    let node = ui.on_node_with_tag(ANCHOR).fetch_semantics_node();
+    let node = ui.on_node_with_tag(ANCHOR).fetch_semantics_snapshot();
     assert!(node.config.contains(&SemanticsActions::ON_LONG_CLICK));
 }
 

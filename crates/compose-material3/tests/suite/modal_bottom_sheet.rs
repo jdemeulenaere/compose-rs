@@ -637,7 +637,7 @@ fn a_short_sheet_rests_half_way_unless_its_state_has_none() {
             });
         });
         ui.wait_for_idle();
-        let bounds = ui.on_node_with_tag_unmerged("sheet").fetch_semantics_node().bounds;
+        let bounds = ui.on_node_with_tag_unmerged("sheet").fetch_semantics_snapshot().bounds;
         (sheet.current_value(), bounds.top, bounds.height())
     };
     assert_eq!(run(&SheetValue::ALL), (SheetValue::PartiallyExpanded, 752.0, 96.0));

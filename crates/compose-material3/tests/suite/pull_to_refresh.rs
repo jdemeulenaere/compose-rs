@@ -658,7 +658,7 @@ fn refreshing_it_is_a_spinner() {
     let mut ui = pull_box(state, flag, || {});
     let node = ui
         .on_node(key_is_defined(&SemanticsProperties::PROGRESS_BAR_RANGE_INFO))
-        .fetch_semantics_node();
+        .fetch_semantics_snapshot();
     let info = *node.config.get(&SemanticsProperties::PROGRESS_BAR_RANGE_INFO).unwrap();
     assert_eq!(info, compose_ui::ProgressBarRangeInfo::INDETERMINATE);
 }
@@ -671,7 +671,7 @@ fn the_default_indicator_is_at_the_top_center() {
     let mut ui = pull_box(state, flag, || {});
     let node = ui
         .on_node_unmerged(key_is_defined(&SemanticsProperties::PROGRESS_BAR_RANGE_INFO))
-        .fetch_semantics_node();
+        .fetch_semantics_snapshot();
     assert_eq!((node.bounds.left + node.bounds.right) / 2.0, 200.0);
 }
 
