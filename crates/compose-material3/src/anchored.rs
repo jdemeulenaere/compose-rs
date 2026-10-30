@@ -25,7 +25,7 @@ pub(crate) struct Anchored {
     target: OwnedState<Key>,
     confirm_value_change: Box<dyn Fn(Key) -> bool>,
     /// Drags' settling animation, as `anchoredDraggableMotionSpec` (its owner can change it).
-    spec: Cell<AnimationSpec>,
+    spec: RefCell<AnimationSpec>,
 }
 
 impl Anchored {
@@ -42,7 +42,7 @@ impl Anchored {
             settled: mutable_state_of(initial),
             target: mutable_state_of(initial),
             confirm_value_change,
-            spec: Cell::new(spec),
+            spec: RefCell::new(spec),
         }
     }
 
@@ -173,7 +173,7 @@ impl Anchored {
 
     /// What drags settle with from now on.
     pub fn set_spec(&self, spec: AnimationSpec) {
-        self.spec.set(spec);
+        *self.spec.borrow_mut() = spec;
     }
 
     /// Whether an animation to an anchor runs (a state read), as `isAnimationRunning`.
@@ -184,7 +184,8 @@ impl Anchored {
     /// Animates to `value`'s anchor (once a layout has found it), as `animateTo`; settled
     /// there when the animation finishes.
     pub async fn animate_to(&self, value: Key) {
-        self.animate_to_with(value, self.spec.get()).await;
+        let spec = self.spec.borrow().clone();
+        self.animate_to_with(value, spec).await;
     }
 
     /// [`animate_to`](Self::animate_to) along `spec`.

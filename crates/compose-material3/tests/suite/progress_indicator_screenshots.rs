@@ -197,7 +197,7 @@ fn play_time(advance: f32) -> f32 {
 /// around them past the gaps.
 fn halfway(gap: f32) -> Vec<Drawn> {
     let scheme = light_color_scheme();
-    let easing = compose_animation::Easing::CubicBezier(0.3, 0.0, 0.8, 0.15);
+    let easing = compose_animation::Easing::cubic_bezier(0.3, 0.0, 0.8, 0.15);
     let time = play_time(875.0);
     let at =
         |delay: f32, duration: f32| easing.transform(((time - delay) / duration).clamp(0.0, 1.0));

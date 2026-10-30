@@ -3,7 +3,7 @@
 //! `SheetState`.
 
 use compose_runtime::{ObjectHandle, Owned};
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_animation::{AnimationSpec, FAST_OUT_SLOW_IN_EASING, Spring};
@@ -63,8 +63,8 @@ struct SheetInner {
     confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
     /// What showing and expanding animate with, and hiding and partially expanding, as
     /// `showMotionSpec` and `hideMotionSpec`: at once until a sheet sets its motion.
-    show_spec: Cell<AnimationSpec>,
-    hide_spec: Cell<AnimationSpec>,
+    show_spec: RefCell<AnimationSpec>,
+    hide_spec: RefCell<AnimationSpec>,
 }
 
 /// A bottom sheet's state, as Compose's `SheetState`: where it rests and where it's going,
@@ -137,8 +137,8 @@ impl SheetState {
                 positional_threshold,
                 velocity_threshold,
                 confirm_value_change,
-                show_spec: Cell::new(compose_animation::snap(0).into()),
-                hide_spec: Cell::new(compose_animation::snap(0).into()),
+                show_spec: RefCell::new(compose_animation::snap(0).into()),
+                hide_spec: RefCell::new(compose_animation::snap(0).into()),
             },
             |object| SheetState { object },
         )
@@ -198,7 +198,7 @@ impl SheetState {
         if let Some(inner) = self.inner()
             && (inner.confirm_value_change)(value)
         {
-            let spec = if show { inner.show_spec.get() } else { inner.hide_spec.get() };
+            let spec = if show { &inner.show_spec } else { &inner.hide_spec }.borrow().clone();
             inner.anchored.animate_to_with(value as u8, spec).await;
         }
     }
@@ -254,8 +254,8 @@ impl SheetState {
     /// settling with the default spatial one.
     fn set_motion(&self) {
         if let Some(inner) = self.inner() {
-            inner.show_spec.set(AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL));
-            inner.hide_spec.set(AnimationSpec::Spring(crate::motion::FAST_EFFECTS));
+            *inner.show_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL);
+            *inner.hide_spec.borrow_mut() = AnimationSpec::Spring(crate::motion::FAST_EFFECTS);
             inner.anchored.set_spec(AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL));
         }
     }
@@ -488,7 +488,7 @@ impl BottomSheetDefaults {
 /// The sheet's part in its content's scrolls.
 struct SheetConnection {
     state: SheetState,
-    settle: std::cell::RefCell<Rc<dyn Fn(f32)>>,
+    settle: RefCell<Rc<dyn Fn(f32)>>,
 }
 
 impl NestedScrollConnection for SheetConnection {
@@ -674,7 +674,7 @@ pub fn ModalBottomSheet(
     let connection = {
         let (state, settle) = (sheet_state, settle.clone());
         compose_runtime::remember_keyed(sheet_state, move || {
-            Rc::new(SheetConnection { state, settle: std::cell::RefCell::new(settle) })
+            Rc::new(SheetConnection { state, settle: RefCell::new(settle) })
         })
     };
     *connection.settle.borrow_mut() = settle.clone();

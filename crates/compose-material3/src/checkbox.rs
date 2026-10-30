@@ -251,12 +251,14 @@ fn checkbox(
     // The check mark draws in from an unchecked box; it goes 100 ms after an unchecking; it
     // gravitates to a line for the indeterminate state, as Compose's transition.
     let transition = compose_animation::update_transition(state, "Checkbox");
-    let spatial = AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL);
+    fn spatial() -> AnimationSpec {
+        AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL)
+    }
     let check_fraction = transition.animate_float(
         move |segment| match (&segment.initial_state, &segment.target_state) {
-            (ToggleableState::Off, _) => spatial,
+            (ToggleableState::Off, _) => spatial(),
             (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
-            _ => spatial,
+            _ => spatial(),
         },
         |state| if *state == ToggleableState::Off { 0.0 } else { 1.0 },
     );
@@ -264,7 +266,7 @@ fn checkbox(
         move |segment| match (&segment.initial_state, &segment.target_state) {
             (ToggleableState::Off, _) => compose_animation::snap(0).into(),
             (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
-            _ => spatial,
+            _ => spatial(),
         },
         |state| if *state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },
     );
@@ -275,7 +277,7 @@ fn checkbox(
         crate::motion::DEFAULT_EFFECTS
     });
     let animate = |target: Color, label| {
-        compose_animation::animate_color_as_state(target, color_spec, label, None)
+        compose_animation::animate_color_as_state(target, color_spec.clone(), label, None)
     };
     let checkmark_color = animate(colors.checkmark_color(state), "CheckmarkColor");
     // Disabled, the colors snap: there's no animating between enabled and disabled.
