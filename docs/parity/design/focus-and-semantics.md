@@ -75,7 +75,7 @@ pub(crate) struct FocusOwner {
 - **States are derived**, as Compose's: `focus_state(target)` is `Active`/`Captured` if it is the active one, `ActiveParent` if the active one is below it (`visit_ancestors(FOCUS_TARGET)` from the active one), else `Inactive`. Asked for one node, it costs the active node's depth.
 - **Properties** are folded on demand: `fetch_focus_properties(target)` starts from `can_focus = focusability.can_focus(input mode)` and applies each `FOCUS_PROPERTIES` entry before the target in its chain and up its ancestors until the next target (`visit_ancestors` with a stop at `FOCUS_TARGET`, modifier-nodes §3.8). `Modifier.focus_properties(|properties| …)` is its element; `FocusProperties` is a struct of Compose's fields (`next`…`end` as `FocusRequester`, with `FocusRequester::DEFAULT`, `CANCEL` constants and a private `REDIRECT`; `on_enter`/`on_exit` as `Callback<dyn Fn(&mut FocusEnterExitScope)>`; `focus_rect: Rect`, `UNSET_FOCUS_RECT`). `invalidate_focus_properties` (and auto-invalidation of a `focus_properties` update that sets `can_focus`, `NodeKind.kt:394-399`) re-checks the active target: one that can no longer focus loses it.
 - **`Focusability::SYSTEM_DEFINED`** reads the input mode (ui-input's `input-mode` feature: `LOCAL_INPUT_MODE_MANAGER`, read through `current_value_of`, modifier-nodes §3.9).
-- **Modal overlays as interaction barriers.** compose-rs's dialogs and focusable popups are overlays in one tree (D130), where Compose's are windows with their own owners. While a modal overlay shows, targets outside it are ineligible and requests to them fail (Compose's `isOccludedByInteractionBarrier`, `FocusTraversal.kt:192-252`); searches start from the overlay's subtree as a root, which is what `focus_order` does today (`focus.rs:336-369`) and what `FocusChangedTest`'s barrier cases test.
+- **Modal overlays as windows.** compose-rs's dialogs and focusable popups are overlays in one tree (D130), where Compose's are windows with their own owners. While a modal overlay shows, what's behind it is out of searches, which start from the overlay's subtree as a root, its own target no stop; a request behind it answers yes and has the focus when it closes, as the other window's owner would (`isOccludedByInteractionBarrier` only knows `Modifier.interactionBarrier`, D1269).
 
 ### A.3.2 Transactions
 
@@ -141,7 +141,7 @@ The geometry-only 2D tests (`TwoDimensionalFocusTraversalTwoItemsTest`, `…Thre
 
 ## A.6 What the implementation settled
 
-FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1279). Where they differ from the text above: `FocusState` is one enum (D1267); a block's `requester.request_focus()` acts as the block returns, its scope's at once (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
+FO-1 to FO-5 are in `focus.rs`, `focus_properties.rs`, `focus_search.rs`, `focus_requester.rs`, `input_mode.rs` (D1267-D1282). Where they differ from the text above: `FocusState` is one enum (D1267); a block's requests act at once, the tree set aside for it (D1270); `focusable`, `clickable` and the fields are targets themselves, not delegating to a `FocusTargetNode` (D1274); callbacks take an `EventContext`, which derefs to `NodeContext`.
 
 # Part B: semantics
 
@@ -306,7 +306,7 @@ Numbers to be assigned from the workstream's block.
 
 - **Focus results are synchronous when the tree is free**, queued only from inside passes, revising D148 and D230; a requester on several nodes ends on the last, as Compose.
 - **Focus listeners are notified by ancestor walks** (Compose's dispatch), replacing D85's whole-tree walk; `on_focus_changed` takes a `FocusState`.
-- **Modal overlays are Compose's interaction barriers** for focus.
+- **Modal overlays are windows** for focus: what's behind them out of searches, a request behind them kept for their closing.
 - **Semantics as typed keys with merge policies and inline values**, replacing the fixed struct and the action enum; actions are closures called outside the tree.
 - **Semantics configurations are cached per node and computed lazily**; ids renewed on reuse.
 - **`Modifier.semantics` keeps its eager block** (a known difference: its state reads recompose the caller).
