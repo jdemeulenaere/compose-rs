@@ -1,22 +1,28 @@
 //! Floating action buttons, as Compose's Material 3: `FloatingActionButton`,
-//! `SmallFloatingActionButton`, `LargeFloatingActionButton` and `ExtendedFloatingActionButton`,
-//! with `FloatingActionButtonDefaults` and `FloatingActionButtonElevation`.
+//! `SmallFloatingActionButton`, `MediumFloatingActionButton`, `LargeFloatingActionButton` and the
+//! extended ones, with `FloatingActionButtonDefaults`, `FloatingActionButtonElevation` and
+//! `Modifier::animate_floating_action_button`.
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use compose_animation::{
-    AnimatedVisibility, expand_horizontally_with, fade_in_with, fade_out_with,
-    shrink_horizontally_with,
+    Animatable, AnimatedVisibility, AnimationSpec, expand_horizontally_with, fade_in_with,
+    fade_out_with, shrink_horizontally_with,
 };
-use compose_foundation::layout::{Arrangement, Box, Row};
-use compose_runtime::{CompositionLocalProvider, composable};
+use compose_foundation::layout::{Arrangement, Box, Row, RowScope, Spacer};
+use compose_runtime::{Callback, CompositionLocalProvider, composable};
 use compose_ui::{
-    Alignment, Color, Dp, Modifier, MutableInteractionSource, Role, Shape, SizeSpec, UnitExt,
+    Alignment, Color, Constraints, Delegates, Dp, IntSize, LayoutDirection, LayoutModifierNode,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    MutableInteractionSource, NodeContext, Role, Shape, SizeSpec, TextStyle, UnitExt,
 };
 
 use crate::components::{Elevations, SurfaceClick, remembered_interaction_source, surface};
 use crate::theme::{LOCAL_TEXT_STYLE, MaterialTheme};
 
 /// A floating action button's elevation in each of its states, as Compose's
-/// `FloatingActionButtonElevation` (the shadow snapping to the state's, where Compose animates).
+/// `FloatingActionButtonElevation`: its shadow, animated (`surface`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FloatingActionButtonElevation {
     pub default_elevation: Dp,
@@ -58,6 +64,8 @@ pub struct FloatingActionButtonDefaults;
 impl FloatingActionButtonDefaults {
     /// A large FAB's icon, as `LargeIconSize`.
     pub const LARGE_ICON_SIZE: Dp = Dp(36.0);
+    /// As `MediumIconSize`.
+    pub const MEDIUM_ICON_SIZE: Dp = Dp(28.0);
 
     /// The large shape (16 dp corners), as `shape`.
     pub fn shape() -> Shape {
@@ -77,6 +85,26 @@ impl FloatingActionButtonDefaults {
     /// As `extendedFabShape`.
     pub fn extended_fab_shape() -> Shape {
         MaterialTheme::shapes().large.clone()
+    }
+
+    /// As `mediumShape`.
+    pub fn medium_shape() -> Shape {
+        MaterialTheme::shapes().large_increased.clone()
+    }
+
+    /// As `smallExtendedFabShape`.
+    pub fn small_extended_fab_shape() -> Shape {
+        MaterialTheme::shapes().large.clone()
+    }
+
+    /// As `mediumExtendedFabShape`.
+    pub fn medium_extended_fab_shape() -> Shape {
+        MaterialTheme::shapes().large_increased.clone()
+    }
+
+    /// As `largeExtendedFabShape`.
+    pub fn large_extended_fab_shape() -> Shape {
+        MaterialTheme::shapes().extra_large.clone()
     }
 
     /// The primary container, as `containerColor`.
@@ -115,24 +143,26 @@ impl FloatingActionButtonDefaults {
     }
 }
 
-/// The FABs' body, as Compose's `FloatingActionButton`: a clickable surface around its content,
-/// centered in at least `minimum` square (unless the modifier sets a minimum), in the label
-/// style.
-#[allow(clippy::too_many_arguments)]
-fn fab(
-    on_click: compose_runtime::Callback,
+/// A FAB's look and how it goes.
+#[derive(Clone)]
+struct FabParts {
+    on_click: Callback,
     modifier: Modifier,
     shape: Shape,
     container_color: Color,
     content_color: Color,
     elevation: FloatingActionButtonElevation,
     interaction_source: Option<MutableInteractionSource>,
-    minimum: Dp,
-    content: compose_runtime::Callback,
-) {
-    let interaction_source = remembered_interaction_source(interaction_source);
+}
+
+/// The FABs' body, as Compose's `FloatingActionButton`: a clickable surface around its content,
+/// centered in at least `min_width` by `min_height` unless the modifier gives another minimum, in
+/// `text_style`.
+fn fab(parts: FabParts, text_style: TextStyle, min_width: Dp, min_height: Dp, content: Callback) {
+    let elevation = parts.elevation;
+    let interaction_source = remembered_interaction_source(parts.interaction_source);
     let click = SurfaceClick {
-        on_click,
+        on_click: parts.on_click,
         enabled: true,
         role: Some(Role::Button),
         interaction_source,
@@ -148,22 +178,21 @@ fn fab(
             disabled: elevation.default_elevation,
         }),
     };
-    let label = MaterialTheme::typography().label_large.clone();
     surface(
-        modifier.size_in(SizeSpec::bounds(minimum, minimum, Dp::UNSPECIFIED, Dp::UNSPECIFIED)),
-        shape,
-        container_color,
-        content_color,
+        parts.modifier,
+        parts.shape,
+        parts.container_color,
+        parts.content_color,
         elevation.tonal_elevation(),
         Dp(0.0),
         None,
         Some(click),
         compose_runtime::callback(move || {
             let content = content.clone();
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label.clone()), || {
+            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(text_style.clone()), || {
                 let content = content.clone();
                 Box(
-                    Modifier,
+                    Modifier.default_min_size(min_width, min_height),
                     Alignment::CENTER,
                     false,
                     compose_runtime::callback(move |_| content()),
@@ -171,6 +200,359 @@ fn fab(
             });
         }),
     );
+}
+
+/// A FAB's own: label-large, at least 56 dp square, as Compose's `FloatingActionButton`.
+fn plain_fab(parts: FabParts, content: Callback) {
+    let label = MaterialTheme::typography().label_large.clone();
+    fab(parts, label, FAB_SIZE, FAB_SIZE, content);
+}
+
+const FAB_SIZE: Dp = Dp(56.0);
+
+/// What tells an extended FAB's sizes apart, as `SmallExtendedFab*` and the others.
+struct ExtendedSize {
+    minimum: Dp,
+    start: Dp,
+    end: Dp,
+    icon_padding: Dp,
+}
+
+const SMALL_EXTENDED: ExtendedSize =
+    ExtendedSize { minimum: Dp(56.0), start: Dp(16.0), end: Dp(16.0), icon_padding: Dp(8.0) };
+const MEDIUM_EXTENDED: ExtendedSize =
+    ExtendedSize { minimum: Dp(80.0), start: Dp(26.0), end: Dp(26.0), icon_padding: Dp(12.0) };
+const LARGE_EXTENDED: ExtendedSize =
+    ExtendedSize { minimum: Dp(96.0), start: Dp(28.0), end: Dp(28.0), icon_padding: Dp(16.0) };
+
+/// An extended FAB of a size with a row of its own, as the overloads of `content`.
+fn sized_extended_content(
+    parts: FabParts,
+    text_style: TextStyle,
+    size: ExtendedSize,
+    content: Callback<dyn Fn(RowScope)>,
+) {
+    let (start, end) = (size.start, size.end);
+    fab(
+        parts,
+        text_style,
+        size.minimum,
+        size.minimum,
+        compose_runtime::callback(move || {
+            Row(
+                Modifier.padding((start, Dp(0.0), end, Dp(0.0))),
+                Arrangement::CENTER.into(),
+                Alignment::CENTER_VERTICALLY,
+                content.clone(),
+            );
+        }),
+    );
+}
+
+/// An extended FAB of a size with an icon and a text, as the private
+/// `ExtendedFloatingActionButton`: as wide as its row, down to a square as it collapses, the text
+/// fading, its width and its alpha on one transition.
+fn sized_extended(
+    parts: FabParts,
+    text_style: TextStyle,
+    size: ExtendedSize,
+    expanded: bool,
+    text: Callback,
+    icon: Callback,
+) {
+    let ExtendedSize { minimum, start, end, icon_padding } = size;
+    fab(
+        parts,
+        text_style,
+        Dp::UNSPECIFIED,
+        Dp::UNSPECIFIED,
+        compose_runtime::callback(move || {
+            let (text, icon) = (text.clone(), icon.clone());
+            let motion = MaterialTheme::motion_scheme();
+            let transition = compose_animation::update_transition(
+                if expanded { 1.0f32 } else { 0.0 },
+                "expanded state",
+            );
+            let (fast_spatial, fast_effects) =
+                (motion.fast_spatial_spec(), motion.fast_effects_spec());
+            let width = transition.animate_float_with(
+                move |_| fast_spatial.clone(),
+                "ExtendedFabWidth",
+                |state| *state,
+            );
+            let alpha = transition.animate_float_with(
+                move |_| fast_effects.clone(),
+                "ExtendedFabAlpha",
+                |state| *state,
+            );
+            let fully_collapsed = transition.current_state() == 0.0 && !transition.is_running();
+            Row(
+                Modifier
+                    .then_custom(ExpandingWidth { minimum, progress: width })
+                    .size_in(SizeSpec::bounds(minimum, minimum, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
+                    .padding((start, Dp(0.0), end, Dp(0.0))),
+                Arrangement::START,
+                Alignment::CENTER_VERTICALLY,
+                compose_runtime::callback(move |_| {
+                    icon();
+                    if !fully_collapsed {
+                        let text = text.clone();
+                        Row(
+                            Modifier.clear_and_set_semantics(|_| {}).graphics_layer(move |layer| {
+                                layer.alpha = alpha.get();
+                            }),
+                            Arrangement::START,
+                            Alignment::TOP,
+                            compose_runtime::callback(move |_| {
+                                Spacer(Modifier.width(icon_padding));
+                                text();
+                            }),
+                        );
+                    }
+                }),
+            );
+        }),
+    );
+}
+
+/// `Modifier.layout` of the sized extended FABs: from the minimum to the full width of its row.
+#[derive(Clone, Copy, PartialEq)]
+struct ExpandingWidth {
+    minimum: Dp,
+    progress: compose_runtime::State<f32>,
+}
+
+impl ModifierNodeElement for ExpandingWidth {
+    type Node = ExpandingWidth;
+    fn create(&self) -> ExpandingWidth {
+        *self
+    }
+    fn update(&self, node: &mut ExpandingWidth) {
+        *node = *self;
+    }
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+    fn name(&self) -> &'static str {
+        "expandingWidth"
+    }
+}
+
+impl ModifierNode for ExpandingWidth {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for ExpandingWidth {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let expanded = scope.max_intrinsic_width(content, constraints.max_height);
+        let minimum = scope.density().round_to_px(self.minimum);
+        let width = minimum + ((expanded - minimum) as f32 * self.progress.get()).round() as i32;
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(width, placeable.height)
+    }
+}
+
+/// How `animate_floating_action_button` shows and hides a FAB.
+pub trait FloatingActionButtonModifiers {
+    /// Shows or hides a FAB with an animation, scaling it towards `alignment` and fading it, as
+    /// `Modifier.animateFloatingActionButton(visible, alignment)`. Hidden it takes no room and no
+    /// pointer.
+    fn animate_floating_action_button(self, visible: bool, alignment: Alignment) -> Modifier;
+
+    /// As `animateFloatingActionButton`, with its other parameters; `None` for the motion scheme's
+    /// fast spatial and fast effects specs.
+    fn animate_floating_action_button_with(
+        self,
+        visible: bool,
+        alignment: Alignment,
+        target_scale: f32,
+        scale_animation_spec: Option<AnimationSpec>,
+        alpha_animation_spec: Option<AnimationSpec>,
+    ) -> Modifier;
+}
+
+/// `ShowHideTargetScale`.
+const SHOW_HIDE_TARGET_SCALE: f32 = 0.2;
+
+impl FloatingActionButtonModifiers for Modifier {
+    fn animate_floating_action_button(self, visible: bool, alignment: Alignment) -> Modifier {
+        self.animate_floating_action_button_with(
+            visible,
+            alignment,
+            SHOW_HIDE_TARGET_SCALE,
+            None,
+            None,
+        )
+    }
+
+    fn animate_floating_action_button_with(
+        self,
+        visible: bool,
+        alignment: Alignment,
+        target_scale: f32,
+        scale_animation_spec: Option<AnimationSpec>,
+        alpha_animation_spec: Option<AnimationSpec>,
+    ) -> Modifier {
+        // The layer is an element of its own, the tree drawing layers as chain entries, with the
+        // node's state through this slot, which the element's `create` or `update` fills.
+        let slot: Rc<RefCell<Option<Rc<FabVisibleState>>>> = Rc::new(RefCell::new(None));
+        let read = slot.clone();
+        self.then_custom(FabVisible {
+            visible,
+            alignment,
+            target_scale,
+            scale_animation_spec,
+            alpha_animation_spec,
+            slot,
+        })
+        .graphics_layer(move |layer| {
+            if let Some(state) = read.borrow().as_ref() {
+                layer.alpha = state.alpha.value();
+                let from = state.target_scale.get();
+                let scale = from + (1.0 - from) * state.scale.value();
+                layer.scale_x = scale;
+                layer.scale_y = scale;
+                // Towards its alignment: the pixel there, as a fraction of its size.
+                let (width, height) = (layer.size.width.max(1.0), layer.size.height.max(1.0));
+                let pivot = state.alignment.get().align(
+                    IntSize::new(1, 1),
+                    IntSize::new(width as i32, height as i32),
+                    state.direction.get(),
+                );
+                layer.transform_origin = compose_ui::TransformOrigin {
+                    pivot_fraction_x: pivot.x as f32 / width,
+                    pivot_fraction_y: pivot.y as f32 / height,
+                };
+            }
+        })
+    }
+}
+
+#[derive(Clone)]
+struct FabVisible {
+    visible: bool,
+    alignment: Alignment,
+    target_scale: f32,
+    scale_animation_spec: Option<AnimationSpec>,
+    alpha_animation_spec: Option<AnimationSpec>,
+    /// Where its layer finds the node's state.
+    slot: Rc<RefCell<Option<Rc<FabVisibleState>>>>,
+}
+
+/// What `FabVisibleNode` and its layer share.
+struct FabVisibleState {
+    scale: Animatable<f32>,
+    alpha: Animatable<f32>,
+    alignment: Cell<Alignment>,
+    target_scale: Cell<f32>,
+    /// Its place in its layout, as the layer's block doesn't know.
+    direction: Cell<LayoutDirection>,
+}
+
+/// As Compose's `FabVisibleNode`, its layer apart (compose-rs's don't clip to their node, so with no
+/// inset to keep a shadow in).
+struct FabVisibleNode {
+    params: FabVisible,
+    state: Rc<FabVisibleState>,
+    /// What's been animated to.
+    target: bool,
+    delegates: Delegates,
+}
+
+impl ModifierNodeElement for FabVisible {
+    type Node = FabVisibleNode;
+
+    fn create(&self) -> FabVisibleNode {
+        let at = if self.visible { 1.0 } else { 0.0 };
+        let state = Rc::new(FabVisibleState {
+            scale: Animatable::new(at),
+            alpha: Animatable::new(at),
+            alignment: Cell::new(self.alignment),
+            target_scale: Cell::new(self.target_scale),
+            direction: Cell::new(LayoutDirection::Ltr),
+        });
+        *self.slot.borrow_mut() = Some(state.clone());
+        FabVisibleNode {
+            params: self.clone(),
+            state,
+            target: self.visible,
+            delegates: Delegates::new(),
+        }
+    }
+
+    fn update(&self, node: &mut FabVisibleNode) {
+        *self.slot.borrow_mut() = Some(node.state.clone());
+        node.state.alignment.set(self.alignment);
+        node.state.target_scale.set(self.target_scale);
+        node.params = self.clone();
+        // A context to launch and read the motion scheme with: `on_update_with_context`.
+        if node.target != self.visible {
+            node.delegates.ask_for_context();
+        }
+    }
+
+    /// Never: each has its own slot, which `update` has to fill for the layer built with it.
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.slot, &other.slot)
+    }
+
+    fn name(&self) -> &'static str {
+        "animateFloatingActionButton"
+    }
+}
+
+impl ModifierNode for FabVisibleNode {
+    fn delegates(&mut self) -> Option<&mut Delegates> {
+        Some(&mut self.delegates)
+    }
+
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn on_update_with_context(&mut self, context: &mut NodeContext<'_>) {
+        self.target = self.params.visible;
+        let motion = context.current_value_of(&crate::motion::LOCAL_MOTION_SCHEME);
+        let target = if self.params.visible { 1.0 } else { 0.0 };
+        let scope = context.coroutine_scope();
+        let scale_spec =
+            self.params.scale_animation_spec.clone().unwrap_or_else(|| motion.fast_spatial_spec());
+        let alpha_spec =
+            self.params.alpha_animation_spec.clone().unwrap_or_else(|| motion.fast_effects_spec());
+        let state = self.state.clone();
+        scope.launch(async move {
+            state.scale.animate_to(target, scale_spec).await;
+        });
+        let state = self.state.clone();
+        scope.launch(async move {
+            state.alpha.animate_to(target, alpha_spec).await;
+        });
+    }
+}
+
+impl LayoutModifierNode for FabVisibleNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.state.direction.set(scope.layout_direction());
+        // Hidden, nothing: no room, and nothing inside the chain to draw or hit.
+        let hidden = self.state.alpha.value() == 0.0;
+        let constraints = if hidden { Constraints::fixed(0, 0) } else { constraints };
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
 }
 
 /// A floating action button, as Compose's `FloatingActionButton`: 56 dp, the large shape, in the
@@ -187,21 +569,21 @@ pub fn FloatingActionButton(
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn() + 'static,
 ) {
-    fab(
-        on_click,
-        modifier,
-        shape,
-        container_color,
-        content_color,
-        elevation,
-        interaction_source,
-        56.dp(),
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
         content,
     );
 }
 
-/// A small floating action button, as Compose's `SmallFloatingActionButton`: 40 dp, the medium
-/// shape.
+/// A small floating action button, as Compose's `SmallFloatingActionButton`: 40 dp, the medium shape.
 #[composable]
 pub fn SmallFloatingActionButton(
     on_click: impl Fn() + 'static,
@@ -214,21 +596,52 @@ pub fn SmallFloatingActionButton(
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn() + 'static,
 ) {
-    fab(
-        on_click,
-        modifier,
-        shape,
-        container_color,
-        content_color,
-        elevation,
-        interaction_source,
-        40.dp(),
+    let modifier =
+        modifier.size_in(SizeSpec::bounds(40.dp(), 40.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED));
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
         content,
     );
 }
 
-/// A large floating action button, as Compose's `LargeFloatingActionButton`: 96 dp, the
-/// extra-large shape (its icon `LARGE_ICON_SIZE`, 36 dp).
+/// A medium floating action button, as Compose's `MediumFloatingActionButton`: 80 dp, the large increased shape (its icon `MEDIUM_ICON_SIZE`, 28 dp).
+#[composable]
+pub fn MediumFloatingActionButton(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::FloatingActionButtonDefaults::medium_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let modifier =
+        modifier.size_in(SizeSpec::bounds(80.dp(), 80.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED));
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        content,
+    );
+}
+
+/// A large floating action button, as Compose's `LargeFloatingActionButton`: 96 dp, the extra-large shape (its icon `LARGE_ICON_SIZE`, 36 dp).
 #[composable]
 pub fn LargeFloatingActionButton(
     on_click: impl Fn() + 'static,
@@ -241,16 +654,256 @@ pub fn LargeFloatingActionButton(
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn() + 'static,
 ) {
-    fab(
-        on_click,
-        modifier,
-        shape,
-        container_color,
-        content_color,
-        elevation,
-        interaction_source,
-        96.dp(),
+    let modifier =
+        modifier.size_in(SizeSpec::bounds(96.dp(), 96.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED));
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
         content,
+    );
+}
+
+/// A small extended floating action button with content of its own, as Compose's
+/// `SmallExtendedFloatingActionButton(onClick, …, content)`.
+#[composable]
+pub fn SmallExtendedFloatingActionButtonContent(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::FloatingActionButtonDefaults::small_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    sized_extended_content(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().title_medium.clone(),
+        SMALL_EXTENDED,
+        content,
+    );
+}
+
+/// A small extended floating action button, as Compose's
+/// `SmallExtendedFloatingActionButton(text, icon, onClick, …, expanded)`: the icon and the text;
+/// collapsed, the icon alone.
+#[composable]
+pub fn SmallExtendedFloatingActionButton(
+    text: impl Fn() + 'static,
+    icon: impl Fn() + 'static,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] expanded: bool,
+    #[default(crate::FloatingActionButtonDefaults::small_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+) {
+    sized_extended(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().title_medium.clone(),
+        SMALL_EXTENDED,
+        expanded,
+        text,
+        icon,
+    );
+}
+
+/// A medium extended floating action button with content of its own, as Compose's
+/// `MediumExtendedFloatingActionButton(onClick, …, content)`.
+#[composable]
+pub fn MediumExtendedFloatingActionButtonContent(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::FloatingActionButtonDefaults::medium_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    sized_extended_content(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().title_large.clone(),
+        MEDIUM_EXTENDED,
+        content,
+    );
+}
+
+/// A medium extended floating action button, as Compose's
+/// `MediumExtendedFloatingActionButton(text, icon, onClick, …, expanded)`: the icon and the text;
+/// collapsed, the icon alone.
+#[composable]
+pub fn MediumExtendedFloatingActionButton(
+    text: impl Fn() + 'static,
+    icon: impl Fn() + 'static,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] expanded: bool,
+    #[default(crate::FloatingActionButtonDefaults::medium_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+) {
+    sized_extended(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().title_large.clone(),
+        MEDIUM_EXTENDED,
+        expanded,
+        text,
+        icon,
+    );
+}
+
+/// A large extended floating action button with content of its own, as Compose's
+/// `LargeExtendedFloatingActionButton(onClick, …, content)`.
+#[composable]
+pub fn LargeExtendedFloatingActionButtonContent(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::FloatingActionButtonDefaults::large_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    sized_extended_content(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().headline_small.clone(),
+        LARGE_EXTENDED,
+        content,
+    );
+}
+
+/// A large extended floating action button, as Compose's
+/// `LargeExtendedFloatingActionButton(text, icon, onClick, …, expanded)`: the icon and the text;
+/// collapsed, the icon alone.
+#[composable]
+pub fn LargeExtendedFloatingActionButton(
+    text: impl Fn() + 'static,
+    icon: impl Fn() + 'static,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] expanded: bool,
+    #[default(crate::FloatingActionButtonDefaults::large_extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+) {
+    sized_extended(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        MaterialTheme::typography().headline_small.clone(),
+        LARGE_EXTENDED,
+        expanded,
+        text,
+        icon,
+    );
+}
+
+/// An extended floating action button with content of its own, as Compose's
+/// `ExtendedFloatingActionButton(onClick, …, content)`: at least 80 dp wide, 20 dp in on each side.
+#[composable]
+pub fn ExtendedFloatingActionButtonContent(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::FloatingActionButtonDefaults::extended_fab_shape())] shape: Shape,
+    #[default(crate::FloatingActionButtonDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::FloatingActionButtonDefaults::elevation())]
+    elevation: FloatingActionButtonElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn(RowScope) + 'static,
+) {
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
+        compose_runtime::callback(move || {
+            Row(
+                Modifier
+                    .size_in(SizeSpec::bounds(
+                        80.dp(),
+                        Dp::UNSPECIFIED,
+                        Dp::UNSPECIFIED,
+                        Dp::UNSPECIFIED,
+                    ))
+                    .padding((20.dp(), Dp(0.0))),
+                Arrangement::CENTER.into(),
+                Alignment::CENTER_VERTICALLY,
+                content.clone(),
+            );
+        }),
     );
 }
 
@@ -275,15 +928,16 @@ pub fn ExtendedFloatingActionButton(
 ) {
     let (start, end) = if expanded { (16.dp(), 20.dp()) } else { (Dp(0.0), Dp(0.0)) };
     let minimum_width = if expanded { 80.dp() } else { 56.dp() };
-    fab(
-        on_click,
-        modifier,
-        shape,
-        container_color,
-        content_color,
-        elevation,
-        interaction_source,
-        56.dp(),
+    plain_fab(
+        FabParts {
+            on_click,
+            modifier,
+            shape,
+            container_color,
+            content_color,
+            elevation,
+            interaction_source,
+        },
         compose_runtime::callback(move || {
             let (text, icon) = (text.clone(), icon.clone());
             Row(
@@ -327,11 +981,14 @@ pub fn ExtendedFloatingActionButton(
                         "ExtendedFloatingActionButton",
                         compose_runtime::callback(move |_| {
                             let text = text.clone();
-                            Box(
-                                Modifier.padding((12.dp(), Dp(0.0), Dp(0.0), Dp(0.0))),
-                                Alignment::CENTER_START,
-                                false,
-                                compose_runtime::callback(move |_| text()),
+                            Row(
+                                Modifier,
+                                Arrangement::START,
+                                Alignment::TOP,
+                                compose_runtime::callback(move |_| {
+                                    Spacer(Modifier.width(12.dp()));
+                                    text();
+                                }),
                             );
                         }),
                     );

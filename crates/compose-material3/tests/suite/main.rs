@@ -18,6 +18,7 @@ mod divider;
 mod drag_handle;
 mod drawer;
 mod fab_elevation;
+mod fab_expressive;
 mod icon_toggle_button;
 mod icon_toggle_button_screenshots;
 mod interactive_list;

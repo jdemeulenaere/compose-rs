@@ -1285,6 +1285,62 @@ fn a_shaped_filter_chips_icon_comes_and_goes_with_the_scheme() {
     }
 }
 
+/// A sized extended FAB's width on fast spatial and its text's alpha on fast effects.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/FloatingActionButton.kt, ExtendedFloatingActionButton
+#[test]
+fn a_sized_extended_fab_animates_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial, FastEffects], |scheme| {
+        let expanded = mutable_state_of(true);
+        let read = expanded.handle();
+        let mut ui = themed(scheme, move || {
+            SmallExtendedFloatingActionButton!(
+                || Box!(modifier = Modifier.size((60.dp(), 18.dp())).background(Color::RED)),
+                || Box!(modifier = Modifier.size(24.dp())),
+                || {},
+                modifier = Modifier.test_tag("fab"),
+                expanded = read.get()
+            );
+        });
+        let width = |ui: &mut ComposeTestRule| {
+            ui.on_node_unmerged(has_test_tag("fab")).fetch_semantics_node().bounds.width()
+        };
+        let open = width(&mut ui);
+        expanded.set(false);
+        to_halfway(&mut ui);
+        let list = ui.host().display_list();
+        let layers = list.groups.iter().filter_map(|group| group.layer.as_ref());
+        let alpha = layers.fold(1.0f32, |alpha, layer| alpha.min(layer.alpha));
+        // Its text gone, or at 1 with no layer below it.
+        vec![along(width(&mut ui), open, 56.0), if alpha == 1.0 { 1.0 } else { 1.0 - alpha }]
+    });
+}
+
+/// `animate_floating_action_button`: its scale on fast spatial and its alpha on fast effects.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/FloatingActionButton.kt, FabVisibleNode
+#[test]
+fn a_fabs_show_and_hide_animate_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial, FastEffects], |scheme| {
+        let visible = mutable_state_of(true);
+        let read = visible.handle();
+        let mut ui = themed(scheme, move || {
+            Box!(
+                modifier = Modifier
+                    .animate_floating_action_button(read.get(), compose_ui::Alignment::CENTER)
+                    .size(40.dp())
+                    .background(Color::RED)
+            );
+        });
+        visible.set(false);
+        to_halfway(&mut ui);
+        let list = ui.host().display_list();
+        let layer = list.groups.iter().filter_map(|group| group.layer.as_ref()).next();
+        // Gone at alpha 0: no layer drawn, so arrived for both, its alpha not having been the long
+        // one's.
+        let (scale, alpha) = layer.map_or((0.2, 0.0), |layer| (layer.scale.0, layer.alpha));
+        vec![along(scale, 1.0, 0.2), 1.0 - alpha]
+    });
+}
+
 /// A button's and an icon button's corners on default effects, "to prevent any bounce".
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Button.kt, Button
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/IconButton.kt, shapeForInteraction

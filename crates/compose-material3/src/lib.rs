@@ -84,8 +84,13 @@ pub use drawer::{
     remember_drawer_state,
 };
 pub use fab::{
-    ExtendedFloatingActionButton, FloatingActionButton, FloatingActionButtonDefaults,
-    FloatingActionButtonElevation, LargeFloatingActionButton, SmallFloatingActionButton,
+    ExtendedFloatingActionButton, ExtendedFloatingActionButtonContent, FloatingActionButton,
+    FloatingActionButtonDefaults, FloatingActionButtonElevation, FloatingActionButtonModifiers,
+    LargeExtendedFloatingActionButton, LargeExtendedFloatingActionButtonContent,
+    LargeFloatingActionButton, MediumExtendedFloatingActionButton,
+    MediumExtendedFloatingActionButtonContent, MediumFloatingActionButton,
+    SmallExtendedFloatingActionButton, SmallExtendedFloatingActionButtonContent,
+    SmallFloatingActionButton,
 };
 pub use icon::{
     FilledIconButton, FilledIconToggleButton, FilledTonalIconButton, FilledTonalIconToggleButton,
