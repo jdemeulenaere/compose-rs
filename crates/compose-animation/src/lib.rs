@@ -23,12 +23,15 @@ mod deferred_target;
 mod easing;
 mod infinite;
 mod keyframes;
+mod mono_spline;
 mod seekable;
 mod shared;
 mod spec;
 mod spline;
 mod spring;
 mod suspend;
+#[cfg(test)]
+mod text_graph;
 mod transition;
 mod vector;
 mod visibility;
@@ -74,7 +77,10 @@ pub use easing::{
     LINEAR_OUT_SLOW_IN_EASING,
 };
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
-pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
+pub use keyframes::{
+    KeyframeEntry, KeyframesBuilder, KeyframesSpec, KeyframesWithSplineSpec, keyframes,
+    keyframes_with_spline, periodic_keyframes_with_spline,
+};
 pub use seekable::SeekableTransitionState;
 pub use shared::{
     BoundsTransform, DefaultSharedContentConfig, PlaceholderSize, ResizeMode, SharedContentConfig,

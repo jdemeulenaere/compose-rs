@@ -27,6 +27,7 @@ mod infinite;
 mod infinite_transition;
 mod interruption_aware;
 mod keyframe_animation;
+mod keyframe_spline_animation;
 mod physics;
 mod repeatable_animation;
 mod review_animation;

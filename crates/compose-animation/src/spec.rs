@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crate::easing::{Easing, FAST_OUT_SLOW_IN_EASING};
-use crate::keyframes::KeyframesSpec;
+use crate::keyframes::{KeyframesSpec, KeyframesWithSplineSpec};
 use crate::spring::{SpringSimulation, estimate_animation_duration_millis};
 use crate::vector::{Animate, AnimationVector};
 
@@ -563,6 +563,7 @@ impl VectorizedAnimationSpec for SnapSpec {
 pub enum DurationBasedSpec {
     Tween(TweenSpec),
     Keyframes(KeyframesSpec),
+    KeyframesWithSpline(KeyframesWithSplineSpec),
     Snap(SnapSpec),
     /// One of an app's own (see [`DurationBasedSpec::custom`]).
     Custom(CustomDurationBasedSpec),
@@ -606,6 +607,12 @@ impl From<KeyframesSpec> for DurationBasedSpec {
     }
 }
 
+impl From<KeyframesWithSplineSpec> for DurationBasedSpec {
+    fn from(spec: KeyframesWithSplineSpec) -> DurationBasedSpec {
+        DurationBasedSpec::KeyframesWithSpline(spec)
+    }
+}
+
 impl From<SnapSpec> for DurationBasedSpec {
     fn from(spec: SnapSpec) -> DurationBasedSpec {
         DurationBasedSpec::Snap(spec)
@@ -624,6 +631,7 @@ impl DurationBasedSpec {
         match self {
             DurationBasedSpec::Tween(tween) => tween.duration_millis,
             DurationBasedSpec::Keyframes(keyframes) => keyframes.duration_millis(),
+            DurationBasedSpec::KeyframesWithSpline(keyframes) => keyframes.duration_millis(),
             DurationBasedSpec::Snap(_) => 0,
             DurationBasedSpec::Custom(custom) => {
                 VectorizedDurationBasedAnimationSpec::duration_millis(&*custom.0)
@@ -636,6 +644,7 @@ impl DurationBasedSpec {
         match self {
             DurationBasedSpec::Tween(tween) => tween.delay_millis,
             DurationBasedSpec::Keyframes(keyframes) => keyframes.delay_millis(),
+            DurationBasedSpec::KeyframesWithSpline(keyframes) => keyframes.delay_millis(),
             DurationBasedSpec::Snap(snap) => snap.delay_millis,
             DurationBasedSpec::Custom(custom) => custom.0.delay_millis(),
         }
@@ -649,6 +658,7 @@ impl DurationBasedSpec {
         match self {
             DurationBasedSpec::Tween(tween) => tween,
             DurationBasedSpec::Keyframes(keyframes) => keyframes,
+            DurationBasedSpec::KeyframesWithSpline(keyframes) => keyframes,
             DurationBasedSpec::Snap(snap) => snap,
             DurationBasedSpec::Custom(custom) => &*custom.0,
         }
@@ -691,6 +701,9 @@ impl From<DurationBasedSpec> for AnimationSpec {
         match spec {
             DurationBasedSpec::Tween(tween) => AnimationSpec::Tween(tween),
             DurationBasedSpec::Keyframes(keyframes) => AnimationSpec::Keyframes(keyframes),
+            DurationBasedSpec::KeyframesWithSpline(keyframes) => {
+                AnimationSpec::KeyframesWithSpline(keyframes)
+            }
             DurationBasedSpec::Snap(snap) => AnimationSpec::Snap(snap),
             DurationBasedSpec::Custom(custom) => {
                 let spec: Rc<dyn VectorizedAnimationSpec> = custom.0;
@@ -882,6 +895,8 @@ pub enum AnimationSpec {
     Repeatable(RepeatableSpec),
     /// Values at given times, as `KeyframesSpec`.
     Keyframes(KeyframesSpec),
+    /// Values at given times on a smooth curve, as `KeyframesWithSplineSpec`.
+    KeyframesWithSpline(KeyframesWithSplineSpec),
     /// One spec, and another when it interrupts an animation running, as
     /// `InterruptionAwareAnimationSpec`.
     InterruptionAware(InterruptionAwareAnimationSpec),
@@ -957,6 +972,12 @@ impl InterruptionAwareAnimationSpec {
     }
 }
 
+impl From<KeyframesWithSplineSpec> for AnimationSpec {
+    fn from(spec: KeyframesWithSplineSpec) -> AnimationSpec {
+        AnimationSpec::KeyframesWithSpline(spec)
+    }
+}
+
 impl From<KeyframesSpec> for AnimationSpec {
     fn from(spec: KeyframesSpec) -> AnimationSpec {
         AnimationSpec::Keyframes(spec)
@@ -1003,6 +1024,7 @@ impl AnimationSpec {
             AnimationSpec::Snap(snap) => f(snap),
             AnimationSpec::Repeatable(repeatable) => f(repeatable),
             AnimationSpec::Keyframes(keyframes) => f(keyframes),
+            AnimationSpec::KeyframesWithSpline(keyframes) => f(keyframes),
             AnimationSpec::InterruptionAware(aware) => f(aware.animation_spec()),
             AnimationSpec::Custom(custom) => f(&**custom),
         }
