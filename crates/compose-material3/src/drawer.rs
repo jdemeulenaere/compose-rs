@@ -311,7 +311,11 @@ impl DrawerDefaults {
     /// A modal drawer sheet's widest, as `MaximumDrawerWidth`.
     pub const MAXIMUM_DRAWER_WIDTH: Dp = Dp(360.0);
     /// Its tonal elevation, as `ModalDrawerElevation`.
-    pub const MODAL_DRAWER_ELEVATION: Dp = Dp(1.0);
+    pub const MODAL_DRAWER_ELEVATION: Dp = Dp(0.0);
+    /// A dismissible one's, as `DismissibleDrawerElevation`.
+    pub const DISMISSIBLE_DRAWER_ELEVATION: Dp = Dp(0.0);
+    /// A permanent one's, as `PermanentDrawerElevation`.
+    pub const PERMANENT_DRAWER_ELEVATION: Dp = Dp(0.0);
 
     /// Its shape: large corners at its end, as `DrawerDefaults.shape`.
     pub fn shape() -> Shape {
@@ -319,6 +323,11 @@ impl DrawerDefaults {
         let none = CornerSize::Dp(Dp(0.0));
         // Top start, top end, bottom end, bottom start.
         Shape::Rounded([none, radius, radius, none])
+    }
+
+    /// A dismissible and a permanent sheet's, as `standardContainerColor`.
+    pub fn standard_container_color() -> Color {
+        MaterialTheme::color_scheme().surface
     }
 
     pub fn modal_container_color() -> Color {
@@ -329,6 +338,55 @@ impl DrawerDefaults {
     pub fn scrim_color() -> Color {
         MaterialTheme::color_scheme().scrim.with_alpha(0.32)
     }
+}
+
+/// A drag across the drawer moves the sheet (by fractions of its width); let go, it settles open or
+/// closed, as Compose's `anchoredDraggable` on the drawer's box.
+fn drawer_gestures(
+    modifier: Modifier,
+    state: DrawerState,
+    gestures_enabled: bool,
+    scope: compose_runtime::CoroutineScope,
+) -> Modifier {
+    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
+    let density = compose_ui::LOCAL_DENSITY.current();
+    let drag = compose_runtime::remember_keyed((state, density), move || {
+        draggable_state(move |delta| state.drag_by(delta, state.width(density)))
+    });
+    let threshold = density.to_px(VELOCITY_THRESHOLD);
+    let settle = move |velocity: f32| {
+        scope.launch(async move {
+            let open = if velocity > threshold {
+                true
+            } else if velocity < -threshold {
+                false
+            } else {
+                state.fraction() > 0.5
+            };
+            let target = if open { DrawerValue::Open } else { DrawerValue::Closed };
+            // A value `confirm_state_change` refuses goes back to the settled one, as Compose's
+            // `settle`.
+            let target =
+                if state.confirm_state_change(target) { target } else { state.current_value() };
+            state.settle_to(target).await;
+        });
+    };
+    modifier.draggable(drag, Orientation::Horizontal, gestures_enabled, rtl, |_| {}, settle)
+}
+
+/// The drawers' specs from the scheme, and the focus going in when it opens, as Compose's
+/// `LaunchedEffect(isOpen) { focusRequester.requestFocus() }`: what to put on its pane.
+fn drawer_motion_and_focus(state: DrawerState) -> compose_ui::FocusRequester {
+    let motion = MaterialTheme::motion_scheme();
+    compose_runtime::SideEffect(move || state.set_motion(&motion));
+    let focus_requester = remember(compose_ui::FocusRequester::new);
+    let is_open = state.is_open();
+    compose_runtime::LaunchedEffect(is_open, async move {
+        if is_open {
+            focus_requester.request_focus();
+        }
+    });
+    focus_requester
 }
 
 /// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`, filling the space it's
@@ -349,64 +407,14 @@ pub fn ModalNavigationDrawer(
 ) {
     let scope = remember_coroutine_scope();
     let shown = drawer_state.inner().is_some_and(|inner| inner.shown.get());
-    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
-    let density = compose_ui::LOCAL_DENSITY.current();
     let policy = {
         let state = drawer_state;
         compose_runtime::remember_keyed(drawer_state, || {
             Rc::new(DrawerLayout { state }) as Rc<dyn MeasurePolicy>
         })
     };
-    // A drag across the drawer moves the sheet (by fractions of its width); let go, it settles
-    // open or closed, as Compose's `anchoredDraggable` on the drawer's box.
-    let drag = {
-        let dragged = drawer_state;
-        compose_runtime::remember_keyed((drawer_state, density), move || {
-            draggable_state(move |delta| dragged.drag_by(delta, dragged.width(density)))
-        })
-    };
-    let threshold = density.to_px(VELOCITY_THRESHOLD);
-    let settle = {
-        let state = drawer_state;
-        move |velocity: f32| {
-            scope.launch(async move {
-                let open = if velocity > threshold {
-                    true
-                } else if velocity < -threshold {
-                    false
-                } else {
-                    state.fraction() > 0.5
-                };
-                let target = if open { DrawerValue::Open } else { DrawerValue::Closed };
-                // A value `confirm_state_change` refuses goes back to the settled one, as
-                // Compose's `settle`.
-                let target =
-                    if state.confirm_state_change(target) { target } else { state.current_value() };
-                state.settle_to(target).await;
-            });
-        }
-    };
-    {
-        let (state, motion) = (drawer_state, MaterialTheme::motion_scheme());
-        compose_runtime::SideEffect(move || state.set_motion(&motion));
-    }
-    let focus_requester = remember(compose_ui::FocusRequester::new);
-    {
-        let is_open = drawer_state.is_open();
-        compose_runtime::LaunchedEffect(is_open, async move {
-            if is_open {
-                focus_requester.request_focus();
-            }
-        });
-    }
-    let modifier = modifier.fill_max_size().draggable(
-        drag,
-        Orientation::Horizontal,
-        gestures_enabled,
-        rtl,
-        |_| {},
-        settle,
-    );
+    let focus_requester = drawer_motion_and_focus(drawer_state);
+    let modifier = drawer_gestures(modifier.fill_max_size(), drawer_state, gestures_enabled, scope);
     let state = drawer_state;
     Layout(
         modifier,
@@ -700,6 +708,27 @@ pub fn ModalDrawerSheet(
     #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
     content: impl Fn(ColumnScope) + 'static,
 ) {
+    drawer_sheet(
+        modifier,
+        drawer_shape,
+        drawer_container_color,
+        drawer_content_color,
+        drawer_tonal_elevation,
+        window_insets,
+        content,
+    );
+}
+
+/// The sheets' body, as Compose's `DrawerSheet`.
+fn drawer_sheet(
+    modifier: Modifier,
+    drawer_shape: Shape,
+    drawer_container_color: Color,
+    drawer_content_color: Color,
+    drawer_tonal_elevation: Dp,
+    window_insets: WindowInsets,
+    content: compose_runtime::Callback<dyn Fn(ColumnScope)>,
+) {
     let content_color = drawer_content_color
         .or(MaterialTheme::color_scheme().content_color_for(drawer_container_color));
     Surface(
@@ -726,6 +755,202 @@ pub fn ModalDrawerSheet(
                 content.clone(),
             );
         }),
+    );
+}
+
+/// `content` beside a drawer that pushes it aside as it comes, as Compose's
+/// `DismissibleNavigationDrawer`. A drag across it opens or closes it with `gestures_enabled`, Escape
+/// closes it while it's open, and it has a pane title and a dismiss action. `DismissibleDrawerSheet`
+/// with its `drawer_state` takes back.
+#[composable]
+#[allow(non_snake_case)]
+pub fn DismissibleNavigationDrawer(
+    drawer_content: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::remember_drawer_state(crate::DrawerValue::Closed, crate::always_confirm()))]
+    drawer_state: DrawerState,
+    #[default(true)] gestures_enabled: bool,
+    content: impl Fn() + 'static,
+) {
+    let state = drawer_state;
+    let scope = remember_coroutine_scope();
+    let focus_requester = drawer_motion_and_focus(state);
+    let policy = compose_runtime::remember_keyed(state, || {
+        Rc::new(DismissibleDrawerLayout { state }) as Rc<dyn MeasurePolicy>
+    });
+    let modifier = drawer_gestures(modifier, state, gestures_enabled, scope);
+    Box(
+        modifier,
+        Alignment::TOP_START,
+        false,
+        compose_runtime::callback(move |_| {
+            let (drawer_content, content, policy) =
+                (drawer_content.clone(), content.clone(), policy.clone());
+            Layout(
+                Modifier,
+                policy,
+                compose_runtime::callback(move || {
+                    let pane = Modifier
+                        .semantics(move |config| {
+                            config.set_pane_title(NAVIGATION_MENU);
+                            if state.is_open() {
+                                config.dismiss(None, move || {
+                                    if state.confirm_state_change(DrawerValue::Closed) {
+                                        scope.launch(async move { state.close().await });
+                                    }
+                                    true
+                                });
+                            }
+                        })
+                        // Escape closes it, as Compose's.
+                        .on_key_event(move |event: compose_ui::KeyEvent| {
+                            if state.is_open()
+                                && event.kind == compose_ui::KeyEventType::KeyUp
+                                && event.key == compose_ui::Key::Escape
+                            {
+                                scope.launch(async move { state.close().await });
+                                return true;
+                            }
+                            false
+                        })
+                        .focus_requester(focus_requester);
+                    let (drawer_content, content) = (drawer_content.clone(), content.clone());
+                    Box(
+                        pane,
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(move |_| drawer_content()),
+                    );
+                    Box(
+                        Modifier,
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(move |_| content()),
+                    );
+                }),
+            );
+        }),
+    );
+}
+
+/// As the `Layout` of Compose's `DismissibleNavigationDrawer`: the content's size, the content after
+/// what shows of the sheet, the sheet placed only while it shows, so that keyboard focus doesn't
+/// reach it off screen.
+struct DismissibleDrawerLayout {
+    state: DrawerState,
+}
+
+impl MeasurePolicy for DismissibleDrawerLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let sheet = scope.measure(measurables[0], constraints);
+        let content = scope.measure(measurables[1], constraints);
+        if let Some(inner) = self.state.inner() {
+            inner.width.set(sheet.width.max(1) as f32);
+        }
+        // Read while measuring: a frame of the slide places them again only.
+        let offset = -(sheet.width as f32 * (1.0 - self.state.fraction())).round() as i32;
+        let content_x = sheet.width + offset;
+        scope.place_relative(&content, content_x, 0);
+        if content_x != 0 {
+            scope.place_relative(&sheet, offset, 0);
+        }
+        scope.layout(content.width, content.height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "DismissibleNavigationDrawer"
+    }
+}
+
+/// A dismissible drawer's sheet, as Compose's `DismissibleDrawerSheet`: as `ModalDrawerSheet`, square
+/// on the surface color. With `drawer_state`, back closes the drawer, as the overload taking it
+/// (without its predictive animation, feature `predictive-back`).
+#[composable]
+#[allow(non_snake_case)]
+pub fn DismissibleDrawerSheet(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] drawer_state: Option<DrawerState>,
+    #[default(crate::RECTANGLE_SHAPE)] drawer_shape: Shape,
+    #[default(crate::DrawerDefaults::standard_container_color())] drawer_container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
+    #[default(crate::DrawerDefaults::DISMISSIBLE_DRAWER_ELEVATION)] drawer_tonal_elevation: Dp,
+    #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    let scope = remember_coroutine_scope();
+    compose_runtime::key(drawer_state.is_some(), || {
+        if let Some(state) = drawer_state {
+            compose_ui::BackHandler(
+                state.target_value() == DrawerValue::Open,
+                compose_runtime::callback(move || {
+                    scope.launch(async move { state.close().await });
+                }),
+            );
+        }
+    });
+    drawer_sheet(
+        modifier,
+        drawer_shape,
+        drawer_container_color,
+        drawer_content_color,
+        drawer_tonal_elevation,
+        window_insets,
+        content,
+    );
+}
+
+/// `content` beside a drawer always there, as Compose's `PermanentNavigationDrawer`, filling the
+/// space it's given.
+#[composable]
+#[allow(non_snake_case)]
+pub fn PermanentNavigationDrawer(
+    drawer_content: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    content: impl Fn() + 'static,
+) {
+    compose_foundation::layout::Row(
+        modifier.fill_max_size(),
+        compose_foundation::layout::Arrangement::START,
+        Alignment::TOP,
+        compose_runtime::callback(move |_| {
+            drawer_content();
+            let content = content.clone();
+            Box(
+                Modifier,
+                Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| content()),
+            );
+        }),
+    );
+}
+
+/// A permanent drawer's sheet, as Compose's `PermanentDrawerSheet`: as `DismissibleDrawerSheet`, with
+/// a pane title.
+#[composable]
+#[allow(non_snake_case)]
+pub fn PermanentDrawerSheet(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::RECTANGLE_SHAPE)] drawer_shape: Shape,
+    #[default(crate::DrawerDefaults::standard_container_color())] drawer_container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
+    #[default(crate::DrawerDefaults::PERMANENT_DRAWER_ELEVATION)] drawer_tonal_elevation: Dp,
+    #[default(crate::DrawerDefaults::window_insets())] window_insets: WindowInsets,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    drawer_sheet(
+        modifier.semantics(|config| config.set_pane_title(NAVIGATION_MENU)),
+        drawer_shape,
+        drawer_container_color,
+        drawer_content_color,
+        drawer_tonal_elevation,
+        window_insets,
+        content,
     );
 }
 

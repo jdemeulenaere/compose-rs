@@ -368,11 +368,11 @@ fn shown(visible: bool, alignment: Alignment) -> (ComposeTestRule, OwnedState<bo
 /// The FAB's layer: its alpha, scale and pivot in its node's pixels.
 fn layer(ui: &mut ComposeTestRule) -> Option<(f32, f32, f32, f32)> {
     let list = ui.host().display_list();
-    let found =
-        list.groups.iter().filter_map(|group| group.layer.as_ref()).next().map(|it| {
-            (it.alpha, it.scale.0, it.pivot.x - it.bounds.left, it.pivot.y - it.bounds.top)
-        });
-    found
+    list.groups
+        .iter()
+        .filter_map(|group| group.layer.as_ref())
+        .next()
+        .map(|it| (it.alpha, it.scale.0, it.pivot.x - it.bounds.left, it.pivot.y - it.bounds.top))
 }
 
 fn near(actual: f32, expected: f32) {

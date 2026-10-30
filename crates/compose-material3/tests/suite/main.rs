@@ -14,6 +14,7 @@ mod checkbox_screenshots;
 mod chip;
 mod components;
 mod content_description;
+mod dismissible_permanent_drawer;
 mod divider;
 mod drag_handle;
 mod drawer;

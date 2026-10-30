@@ -79,8 +79,9 @@ pub use drag_handle::{
     VerticalDragHandleDefaults,
 };
 pub use drawer::{
-    DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
-    NavigationDrawerItem, NavigationDrawerItemColors, NavigationDrawerItemDefaults,
+    DismissibleDrawerSheet, DismissibleNavigationDrawer, DrawerDefaults, DrawerState, DrawerValue,
+    ModalDrawerSheet, ModalNavigationDrawer, NavigationDrawerItem, NavigationDrawerItemColors,
+    NavigationDrawerItemDefaults, PermanentDrawerSheet, PermanentNavigationDrawer,
     remember_drawer_state,
 };
 pub use fab::{
