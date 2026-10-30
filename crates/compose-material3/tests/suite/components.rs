@@ -454,10 +454,10 @@ fn a_sliders_semantics_follow_its_value_focus_and_enabled_state() {
         .assert(key_not_defined(&compose_ui::SemanticsProperties::FOCUSED));
 }
 
-/// `SetProgress` asks from the value last asked, as the slider's keys do: asked twice for the
-/// same stop before the application answers, it asks once.
+/// `SetProgress` compares with the state's value, as `sliderSemantics` (D1024): with a state the
+/// application never changes, each asks again, and only the state's own value is no action.
 #[test]
-fn a_sliders_set_progress_goes_on_from_the_value_asked() {
+fn a_sliders_set_progress_compares_with_the_state() {
     let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = asked.clone();
     let mut ui = compose_test(move || {
@@ -479,9 +479,10 @@ fn a_sliders_set_progress_goes_on_from_the_value_asked() {
         .semantics_action(node, &compose_ui::SemanticsActions::SET_PROGRESS)
         .expect("a slider sets its progress");
     assert!(set(0.3));
-    assert!(!set(0.3), "the stop asked already");
+    assert!(set(0.3), "the state didn't take it");
     assert!(set(0.5));
-    assert_eq!(*asked.borrow(), [0.25, 0.5]);
+    assert!(!set(0.1), "the stop the state is at");
+    assert_eq!(*asked.borrow(), [0.25, 0.25, 0.5]);
 }
 
 #[test]

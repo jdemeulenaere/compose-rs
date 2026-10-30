@@ -742,7 +742,9 @@ impl MeasurePolicy for ScrollableTabRowLayout {
                     let centered = tab_offset - (visible / 2 - tab_width / 2);
                     let target = centered.clamp(0, (total - visible).max(0));
                     if scroll.value() != target {
-                        animate_scroll_to(scroll, target).await;
+                        // The standard spatial spring, as `ScrollableTabData`'s `animationSpec`.
+                        let spec = AnimationSpec::Spring(motion::DEFAULT_SPATIAL);
+                        let _ = scroll.animate_scroll_to(target, spec).await;
                     }
                 });
             }
@@ -753,50 +755,6 @@ impl MeasurePolicy for ScrollableTabRowLayout {
     fn debug_name(&self) -> &'static str {
         "ScrollableTabRow"
     }
-}
-
-/// Scrolls `scroll` to `target` with the standard spatial spring, as `animateScrollTo`.
-async fn animate_scroll_to(scroll: ScrollState, target: i32) {
-    let position = Animatable::new(scroll.value() as f32);
-    let follow = position.clone();
-    let mover = async move {
-        position.animate_to(target as f32, AnimationSpec::Spring(motion::DEFAULT_SPATIAL)).await;
-    };
-    // Each frame of the animation scrolls to its value.
-    let stepper = async move {
-        loop {
-            compose_runtime::with_frame_nanos(|_| ()).await;
-            scroll.scroll_to(follow.value().round() as i32);
-            if !follow.is_running() {
-                break;
-            }
-        }
-    };
-    futures_join(mover, stepper).await;
-}
-
-/// Runs both futures to completion.
-async fn futures_join(
-    first: impl std::future::Future<Output = ()>,
-    second: impl std::future::Future<Output = ()>,
-) {
-    let mut first = std::boxed::Box::pin(first);
-    let mut second = std::boxed::Box::pin(second);
-    let (mut first_done, mut second_done) = (false, false);
-    std::future::poll_fn(move |context| {
-        if !first_done {
-            first_done = first.as_mut().poll(context).is_ready();
-        }
-        if !second_done {
-            second_done = second.as_mut().poll(context).is_ready();
-        }
-        if first_done && second_done {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await;
 }
 
 /// A tab's height with its text or its icon, as `SmallTabHeight`, and with both, as

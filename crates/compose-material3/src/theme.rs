@@ -595,9 +595,9 @@ pub const DEFAULT_TEXT_STYLE: TextStyle =
 /// reads the current theme, as Kotlin's `MaterialTheme.colorScheme`.
 #[composable]
 pub fn MaterialTheme(
-    #[default(*crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
-    #[default(Shapes::clone(&crate::MaterialTheme::shapes()))] shapes: Shapes,
-    #[default(Typography::clone(&crate::MaterialTheme::typography()))] typography: Typography,
+    #[default(crate::MaterialTheme::color_scheme())] color_scheme: impl Into<ThemeValue<ColorScheme>>,
+    #[default(crate::MaterialTheme::shapes())] shapes: impl Into<ThemeValue<Shapes>>,
+    #[default(crate::MaterialTheme::typography())] typography: impl Into<ThemeValue<Typography>>,
     content: impl Fn() + 'static,
 ) {
     // Compared by value, as Compose's: a scheme, shapes or typography made anew but equal skip the
@@ -606,9 +606,9 @@ pub fn MaterialTheme(
     let body_large = typography.body_large.clone();
     CompositionLocalProvider(
         (
-            LOCAL_COLOR_SCHEME.provides(Rc::new(color_scheme)),
-            LOCAL_SHAPES.provides(Rc::new(shapes)),
-            LOCAL_TYPOGRAPHY.provides(Rc::new(typography)),
+            LOCAL_COLOR_SCHEME.provides(color_scheme.0.clone()),
+            LOCAL_SHAPES.provides(shapes.0.clone()),
+            LOCAL_TYPOGRAPHY.provides(typography.0.clone()),
             LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
         ),
         || {
@@ -616,6 +616,38 @@ pub fn MaterialTheme(
             ProvideTextStyle(body_large.clone(), content.clone());
         },
     );
+}
+
+/// What `MaterialTheme` takes for its color scheme, shapes and typography: a value (a
+/// `ColorScheme`, as Compose's parameter), or the enclosing theme's, shared, which is what a
+/// theme overriding only some of them keeps of the others, so it copies nothing (D1024).
+/// Compared by value, as Kotlin's `==`.
+#[derive(Clone, Debug)]
+pub struct ThemeValue<T>(Rc<T>);
+
+impl<T> From<T> for ThemeValue<T> {
+    fn from(value: T) -> ThemeValue<T> {
+        ThemeValue(Rc::new(value))
+    }
+}
+
+impl<T> From<Rc<T>> for ThemeValue<T> {
+    fn from(value: Rc<T>) -> ThemeValue<T> {
+        ThemeValue(value)
+    }
+}
+
+impl<T> std::ops::Deref for ThemeValue<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: PartialEq + 'static> ComposeArg for ThemeValue<T> {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
 }
 
 /// `value` merged into the current text style for `content`, as Compose's `ProvideTextStyle`:
@@ -639,17 +671,17 @@ pub fn MaterialExpressiveTheme(
 ) {
     if LOCAL_USING_EXPRESSIVE_THEME.current() {
         MaterialTheme(
-            color_scheme.unwrap_or_else(|| *MaterialTheme::color_scheme()),
-            shapes.unwrap_or_else(|| Shapes::clone(&MaterialTheme::shapes())),
-            typography.unwrap_or_else(|| Typography::clone(&MaterialTheme::typography())),
+            color_scheme.map_or_else(|| MaterialTheme::color_scheme().into(), ThemeValue::from),
+            shapes.map_or_else(|| MaterialTheme::shapes().into(), ThemeValue::from),
+            typography.map_or_else(|| MaterialTheme::typography().into(), ThemeValue::from),
             content,
         );
     } else {
         CompositionLocalProvider(LOCAL_USING_EXPRESSIVE_THEME.provides(true), || {
             MaterialTheme(
-                color_scheme.unwrap_or_else(expressive_light_color_scheme),
-                shapes.unwrap_or_default(),
-                typography.unwrap_or_default(),
+                ThemeValue::from(color_scheme.unwrap_or_else(expressive_light_color_scheme)),
+                ThemeValue::from(shapes.unwrap_or_default()),
+                ThemeValue::from(typography.unwrap_or_default()),
                 content.clone(),
             );
         });

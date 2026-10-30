@@ -23,8 +23,9 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Dp, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, MutableInteractionSource, Offset,
-    PointerEvent, ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
+    Dp, DragInteraction, Interaction, Key, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier,
+    MutableInteractionSource, Offset, PointerEvent, PointerId, PointerType, PressInteraction,
+    ProgressBarRangeInfo, Rect, SemanticsActions, SizeSpec, UnitExt,
 };
 
 const TAG: &str = "slider";
@@ -87,13 +88,14 @@ fn info(current: f32, steps: u32) -> ProgressBarRangeInfo {
 /// A press at `from`, a move by each of `moves` (one event each), and the release, as
 /// `performTouchInput { down(); moveBy()…; up() }`.
 fn drag(ui: &mut ComposeTestRule, from: Offset, moves: &[(f32, f32)]) {
+    let touch = |event: PointerEvent| event.with_pointer(PointerId(0), PointerType::Touch);
     let mut at = from;
-    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(touch(PointerEvent::press(at)));
     for (dx, dy) in moves {
         at = Offset::new(at.x + dx, at.y + dy);
-        ui.host().send_pointer(PointerEvent::moved(at, true));
+        ui.host().send_pointer(touch(PointerEvent::moved(at, true)));
     }
-    ui.host().send_pointer(PointerEvent::release(at));
+    ui.host().send_pointer(touch(PointerEvent::release(at)));
     ui.wait_for_idle();
 }
 
@@ -825,22 +827,6 @@ fn with_source(
     }
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, slider_interactionSource_resetWhenDisposed
-#[test]
-fn a_press_under_way_ends_when_the_slider_leaves() {
-    let source = MutableInteractionSource::new();
-    let state = SliderState::new(0.0, 0, (0.0, 1.0));
-    let shown = mutable_state_of(true);
-    let mut ui = compose_test(material(with_source(*state, source.clone(), shown.handle())));
-    let at = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
-    ui.host().send_pointer(PointerEvent::press(at));
-    ui.wait_for_idle();
-    assert!(source.is_pressed());
-    shown.set(false);
-    ui.wait_for_idle();
-    assert!(!source.is_pressed());
-}
-
 /// The slider's interactions, as `sliderTapModifier`'s and `draggable`'s: a press until the drag
 /// takes it, then a drag until the release.
 #[test]
@@ -900,4 +886,718 @@ fn a_disabled_sliders_set_progress_calls_through() {
     ui.on_node_with_tag(TAG)
         .perform_semantics_action_with(&SemanticsActions::SET_PROGRESS, |set| assert!(set(0.5)));
     assert_near(state.value(), 0.5);
+}
+
+/// A slider on a new state, given `source`, while `enabled` and `shown`: what the tests below
+/// change under a gesture.
+struct Rig {
+    ui: ComposeTestRule,
+    source: MutableInteractionSource,
+    state: compose_runtime::Owned<SliderState>,
+    enabled: OwnedState<bool>,
+    shown: OwnedState<bool>,
+    finished: Rc<Cell<u32>>,
+}
+
+fn rig() -> Rig {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let enabled = mutable_state_of(true);
+    let shown = mutable_state_of(true);
+    let finished = Rc::new(Cell::new(0));
+    let (given, handle, on, visible, count) =
+        (source.clone(), *state, enabled.handle(), shown.handle(), finished.clone());
+    let ui = compose_test(material(move || {
+        if visible.get() {
+            let count = count.clone();
+            Slider!(
+                handle,
+                move |new| handle.set_value(new),
+                modifier = Modifier.test_tag(TAG),
+                enabled = on.get(),
+                on_value_change_finished = Some(move || count.set(count.get() + 1)),
+                interaction_source = Some(given.clone()),
+            );
+        }
+    }));
+    Rig { ui, source, state, enabled, shown, finished }
+}
+
+fn center_of(ui: &mut ComposeTestRule) -> Offset {
+    ui.on_node_with_tag(TAG).fetch_semantics_node().center()
+}
+
+/// A second pointer, a finger.
+fn second_finger(event: PointerEvent) -> PointerEvent {
+    event.with_pointer(PointerId(1), PointerType::Touch)
+}
+
+/// What `source` emits from now on, in short.
+fn recorded(source: &MutableInteractionSource) -> Rc<std::cell::RefCell<Vec<&'static str>>> {
+    let recorded: Rc<std::cell::RefCell<Vec<&'static str>>> = Rc::default();
+    let sink = recorded.clone();
+    let interactions = source.interactions();
+    compose_runtime::platform::launch(async move {
+        interactions
+            .collect(move |interaction| {
+                sink.borrow_mut().push(match interaction {
+                    Interaction::Press(PressInteraction::Press(_)) => "Press",
+                    Interaction::Press(PressInteraction::Release(_)) => "PressRelease",
+                    Interaction::Press(PressInteraction::Cancel(_)) => "PressCancel",
+                    Interaction::Drag(DragInteraction::Start(_)) => "DragStart",
+                    Interaction::Drag(DragInteraction::Stop(_)) => "DragStop",
+                    Interaction::Drag(DragInteraction::Cancel(_)) => "DragCancel",
+                    _ => "Other",
+                })
+            })
+            .await
+    });
+    recorded
+}
+
+/// The handle's width: the round rectangle 44 dp high.
+fn handle_width(ui: &mut ComposeTestRule) -> f32 {
+    let list = ui.host().display_list();
+    let widths: Vec<f32> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawRoundRect(rect, _, _)
+                if rect.bottom - rect.top == 44.0 =>
+            {
+                Some(rect.right - rect.left)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths.len(), 1, "{:#?}", list.ops);
+    widths[0]
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, slider_interactionSource_resetWhenDisposed
+#[test]
+fn the_interactions_end_when_the_slider_leaves() {
+    let mut rig = rig();
+    let interactions = recorded(&rig.source);
+    rig.ui.wait_for_idle();
+    assert!(interactions.borrow().is_empty());
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(at + Offset::new(100.0, 0.0), true));
+    rig.ui.wait_for_idle();
+    assert_eq!(*interactions.borrow(), ["Press", "DragStart", "PressCancel"]);
+    rig.shown.set(false);
+    rig.ui.wait_for_idle();
+    assert_eq!(*interactions.borrow(), ["Press", "DragStart", "PressCancel", "DragCancel"]);
+}
+
+/// Disabled under a press, the press ends then, and its release adds nothing, as
+/// `sliderTapModifier` dropping off.
+#[test]
+fn a_press_ends_when_the_slider_is_disabled() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_pressed());
+    rig.enabled.set(false);
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed());
+    rig.ui.host().send_pointer(PointerEvent::release(at));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed());
+    assert_eq!(rig.state.value(), 0.0);
+    assert_eq!(rig.finished.get(), 0);
+}
+
+/// Disabled under a drag, the drag ends then, as `DragGestureNode.update`, on the source and on
+/// the state, and leaves nothing a hover after it could move the value with.
+#[test]
+fn a_drag_ends_when_the_slider_is_disabled() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(moved, true));
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_dragged() && rig.state.is_dragging());
+    rig.enabled.set(false);
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_dragged() && !rig.state.is_dragging());
+    rig.ui.host().send_pointer(PointerEvent::release(moved));
+    rig.ui.wait_for_idle();
+    rig.enabled.set(true);
+    rig.ui.wait_for_idle();
+    let value = rig.state.value();
+    // A mouse over it, nothing pressed.
+    rig.ui.host().send_pointer(PointerEvent::moved(at, false));
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.state.value(), value, "a hover moved the value");
+}
+
+/// Disabled while focused, its focus ends, as `focusable(enabled = false)` removing its node.
+#[test]
+fn a_focus_ends_when_the_slider_is_disabled() {
+    let mut rig = rig();
+    rig.ui.on_node_with_tag(TAG).request_focus();
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_focused());
+    rig.enabled.set(false);
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_focused());
+}
+
+/// A disabled slider takes no press.
+#[test]
+fn a_disabled_slider_takes_no_press() {
+    let mut rig = rig();
+    rig.enabled.set(false);
+    rig.ui.wait_for_idle();
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed());
+    rig.ui.host().send_pointer(PointerEvent::release(at));
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.state.value(), 0.0);
+}
+
+/// `Slider.kt` asks for no focus: a drag takes none, and the handle is whole again after it.
+#[test]
+fn a_drag_takes_no_focus_and_the_handle_is_whole_after_it() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(moved, true));
+    rig.ui.host().send_pointer(PointerEvent::release(moved));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_focused(), "focused by a drag");
+    assert_eq!(handle_width(&mut rig.ui), 4.0);
+}
+
+/// `SliderDefaults.Thumb`: 4 dp wide at rest, half that while a press, a drag or a focus lasts.
+#[test]
+fn the_handle_narrows_for_a_press_a_drag_and_a_focus() {
+    let mut rig = rig();
+    assert_eq!(handle_width(&mut rig.ui), 4.0);
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.wait_for_idle();
+    assert_eq!(handle_width(&mut rig.ui), 2.0, "pressed");
+    // The drag has taken the press: only the drag narrows it now.
+    let moved = at + Offset::new(30.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::moved(moved, true));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed() && rig.source.is_dragged());
+    assert_eq!(handle_width(&mut rig.ui), 2.0, "dragged");
+    rig.ui.host().send_pointer(PointerEvent::release(moved));
+    rig.ui.wait_for_idle();
+    assert_eq!(handle_width(&mut rig.ui), 4.0, "released");
+    rig.ui.on_node_with_tag(TAG).request_focus();
+    rig.ui.wait_for_idle();
+    assert_eq!(handle_width(&mut rig.ui), 2.0, "focused");
+}
+
+/// Out of bounds a press is cancelled, and there's no tap, as `waitForUpOrCancellation`.
+#[test]
+fn a_move_out_of_bounds_cancels_the_press_and_the_tap() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let away = at + Offset::new(0.0, 300.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(away, true));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed());
+    rig.ui.host().send_pointer(PointerEvent::release(away));
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.state.value(), 0.0, "a tap after leaving the slider");
+    assert_eq!(rig.finished.get(), 0);
+}
+
+/// Inside the minimum touch target, though past the node's own bounds, a press goes on, as
+/// `isOutOfBounds(size, extendedTouchPadding)`: the slider's 44 dp height (the handle's) has 2 dp
+/// more on each side up to 48.
+#[test]
+fn a_move_inside_the_touch_target_keeps_the_press() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let top = at.y - 22.0;
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(Offset::new(at.x, top - 1.0), true));
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_pressed(), "inside the target");
+    rig.ui.host().send_pointer(PointerEvent::moved(Offset::new(at.x, top - 3.0), true));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed(), "past the target");
+}
+
+/// A tap takes the value where it pressed, as `state.onPress`, not where it was released.
+#[test]
+fn a_tap_takes_the_value_of_where_it_pressed() {
+    let mut tapped = rig();
+    let at = center_of(&mut tapped.ui);
+    tapped.ui.host().send_pointer(PointerEvent::press(at));
+    tapped.ui.host().send_pointer(PointerEvent::release(at));
+    tapped.ui.wait_for_idle();
+    let mut wandered = rig();
+    let at = center_of(&mut wandered.ui);
+    let near = at + Offset::new(6.0, 0.0);
+    wandered.ui.host().send_pointer(PointerEvent::press(at));
+    wandered.ui.host().send_pointer(PointerEvent::moved(near, true));
+    wandered.ui.host().send_pointer(PointerEvent::release(near));
+    wandered.ui.wait_for_idle();
+    assert_eq!(wandered.state.value(), tapped.state.value());
+}
+
+/// As `detectTapGestures`, the slider consumes the down: a clickable around it isn't pressed.
+#[test]
+fn a_clickable_around_the_slider_takes_no_press() {
+    let parent = MutableInteractionSource::new();
+    let clicks = Rc::new(Cell::new(0));
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let (given, count, handle) = (parent.clone(), clicks.clone(), *state);
+    let mut ui = compose_test(material(move || {
+        let count = count.clone();
+        ClickableSurface!(
+            move || count.set(count.get() + 1),
+            interaction_source = Some(given.clone()),
+            {
+                Slider!(
+                    handle,
+                    move |new| handle.set_value(new),
+                    modifier = Modifier.test_tag(TAG)
+                );
+            }
+        );
+    }));
+    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().center();
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.advance_time_by(std::time::Duration::from_millis(200));
+    assert!(!parent.is_pressed());
+    ui.host().send_pointer(PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert_eq!(clicks.get(), 0);
+    assert!(state.value() > 0.0, "the slider took the tap");
+}
+
+/// A scrolling parent takes the gesture: the press ends, and there's no tap.
+#[test]
+fn a_scrolling_parent_cancels_the_press() {
+    use compose_foundation::ScrollModifiers;
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let (given, handle) = (source.clone(), *state);
+    let mut ui = compose_test(move || {
+        let given = given.clone();
+        let scroll = compose_foundation::remember_scroll_state!(1000);
+        Column!(modifier = Modifier.vertical_scroll(scroll), {
+            Spacer!(modifier = Modifier.height(1000.dp()));
+            Slider!(
+                handle,
+                move |new| handle.set_value(new),
+                modifier = Modifier.test_tag(TAG),
+                interaction_source = Some(given.clone()),
+            );
+            Spacer!(modifier = Modifier.height(2000.dp()));
+        });
+    });
+    let at = ui.on_node_unmerged(has_test_tag(TAG)).fetch_semantics_node().center();
+    let touch = |event: PointerEvent| event.with_pointer(PointerId(0), PointerType::Touch);
+    ui.host().send_pointer(touch(PointerEvent::press(at)));
+    assert!(source.is_pressed());
+    let mut position = at;
+    for _ in 0..3 {
+        position = position + Offset::new(0.0, 15.0);
+        ui.host().send_pointer(touch(PointerEvent::moved(position, true)));
+        ui.wait_for_idle();
+    }
+    assert!(!source.is_pressed(), "still pressed while the parent scrolls");
+    ui.host().send_pointer(touch(PointerEvent::release(position)));
+    ui.wait_for_idle();
+    assert!(!source.is_pressed());
+    assert_eq!(state.value(), 0.0);
+}
+
+/// The state's value is what the input goes on from, whatever else changed it (D1024): tap, set
+/// the value back, tap the same place, and it moves again.
+#[test]
+fn a_tap_after_the_state_was_reset_moves_it_again() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let tap = |ui: &mut ComposeTestRule| {
+        ui.host().send_pointer(PointerEvent::press(at));
+        ui.host().send_pointer(PointerEvent::release(at));
+        ui.wait_for_idle();
+    };
+    tap(&mut rig.ui);
+    let tapped = rig.state.value();
+    assert!(tapped > 0.0);
+    rig.state.set_value(0.0);
+    rig.ui.wait_for_idle();
+    tap(&mut rig.ui);
+    assert_eq!(rig.state.value(), tapped, "the second tap did nothing");
+}
+
+/// A key goes on from the state's value, not the one it last asked for (D1024).
+#[test]
+fn a_key_after_the_state_was_reset_goes_on_from_the_state() {
+    let mut rig = rig();
+    rig.ui.on_node_with_tag(TAG).request_focus();
+    rig.ui.wait_for_idle();
+    rig.ui.press_key(Key::MoveEnd);
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.state.value(), 1.0);
+    rig.state.set_value(0.5);
+    rig.ui.wait_for_idle();
+    rig.ui.press_key(Key::DirectionLeft);
+    rig.ui.wait_for_idle();
+    assert_near(rig.state.value(), 0.49);
+}
+
+/// `SetProgress` compares with the state's value, not the one it last asked for (D1024).
+#[test]
+fn set_progress_after_the_state_was_reset_moves_it_again() {
+    let mut rig = rig();
+    let set = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag(TAG)
+            .perform_semantics_action_with(&SemanticsActions::SET_PROGRESS, |set| {
+                assert!(set(0.75))
+            });
+        ui.wait_for_idle();
+    };
+    set(&mut rig.ui);
+    assert_eq!(rig.state.value(), 0.75);
+    rig.state.set_value(0.25);
+    rig.ui.wait_for_idle();
+    set(&mut rig.ui);
+    assert_eq!(rig.state.value(), 0.75);
+}
+
+/// A second finger is ignored: nothing stays pressed after both are up, and the tap is the first
+/// finger's.
+#[test]
+fn a_second_finger_leaves_nothing_pressed() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let second = at + Offset::new(20.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(second_finger(PointerEvent::press(second)));
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_pressed());
+    rig.ui.host().send_pointer(second_finger(PointerEvent::release(second)));
+    rig.ui.wait_for_idle();
+    assert!(rig.source.is_pressed(), "the first finger is still down");
+    rig.ui.host().send_pointer(PointerEvent::release(at));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed(), "stuck pressed after two fingers");
+    assert_eq!(rig.finished.get(), 1);
+}
+
+/// A second finger during a drag is ignored too.
+#[test]
+fn a_second_finger_during_a_drag_leaves_nothing_dragged() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    let second = at + Offset::new(-20.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(moved, true));
+    rig.ui.host().send_pointer(second_finger(PointerEvent::press(second)));
+    rig.ui.wait_for_idle();
+    let value = rig.state.value();
+    rig.ui.host().send_pointer(second_finger(PointerEvent::moved(second, true)));
+    rig.ui.host().send_pointer(second_finger(PointerEvent::release(second)));
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.state.value(), value, "the second finger moved the value");
+    assert!(rig.source.is_dragged() && rig.state.is_dragging(), "the first finger is still down");
+    rig.ui.host().send_pointer(PointerEvent::release(moved));
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_pressed() && !rig.source.is_dragged() && !rig.state.is_dragging());
+    assert_eq!(rig.finished.get(), 1);
+}
+
+/// Removed under a drag, the state isn't left dragging, and its release does nothing.
+#[test]
+fn a_slider_removed_during_a_drag_leaves_the_state_not_dragging() {
+    let mut rig = rig();
+    let at = center_of(&mut rig.ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(moved, true));
+    rig.ui.wait_for_idle();
+    assert!(rig.state.is_dragging());
+    rig.shown.set(false);
+    rig.ui.wait_for_idle();
+    assert!(!rig.source.is_dragged());
+    assert!(!rig.state.is_dragging());
+    rig.ui.host().send_pointer(PointerEvent::release(moved));
+    rig.ui.wait_for_idle();
+    assert!(!rig.state.is_dragging());
+}
+
+/// Deactivated under a drag (its host inactive), nothing stays on the source or the state.
+#[test]
+fn a_deactivated_slider_ends_its_interactions() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let active = mutable_state_of(true);
+    let (given, handle, on) = (source.clone(), *state, active.handle());
+    let mut ui = compose_test(material(move || {
+        let given = given.clone();
+        ReusableContentHost(on.get(), move || {
+            Slider!(
+                handle,
+                move |new| handle.set_value(new),
+                modifier = Modifier.test_tag(TAG),
+                interaction_source = Some(given.clone()),
+            );
+        });
+    }));
+    let at = center_of(&mut ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::moved(moved, true));
+    ui.wait_for_idle();
+    assert!(source.is_dragged() && state.is_dragging());
+    active.set(false);
+    ui.wait_for_idle();
+    assert!(!source.is_dragged() && !state.is_dragging());
+    active.set(true);
+    ui.wait_for_idle();
+    assert!(!source.is_dragged() && !state.is_dragging());
+}
+
+/// Reused for another key under a drag, its node staying attached, nothing stays on the source
+/// or the state (`on_reset`), and the old gesture's next move does nothing.
+#[test]
+fn a_reused_slider_ends_its_interactions() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let key = mutable_state_of(0);
+    let (given, handle, current) = (source.clone(), *state, key.handle());
+    let mut ui = compose_test(material(move || {
+        let given = given.clone();
+        ReusableContent(current.get(), move || {
+            Slider!(
+                handle,
+                move |new| handle.set_value(new),
+                modifier = Modifier.test_tag(TAG),
+                interaction_source = Some(given.clone()),
+            );
+        });
+    }));
+    let at = center_of(&mut ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::moved(moved, true));
+    ui.wait_for_idle();
+    assert!(source.is_dragged() && state.is_dragging());
+    key.set(1);
+    ui.wait_for_idle();
+    assert!(!source.is_dragged() && !state.is_dragging());
+}
+
+/// A source swapped under a drag: it ends on the old one, as `DragGestureNode.update`; it goes on
+/// unreported, the new one hearing nothing; its release finishes.
+#[test]
+fn a_new_source_during_a_drag_hears_nothing_and_the_drag_goes_on() {
+    let (first, second) = (MutableInteractionSource::new(), MutableInteractionSource::new());
+    let use_second = mutable_state_of(false);
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let finished = Rc::new(Cell::new(0));
+    let (a, b, flag, handle, count) =
+        (first.clone(), second.clone(), use_second.handle(), *state, finished.clone());
+    let mut ui = compose_test(material(move || {
+        let source = if flag.get() { b.clone() } else { a.clone() };
+        let count = count.clone();
+        Slider!(
+            handle,
+            move |new| handle.set_value(new),
+            modifier = Modifier.test_tag(TAG),
+            on_value_change_finished = Some(move || count.set(count.get() + 1)),
+            interaction_source = Some(source),
+        );
+    }));
+    let at = center_of(&mut ui);
+    let moved = at + Offset::new(30.0, 0.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::moved(moved, true));
+    ui.wait_for_idle();
+    assert!(first.is_dragged());
+    let before = state.value();
+    use_second.set(true);
+    ui.wait_for_idle();
+    assert!(!first.is_dragged() && !first.is_pressed());
+    let further = moved + Offset::new(30.0, 0.0);
+    ui.host().send_pointer(PointerEvent::moved(further, true));
+    ui.wait_for_idle();
+    assert!(state.value() > before, "the drag stopped");
+    assert!(state.is_dragging());
+    assert!(!second.is_dragged());
+    ui.host().send_pointer(PointerEvent::release(further));
+    ui.wait_for_idle();
+    assert!(!state.is_dragging());
+    assert_eq!(finished.get(), 1);
+}
+
+/// A source swapped under a press ends it on the old one.
+#[test]
+fn a_new_source_during_a_press_ends_it_on_the_old_one() {
+    let (first, second) = (MutableInteractionSource::new(), MutableInteractionSource::new());
+    let use_second = mutable_state_of(false);
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let (a, b, flag, handle) = (first.clone(), second.clone(), use_second.handle(), *state);
+    let mut ui = compose_test(material(move || {
+        let source = if flag.get() { b.clone() } else { a.clone() };
+        Slider!(
+            handle,
+            move |new| handle.set_value(new),
+            modifier = Modifier.test_tag(TAG),
+            interaction_source = Some(source),
+        );
+    }));
+    let at = center_of(&mut ui);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.wait_for_idle();
+    assert!(first.is_pressed());
+    use_second.set(true);
+    ui.wait_for_idle();
+    assert!(!first.is_pressed() && !second.is_pressed());
+}
+
+/// A source swapped while focused: `FocusableNode.update` disposes the old one's, and tells the
+/// new one nothing until the next change.
+#[test]
+fn a_new_source_while_focused_hears_nothing() {
+    let (first, second) = (MutableInteractionSource::new(), MutableInteractionSource::new());
+    let use_second = mutable_state_of(false);
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let (a, b, flag, handle) = (first.clone(), second.clone(), use_second.handle(), *state);
+    let mut ui = compose_test(material(move || {
+        let source = if flag.get() { b.clone() } else { a.clone() };
+        Slider!(
+            handle,
+            move |new| handle.set_value(new),
+            modifier = Modifier.test_tag(TAG),
+            interaction_source = Some(source),
+        );
+    }));
+    ui.on_node_with_tag(TAG).request_focus();
+    ui.wait_for_idle();
+    assert!(first.is_focused());
+    use_second.set(true);
+    ui.wait_for_idle();
+    assert!(!first.is_focused());
+    assert!(!second.is_focused());
+}
+
+/// The pointers cancelled under a drag, it ends as `processDragCancel`: a cancellation, not
+/// dragging, and `on_value_change_finished`, as `onDragStopped`.
+#[test]
+fn a_cancelled_drag_finishes_the_value_change() {
+    let mut rig = rig();
+    let interactions = recorded(&rig.source);
+    rig.ui.wait_for_idle();
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.host().send_pointer(PointerEvent::moved(at + Offset::new(30.0, 0.0), true));
+    rig.ui.wait_for_idle();
+    assert_eq!(rig.finished.get(), 0);
+    rig.ui.host().with_tree(|tree| tree.cancel_pointers());
+    rig.ui.wait_for_idle();
+    assert!(!rig.state.is_dragging());
+    assert_eq!(*interactions.borrow(), ["Press", "DragStart", "PressCancel", "DragCancel"]);
+    assert_eq!(rig.finished.get(), 1);
+}
+
+/// The pointers cancelled under a press: a cancellation, nothing finished.
+#[test]
+fn a_cancelled_press_finishes_nothing() {
+    let mut rig = rig();
+    let interactions = recorded(&rig.source);
+    rig.ui.wait_for_idle();
+    let at = center_of(&mut rig.ui);
+    rig.ui.host().send_pointer(PointerEvent::press(at));
+    rig.ui.wait_for_idle();
+    rig.ui.host().with_tree(|tree| tree.cancel_pointers());
+    rig.ui.wait_for_idle();
+    assert_eq!(*interactions.borrow(), ["Press", "PressCancel"]);
+    assert_eq!(rig.finished.get(), 0);
+    assert_eq!(rig.state.value(), 0.0);
+}
+
+/// Consumes every release that reaches it.
+#[derive(Clone)]
+struct ConsumeRelease;
+
+struct ConsumeReleaseNode;
+
+impl compose_ui::ModifierNodeElement for ConsumeRelease {
+    type Node = ConsumeReleaseNode;
+    fn create(&self) -> ConsumeReleaseNode {
+        ConsumeReleaseNode
+    }
+    fn update(&self, _: &mut ConsumeReleaseNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+    fn name(&self) -> &'static str {
+        "consume_release"
+    }
+}
+
+impl compose_ui::ModifierNode for ConsumeReleaseNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for ConsumeReleaseNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: compose_ui::PointerEventPass,
+        _: compose_ui::IntSize,
+        _: &mut compose_ui::EventContext<'_>,
+    ) {
+        if pass == compose_ui::PointerEventPass::Main
+            && event.kind == compose_ui::PointerEventType::Release
+        {
+            event.consume();
+        }
+    }
+}
+
+/// A release a thumb inside consumed is a cancellation, as `tryAwaitRelease`: no tap.
+#[test]
+fn a_consumed_release_cancels_the_press() {
+    let source = MutableInteractionSource::new();
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let finished = Rc::new(Cell::new(0));
+    let (given, handle, count) = (source.clone(), *state, finished.clone());
+    let mut ui = compose_test(material(move || {
+        let count = count.clone();
+        Slider!(
+            handle,
+            move |new| handle.set_value(new),
+            modifier = Modifier.test_tag(TAG),
+            on_value_change_finished = Some(move || count.set(count.get() + 1)),
+            interaction_source = Some(given.clone()),
+            thumb = Some(|_: SliderState| {
+                Box!(modifier = Modifier.size(48.dp()).then_custom(ConsumeRelease));
+            }),
+        );
+    }));
+    let interactions = recorded(&source);
+    ui.wait_for_idle();
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    // On the thumb, near the slider's start.
+    let at = Offset::new(bounds.left + SEMANTICS_PADDING + 30.0, bounds.top + 24.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert_eq!(*interactions.borrow(), ["Press", "PressCancel"]);
+    assert_eq!(state.value(), 0.0);
+    assert_eq!(finished.get(), 0);
 }

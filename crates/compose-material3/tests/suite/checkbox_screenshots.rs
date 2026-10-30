@@ -522,14 +522,34 @@ fn a_checkings_check_mark_follows_the_default_spatial_spring() {
     }
 }
 
+/// `toggled` with an opaque unchecked check mark: unchecking, what's drawn says when the mark's
+/// length goes, not the color fading away under it.
+fn unchecking_opaque(scheme: ColorScheme, after: Duration) -> Vec<Drawn> {
+    let state = mutable_state_of(true);
+    let handle = state.handle();
+    let mut ui = rule(scheme, move || {
+        let colors = CheckboxColors {
+            unchecked_checkmark_color: Color::GREEN,
+            ..CheckboxDefaults::colors()
+        };
+        Checkbox!(handle.get(), Some(move |now| handle.set(now)), colors = colors);
+    });
+    state.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(after);
+    let found = drawn(&mut ui);
+    drop(state);
+    found
+}
+
 /// Unchecking, the check mark stays whole until the snap's 100 ms delay (`SnapAnimationDelay`):
 /// whole at the golden (96 ms in, `checkBox_checked_animateToUnchecked`), gone a frame later.
 #[test]
 fn an_uncheckings_check_mark_snaps_away_at_100_ms() {
     for s in schemes() {
-        let at_golden = toggled(s, true, Duration::from_millis(100));
+        let at_golden = unchecking_opaque(s, Duration::from_millis(100));
         assert!((check_length(&at_golden) - FULL_CHECK).abs() < 0.01, "{at_golden:?}");
-        let a_frame_later = toggled(s, true, Duration::from_millis(116));
+        let a_frame_later = unchecking_opaque(s, Duration::from_millis(116));
         assert_eq!(check_length(&a_frame_later), 0.0, "{a_frame_later:?}");
     }
 }

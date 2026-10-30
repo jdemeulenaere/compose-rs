@@ -18,14 +18,14 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 177 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 42 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 200 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 82 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 27 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
-| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 34 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 45 |
+| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 46 |
 
 ## Index by number
 
@@ -528,9 +528,10 @@ The log is split by area into the files below, one table each, rows in number or
 | D1018 | [ui-and-layout](decisions/ui-and-layout.md#d1018) | current |
 | D1019 | [ui-and-layout](decisions/ui-and-layout.md#d1019) | current |
 | D1020 | [benchmarks](decisions/benchmarks.md#d1020) | current |
-| D1021 | [ui-and-layout](decisions/ui-and-layout.md#d1021) | current |
+| D1021 | [ui-and-layout](decisions/ui-and-layout.md#d1021) | revised by [D1024](decisions/ui-and-layout.md#d1024) |
 | D1022 | [api-and-tooling](decisions/api-and-tooling.md#d1022) | current |
-| D1023 | [ui-and-layout](decisions/ui-and-layout.md#d1023) | current |
+| D1023 | [ui-and-layout](decisions/ui-and-layout.md#d1023) | revised by [D1024](decisions/ui-and-layout.md#d1024) |
+| D1024 | [ui-and-layout](decisions/ui-and-layout.md#d1024) | current |
 | D1050 | [ui-and-layout](decisions/ui-and-layout.md#d1050) | current |
 | D1051 | [ui-and-layout](decisions/ui-and-layout.md#d1051) | revised by [D1056](decisions/ui-and-layout.md#d1056) |
 | D1052 | [ui-and-layout](decisions/ui-and-layout.md#d1052) | revised by [D1062](decisions/ui-and-layout.md#d1062) |
@@ -592,7 +593,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1252 | [ui-and-layout](decisions/ui-and-layout.md#d1252) | revised by [D1255](decisions/ui-and-layout.md#d1255) |
 | D1253 | [ui-and-layout](decisions/ui-and-layout.md#d1253) | revised by [D1255](decisions/ui-and-layout.md#d1255) |
 | D1254 | [ui-and-layout](decisions/ui-and-layout.md#d1254) | current |
-| D1255 | [ui-and-layout](decisions/ui-and-layout.md#d1255) | current |
+| D1255 | [ui-and-layout](decisions/ui-and-layout.md#d1255) | revised by [D1024](decisions/ui-and-layout.md#d1024) |
 | D1256 | [ui-and-layout](decisions/ui-and-layout.md#d1256) | current |
 | D1257 | [ui-and-layout](decisions/ui-and-layout.md#d1257) | current |
 | D1258 | [ui-and-layout](decisions/ui-and-layout.md#d1258) | current |

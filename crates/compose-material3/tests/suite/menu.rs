@@ -173,7 +173,7 @@ fn a_menu_scrolls_its_content() {
                     }
                 });
                 LaunchedEffect((), async move {
-                    scroll_state.scroll_to(scroll_state.max_value());
+                    let _ = scroll_state.scroll_to(scroll_state.max_value()).await;
                 });
             });
         });

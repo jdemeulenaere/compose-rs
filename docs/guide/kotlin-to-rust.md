@@ -1287,7 +1287,7 @@ pub fn Banner(text: SharedString) {
 }
 ```
 
-`MaterialTheme::color_scheme()`, `MaterialTheme::typography()` and `MaterialTheme::shapes()` are shared, as Kotlin's objects are: an `Rc`, so a read copies nothing; a composable takes one style from the typography with `.clone()`, and `*MaterialTheme::color_scheme()` copies the scheme where one is needed by value. `MaterialTheme` takes the three by value and, as Compose, compares them by value: a theme composable that builds an equal one each pass recomposes no reader (D1021, D1106, D1107).
+`MaterialTheme::color_scheme()`, `MaterialTheme::typography()` and `MaterialTheme::shapes()` are shared, as Kotlin's objects are: an `Rc`, so a read copies nothing; a composable takes one style from the typography with `.clone()`, and `*MaterialTheme::color_scheme()` copies the scheme where one is needed by value. `MaterialTheme` takes the three as values, or the `Rc`s of what it keeps of the theme around it, and, as Compose, compares them by value: a theme composable that builds an equal one each pass recomposes no reader (D1021, D1106, D1107).
 
 ### Composition locals
 

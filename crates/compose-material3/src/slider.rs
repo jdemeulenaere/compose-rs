@@ -13,7 +13,7 @@ use compose_ui::{
     Focus, FocusInteraction, FocusTargetModifierNode, IntSize, Key, KeyEvent, KeyEventType,
     KeyInputModifierNode, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
     ModifierNode, ModifierNodeElement, MutableInteractionSource, Offset, Paint, PointerEvent,
-    PointerEventPass, PointerEventType, PointerIcon, PointerInputModifierNode, Press,
+    PointerEventPass, PointerEventType, PointerIcon, PointerId, PointerInputModifierNode, Press,
     PressInteraction, Rect, SemanticsConfiguration, SemanticsModifierNode, SizeSpec, UnitExt,
 };
 
@@ -717,9 +717,12 @@ struct SliderInputNode {
     on_value_change_finished: Option<Callback<dyn Fn()>>,
     enabled: bool,
     interaction_source: MutableInteractionSource,
-    /// A press, until it becomes a tap or a drag (or another handler takes it): where it went
-    /// down, and what it emitted.
-    press: Option<(Offset, Press)>,
+    /// The pointer of the gesture under way and where it went down: other fingers are ignored,
+    /// as `detectTapGestures` and `draggable` follow their first.
+    down: Option<(PointerId, Offset)>,
+    /// The press's interaction, until it becomes a tap or a drag, leaves the slider, or another
+    /// handler takes it.
+    press: Option<Press>,
     /// The drag's interaction, while dragging.
     drag: Option<DragStart>,
     /// The focus's interaction, while focused.
@@ -728,9 +731,6 @@ struct SliderInputNode {
     /// direction), as Compose's drag that starts past the slop.
     drag_lag: Option<f32>,
     focused: bool,
-    /// The value last asked for, until the state takes it: keys pressed before the next frame
-    /// go on from it (shared with the semantics' `SetProgress`).
-    asked: Rc<Cell<Option<f32>>>,
 }
 
 impl ModifierNodeElement for SliderInput {
@@ -742,29 +742,30 @@ impl ModifierNodeElement for SliderInput {
             on_value_change_finished: self.on_value_change_finished.clone(),
             enabled: self.enabled,
             interaction_source: self.interaction_source.clone(),
+            down: None,
             press: None,
             drag: None,
             focus: None,
             drag_lag: None,
             focused: false,
-            asked: Rc::new(Cell::new(None)),
         }
     }
 
     fn update(&self, node: &mut SliderInputNode) {
         node.state = self.state;
-        node.asked.set(None);
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
+        if node.enabled && !self.enabled {
+            // As `sliderTapModifier` dropping off and `DragGestureNode.update` when disabled.
+            node.end_gesture();
+        }
         node.enabled = self.enabled;
         if node.interaction_source != self.interaction_source {
-            // What's under way ends on the old source and goes on on the new, as Compose's
-            // gestures, keyed on it, restart.
+            // What's under way ends on the old source, as `DragGestureNode.update` and
+            // `FocusableNode.update` dispose theirs. The new one hears nothing until the next
+            // change, and a drag goes on, unreported.
             node.end_interactions();
             node.interaction_source = self.interaction_source.clone();
-            if node.focused {
-                node.emit_focus(true);
-            }
         }
     }
 
@@ -790,19 +791,19 @@ impl SliderInputNode {
     fn start_press(&mut self, position: Offset) {
         let press = Press::new(position);
         self.interaction_source.try_emit(PressInteraction::Press(press));
-        self.press = Some((position, press));
+        self.press = Some(press);
     }
 
-    /// The press's end: `released`, a release, else (a drag or another handler took it) a
-    /// cancellation, as `tryAwaitRelease`. Whether there was one.
-    fn end_press(&mut self, released: bool) -> bool {
-        let Some((_, press)) = self.press.take() else { return false };
-        self.interaction_source.try_emit(if released {
-            PressInteraction::Release(press)
-        } else {
-            PressInteraction::Cancel(press)
-        });
-        true
+    /// The press's end: `released`, a release, else (a drag or another handler took it, or it
+    /// left the slider) a cancellation, as `tryAwaitRelease`.
+    fn end_press(&mut self, released: bool) {
+        if let Some(press) = self.press.take() {
+            self.interaction_source.try_emit(if released {
+                PressInteraction::Release(press)
+            } else {
+                PressInteraction::Cancel(press)
+            });
+        }
     }
 
     /// A drag's start, as `draggable`'s `DragInteraction.Start`.
@@ -834,11 +835,20 @@ impl SliderInputNode {
         }
     }
 
-    /// Ends what's under way, so the source doesn't stay pressed, dragged or focused.
+    /// Ends what's under way on the source, so it doesn't stay pressed, dragged or focused.
     fn end_interactions(&mut self) {
         self.end_press(false);
         self.end_drag(false);
         self.emit_focus(false);
+    }
+
+    /// The gesture is over without its release (the slider disabled or gone): its interactions
+    /// end, and nothing of it is left for a later event.
+    fn end_gesture(&mut self) {
+        self.end_interactions();
+        self.down = None;
+        self.drag_lag = None;
+        self.set_dragging(false);
     }
 
     /// The value at `x` (pixels from the slider's start), as `dispatchRawDelta`: mapped from
@@ -854,9 +864,10 @@ impl SliderInputNode {
         self.state.snapped(value)
     }
 
-    /// Asks for `value` (through `on_value_change`), if it's new: a drag's.
+    /// Asks for `value` (through `on_value_change`), if it isn't the state's, as
+    /// `dispatchRawDeltaInternal`: a drag's or a tap's.
     fn change_to(&mut self, value: f32, context: &mut EventContext<'_>) {
-        if value != self.asked.get().unwrap_or(self.state.value()) {
+        if value != self.state.value() {
             self.ask(value, context);
         }
     }
@@ -864,7 +875,6 @@ impl SliderInputNode {
     /// Asks for `value` (through `on_value_change`), new or not: a key's, as Compose's
     /// `slideOnKeyEvents` calls `onValueChange` on every key down, at the ends too.
     fn ask(&mut self, value: f32, context: &mut EventContext<'_>) {
-        self.asked.set(Some(value));
         let callback = self.on_value_change.clone();
         context.run(move || callback(value));
     }
@@ -883,6 +893,20 @@ impl SliderInputNode {
         }
     }
 
+    /// Whether `event` is outside `bounds`, extended to the minimum touch target around a smaller
+    /// slider, as `isOutOfBounds(size, extendedTouchPadding)`.
+    fn out_of_bounds(event: &PointerEvent, bounds: IntSize, context: &EventContext<'_>) -> bool {
+        let minimum = context.view_configuration().minimum_touch_target_size;
+        let density = context.density();
+        let horizontal = ((density.to_px(minimum.width) - bounds.width as f32) / 2.0).max(0.0);
+        let vertical = ((density.to_px(minimum.height) - bounds.height as f32) / 2.0).max(0.0);
+        let position = event.position;
+        position.x < -horizontal
+            || position.y < -vertical
+            || position.x > bounds.width as f32 + horizontal
+            || position.y > bounds.height as f32 + vertical
+    }
+
     /// The pointer's offset from the slider's start (from the right in a right-to-left layout).
     fn start_offset(&self, x: f32, width: i32, context: &EventContext<'_>) -> f32 {
         if context.layout_direction() == compose_ui::LayoutDirection::Rtl {
@@ -895,13 +919,11 @@ impl SliderInputNode {
 
 impl ModifierNode for SliderInputNode {
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.end_interactions();
-        self.drag_lag = None;
+        // `on_detach`, which always follows, ends the gesture.
         self.focused = false;
-        self.asked.set(None);
     }
     fn on_detach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.end_interactions();
+        self.end_gesture();
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
@@ -918,8 +940,9 @@ impl ModifierNode for SliderInputNode {
 }
 
 impl PointerInputModifierNode for SliderInputNode {
-    /// A tap moves the value there; a horizontal drag past the touch slop follows the pointer
-    /// (less the slop); a vertical one is left to a scrolling parent, as Compose's.
+    /// A tap moves the value to where it pressed; a horizontal drag past the touch slop follows
+    /// the pointer (less the slop); a vertical one is left to a scrolling parent, as Compose's.
+    /// The first finger only.
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,
@@ -930,10 +953,16 @@ impl PointerInputModifierNode for SliderInputNode {
         if pass != PointerEventPass::Main || !self.enabled {
             return;
         }
+        if self.down.is_some_and(|(pointer, _)| pointer != event.pointer) {
+            return;
+        }
         let x = self.start_offset(event.position.x, bounds.width, context);
         let slop = context.density().to_px(8.dp());
         match event.kind {
-            PointerEventType::Press if !event.consumed => {
+            PointerEventType::Press if self.down.is_none() && !event.consumed => {
+                // As `detectTapGestures`, the down is consumed: a clickable around doesn't react.
+                event.consume();
+                self.down = Some((event.pointer, event.position));
                 self.start_press(event.position);
                 self.drag_lag = None;
             }
@@ -943,9 +972,10 @@ impl PointerInputModifierNode for SliderInputNode {
                 self.change_to(value, context);
             }
             PointerEventType::Move => {
-                let Some((start, _)) = self.press else { return };
+                let Some((_, start)) = self.down else { return };
                 if event.consumed {
                     // A scrolling parent (or another handler) took it.
+                    self.down = None;
                     self.end_press(false);
                     return;
                 }
@@ -959,39 +989,57 @@ impl PointerInputModifierNode for SliderInputNode {
                         lead
                     };
                     self.drag_lag = Some(lead);
-                    // The drag takes the press, as `draggable` consuming the tap detector's.
-                    self.end_press(false);
+                    // The drag starts, then takes the press from the tap detector: in that order,
+                    // as `slider_interactionSource_resetWhenDisposed` hears them.
                     self.start_drag();
+                    self.end_press(false);
                     self.set_dragging(true);
                     event.consume();
-                    context.request_focus();
                     let value = self.value_at_offset(x - lead);
                     self.change_to(value, context);
+                } else if Self::out_of_bounds(event, bounds, context) {
+                    // Out of bounds, a press is cancelled and there'll be no tap, as
+                    // `waitForUpOrCancellation`; a drag can still start.
+                    self.end_press(false);
                 }
             }
             PointerEventType::Release => {
-                let pressed = self.end_press(true);
+                let Some((_, start)) = self.down.take() else { return };
                 if self.drag_lag.take().is_some() {
                     event.consume();
                     self.end_drag(true);
                     self.set_dragging(false);
                     self.finish(context);
-                } else if pressed && !event.consumed {
-                    event.consume();
-                    let value = self.value_at_offset(x);
-                    self.change_to(value, context);
-                    self.finish(context);
+                } else if self.press.is_some() {
+                    // A release something else consumed is a cancellation.
+                    let released = !event.consumed;
+                    self.end_press(released);
+                    if released {
+                        event.consume();
+                        let x = self.start_offset(start.x, bounds.width, context);
+                        let value = self.value_at_offset(x);
+                        self.change_to(value, context);
+                        self.finish(context);
+                    }
                 }
             }
             _ => {}
         }
     }
 
+    /// The gesture ended without its events: a drag ends as `processDragCancel` does, through
+    /// `onDragStopped` and so `on_value_change_finished`.
     fn on_cancel_pointer_input(&mut self) {
-        let pressed = self.end_press(false);
-        if pressed || self.drag_lag.take().is_some() {
-            self.end_drag(false);
+        self.down = None;
+        self.end_press(false);
+        let dragging = self.drag_lag.take().is_some();
+        self.end_drag(false);
+        if dragging {
             self.set_dragging(false);
+            if let Some(callback) = self.on_value_change_finished.clone() {
+                // Later: no context here, and the tree is in the middle of the cancellation.
+                compose_runtime::platform::launch(async move { callback() });
+            }
         }
     }
 }
@@ -1038,7 +1086,7 @@ impl KeyInputModifierNode for SliderInputNode {
         let page = (actual_steps / 10).clamp(1, 10) as f32;
         let sign =
             if context.layout_direction() == compose_ui::LayoutDirection::Rtl { -1.0 } else { 1.0 };
-        let value = self.asked.get().unwrap_or(self.state.value());
+        let value = self.state.value();
         let target = match event.key {
             Key::MoveHome => start,
             Key::MoveEnd => end,
@@ -1080,15 +1128,14 @@ impl SemanticsModifierNode for SliderInputNode {
         // Moves to the value asked (in the range, at the nearest stop), as Compose's
         // `setProgress`; no change from the state's value is no action. Whether enabled or not:
         // refusing a disabled node's actions is the bridges' (D1255).
-        let (state, asked) = (self.state, self.asked.clone());
+        let state = self.state;
         let on_value_change = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
         config.set_progress(None, move |target| {
             let value = nearest_stop(state, target);
-            if value == asked.get().unwrap_or(state.value()) {
+            if value == state.value() {
                 return false;
             }
-            asked.set(Some(value));
             on_value_change(value);
             if let Some(finished) = &finished {
                 finished();

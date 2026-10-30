@@ -436,3 +436,29 @@ fn a_changed_scheme_or_shapes_recompose_their_readers_only() {
     ui.wait_for_idle();
     assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (2, 2));
 }
+
+/// A nested theme overriding one value shares the others with the enclosing theme, copying
+/// nothing (D1024); and what it overrides is its own.
+#[test]
+fn a_nested_theme_shares_what_it_does_not_override() {
+    thread_local! {
+        static OUTER: std::cell::RefCell<Option<MaterialThemeValues>> =
+            const { std::cell::RefCell::new(None) };
+        static INNER: std::cell::RefCell<Option<MaterialThemeValues>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let _ui = compose_test(|| {
+        MaterialTheme!({
+            OUTER.with(|outer| *outer.borrow_mut() = Some(MaterialTheme::values()));
+            MaterialTheme!(color_scheme = dark_color_scheme(), {
+                INNER.with(|inner| *inner.borrow_mut() = Some(MaterialTheme::values()));
+            });
+        });
+    });
+    let outer = OUTER.with(|outer| outer.borrow().clone()).expect("composed");
+    let inner = INNER.with(|inner| inner.borrow().clone()).expect("composed");
+    assert!(Rc::ptr_eq(&outer.typography, &inner.typography));
+    assert!(Rc::ptr_eq(&outer.shapes, &inner.shapes));
+    assert_eq!(*inner.color_scheme, dark_color_scheme());
+    assert!(!Rc::ptr_eq(&outer.color_scheme, &inner.color_scheme));
+}
