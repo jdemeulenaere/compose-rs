@@ -143,6 +143,11 @@ impl NodeContext<'_> {
         self.tree.text_measurer()
     }
 
+    /// What a node hosting another gives back through, for a hosted node gone for good.
+    pub(crate) fn release_context(&mut self) -> crate::modifier::ReleaseContext<'_> {
+        crate::modifier::ReleaseContext { text_measurer: self.tree.text_measurer() }
+    }
+
     fn invalidate(&mut self, what: Invalidation) {
         // As Compose's: a detached node's invalidations do nothing.
         if self.is_attached() {

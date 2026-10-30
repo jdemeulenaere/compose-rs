@@ -240,8 +240,16 @@ internal class Accessibility(private val view: ComposeRsView) :
             info.text = node.text
         }
         if (node.description.isNotEmpty()) info.contentDescription = node.description
-        // A state description from API 30 (`setStateDescription`); before, none.
-        if (node.state.isNotEmpty() && Build.VERSION.SDK_INT >= 30) info.stateDescription = node.state
+        // A state description: `setStateDescription` from API 30; before, in the extras, under
+        // the key AndroidX's `AccessibilityNodeInfoCompat.setStateDescription` uses, which
+        // accessibility services read back through the compat class, as Compose's.
+        if (node.state.isNotEmpty()) {
+            if (Build.VERSION.SDK_INT >= 30) {
+                info.stateDescription = node.state
+            } else {
+                info.extras.putCharSequence(STATE_DESCRIPTION_KEY, node.state)
+            }
+        }
         if (node.error.isNotEmpty()) {
             info.isContentInvalid = true
             info.error = node.error
@@ -415,6 +423,9 @@ internal class Accessibility(private val view: ComposeRsView) :
     }
 
     private companion object {
+        /** AndroidX's `AccessibilityNodeInfoCompat.STATE_DESCRIPTION_KEY`, before API 30. */
+        const val STATE_DESCRIPTION_KEY =
+            "androidx.view.accessibility.AccessibilityNodeInfoCompat.STATE_DESCRIPTION_KEY"
         const val FOCUSABLE = 1 shl 1
         const val FOCUSED = 1 shl 2
         const val EDITABLE = 1 shl 3

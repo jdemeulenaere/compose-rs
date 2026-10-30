@@ -662,3 +662,86 @@ impl SemanticsModifierNode for SemanticsNode {
         config.apply(&self.1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use compose_runtime::platform::run_ready;
+
+    use crate::focus_requester::{FocusRequest, FocusRequester};
+    use crate::host::UiHost;
+    use crate::interaction::{Interaction, MutableInteractionSource};
+    use crate::lifecycle::Lifecycle;
+    use crate::modifier::Modifier;
+    use crate::tree::{NodeId, UiTree};
+
+    /// The first layout node with a focusable.
+    fn focusable_node(tree: &UiTree) -> NodeId {
+        let mut stack = vec![tree.root_id()];
+        while let Some(id) = stack.pop() {
+            let chain = &tree.node(id).chain;
+            if chain.iter().any(|entry| entry.node.downcast_ref::<super::FocusableNode>().is_some())
+            {
+                return id;
+            }
+            stack.extend(tree.children_of(id));
+        }
+        panic!("no focusable");
+    }
+
+    /// A focusable leaving with a focus queued sends it, then its end, as its scope is about to
+    /// be cancelled (`drop_queued`, D1061), and attached again it emits: its queue starts a new
+    /// task on its new scope.
+    // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Focusable.kt, emitWithFallback
+    #[test]
+    fn a_focusable_leaving_with_a_focus_queued_ends_it_and_emits_when_it_is_back() {
+        let source = MutableInteractionSource::new();
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let sink = heard.clone();
+        let _listener = source.listen(move |interaction| {
+            sink.borrow_mut().push(match interaction {
+                Interaction::Focus(crate::interaction::FocusInteraction::Focus(_)) => "Focus",
+                Interaction::Focus(crate::interaction::FocusInteraction::Unfocus(_)) => "Unfocus",
+                _ => "other",
+            })
+        });
+        let requester = FocusRequester::new();
+        let given = source.clone();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            crate::layout::emit_layout_node(
+                Modifier.focus_requester(requester).focusable_with(true, Some(given.clone())),
+                crate::layout::empty_measure_policy(),
+                || {},
+            );
+        });
+        host.frame();
+        assert!(requester.request_focus());
+        host.handle_focus_requests();
+        assert!(heard.borrow().is_empty(), "queued for the node's task");
+
+        host.with_tree(|tree| {
+            let node = focusable_node(tree);
+            tree.reset_and_detach(node);
+        });
+        assert_eq!(*heard.borrow(), ["Focus", "Unfocus"]);
+        assert!(!source.is_focused());
+        run_ready();
+        assert_eq!(*heard.borrow(), ["Focus", "Unfocus"], "nothing left for its task");
+
+        host.with_tree(|tree| {
+            let node = focusable_node(tree);
+            tree.queue_lifecycle(Lifecycle::AttachEntries(node));
+            tree.run_lifecycle();
+            tree.focus_requests.push(FocusRequest::Clear { force: true });
+        });
+        host.handle_focus_requests();
+        assert!(requester.request_focus());
+        host.handle_focus_requests();
+        run_ready();
+        assert_eq!(*heard.borrow(), ["Focus", "Unfocus", "Focus"]);
+        assert!(source.is_focused());
+    }
+}

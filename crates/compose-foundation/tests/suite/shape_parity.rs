@@ -1,9 +1,19 @@
 //! The corner-based shapes and `CornerSize` against Compose's shape tests: outlines, right to
 //! left, corners scaled to fit, equality and `copy`.
 
+#![allow(non_snake_case)]
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use compose_foundation::layout::*;
 use compose_foundation::shape::*;
+use compose_runtime::*;
+use compose_test::*;
+use compose_ui::platform::DrawOp;
 use compose_ui::{
-    Density, LayoutDirection, Offset, Outline, PathCommand, Rect, Shape, Size, UnitExt,
+    Density, LayoutDirection, Modifier, Offset, Outline, PathCommand, PointerEvent, Rect, Shape,
+    Size, UnitExt,
 };
 
 const SIZE: Size = Size { width: 100.0, height: 150.0 };
@@ -379,4 +389,119 @@ fn a_border_of_half_the_side_is_a_stroke_and_past_half_a_fill() {
     assert!(half.contains("rect 10,10 20x20 #FFFF0000 stroke 20"), "{half}");
     let past = draw(41.0, 21.0);
     assert!(past.contains("rect 0,0 41x41 #FFFF0000\n"), "{past}");
+}
+
+// ---- A custom shape reading state ---------------------------------------------------------------
+
+/// A 40 dp clickable clipped by a remembered `GenericShape` cutting its top left corner by what
+/// `cut` holds, by `clipped`'s form of the clip; each tap inside it counts.
+fn clipped_by_a_shape_reading_state(
+    clicks: Rc<Cell<u32>>,
+    cut: MutableState<f32>,
+    clipped: fn(Shape) -> Modifier,
+) -> ComposeTestRule {
+    compose_test(move || {
+        let clicks = clicks.clone();
+        let shape = remember(|| {
+            GenericShape(move |path, size, _| {
+                let cut = cut.get();
+                path.move_to(cut, 0.0);
+                path.line_to(size.width, 0.0);
+                path.line_to(size.width, size.height);
+                path.line_to(0.0, size.height);
+                path.line_to(0.0, cut);
+                path.close();
+            })
+        });
+        Box!(
+            modifier = Modifier
+                .size(40.dp())
+                .then(clipped(shape))
+                .background(compose_ui::Color::RED)
+                .clickable(move || clicks.set(clicks.get() + 1))
+        );
+    })
+}
+
+/// Where the path the list clips to or casts its shadow from starts: the cut, by the shape above.
+fn cut_drawn(ui: &mut ComposeTestRule) -> f32 {
+    let list = ui.host().display_list();
+    let path = list.ops.iter().find_map(|op| match op {
+        DrawOp::ClipPath { path, .. } => Some(path.clone()),
+        DrawOp::DrawShadow { outline: Outline::Generic(path, _), .. } => Some(path.clone()),
+        _ => None,
+    });
+    match path.expect("a path").commands().first() {
+        Some(PathCommand::MoveTo(point)) => point.x,
+        other => panic!("not the shape's path: {other:?}"),
+    }
+}
+
+/// A shape reading state in its outline makes the outline again when that state changes, as
+/// Compose runs `createOutline` inside `observeReads` on every layer update: what clips and is
+/// hit follows each write, the first and the later ones (a cached outline read nothing, so it
+/// missed them all: D1063).
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, updateLayerParameters
+fn a_shape_reading_state_follows_each_write(clipped: fn(Shape) -> Modifier) {
+    let clicks = Rc::new(Cell::new(0));
+    let cut = mutable_state_of(10.0f32);
+    let mut ui = clipped_by_a_shape_reading_state(clicks.clone(), cut.handle(), clipped);
+    let tap = |ui: &mut ComposeTestRule, at: Offset| {
+        ui.host().send_pointer(PointerEvent::press(at));
+        ui.host().send_pointer(PointerEvent::release(at));
+        ui.wait_for_idle();
+    };
+    let inside_at_10 = Offset::new(15.0, 1.0);
+    let inside_at_20 = Offset::new(25.0, 1.0);
+    assert_eq!(cut_drawn(&mut ui), 10.0);
+    tap(&mut ui, inside_at_10);
+    assert_eq!(clicks.get(), 1, "inside the clip");
+    for next in [20.0f32, 30.0] {
+        cut.set(next);
+        ui.wait_for_idle();
+        assert_eq!(cut_drawn(&mut ui), next, "clips to the cut after each write");
+    }
+    let before = clicks.get();
+    tap(&mut ui, inside_at_10);
+    tap(&mut ui, inside_at_20);
+    assert_eq!(clicks.get(), before, "cut out by the writes: not hit");
+    cut.set(5.0);
+    ui.wait_for_idle();
+    assert_eq!(cut_drawn(&mut ui), 5.0);
+    tap(&mut ui, inside_at_10);
+    assert_eq!(clicks.get(), before + 1, "the last write opens it again");
+}
+
+#[test]
+fn a_clip_to_a_shape_reading_state_follows_each_write() {
+    a_shape_reading_state_follows_each_write(|shape| Modifier.clip(shape));
+}
+
+#[test]
+fn a_graphics_layer_clipping_to_a_shape_reading_state_follows_each_write() {
+    a_shape_reading_state_follows_each_write(|shape| {
+        Modifier.graphics_layer(move |layer| {
+            layer.shape = shape.clone();
+            layer.clip = true;
+        })
+    });
+}
+
+/// Its shadow's outline follows too: a shadow is the layer's outline.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, updateLayerParameters
+#[test]
+fn a_shadow_of_a_shape_reading_state_follows_each_write() {
+    let cut = mutable_state_of(10.0f32);
+    let mut ui = clipped_by_a_shape_reading_state(Rc::default(), cut.handle(), |shape| {
+        Modifier.graphics_layer(move |layer| {
+            layer.shape = shape.clone();
+            layer.shadow_elevation = 4.0;
+        })
+    });
+    assert_eq!(cut_drawn(&mut ui), 10.0);
+    for next in [20.0f32, 30.0] {
+        cut.set(next);
+        ui.wait_for_idle();
+        assert_eq!(cut_drawn(&mut ui), next, "the shadow's outline after each write");
+    }
 }

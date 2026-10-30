@@ -10,9 +10,9 @@ use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, ContentDrawScope, DrawModifierNode, Indication, IndicationNodeFactory, Interaction,
-    InteractionSource, Modifier, ModifierNode, MutableInteractionSource, Offset, Paint, Press,
-    PressInteraction, UnitExt,
+    ClickableOptions, Color, ContentDrawScope, DrawModifierNode, Indication, IndicationNodeFactory,
+    Interaction, InteractionSource, Modifier, ModifierNode, MutableInteractionSource, NodeContext,
+    Offset, Paint, Press, PressInteraction, ReleaseContext, UnitExt,
 };
 
 type Hook = Option<Rc<dyn Fn()>>;
@@ -229,4 +229,139 @@ fn no_indication_is_no_modifier() {
         Box!(modifier = Modifier.size(100.dp()).indication(source.clone(), Indication::NONE));
     });
     assert!(!ui.dump_tree().contains("indication"), "{}", ui.dump_tree());
+}
+
+// ---- The hosted node's lifecycle -----------------------------------------------------------------
+
+type Log = Rc<std::cell::RefCell<Vec<&'static str>>>;
+
+/// A factory whose nodes log their lifecycle.
+struct Logging(Log);
+struct LoggingNode(Log);
+
+impl IndicationNodeFactory for Logging {
+    fn create(&self, _: InteractionSource) -> Box<dyn ModifierNode> {
+        Box::new(LoggingNode(self.0.clone()))
+    }
+    fn same(&self, other: &dyn IndicationNodeFactory) -> bool {
+        other.downcast_ref::<Logging>().is_some_and(|other| Rc::ptr_eq(&self.0, &other.0))
+    }
+}
+
+impl ModifierNode for LoggingNode {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, _: &mut NodeContext<'_>) {
+        self.0.borrow_mut().push("attach");
+    }
+    fn on_detach(&mut self, _: &mut NodeContext<'_>) {
+        self.0.borrow_mut().push("detach");
+    }
+    fn on_reset(&mut self, _: &mut NodeContext<'_>) {
+        self.0.borrow_mut().push("reset");
+    }
+    fn on_release(&mut self, _: &mut ReleaseContext<'_>) {
+        self.0.borrow_mut().push("release");
+    }
+}
+
+impl DrawModifierNode for LoggingNode {}
+
+fn clickable_hosting(log: &Log, source: &MutableInteractionSource) -> Modifier {
+    let options = ClickableOptions {
+        interaction_source: Some(source.clone()),
+        indication: Indication::new(Logging(log.clone())),
+        ..ClickableOptions::DEFAULT
+    };
+    Modifier.size(10.dp()).clickable_with(options, || {})
+}
+
+/// A clickable's indication node, its host reused: reset, detached (a new one made when needed,
+/// as `onDetach`'s `undelegate`) and released, then the next one attached.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, reset
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onDetach
+#[test]
+fn a_reused_clickable_resets_detaches_and_releases_its_indication_node() {
+    let log = Log::default();
+    let source = MutableInteractionSource::new();
+    let key = mutable_state_of(0);
+    let (handle, logged, given) = (key.handle(), log.clone(), source.clone());
+    let mut ui = compose_test(move || {
+        let (logged, given) = (logged.clone(), given.clone());
+        ReusableContent(handle.get(), move || {
+            Box!(modifier = clickable_hosting(&logged, &given));
+        });
+    });
+    assert_eq!(*log.borrow(), ["attach"]);
+    key.set(1);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["attach", "reset", "detach", "release", "attach"]);
+}
+
+/// Removed, it's detached and released, not reset.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onDetach
+#[test]
+fn a_removed_clickable_detaches_and_releases_its_indication_node() {
+    let log = Log::default();
+    let source = MutableInteractionSource::new();
+    let shown = mutable_state_of(true);
+    let (handle, logged, given) = (shown.handle(), log.clone(), source.clone());
+    let mut ui = compose_test(move || {
+        if handle.get() {
+            Box!(modifier = clickable_hosting(&logged, &given));
+        }
+    });
+    shown.set(false);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["attach", "detach", "release"]);
+}
+
+/// Replaced by an update, the old one is detached and released, as `undelegate`, not reset.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, undelegate
+#[test]
+fn a_clickable_s_replaced_indication_node_is_detached_and_released() {
+    let (first, second) = (Log::default(), Log::default());
+    let source = MutableInteractionSource::new();
+    let swapped = mutable_state_of(false);
+    let (handle, a, b, given) = (swapped.handle(), first.clone(), second.clone(), source.clone());
+    let mut ui = compose_test(move || {
+        let log = if handle.get() { &b } else { &a };
+        Box!(modifier = clickable_hosting(log, &given));
+    });
+    assert_eq!(*first.borrow(), ["attach"]);
+    swapped.set(true);
+    ui.wait_for_idle();
+    assert_eq!(*first.borrow(), ["attach", "detach", "release"]);
+    assert_eq!(*second.borrow(), ["attach"]);
+}
+
+/// `Modifier.indication`'s node stays with its host, as `IndicationModifierNode`'s delegate: reset
+/// and detached with it when it's reused, attached again, released only when it goes.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/DelegatingNode.kt, reset
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/IndicationTest.kt, indicationNodeFactory_reuse_sameIndicationInstance
+#[test]
+fn a_reused_indication_modifier_keeps_its_node_through_reset_and_detach() {
+    let log = Log::default();
+    let source = MutableInteractionSource::new();
+    let key = mutable_state_of(0);
+    let shown = mutable_state_of(true);
+    let (handle, is_shown, logged, given) =
+        (key.handle(), shown.handle(), log.clone(), source.clone());
+    let mut ui = compose_test(move || {
+        if is_shown.get() {
+            let (logged, given) = (logged.clone(), given.clone());
+            ReusableContent(handle.get(), move || {
+                let indication = Indication::new(Logging(logged.clone()));
+                Box!(modifier = Modifier.size(10.dp()).indication(given.clone(), indication));
+            });
+        }
+    });
+    assert_eq!(*log.borrow(), ["attach"]);
+    key.set(1);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["attach", "reset", "detach", "attach"]);
+    shown.set(false);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), ["attach", "reset", "detach", "attach", "detach", "release"]);
 }

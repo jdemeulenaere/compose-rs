@@ -613,10 +613,10 @@ impl ComposeArg for MutableInteractionSource {
 /// hovers, which compose-rs sends at once so a hover the frame's layout finds draws in that
 /// frame), so a release then an exit go out in that order. The node's `on_reset` and `on_detach`
 /// start with [`drop_queued`](Emitter::drop_queued), its scope about to be cancelled (D1061):
-/// what's queued isn't sent, but its fallbacks, which Compose's nodes send at once when their
-/// scope is cancelled first: a press's cancellation (`invokeOnCompletion { tryEmit(cancel) }`)
-/// and focus changes (`FocusableNode`'s `emitWithFallback`), so a source never stays focused or
-/// pressed for an end dropped.
+/// what's queued isn't sent, but its fallbacks, as Compose's nodes send at once when their scope
+/// is cancelled first: a press's cancellation (`invokeOnCompletion { tryEmit(cancel) }`) and focus
+/// changes (`FocusableNode`'s `emitWithFallback`), and compose-rs's press release too (D1065), so
+/// a source never stays focused or pressed for an end dropped.
 #[derive(Default)]
 pub(crate) struct Emitter(OnceCell<Rc<EmitterQueue>>);
 
@@ -646,11 +646,12 @@ impl EmitterQueue {
 }
 
 /// Whether `interaction` is sent though its node is cancelled before its task sends it, as
-/// Compose's components fall back to `tryEmit` for a press's cancellation and focus changes.
+/// Compose's components fall back to `tryEmit` for a press's cancellation and focus changes. A
+/// release too: the node has forgotten its press by then, so nothing else would end it (D1065).
 fn has_fallback(interaction: &Interaction) -> bool {
     matches!(
         interaction,
-        Interaction::Press(PressInteraction::Cancel(_))
+        Interaction::Press(PressInteraction::Cancel(_) | PressInteraction::Release(_))
             | Interaction::Focus(FocusInteraction::Focus(_) | FocusInteraction::Unfocus(_))
     )
 }
@@ -695,8 +696,11 @@ impl Emitter {
     }
 
     /// The node is detached or reset (its scope, and the task on it, about to be cancelled):
-    /// what's queued is dropped but its fallbacks, sent now in order, before the node ends its
-    /// interactions, so a focus queued and its end go out in that order (D1061).
+    /// what's queued is dropped but its fallbacks, sent now in order. It comes before the node
+    /// ends its interactions because those go through [`emit_now`](Emitter::emit_now), which
+    /// sends what's queued first: dropped here, a press queued isn't sent then. And the node's
+    /// ending of its focus there (`dispose_focus`, a `tryEmit` Compose's clickable has no
+    /// counterpart of at detach) comes after a focus queued, in that order (D1061).
     pub(crate) fn drop_queued(&self) {
         let Some(queue) = self.0.get() else { return };
         queue.running.set(false);
@@ -812,7 +816,8 @@ mod tests {
     }
 
     /// Its node detached, an emitter sends none of what it queued but its
-    /// fallbacks, in order: press cancellations, as Compose's `invokeOnCompletion { tryEmit }`,
+    /// fallbacks, in order: press releases (D1065) and cancellations, as Compose's
+    /// `invokeOnCompletion { tryEmit }`,
     /// and focus changes, as `FocusableNode.emitWithFallback` (D1057). A press queued before
     /// the node left never reaches a collector after its cancel, and a focus's end is never
     /// dropped (the source would stay focused).
@@ -834,8 +839,24 @@ mod tests {
         emitter.drop_queued();
         scope.cancel();
         compose_runtime::platform::run_ready();
-        assert_eq!(*heard.borrow(), ["Focus", "Cancel", "Unfocus"]);
+        assert_eq!(*heard.borrow(), ["Focus", "Release", "Cancel", "Unfocus"]);
         assert!(!source.is_pressed() && !source.is_focused());
+    }
+
+    /// A press sent and its release queued, then the node detached: the release is sent, or the
+    /// source would stay pressed, its node having forgotten the press (D1065).
+    #[test]
+    fn a_release_queued_when_the_node_leaves_leaves_the_source_unpressed() {
+        let source = MutableInteractionSource::new();
+        let emitter = Emitter::default();
+        let scope = CoroutineScope::new();
+        let press = Press::new(Offset::ZERO);
+        emitter.emit_now(&source, PressInteraction::Press(press));
+        assert!(source.is_pressed());
+        emitter.emit_soon(Some(*scope), &source, PressInteraction::Release(press));
+        emitter.drop_queued();
+        scope.cancel();
+        assert!(!source.is_pressed());
     }
 
     /// A focus whose end the emitter falls back to sending: queued, then cancelled, the source

@@ -134,10 +134,11 @@ pub(crate) struct GraphicsLayerNode {
     outline: std::cell::RefCell<Option<CachedOutline>>,
 }
 
-/// A layer's path outline and what it was made for: made again only when one of them changes,
-/// as Compose's layer keeps its outline until its shape or size changes (D1059). So an
-/// animation of its other properties (an alpha over a cut shape) keeps the same path, which
-/// Android doesn't define again each frame.
+/// A built-in shape's path outline and what it was made for: made again only when one of them
+/// changes, so an animation of a layer's other properties (an alpha over a cut shape) keeps the
+/// same path, which Android doesn't define again each frame (D1059). compose-rs's own: Compose
+/// makes its outline on every layer update, and a custom shape's here too (it may read state,
+/// D1063).
 struct CachedOutline {
     shape: Shape,
     size: Size,
@@ -200,7 +201,11 @@ impl GraphicsLayerNode {
             }
             let outline = layer.shape.outline_in(size, &layer.density, direction);
             // Paths alone: the other outlines are values, as cheap to make again as to compare.
-            *cache = matches!(outline, Outline::Generic(..)).then(|| CachedOutline {
+            // Built-in shapes alone: a custom shape's outline may read state, which must be read
+            // each time to be observed, as Compose's `createOutline` runs in `observeReads`.
+            let keeps =
+                matches!(outline, Outline::Generic(..)) && !matches!(layer.shape, Shape::Custom(_));
+            *cache = keeps.then(|| CachedOutline {
                 shape: layer.shape.clone(),
                 size,
                 direction,

@@ -2686,10 +2686,63 @@ fn a_path_outline_defined_again_in_place_changes_the_layer_entry() {
     }
 }
 
+/// A layer's kept path outline goes when what it was made for changes: its size, its layout
+/// direction (one corner cut mirrors), its density (a cut in dp), one at a time, each giving
+/// other path contents, so a new id or the definition's serial changes the `LAYERS` entry, and the path's
+/// new contents are defined (D1059).
+#[test]
+fn a_cut_shape_outline_follows_size_direction_and_density() {
+    let side = mutable_state_of(40.0f32);
+    let handle = side.handle();
+    let direction = mutable_state_of(LayoutDirection::Ltr);
+    let direction_handle = direction.handle();
+    let mut serialized = Serialized::new(move || {
+        CompositionLocalProvider(
+            LOCAL_LAYOUT_DIRECTION.provides(direction_handle.get()),
+            move || {
+                // One corner cut, so the shape mirrors in a right-to-left layout.
+                let corner = |cut: f32| CornerSize::Dp(cut.dp());
+                let cut = [corner(6.0), corner(0.0), corner(0.0), corner(0.0)];
+                Leaf(
+                    Modifier
+                        .size(handle.get().dp())
+                        .clip(compose_foundation::CutCornerShape(cut))
+                        .then(painted(|| Color::RED)),
+                );
+            },
+        );
+    });
+    let entry = |bytes: &[u8]| bytes[5 + 8..5 + LAYER_ENTRY_BYTES].to_vec();
+    let first = serialized.frame();
+    let mut defined = Writer::default();
+    serialized.resources.write_pending(&mut defined);
+    let check = |serialized: &mut Serialized, before: &[u8], what: &str| -> Vec<u8> {
+        let after = serialized.frame();
+        assert_ne!(
+            (path_outline(before, 0).0, path_outline_serial(before, 0)),
+            (path_outline(&after, 0).0, path_outline_serial(&after, 0)),
+            "a new path or definition for the new {what}"
+        );
+        assert_ne!(entry(before), entry(&after), "the entry changes with the {what}");
+        assert!(serialized.resources.has_pending(), "the new {what}'s contents are defined");
+        let mut defined = Writer::default();
+        serialized.resources.write_pending(&mut defined);
+        after
+    };
+    side.set(60.0);
+    let sized = check(&mut serialized, &first, "size");
+    direction.set(LayoutDirection::Rtl);
+    let mirrored = check(&mut serialized, &sized, "direction");
+    // The same pixels at the new density: only the cut, in dp, differs.
+    serialized.host.set_density(Density::new(2.0));
+    side.set(30.0);
+    check(&mut serialized, &mirrored, "density");
+}
+
 /// A layer clipping to a cut shape while only its alpha animates: its outline is the same
 /// path each frame (kept by the layer for its shape, size, direction and density), so the
-/// `LAYERS` entry names the same path and defines nothing new, as Compose's layer keeps its
-/// outline until its shape or size changes (D1059).
+/// `LAYERS` entry names the same path and defines nothing new (D1059, built-in shapes only:
+/// D1063).
 #[test]
 fn an_alpha_animation_over_a_cut_shape_keeps_its_path() {
     let alpha = mutable_state_of(1.0f32);

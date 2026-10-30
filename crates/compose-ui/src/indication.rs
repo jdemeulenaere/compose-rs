@@ -244,10 +244,14 @@ impl InteractionStates {
         self.listener = Some(listener);
     }
 
-    /// Its node is attached (in `context`, its host's): it listens, and draws through it.
+    /// Its node is attached (in `context`, its host's): it listens, and draws through it. What
+    /// it heard since it was made, before it had this handle, asks now.
     pub(crate) fn attach(&mut self, context: &mut NodeContext<'_>) {
         self.start();
         self.shared.handle.set(Some(context.handle()));
+        // This and `stop`'s reset are close to equivalent mutants, which no test tells from no
+        // reset: a detached node hears nothing, and `get` resets it at the next draw. Kept so a
+        // node attached again with a request left over can't skip its first.
         self.shared.asked.set(false);
         if self.shared.bits.get() != 0 {
             context.invalidate_draw();
@@ -391,6 +395,13 @@ struct IndicationElement {
     factory: Rc<dyn IndicationNodeFactory>,
 }
 
+/// An attached hosted node gone for good (replaced, or its clickable leaving): detached, as
+/// Compose's `undelegate`, then what it holds given back (D1064).
+pub(crate) fn detach_and_release(mut node: Box<dyn ModifierNode>, context: &mut NodeContext<'_>) {
+    node.on_detach(context);
+    node.on_release(&mut context.release_context());
+}
+
 /// Hosts the factory's node, made again for a new source or a factory not the same.
 pub(crate) struct IndicationHostNode {
     node: Box<dyn ModifierNode>,
@@ -398,12 +409,14 @@ pub(crate) struct IndicationHostNode {
     draws_content: bool,
     /// Whether `node` is attached (attached with its host, as Compose's delegate).
     attached: bool,
-    /// Nodes replaced while attached, detached by `run_lifecycle`.
+    /// Nodes replaced while attached, detached and released by `run_lifecycle`.
     retired: Vec<Box<dyn ModifierNode>>,
     /// The host's handle while it's attached, for `run_lifecycle` from a task (an update has
     /// no context: MN-5's delegates will do this at once).
     handle: Option<NodeHandle>,
-    lifecycle_scheduled: bool,
+    /// A task runs `run_lifecycle` soon. Shared with the task: it says it's done even if the
+    /// tree was busy and the node out of reach.
+    lifecycle_scheduled: Rc<std::cell::Cell<bool>>,
 }
 
 impl IndicationHostNode {
@@ -415,7 +428,7 @@ impl IndicationHostNode {
             attached: false,
             retired: Vec::new(),
             handle: None,
-            lifecycle_scheduled: false,
+            lifecycle_scheduled: Rc::default(),
         }
     }
 
@@ -428,20 +441,19 @@ impl IndicationHostNode {
         }
         let Some(handle) = self.handle else { return };
         let Some(scope) = handle.coroutine_scope() else { return };
-        if std::mem::replace(&mut self.lifecycle_scheduled, true) {
+        if self.lifecycle_scheduled.replace(true) {
             return;
         }
+        let scheduled = self.lifecycle_scheduled.clone();
         scope.launch(async move {
-            handle.with_node(|host: &mut IndicationHostNode, context| {
-                host.lifecycle_scheduled = false;
-                host.run_lifecycle(context);
-            });
+            scheduled.set(false);
+            handle.with_node(|host: &mut IndicationHostNode, context| host.run_lifecycle(context));
         });
     }
 
     fn run_lifecycle(&mut self, context: &mut NodeContext<'_>) {
-        for mut node in self.retired.drain(..) {
-            node.on_detach(context);
+        for node in self.retired.drain(..) {
+            detach_and_release(node, context);
         }
         if context.is_attached() && !self.attached {
             self.node.on_attach(context);
@@ -486,17 +498,23 @@ impl ModifierNode for IndicationHostNode {
         if std::mem::take(&mut self.attached) {
             self.node.on_detach(context);
         }
-        for mut node in self.retired.drain(..) {
-            node.on_detach(context);
+        for node in self.retired.drain(..) {
+            detach_and_release(node, context);
         }
         self.handle = None;
         // Its task goes with its coroutine scope.
-        self.lifecycle_scheduled = false;
+        self.lifecycle_scheduled.set(false);
     }
+    /// Its node's too if it's attached, as `DelegatingNode.reset` resets its delegates.
     fn on_reset(&mut self, context: &mut NodeContext<'_>) {
-        self.node.on_reset(context);
+        if self.attached {
+            self.node.on_reset(context);
+        }
     }
     fn on_release(&mut self, context: &mut crate::modifier::ReleaseContext<'_>) {
+        for node in self.retired.iter_mut() {
+            node.on_release(context);
+        }
         self.node.on_release(context);
     }
 }
@@ -753,6 +771,55 @@ mod tests {
         shown.set(true);
         host.frame();
         assert_eq!(dirty(&host), [false]);
+    }
+
+    /// What a node heard since it was made, before it was attached (a paused composition's, drawn
+    /// ahead, attached when it's applied), draws when it's attached: it had no handle to ask
+    /// through, and nothing else says so.
+    #[test]
+    fn what_a_node_heard_before_it_was_attached_draws_once_it_is() {
+        let source = MutableInteractionSource::new();
+        let given = source.clone();
+        let mut host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            crate::layout::emit_layout_node(
+                // A boundary of its own: only what asks draws it again.
+                Modifier
+                    .repaint_boundary()
+                    .indication(given.clone(), Indication::bounded(Color::RED))
+                    .size(10.dp()),
+                crate::layout::empty_measure_policy(),
+                || {},
+            );
+        });
+        host.frame();
+        assert!(!shaded(&host));
+        host.with_tree(|tree| {
+            let mut stack = vec![tree.root_id()];
+            while let Some(id) = stack.pop() {
+                let found =
+                    tree.node(id).chain.iter().position(|entry| {
+                        entry.node.downcast_ref::<IndicationHostNode>().is_some()
+                    });
+                if let Some(index) = found {
+                    tree.with_entry(id, index, |node, context| {
+                        let host = node.downcast_mut::<IndicationHostNode>().expect("the host");
+                        // Its node out, a new one made and not yet attached, which hears a press.
+                        host.on_detach(context);
+                        let factory = state_layer_factory(Color::RED, None);
+                        host.replace(factory.create(source.as_source().clone()));
+                        source.try_emit(PressInteraction::Press(Press::new(Offset::ZERO)));
+                        assert!(!context.tree.has_node_requests(), "nothing to ask through");
+                        host.on_attach(context);
+                    });
+                    return;
+                }
+                stack.extend(tree.children_of(id));
+            }
+            panic!("no indication");
+        });
+        host.frame();
+        assert!(shaded(&host), "it draws the press\n{}", host.display_list().dump());
     }
 
     /// Content moved under a resting mouse: the hover the frame's layout finds is drawn by the
