@@ -13,6 +13,7 @@ extern crate compose_runtime as compose;
 
 mod animatable;
 mod animation;
+mod arc_spline;
 mod as_state;
 mod content;
 mod content_size;
@@ -38,6 +39,7 @@ mod visibility;
 
 pub use animatable::{Animatable, AnimationEndReason, AnimationResult};
 pub use animation::{Animation, TargetBasedAnimation};
+pub use arc_spline::ArcMode;
 #[doc(hidden)]
 pub use as_state::{
     __dp_default_spring, __int_default_spring, __int_offset_default_spring,
@@ -78,8 +80,8 @@ pub use easing::{
 };
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{
-    KeyframeEntry, KeyframesBuilder, KeyframesSpec, KeyframesWithSplineSpec, keyframes,
-    keyframes_with_spline, periodic_keyframes_with_spline,
+    ArcAnimationSpec, KeyframeEntry, KeyframesBuilder, KeyframesSpec, KeyframesWithSplineSpec,
+    keyframes, keyframes_with_spline, periodic_keyframes_with_spline,
 };
 pub use seekable::SeekableTransitionState;
 pub use shared::{

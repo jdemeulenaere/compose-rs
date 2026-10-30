@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crate::easing::{Easing, FAST_OUT_SLOW_IN_EASING};
-use crate::keyframes::{KeyframesSpec, KeyframesWithSplineSpec};
+use crate::keyframes::{ArcAnimationSpec, KeyframesSpec, KeyframesWithSplineSpec};
 use crate::spring::{SpringSimulation, estimate_animation_duration_millis};
 use crate::vector::{Animate, AnimationVector};
 
@@ -607,6 +607,12 @@ impl From<KeyframesSpec> for DurationBasedSpec {
     }
 }
 
+impl From<ArcAnimationSpec> for DurationBasedSpec {
+    fn from(spec: ArcAnimationSpec) -> DurationBasedSpec {
+        DurationBasedSpec::Keyframes(spec.into())
+    }
+}
+
 impl From<KeyframesWithSplineSpec> for DurationBasedSpec {
     fn from(spec: KeyframesWithSplineSpec) -> DurationBasedSpec {
         DurationBasedSpec::KeyframesWithSpline(spec)
@@ -969,6 +975,12 @@ impl InterruptionAwareAnimationSpec {
     /// The spec when interrupting, as `interruptionSpec`.
     pub fn interruption_spec(&self) -> &AnimationSpec {
         &self.specs.1
+    }
+}
+
+impl From<ArcAnimationSpec> for AnimationSpec {
+    fn from(spec: ArcAnimationSpec) -> AnimationSpec {
+        AnimationSpec::Keyframes(spec.into())
     }
 }
 

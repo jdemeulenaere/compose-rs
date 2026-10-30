@@ -9,6 +9,7 @@ mod animated_visibility;
 mod animation;
 mod animation_objects;
 mod animation_vector;
+mod arc_animation;
 mod composite_hash;
 mod content;
 mod content_size;

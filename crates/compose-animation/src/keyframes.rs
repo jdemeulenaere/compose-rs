@@ -9,7 +9,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::easing::{Easing, LINEAR_EASING};
+use crate::arc_spline::{ArcMode, ArcSpline};
+use crate::easing::{Easing, FAST_OUT_SLOW_IN_EASING, LINEAR_EASING};
 use crate::mono_spline::MonoSpline;
 use crate::spec::{MILLIS_TO_NANOS, VectorizedAnimationSpec, lerp};
 use crate::vector::{Animate, AnimationVector};
@@ -35,9 +36,10 @@ struct Keyframe {
     time_millis: i32,
     value: AnimationVector,
     easing: Easing,
+    arc_mode: ArcMode,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 struct Entry {
     duration_millis: u32,
     delay_millis: u32,
@@ -45,6 +47,31 @@ struct Entry {
     frames: Vec<Keyframe>,
     /// The times of the stretches: the keyframes', with 0 and the duration, sorted.
     timestamps: Vec<i32>,
+    /// The easing of a stretch no keyframe starts, as `defaultEasing`.
+    default_easing: Easing,
+    /// The arc mode of the same, as `initialArcMode`.
+    initial_arc_mode: ArcMode,
+    /// Whether some stretch isn't a line, as `requiresArcSpline`.
+    requires_arcs: bool,
+    /// The arcs of the last start and end values, as `VectorizedKeyframesSpec`'s fields.
+    arcs: RefCell<Option<CachedArcs>>,
+}
+
+#[derive(Debug)]
+struct CachedArcs {
+    initial_value: AnimationVector,
+    target_value: AnimationVector,
+    spline: Rc<ArcSpline>,
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Entry) -> bool {
+        self.duration_millis == other.duration_millis
+            && self.delay_millis == other.delay_millis
+            && self.frames == other.frames
+            && self.default_easing == other.default_easing
+            && self.initial_arc_mode == other.initial_arc_mode
+    }
 }
 
 impl Entry {
@@ -53,6 +80,75 @@ impl Entry {
             .binary_search_by_key(&time_millis, |frame| frame.time_millis)
             .ok()
             .map(|index| &self.frames[index])
+    }
+
+    /// The entry index with `time_millis` at or after it and before the next, as
+    /// `findEntryForTimeMillis`.
+    fn index_of(&self, time_millis: i32) -> usize {
+        match self.timestamps.binary_search(&time_millis) {
+            Ok(index) => index,
+            Err(insertion) => insertion.saturating_sub(1),
+        }
+    }
+
+    /// `time_millis` in seconds, eased within its stretch, as `getEasedTimeFromIndex`.
+    fn eased_time(&self, index: usize, time_millis: i32) -> f32 {
+        if index + 1 >= self.timestamps.len() {
+            return time_millis as f32 / SECONDS_TO_MILLIS;
+        }
+        let (from, to) = (self.timestamps[index], self.timestamps[index + 1]);
+        if time_millis == from {
+            return from as f32 / SECONDS_TO_MILLIS;
+        }
+        let range = (to - from) as f32;
+        let easing = self.frame_at(from).map_or(&self.default_easing, |frame| &frame.easing);
+        let eased = easing.transform((time_millis - from) as f32 / range);
+        (range * eased + from as f32) / SECONDS_TO_MILLIS
+    }
+
+    /// The times of the stretches in seconds.
+    fn times_in_seconds(&self) -> Vec<f32> {
+        self.timestamps.iter().map(|time| *time as f32 / SECONDS_TO_MILLIS).collect()
+    }
+
+    /// The value at each of the times: a keyframe's, else the start's at 0 or the end's.
+    fn values_with(
+        &self,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+    ) -> Vec<AnimationVector> {
+        self.timestamps
+            .iter()
+            .map(|time| match self.frame_at(*time) {
+                Some(frame) => frame.value,
+                None if *time == 0 => initial_value,
+                None => target_value,
+            })
+            .collect()
+    }
+
+    /// The arcs from `initial_value` to `target_value`, as `init`, kept until they change.
+    fn arc_spline(
+        &self,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+    ) -> Rc<ArcSpline> {
+        let mut cached = self.arcs.borrow_mut();
+        if let Some(cached) = &*cached
+            && cached.initial_value == initial_value
+            && cached.target_value == target_value
+        {
+            return cached.spline.clone();
+        }
+        let modes: Vec<ArcMode> = self
+            .timestamps
+            .iter()
+            .map(|time| self.frame_at(*time).map_or(self.initial_arc_mode, |frame| frame.arc_mode))
+            .collect();
+        let values = self.values_with(initial_value, target_value);
+        let spline = Rc::new(ArcSpline::new(&modes, &self.times_in_seconds(), &values));
+        *cached = Some(CachedArcs { initial_value, target_value, spline: spline.clone() });
+        spline
     }
 }
 
@@ -74,8 +170,17 @@ pub struct KeyframeEntry<'a> {
 
 impl KeyframeEntry<'_> {
     /// Eases the stretch from this keyframe to the next along `easing` (linear by default).
-    pub fn using(self, easing: Easing) {
+    pub fn using(self, easing: Easing) -> Self {
         self.frame.easing = easing;
+        self
+    }
+
+    /// Goes from this keyframe to the next along `arc_mode` (a line by default), as Compose's
+    /// `using` of an `ArcMode`: for `keyframes`; `keyframes_with_spline`'s curve is across them all,
+    /// and ignores it, where Compose's config doesn't offer it.
+    pub fn using_arc(self, arc_mode: ArcMode) -> Self {
+        self.frame.arc_mode = arc_mode;
+        self
     }
 }
 
@@ -83,7 +188,12 @@ impl<T: Animate> KeyframesBuilder<T> {
     /// `value` at `time_millis`, as `value at time`. A later one at the same time replaces it;
     /// times outside 0 to the duration are ignored.
     pub fn at(&mut self, time_millis: i32, value: T) -> KeyframeEntry<'_> {
-        let frame = Keyframe { time_millis, value: value.to_vector(), easing: LINEAR_EASING };
+        let frame = Keyframe {
+            time_millis,
+            value: value.to_vector(),
+            easing: LINEAR_EASING,
+            arc_mode: ArcMode::ArcLinear,
+        };
         let index = match self.frames.iter().position(|old| old.time_millis == time_millis) {
             Some(index) => {
                 self.frames[index] = frame;
@@ -134,7 +244,17 @@ fn built<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> Entry {
         }
     }
     timestamps.sort_unstable();
-    Entry { duration_millis, delay_millis, frames, timestamps }
+    let requires_arcs = frames.iter().any(|frame| frame.arc_mode != ArcMode::ArcLinear);
+    Entry {
+        duration_millis,
+        delay_millis,
+        frames,
+        timestamps,
+        default_easing: LINEAR_EASING,
+        initial_arc_mode: ArcMode::ArcLinear,
+        requires_arcs,
+        arcs: RefCell::new(None),
+    }
 }
 
 impl KeyframesSpec {
@@ -169,14 +289,16 @@ impl KeyframesSpec {
         if time <= 0 {
             return initial_value;
         }
+        if entry.requires_arcs {
+            let spline = entry.arc_spline(initial_value, target_value);
+            let position = spline.position(entry.eased_time(entry.index_of(time), time));
+            return initial_value.map(|index, _| position[index]);
+        }
         // The stretch from the last time at or before it to the next.
-        let index = match entry.timestamps.binary_search(&time) {
-            Ok(index) => index,
-            Err(insertion) => insertion - 1,
-        };
+        let index = entry.index_of(time);
         let (from, to) = (entry.timestamps[index], entry.timestamps[index + 1]);
         let start = entry.frame_at(from);
-        let easing = start.map_or(&LINEAR_EASING, |frame| &frame.easing);
+        let easing = start.map_or(&entry.default_easing, |frame| &frame.easing);
         let fraction = easing.transform((time - from) as f32 / (to - from) as f32);
         let start = start.map_or(initial_value, |frame| frame.value);
         let end = entry.frame_at(to).map_or(target_value, |frame| frame.value);
@@ -217,6 +339,12 @@ impl VectorizedAnimationSpec for KeyframesSpec {
     ) -> AnimationVector {
         let entry = &self.entry;
         let clamped = self.clamp_play_time(play_time_nanos / MILLIS_TO_NANOS);
+        if entry.requires_arcs {
+            let time = clamped as i32;
+            let spline = entry.arc_spline(initial_value, target_value);
+            let slope = spline.slope(entry.eased_time(entry.index_of(time), time));
+            return initial_value.map(|index, _| slope[index]);
+        }
         let start = self.value_from_millis_in(entry, clamped - 1, initial_value, target_value);
         let end = self.value_from_millis_in(entry, clamped, initial_value, target_value);
         initial_value.map(|index, _| (component(start, index) - component(end, index)) * 1000.0)
@@ -321,42 +449,11 @@ impl KeyframesWithSplineSpec {
             return cached.spline.clone();
         }
         let entry = &inner.entry;
-        let values = entry.timestamps.iter().map(|time| match entry.frame_at(*time) {
-            Some(frame) => frame.value,
-            None if *time == 0 => initial_value,
-            None => target_value,
-        });
-        let values: Vec<AnimationVector> = values.collect();
-        let times: Vec<f32> =
-            entry.timestamps.iter().map(|time| *time as f32 / SECONDS_TO_MILLIS).collect();
+        let values = entry.values_with(initial_value, target_value);
+        let times = entry.times_in_seconds();
         let spline = Rc::new(MonoSpline::new(times, values, inner.periodic_bias));
         *cached = Some(CachedSpline { initial_value, target_value, spline: spline.clone() });
         spline
-    }
-
-    /// The entry index with `time_millis` at or after it and before the next, as
-    /// `findEntryForTimeMillis`.
-    fn index_of(&self, time_millis: i32) -> usize {
-        match self.inner.entry.timestamps.binary_search(&time_millis) {
-            Ok(index) => index,
-            Err(insertion) => insertion.saturating_sub(1),
-        }
-    }
-
-    /// `time_millis` in seconds, eased within its stretch, as `getEasedTimeFromIndex`.
-    fn eased_time(&self, index: usize, time_millis: i32) -> f32 {
-        let entry = &self.inner.entry;
-        if index + 1 >= entry.timestamps.len() {
-            return time_millis as f32 / SECONDS_TO_MILLIS;
-        }
-        let (from, to) = (entry.timestamps[index], entry.timestamps[index + 1]);
-        if time_millis == from {
-            return from as f32 / SECONDS_TO_MILLIS;
-        }
-        let range = (to - from) as f32;
-        let easing = entry.frame_at(from).map_or(&LINEAR_EASING, |frame| &frame.easing);
-        let eased = easing.transform((time_millis - from) as f32 / range);
-        (range * eased + from as f32) / SECONDS_TO_MILLIS
     }
 }
 
@@ -382,8 +479,9 @@ impl VectorizedAnimationSpec for KeyframesWithSplineSpec {
             return initial_value;
         }
         let spline = self.spline(initial_value, target_value);
-        let index = self.index_of(time);
-        spline.position(self.eased_time(index, time), index, initial_value)
+        let entry = &self.inner.entry;
+        let index = entry.index_of(time);
+        spline.position(entry.eased_time(index, time), index, initial_value)
     }
 
     fn velocity_from_nanos(
@@ -395,12 +493,112 @@ impl VectorizedAnimationSpec for KeyframesWithSplineSpec {
     ) -> AnimationVector {
         let time = self.clamped(play_time_nanos);
         let spline = self.spline(initial_value, target_value);
-        let index = self.index_of(time);
-        spline.slope(self.eased_time(index, time), index, initial_velocity)
+        let entry = &self.inner.entry;
+        let index = entry.index_of(time);
+        spline.slope(entry.eased_time(index, time), index, initial_velocity)
     }
 
     fn duration_nanos(&self, _: AnimationVector, _: AnimationVector, _: AnimationVector) -> i64 {
         let entry = &self.inner.entry;
         (i64::from(entry.delay_millis) + i64::from(entry.duration_millis)) * MILLIS_TO_NANOS
+    }
+}
+
+/// An arc from the start value to the target, as Compose's `ArcAnimationSpec`: built with
+/// [`ArcAnimationSpec::new`], [`duration`](Self::duration), [`delay`](Self::delay) and
+/// [`easing`](Self::easing), playing as keyframes with none, as Compose's `vectorize`. For positions,
+/// and experimental in Compose (`@ExperimentalAnimationSpecApi`): see [`ArcMode`].
+#[derive(Clone, PartialEq, Debug)]
+pub struct ArcAnimationSpec {
+    mode: ArcMode,
+    duration_millis: u32,
+    delay_millis: u32,
+    easing: Easing,
+    keyframes: KeyframesSpec,
+}
+
+impl ArcAnimationSpec {
+    /// `mode` over 300 ms, eased by `FAST_OUT_SLOW_IN_EASING`, with no delay: `ArcAnimationSpec(mode)`.
+    pub fn new(mode: ArcMode) -> ArcAnimationSpec {
+        let duration = crate::spec::DEFAULT_DURATION_MILLIS;
+        ArcAnimationSpec::with(mode, duration, 0, FAST_OUT_SLOW_IN_EASING)
+    }
+
+    fn with(mode: ArcMode, duration_millis: u32, delay_millis: u32, easing: Easing) -> Self {
+        let duration = duration_millis.min(i32::MAX as u32) as i32;
+        let entry = Rc::new(Entry {
+            duration_millis,
+            delay_millis,
+            frames: Vec::new(),
+            timestamps: vec![0, duration],
+            default_easing: easing.clone(),
+            initial_arc_mode: mode,
+            requires_arcs: mode != ArcMode::ArcLinear,
+            arcs: RefCell::new(None),
+        });
+        let keyframes = KeyframesSpec { entry, duration_millis, delay_millis };
+        ArcAnimationSpec { mode, duration_millis, delay_millis, easing, keyframes }
+    }
+
+    /// The same over `duration_millis`, as `durationMillis`.
+    pub fn duration(self, duration_millis: u32) -> ArcAnimationSpec {
+        ArcAnimationSpec::with(self.mode, duration_millis, self.delay_millis, self.easing)
+    }
+
+    /// The same after `delay_millis`, as `delayMillis`.
+    pub fn delay(self, delay_millis: u32) -> ArcAnimationSpec {
+        ArcAnimationSpec::with(self.mode, self.duration_millis, delay_millis, self.easing)
+    }
+
+    /// The same along `easing`, as `easing`.
+    pub fn easing(self, easing: Easing) -> ArcAnimationSpec {
+        ArcAnimationSpec::with(self.mode, self.duration_millis, self.delay_millis, easing)
+    }
+}
+
+impl VectorizedAnimationSpec for ArcAnimationSpec {
+    fn value_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        initial_velocity: AnimationVector,
+    ) -> AnimationVector {
+        self.keyframes.value_from_nanos(
+            play_time_nanos,
+            initial_value,
+            target_value,
+            initial_velocity,
+        )
+    }
+
+    fn velocity_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        initial_velocity: AnimationVector,
+    ) -> AnimationVector {
+        self.keyframes.velocity_from_nanos(
+            play_time_nanos,
+            initial_value,
+            target_value,
+            initial_velocity,
+        )
+    }
+
+    fn duration_nanos(
+        &self,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        initial_velocity: AnimationVector,
+    ) -> i64 {
+        self.keyframes.duration_nanos(initial_value, target_value, initial_velocity)
+    }
+}
+
+impl From<ArcAnimationSpec> for KeyframesSpec {
+    fn from(spec: ArcAnimationSpec) -> KeyframesSpec {
+        spec.keyframes
     }
 }

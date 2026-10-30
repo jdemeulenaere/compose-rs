@@ -32,17 +32,17 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 31 | 246 |
+| `ported` | 33 | 260 |
 | `port` | 0 | 0 |
 | `partial` | 6 | 59 |
-| `feature:<name>` | 48 | 588 |
+| `feature:<name>` | 46 | 574 |
 | `n/a` | 10 | 128 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 24 / 167 | 0 | 3 / 19 | 3 / 26 | 0 |
+| animation-core | 30 | 212 | 0 | 26 / 181 | 0 | 3 / 19 | 1 / 12 | 0 |
 | animation | 15 | 238 | 0 | 7 / 79 | 0 | 3 / 40 | 5 / 119 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
@@ -59,7 +59,6 @@ By module:
 | nav3-runtime | 8 | 79 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
-| arc-animation | 2 | 14 |
 | path-easing | 1 | 12 |
 | nav3-results | 4 | 10 |
 | captured-animated-visibility | 1 | 9 |
@@ -67,7 +66,7 @@ By module:
 
 Three parts:
 
-- **Animation** (50 files, 472 tests): 31 files `ported` (246 tests), 6 `partial` (59), 13 waiting on features (167), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the remaining specs (path-easing, arc-animation), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
+- **Animation** (50 files, 472 tests): 33 files `ported` (260 tests), 6 `partial` (59), 11 waiting on features (153), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the ui path iterator (path-easing), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
 - **Navigation 3** (36 files, 428 tests): 35 files waiting on its four features (421 tests), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3. Predictive back is one of its dependencies.
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
@@ -88,7 +87,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 1 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimatableTest.kt` | 9 | `Animatable`: animateTo (float, generic), interruption, animateDecay, updateBounds, IntSize bounds, toString of results | ported | `animation_objects.rs` and `interruption_aware.rs` (16 ms frames, not 50); the 2 `toString` tests are n/a (Rust `Debug`) |
 | 2 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt` | 6 | `TargetBasedAnimation` values/velocities for snap, keyframes, tween, spring; infinite repeatable velocity across repetitions | ported | `animation_objects.rs` (`testVectorizedInfiniteRepeatableSpec_velocityOnRepetitions` with a `DurationBasedSpec::custom`, D816) |
 | 3 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationVectorTest.kt` | 3 | `AnimationVector1D..4D`: reset, hashCode, factory functions | partial | 2 ported (`animation_vector.rs`: `reset`, the factory); `testHashCode` n/a (`AnimationVector` holds floats: no `Hash`) |
-| 4 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/ArcAnimationTest.kt` | 12 | `ArcAnimationSpec` (ArcAbove/Below/Linear) interpolation in 1-4 dimensions, equality, curve shape | `feature:arc-animation` | experimental (`@ExperimentalAnimationSpecApi`) |
+| 4 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/ArcAnimationTest.kt` | 12 | `ArcAnimationSpec` (ArcAbove/Below/Linear) interpolation in 1-4 dimensions, equality, curve shape | ported | `arc_animation.rs`; the 3 curve plots in `arc_spline.rs`'s unit tests (D844) |
 | 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | ported | `animation_objects.rs` |
 | 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | ported | `deferred_target.rs` |
 | 7 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt` | 5 | Compose's internal `delayed(spec, nanos)` wrapper: duration, values, velocity, zero, equality | partial | 4 ported (`animation.rs`'s unit tests, on `TargetBasedAnimation::delayed`: compose-rs delays the animation, not the spec); `comparison` n/a: no delayed specs to compare (D821) |
@@ -96,7 +95,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | ported | `easing.rs` |
 | 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | ported | `animation_objects.rs` |
 | 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | ported | `keyframe_animation.rs`; `testNotEquals0` inverted there: keyframes built alike are equal (D816) |
-| 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | `feature:arc-animation` |  |
+| 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | ported | `arc_animation.rs` |
 | 13 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt` | 8 | `keyframesWithSpline`: interpolation, periodic bias, easing, delay, equality | ported | `keyframe_spline_animation.rs`; `testNotEquals0`'s specs built alike are equal (D816, D843) |
 | 14 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/MonoSplineTest.kt` | 2 | the monotonic spline under `keyframesWithSpline` | ported | unit tests of `mono_spline.rs`, an internal class, with its text plot |
 | 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | ported | `physics.rs`, `interruption_aware.rs` |
@@ -249,9 +248,9 @@ Deprecated and left out:
 | `SpringSpec` duration (Compose's spring estimation), and ending an animation at that duration | present (D800) | spring-estimation |
 | `AnimationState` (ctor, `copy`, `isFinished`, `createZeroVectorFrom`), `AnimationScope` (`cancelAnimation`, times, value, velocity), `animate(…)` (float and generic), `AnimationState.animateTo`, `animateDecay(…)` (float and on `AnimationState`), `sequentialAnimation` | present (`animate`, `animate_value`, `animate_decay`, `AnimationState`, `AnimationScope`, D819) | suspend-animate (decay forms: decay-animation) |
 | `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponentialDecay`, `FloatExponentialDecaySpec`, `generateDecayAnimationSpec`, `calculateTargetValue` (both), `DecayAnimation` (3 ctors), `DecayAnimation(FloatDecayAnimationSpec, …)` | present (D807) | decay-animation |
-| `ArcAnimationSpec` (experimental), `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), `KeyframesSpecConfig.using(entity, ArcMode)` | missing | arc-animation |
+| `ArcAnimationSpec` (experimental), `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), `KeyframesSpecConfig.using(entity, ArcMode)` | present: `ArcAnimationSpec::new`, `ArcMode`, `using_arc` (D844) | arc-animation |
 | `KeyframesSpecBaseConfig.atFraction`, `using(entity, easing)`, `durationMillis` settable in the builder | present (`at_fraction`, `using`, `duration_millis` settable) | spec-gaps |
-| `KeyframesWithSplineSpec`, `keyframesWithSpline(init)`, `keyframesWithSpline(periodicBias, init)` | missing | keyframes-with-spline |
+| `KeyframesWithSplineSpec`, `keyframesWithSpline(init)`, `keyframesWithSpline(periodicBias, init)` | present: `keyframes_with_spline`, `periodic_keyframes_with_spline` (D843) | keyframes-with-spline |
 | `StartOffset`, `StartOffsetType` (`Delay`, `FastForward`); `initialStartOffset` on `repeatable`, `infiniteRepeatable`, `RepeatableSpec`, `InfiniteRepeatableSpec` | present (`repeatable_with`, `infinite_repeatable_with`) | spec-gaps |
 | `SnapSpec` as a `DurationBasedAnimationSpec` (so `repeatable(snap())` works) | present (D800) | spec-gaps |
 | `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | present (D809) | interruption-aware-spec |
@@ -449,7 +448,7 @@ One entry per feature. Sizes:
 - **Tests:** `KeyframeSplineAnimationTest`, `MonoSplineTest`, `RepeatableAnimationTest` (1).
 - **Dependencies:** spec-gaps (`atFraction`).
 
-#### arc-animation (M; `ArcAnimationSpec` is exp., `ArcMode` and keyframes `using(ArcMode)` are not)
+#### arc-animation (M; `ArcAnimationSpec` is exp., `ArcMode` and keyframes `using(ArcMode)` are not): done (D844)
 
 - **API:** `ArcAnimationSpec`, `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), keyframes `using(arc_mode)`.
 - **Tests:** `ArcAnimationTest`, `KeyframeArcAnimationTest`, `RepeatableAnimationTest` (1).
@@ -662,7 +661,7 @@ Navigation 3 replaces `compose-navigation`'s model (D704), rather than sitting b
 6. **animated-visibility-scope (M)**, then **animated-content-scope (M–L)** and **crossfade-extras (S)**.
 7. **The animation-core additions:** decay-animation (M), then suspend-animate (M) and motion-duration-scale (S–M).
 8. **seekable-transition (L)**.
-9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental).
+9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental, done).
 10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
 12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last or never. It replaces `compose-navigation`.

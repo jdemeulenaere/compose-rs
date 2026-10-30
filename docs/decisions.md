@@ -19,10 +19,14 @@ The log is split by area into the files below, one table each, rows in number or
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 126 |
 <<<<<<< HEAD
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 255 |
+<<<<<<< HEAD
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 256 |
 =======
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 252 |
 >>>>>>> af67875b (keyframes_with_spline as Compose's KeyframesWithSplineSpec, on a port of MonoSpline, periodic too (D843))
+=======
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 253 |
+>>>>>>> a78744d5 (Arcs as Compose's: ArcMode, a port of ArcSpline, keyframes using_arc, ArcAnimationSpec (D844))
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 90 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
@@ -499,6 +503,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D841 | [api-and-tooling](decisions/api-and-tooling.md#d841) | current |
 | D842 | [ui-and-layout](decisions/ui-and-layout.md#d842) | current |
 | D843 | [ui-and-layout](decisions/ui-and-layout.md#d843) | current |
+| D844 | [ui-and-layout](decisions/ui-and-layout.md#d844) | current |
 | D850 | [ui-and-layout](decisions/ui-and-layout.md#d850) | current |
 | D851 | [api-and-tooling](decisions/api-and-tooling.md#d851) | current |
 | D852 | [ui-and-layout](decisions/ui-and-layout.md#d852) | current |
