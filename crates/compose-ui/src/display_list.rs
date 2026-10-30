@@ -495,6 +495,16 @@ fn fill_extent(op: &DrawOp) -> Option<Rect> {
     }
 }
 
+/// The group first in `groups` flattened, with those nested in it that follow it.
+pub(crate) fn flatten_groups(groups: &[DrawGroup]) -> FlatDisplayList {
+    let mut flat = FlatDisplayList::default();
+    if let Some(first) = groups.first() {
+        let boundary = Boundary { at: 0, key: first.key };
+        flatten_group(&boundary, groups, &mut 0, &mut flat);
+    }
+    flat
+}
+
 /// Appends `recording` (the frame, or a group's content) to `flat`, each group it draws (the
 /// frame's `groups` from `next` on) in place.
 fn flatten_into(

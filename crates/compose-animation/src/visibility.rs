@@ -863,7 +863,7 @@ pub(crate) type ShouldDispose = Rc<dyn Fn(EnterExitState, EnterExitState) -> boo
 /// The child transition's state for a parent state, as Compose's `targetEnterExit`: `Visible`
 /// when visible, else `PreEnter` while a pending target shows it (a gesture coming back to it),
 /// else `PostExit` once it has been visible, `PreEnter` before. Calls `remember`.
-fn target_enter_exit<T: Clone + PartialEq + 'static>(
+pub(crate) fn target_enter_exit<T: Clone + PartialEq + 'static>(
     transition: &Transition<T>,
     visible: &VisibleFn<T>,
     target_state: &T,
@@ -1023,7 +1023,7 @@ impl Tracker {
     }
 }
 
-fn update_enter_exit_modifier_state(
+pub(crate) fn update_enter_exit_modifier_state(
     transition: &Transition<EnterExitState>,
     enter: EnterTransition,
     exit: ExitTransition,
@@ -1132,7 +1132,7 @@ fn neutralized(exit: &ExitTransition) -> ExitTransition {
 /// The modifier animating the content's alpha, scale, size and slide, as Compose's
 /// `createEnterExitModifier`: a clip while a size animates (unless asked not to), the
 /// size and slide in a layout node, the alpha and scale in a graphics layer.
-fn create_enter_exit_modifier(
+pub(crate) fn create_enter_exit_modifier(
     transition: &Transition<EnterExitState>,
     enter: EnterTransition,
     exit: ExitTransition,

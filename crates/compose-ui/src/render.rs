@@ -125,6 +125,7 @@ impl UiTree {
         if !self.needs_draw {
             return false;
         }
+        self.held_paragraphs.sweep(&mut *self.text_measurer);
         let observer = self.observer.clone();
         let mut recording = mem::take(&mut self.display_list);
         // The boundaries the last frame drew that this one won't, still composed: kept drawn
@@ -541,7 +542,19 @@ impl UiTree {
         let group = &mut groups[index];
         group.descendants = descendants;
         group.empty = !draws;
+        if changed && self.node(node).kinds.any(NodeKinds::CONTENT_CAPTURE) {
+            self.capture_content(node, groups[index..].to_vec());
+        }
         (changed, draws)
+    }
+
+    /// What `node` drew, with the groups nested in it, goes to its `Modifier.capture_content`'s.
+    fn capture_content(&mut self, node: NodeId, groups: Vec<DrawGroup>) {
+        let value = self.node(node);
+        let capture = value.chain.iter().find_map(|entry| entry.node.content_capture()).cloned();
+        if let Some(capture) = capture {
+            self.held_paragraphs.store(&capture, groups, &mut *self.text_measurer);
+        }
     }
 
     /// Appends inner layer `key`'s group to `groups`, then the groups nested in it: its content

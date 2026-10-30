@@ -480,7 +480,10 @@ impl UiTree {
             self.mark_entry_detached(entry.id, &mut state);
             self.forget_entry_reads(entry.id, state);
             self.release_delegates(&mut *entry.node);
-            let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
+            let mut context = ReleaseContext {
+                text_measurer: &mut *self.text_measurer,
+                held_paragraphs: &mut self.held_paragraphs,
+            };
             entry.node.on_release(&mut context);
         }
     }

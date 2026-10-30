@@ -23,7 +23,7 @@ The inventory of Compose's animation and navigation tests and public API against
   `ExperimentalAnimationApi`, `ExperimentalSharedTransitionApi`, `ExperimentalTransitionApi` and `ExperimentalAnimationGraphicsApi` still exist but annotate nothing public. Shared transitions, `SeekableTransitionState`, `animateBounds` and the new `Deferred*` APIs are all stable.
 - **compose-rs side:**
   - `crates/compose-animation`: 12 source files; 54 tests in `tests/suite` (`animation.rs`, `content.rs`, `crossfade.rs`, `infinite.rs`, `visibility.rs` and eight `review_*.rs`);
-  - `crates/compose-navigation`: 18 tests in `tests/suite/navigation.rs` and `review.rs`;
+  - `crates/compose-navigation`: Navigation 3, tested in `tests/suite/nav_*.rs`;
   - the harness: `crates/compose-test`.
 
 ## Totals
@@ -33,18 +33,18 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 62 | 565 |
+| `ported` | 64 | 588 |
 | `port` | 0 | 0 |
-| `partial` | 9 | 116 |
-| `feature:<name>` | 23 | 384 |
+| `partial` | 9 | 114 |
+| `feature:<name>` | 21 | 363 |
 | `n/a` | 14 | 154 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 26 / 181 | 0 | 3 / 19 | 1 / 12 | 0 |
-| animation | 15 | 238 | 0 | 7 / 79 | 0 | 3 / 40 | 5 / 119 | 0 |
+| animation-core | 30 | 212 | 0 | 28 / 204 | 0 | 2 / 8 | 0 | 0 |
+| animation | 15 | 238 | 0 | 7 / 79 | 0 | 4 / 49 | 4 / 110 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 12 / 89 | 0 | 0 | 8 / 211 | 1 / 7 |
@@ -60,13 +60,11 @@ By module:
 | movable-content | 3 | 19 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
-| path-easing | 1 | 12 |
-| captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
 
 Four parts:
 
-- **Animation** (50 files, 472 tests): 33 files `ported` (260 tests), 6 `partial` (59), 11 waiting on features (153), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug), the ui path iterator (path-easing), ui layer recording (captured-animated-visibility) or a full `ImageVector` (animated-image-vector).
+- **Animation** (50 files, 472 tests): 35 files `ported` (283 tests), 6 `partial` (57), 9 waiting on features (132), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug) or a full `ImageVector` (animated-image-vector).
 - **Navigation 3** (36 files, 428 tests): 21 files `ported` (142 tests), 2 `partial` (48), 12 waiting on features (231: deep links, movable content, shared elements), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3.
 - **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
@@ -100,7 +98,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 13 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt` | 8 | `keyframesWithSpline`: interpolation, periodic bias, easing, delay, equality | ported | `keyframe_spline_animation.rs`; `testNotEquals0`'s specs built alike are equal (D816, D843) |
 | 14 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/MonoSplineTest.kt` | 2 | the monotonic spline under `keyframesWithSpline` | ported | unit tests of `mono_spline.rs`, an internal class, with its text plot |
 | 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | ported | `physics.rs`, `interruption_aware.rs` |
-| 16 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt` | 11 | repeatable/infiniteRepeatable values, durations, Reverse, StartOffset, zero-duration inner specs | partial | 9 ported (`repeatable_animation.rs`); the zero-duration spline (keyframes-with-spline) and arc (arc-animation) specs need their features |
+| 16 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt` | 11 | repeatable/infiniteRepeatable values, durations, Reverse, StartOffset, zero-duration inner specs | ported | `repeatable_animation.rs` |
 | 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | ported | `easing.rs` |
 | 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | ported | `suspend_animation.rs` (16 ms frames, not 50) |
 | 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | ported | `easing.rs` (the custom easing an `Easing::Function`) |
@@ -109,7 +107,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | ported | `duration_scale.rs`, the rule's `set_motion_duration_scale` for `effectContext` (D827) |
 | 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | ported | `easing.rs`: the evaluation against the curve sampled by its parameter, not bitmaps |
 | 24 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/InfiniteTransitionTest.kt` | 1 | `rememberInfiniteTransition`: keyframes Reverse float and tween color, frame by frame | ported | `infinite_transition.rs`, through 2.1 s of frames (Compose's loop compares nanoseconds with 2100: it checks one frame) |
-| 25 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/PathEasingTest.kt` | 12 | `PathEasing`: bounds, invalid paths, compare to cubic, quads, overshoot | `feature:path-easing` |  |
+| 25 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/PathEasingTest.kt` | 12 | `PathEasing`: bounds, invalid paths, compare to cubic, quads, overshoot | ported | `path_easing.rs`, its 12 and a curve bulging along x, `Easing::path` (D1412) |
 | 26 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SeekableTransitionStateTest.kt` | 44 | `SeekableTransitionState`: seekTo, animateTo, snapTo, interruptions, durations, isRunning, cleanup | ported | `seekable.rs` (41) and `seekable.rs`'s unit tests (3: the two tests giving `animate_to` a frame clock of its own check those frames against the fraction's animation; `testCleanupAfterDispose` the observer of the total duration); `animateAfterSeekToZero` checks the content's states and display, not its pixels; a call can end a frame earlier (D817, D821) |
 | 27 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SingleValueAnimationTest.kt` | 13 | `animate*AsState`: 1D/2D/4D/color frame by frame, interruption, visibility thresholds, spec and threshold updates | ported | `single_value.rs`, `interruption_aware.rs` |
 | 28 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/TransitionTest.kt` | 17 | `updateTransition`/`Transition`: values per segment, animations added mid-flight, MutableTransitionState, child transitions, totalDurationNanos, recomposition counts, interruption-aware spec | ported | `transition.rs`, `interruption_aware.rs` (`interruptionAwareAnimationSpec_preservedOnInterruption` with keyframes for its spec of its own), `seekable.rs` (`childTransitionStartsUninterrupted_usingSeekableTransition`) |
@@ -117,9 +115,9 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 12 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `animated_content_scope.rs`: slides into and out of the container, `contentKey` (2), `KeepUntilTransitionsFinished` (2), the enter and exit an interruption picks, the last with a wait one frame later (D817); `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); lookahead and `animateBounds` (3); n/a: `AnimatedContentWithInterruption` (the test ends as it sets the flag, so its layout-callback assertions never see the interruption, under which Compose's content slides too) and `testAnimatedContentCleanup` (an internal map's size) |
-| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 15 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time, with a test of the column and row defaults; `veil.rs`: the five veil tests); seeking (1) seekable-transition; lookahead (1) |
+| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 16 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time, with a test of the column and row defaults; `veil.rs`: the five veil tests; `seekable.rs`: seeking, through a `SeekableTransitionState` for the internal `setPlaytimeAfterInitialAndTargetStateEstablished`); lookahead (1) |
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
-| 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
+| 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | partial | 7 of 9, `captured_visibility.rs`, its pixels read from the display list (D1413); `inLookaheadScope` and `siblingLookaheadInColumn` wait for lookahead |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | ported | `crossfade_ported.rs` (`crossfadeTest_contentKey` with a wait one frame later, D817) |
 | 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | ported | `deferred_content.rs` (`immediateExitTest` and `verifyExitAnimationAfterGateOpens` in one; the veil's pixel from the display list; D828; widths through `on_globally_positioned`, as Compose's, since D1187) |
 | 38 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedVisibilityTest.kt` | 21 | `DeferredAnimatedVisibility`: enter/exit gates, preview scale/offset, hand-off, interruption | ported | `deferred_visibility.rs` (D828; widths through `on_globally_positioned`, as Compose's, since D1187) |
@@ -270,7 +268,7 @@ Deprecated and left out:
 | `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | present (D809) | interruption-aware-spec |
 | `Easing` as a `fun interface` (any object, capturing lambdas) | present: `Easing::custom(closure)` (D816) | easing-functions |
 | `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | present (D808) | easing-functions |
-| `PathEasing(path)` | missing | path-easing |
+| `PathEasing(path)` | present: `Easing::path` | D1412 |
 | `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`TransitionState` a trait of `MutableTransitionState` and `SeekableTransitionState`, D821; `DeferredTransitionState` too, D828) | transition-state |
 | `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813; `pending_target_state`, D828) | transition-state |
 | `Transition.createChildTransition(label, transform)` | present | transition-state |
@@ -301,7 +299,7 @@ Deprecated and left out:
 | `ContentTransform(targetContentEnter, initialContentExit, targetContentZIndex, sizeTransform)`, `SizeTransform(clip, sizeAnimationSpec)`, `SizeTransform` interface | present (`ContentTransform`, `size_transform(clip, spec)`, D805) | animated-content-scope |
 | `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | present (`transition.Crossfade(…)`, D817) | crossfade-extras |
 | `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
-| `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
+| `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | present | D1413 |
 | `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | present: methods of `DeferredTransition`; `TransformScope`'s setters `set_alpha` and the like (D828) | deferred-transition |
 | `BoundsTransform`, `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`), `SharedTransitionScope.PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`), `SharedContentConfig`'s `shouldKeepEnabledForOngoingAnimation` and `permitTransformDuringDeferredTransition` | present (D829); what takes a `SharedContentState` comes with the scope | shared-transition |
 | `SharedTransitionLayout`, `SharedTransitionScope(content)`, the rest of the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
@@ -449,13 +447,13 @@ One entry per feature. Sizes:
 - **Tests:** none target the `Ease*` constants; `TweenAnimationTest.easingIsApplied` uses a custom easing.
 - **Dependencies:** none.
 
-#### path-easing (S–M, not exp.)
+#### path-easing (S–M, not exp.): done (D1412)
 
 - **API:** `PathEasing(path)`.
 - **Tests:** `PathEasingTest`.
 - **Dependencies:**
   - easing-functions (an easing that holds data);
-  - a compose-ui path iterator or flattener, which compose-ui's `Path` lacks (ui graphics area).
+  - a path's segments: `PathData::commands`, with its results of `Path::op` left to the platforms.
 
 #### keyframes-with-spline (M, not exp.): done (D843)
 
@@ -577,13 +575,13 @@ One entry per feature. Sizes:
 - **Tests:** `AnimationModifierTest` (2 alignment).
 - **Dependencies:** none.
 
-#### captured-animated-visibility (M, not exp., new at this tip)
+#### captured-animated-visibility (M, not exp., new at this tip): done but what's of lookahead (D1413)
 
 - **API:** `CapturedAnimatedVisibility(visible | MutableTransitionState, …)`.
 - **What it does:** disposes the content at once and animates a recorded layer of its last frame.
 - **Tests:** `CapturedAnimatedVisibilityTest`.
 - **Dependencies:**
-  - recording a subtree into a graphics layer and drawing it later (`rememberGraphicsLayer`/`record`/`drawLayer`), which compose-ui lacks (ui drawing area);
+  - recording a subtree and drawing it later: `ContentCapture`, the part of `GraphicsLayer` it needs, the object itself being ui-core's graphics-layer-object;
   - enter-exit-params and transition-state; ui lookahead for 2 tests.
 
 #### shared-transition (XL, not exp.)
@@ -670,7 +668,7 @@ Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavControlle
 6. **animated-visibility-scope (M)**, then **animated-content-scope (M–L)** and **crossfade-extras (S)**.
 7. **The animation-core additions:** decay-animation (M), then suspend-animate (M) and motion-duration-scale (S–M).
 8. **seekable-transition (L)**.
-9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, after the ui path iterator), arc-animation (M, experimental, done).
+9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, done), arc-animation (M, experimental, done).
 10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work: the host's side done (D845), `NavDisplay`'s with nav3-ui.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
 12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last or never. It replaces `compose-navigation`.
@@ -679,7 +677,7 @@ Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavControlle
     - animate-bounds (L);
     - shared-transition (XL);
     - lookahead-visual-debug (M, experimental).
-14. **captured-animated-visibility (M)**, after ui layer recording.
+14. **captured-animated-visibility (M)**: done but its lookahead tests.
 15. **animated-image-vector (L)**, after a full `ImageVector`.
 
 ## Notes for the porting agents

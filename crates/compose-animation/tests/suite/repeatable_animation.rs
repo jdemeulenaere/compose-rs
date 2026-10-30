@@ -173,3 +173,24 @@ fn keyframes_of_no_time_cant_repeat_forever() {
         RepeatMode::Restart,
     );
 }
+
+// Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt, testInfiniteRepeatableZeroDurationKeyframesWithSpline
+#[test]
+#[should_panic(expected = "0 duration")]
+fn spline_keyframes_of_no_time_cant_repeat_forever() {
+    infinite_repeatable(
+        keyframes_with_spline(|frames| {
+            frames.duration_millis = 0;
+            frames.delay_millis = 0;
+            frames.at(0, 0.0f32);
+        }),
+        RepeatMode::Restart,
+    );
+}
+
+// Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt, testInfiniteRepeatableZeroDurationArc
+#[test]
+#[should_panic(expected = "0 duration")]
+fn an_arc_of_no_time_cant_repeat_forever() {
+    infinite_repeatable(ArcAnimationSpec::new(ArcMode::ArcBelow).duration(0), RepeatMode::Restart);
+}

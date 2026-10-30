@@ -1126,6 +1126,10 @@ pub trait ModifierNode: Any {
     fn is_repaint_boundary(&self) -> bool {
         false
     }
+    /// Where a boundary keeps what it draws, `Modifier.capture_content`'s.
+    fn content_capture(&self) -> Option<&crate::content_capture::ContentCapture> {
+        None
+    }
     /// Told where it is after each layout that moved or resized it, as
     /// `LayoutAwareModifierNode` (`on_placed`, `on_remeasured`).
     fn as_layout_aware(
@@ -1338,6 +1342,17 @@ impl dyn ModifierNode {
 /// What a node reaches when released (`ModifierNode::on_release`).
 pub struct ReleaseContext<'a> {
     pub text_measurer: &'a mut dyn crate::text::TextMeasurer,
+    pub(crate) held_paragraphs: &'a mut crate::content_capture::HeldParagraphs,
+}
+
+impl ReleaseContext<'_> {
+    /// Releases the paragraph of a node leaving, or leaves it to what captured it to draw later
+    /// (`Modifier.capture_content`).
+    pub fn release_paragraph(&mut self, paragraph: crate::text::ParagraphHandle) {
+        if !self.held_paragraphs.release_later(paragraph) {
+            self.text_measurer.release(paragraph);
+        }
+    }
 }
 
 /// A node that changes how its content is measured and placed, as `LayoutModifierNode`.

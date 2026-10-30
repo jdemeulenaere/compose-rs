@@ -757,7 +757,7 @@ impl ModifierNode for TextFieldNode {
         for paragraph in
             self.paragraph.take().into_iter().chain(self.stale.drain(..)).chain(intrinsics)
         {
-            context.text_measurer.release(paragraph);
+            context.release_paragraph(paragraph);
         }
     }
     /// Reused for another field: its editing (cursor, selection, history, composing text,

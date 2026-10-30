@@ -450,7 +450,7 @@ impl ModifierNode for TextNode {
         let probe = self.probe.take().map(|probe| probe.paragraph);
         let paragraphs = self.paragraph.take().into_iter().chain(self.stale.drain(..));
         for paragraph in paragraphs.chain(probe) {
-            context.text_measurer.release(paragraph);
+            context.release_paragraph(paragraph);
         }
     }
 }

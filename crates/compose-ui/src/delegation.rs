@@ -610,7 +610,10 @@ impl UiTree {
         if entry.state & entry_state::HAS_HANDLE != 0 {
             self.focus_requests.attached_entries.borrow_mut().remove(&entry.id.0);
         }
-        let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
+        let mut context = ReleaseContext {
+            text_measurer: &mut *self.text_measurer,
+            held_paragraphs: &mut self.held_paragraphs,
+        };
         entry.node.on_release(&mut context);
     }
 

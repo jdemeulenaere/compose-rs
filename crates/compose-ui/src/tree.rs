@@ -308,6 +308,8 @@ pub struct UiTree {
     free: Vec<u32>,
     root: NodeId,
     pub(crate) text_measurer: Box<dyn TextMeasurer>,
+    /// The paragraphs `Modifier.capture_content`'s captures still draw.
+    pub(crate) held_paragraphs: crate::content_capture::HeldParagraphs,
     pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
     /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
     /// `LOCAL_HAPTIC_FEEDBACK`.
@@ -463,6 +465,7 @@ impl UiTree {
             free: Vec::new(),
             root: NodeId { index: 0, generation: 0 },
             text_measurer,
+            held_paragraphs: Default::default(),
             clipboard: Rc::new(crate::clipboard::MemoryClipboard::default()),
             uri_handler: Rc::new(crate::platform_services::PlatformUriHandler::headless()),
             platform_uri_handler: crate::platform_services::PlatformUriHandler::headless(),
@@ -1228,7 +1231,10 @@ impl UiTree {
                 if removed.state & entry_state::DELEGATING != 0 {
                     self.release_delegates(&mut *removed.node);
                 }
-                let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
+                let mut context = ReleaseContext {
+                    text_measurer: &mut *self.text_measurer,
+                    held_paragraphs: &mut self.held_paragraphs,
+                };
                 removed.node.on_release(&mut context);
             }
         }
@@ -1703,7 +1709,10 @@ impl UiTree {
                     self.release_delegates(&mut *entry.node);
                 }
             }
-            let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
+            let mut context = ReleaseContext {
+                text_measurer: &mut *self.text_measurer,
+                held_paragraphs: &mut self.held_paragraphs,
+            };
             for entry in &mut value.chain {
                 entry.node.on_release(&mut context);
             }

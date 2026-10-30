@@ -2,8 +2,11 @@
 //! out. Cubic Bézier curves are solved as Compose's `CubicBezierEasing` (its cubic root and
 //! clamping), so eased values match Compose's.
 
+use std::cell::OnceCell;
 use std::f64::consts::PI;
 use std::rc::Rc;
+
+use compose_ui::{Offset, Path, PathCommand};
 
 /// An easing curve, as Compose's `Easing`: one of Compose's curves, or any function of the
 /// fraction (a capturing closure too, as Compose's `fun interface`, [`Easing::custom`]).
@@ -43,6 +46,166 @@ impl PartialEq for Easing {
             _ => false,
         }
     }
+}
+
+impl Easing {
+    /// The curve of `path`, as `PathEasing(path)`: its x is the fraction and its y what comes out,
+    /// so it goes from (0, 0) to (1, 1), covering all the x between, with no `close`. An invalid
+    /// path panics at the first fraction that isn't an end, as there. A path of
+    /// [`Path::op`](Path::op)'s result has no segments to read until a platform makes them, so it's
+    /// refused too (D1412).
+    pub fn path(path: &Path) -> Easing {
+        let path = path.clone();
+        let segments = OnceCell::new();
+        Easing::Custom(Rc::new(move |fraction| {
+            if fraction <= 0.0 {
+                return 0.0;
+            }
+            if fraction >= 1.0 {
+                return 1.0;
+            }
+            let segments = segments.get_or_init(|| EasingSegment::of_path(&path));
+            let segment = segments
+                .iter()
+                .find(|segment: &&EasingSegment| {
+                    segment.min_x <= fraction && fraction <= segment.max_x
+                })
+                .expect("The easing path is invalid. Make sure it is continuous on the x axis.");
+            let t = segment.first_root(fraction);
+            assert!(
+                !t.is_nan(),
+                "The easing path is invalid. Make sure it does not contain NaN/Infinity values."
+            );
+            segment.y(t)
+        }))
+    }
+}
+
+/// A line, a quadratic or a cubic of a path easing, its points as they are in a `PathSegment`, with
+/// its range along x. Compose keeps them in an interval tree: for the few of an easing curve, a list
+/// finds the same overlap.
+struct EasingSegment {
+    points: Vec<Offset>,
+    min_x: f32,
+    max_x: f32,
+}
+
+impl EasingSegment {
+    fn new(points: Vec<Offset>) -> EasingSegment {
+        let mut segment = EasingSegment { points, min_x: 0.0, max_x: 0.0 };
+        let (start, end) = (segment.points[0].x, segment.points[segment.points.len() - 1].x);
+        segment.min_x = start.min(end);
+        segment.max_x = start.max(end);
+        for t in segment.derivative_roots() {
+            let x = segment.x(t);
+            segment.min_x = segment.min_x.min(x);
+            segment.max_x = segment.max_x.max(x);
+        }
+        segment
+    }
+
+    /// What `path` has, as `initializeEasing`.
+    fn of_path(path: &Path) -> Vec<EasingSegment> {
+        let data = path.data();
+        assert!(
+            data.steps().is_empty(),
+            "The easing path can't be the result of a path operation."
+        );
+        let mut segments = Vec::new();
+        let mut current = Offset::new(0.0, 0.0);
+        for command in data.commands() {
+            let points = match *command {
+                PathCommand::MoveTo(to) => {
+                    current = to;
+                    continue;
+                }
+                PathCommand::LineTo(end) => vec![current, end],
+                PathCommand::QuadTo(control, end) => vec![current, control, end],
+                PathCommand::CubicTo(first, second, end) => vec![current, first, second, end],
+                PathCommand::Close => panic!("The path cannot contain a close() command."),
+            };
+            current = points[points.len() - 1];
+            segments.push(EasingSegment::new(points));
+        }
+        let covers =
+            |x: f32| segments.iter().any(|segment| segment.min_x <= x && x <= segment.max_x);
+        assert!(covers(0.0) && covers(1.0), "The easing path must start at 0.0f and end at 1.0f.");
+        segments
+    }
+
+    fn x(&self, t: f32) -> f32 {
+        self.evaluate(t, |point| point.x)
+    }
+
+    fn y(&self, t: f32) -> f32 {
+        self.evaluate(t, |point| point.y)
+    }
+
+    /// As `evaluateX` and `evaluateY`.
+    fn evaluate(&self, t: f32, of: impl Fn(&Offset) -> f32) -> f32 {
+        match self.points.as_slice() {
+            [p0, p1] => (of(p1) - of(p0)) * t + of(p0),
+            [p0, p1, p2] => {
+                let by = 2.0 * (of(p1) - of(p0));
+                let ay = of(p2) - 2.0 * of(p1) + of(p0);
+                (ay * t + by) * t + of(p0)
+            }
+            [p0, p1, p2, p3] => evaluate_cubic_4(of(p0), of(p1), of(p2), of(p3), t),
+            _ => f32::NAN,
+        }
+    }
+
+    /// As `findFirstRoot`.
+    fn first_root(&self, fraction: f32) -> f32 {
+        let x = |point: &Offset| point.x - fraction;
+        match self.points.as_slice() {
+            [p0, p1] => clamp_valid_root_in_unit_range(-x(p0) / (x(p1) - x(p0))),
+            [p0, p1, p2] => find_first_quadratic_root(x(p0), x(p1), x(p2)),
+            [p0, p1, p2, p3] => find_first_cubic_root(x(p0), x(p1), x(p2), x(p3)),
+            _ => f32::NAN,
+        }
+    }
+
+    /// As `findDerivativeRoots`, along x.
+    fn derivative_roots(&self) -> Vec<f32> {
+        let line_root = |p0: f32, p1: f32| clamp_valid_root_in_unit_range(-p0 / (p1 - p0));
+        let mut found = Vec::new();
+        match self.points.as_slice() {
+            [p0, p1, p2] => {
+                found.push(line_root(2.0 * (p1.x - p0.x), 2.0 * (p2.x - p1.x)));
+            }
+            [p0, p1, p2, p3] => {
+                let (d0, d1, d2) = (3.0 * (p1.x - p0.x), 3.0 * (p2.x - p1.x), 3.0 * (p3.x - p2.x));
+                let mut roots = [0.0f32; 3];
+                let count = find_quadratic_roots(d0, d1, d2, &mut roots);
+                found.extend_from_slice(&roots[..count]);
+                found.push(line_root(2.0 * (d1 - d0), 2.0 * (d2 - d1)));
+            }
+            _ => {}
+        }
+        found.retain(|root| !root.is_nan());
+        found
+    }
+}
+
+/// The first root in 0..1 of the quadratic of control values `p0` to `p2`, as Compose's
+/// `findFirstQuadraticRoot`.
+fn find_first_quadratic_root(p0: f32, p1: f32, p2: f32) -> f32 {
+    let (a, b, c) = (f64::from(p0), f64::from(p1), f64::from(p2));
+    let d = a - 2.0 * b + c;
+    if d != 0.0 {
+        let v1 = -(b * b - a * c).sqrt();
+        let v2 = -a + b;
+        let root = clamp_valid_root_in_unit_range((-(v1 + v2) / d) as f32);
+        if !root.is_nan() {
+            return root;
+        }
+        return clamp_valid_root_in_unit_range(((v1 - v2) / d) as f32);
+    }
+    if b != c {
+        return clamp_valid_root_in_unit_range(((2.0 * b - c) / (2.0 * b - 2.0 * c)) as f32);
+    }
+    f32::NAN
 }
 
 /// Material's standard curve: quick to start, slow to settle, as `FastOutSlowInEasing`.

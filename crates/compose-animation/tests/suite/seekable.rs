@@ -8,8 +8,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_animation::*;
+use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::{Alignment, IntOffset, IntSize, Modifier, TransformOrigin, UnitExt};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum AnimStates {
@@ -1871,4 +1873,66 @@ fn a_seek_takes_the_total_duration_as_it_is() {
     ui.wait_for_idle();
     assert_eq!(seek.get(), Some(true));
     assert_eq!(watched.borrow().as_ref().unwrap().play_time_nanos(), 150_000_000);
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt, testSeekingAnimatedVisibility
+#[test]
+fn a_visibility_seeks_along_its_enter_and_its_exit() {
+    fn spec() -> AnimationSpec {
+        tween(200).easing(LINEAR_EASING).into()
+    }
+    let seeking = SeekableTransitionState::new(false);
+    let shown = seeking.clone();
+    let root: Rc<RefCell<Option<Transition<bool>>>> = Rc::default();
+    let kept = root.clone();
+    let mut ui = compose_test(move || {
+        let transition = remember_transition(&shown, "test");
+        *kept.borrow_mut() = Some(transition.clone());
+        transition.AnimatedVisibility(
+            |visible: &bool| *visible,
+            Modifier,
+            fade_in_with(spec(), 0.0) + slide_in_vertically_with(spec(), |_| 200),
+            scale_out_with(spec(), 0.0, TransformOrigin::CENTER)
+                + shrink_horizontally_with(spec(), Alignment::END, true, |_| 0),
+            |_| Box!(modifier = Modifier.size(200.dp())),
+        );
+    });
+    ui.wait_for_idle();
+    fn value<T: Animate>(transition: &Transition<bool>, label: &str) -> T {
+        transition.transitions()[0]
+            .animations()
+            .into_iter()
+            .find(|animation| animation.label().contains(label))
+            .and_then(|animation| animation.value::<T>())
+            .unwrap_or_else(|| panic!("a {label}"))
+    }
+    let transition = root.borrow().clone().unwrap();
+    // Seeking the enter.
+    for time in (0..=200).step_by(20) {
+        let seek = seeking.clone();
+        let fraction = time as f32 / 200.0;
+        block_on(&mut ui, async move { seek.seek_to_with(fraction, true).await });
+        ui.wait_for_idle();
+        assert_eq!(transition.total_duration_nanos(), 200_000_000);
+        let alpha: f32 = value(&transition, "alpha");
+        assert!((alpha - fraction).abs() <= 0.01, "{alpha} at {time}");
+        assert_eq!(value::<IntOffset>(&transition, "slide"), IntOffset::new(0, 200 - time));
+    }
+    assert_eq!(value::<f32>(&transition, "alpha"), 1.0);
+    let settle = seeking.clone();
+    block_on(&mut ui, async move { settle.snap_to(true).await });
+    ui.wait_for_idle();
+    // Seeking the exit.
+    for time in (0..=200).step_by(20) {
+        let seek = seeking.clone();
+        let fraction = time as f32 / 200.0;
+        block_on(&mut ui, async move { seek.seek_to_with(fraction, false).await });
+        ui.wait_for_idle();
+        assert_eq!(transition.total_duration_nanos(), 200_000_000);
+        let scale: f32 = value(&transition, "scale");
+        assert!((scale - (1.0 - fraction)).abs() <= 0.01, "{scale} at {time}");
+        assert_eq!(value::<IntSize>(&transition, "shrink"), IntSize::new(200 - time, 200));
+    }
+    assert_eq!(value::<f32>(&transition, "scale"), 0.0);
+    assert_eq!(value::<IntSize>(&transition, "shrink"), IntSize::new(0, 200));
 }
