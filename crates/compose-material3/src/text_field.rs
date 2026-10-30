@@ -4,7 +4,6 @@
 
 use std::rc::Rc;
 
-use compose_animation::animate_float_as_state;
 use compose_foundation::layout::Box;
 use compose_foundation::{BasicTextField, KeyboardActions, KeyboardOptions, VisualTransformation};
 use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
@@ -43,6 +42,14 @@ impl OutlinedTextFieldDefaults {
     pub fn shape() -> Shape {
         MaterialTheme::shapes().extra_small.clone()
     }
+}
+
+/// What a text field's animations follow, as `InputPhase`.
+#[derive(Clone, Copy, PartialEq)]
+enum InputPhase {
+    Focused,
+    UnfocusedEmpty,
+    UnfocusedNotEmpty,
 }
 
 /// A filled text field, as Compose's `TextField`: a container with an indicator line (2 dp
@@ -208,15 +215,62 @@ fn decorated_field(
     let focused = remember(|| mutable_state_of(false));
     let is_focused = focused.get();
     let empty = value.is_empty();
-    // 0 resting in the field, 1 floated, as Compose's label animation.
-    let floated = is_focused || !empty;
-    let progress = animate_float_as_state(
-        if floated { 1.0 } else { 0.0 },
-        crate::theme::MaterialTheme::motion_scheme().fast_spatial_spec(),
-        0.01,
-        "LabelProgress",
-        None,
-    )
+    let has_label = slots.label.is_some();
+    let phase = if is_focused {
+        InputPhase::Focused
+    } else if empty {
+        InputPhase::UnfocusedEmpty
+    } else {
+        InputPhase::UnfocusedNotEmpty
+    };
+    let motion = MaterialTheme::motion_scheme();
+    let transition = compose_animation::update_transition(phase, "TextFieldInputState");
+    // 0 resting in the field, 1 floated, as `labelProgress`.
+    let progress = {
+        let spec = motion.fast_spatial_spec();
+        transition.animate_float_with(
+            move |_| spec.clone(),
+            "LabelProgress",
+            |phase| if *phase == InputPhase::UnfocusedEmpty { 0.0 } else { 1.0 },
+        )
+    }
+    .get();
+    // A placeholder fades in slowly as the field empties or is focused, as `placeholderOpacity`.
+    let placeholder_alpha = {
+        let (fast, slow) = (motion.fast_effects_spec(), motion.slow_effects_spec());
+        transition.animate_float_with(
+            move |segment| match (&segment.initial_state, &segment.target_state) {
+                (InputPhase::Focused, InputPhase::UnfocusedEmpty) => fast.clone(),
+                (InputPhase::UnfocusedEmpty, InputPhase::Focused)
+                | (InputPhase::UnfocusedNotEmpty, InputPhase::UnfocusedEmpty) => slow.clone(),
+                _ => fast.clone(),
+            },
+            "PlaceholderOpacity",
+            move |phase| match phase {
+                InputPhase::Focused => 1.0,
+                InputPhase::UnfocusedEmpty => {
+                    if has_label {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                }
+                InputPhase::UnfocusedNotEmpty => 0.0,
+            },
+        )
+    }
+    .get();
+    // The prefix and suffix, shown as the label floats (or always, without one), as `affixOpacity`.
+    let prefix_suffix_alpha = {
+        let spec = motion.fast_effects_spec();
+        transition.animate_float_with(
+            move |_| spec.clone(),
+            "PrefixSuffixOpacity",
+            move |phase| {
+                if *phase == InputPhase::UnfocusedEmpty && has_label { 0.0 } else { 1.0 }
+            },
+        )
+    }
     .get();
     let indicator = pick(
         enabled,
@@ -229,6 +283,36 @@ fn decorated_field(
             colors.unfocused_indicator_color,
         ],
     );
+    // As `animateBorderStrokeAsState`: disabled, it snaps.
+    let indicator = if enabled {
+        compose_animation::animate_color_as_state(
+            indicator,
+            motion.fast_effects_spec(),
+            "IndicatorColor",
+            None,
+        )
+        .get()
+    } else {
+        indicator
+    };
+    let (focused_thickness, unfocused_thickness) = match variant {
+        Variant::Filled => (2.dp(), 1.dp()),
+        Variant::Outlined => (
+            OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS,
+            OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS,
+        ),
+    };
+    let indicator_thickness = if enabled {
+        compose_animation::animate_dp_as_state(
+            if is_focused { focused_thickness } else { unfocused_thickness },
+            motion.fast_spatial_spec(),
+            "IndicatorThickness",
+            None,
+        )
+        .get()
+    } else {
+        unfocused_thickness
+    };
     let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
     let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
     let typography = MaterialTheme::typography();
@@ -243,6 +327,13 @@ fn decorated_field(
             colors.label_color,
         ],
     );
+    let label_color = compose_animation::animate_color_as_state(
+        label_color,
+        motion.fast_effects_spec(),
+        "LabelContentColor",
+        None,
+    )
+    .get();
     let leading_color = pick(
         enabled,
         is_error,
@@ -277,8 +368,7 @@ fn decorated_field(
         ],
     );
     let cursor_color = if is_error { colors.error_cursor_color } else { colors.cursor_color };
-    // The prefix and suffix in the text's style, shown as the label floats (or always, without
-    // a label), as Compose's `prefixSuffixAlpha`.
+    // The prefix and suffix in the text's style.
     let prefix_style = TextStyle {
         color: if enabled { colors.prefix_color } else { colors.disabled_prefix_color },
         ..text_style.clone()
@@ -289,14 +379,17 @@ fn decorated_field(
     };
     // The label's style, from the body-large text's to the small one's as it floats.
     let label_style = TextStyle::lerp(&typography.body_large, &typography.body_small, progress);
-    let container_color =
-        if enabled { colors.container_color } else { colors.disabled_container_color };
+    let container_color = compose_animation::animate_color_as_state(
+        if enabled { colors.container_color } else { colors.disabled_container_color },
+        motion.fast_effects_spec(),
+        "ContainerColor",
+        None,
+    )
+    .get();
     let placeholder_color =
         if enabled { colors.placeholder_color } else { colors.disabled_placeholder_color };
-    let has_label = slots.label.is_some();
-    let prefix_suffix_alpha = if has_label { progress } else { 1.0 };
-    // Shown while the field is empty and its label floated (or it has none), as Compose's.
-    let show_placeholder = empty && slots.placeholder.is_some() && (!has_label || is_focused);
+    // Shown while the field is empty and it's not transparent, as Compose's.
+    let show_placeholder = empty && slots.placeholder.is_some() && placeholder_alpha > 0.0;
     let floated_label_height = typography.body_small.line_height;
     let supporting_style = typography.body_small.clone();
     // Remembered: the layout (remembered too) writes it, the outline reads it. Not state: the
@@ -324,11 +417,7 @@ fn decorated_field(
                     container.background_with(container_color, TextFieldDefaults::shape())
                 }
                 Variant::Outlined => {
-                    let thickness = if is_focused {
-                        OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS
-                    } else {
-                        OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS
-                    };
+                    let thickness = indicator_thickness;
                     let shape = OutlinedTextFieldDefaults::shape();
                     let (label_width, label_start) = (label_width.clone(), label_start.clone());
                     let outline = outline.clone();
@@ -403,7 +492,7 @@ fn decorated_field(
                 }
                 if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
                     let style = style.clone();
-                    Box!({
+                    Box!(modifier = Modifier.alpha(placeholder_alpha), {
                         CompositionLocalProvider(
                             LOCAL_CONTENT_COLOR.provides(placeholder_color),
                             || {
@@ -440,9 +529,8 @@ fn decorated_field(
                 inner_text_field();
                 if variant == Variant::Filled {
                     // The indicator line: 1 dp, 2 dp focused.
-                    let thickness = if is_focused { 2.dp() } else { 1.dp() };
                     compose_foundation::layout::Spacer(
-                        Modifier.height(thickness).background(indicator),
+                        Modifier.height(indicator_thickness).background(indicator),
                     );
                 }
             });

@@ -594,6 +594,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1031 | [ui-and-layout](decisions/ui-and-layout.md#d1031) | current |
 | D1032 | [ui-and-layout](decisions/ui-and-layout.md#d1032) | current |
 | D1033 | [ui-and-layout](decisions/ui-and-layout.md#d1033) | current |
+| D1034 | [ui-and-layout](decisions/ui-and-layout.md#d1034) | current |
 | D1050 | [ui-and-layout](decisions/ui-and-layout.md#d1050) | current |
 | D1051 | [ui-and-layout](decisions/ui-and-layout.md#d1051) | revised by [D1056](decisions/ui-and-layout.md#d1056) |
 | D1052 | [ui-and-layout](decisions/ui-and-layout.md#d1052) | revised by [D1062](decisions/ui-and-layout.md#d1062) |

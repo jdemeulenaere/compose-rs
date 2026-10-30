@@ -212,3 +212,43 @@ fn a_rails_items_are_a_traversal_group() {
         .on_parent()
         .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
 }
+
+/// A label shown only when selected: the icon moves between the center and its place above the
+/// label, the indicator with it, a progress at a time.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarTest.kt, navigationBarItemContent_withLabel_unselected_sizeAndPosition
+#[test]
+fn an_item_showing_its_label_when_selected_centers_its_icon_when_not() {
+    use compose_ui::UnitExt;
+    let selected = mutable_state_of(false);
+    let read = selected.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            NavigationBar!(|row: RowScope| {
+                NavigationBarItem!(
+                    row,
+                    read.get(),
+                    || {},
+                    {
+                        Box!(modifier = Modifier.size(24.dp()).test_tag("icon"));
+                    },
+                    modifier = Modifier.test_tag("item"),
+                    label = Some(|| Text!("Label")),
+                    always_show_label = false
+                );
+            });
+        });
+    });
+    let rect = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    };
+    let (item, icon) = (rect(&mut ui, "item"), rect(&mut ui, "icon"));
+    assert_eq!(icon.top - item.top, (item.height() - 24.0) / 2.0);
+    selected.set(true);
+    ui.wait_for_idle();
+    // Selected, the icon's semantics are cleared: its place shows from the label's below it, 24 dp
+    // of icon and 4 + 4 dp of indicator and gap, centered with them in the bar.
+    let item = rect(&mut ui, "item");
+    let label = ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds;
+    let content = 24.0 + 8.0 + label.height();
+    assert_eq!(label.top - item.top, (item.height() - content) / 2.0 + 32.0);
+}

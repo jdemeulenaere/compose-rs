@@ -16,8 +16,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, Focus, FocusInteraction, Modifier, MutableInteractionSource, PaintStyle, UnitExt,
-    platform::DrawOp,
+    Color, CornerSize, Focus, FocusInteraction, Modifier, MutableInteractionSource, Outline,
+    PaintStyle, Shape, UnitExt, platform::DrawOp,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -622,10 +622,254 @@ fn a_scrollable_tab_row_scrolls_with_the_scheme() {
     assert!(halfway < handle.value(), "{halfway} is not short of {}", handle.value());
 }
 
-/// A segmented button's check mark grows on the fast spatial spec.
+/// What `NavigationBarItem` and `NavigationRailItem` animate as they're selected: the icon's and
+/// the label's colors and the indicator's alpha on the default effects spec, the indicator's width
+/// on the fast spatial one.
 #[test]
-fn a_segmented_button_animates_with_the_scheme() {
-    assert_animates_with(&[FastSpatial], |scheme| {
+fn a_navigation_items_selection_animates_with_the_scheme() {
+    use std::cell::Cell;
+    thread_local! {
+        static COLORS: [Cell<Color>; 2] = const { [Cell::new(Color::UNSPECIFIED), Cell::new(Color::UNSPECIFIED)] };
+    }
+    fn colors() -> NavigationBarItemColors {
+        NavigationBarItemColors {
+            selected_icon_color: Color::RED,
+            unselected_icon_color: Color::BLUE,
+            selected_text_color: Color::RED,
+            unselected_text_color: Color::BLUE,
+            selected_indicator_color: Color::GREEN,
+            ..NavigationBarItemDefaults::colors()
+        }
+    }
+    fn indicator(ui: &mut ComposeTestRule) -> (f32, f32) {
+        let list = ui.host().display_list();
+        let rect = list.ops.iter().find_map(|op| match op {
+            DrawOp::DrawRoundRect(rect, _, paint) if paint.color == Color::GREEN => Some(*rect),
+            _ => None,
+        });
+        // Its alpha: the layer around it, the only one with less than 1.
+        let alpha = list
+            .groups
+            .iter()
+            .filter_map(|group| group.layer.as_ref())
+            .find_map(|layer| (layer.alpha < 1.0).then_some(layer.alpha));
+        (rect.map_or(0.0, |it| it.width()), alpha.unwrap_or(1.0))
+    }
+    let run = |rail: bool, scheme: MotionScheme| {
+        let selected = mutable_state_of(false);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            let icon = || {
+                COLORS.with(|it| it[0].set(LOCAL_CONTENT_COLOR.current()));
+                Box!(modifier = Modifier.size(24.dp()));
+            };
+            let label = Some(|| {
+                COLORS.with(|it| it[1].set(LOCAL_CONTENT_COLOR.current()));
+                Text!("Item");
+            });
+            if rail {
+                NavigationRail!({
+                    NavigationRailItem!(read.get(), || {}, icon, label = label, colors = colors());
+                });
+            } else {
+                NavigationBar!(|row: RowScope| {
+                    NavigationBarItem!(
+                        row,
+                        read.get(),
+                        || {},
+                        icon,
+                        label = label,
+                        colors = colors()
+                    );
+                });
+            }
+        });
+        selected.set(true);
+        to_halfway(&mut ui);
+        let (width, alpha) = indicator(&mut ui);
+        let (icon, text) = COLORS.with(|it| (it[0].get(), it[1].get()));
+        let full = if rail { 56.0 } else { 64.0 };
+        vec![
+            along(width, 0.0, full),
+            along(alpha, 0.0, 1.0),
+            color_along(icon, Color::BLUE, Color::RED),
+            color_along(text, Color::BLUE, Color::RED),
+        ]
+    };
+    for rail in [false, true] {
+        assert_each_property_animates_with(
+            &[FastSpatial, DefaultEffects, DefaultEffects, DefaultEffects],
+            |scheme| run(rail, scheme),
+        );
+    }
+}
+
+/// A list item's colors on the default effects spec and its corners on the fast spatial one, as
+/// `InteractiveListItem`; its clip following the same shape.
+#[test]
+fn a_list_items_colors_and_shape_animate_with_the_scheme() {
+    use std::cell::Cell;
+    thread_local! {
+        static CONTENT: Cell<Color> = const { Cell::new(Color::UNSPECIFIED) };
+    }
+    assert_each_property_animates_with(
+        &[DefaultEffects, DefaultEffects, FastSpatial, FastSpatial],
+        |scheme| {
+            let selected = mutable_state_of(false);
+            let read = selected.handle();
+            let mut ui = themed(scheme, move || {
+                let colors = ListItemColors {
+                    container_color: Color::BLUE,
+                    selected_container_color: Color::RED,
+                    content_color: Color::BLUE,
+                    selected_content_color: Color::RED,
+                    ..ListItemDefaults::colors()
+                };
+                let shape = |dp: f32| Shape::Rounded([CornerSize::Dp(dp.dp()); 4]);
+                let shapes = ListItemShapes {
+                    shape: shape(0.0),
+                    selected_shape: shape(20.0),
+                    ..ListItemDefaults::shapes()
+                };
+                SelectableListItem!(read.get(), || {}, colors = colors, shapes = shapes, {
+                    CONTENT.with(|it| it.set(LOCAL_CONTENT_COLOR.current()));
+                    Text!("Item");
+                });
+            });
+            selected.set(true);
+            to_halfway(&mut ui);
+            let list = ui.host().display_list();
+            let background = list.ops.iter().find_map(|op| match op {
+                DrawOp::DrawRoundRect(_, radii, paint) => Some((paint.color, radii[0])),
+                DrawOp::DrawRect(_, paint) => Some((paint.color, 0.0)),
+                _ => None,
+            });
+            let (container, corner) = background.expect("a background");
+            let clip =
+                list.groups.iter().filter_map(|group| group.layer.as_ref()).find_map(|layer| {
+                    (layer.clip).then(|| match &layer.outline {
+                        Some(Outline::Rounded(_, radii)) => radii[0],
+                        _ => 0.0,
+                    })
+                });
+            vec![
+                color_along(container, Color::BLUE, Color::RED),
+                color_along(CONTENT.with(Cell::get), Color::BLUE, Color::RED),
+                along(corner, 0.0, 20.0),
+                along(clip.expect("a clip"), 0.0, 20.0),
+            ]
+        },
+    );
+}
+
+/// A text field focused: its label on the fast spatial spec and its color on fast effects, the
+/// border's color on fast effects and its thickness on fast spatial, the placeholder fading in on
+/// slow effects, as `TextFieldImpl`'s transition and `animateBorderStrokeAsState`.
+#[test]
+fn a_focused_text_fields_parts_animate_with_the_scheme() {
+    use std::cell::Cell;
+    thread_local! {
+        static LABEL: Cell<Color> = const { Cell::new(Color::UNSPECIFIED) };
+    }
+    /// The outline's stroke.
+    fn border(ui: &mut ComposeTestRule) -> (Color, f32) {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                DrawOp::DrawPath { paint, .. } | DrawOp::DrawRoundRect(_, _, paint) => {
+                    match paint.style {
+                        PaintStyle::Stroke(width) => Some((paint.color, width)),
+                        PaintStyle::Fill => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("an outline")
+    }
+    assert_each_property_animates_with(
+        &[FastSpatial, FastEffects, FastEffects, FastSpatial, SlowEffects],
+        |scheme| {
+            let mut ui = themed(scheme, move || {
+                let colors = TextFieldColors {
+                    label_color: Color::BLUE,
+                    focused_label_color: Color::RED,
+                    unfocused_indicator_color: Color::BLUE,
+                    focused_indicator_color: Color::RED,
+                    ..OutlinedTextFieldDefaults::colors()
+                };
+                OutlinedTextField!(
+                    String::new(),
+                    |_| {},
+                    modifier = Modifier.test_tag("field"),
+                    label = Some(|| {
+                        LABEL.with(|it| it.set(LOCAL_CONTENT_COLOR.current()));
+                        Text!("Label");
+                    }),
+                    placeholder = Some(|| Text!("Hint")),
+                    colors = colors
+                );
+            });
+            let label_top = |ui: &mut ComposeTestRule| {
+                ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds.top
+            };
+            let start_top = label_top(&mut ui);
+            ui.on_node_with_tag("field").request_focus();
+            to_halfway(&mut ui);
+            let top = label_top(&mut ui);
+            let label_color = LABEL.with(Cell::get);
+            let (border_color, width) = border(&mut ui);
+            let (_, placeholder) = layer_scale_and_alpha(&mut ui);
+            // Its cursor blinks on: not to idle, past the long spec.
+            ui.advance_time_by(Duration::from_millis(LONG));
+            let end_top = label_top(&mut ui);
+            vec![
+                along(top, start_top, end_top),
+                color_along(label_color, Color::BLUE, Color::RED),
+                color_along(border_color, Color::BLUE, Color::RED),
+                along(width, 1.0, 2.0),
+                placeholder,
+            ]
+        },
+    );
+}
+
+/// The field filled, unfocused: its label floating on the fast spatial spec, its suffix fading in
+/// on fast effects, as `affixOpacity`.
+#[test]
+fn a_filled_text_fields_affix_animates_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial, FastEffects], |scheme| {
+        let value = mutable_state_of(String::new());
+        let read = value.handle();
+        let mut ui = themed(scheme, move || {
+            TextField!(
+                read.get(),
+                |_| {},
+                label = Some(|| Text!("Label")),
+                suffix = Some(|| Text!("kg"))
+            );
+        });
+        let label_top = |ui: &mut ComposeTestRule| {
+            ui.on_node_unmerged(has_text("Label")).fetch_semantics_node().bounds.top
+        };
+        let start_top = label_top(&mut ui);
+        value.set("1".to_string());
+        to_halfway(&mut ui);
+        let top = label_top(&mut ui);
+        let (_, alpha) = layer_scale_and_alpha(&mut ui);
+        idle_after(&mut ui);
+        let end_top = label_top(&mut ui);
+        vec![along(top, start_top, end_top), alpha]
+    });
+}
+
+/// A segmented button's check: it fades in on the default effects spec and grows from nothing on
+/// fast spatial, and the label moves over on fast spatial; unchecked, it's gone at once, as
+/// `SegmentedButtonDefaults.Icon`.
+#[test]
+fn a_segmented_buttons_check_animates_with_the_scheme() {
+    assert_each_property_animates_with(&[DefaultEffects, FastSpatial], |scheme| {
         let selected = mutable_state_of(false);
         let read = selected.handle();
         let mut ui = themed(scheme, move || {
@@ -635,6 +879,84 @@ fn a_segmented_button_animates_with_the_scheme() {
                     read.get(),
                     || {},
                     SegmentedButtonDefaults::item_shape(0, 1),
+                    {
+                        Text!("One");
+                    }
+                );
+            });
+        });
+        selected.set(true);
+        to_halfway(&mut ui);
+        let (scale, alpha) = layer_scale_and_alpha(&mut ui);
+        vec![alpha, scale]
+    });
+    // The label's move, and the time: all of it, with those.
+    assert_animates_with(&[DefaultEffects, FastSpatial], |scheme| {
+        let selected = mutable_state_of(false);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            SingleChoiceSegmentedButtonRow!(|row| {
+                SegmentedButton!(
+                    row,
+                    read.get(),
+                    || {},
+                    SegmentedButtonDefaults::item_shape(0, 1),
+                    {
+                        Text!("One");
+                    }
+                );
+            });
+        });
+        selected.set(true);
+        idle_after(&mut ui)
+    });
+    // Unchecked, only the label's move.
+    assert_animates_with(&[FastSpatial], |scheme| {
+        let selected = mutable_state_of(true);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            SingleChoiceSegmentedButtonRow!(|row| {
+                SegmentedButton!(
+                    row,
+                    read.get(),
+                    || {},
+                    SegmentedButtonDefaults::item_shape(0, 1),
+                    {
+                        Text!("One");
+                    }
+                );
+            });
+        });
+        selected.set(false);
+        idle_after(&mut ui)
+    });
+}
+
+/// With content for both states, a crossfade on the default effects spec, as
+/// `SegmentedButtonDefaults.Icon(active, activeContent, inactiveContent)`.
+#[test]
+fn a_segmented_buttons_two_icons_crossfade_with_the_scheme() {
+    assert_animates_with(&[DefaultEffects], |scheme| {
+        let selected = mutable_state_of(false);
+        let read = selected.handle();
+        let mut ui = themed(scheme, move || {
+            SingleChoiceSegmentedButtonRow!(|row| {
+                SegmentedButton!(
+                    row,
+                    read.get(),
+                    || {},
+                    SegmentedButtonDefaults::item_shape(0, 1),
+                    icon = Some(move || {
+                        SegmentedButtonDefaults::icon_with(
+                            read.get(),
+                            || {
+                                Box!(modifier = Modifier.size(18.dp()));
+                            },
+                            Some(|| {
+                                Box!(modifier = Modifier.size(18.dp()));
+                            }),
+                        );
+                    }),
                     {
                         Text!("One");
                     }
@@ -931,10 +1253,11 @@ fn a_top_app_bar_settles_with_the_scheme() {
     });
 }
 
-/// The label floating on the fast spatial spec, as `labelProgress`.
+/// The label floating on the fast spatial spec, as `labelProgress`; the transition's affix opacity,
+/// on fast effects, is part of it with or without an affix, as Compose's.
 #[test]
 fn a_text_fields_label_animates_with_the_scheme() {
-    assert_animates_with(&[FastSpatial], |scheme| {
+    assert_animates_with(&[FastSpatial, FastEffects], |scheme| {
         let value = mutable_state_of(String::new());
         let read = value.handle();
         let mut ui = themed(scheme, move || {

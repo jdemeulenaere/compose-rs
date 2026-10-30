@@ -13,6 +13,7 @@
 extern crate compose_runtime as compose;
 
 mod anchored;
+mod animated_shape;
 mod app_bar;
 mod bottom_sheet_scaffold;
 mod button;
