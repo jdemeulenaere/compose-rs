@@ -88,17 +88,7 @@ internal object ComposeRsNative {
     @JvmStatic
     external fun key(host: Long, key: Int, character: Int, down: Boolean, meta: Int): Boolean
 
-    /** Text the input method committed, the cursor at UTF-16 [newCursorPosition] relative to it. */
-    @JvmStatic external fun commitText(host: Long, text: String, newCursorPosition: Int)
-
-    /** The UTF-16 lengths the input method deletes before and after the selection. */
-    @JvmStatic external fun deleteSurroundingText(host: Long, before: Int, after: Int)
-
-    /** The UTF-16 range of the text the input method composes over. */
-    @JvmStatic external fun setComposingRegion(host: Long, start: Int, end: Int)
-
-    /** The input method ends its composition, keeping its text. */
-    @JvmStatic external fun finishComposingText(host: Long)
+    @JvmStatic external fun text(host: Long, text: String)
 
     /** A wheel's scroll at ([x], [y]), by ([dx], [dy]) pixels. */
     @JvmStatic external fun scroll(host: Long, x: Float, y: Float, dx: Float, dy: Float)

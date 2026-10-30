@@ -258,20 +258,6 @@ fn merging_paints_prefers_brushes_then_the_other() {
 
 // Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/style/TextForegroundStyleTest.kt, lerps colors if both ends are not brush
 // Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/style/TextForegroundStyleTest.kt, lerps discrete if one end is brush and the other end is color
-/// A fraction outside 0..1 (an overshooting easing) is clamped, as Compose's
-/// `lerp(Color, Color, Float)` clamps it.
-#[test]
-fn lerping_colors_clamps_the_fraction() {
-    assert_eq!(
-        Color::lerp(Color::RED, Color::GREEN, 1.5),
-        Color::lerp(Color::RED, Color::GREEN, 1.0)
-    );
-    assert_eq!(
-        Color::lerp(Color::RED, Color::GREEN, -0.5),
-        Color::lerp(Color::RED, Color::GREEN, 0.0)
-    );
-}
-
 // Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/style/TextForegroundStyleTest.kt, lerps alpha if both ends are brush
 #[test]
 fn lerping_paints_lerps_colors_and_brush_alphas() {

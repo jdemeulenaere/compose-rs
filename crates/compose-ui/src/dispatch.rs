@@ -487,37 +487,6 @@ impl UiTree {
         self.dispatch_to_key_path(|handler, context| handler.on_ime_action(action, context))
     }
 
-    /// Sends an input method's edit to the focused node and its ancestors until one takes it.
-    pub fn dispatch_input_method_command(
-        &mut self,
-        command: &crate::text_editing::InputMethodCommand,
-    ) -> (bool, Vec<Action>) {
-        self.dispatch_to_key_path(|handler, context| {
-            handler.on_input_method_command(command, context)
-        })
-    }
-
-    /// What an input method's edits apply to in the focused node taking them.
-    pub fn input_method_value(&mut self) -> Option<crate::text_editing::TextFieldValue> {
-        let mut next = self.focused();
-        while let Some(node) = next {
-            next = self.node(node).parent;
-            for index in (0..self.node(node).chain.len()).rev() {
-                if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
-                    continue;
-                }
-                let value = self.get_mut(node)?.chain[index]
-                    .node
-                    .as_key_input()
-                    .and_then(|handler| handler.input_method_value());
-                if value.is_some() {
-                    return value;
-                }
-            }
-        }
-        None
-    }
-
     /// What the focused node taking text asks of an on-screen keyboard: its `ImeOptions`, the
     /// defaults if it gives none, `None` if no focused node takes text.
     pub fn text_input_options(&mut self) -> Option<crate::text_input::ImeOptions> {

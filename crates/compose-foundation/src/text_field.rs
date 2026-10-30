@@ -17,12 +17,11 @@ use crate::text_input::{
 use compose_ui::{
     AnyModifierNodeElement, Color, CommitTextCommand, Constraints, DeleteSurroundingTextCommand,
     DrawModifierNode, DrawScope, EditCommand, EditProcessor, EventContext, FocusTargetModifierNode,
-    InputMethodCommand, IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType,
-    KeyInputModifierNode, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
-    Modifier, ModifierNode, ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass,
-    PointerEventType, PointerInputModifierNode, Rect, ReleaseContext, SemanticsConfiguration,
-    SemanticsModifierNode, SetComposingRegionCommand, SetSelectionCommand, TextFieldValue,
-    TextRange, TextStyle, empty_measure_policy,
+    IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
+    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
+    PointerInputModifierNode, Rect, ReleaseContext, SemanticsConfiguration, SemanticsModifierNode,
+    SetSelectionCommand, TextFieldValue, TextRange, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -162,7 +161,6 @@ impl ModifierNodeElement for TextFieldElement {
             redo: Vec::new(),
             last_typing: None,
             composition: None,
-            composing_region: None,
             composition_rects: Vec::new(),
             keyboard_options: self.keyboard_options,
             keyboard_actions: self.keyboard_actions.clone(),
@@ -190,7 +188,6 @@ impl ModifierNodeElement for TextFieldElement {
                 node.undo.clear();
                 node.redo.clear();
                 node.last_typing = None;
-                node.drop_composing_region();
             }
             if node.style != self.style {
                 node.line_bounds = None;
@@ -363,10 +360,6 @@ pub(crate) struct TextFieldNode {
     /// The text an input method is composing, shown in place of the selection until committed,
     /// with its cursor's byte range.
     composition: Option<(String, Option<(usize, usize)>)>,
-    /// The range of the text the composition takes the place of when an input method named one
-    /// (`setComposingRegion`), rather than the selection, which then stays where it was until
-    /// the composition has a cursor of its own (D1113).
-    composing_region: Option<std::ops::Range<usize>>,
     /// The composition's underline, from the measurer, refreshed at measurement.
     composition_rects: Vec<Rect>,
     keyboard_options: KeyboardOptions,
@@ -393,7 +386,7 @@ impl TextFieldNode {
     fn display_text(&self) -> std::borrow::Cow<'_, str> {
         match &self.composition {
             Some((composing, _)) => {
-                let range = self.composition_range();
+                let range = self.selection();
                 let mut text = String::with_capacity(self.text.len() + composing.len());
                 text.push_str(&self.text[..range.start]);
                 text.push_str(composing);
@@ -404,29 +397,15 @@ impl TextFieldNode {
         }
     }
 
-    /// The cursor in the displayed text: in the composition while there is one, unless it's a
-    /// region of the text with no cursor of its own (shown as the text is, where it was).
+    /// The cursor in the displayed text: in the composition while there is one.
     fn display_cursor(&self) -> usize {
         match &self.composition {
-            Some((_, None)) if self.composing_region.is_some() => self.cursor,
             Some((composing, cursor)) => {
                 let inside =
                     cursor.map_or(composing.len(), |(start, _)| start.min(composing.len()));
-                self.composition_range().start + inside
+                self.selection().start + inside
             }
             None => self.cursor,
-        }
-    }
-
-    /// The range of the text the composition takes the place of (no composition: the selection).
-    fn composition_range(&self) -> std::ops::Range<usize> {
-        self.composing_region.clone().unwrap_or_else(|| self.selection())
-    }
-
-    /// A text changed under a composing region: its offsets mean nothing, and it ends.
-    fn drop_composing_region(&mut self) {
-        if self.composing_region.take().is_some() {
-            self.composition = None;
         }
     }
 
@@ -486,13 +465,6 @@ impl TextFieldNode {
         ));
         let value = processor.apply(commands);
         let selection = value.selection();
-        if value.text() == self.text {
-            // Only the cursor moved: no edit to tell the application of, or to undo.
-            self.cursor = selection.end;
-            self.anchor = selection.start;
-            context.invalidate_measure();
-            return;
-        }
         self.edit(value.text().to_string(), selection.end, selection.start, typing, context);
     }
 
@@ -686,123 +658,21 @@ impl TextFieldNode {
         self.replace_selection(&inserted, typing, context);
     }
 
-    /// Ends the composition, if any: committed text follows, in its place.
+    /// Ends the composition, if any (committed text follows, or it was cancelled).
     fn end_composition(&mut self) {
         if self.composition.take().is_some() {
             self.invalidate_paragraph();
-        }
-        if let Some(region) = self.composing_region.take() {
-            self.anchor = region.start;
-            self.cursor = region.end;
         }
     }
 
     /// Commits the composition in progress, if any, as Compose does when a click or a focus
     /// change interrupts it, and has the platform's input method start over.
     fn commit_composition(&mut self, context: &mut EventContext<'_>) {
-        if self.composition.is_some() {
-            context.reset_input_method();
-            self.finish_composition(context);
-        }
-    }
-
-    /// Ends the composition keeping its text, as Compose's `FinishComposingTextCommand`: what it
-    /// takes the place of becomes it, and a cursor it had stays where it is in it. A region
-    /// finished as it was changes nothing: no edit, and the selection stays.
-    fn finish_composition(&mut self, context: &mut EventContext<'_>) {
-        let Some((composing, inside)) = self.composition.take() else { return };
-        let over_region = self.composing_region.is_some();
-        let range = self.composition_range();
-        self.composing_region = None;
+        let Some((composing, _)) = self.composition.take() else { return };
         self.invalidate_paragraph();
         context.invalidate_measure();
-        if self.text[range.clone()] != composing {
-            self.anchor = range.start;
-            self.cursor = range.end;
-            self.insert(&composing, true, context);
-        } else if !over_region {
-            self.anchor = range.end;
-            self.cursor = range.end;
-        }
-        if let Some((start, end)) = inside {
-            self.anchor = floor_char_boundary(&self.text, range.start + start);
-            self.cursor = floor_char_boundary(&self.text, range.start + end);
-        }
-    }
-
-    /// Commits `command`'s text in place of the composition or the selection, its new cursor
-    /// position honoured, as Compose's `CommitTextCommand`.
-    fn commit_text(&mut self, command: &CommitTextCommand, context: &mut EventContext<'_>) {
-        self.end_composition();
-        let inserted: String = if self.single_line {
-            command.text().chars().filter(|c| *c != '\n').collect()
-        } else {
-            command.text().to_string()
-        };
-        // A new line ends a typing step.
-        let typing = !inserted.contains('\n');
-        let command = CommitTextCommand::new(inserted, command.new_cursor_position);
-        self.apply_commands(&[&command], typing, context);
-    }
-
-    /// Deletes `command`'s lengths before and after the selection, as one edit, as Compose's
-    /// `DeleteSurroundingTextCommand`, and around a composition, which stays (D1113; Compose's
-    /// composition is in its text, where a length can reach it, D117's isn't, as Android's
-    /// `BaseInputConnection` leaves it).
-    fn delete_surrounding_text(
-        &mut self,
-        command: &DeleteSurroundingTextCommand,
-        context: &mut EventContext<'_>,
-    ) {
-        let selection = self.selection();
-        let composing = self.composition_range();
-        // The selection only counts while the composition has no cursor of its own.
-        let around = match &self.composition {
-            None => selection,
-            Some((_, None)) => {
-                composing.start.min(selection.start)..composing.end.max(selection.end)
-            }
-            Some(_) => composing,
-        };
-        let mut processor = EditProcessor::new();
-        processor.reset(TextFieldValue::new(
-            self.text.as_str(),
-            TextRange::new(around.start, around.end),
-            None,
-        ));
-        let value = processor.apply(&[command]);
-        if value.text() == self.text {
-            return;
-        }
-        let moved = around.start - value.selection().min();
-        if let Some(region) = &mut self.composing_region {
-            *region = region.start - moved..region.end - moved;
-        }
-        self.edit(
-            value.text().to_string(),
-            self.cursor - moved,
-            self.anchor - moved,
-            false,
-            context,
-        );
-    }
-
-    /// Makes `command`'s range of the text the composition, as Compose's
-    /// `SetComposingRegionCommand`: any composition is committed first, the text stays in the
-    /// value until the composition changes and commits, and the selection stays.
-    fn set_composing_region(
-        &mut self,
-        command: &SetComposingRegionCommand,
-        context: &mut EventContext<'_>,
-    ) {
-        self.finish_composition(context);
-        let mut processor = EditProcessor::new();
-        processor.reset(TextFieldValue::new(self.text.as_str(), TextRange::ZERO, None));
-        if let Some(region) = processor.apply(&[command]).composition() {
-            self.composition = Some((self.text[region.range()].to_string(), None));
-            self.composing_region = Some(region.range());
-            context.invalidate_measure();
-        }
+        context.reset_input_method();
+        self.insert(&composing, true, context);
     }
 
     /// The hard line (between new lines) at `offset`: what a triple-click selects.
@@ -872,7 +742,6 @@ impl ModifierNode for TextFieldNode {
         self.redo.clear();
         self.last_typing = None;
         self.composition = None;
-        self.composing_region = None;
     }
 }
 
@@ -943,7 +812,6 @@ impl LayoutModifierNode for TextFieldNode {
             self.text = self.value.clone();
             self.cursor = floor_char_boundary(&self.text, self.cursor);
             self.anchor = floor_char_boundary(&self.text, self.anchor);
-            self.drop_composing_region();
             self.invalidate_paragraph();
         }
         for paragraph in self.stale.drain(..) {
@@ -1026,7 +894,7 @@ impl LayoutModifierNode for TextFieldNode {
         self.composition_rects.clear();
         match &self.composition {
             Some((composing, _)) => {
-                let start = self.composition_range().start;
+                let start = self.selection().start;
                 if !composing.is_empty() {
                     let range = self.shown(start)..self.shown(start + composing.len());
                     self.composition_rects =
@@ -1624,28 +1492,6 @@ impl KeyInputModifierNode for TextFieldNode {
         if !self.enabled || self.read_only {
             return false;
         }
-        // Over a region, the text it holds is the value's: empty composing text deletes it, as
-        // Compose's `SetComposingTextCommand`, and its cursor is the new text's end.
-        if text.is_empty()
-            && let Some(region) = self.composing_region.take()
-        {
-            self.composition = None;
-            self.anchor = region.start;
-            self.cursor = region.end;
-            self.invalidate_paragraph();
-            self.replace_selection("", false, context);
-            context.invalidate_measure();
-            return true;
-        }
-        let cursor = match &self.composing_region {
-            // The cursor moves into the composition, and stays out of the text until it commits.
-            Some(region) => {
-                self.cursor = region.start;
-                self.anchor = region.start;
-                cursor.or(Some((text.len(), text.len())))
-            }
-            None => cursor,
-        };
         let composition = (!text.is_empty()).then(|| (text.to_string(), cursor));
         if composition != self.composition {
             self.composition = composition;
@@ -1657,46 +1503,6 @@ impl KeyInputModifierNode for TextFieldNode {
 
     fn ime_options(&self) -> Option<compose_ui::ImeOptions> {
         Some(self.keyboard_options.to_ime_options(self.single_line))
-    }
-
-    fn input_method_value(&self) -> Option<TextFieldValue> {
-        if !self.enabled || self.read_only {
-            return None;
-        }
-        let Some((composing, cursor)) = &self.composition else {
-            let selection = TextRange::new(self.anchor, self.cursor);
-            return Some(TextFieldValue::new(self.text.as_str(), selection, None));
-        };
-        let start = self.composition_range().start;
-        let selection = match cursor {
-            Some((from, to)) => TextRange::new(start + from, start + to),
-            None if self.composing_region.is_some() => TextRange::new(self.anchor, self.cursor),
-            None => TextRange::at(start + composing.len()),
-        };
-        let composition = TextRange::new(start, start + composing.len());
-        Some(TextFieldValue::new(self.display_text().into_owned(), selection, Some(composition)))
-    }
-
-    fn on_input_method_command(
-        &mut self,
-        command: &InputMethodCommand,
-        context: &mut EventContext<'_>,
-    ) -> bool {
-        if !self.enabled || self.read_only {
-            return false;
-        }
-        self.preferred_x = None;
-        match command {
-            InputMethodCommand::CommitText(command) => self.commit_text(command, context),
-            InputMethodCommand::DeleteSurroundingText(command) => {
-                self.delete_surrounding_text(command, context)
-            }
-            InputMethodCommand::SetComposingRegion(command) => {
-                self.set_composing_region(command, context)
-            }
-            InputMethodCommand::FinishComposingText(_) => self.finish_composition(context),
-        }
-        true
     }
 
     /// The input method's action key: the field's action for it (whichever the keyboard showed,

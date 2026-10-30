@@ -79,7 +79,10 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         let visible_end = if entry.ellipsized && number + 1 == count {
             byte_at(line.end_excluding_whitespaces).max(start)
         } else {
-            start + text[start..end].trim_end_matches(compose_ui::platform::is_line_end_space).len()
+            start
+                + text[start..end]
+                    .trim_end_matches(compose_ui::platform::is_line_end_space)
+                    .len()
         };
         let mut glyphs = Vec::new();
         // A running UTF-16 index through the line.

@@ -249,9 +249,7 @@ impl ParagraphLayout {
         let max = if line + 1 == self.lines.len() {
             layout.end
         } else {
-            text.grapheme_indices(true)
-                .next_back()
-                .map_or(layout.end, |(index, _)| layout.start + index)
+            text.grapheme_indices(true).next_back().map_or(layout.end, |(index, _)| layout.start + index)
         };
         let mut best = layout.start;
         let mut best_distance = (self.position(layout.start).primary - horizontal).abs();

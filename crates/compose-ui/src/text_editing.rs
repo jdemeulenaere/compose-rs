@@ -715,18 +715,6 @@ impl fmt::Display for FinishComposingTextCommand {
     }
 }
 
-/// What an input method asks of the focused field: the edits Compose's
-/// `RecordingInputConnection` sends as commands, in bytes (D1100, D1113): the platform's bridge
-/// converts an input method's UTF-16 positions and lengths with the field's text
-/// (`UiHost::text_input_value`).
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum InputMethodCommand {
-    CommitText(CommitTextCommand),
-    DeleteSurroundingText(DeleteSurroundingTextCommand),
-    SetComposingRegion(SetComposingRegionCommand),
-    FinishComposingText(FinishComposingTextCommand),
-}
-
 /// Deletes the composition, else the selection, else the grapheme cluster before the cursor,
 /// as Compose's `BackspaceCommand`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]

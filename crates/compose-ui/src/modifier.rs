@@ -1265,21 +1265,6 @@ pub trait KeyInputModifierNode {
     ) -> bool {
         false
     }
-    /// What an input method's edits apply to: the text as shown, the composition in it, with the
-    /// selection and composition in bytes, as Compose's `TextFieldValue`. `None` if the node
-    /// takes no edits. A bridge reads it to convert an input method's positions (D1113).
-    fn input_method_value(&self) -> Option<crate::text_editing::TextFieldValue> {
-        None
-    }
-    /// An edit from an input method (Android's `InputConnection`), as Compose's
-    /// `onEditCommands`. Returning true consumes it.
-    fn on_input_method_command(
-        &mut self,
-        _command: &crate::text_editing::InputMethodCommand,
-        _context: &mut EventContext<'_>,
-    ) -> bool {
-        false
-    }
     /// Where text input goes, in the node's coordinates: an input method places its candidate
     /// window there. `None` if the node takes no text.
     fn text_input_area(&self) -> Option<crate::unit::Rect> {

@@ -757,25 +757,6 @@ impl UiHost {
         consumed
     }
 
-    /// What an input method's edits apply to in the focused field (the text as shown, the
-    /// selection and composition in bytes): a platform's bridge reads it to convert its input
-    /// method's positions (D1113). `None` while no focused node takes edits.
-    pub fn input_method_value(&self) -> Option<crate::text_editing::TextFieldValue> {
-        self.with_tree(|tree| tree.input_method_value())
-    }
-
-    /// An input method's edit, in bytes, to the focused field; returns whether it was taken.
-    pub fn send_input_method_command(
-        &mut self,
-        command: &crate::text_editing::InputMethodCommand,
-    ) -> bool {
-        let (consumed, actions) =
-            self.with_tree(|tree| tree.dispatch_input_method_command(command));
-        Self::run(actions);
-        self.wake_if_dirty();
-        consumed
-    }
-
     /// Whether a handler asked for the input method to be reset since the last call: the
     /// platform host then resets it.
     pub fn take_input_method_reset(&self) -> bool {

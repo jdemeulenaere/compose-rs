@@ -19,7 +19,7 @@ The log is split by area into the files below, one table each, rows in number or
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 139 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 41 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 40 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
@@ -147,7 +147,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D114 | [runtime](decisions/runtime.md#d114) | current |
 | D115 | [runtime](decisions/runtime.md#d115) | current |
 | D116 | [runtime](decisions/runtime.md#d116) | current |
-| D117 | [text](decisions/text.md#d117) | revised by [D1113](decisions/text.md#d1113) |
+| D117 | [text](decisions/text.md#d117) | current |
 | D118 | [text](decisions/text.md#d118) | current |
 | D119 | [text](decisions/text.md#d119) | current |
 | D120 | [ui-and-layout](decisions/ui-and-layout.md#d120) | current |
@@ -470,7 +470,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D907 | [api-and-tooling](decisions/api-and-tooling.md#d907) | current |
 | D908 | [api-and-tooling](decisions/api-and-tooling.md#d908) | current |
 | D909 | [api-and-tooling](decisions/api-and-tooling.md#d909) | current |
-| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112), [D1113](decisions/text.md#d1113) |
+| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |
 | D1103 | [text](decisions/text.md#d1103) | current |
@@ -483,7 +483,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D1110 | [text](decisions/text.md#d1110) | current |
 | D1111 | [text](decisions/text.md#d1111) | current |
 | D1112 | [text](decisions/text.md#d1112) | current |
-| D1113 | [text](decisions/text.md#d1113) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |
