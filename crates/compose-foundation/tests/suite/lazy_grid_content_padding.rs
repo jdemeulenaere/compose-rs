@@ -10,9 +10,9 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::Optimizations;
-use compose_ui::{IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, PaddingValues, UnitExt};
+use compose_ui::{Dp, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, PaddingValues, UnitExt};
 
-use crate::lazy_support::bounds;
+use crate::lazy_support::{Lazy, bounds};
 use crate::scroll_support::run;
 
 const LIST: &str = "LazyList";
@@ -463,4 +463,69 @@ fn uneven_padding_right_to_left() {
     scroll_by(&mut ui, handle, ITEM_SIZE * 4.0);
     let last = bounds(&mut ui, "3");
     assert_eq!((last.top, last.left), (ITEM_SIZE, 8.0));
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt, verticalGrid_contentPaddingAndReverseLayout
+#[test]
+fn a_reversed_grid_starts_inside_the_padding_at_its_end() {
+    let item = 50.0;
+    let (top, bottom, size) = (item * 2.0, item / 2.0, item * 3.0);
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    use_optimizations(Optimizations::NONE);
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(1),
+            modifier = Modifier.size(Dp(size)),
+            state = handle,
+            reverse_layout = true,
+            content_padding =
+                PaddingValues { top: Dp(top), bottom: Dp(bottom), ..PaddingValues::ZERO },
+            move |scope: LazyGridScope| {
+                scope.items(3, move |index| {
+                    Box!(modifier = Modifier.size(Dp(item)).test_tag(index.to_string()), {});
+                });
+            }
+        );
+    });
+    let lazy = Lazy::column();
+    assert_eq!(lazy.main_start(&mut ui, "0"), size - bottom - item);
+    assert_eq!(lazy.main_start(&mut ui, "1"), size - bottom - item * 2.0);
+    assert_eq!(lazy.main_start(&mut ui, "2"), -item / 2.0);
+    let _ = run(&mut ui, async move { handle.scroll_by(item * 2.5).await });
+    assert_eq!(lazy.main_start(&mut ui, "2"), top);
+    assert!(!ui.on_node_with_tag("1").is_displayed());
+    assert!(!ui.on_node_with_tag("0").is_displayed());
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt, verticalGrid_largeContentPaddingAndReverseLayout
+#[test]
+fn a_reversed_grid_with_padding_larger_than_it_lays_out_one_line() {
+    let item = 50.0;
+    let (top, bottom, size) = (item * 2.0, item * 2.0, item * 3.0);
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    use_optimizations(Optimizations::NONE);
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(1),
+            modifier = Modifier.size(Dp(size)),
+            state = handle,
+            reverse_layout = true,
+            content_padding =
+                PaddingValues { top: Dp(top), bottom: Dp(bottom), ..PaddingValues::ZERO },
+            move |scope: LazyGridScope| {
+                scope.items(3, move |index| {
+                    Box!(modifier = Modifier.size(Dp(item)).test_tag(index.to_string()), {});
+                });
+            }
+        );
+    });
+    let lazy = Lazy::column();
+    assert_eq!(lazy.main_start(&mut ui, "0"), 0.0);
+    ui.on_node_with_tag("1").assert_does_not_exist();
+    let _ = run(&mut ui, async move { handle.scroll_by(item * 5.0).await });
+    assert_eq!(lazy.main_start(&mut ui, "2"), top);
+    assert!(!ui.on_node_with_tag("1").is_displayed());
+    assert!(!ui.on_node_with_tag("0").is_displayed());
 }

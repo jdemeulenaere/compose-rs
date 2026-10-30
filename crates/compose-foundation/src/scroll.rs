@@ -672,7 +672,7 @@ impl PointerInputModifierNode for ScrollNode {
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
-        _bounds: IntSize,
+        bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
         if !self.enabled {
@@ -690,6 +690,7 @@ impl PointerInputModifierNode for ScrollNode {
         self.drag.on_pointer_event(
             event,
             pass,
+            bounds,
             self.vertical,
             reverse,
             context,
@@ -1001,6 +1002,7 @@ impl DragScroller {
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
+        bounds: IntSize,
         vertical: bool,
         reverse: bool,
         context: &EventContext<'_>,
@@ -1032,7 +1034,7 @@ impl DragScroller {
         }
         if event.kind == PointerEventType::Scroll {
             if let Some(wheel) = &self.wheel {
-                wheel.on_pointer_event(event, pass);
+                wheel.on_pointer_event(event, pass, bounds);
             }
             return;
         }

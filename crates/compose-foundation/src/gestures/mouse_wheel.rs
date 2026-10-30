@@ -10,7 +10,7 @@ use std::task::Poll;
 
 use compose_animation::{AnimationState, LINEAR_EASING, tween};
 use compose_runtime::{CoroutineScope, Job};
-use compose_ui::{Offset, PointerEvent, PointerEventPass, VelocityTracker1D};
+use compose_ui::{IntSize, Offset, PointerEvent, PointerEventPass, VelocityTracker1D};
 
 use crate::gestures::{ScrollScope, ScrollableStateExt};
 use crate::mutator::MutatePriority;
@@ -100,26 +100,32 @@ impl MouseWheel {
     /// An event of the wheel, as `NonTouchScrollingLogic.onPointerEvent`: while a gesture goes on
     /// it's taken on the way in, giving this scrollable priority over those inside; otherwise on
     /// the way out, if this scrollable can use it.
-    pub(crate) fn on_pointer_event(&self, event: &mut PointerEvent, pass: PointerEventPass) {
+    pub(crate) fn on_pointer_event(
+        &self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
         if event.consumed {
             return;
         }
         let scrolling = self.shared.scrolling.get();
         if pass == PointerEventPass::Initial && scrolling {
-            self.on_turn(event);
+            self.on_turn(event, bounds);
             event.consume();
         }
-        if pass == PointerEventPass::Main && !scrolling && self.on_turn(event) {
+        if pass == PointerEventPass::Main && !scrolling && self.on_turn(event, bounds) {
             event.consume();
         }
     }
 
     /// Takes the turn if the state can use it, as `onScrollingEvent` with `canConsumeDelta`;
     /// returns whether the event is to be consumed.
-    fn on_turn(&self, event: &PointerEvent) -> bool {
+    fn on_turn(&self, event: &PointerEvent, bounds: IntSize) -> bool {
+        let value = event.wheel_pixels(self.shared.target.borrow().density, bounds);
         let can_consume = {
             let target = self.shared.target.borrow();
-            let delta = along_axis(event.scroll_delta, target.vertical);
+            let delta = along_axis(value, target.vertical);
             let toward_state = if target.reverse { -delta } else { delta };
             // Nothing on this axis: something else may handle the other one (a NaN too).
             if toward_state < 0.0 {
@@ -135,7 +141,7 @@ impl MouseWheel {
         }
         let time_millis = (event_time(event) / 1_000_000) as i64;
         self.shared.turns.borrow_mut().push_back(Turn {
-            value: event.scroll_delta,
+            value,
             time_millis,
             precise: event.precise_wheel,
         });

@@ -266,6 +266,15 @@ impl Modifier {
         self.then_element(Element::ZIndex(z_index))
     }
 
+    /// A lazy layout's item: a `repaint_boundary`, ordered among its siblings by the largest
+    /// `z_index` of its children, as if they were its parent's, the node being around content
+    /// Compose's item composes directly into the layout (D1452). One element, not two: a list's
+    /// items have it, and the frames that walk them feel a longer chain.
+    #[doc(hidden)]
+    pub fn lazy_item_boundary(self) -> Modifier {
+        self.then_element(Element::LazyItemBoundary)
+    }
+
     // ---- Input ------------------------------------------------------------------------------
 
     /// Calls `on_click` on a press released inside, and on Enter, Space or the D-pad's center
@@ -818,6 +827,8 @@ pub(crate) enum Element {
     Semantics(bool, Rc<SemanticsConfiguration>),
     /// `z_index`: the order among siblings, read from the elements as parent data.
     ZIndex(f32),
+    /// `Modifier::z_index_of_children`.
+    LazyItemBoundary,
     Custom(Rc<dyn AnyModifierNodeElement>),
 }
 
@@ -843,6 +854,7 @@ impl Element {
             | Element::Align(_)
             | Element::ZIndex(_)
             | Element::FillCrossAxis(_) => ANY,
+            Element::LazyItemBoundary => ANY.with(NodeKinds::REPAINT_BOUNDARY),
             Element::Background(..) | Element::Border(..) => ANY.with(NodeKinds::DRAW),
             Element::Clip(_) => ANY.with(NodeKinds::DRAW).with(NodeKinds::GRAPHICS_LAYER),
             Element::Clickable(_) => ANY
@@ -893,6 +905,7 @@ impl Element {
             (TestTag(a), TestTag(b)) => a.same(b),
             (Semantics(a, b), Semantics(c, d)) => a == c && (Rc::ptr_eq(b, d) || b == d),
             (ZIndex(a), ZIndex(b)) => a == b,
+            (LazyItemBoundary, LazyItemBoundary) => true,
             (Custom(a), Custom(b)) => Rc::ptr_eq(a, b) || a.same_dyn(&**b),
             _ => false,
         }
@@ -961,6 +974,7 @@ impl fmt::Debug for Element {
             TestTag(tag) => write!(formatter, "test_tag({tag:?})"),
             Semantics(merge, _) => write!(formatter, "semantics(merge = {merge})"),
             ZIndex(z_index) => write!(formatter, "z_index({z_index})"),
+            LazyItemBoundary => write!(formatter, "repaint_boundary"),
             Custom(element) => {
                 let mut info = InspectorInfo::default();
                 element.inspect_dyn(&mut info);

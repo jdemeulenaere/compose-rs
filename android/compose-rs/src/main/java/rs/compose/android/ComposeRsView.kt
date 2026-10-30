@@ -21,6 +21,7 @@ import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeProvider
@@ -867,16 +868,22 @@ class ComposeRsView @JvmOverloads constructor(
         return true
     }
 
-    /** A mouse wheel (or a trackpad's scroll), in pixels, as Compose's scroll events. */
+    /**
+     * A mouse wheel (or a trackpad's scroll), in pixels, by the view configuration's scroll factors,
+     * as Compose's `AndroidConfig` (D1450).
+     */
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if (host != 0L && event.actionMasked == MotionEvent.ACTION_SCROLL) {
-            val step = 64f * resources.displayMetrics.density
+            val configuration = ViewConfiguration.get(context)
             ComposeRsNative.scroll(
                 host,
                 event.x,
                 event.y,
-                -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * step,
-                -event.getAxisValue(MotionEvent.AXIS_VSCROLL) * step,
+                // Compose's (-H h, +V v) is in drag-like coordinates; these are positive forward.
+                event.getAxisValue(MotionEvent.AXIS_HSCROLL) *
+                    configuration.scaledHorizontalScrollFactor,
+                -event.getAxisValue(MotionEvent.AXIS_VSCROLL) *
+                    configuration.scaledVerticalScrollFactor,
             )
             return true
         }

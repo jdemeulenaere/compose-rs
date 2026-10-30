@@ -8,7 +8,7 @@
 //! measurement lays the composed items out in lines, as Compose's `measureLazyGrid`: it works
 //! from the line holding the first visible item, and asks for the items of the lines it needs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -33,12 +33,52 @@ use crate::mutator::{MutatePriority, MutationInterrupted};
 
 /// How a grid's cross axis is cut into cells, as Compose's `GridCells`: a vertical grid's
 /// columns, a horizontal one's rows.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone)]
 pub enum GridCells {
     /// This many cells.
     Fixed(usize),
     /// As many cells as fit at least this large.
     Adaptive(Dp),
+    /// As many cells as fit of exactly this size, the arrangement placing them; one as large as the
+    /// room if not even one fits, as `GridCells.FixedSize`.
+    FixedSize(Dp),
+    /// Cells of your own, as an implementation of Compose's `GridCells`.
+    Custom(Rc<dyn CrossAxisCells>),
+}
+
+/// Cells of your own: Compose's `GridCells.calculateCrossAxisCellSizes`.
+pub trait CrossAxisCells {
+    /// The cells' sizes in `available` pixels with `spacing` between them, at least one. Their sum
+    /// and spacing may be less than `available`: the arrangement places them in it.
+    fn calculate_cross_axis_cell_sizes(
+        &self,
+        density: Density,
+        available: i32,
+        spacing: i32,
+    ) -> Vec<i32>;
+}
+
+impl PartialEq for GridCells {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GridCells::Fixed(a), GridCells::Fixed(b)) => a == b,
+            (GridCells::Adaptive(a), GridCells::Adaptive(b)) => a == b,
+            (GridCells::FixedSize(a), GridCells::FixedSize(b)) => a == b,
+            (GridCells::Custom(a), GridCells::Custom(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for GridCells {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GridCells::Fixed(count) => write!(f, "Fixed({count})"),
+            GridCells::Adaptive(size) => write!(f, "Adaptive({size:?})"),
+            GridCells::FixedSize(size) => write!(f, "FixedSize({size:?})"),
+            GridCells::Custom(_) => write!(f, "Custom"),
+        }
+    }
 }
 
 impl ComposeArg for GridCells {
@@ -51,12 +91,26 @@ impl GridCells {
     /// The cells' sizes in `available` pixels with `spacing` between them, as Compose's
     /// `calculateCrossAxisCellSizes`: the size without spacing divided evenly, the remaining
     /// pixels one each to the first cells.
-    fn sizes(self, available: i32, spacing: i32, density: Density) -> Vec<i32> {
+    fn sizes(&self, available: i32, spacing: i32, density: Density) -> Vec<i32> {
         let count = match self {
-            GridCells::Fixed(count) => count.max(1),
+            GridCells::Fixed(count) => (*count).max(1),
             GridCells::Adaptive(min) => {
-                let min = density.round_to_px(min).max(1);
+                let min = density.round_to_px(*min).max(1);
                 ((available + spacing) / (min + spacing)).max(1) as usize
+            }
+            GridCells::FixedSize(size) => {
+                assert!(size.0 > 0.0, "Provided size should be larger than zero.");
+                let size = density.round_to_px(*size);
+                return if size + spacing < available + spacing {
+                    vec![size; ((available + spacing) / (size + spacing)) as usize]
+                } else {
+                    vec![available]
+                };
+            }
+            GridCells::Custom(cells) => {
+                let sizes = cells.calculate_cross_axis_cell_sizes(density, available, spacing);
+                assert!(!sizes.is_empty(), "compose-foundation: a grid needs at least one cell");
+                return sizes;
             }
         };
         let without_spacing = (available - spacing * (count as i32 - 1)).max(0);
@@ -458,12 +512,35 @@ pub fn remember_lazy_grid_state(
 /// the first, as far as the grid is scrolled, once per set of items (each time the grid's
 /// content runs again, as when its caller recomposes with other captures). Without spans, it's
 /// arithmetic: give a span only where an item takes more than a cell.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LazyGridScope {
     intervals: Rc<RefCell<Vec<Interval>>>,
+    /// The items so far: a sticky header's index.
+    count: Rc<Cell<usize>>,
+    item_scope: LazyGridItemScope,
+}
+
+/// What a grid's item can ask of the grid, as Compose's `LazyGridItemScope`.
+#[derive(Clone)]
+pub struct LazyGridItemScope {
+    cross_cells: compose_runtime::MutableState<usize>,
+}
+
+impl LazyGridItemScope {
+    /// The cells across the grid, as `crossAxisCellCount`, at least 1: an estimate from the room
+    /// around before its first measurement here, which composes items in rounds (D1451). Reading it
+    /// recomposes when it changes.
+    pub fn cross_axis_cell_count(&self) -> usize {
+        self.cross_cells.get()
+    }
 }
 
 impl LazyGridScope {
+    /// The scope of this grid's items, for their content: what `cross_axis_cell_count` is on.
+    pub fn item_scope(&self) -> LazyGridItemScope {
+        self.item_scope.clone()
+    }
+
     /// One item, as `item { … }`.
     pub fn item(&self, content: impl Fn() + 'static) {
         self.push(Interval::new(1, Rc::new(move |_| content())));
@@ -491,6 +568,65 @@ impl LazyGridScope {
         content: impl Fn() + 'static,
     ) {
         self.push(Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content())));
+    }
+
+    /// A header that sticks to the grid's start, a whole line, as `stickyHeader { … }`: its content
+    /// gets its index in the grid.
+    pub fn sticky_header(&self, content: impl Fn(usize) + 'static) {
+        self.push_sticky(None, None, Rc::new(content));
+    }
+
+    /// `sticky_header` with a content type, as `stickyHeader(contentType = …) { … }`.
+    pub fn sticky_header_with<C: Hash>(&self, content_type: C, content: impl Fn(usize) + 'static) {
+        self.push_sticky(None, Some(content_type_of(&content_type)), Rc::new(content));
+    }
+
+    /// `sticky_header` with a key, as `stickyHeader(key) { … }`.
+    pub fn sticky_header_keyed<K: Hash + PartialEq + Clone + 'static>(
+        &self,
+        key: K,
+        content: impl Fn(usize) + 'static,
+    ) {
+        let keyed = Interval::keyed(1, move |_| key.clone(), Rc::new(|_| {}));
+        self.push_sticky(Some(keyed), None, Rc::new(content));
+    }
+
+    /// `sticky_header` with a key and a content type, as `stickyHeader(key, contentType) { … }`.
+    pub fn sticky_header_keyed_with<K: Hash + PartialEq + Clone + 'static, C: Hash>(
+        &self,
+        key: K,
+        content_type: C,
+        content: impl Fn(usize) + 'static,
+    ) {
+        let keyed = Interval::keyed(1, move |_| key.clone(), Rc::new(|_| {}));
+        self.push_sticky(Some(keyed), Some(content_type_of(&content_type)), Rc::new(content));
+    }
+
+    /// A sticky header: a whole line, its content told its index in the grid. Not generic: the
+    /// shims above are.
+    fn push_sticky(
+        &self,
+        keyed: Option<Interval>,
+        content_type: Option<u64>,
+        content: Rc<dyn Fn(usize)>,
+    ) {
+        let index = self.count.get();
+        let content: Rc<dyn Fn(usize)> = Rc::new(move |_| content(index));
+        let mut interval = match keyed {
+            Some(mut interval) => {
+                interval.content = content;
+                interval
+            }
+            None => Interval::new(1, content),
+        };
+        if let Some(content_type) = content_type {
+            interval = interval.typed(Rc::new(move |_| content_type));
+        }
+        interval = interval.spanned(Rc::new(|scope: LazyGridItemSpanScope, _| {
+            GridItemSpan(scope.max_line_span())
+        }));
+        interval.sticky = true;
+        self.push(interval);
     }
 
     /// One item with a key, a span and a content type, as `item(key, span, contentType) { … }`.
@@ -819,6 +955,7 @@ impl LazyGridScope {
     }
 
     fn push(&self, interval: Interval) {
+        self.count.set(self.count.get() + interval.count);
         self.intervals.borrow_mut().push(interval);
     }
 }
@@ -850,10 +987,10 @@ impl Items {
 }
 
 /// A vertically scrolling grid, as Compose's `LazyVerticalGrid`: `columns` cut its width (inside
-/// `content_padding`) into cells, `horizontal_arrangement` between them, and its items fill
-/// rows from the start, each in as many cells as its span, composed lazily item by item. Cells
-/// fill the width, so `horizontal_arrangement` gives only its spacing (a custom arrangement's
-/// `arrange` isn't asked: there is no free space to place).
+/// `content_padding`) into cells, `horizontal_arrangement` placing them, and its items fill
+/// rows from the start, each in as many cells as its span, composed lazily item by item.
+/// `reverse_layout` lays the rows out from the bottom, and `vertical_arrangement` defaults to the
+/// top, to the bottom when reversed.
 #[composable]
 #[allow(non_snake_case)]
 pub fn LazyVerticalGrid(
@@ -861,7 +998,8 @@ pub fn LazyVerticalGrid(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_grid_state(0, 0))] state: LazyGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(false)] reverse_layout: bool,
+    #[default(None)] vertical_arrangement: impl Into<Option<VerticalArrangement>>,
     #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
@@ -871,15 +1009,22 @@ pub fn LazyVerticalGrid(
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     // (The `#[composable]` transform converts `impl Into` parameters.)
-    let cross_spacing = horizontal_arrangement.spacing();
     LazyGrid(
         modifier,
         state,
         columns,
         content_padding,
         true,
-        vertical_arrangement.0,
-        cross_spacing,
+        reverse_layout,
+        // As Compose's default: from the top, from the bottom when reversed.
+        vertical_arrangement
+            .unwrap_or(if reverse_layout {
+                crate::layout::Arrangement::BOTTOM
+            } else {
+                crate::layout::Arrangement::TOP
+            })
+            .0,
+        horizontal_arrangement.0,
         fling_behavior,
         user_scroll_enabled,
         cache_window,
@@ -888,9 +1033,10 @@ pub fn LazyVerticalGrid(
 }
 
 /// A horizontally scrolling grid, as Compose's `LazyHorizontalGrid`: `rows` cut its height
-/// (inside `content_padding`) into cells, `vertical_arrangement` between them, and its items
+/// (inside `content_padding`) into cells, `vertical_arrangement` placing them, and its items
 /// fill columns from the top, each in as many cells as its span. Right to left, its first
-/// column is at the right, as a `LazyRow`'s first item.
+/// column is at the right, as a `LazyRow`'s first item. `reverse_layout` lays the columns out from
+/// the end, and `horizontal_arrangement` defaults to the start, to the end when reversed.
 #[composable]
 #[allow(non_snake_case)]
 pub fn LazyHorizontalGrid(
@@ -898,24 +1044,30 @@ pub fn LazyHorizontalGrid(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_grid_state(0, 0))] state: LazyGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
-        HorizontalArrangement,
-    >,
+    #[default(false)] reverse_layout: bool,
+    #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
     #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
-    let cross_spacing = vertical_arrangement.spacing();
     LazyGrid(
         modifier,
         state,
         rows,
         content_padding,
         false,
-        horizontal_arrangement.0,
-        cross_spacing,
+        reverse_layout,
+        // As Compose's default: from the start, from the end when reversed.
+        horizontal_arrangement
+            .unwrap_or(if reverse_layout {
+                crate::layout::Arrangement::END
+            } else {
+                crate::layout::Arrangement::START
+            })
+            .0,
+        vertical_arrangement.0,
         fling_behavior,
         user_scroll_enabled,
         cache_window,
@@ -930,9 +1082,10 @@ struct GridInfo {
     items: Rc<Items>,
     cells: GridCells,
     vertical: bool,
+    reverse: bool,
     padding: PaddingValues,
     arrangement: MainAxisArrangement,
-    cross_spacing: Dp,
+    cross_arrangement: MainAxisArrangement,
 }
 
 impl PartialEq for GridInfo {
@@ -940,9 +1093,10 @@ impl PartialEq for GridInfo {
         Rc::ptr_eq(&self.items, &other.items)
             && self.cells == other.cells
             && self.vertical == other.vertical
+            && self.reverse == other.reverse
             && self.padding == other.padding
             && self.arrangement == other.arrangement
-            && self.cross_spacing == other.cross_spacing
+            && self.cross_arrangement == other.cross_arrangement
     }
 }
 
@@ -964,30 +1118,44 @@ fn LazyGrid(
     cells: GridCells,
     content_padding: PaddingValues,
     vertical: bool,
+    reverse: bool,
     arrangement: MainAxisArrangement,
-    cross_spacing: Dp,
+    cross_arrangement: MainAxisArrangement,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     user_scroll_enabled: bool,
     cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
-    let scope = LazyGridScope::default();
-    content(scope.clone());
-    let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
-    let items = Rc::new(Items::new(intervals));
     // The list state its position is in (detached once the grid state's owner went, D240).
     let list = state.list;
     let inner = list.inner_or_detached();
+    let scope = LazyGridScope {
+        intervals: Rc::default(),
+        count: Rc::default(),
+        item_scope: LazyGridItemScope { cross_cells: inner.cross_cells.handle() },
+    };
+    content(scope.clone());
+    let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
+    let items = Rc::new(Items::new(intervals));
     let owner = compose_runtime::remember(|| Rc::new(()));
     inner.prefetch.use_window(&inner, cache_window, &owner);
+    let density = compose_ui::LOCAL_DENSITY.current();
+    let cross_spacing = cross_arrangement.spacing(&density);
     let info = GridInfo {
         items: items.clone(),
-        cells,
+        cells: cells.clone(),
         vertical,
+        reverse,
         padding: content_padding,
         arrangement,
-        cross_spacing,
+        cross_arrangement,
     };
+    // The cells stay while the way they're worked out does, as Compose's `GridSlotCache`:
+    // `remember(columns, arrangement)`, a caller's recomposition asking nothing again.
+    let slots_cache: SlotsCache = compose_runtime::remember_keyed(
+        SlotsCacheKey(info.cells.clone(), info.cross_arrangement.clone()),
+        Rc::default,
+    );
     let policy = {
         let scheduler = compose_ui::LOCAL_PREFETCH_SCHEDULER.current();
         compose_runtime::remember_keyed(
@@ -996,8 +1164,8 @@ fn LazyGrid(
                 let state = list.inner_or_detached();
                 let lines = Rc::new(RefCell::new(Lines::new(info.items.clone(), 0)));
                 *state.prefetch.units.borrow_mut() = Some(Rc::new(StoredLines(lines.clone())));
-                let slots = RefCell::new(None);
-                Rc::new(LazyGridLayout { state, info, scheduler, lines, slots })
+                let told = Cell::new(false);
+                Rc::new(LazyGridLayout { state, info, scheduler, lines, slots: slots_cache, told })
                     as Rc<dyn MeasurePolicy>
             },
         )
@@ -1005,16 +1173,19 @@ fn LazyGrid(
     let modifier = modifier.clip(compose_ui::RECTANGLE_SHAPE).then_custom(LazyScrollElement {
         state: list,
         vertical,
-        reverse: false,
+        reverse,
         enabled: user_scroll_enabled,
         fling_behavior,
     });
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).
     let holder = compose_runtime::remember_saveable_state_holder();
-    // Until the grid is measured, its items' likely constraints: a cell's, in the space around.
-    let density = compose_ui::LOCAL_DENSITY.current();
-    let fallback = compose_ui::platform::LOCAL_CONSTRAINTS_HINT.current().and_then(|around| {
+    // Until the grid is measured, its items' likely constraints: a cell's, in the space around, and
+    // its cells for `cross_axis_cell_count`. Cells of your own are asked only when measured.
+    let hinted =
+        matches!(cells, GridCells::Custom(_)) || inner.item_constraints_written.get().is_some();
+    let around = if hinted { None } else { compose_ui::platform::LOCAL_CONSTRAINTS_HINT.current() };
+    let fallback = around.and_then(|around| {
         let px = |dp: Dp| density.round_to_px(dp);
         let (available, padding) = if vertical {
             (around.max_width, px(content_padding.start) + px(content_padding.end))
@@ -1024,9 +1195,12 @@ fn LazyGrid(
         if available == Constraints::INFINITY {
             return None;
         }
-        let spacing = px(cross_spacing);
-        let size = cells.sizes((available - padding).max(0), spacing, density)[0];
-        Some(cell_constraints(vertical, size))
+        let sizes = cells.sizes((available - padding).max(0), cross_spacing, density);
+        if !inner.cross_cells_seeded.replace(true) {
+            inner.cross_cells_written.set(sizes.len());
+            inner.cross_cells.set(sizes.len());
+        }
+        Some(cell_constraints(vertical, sizes[0]))
     });
     Layout(
         modifier,
@@ -1054,13 +1228,22 @@ struct Slots {
 }
 
 impl Slots {
-    fn new(sizes: Vec<i32>, spacing: i32) -> Slots {
-        let mut positions = Vec::with_capacity(sizes.len());
-        let mut position = 0;
-        for size in &sizes {
-            positions.push(position);
-            position += size + spacing;
-        }
+    /// Placed by the arrangement across, as Compose's `rememberColumnWidthSums`: from the left in
+    /// any layout direction, mirrored when placed.
+    fn new(
+        sizes: Vec<i32>,
+        arrangement: &MainAxisArrangement,
+        room: i32,
+        density: &Density,
+    ) -> Slots {
+        let mut positions = vec![0; sizes.len()];
+        arrangement.arrange(
+            room,
+            &sizes,
+            compose_ui::LayoutDirection::Ltr,
+            density,
+            &mut positions,
+        );
         Slots { sizes, positions }
     }
 
@@ -1072,7 +1255,7 @@ impl Slots {
     fn of(&self, slot: usize, span: usize) -> (i32, i32) {
         let last = (slot + span).min(self.count()) - 1;
         let start = self.positions[slot];
-        (start, self.positions[last] + self.sizes[last] - start)
+        (start, (self.positions[last] + self.sizes[last] - start).max(0))
     }
 }
 
@@ -1220,12 +1403,27 @@ struct LazyGridLayout {
     /// The lines, shared with prefetching (an item's constraints depend on its cell and span).
     lines: Rc<RefCell<Lines>>,
     /// The cells, as last measured, for the room across, the spacing and the density.
-    slots: RefCell<Option<(SlotsKey, Rc<Slots>)>>,
+    slots: SlotsCache,
+    /// Prefetching was told each item's constraints in the cells, with this policy's lines.
+    told: Cell<bool>,
 }
 
 /// What the cells are worked out from: the room across the grid, the spacing between cells, the
 /// density.
 type SlotsKey = (i32, i32, Density);
+
+/// The cells as last worked out, kept across a grid's new items.
+type SlotsCache = Rc<RefCell<Option<(SlotsKey, Rc<Slots>)>>>;
+
+/// What a `SlotsCache` holds for.
+#[derive(Clone, PartialEq)]
+struct SlotsCacheKey(GridCells, MainAxisArrangement);
+
+impl ComposeArg for SlotsCacheKey {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
 
 impl LazyGridLayout {
     /// The cells for `room` pixels across, `spacing` apart: as last measured if those are the
@@ -1233,13 +1431,23 @@ impl LazyGridLayout {
     fn slots(&self, room: i32, spacing: i32, density: Density) -> Rc<Slots> {
         let key = (room, spacing, density);
         let mut cached = self.slots.borrow_mut();
-        if let Some((cached_key, slots)) = &*cached
-            && *cached_key == key
+        let found = cached.as_ref().filter(|(cached_key, _)| *cached_key == key);
+        if let Some((_, slots)) = found
+            && self.told.get()
         {
             return slots.clone();
         }
-        let slots = Rc::new(Slots::new(self.info.cells.sizes(room, spacing, density), spacing));
-        *cached = Some((key, slots.clone()));
+        let slots = match found {
+            Some((_, slots)) => slots.clone(),
+            None => {
+                let sizes = self.info.cells.sizes(room, spacing, density);
+                let slots =
+                    Rc::new(Slots::new(sizes, &self.info.cross_arrangement, room, &density));
+                *cached = Some((key, slots.clone()));
+                slots
+            }
+        };
+        self.told.set(true);
         let (lines, cells, vertical) = (self.lines.clone(), slots.clone(), self.info.vertical);
         let constraints_of = Rc::new(move |item: usize| {
             let mut lines = lines.try_borrow_mut().ok()?;
@@ -1424,7 +1632,7 @@ fn step_back(
         match measurer.line(*index - 1) {
             Some(size) => {
                 *index -= 1;
-                *offset += (size + spacing) as f32;
+                *offset += (size + spacing).max(0) as f32;
             }
             None => {
                 let average = measurer.line_sizes.average() as f32 + spacing as f32;
@@ -1467,7 +1675,10 @@ impl MeasurePolicy for LazyGridLayout {
         state.rtl.set(layout_direction == compose_ui::LayoutDirection::Rtl);
         state.density.set(density.density);
         let px = |dp: Dp| density.round_to_px(dp);
-        let (before, after, cross_before, cross_after) = if vertical {
+        // Positions along the axis are worked out from the grid's start (its end, reversed: the
+        // padding there comes first), and mirrored when placed if reversed, as a list's.
+        let reverse = info.reverse;
+        let (mut before, mut after, cross_before, cross_after) = if vertical {
             (
                 px(info.padding.top),
                 px(info.padding.bottom),
@@ -1482,6 +1693,9 @@ impl MeasurePolicy for LazyGridLayout {
                 px(info.padding.bottom),
             )
         };
+        if reverse {
+            std::mem::swap(&mut before, &mut after);
+        }
         let spacing = info.arrangement.spacing(&density);
         let (main_max, cross_max) = if vertical {
             (constraints.max_height, constraints.max_width)
@@ -1499,12 +1713,16 @@ impl MeasurePolicy for LazyGridLayout {
              (a vertical grid's width, a horizontal one's height): give it a size"
         );
         let cross_room = (cross_max - cross_before - cross_after).max(0);
-        let cross_spacing = px(info.cross_spacing);
+        let cross_spacing = info.cross_arrangement.spacing(&density);
         let slots = self.slots(cross_room, cross_spacing, density);
         // A cell's constraints, for the items composing for theirs (`BoxWithConstraints`).
         let hint = cell_constraints(vertical, slots.sizes[0]);
         if state.item_constraints_written.replace(Some(hint)) != Some(hint) {
             state.item_constraints.set(Some(hint));
+        }
+        let cross_cells = slots.count().max(1);
+        if state.cross_cells_written.replace(cross_cells) != cross_cells {
+            state.cross_cells.set(cross_cells);
         }
         let mut lines = self.lines.borrow_mut();
         if lines.slots != slots.count() {
@@ -1565,7 +1783,7 @@ impl MeasurePolicy for LazyGridLayout {
                 false,
                 None,
                 &[],
-                &mut |_| 0,
+                &mut |_| None,
             );
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
@@ -1596,7 +1814,7 @@ impl MeasurePolicy for LazyGridLayout {
                     count: 0,
                     size,
                     vertical,
-                    reverse: false,
+                    reverse,
                     before,
                     after,
                     spacing,
@@ -1623,7 +1841,7 @@ impl MeasurePolicy for LazyGridLayout {
                 }
                 break;
             };
-            let size = (size + spacing) as f32;
+            let size = (size + spacing).max(0) as f32;
             if offset >= size {
                 offset -= size;
                 index += 1;
@@ -1661,7 +1879,7 @@ impl MeasurePolicy for LazyGridLayout {
                 match m.line(end_index) {
                     Some(size) => {
                         placed.push((end_index, main));
-                        main += size + spacing;
+                        main += (size + spacing).max(0);
                         end_index += 1;
                     }
                     None => {
@@ -1711,12 +1929,31 @@ impl MeasurePolicy for LazyGridLayout {
                     wanted_before += wanted.min(lead);
                     break;
                 };
-                start -= size + spacing;
+                start -= (size + spacing).max(0);
                 leading.push((lead - 1, start));
                 lead -= 1;
             }
             leading.reverse();
             placed.splice(0..0, leading);
+        }
+        // At a negative spacing, as a list's: the walk back makes the first line laid out the first
+        // visible one, but for those wholly before the content's start at their size with the
+        // spacing, at least 0 (`mainAxisSizeWithSpacings`), unless at the start itself (D873).
+        if spacing < 0 && lead < index && scrolled_back == 0 {
+            let mut first = 0;
+            let mut into = before - placed[0].1;
+            while into > 0 && first + 1 < placed.len() {
+                let size = (m.size_of(placed[first].0) + spacing).max(0);
+                if size > into {
+                    break;
+                }
+                into -= size;
+                first += 1;
+            }
+            if into >= 0 {
+                index = lead + first;
+                offset = into as f32;
+            }
         }
         let at_end = !m.lines.exists(end_index);
         let scrolled_into = index > 0 || offset > 0.0;
@@ -1734,7 +1971,11 @@ impl MeasurePolicy for LazyGridLayout {
             && content_end < main_total
             && !placed.is_empty()
         {
-            let line_sizes: Vec<i32> = placed.iter().map(|(line, _)| m.size_of(*line)).collect();
+            let mut line_sizes: Vec<i32> =
+                placed.iter().map(|(line, _)| m.size_of(*line)).collect();
+            if reverse {
+                line_sizes.reverse();
+            }
             let mut positions = vec![0; line_sizes.len()];
             info.arrangement.arrange(
                 main_total - before - after,
@@ -1743,8 +1984,14 @@ impl MeasurePolicy for LazyGridLayout {
                 &density,
                 &mut positions,
             );
-            for ((_, main), position) in placed.iter_mut().zip(positions) {
-                *main = before + position;
+            let last = placed.len() - 1;
+            for (position, (line, main)) in placed.iter_mut().enumerate() {
+                *main = if reverse {
+                    // Mirrored back when placed.
+                    main_total - (after + positions[last - position]) - m.size_of(*line)
+                } else {
+                    before + positions[position]
+                };
             }
         }
         // The lines wanted composed: those in view (with `GRID_LINES_BEYOND`, and `BEYOND`
@@ -1798,17 +2045,39 @@ impl MeasurePolicy for LazyGridLayout {
         prefetch.policy.set(policy);
         prefetch.vertical.set(self.info.vertical);
         prefetch.visible.set(m.lines.start(end_index) - m.lines.start(lead));
+        // The header sticking over the first item in view (`applyStickyItems`): where it sticks.
+        // Compose's sticking item has no line (`UnknownRow`), so its window has no first line while
+        // one sticks: nothing's requested before it, nothing kept around it (D1451).
+        let first_laid = m.lines.start(lead);
+        let headers = info.items.headers_around(first_laid);
+        let sticking = headers.and_then(|(header, next)| {
+            let (placeable, _) = m.item(header)?;
+            let size = if vertical { placeable.height } else { placeable.width };
+            let line_main = |m: &mut Measurer<'_, '_>, item: usize| {
+                let line = m.lines.line_of(item);
+                placed.iter().find(|(placed_line, _)| *placed_line == line).map(|(_, main)| *main)
+            };
+            let mut at = line_main(m, header).map_or(0, |main| main.max(0));
+            if let Some(next_main) = next.and_then(|next| line_main(m, next)) {
+                at = at.min(next_main - size - spacing);
+            }
+            Some((header, placeable, at))
+        });
         // The cache window, once the layout settled: a line at a time, each of its items a request.
-        if !missing && wanted_before == 0 {
-            let laid = match (placed.first().copied(), placed.last().copied()) {
+        if !missing && wanted_before == 0 && (headers.is_none() || sticking.is_some()) {
+            let mut laid = match (placed.first().copied(), placed.last().copied()) {
                 (Some((_, first_main)), Some((last_line, last_main))) => {
                     let first = lead.saturating_sub(beyond);
                     let last = m.lines.at_most_last(end_index - 1 + beyond);
                     Some(Laid {
-                        first,
+                        first: if sticking.is_some() { -1 } else { first as i32 },
                         last,
                         // The window starts past lines laid out beyond those in view.
-                        start_overflow: if first < lead { 0 } else { (-first_main).max(0) },
+                        start_overflow: match sticking {
+                            Some((_, _, at)) => (-at).max(0),
+                            None if first < lead => 0,
+                            None => (-first_main).max(0),
+                        },
                         // The last visible item's own size, as Compose's `lastItem.size` (an item
                         // shorter than its line ends before the line does).
                         end_overflow: if last + 1 > end_index {
@@ -1823,7 +2092,7 @@ impl MeasurePolicy for LazyGridLayout {
                                 .abs()
                         },
                         viewport: main_max,
-                        spacing,
+                        average: 0,
                         density,
                     })
                 }
@@ -1831,15 +2100,34 @@ impl MeasurePolicy for LazyGridLayout {
             };
             let mut sizes = prefetch.sizes.borrow_mut();
             sizes.clear();
-            if let Some(laid) = &laid {
-                // Lines beyond those placed (`GRID_LINES_BEYOND`) count as the average.
-                for line in laid.first..=laid.last {
-                    sizes.push((
-                        line,
-                        if (lead..end_index).contains(&line) { m.size_of(line) } else { average },
-                    ));
+            if let Some(laid) = &mut laid {
+                // Compose's walk over every line to the last in view (`forEachVisibleItem`), by
+                // the lines of its visible items: a header sticking has none (`UnknownRow`), so
+                // from the first line to the last, those it covers and those before it weigh 0,
+                // with no key, and going from 0 to a real size refills the window once they show
+                // (D1451). Lines beyond those placed (`GRID_LINES_BEYOND`) count as the average.
+                let header_line = sticking.map(|(header, _, _)| m.lines.line_of(header));
+                if sticking.is_some() {
+                    sizes.extend((0..lead.saturating_sub(beyond)).map(|line| (line, 0)));
                 }
+                let (mut sum, mut lines_in_view) = (0, 0);
+                for line in lead.saturating_sub(beyond)..=laid.last {
+                    let size = if Some(line) == header_line {
+                        0
+                    } else if (lead..end_index).contains(&line) {
+                        m.size_of(line)
+                    } else {
+                        average
+                    };
+                    if Some(line) != header_line {
+                        sum += size;
+                        lines_in_view += 1;
+                    }
+                    sizes.push((line, size));
+                }
+                laid.average = sum / lines_in_view.max(1) + spacing;
             }
+            let header_line = sticking.map(|(header, _, _)| m.lines.line_of(header));
             // In the layout the lines are borrowed: a view of them.
             let lines = LayoutLines(RefCell::new(&mut *m.lines));
             let items = &info.items;
@@ -1851,7 +2139,10 @@ impl MeasurePolicy for LazyGridLayout {
                 state.laid_items_changed(&info.items),
                 Some(&lines),
                 &sizes,
-                &mut |line| items.key(lines.items_of(line).map_or(0, |range| range.start)),
+                &mut |line| {
+                    let in_view = line >= lead.saturating_sub(beyond) && Some(line) != header_line;
+                    in_view.then(|| items.key(lines.items_of(line).map_or(0, |range| range.start)))
+                },
             );
             drop(sizes);
         }
@@ -1869,9 +2160,10 @@ impl MeasurePolicy for LazyGridLayout {
             } else {
                 m.lines.start(wanted_start.saturating_sub(1))
             };
-            let window = prefetch
-                .window_bounds()
-                .map(|(first, last)| (m.lines.start(first), m.lines.start(last + 1)));
+            let window = prefetch.window_bounds().map(|(first, last)| {
+                let start = if sticking.is_some() { wanted_items.0 } else { m.lines.start(first) };
+                (start, m.lines.start(last + 1))
+            });
             prefetch.target(
                 wanted_items,
                 (composed_start, composed_end),
@@ -1948,11 +2240,11 @@ impl MeasurePolicy for LazyGridLayout {
         }
         let mut beyond_lines: Vec<(usize, i32)> = Vec::new();
         let mut main =
-            placed.last().map_or(before, |(line, main)| main + m.size_of(*line) + spacing);
+            placed.last().map_or(before, |(line, main)| main + (m.size_of(*line) + spacing).max(0));
         for next in end_index..placed_end {
             if let Some(size) = m.line(next) {
                 beyond_lines.push((next, main));
-                main += size + spacing;
+                main += (size + spacing).max(0);
             }
         }
         let extent_end = main - spacing + after;
@@ -1961,7 +2253,7 @@ impl MeasurePolicy for LazyGridLayout {
         let mut main = placed.first().map_or(before, |(_, main)| *main);
         for previous in (placed_start.min(lead)..lead).rev() {
             if let Some(size) = m.line(previous) {
-                main -= size + spacing;
+                main -= (size + spacing).max(0);
                 ahead_lines.push((previous, main));
             }
         }
@@ -2003,10 +2295,15 @@ impl MeasurePolicy for LazyGridLayout {
                 .max(1.0)
         });
         state.publish_can_scroll();
+        let header = headers.map(|(header, _)| header);
+        if state.sticky_written.replace(header) != header {
+            state.sticky.set(header);
+        }
         // A focused item composed out of the composed lines (pinned), placed out of view.
         let mut pinned: Vec<(Placeable, i32, i32)> = Vec::new();
         for &item in &children {
             if (item < composed_start || item >= composed_end)
+                && Some(item) != header
                 && let Some((placeable, cross)) = m.item(item)
             {
                 let size = if vertical { placeable.height } else { placeable.width };
@@ -2026,6 +2323,8 @@ impl MeasurePolicy for LazyGridLayout {
             if vertical { (cross_max, main_total) } else { (main_total, cross_max) };
         let place = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32, cross: i32| {
             let cross = cross_before + cross;
+            let size = if vertical { placeable.height } else { placeable.width };
+            let main = if reverse { main_total - main - size } else { main };
             if vertical {
                 scope.place_relative(placeable, cross, main);
             } else {
@@ -2035,11 +2334,20 @@ impl MeasurePolicy for LazyGridLayout {
         for &(line, main) in ahead_lines.iter().chain(&placed).chain(&beyond_lines) {
             let (start, end, _) = m.measured_line(line).expect("a line measured");
             for &(placeable, cross) in &m.cells[start..end] {
-                place(m.scope, &placeable, main, cross);
+                if sticking.is_none_or(|(_, header, _)| header != placeable) {
+                    place(m.scope, &placeable, main, cross);
+                }
             }
         }
         for (placeable, main, cross) in &pinned {
             place(m.scope, placeable, *main, *cross);
+        }
+        state.sticking_size.set(sticking.map_or(0, |(_, placeable, _)| {
+            if vertical { placeable.height } else { placeable.width }
+        }));
+        // The header last: drawn over the items, and hit first.
+        if let Some((_, placeable, at)) = &sticking {
+            place(m.scope, placeable, *at, 0);
         }
         // The items in view for `layout_info`, as Compose's `visibleItemsInfo`: those of the lines
         // laid out from the first under the start padding to the last in view.
@@ -2055,6 +2363,10 @@ impl MeasurePolicy for LazyGridLayout {
                 } else {
                     (placeable.width, placeable.height)
                 };
+                if sticking.is_some_and(|(header, _, _)| header == item) {
+                    slot += span;
+                    continue;
+                }
                 laid.push(LaidItem {
                     index: item,
                     main: main - before,
@@ -2069,6 +2381,26 @@ impl MeasurePolicy for LazyGridLayout {
                 slot += span;
             }
         }
+        // A sticking header: no line, as `UnknownRow` and `UnknownColumn`, at the start across, as
+        // `item.position(offset, 0, …)`.
+        if let Some((header, placeable, at)) = sticking {
+            let (main_size, cross_size) = if vertical {
+                (placeable.height, placeable.width)
+            } else {
+                (placeable.width, placeable.height)
+            };
+            laid.push(LaidItem {
+                index: header,
+                main: at - before,
+                cross: 0,
+                main_size,
+                cross_size,
+                line: super::LazyGridItemInfo::UNKNOWN_ROW,
+                lane: super::LazyGridItemInfo::UNKNOWN_COLUMN,
+                span: m.lines.span(header),
+                sticky: true,
+            });
+        }
         drop(laid);
         let keys_changed = state.note_laid_items(&info.items);
         state.laid_out.end(
@@ -2078,7 +2410,7 @@ impl MeasurePolicy for LazyGridLayout {
                 count,
                 size: IntSize::new(width, height),
                 vertical,
-                reverse: false,
+                reverse,
                 before,
                 after,
                 spacing,

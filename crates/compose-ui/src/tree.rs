@@ -155,6 +155,8 @@ pub struct LayoutNode {
     pub(crate) inner_layers: Vec<crate::render::InnerLayer>,
     /// The sum of its `z_index` modifiers: siblings are drawn, and hit, in its order.
     pub(crate) z_index: f32,
+    /// It's ordered among its siblings by its children's largest `z_index` instead (D1452).
+    pub(crate) z_index_of_children: bool,
     /// Its content is deactivated (a lazy list's item kept for reuse): unplaced, its modifier
     /// nodes reset, left out of the walks that only concern content in use.
     pub(crate) deactivated: bool,
@@ -212,6 +214,7 @@ impl LayoutNode {
             retained: None,
             inner_layers: Vec::new(),
             z_index: 0.0,
+            z_index_of_children: false,
             deactivated: false,
             attached: false,
             attaching: false,
@@ -509,7 +512,17 @@ impl UiTree {
         let children = &self.node(node).children;
         let order_of = |child: &Measurable| {
             let value = self.node(child.node);
-            value.placed.then_some((value.z_index, value.place_order))
+            value.placed.then(|| {
+                let z = if value.z_index_of_children {
+                    let inside = value.children.iter().map(|inner| self.node(inner.node).z_index);
+                    inside
+                        .fold(None, |most: Option<f32>, z| Some(most.map_or(z, |most| most.max(z))))
+                        .unwrap_or(0.0)
+                } else {
+                    value.z_index
+                };
+                (z, value.place_order)
+            })
         };
         let before = |a: (f32, u64), b: (f32, u64)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
         // In order, the usual case: one look at each child, nothing allocated.
@@ -1362,18 +1375,27 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         let positioned = value.kinds.any(NodeKinds::GLOBAL_POSITION_AWARE);
-        let z_index = value
-            .modifier
-            .elements()
-            .iter()
-            .filter_map(|element| if let Element::ZIndex(z) = element { Some(*z) } else { None })
-            // From +0.0 (an empty `sum` is -0.0, which `total_cmp` orders first).
-            .fold(0.0f32, |sum, z| sum + z);
+        // From +0.0 (an empty `sum` is -0.0, which `total_cmp` orders first).
+        let (mut z_index, mut of_children) = (0.0f32, false);
+        for element in value.modifier.elements() {
+            match element {
+                Element::ZIndex(z) => z_index += *z,
+                Element::LazyItemBoundary => of_children = true,
+                _ => {}
+            }
+        }
+        value.z_index_of_children = of_children;
         if z_index != value.z_index {
             value.z_index = z_index;
-            // Its parent draws its children in another order.
+            // Its parent draws its children in another order; and that one's, if it goes by them.
             if let Some(parent) = value.parent {
                 self.invalidate_children_draw_of(parent);
+                let around = self.node(parent);
+                if around.z_index_of_children
+                    && let Some(grandparent) = around.parent
+                {
+                    self.invalidate_children_draw_of(grandparent);
+                }
             }
         }
         if positioned {

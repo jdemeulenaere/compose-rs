@@ -13,7 +13,9 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{IntSize, Offset, PointerEvent, UnitExt};
+use compose_ui::{
+    Dp, IntSize, Offset, PointerEvent, PointerEventPass, PointerEventType, UnitExt, WheelStep,
+};
 
 use crate::scroll_support::launch;
 
@@ -668,4 +670,126 @@ fn the_wheel_goes_on_after_a_panic_in_its_consumer() {
     assert!(!state.is_scroll_in_progress(), "its scroll ended");
     turn(&mut ui, -5.0);
     assert_eq!(total.get(), 5.0);
+}
+
+/// A precise turn of `units` (so it applies at once) in `step`.
+fn turn_in(ui: &mut ComposeTestRule, units: f32, step: WheelStep) {
+    ui.host().send_pointer(
+        PointerEvent::scroll(CENTER, Offset::new(0.0, units))
+            .with_precise_wheel(true)
+            .with_wheel_step(step),
+    );
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollingEvent: `calculateMouseWheelScroll(pointerEvent, bounds)`, in the scrollable, with its own bounds; the desktop steps from the JetBrains fork's `DesktopScrollable.desktop.kt`, 10 dp, height / 20, sqrt(height), times `scrollAmount`
+#[test]
+fn a_units_worth_comes_from_the_step_and_the_scrollable() {
+    let steps = [
+        (WheelStep::Pixels, 1.0, 1.0),
+        (WheelStep::Dp(10.0), 10.0, 10.0),
+        (WheelStep::HeightOverTwenty { scroll_amount: 3.0 }, 15.0, 38.4),
+        (WheelStep::SquareRootOfHeight { scroll_amount: 3.0 }, 30.0, 48.0),
+    ];
+    for (step, in_100_px, in_256_px) in steps {
+        for (height, expected) in [(100.0, in_100_px), (256.0, in_256_px)] {
+            let (state, total) = total_state();
+            let mut ui = sized(move || {
+                Box!(
+                    modifier = Modifier
+                        .size((100.dp(), Dp(height)))
+                        .scrollable(state.clone(), Orientation::Vertical)
+                );
+            });
+            turn_in(&mut ui, -2.0, step);
+            assert!((total.get() - 2.0 * expected).abs() < 0.001, "{step:?} at {height}");
+        }
+    }
+}
+
+// Compose: the same, a turn's units are asked of each scrollable it reaches: the one inside uses it at its height
+#[test]
+fn a_step_is_the_scrollables_the_turn_reaches() {
+    let (inner, inner_total) = total_state();
+    let (outer, outer_total) = total_state();
+    let mut ui = sized(move || {
+        let inner = inner.clone();
+        Box!(
+            modifier = Modifier
+                .size((100.dp(), 256.dp()))
+                .scrollable(outer.clone(), Orientation::Vertical),
+            {
+                Box!(
+                    modifier =
+                        Modifier.size(100.dp()).scrollable(inner.clone(), Orientation::Vertical)
+                );
+            }
+        );
+    });
+    turn_in(&mut ui, -1.0, WheelStep::SquareRootOfHeight { scroll_amount: 1.0 });
+    assert_eq!((inner_total.get(), outer_total.get()), (10.0, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollingEvent: `with(density) { calculateMouseWheelScroll(...) }`, a dp step at the host's density
+#[test]
+fn a_step_in_dp_counts_the_density() {
+    let (state, total) = total_state();
+    let mut ui = compose_test_with(
+        IntSize::new(300, 300),
+        compose_ui::Density::new(2.0),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+        move || {
+            Box!(
+                modifier = Modifier.size(100.dp()).scrollable(state.clone(), Orientation::Vertical)
+            );
+        },
+    );
+    ui.set_auto_advance(false);
+    ui.wait_for_idle();
+    turn_in(&mut ui, -1.0, WheelStep::Dp(10.0));
+    assert_eq!(total.get(), 20.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollingLogic.kt, onScrollingEvent: `canConsumeDelta(scrollDelta.toScrollValue())`, of the pixels worked out: a turn worth none starts no scroll
+#[test]
+fn a_turn_worth_nothing_here_starts_no_scroll() {
+    let (state, total) = total_state();
+    let mut ui = box_of(state.clone());
+    turn_in(&mut ui, -1.0, WheelStep::Dp(0.0));
+    assert!(!state.is_scroll_in_progress());
+    assert_eq!(total.get(), 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/MouseWheelScrollable.kt: canConsumeDelta
+#[test]
+fn a_turn_worth_nothing_here_goes_on_to_the_parents() {
+    let (state, _total) = total_state();
+    let seen: Rc<Cell<Option<bool>>> = Rc::default();
+    let noted = seen.clone();
+    let mut ui = sized(move || {
+        let noted = noted.clone();
+        let state = state.clone();
+        Box!(
+            modifier = Modifier.pointer_input((), move |scope| {
+                let noted = noted.clone();
+                async move {
+                    loop {
+                        let change = scope.await_pointer_event(PointerEventPass::Main).await;
+                        if change.kind == PointerEventType::Scroll {
+                            noted.set(Some(change.is_consumed()));
+                        }
+                    }
+                }
+            }),
+            {
+                Box!(
+                    modifier =
+                        Modifier.size(100.dp()).scrollable(state.clone(), Orientation::Vertical)
+                );
+            }
+        );
+    });
+    turn_in(&mut ui, -1.0, WheelStep::Dp(0.0));
+    assert_eq!(seen.get(), Some(false), "not consumed");
+    turn_in(&mut ui, -1.0, WheelStep::Dp(1.0));
+    assert_eq!(seen.get(), Some(true), "consumed");
 }

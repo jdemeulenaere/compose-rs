@@ -4,6 +4,8 @@
 //! composed while the window has room for them. A list has one lane; so has a grid, whose units are
 //! lines. D892.
 
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::rc::{Rc, Weak};
 
 use compose_ui::{Density, Dp};
@@ -233,7 +235,8 @@ pub(super) trait CacheWindowScope {
     fn schedule_prefetch(&self, lane: i32, item_index: i32) -> Vec<Rc<Handle>>;
     fn visible_item_size(&self, index_in_visible_items: i32) -> i32;
     fn visible_item_index(&self, index_in_visible_items: i32) -> i32;
-    fn visible_item_key(&self, index_in_visible_items: i32) -> u64;
+    /// The key, `None` for a grid's line with no item in view, Compose's `NoKey`.
+    fn visible_item_key(&self, index_in_visible_items: i32) -> Option<u64>;
     fn visible_item_lane(&self, index_in_visible_items: i32) -> i32;
     fn last_item_index_in_line(&self, current_item_index: i32) -> i32;
     fn last_item_index(&self) -> i32;
@@ -251,9 +254,28 @@ pub(super) trait CacheWindowScope {
 /// A unit in the window: its size, and its key (`None`: one prefetched, Compose's `NoKey`).
 #[derive(Clone, Copy)]
 struct CachedItem {
-    index: i32,
     size: i32,
     key: Option<u64>,
+}
+
+/// Hashes a unit's index, as Compose's `IntIntMap`: a multiplication, no more.
+#[derive(Default)]
+struct UnitHasher(u64);
+
+impl std::hash::Hasher for UnitHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 << 8) | u64::from(*byte);
+        }
+    }
+
+    fn write_i32(&mut self, unit: i32) {
+        self.0 = (unit as u32 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// The window's logic, as Compose's `MultiLaneCacheWindow`.
@@ -262,8 +284,9 @@ pub(super) struct CacheWindowLogic {
     lane_count: Box<dyn Fn() -> usize>,
     /// The requests for units in the window, by unit.
     handles: Vec<(i32, Vec<Rc<Handle>>)>,
-    /// What's known of the units in the window, visible or not (few: a small list).
-    cached: Vec<CachedItem>,
+    /// What's known of the units in the window, visible or not: few, unless a grid's header sticks
+    /// far from the start, when Compose's walk has every line before it here (D1451).
+    cached: HashMap<i32, CachedItem, BuildHasherDefault<UnitHasher>>,
     previous_pass_delta: f32,
     previous_pass_item_count: i32,
     has_updated_visible_items_once: bool,
@@ -306,7 +329,7 @@ impl CacheWindowLogic {
             cache_window,
             lane_count: Box::new(lane_count),
             handles: Vec::new(),
-            cached: Vec::new(),
+            cached: HashMap::default(),
             previous_pass_delta: 0.0,
             previous_pass_item_count: UNSET_ITEM_COUNT,
             has_updated_visible_items_once: false,
@@ -343,17 +366,11 @@ impl CacheWindowLogic {
     }
 
     fn cached(&self, index: i32) -> Option<&CachedItem> {
-        self.cached.iter().find(|item| item.index == index)
+        self.cached.get(&index)
     }
 
     fn cache(&mut self, index: i32, size: i32, key: Option<u64>) {
-        match self.cached.iter_mut().find(|item| item.index == index) {
-            Some(item) => {
-                item.size = size;
-                item.key = key;
-            }
-            None => self.cached.push(CachedItem { index, size, key }),
-        }
+        self.cached.insert(index, CachedItem { size, key });
     }
 
     fn has_handle(&self, index: i32) -> bool {
@@ -413,11 +430,11 @@ impl CacheWindowLogic {
                     (scope.visible_item_size(position), scope.visible_item_key(position));
                 let lane = scope.visible_item_lane(position);
                 if let Some(cached) = self.cached(index)
-                    && (cached.size != size || cached.key.is_some_and(|cached| cached != key))
+                    && (cached.size != size || cached.key.is_some_and(|cached| Some(cached) != key))
                 {
                     self.should_refill = true;
                 }
-                self.cache(index, size, Some(key));
+                self.cache(index, size, key);
                 let lane = lane as usize;
                 self.start_index[lane] = self.start_index[lane].min(index);
                 self.end_index[lane] = self.end_index[lane].max(index);
@@ -744,7 +761,7 @@ impl CacheWindowLogic {
                 index += 1;
             }
         }
-        self.cached.retain(|item| !bounds.contains(&item.index));
+        self.cached.retain(|index, _| !bounds.contains(index));
     }
 
     /// A requested unit is done, of main-axis size `size`: known now, and the next is requested if
@@ -892,8 +909,8 @@ mod tests {
         fn visible_item_index(&self, position: i32) -> i32 {
             position
         }
-        fn visible_item_key(&self, position: i32) -> u64 {
-            position as u64
+        fn visible_item_key(&self, position: i32) -> Option<u64> {
+            Some(position as u64)
         }
         fn visible_item_lane(&self, position: i32) -> i32 {
             position

@@ -346,7 +346,7 @@ fn no_degree_or_no_data_has_no_fit() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, twoPoints_nonDifferentialValues
 #[test]
-fn two_points_non_differential_values() {
+fn two_positions_give_their_slope() {
     check_test_case(
         false,
         &[(1, 5.0), (2, 15.0)],
@@ -357,7 +357,7 @@ fn two_points_non_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, twoPoints_differentialValues
 #[test]
-fn two_points_differential_values() {
+fn two_changes_give_their_impulse() {
     check_test_case(
         true,
         &[(1, 5.0), (2, 10.0)],
@@ -368,7 +368,7 @@ fn two_points_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, threePoints_pointerStoppedMoving_nonDifferentialValues
 #[test]
-fn three_points_pointer_stopped_moving_non_differential_values() {
+fn positions_after_a_pause_give_no_velocity() {
     check_test_case(
         false,
         &[(25, 25.0), (50, 50.0), (100, 100.0)],
@@ -379,7 +379,7 @@ fn three_points_pointer_stopped_moving_non_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, threePoints_pointerStoppedMoving_differentialValues
 #[test]
-fn three_points_pointer_stopped_moving_differential_values() {
+fn changes_after_a_pause_give_no_velocity() {
     check_test_case(
         true,
         &[(25, 25.0), (50, 50.0), (100, 100.0)],
@@ -390,7 +390,7 @@ fn three_points_pointer_stopped_moving_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, threePoints_zeroVelocity_nonDifferentialValues
 #[test]
-fn three_points_zero_velocity_non_differential_values() {
+fn a_position_held_gives_no_velocity() {
     check_test_case(
         false,
         &[(0, 273.0), (1, 273.0), (2, 273.0)],
@@ -401,7 +401,7 @@ fn three_points_zero_velocity_non_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, threePoints_zeroVelocity_differentialValues
 #[test]
-fn three_points_zero_velocity_differential_values() {
+fn changes_of_nothing_give_no_velocity() {
     check_test_case(
         true,
         &[(0, 0.0), (1, 0.0), (2, 0.0)],
@@ -412,7 +412,7 @@ fn three_points_zero_velocity_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_positiveVelocity_positiveDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_positive_velocity_positive_data_points_non_differential_values() {
+fn rising_positions_above_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, 0.0), (10, 5.0), (20, 10.0), (30, 15.0)],
@@ -423,7 +423,7 @@ fn linear_motion_positive_velocity_positive_data_points_non_differential_values(
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_positiveVelocity_positiveDataPoints_differentialValues
 #[test]
-fn linear_motion_positive_velocity_positive_data_points_differential_values() {
+fn equal_positive_changes_give_their_rate() {
     check_test_case(
         true,
         &[(10, 5.0), (20, 5.0), (30, 5.0)],
@@ -434,7 +434,7 @@ fn linear_motion_positive_velocity_positive_data_points_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_positiveVelocity_negativeDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_positive_velocity_negative_data_points_non_differential_values() {
+fn rising_positions_below_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, -20.0), (10, -15.0), (20, -10.0)],
@@ -445,7 +445,7 @@ fn linear_motion_positive_velocity_negative_data_points_non_differential_values(
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_positiveVelocity_mixedSignDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_positive_velocity_mixed_sign_data_points_non_differential_values() {
+fn rising_positions_through_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, -5.0), (10, 0.0), (20, 5.0)],
@@ -456,7 +456,7 @@ fn linear_motion_positive_velocity_mixed_sign_data_points_non_differential_value
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_negativeVelocity_negativeDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_negative_velocity_negative_data_points_non_differential_values() {
+fn falling_positions_below_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, 0.0), (10, -5.0), (20, -10.0)],
@@ -467,7 +467,7 @@ fn linear_motion_negative_velocity_negative_data_points_non_differential_values(
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_negativeVelocity_negativeDataPoints_differentialValues
 #[test]
-fn linear_motion_negative_velocity_negative_data_points_differential_values() {
+fn equal_negative_changes_give_their_rate() {
     check_test_case(
         true,
         &[(0, 5.0), (10, -5.0), (20, -5.0)],
@@ -478,7 +478,7 @@ fn linear_motion_negative_velocity_negative_data_points_differential_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_negativeVelocity_postiveDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_negative_velocity_positive_data_points_non_differential_values() {
+fn falling_positions_above_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, 20.0), (10, 15.0), (20, 10.0)],
@@ -489,7 +489,7 @@ fn linear_motion_negative_velocity_positive_data_points_non_differential_values(
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotion_negativeVelocity_mixedSignDataPoints_nonDifferentialValues
 #[test]
-fn linear_motion_negative_velocity_mixed_sign_data_points_non_differential_values() {
+fn falling_positions_through_zero_give_their_rate() {
     check_test_case(
         false,
         &[(0, 5.0), (10, 0.0), (20, -5.0)],
@@ -500,7 +500,7 @@ fn linear_motion_negative_velocity_mixed_sign_data_points_non_differential_value
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearHalfMotion
 #[test]
-fn linear_half_motion() {
+fn a_motion_from_rest_half_way_gives_the_rate_it_reached() {
     check_test_case(
         false,
         &[
@@ -523,7 +523,7 @@ fn linear_half_motion() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearHalfMotionSampled
 #[test]
-fn linear_half_motion_sampled() {
+fn the_same_motion_sampled_unevenly_gives_nearly_its_rate() {
     check_test_case(
         false,
         &[(0, 0.0), (30, 0.0), (40, 0.0), (70, 40.0), (100, 100.0)],
@@ -534,7 +534,7 @@ fn linear_half_motion_sampled() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotionFollowedByFlatLine
 #[test]
-fn linear_motion_followed_by_flat_line() {
+fn a_motion_that_stopped_and_stayed_gives_no_velocity() {
     check_test_case(
         false,
         &[
@@ -557,7 +557,7 @@ fn linear_motion_followed_by_flat_line() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, linearMotionFollowedByFlatLineWithoutIntermediatePoints
 #[test]
-fn linear_motion_followed_by_flat_line_without_intermediate_points() {
+fn a_motion_with_only_its_last_position_repeated_gives_no_velocity() {
     check_test_case(
         false,
         &[(0, 0.0), (50, 50.0), (100, 50.0)],
@@ -568,7 +568,7 @@ fn linear_motion_followed_by_flat_line_without_intermediate_points() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, pixelWatch_rsb_scrollDown_thenUp_thenDown
 #[test]
-fn pixel_watch_rsb_scroll_down_then_up_then_down() {
+fn a_watch_crowns_reversals_end_with_their_last_direction() {
     check_test_case(
         true,
         &[
@@ -613,7 +613,7 @@ fn pixel_watch_rsb_scroll_down_then_up_then_down() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, pixelWatch_rsb_scrollDown
 #[test]
-fn pixel_watch_rsb_scroll_down() {
+fn a_watch_crowns_turn_down_gives_its_velocity() {
     check_test_case(
         true,
         &[
@@ -633,7 +633,7 @@ fn pixel_watch_rsb_scroll_down() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, pxielWatch_rsb_scrollUp
 #[test]
-fn pixel_watch_rsb_scroll_up() {
+fn a_watch_crowns_turn_up_gives_its_velocity() {
     check_test_case(
         true,
         &[
@@ -653,7 +653,7 @@ fn pixel_watch_rsb_scroll_up() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, swordfishFlingDown_xValues
 #[test]
-fn swordfish_fling_down_x_values() {
+fn a_recorded_fling_downs_sideways_drift() {
     check_test_case(
         false,
         &[
@@ -672,7 +672,7 @@ fn swordfish_fling_down_x_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, swordfishFlingDown_yValues
 #[test]
-fn swordfish_fling_down_y_values() {
+fn a_recorded_fling_downs_motion() {
     check_test_case(
         false,
         &[
@@ -691,7 +691,7 @@ fn swordfish_fling_down_y_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, sailfishFlingUpSlow_xValues
 #[test]
-fn sailfish_fling_up_slow_x_values() {
+fn a_recorded_slow_fling_ups_sideways_drift() {
     check_test_case(
         false,
         &[
@@ -719,7 +719,7 @@ fn sailfish_fling_up_slow_x_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, sailfishFlingUpSlow_yValues
 #[test]
-fn sailfish_fling_up_slow_y_values() {
+fn a_recorded_slow_fling_ups_motion() {
     check_test_case(
         false,
         &[
@@ -750,7 +750,7 @@ fn sailfish_fling_up_slow_y_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, sailfishFlingUpFast_xValues
 #[test]
-fn sailfish_fling_up_fast_x_values() {
+fn a_recorded_fast_fling_ups_sideways_drift() {
     check_test_case(
         false,
         &[
@@ -771,7 +771,7 @@ fn sailfish_fling_up_fast_x_values() {
 
 // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt, sailfishFlingUpFast_yValues
 #[test]
-fn sailfish_fling_up_fast_y_values() {
+fn a_recorded_fast_fling_ups_motion() {
     check_test_case(
         false,
         &[

@@ -266,6 +266,7 @@ pub fn LazyGrid(
             modifier = modifier,
             state = state,
             content_padding = content_padding,
+            reverse_layout = lazy.reverse_layout,
             vertical_arrangement = arrangement,
             move |scope: LazyGridScope| content(scope)
         );
@@ -282,6 +283,7 @@ pub fn LazyGrid(
             modifier = modifier,
             state = state,
             content_padding = content_padding,
+            reverse_layout = lazy.reverse_layout,
             horizontal_arrangement = arrangement,
             move |scope: LazyGridScope| content(scope)
         );

@@ -1,7 +1,6 @@
 //! A lazy grid's `layout_info`: the items in view with their lines, cells, offsets and sizes,
-//! the viewport, the padding, the count and the cells in a line. Compose's tests run reversed
-//! too; compose-rs's grids aren't reversible yet (feature:grid-parity), so only the two
-//! orientations are.
+//! the viewport, the padding, the count and the cells in a line, each orientation, reversed or
+//! not.
 
 #![allow(non_snake_case)]
 
@@ -81,7 +80,7 @@ fn twelve_items(lazy: Lazy, state: LazyGridState, cross: i32) -> ComposeTestRule
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, visibleItemsAreCorrect
 #[test]
 fn the_items_in_view_are_in_the_layout_info() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let _ui = twelve_items(lazy, *state, ITEM * 2);
         assert_visible_items(lazy, &state.layout_info(), 8, 2, 0, 0, square(), 0);
@@ -91,7 +90,7 @@ fn the_items_in_view_are_in_the_layout_info() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, visibleItemsAreCorrectAfterScroll
 #[test]
 fn the_layout_info_follows_a_scroll() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let mut ui = twelve_items(lazy, handle, ITEM * 2);
@@ -103,7 +102,7 @@ fn the_layout_info_follows_a_scroll() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, visibleItemsAreCorrectWithSpacing
 #[test]
 fn the_layout_info_has_the_spacing() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let lazy = Lazy { spaced_by: ITEM as f32, ..lazy };
         let state = LazyGridState::new(0, 0);
         let handle = *state;
@@ -142,7 +141,7 @@ fn take_observed() -> Option<LazyGridLayoutInfo> {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, visibleItemsAreObservableWhenWeScroll
 #[test]
 fn a_scroll_recomposes_what_reads_the_layout_info() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
@@ -168,7 +167,7 @@ fn a_scroll_recomposes_what_reads_the_layout_info() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, visibleItemsAreObservableWhenResize
 #[test]
 fn a_resized_item_recomposes_what_reads_the_layout_info() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let size = mutable_state_of(ITEM * 2);
@@ -200,7 +199,7 @@ fn a_resized_item_recomposes_what_reads_the_layout_info() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, totalCountIsCorrect
 #[test]
 fn the_layout_info_counts_the_items() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let count = mutable_state_of(10usize);
@@ -254,7 +253,7 @@ fn viewport_grid(
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, viewportOffsetsAndSizeAreCorrect
 #[test]
 fn the_viewport_is_the_grids_size() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let _ui = viewport_grid(lazy, *state, 2, no_padding(), 8, Some(45));
         let info = state.layout_info();
@@ -269,9 +268,10 @@ fn the_viewport_is_the_grids_size() {
 #[test]
 fn the_viewport_starts_before_the_padding() {
     for (cells, items, item) in [(2, 8, Some(45)), (1, 0, Some(45)), (1, 1, None)] {
-        for lazy in Lazy::grids() {
+        for lazy in Lazy::all() {
             let state = LazyGridState::new(0, 0);
-            let padding = lazy.padding(px(10), px(15), 2.dp(), 2.dp());
+            let (before, after) = if lazy.reverse_layout { (15, 10) } else { (10, 15) };
+            let padding = lazy.padding(px(before), px(after), 2.dp(), 2.dp());
             let _ui = viewport_grid(lazy, *state, cells, padding, items, item);
             let info = state.layout_info();
             let context = format!("{lazy:?}, {items} items");
@@ -287,7 +287,7 @@ fn the_viewport_starts_before_the_padding() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, emptyItemsInVisibleItemsInfo
 #[test]
 fn empty_items_are_in_the_layout_info() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let _ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
@@ -306,11 +306,11 @@ fn empty_items_are_in_the_layout_info() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, orientationIsCorrect
 #[test]
 fn the_layout_info_says_the_orientation() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let _ui = twelve_items(lazy, *state, ITEM * 2);
         let info = state.layout_info();
-        assert!(!info.reverse_layout);
+        assert_eq!(info.reverse_layout, lazy.reverse_layout);
         assert_eq!(info.orientation == Orientation::Vertical, lazy.vertical);
     }
 }
@@ -318,7 +318,7 @@ fn the_layout_info_says_the_orientation() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, viewportOffsetsSmallContentReverseArrangement
 #[test]
 fn short_content_arranged_from_the_end_starts_after_the_room_left() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let lazy = Lazy { reverse_arrangement: true, ..lazy };
         let state = LazyGridState::new(0, 0);
         let handle = *state;
@@ -370,7 +370,7 @@ fn the_layout_info_has_the_content_types() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, snapshotFlowIsNotifiedAboutNewOffsetOnSmallScrolls
 #[test]
 fn a_pixels_scroll_moves_the_first_items_offset() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
@@ -397,7 +397,7 @@ fn a_pixels_scroll_moves_the_first_items_offset() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt, maxSpan_returnsNumberOfSlotsPerLine
 #[test]
 fn the_layout_info_says_the_cells_in_a_line() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let _ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
@@ -421,7 +421,7 @@ fn the_layout_info_says_the_cells_in_a_line() {
 // lines to those it laid out).
 #[test]
 fn an_empty_last_line_stays_laid_out_after_a_scroll_back() {
-    for lazy in Lazy::grids() {
+    for lazy in Lazy::all() {
         let state = LazyGridState::new(0, 0);
         let handle = *state;
         let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {

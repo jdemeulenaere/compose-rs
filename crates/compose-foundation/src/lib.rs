@@ -41,13 +41,13 @@ pub use gestures::{
 };
 pub use image::{ContentScale, Image};
 pub use lazy::{
-    GridCells, GridItemSpan, LazyColumn, LazyGridDefaults, LazyGridItemInfo, LazyGridItemSpanScope,
-    LazyGridLayoutInfo, LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyItemModifiers,
-    LazyItemScope, LazyLayoutCacheWindow, LazyLayoutScrollScope, LazyListDefaults,
-    LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState, LazyRow, LazyVerticalGrid,
-    lazy_layout_cache_window, lazy_layout_cache_window_fraction,
-    lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
-    remember_lazy_grid_state, remember_lazy_list_state,
+    CrossAxisCells, GridCells, GridItemSpan, LazyColumn, LazyGridDefaults, LazyGridItemInfo,
+    LazyGridItemScope, LazyGridItemSpanScope, LazyGridLayoutInfo, LazyGridScope, LazyGridState,
+    LazyHorizontalGrid, LazyItemModifiers, LazyItemScope, LazyLayoutCacheWindow,
+    LazyLayoutScrollScope, LazyListDefaults, LazyListItemInfo, LazyListLayoutInfo, LazyListScope,
+    LazyListState, LazyRow, LazyVerticalGrid, lazy_layout_cache_window,
+    lazy_layout_cache_window_fraction, lazy_layout_cache_window_fraction_with,
+    lazy_layout_cache_window_with, remember_lazy_grid_state, remember_lazy_list_state,
 };
 pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};

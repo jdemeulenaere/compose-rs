@@ -460,7 +460,7 @@ impl ModifierNode for GraphicsLayerNode {
 /// `Modifier.repaint_boundary`'s element.
 struct RepaintBoundaryElement;
 
-struct RepaintBoundaryNode;
+pub(crate) struct RepaintBoundaryNode;
 
 impl crate::modifier::ModifierNodeElement for RepaintBoundaryElement {
     type Node = RepaintBoundaryNode;

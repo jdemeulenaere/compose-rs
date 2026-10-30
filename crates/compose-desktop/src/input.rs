@@ -3,7 +3,7 @@
 
 use compose_ui::{
     Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, PointerId, PointerType,
-    platform::UiHost,
+    WheelStep, platform::UiHost,
 };
 use winit::event::{
     ElementState, Ime, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent,
@@ -65,6 +65,34 @@ fn is_precise_wheel(delta: &MouseScrollDelta) -> bool {
     }
 }
 
+/// A wheel's step on this platform, as Compose Desktop's `ScrollConfig`s, **unverified**: the
+/// JetBrains fork's `DesktopScrollable.desktop.kt` isn't in androidx-main, so these are from memory
+/// (D1450). macOS's lines are 10 dp (its driver accelerates them); Windows's the scrollable's height
+/// over 20 and Linux's the root of its height, each times AWT's `scrollAmount`, the system's lines
+/// per notch: 3 by default on both (Windows's setting isn't read here).
+fn wheel_step() -> WheelStep {
+    if cfg!(target_os = "macos") {
+        WheelStep::Dp(10.0)
+    } else if cfg!(target_os = "windows") {
+        WheelStep::HeightOverTwenty { scroll_amount: 3.0 }
+    } else {
+        WheelStep::SquareRootOfHeight { scroll_amount: 3.0 }
+    }
+}
+
+/// A wheel's event: lines, in its platform's step; pixels, as they are.
+fn wheel_event(position: Offset, delta: &MouseScrollDelta) -> PointerEvent {
+    let event = match delta {
+        MouseScrollDelta::LineDelta(x, y) => {
+            PointerEvent::scroll(position, Offset::new(-x, -y)).with_wheel_step(wheel_step())
+        }
+        MouseScrollDelta::PixelDelta(pixels) => {
+            PointerEvent::scroll(position, Offset::new(-pixels.x as f32, -pixels.y as f32))
+        }
+    };
+    event.with_precise_wheel(is_precise_wheel(delta))
+}
+
 pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEvent) -> Outcome {
     match event {
         WindowEvent::CursorMoved { position, .. } => {
@@ -85,16 +113,7 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             }
         }
         WindowEvent::MouseWheel { delta, .. } => {
-            let precise = is_precise_wheel(delta);
-            let delta = match delta {
-                MouseScrollDelta::LineDelta(x, y) => Offset::new(-x * 40.0, -y * 40.0),
-                MouseScrollDelta::PixelDelta(position) => {
-                    Offset::new(-position.x as f32, -position.y as f32)
-                }
-            };
-            host.send_pointer(
-                PointerEvent::scroll(state.cursor, delta).with_precise_wheel(precise),
-            );
+            host.send_pointer(wheel_event(state.cursor, delta));
         }
         WindowEvent::Touch(Touch { phase, location, id, .. }) => {
             let position = Offset::new(location.x as f32, location.y as f32);
@@ -174,6 +193,7 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
 
 #[cfg(test)]
 mod wheel_tests {
+    use compose_ui::IntSize;
     use winit::dpi::PhysicalPosition;
 
     use super::*;
@@ -185,6 +205,29 @@ mod wheel_tests {
         assert!(is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, 0.25)));
         assert!(is_precise_wheel(&MouseScrollDelta::LineDelta(0.5, 2.0)));
         assert!(!is_precise_wheel(&MouseScrollDelta::LineDelta(0.0, -2.0)));
+    }
+
+    // The step's numbers are unverified, from the JetBrains fork's source by memory (D1450): this
+    // pins what's here, not what Compose Desktop does.
+    #[test]
+    fn a_line_is_the_platforms_step_and_pixels_are_pixels() {
+        let bounds = IntSize::new(100, 400);
+        let line = wheel_event(Offset::ZERO, &MouseScrollDelta::LineDelta(0.0, -2.0));
+        // 10 dp on macOS; 3 lines of the height over 20 on Windows and of its root on Linux, which
+        // a height of 400 makes the same.
+        let step = if cfg!(target_os = "macos") { 10.0 * 2.0 } else { 20.0 * 3.0 };
+        assert_eq!(line.wheel_pixels(2.0, bounds), Offset::new(0.0, 2.0 * step));
+        let pixels = wheel_event(
+            Offset::ZERO,
+            &MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -3.0)),
+        );
+        assert_eq!(pixels.wheel_pixels(2.0, bounds), Offset::new(0.0, 3.0));
+    }
+
+    #[test]
+    fn a_lines_delta_runs_the_other_way_on_each_axis() {
+        let event = wheel_event(Offset::ZERO, &MouseScrollDelta::LineDelta(2.0, -3.0));
+        assert_eq!(event.scroll_delta, Offset::new(-2.0, 3.0));
     }
 
     #[test]

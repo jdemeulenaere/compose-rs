@@ -3,12 +3,52 @@
 //! the next frame, so the frame that scrolls them in finds them ready. The host runs the
 //! requests (`UiHost::prefetch`) when the platform has idle time, until a deadline.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use compose_runtime::{ComposeArg, Composition, CompositionLocal};
+
+thread_local! {
+    /// The time a `PrefetchClock` holds, instead of the machine's.
+    static HELD: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// The time prefetching goes by, deadlines and the steps it times alike: the machine's, unless a
+/// test holds a [`PrefetchClock`].
+#[doc(hidden)]
+pub fn prefetch_now() -> Instant {
+    HELD.get().unwrap_or_else(Instant::now)
+}
+
+/// A test's clock for prefetching on this thread, until it's dropped: it stands still but for what
+/// [`advance`](PrefetchClock::advance) says, so a step takes what the test says it takes and an
+/// idle time never runs out on a loaded machine (D1457).
+#[doc(hidden)]
+pub struct PrefetchClock;
+
+impl PrefetchClock {
+    pub fn hold() -> PrefetchClock {
+        HELD.set(Some(Instant::now()));
+        PrefetchClock
+    }
+
+    /// Whether a test holds the clock on this thread.
+    pub fn held() -> bool {
+        HELD.get().is_some()
+    }
+
+    pub fn advance(by: Duration) {
+        HELD.set(HELD.get().map(|now| now + by));
+    }
+}
+
+impl Drop for PrefetchClock {
+    fn drop(&mut self) {
+        HELD.set(None);
+    }
+}
 
 use crate::constraints::Constraints;
 use crate::tree::{NodeId, UiTree};
@@ -32,7 +72,7 @@ pub struct PrefetchRequestScope<'a> {
 impl PrefetchRequestScope<'_> {
     /// The nanoseconds left until the next frame should start, as `availableTimeNanos`.
     pub fn available_time_nanos(&self) -> u64 {
-        self.deadline.saturating_duration_since(Instant::now()).as_nanos() as u64
+        self.deadline.saturating_duration_since(prefetch_now()).as_nanos() as u64
     }
 
     /// Which idle time this is: a number the scheduler counts up at each run, so a request can
@@ -121,11 +161,8 @@ impl PrefetchScheduler {
         let mut unbounded = unbounded_first;
         loop {
             let Some(request) = self.requests.borrow().front().cloned() else { return false };
-            let deadline = if unbounded {
-                Instant::now() + std::time::Duration::from_secs(3600)
-            } else {
-                deadline
-            };
+            let deadline =
+                if unbounded { prefetch_now() + Duration::from_secs(3600) } else { deadline };
             unbounded = false;
             let mut scope = PrefetchRequestScope { deadline, composition, idle_time };
             if scope.available_time_nanos() == 0 || request.execute(&mut scope) {

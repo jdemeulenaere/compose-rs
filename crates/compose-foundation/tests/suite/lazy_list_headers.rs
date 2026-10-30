@@ -211,3 +211,122 @@ fn empty_headers_do_not_unstick_the_real_one() {
     let first = state.layout_info().visible_items_info[0];
     assert_eq!((first.index, first.offset), (0, 0));
 }
+
+/// A column or a row in 35 px, a 5 px header (or two) and 10 px focusable items.
+fn focusable_list(
+    lazy: crate::lazy_support::Lazy,
+    headers: usize,
+    padding: f32,
+    direction: compose_ui::LayoutDirection,
+    state: LazyListState,
+    requesters: std::rc::Rc<std::cell::RefCell<Vec<compose_ui::FocusRequester>>>,
+) -> ComposeTestRule {
+    use compose_runtime::remember;
+    use_optimizations(Optimizations::NONE);
+    ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let requesters = requesters.clone();
+        compose_runtime::CompositionLocalProvider(
+            compose_ui::LOCAL_LAYOUT_DIRECTION.provides(direction),
+            move || {
+                let requesters = requesters.clone();
+                crate::lazy_support::LazyColumnOrRow(
+                    lazy,
+                    lazy.main_axis_size(35.dp()),
+                    state,
+                    PaddingValues::all(compose_ui::Dp(padding)),
+                    move |scope: LazyListScope| {
+                        for _ in 0..headers {
+                            scope.sticky_header(move |_| {
+                                Spacer(
+                                    lazy.main_axis_size(5.dp()).then(lazy.cross_axis_size(50.dp())),
+                                );
+                            });
+                        }
+                        let requesters = requesters.clone();
+                        scope.items(10, move |index| {
+                            let requester = remember(compose_ui::FocusRequester::new);
+                            let mut all = requesters.borrow_mut();
+                            if all.len() <= index {
+                                all.resize(index + 1, requester);
+                            }
+                            all[index] = requester;
+                            drop(all);
+                            Spacer(
+                                lazy.main_axis_size(10.dp())
+                                    .then(lazy.cross_axis_size(50.dp()))
+                                    .focus_requester(requester)
+                                    .focusable(),
+                            );
+                        });
+                    },
+                );
+            },
+        );
+    })
+}
+
+fn list_offset(state: &LazyListState, item: usize) -> i32 {
+    let info = state.layout_info();
+    info.visible_items_info.iter().find(|it| it.index == item).expect("in view").offset
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt, lazyList_withHeader_focusScrollsRevealsEntireItemUnderHeaderIgnoringContentPadding: without its pinning, the item focused in view
+#[test]
+fn a_focused_item_comes_out_from_under_its_header() {
+    use crate::lazy_support::Lazy;
+    for padding in [0.0, 5.0] {
+        let lazy = Lazy::column();
+        let state = LazyListState::new(2, 0);
+        let requesters: std::rc::Rc<std::cell::RefCell<Vec<compose_ui::FocusRequester>>> =
+            Default::default();
+        let mut ui = focusable_list(
+            lazy,
+            1,
+            padding,
+            compose_ui::LayoutDirection::Ltr,
+            *state,
+            requesters.clone(),
+        );
+        ui.wait_for_idle();
+        assert!(requesters.borrow()[1].request_focus());
+        ui.wait_for_idle();
+        assert_eq!(list_offset(&state, 2), 5 - padding as i32, "padding {padding}");
+    }
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt, lazyList_withMultipleHeaders_focusScrollsRevealsEntireItemUnderHeaders: only the one sticking counts
+#[test]
+fn a_focused_item_comes_out_from_under_the_header_sticking() {
+    use crate::lazy_support::Lazy;
+    let lazy = Lazy::column();
+    let state = LazyListState::new(3, 0);
+    let requesters: std::rc::Rc<std::cell::RefCell<Vec<compose_ui::FocusRequester>>> =
+        Default::default();
+    let mut ui =
+        focusable_list(lazy, 2, 0.0, compose_ui::LayoutDirection::Ltr, *state, requesters.clone());
+    ui.wait_for_idle();
+    assert!(requesters.borrow()[1].request_focus());
+    ui.wait_for_idle();
+    assert_eq!(list_offset(&state, 3), 5);
+}
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt, lazyList_withHeader_layoutOrientations_focusScrollsRevealsEntireItemUnderHeader
+#[test]
+fn a_focused_item_comes_out_from_under_its_header_in_any_layout() {
+    use crate::lazy_support::Lazy;
+    for reverse_layout in [true, false] {
+        for direction in [compose_ui::LayoutDirection::Ltr, compose_ui::LayoutDirection::Rtl] {
+            for lazy in [Lazy::column(), Lazy::row()] {
+                let lazy = Lazy { reverse_layout, ..lazy };
+                let state = LazyListState::new(2, 0);
+                let requesters: std::rc::Rc<std::cell::RefCell<Vec<compose_ui::FocusRequester>>> =
+                    Default::default();
+                let mut ui = focusable_list(lazy, 1, 0.0, direction, *state, requesters.clone());
+                ui.wait_for_idle();
+                assert!(requesters.borrow()[1].request_focus());
+                ui.wait_for_idle();
+                assert_eq!(list_offset(&state, 2), 5, "{lazy:?} {direction:?}");
+            }
+        }
+    }
+}
