@@ -1106,6 +1106,49 @@ fn a_labels_room_grows_late_in_its_move() {
     assert_eq!(height, 8.0 + 16.0 + 24.0 + 8.0);
 }
 
+/// The cut is as big as the label is along its way, in height too.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/TextFieldImpl.kt, CommonDecorationBox
+#[test]
+fn a_cut_grows_with_the_label() {
+    let mut ui = themed(long_only(FastSpatial), || {
+        OutlinedTextField!(
+            String::new(),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            label = Some(|| {
+                compose_foundation::layout::Spacer(Modifier.width(100.dp()).height(40.dp()));
+            }),
+            colors = TextFieldColors {
+                container_color: Color::RED,
+                focused_container_color: Color::RED,
+                ..OutlinedTextFieldDefaults::colors()
+            }
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(LONG / 2));
+    let clip = ui.host().display_list().ops.iter().find_map(|op| match op {
+        DrawOp::ClipPath { path, .. } => Some(path.clone()),
+        _ => None,
+    });
+    let clip = clip.expect("a clip");
+    let closes = clip
+        .commands()
+        .iter()
+        .position(|command| matches!(command, compose_ui::PathCommand::Close))
+        .unwrap();
+    let top = clip.commands()[closes + 1..]
+        .iter()
+        .filter_map(|command| match command {
+            compose_ui::PathCommand::MoveTo(at) | compose_ui::PathCommand::LineTo(at) => Some(at.y),
+            _ => None,
+        })
+        .fold(f32::MAX, f32::min);
+    // About half of 20.
+    assert!(top < -8.0 && top > -13.0, "{top}");
+}
+
 /// An outlined one's too, its outline the unfocused width.
 #[test]
 fn a_disabled_outlined_fields_outline_is_thin() {

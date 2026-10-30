@@ -475,6 +475,7 @@ fn an_outlined_containers_border_comes_from_the_colors() {
     });
     let drawn = format!("{ops:?}");
     assert!(drawn.contains(&format!("{:?}", Color::RED)), "{drawn}");
+    assert!(drawn.contains("Stroke(40.0)"), "{drawn}");
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TextFieldDecoratorTest.kt, textFieldBox_defaultIndicatorLineColor_comesFromColors
@@ -636,7 +637,7 @@ fn default_padding_top(outlined: bool, label: Option<TextFieldLabelPosition>) ->
 #[test]
 fn a_filled_boxs_default_padding_goes_by_the_label() {
     assert_eq!(default_padding_top(false, None), PADDING);
-    assert_eq!(default_padding_top(false, Some(TextFieldLabelPosition::inside())), 8.0 + 10.0);
+    assert_eq!(default_padding_top(false, Some(TextFieldLabelPosition::inside())), 8.0 + 16.0);
     assert_eq!(default_padding_top(false, Some(TextFieldLabelPosition::cutout())), PADDING);
     assert_eq!(
         default_padding_top(false, Some(TextFieldLabelPosition::above())),
@@ -648,7 +649,7 @@ fn a_filled_boxs_default_padding_goes_by_the_label() {
 #[test]
 fn an_outlined_boxs_default_padding_goes_by_the_label() {
     assert_eq!(default_padding_top(true, None), PADDING);
-    assert_eq!(default_padding_top(true, Some(TextFieldLabelPosition::inside())), 8.0 + 10.0);
+    assert_eq!(default_padding_top(true, Some(TextFieldLabelPosition::inside())), 8.0 + 16.0);
     assert_eq!(default_padding_top(true, Some(TextFieldLabelPosition::cutout())), PADDING);
     assert_eq!(
         default_padding_top(true, Some(TextFieldLabelPosition::above())),
@@ -1109,17 +1110,28 @@ fn a_cutout_box_cuts_its_own_container_at_the_label() {
     );
 }
 
-/// The room for the label a box's own container is cut by, left and right.
+/// The room for the label a box's own container is cut by, left and right: the second contour of
+/// the clip.
 fn cut_of(ui: &mut ComposeTestRule) -> (f32, f32) {
-    let cut = ui.host().display_list().ops.iter().find_map(|op| match op {
-        DrawOp::ClipPath { path, .. } => path.steps().iter().rev().find_map(|step| match step {
-            compose_ui::PathStep::Push(operand) => Some(operand.bounds()),
-            _ => None,
-        }),
+    let clip = ui.host().display_list().ops.iter().find_map(|op| match op {
+        DrawOp::ClipPath { path, .. } => Some(path.clone()),
         _ => None,
     });
-    let cut = cut.expect("a cut");
-    (cut.left, cut.right)
+    let clip = clip.expect("a cut");
+    assert_eq!(clip.fill_type(), compose_ui::PathFillType::EvenOdd);
+    let closes = clip
+        .commands()
+        .iter()
+        .position(|command| matches!(command, compose_ui::PathCommand::Close))
+        .expect("a contour");
+    let xs: Vec<f32> = clip.commands()[closes + 1..]
+        .iter()
+        .filter_map(|command| match command {
+            compose_ui::PathCommand::MoveTo(at) | compose_ui::PathCommand::LineTo(at) => Some(at.x),
+            _ => None,
+        })
+        .collect();
+    (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max))
 }
 
 /// The cut's between the paddings given, 4 dp either side of the label.
@@ -1473,4 +1485,154 @@ fn the_lines_path_follows_the_size_and_the_shape() {
     rtl_state.set(true);
     ui.wait_for_idle();
     assert_ne!(format!("{:?}", line(&mut ui).steps()), rounded);
+}
+
+/// With `None`, the theme is what's current when it's wanted, not what it was when attached.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TextField.kt, IndicatorLineNode
+#[test]
+fn a_lines_default_colors_and_shape_follow_the_theme() {
+    let dark_state = mutable_state_of(false);
+    let dark = dark_state.handle();
+    let source = MutableInteractionSource::new();
+    let content_source = source.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), move || {
+        let source = content_source.clone();
+        let (scheme, shapes) = if dark.get() {
+            (
+                dark_color_scheme(),
+                Shapes {
+                    extra_small: Shape::Rounded([compose_ui::CornerSize::Dp(9.dp()); 4]),
+                    ..Shapes::default()
+                },
+            )
+        } else {
+            (light_color_scheme(), Shapes::default())
+        };
+        MaterialTheme!(color_scheme = scheme, shapes = shapes, {
+            Box!(
+                modifier = Modifier.width(300.dp()).height(100.dp()).indicator_line(
+                    true,
+                    false,
+                    &source,
+                    None,
+                    None,
+                    4.dp(),
+                    1.dp(),
+                )
+            );
+        });
+    });
+    ui.wait_for_idle();
+    dark_state.set(true);
+    ui.wait_for_idle();
+    // The shape at once, the color at the next change, as Compose's.
+    let steps = |ui: &mut ComposeTestRule| {
+        let ops = &ui.host().display_list().ops;
+        let path = ops.iter().rev().find_map(|op| match op {
+            DrawOp::DrawPath { path, .. } => Some(path.clone()),
+            _ => None,
+        });
+        format!("{:?}", path.expect("a path").steps())
+    };
+    assert!(steps(&mut ui).contains("91.0"));
+    assert_eq!(last_path(&mut ui).1, light_color_scheme().on_surface_variant);
+    source.try_emit(compose_ui::FocusInteraction::Focus(compose_ui::Focus::new()));
+    ui.advance_time_by(std::time::Duration::from_secs(2));
+    assert_eq!(last_path(&mut ui).1, dark_color_scheme().primary);
+}
+
+/// Presses too: on the text or around it, released or moved off, as `tapPressTextFieldModifier`.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/TextFieldPressGestureFilter.kt, tapPressTextFieldModifier
+#[test]
+fn a_basic_text_field_tells_its_source_of_presses() {
+    let source = MutableInteractionSource::new();
+    let enabled_state = mutable_state_of(true);
+    let enabled = enabled_state.handle();
+    let content_source = source.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        let source = content_source.clone();
+        BasicTextField!(
+            "Text".to_string(),
+            |_: String| {},
+            modifier = Modifier.width(300.dp()).height(100.dp()).test_tag(FIELD),
+            enabled = enabled.get(),
+            interaction_source = Some(source),
+            decoration_box = |inner: Callback| {
+                Box!(modifier = Modifier.padding(20.dp()), content = move |_| inner());
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let _listener = source.listen(move |interaction| {
+        if let compose_ui::Interaction::Press(press) = interaction {
+            log.borrow_mut().push(match press {
+                compose_ui::PressInteraction::Press(_) => "press",
+                compose_ui::PressInteraction::Release(_) => "release",
+                compose_ui::PressInteraction::Cancel(_) => "cancel",
+            });
+        }
+    });
+    // In the padding, where the inner field isn't.
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(5.0, 5.0));
+    });
+    ui.wait_for_idle();
+    assert!(source.is_pressed());
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| touch.up());
+    ui.wait_for_idle();
+    assert_eq!(*seen.borrow(), ["press", "release"]);
+    assert!(!source.is_pressed());
+    // Moved off, far.
+    seen.borrow_mut().clear();
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(150.0, 50.0));
+        touch.move_by(compose_ui::Offset::new(0.0, 400.0));
+    });
+    ui.wait_for_idle();
+    assert_eq!(*seen.borrow(), ["press", "cancel"]);
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| touch.up());
+    ui.wait_for_idle();
+    assert_eq!(*seen.borrow(), ["press", "cancel"]);
+    // Disabled in the middle of one, it's cancelled.
+    seen.borrow_mut().clear();
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(150.0, 50.0));
+    });
+    ui.wait_for_idle();
+    enabled_state.set(false);
+    ui.wait_for_idle();
+    assert_eq!(*seen.borrow(), ["press", "cancel"]);
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| touch.up());
+    ui.wait_for_idle();
+    // Disabled, none.
+    seen.borrow_mut().clear();
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| {
+        touch.down(compose_ui::Offset::new(150.0, 50.0));
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert!(seen.borrow().is_empty());
+}
+
+/// A field going in the middle of a press ends it.
+#[test]
+fn a_field_going_cancels_its_press() {
+    let source = MutableInteractionSource::new();
+    let shown_state = mutable_state_of(true);
+    let shown = shown_state.handle();
+    let content_source = source.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+        if shown.get() {
+            Labelled(content_source.clone(), "Text".to_string());
+        }
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag(FIELD).perform_touch_input(|touch| touch.down(touch.center()));
+    ui.wait_for_idle();
+    assert!(source.is_pressed());
+    shown_state.set(false);
+    ui.wait_for_idle();
+    assert!(!source.is_pressed());
 }

@@ -31,10 +31,11 @@
 StackMeasurePolicy [0,0 400x800]
   RowColumnMeasurePolicy [0,0 400x800] Modifier.fill_max_size(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
     RowColumnMeasurePolicy [0,0 368x56]
-      BoxMeasurePolicy [0,0 298x56] Modifier.weight(1, true).test_tag("draft").semantics(merge = true).focus_on_tap.pointer_hover_icon {tag="draft" merged}
-        TextFieldDecoration [0,0 298x56] Modifier.size(280.dp.._ x 56.dp.._).on_focus_changed.draw_behind
-          EmptyMeasurePolicy [16,19 266x18] Modifier.TextField {editable_text="" clickable editable focusable focused part_of_parent TextSelectionRange=TextRange(0, 0) ImeAction=Default}
-          EmptyMeasurePolicy [0,54 298x2] Modifier.size(_ x 2.dp).background(#FF6750A4, Rectangle)
+      BoxMeasurePolicy [0,0 298x56] Modifier.weight(1, true).test_tag("draft").default_min_size.semantics(merge = true).focus_on_tap.pointer_hover_icon {tag="draft" merged}
+        TextFieldDecoration [0,0 298x56]
+          BoxMeasurePolicy [0,16 298x24] Modifier.size(_ x 24.dp.._).wrap_content.padding(16.dp, 0.dp, 16.dp, 0.dp)
+            EmptyMeasurePolicy [0,0 266x18] Modifier.TextField {editable_text="" clickable editable focusable focused part_of_parent TextSelectionRange=TextRange(0, 0) ImeAction=Default}
+          BoxMeasurePolicy [0,0 298x56] Modifier.draw_behind
       BoxMeasurePolicy [298,4 70x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 70x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 22x20] Modifier.Text {text=["Add"]}

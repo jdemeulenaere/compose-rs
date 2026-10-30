@@ -525,6 +525,10 @@ fn a_selected_segmented_item_is_in_the_selected_colors_and_shape() {
     assert_eq!(drawn[0].0, scheme.surface);
     let node = ui.on_node_with_tag("item1").fetch_semantics_snapshot();
     assert_eq!(node.config.get(&compose_ui::SemanticsProperties::SELECTED), Some(&true));
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::ROLE),
+        Some(&compose_ui::Role::RadioButton)
+    );
     ui.on_node_with_tag("item0").perform_click();
     ui.wait_for_idle();
     assert_eq!(clicks.get(), 1);
@@ -557,6 +561,10 @@ fn a_toggled_segmented_item_is_a_checkbox_that_tells_the_opposite() {
     assert_eq!(
         node.config.get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE),
         Some(&ToggleableState::On)
+    );
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::ROLE),
+        Some(&compose_ui::Role::Checkbox)
     );
     ui.on_node_with_tag("item").perform_click();
     ui.wait_for_idle();
@@ -609,4 +617,37 @@ fn a_segmented_item_takes_long_clicks() {
     ui.wait_for_idle();
     long_click(&mut ui, "item");
     assert_eq!(long.get(), 1);
+}
+
+/// Any shape with corners takes the list's at its ends, as `segmentedShapes`, of its kind.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItemDefaults.kt, segmentedShapes
+#[test]
+fn a_cut_shape_takes_the_lists_corners_at_its_ends() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            let four = compose_ui::CornerSize::Dp(4.dp());
+            let large = MaterialTheme::shapes().large.corners().unwrap();
+            let given = ListItemShapes {
+                shape: compose_ui::Shape::Cut([four; 4]),
+                ..ListItemDefaults::shapes()
+            };
+            assert_eq!(
+                ListItemDefaults::segmented_shapes(0, 3, given.clone()).shape,
+                compose_ui::Shape::Cut([large[0], large[1], four, four])
+            );
+            assert_eq!(
+                ListItemDefaults::segmented_shapes(2, 3, given.clone()).shape,
+                compose_ui::Shape::Cut([four, four, large[2], large[3]])
+            );
+            assert_eq!(
+                ListItemDefaults::segmented_shapes(1, 3, given.clone()).shape,
+                compose_ui::Shape::Cut([four; 4])
+            );
+            assert_eq!(
+                ListItemDefaults::segmented_shapes(0, 1, given.clone()).shape,
+                compose_ui::Shape::Cut(large)
+            );
+        });
+    });
+    ui.wait_for_idle();
 }

@@ -65,6 +65,7 @@ pub fn BasicTextField(
     } else {
         crate::text::validate_min_max_lines(min_lines, max_lines);
     }
+    let interaction_source_for_press = if enabled { interaction_source.clone() } else { None };
     let element: Rc<dyn AnyModifierNodeElement> = Rc::new(TextFieldElement {
         value,
         on_value_change,
@@ -83,6 +84,7 @@ pub fn BasicTextField(
         visual_transformation,
         interaction_source,
     });
+    let press_source = interaction_source_for_press;
     let inner_text_field = Callback::new(move || {
         Layout(
             compose_ui::platform::shared_custom_modifier(element.clone()),
@@ -94,7 +96,7 @@ pub fn BasicTextField(
         // An I-beam over the field, as Compose Desktop's text fields.
         modifier
             .semantics_with(true, |_| {})
-            .then_custom(FocusOnTap)
+            .then_custom(FocusOnTap { interaction_source: press_source })
             .pointer_hover_icon(compose_ui::PointerIcon::Text),
         crate::Alignment::TOP_START,
         // The decoration's size is the field's: a field given a size passes it on.
@@ -1897,22 +1899,46 @@ impl SemanticsModifierNode for TextFieldNode {
 
 // ---- The decoration's taps ----------------------------------------------------------------
 
-/// Focuses the focus target below it on a tap (a release after a press, inside).
-struct FocusOnTap;
+/// Focuses the focus target below it on a tap (a release after a press, inside), and tells
+/// `interaction_source` of presses anywhere in the field, as `tapPressTextFieldModifier`.
+struct FocusOnTap {
+    interaction_source: Option<compose_ui::MutableInteractionSource>,
+}
 
 #[derive(Default)]
 struct FocusOnTapNode {
     pressed: bool,
+    interaction_source: Option<compose_ui::MutableInteractionSource>,
+    press: Option<compose_ui::Press>,
+}
+
+impl FocusOnTapNode {
+    /// Ends the press told, if any: released, or cancelled.
+    fn end_press(&mut self, released: bool) {
+        use compose_ui::PressInteraction;
+        if let (Some(press), Some(source)) = (self.press.take(), &self.interaction_source) {
+            source.try_emit(if released {
+                PressInteraction::Release(press)
+            } else {
+                PressInteraction::Cancel(press)
+            });
+        }
+    }
 }
 
 impl ModifierNodeElement for FocusOnTap {
     type Node = FocusOnTapNode;
     fn create(&self) -> FocusOnTapNode {
-        FocusOnTapNode::default()
+        FocusOnTapNode { interaction_source: self.interaction_source.clone(), ..Default::default() }
     }
-    fn update(&self, _: &mut Self::Node) {}
-    fn same(&self, _other: &Self) -> bool {
-        true
+    fn update(&self, node: &mut Self::Node) {
+        if node.interaction_source != self.interaction_source {
+            node.end_press(false);
+            node.interaction_source = self.interaction_source.clone();
+        }
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.interaction_source == other.interaction_source
     }
     fn name(&self) -> &'static str {
         "focus_on_tap"
@@ -1922,6 +1948,10 @@ impl ModifierNodeElement for FocusOnTap {
 impl ModifierNode for FocusOnTapNode {
     fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
         Some(self)
+    }
+
+    fn on_detach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
+        self.end_press(false);
     }
 }
 
@@ -1934,6 +1964,35 @@ impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
         context: &mut compose_ui::EventContext<'_>,
     ) {
         use compose_ui::PointerEventType;
+        let is_inside = |event: &compose_ui::PointerEvent| {
+            event.position.x >= 0.0
+                && event.position.y >= 0.0
+                && event.position.x < bounds.width as f32
+                && event.position.y < bounds.height as f32
+        };
+        // Before the field's handling: the field consumes its own taps.
+        if pass == compose_ui::PointerEventPass::Initial {
+            match event.kind {
+                PointerEventType::Press if !event.consumed => {
+                    self.end_press(false);
+                    if let Some(source) = &self.interaction_source {
+                        let press = compose_ui::Press::new(event.position);
+                        self.press = Some(press);
+                        source.try_emit(compose_ui::PressInteraction::Press(press));
+                    }
+                }
+                PointerEventType::Release => self.end_press(!event.consumed),
+                _ => {}
+            }
+            return;
+        }
+        // Taken by something around (a page scrolling), or gone off: no press any more.
+        if pass == compose_ui::PointerEventPass::Final
+            && event.kind == PointerEventType::Move
+            && (event.consumed || context.is_out_of_touch_target(event, bounds))
+        {
+            self.end_press(false);
+        }
         // After the field's own handling (the Main pass goes up from the target): a tap the
         // field took is consumed.
         if pass != compose_ui::PointerEventPass::Main {
@@ -1941,15 +2000,11 @@ impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
         }
         match event.kind {
             PointerEventType::Press if !event.consumed => self.pressed = true,
-            PointerEventType::Release if std::mem::take(&mut self.pressed) && !event.consumed => {
-                let inside = event.position.x >= 0.0
-                    && event.position.y >= 0.0
-                    && event.position.x < bounds.width as f32
-                    && event.position.y < bounds.height as f32;
-                if inside {
-                    event.consume();
-                    context.request_focus_at_pointer();
-                }
+            PointerEventType::Release
+                if std::mem::take(&mut self.pressed) && !event.consumed && is_inside(event) =>
+            {
+                event.consume();
+                context.request_focus_at_pointer();
             }
             _ => {}
         }
@@ -1957,5 +2012,6 @@ impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.pressed = false;
+        self.end_press(false);
     }
 }

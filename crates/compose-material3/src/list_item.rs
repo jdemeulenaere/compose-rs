@@ -10,9 +10,9 @@ use std::rc::Rc;
 use compose_foundation::layout::Box;
 use compose_runtime::{Callback, CompositionLocalProvider, composable};
 use compose_ui::{
-    Alignment, ClickableOptions, Color, Constraints, CornerSize, Dp, Layout, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, MutableInteractionSource, PaddingValues,
-    Placeable, Role, Shape, ToggleableState, UnitExt, VerticalAlignment,
+    Alignment, ClickableOptions, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, MutableInteractionSource, PaddingValues, Placeable,
+    Role, Shape, ToggleableState, UnitExt, VerticalAlignment,
 };
 
 use crate::components::{
@@ -333,13 +333,12 @@ impl ListItemDefaults {
         count: usize,
         default_shapes: ListItemShapes,
     ) -> ListItemShapes {
-        let (Shape::Rounded(corners), Shape::Rounded(large)) =
-            (default_shapes.shape.clone(), MaterialTheme::shapes().large.clone())
+        let (Some(mut corners), Some(large)) =
+            (default_shapes.shape.corners(), MaterialTheme::shapes().large.corners())
         else {
             return default_shapes;
         };
         // Top start, top end, bottom end, bottom start.
-        let mut corners: [CornerSize; 4] = corners;
         if index == 0 {
             corners[0] = large[0];
             corners[1] = large[1];
@@ -348,7 +347,7 @@ impl ListItemDefaults {
             corners[2] = large[2];
             corners[3] = large[3];
         }
-        ListItemShapes { shape: Shape::Rounded(corners), ..default_shapes }
+        ListItemShapes { shape: default_shapes.shape.copy(corners), ..default_shapes }
     }
 }
 

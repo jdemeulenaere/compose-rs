@@ -696,7 +696,7 @@ impl TextFieldDefaults {
             focused_label_color: scheme.primary,
             placeholder_color: scheme.on_surface_variant,
             disabled_text_color: scheme.on_surface.with_alpha(0.38),
-            disabled_container_color: scheme.on_surface.with_alpha(0.04),
+            disabled_container_color: scheme.surface_container_highest,
             disabled_indicator_color: scheme.on_surface.with_alpha(0.38),
             disabled_label_color: scheme.on_surface.with_alpha(0.38),
             disabled_placeholder_color: scheme.on_surface.with_alpha(0.38),

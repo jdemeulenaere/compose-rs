@@ -382,20 +382,17 @@ fn a_filled_fields_container_is_cut_for_a_label_on_its_edge() {
     ui.on_node_with_tag(FIELD).request_focus();
     ui.wait_for_idle();
     let ops = ui.host().display_list().ops.clone();
-    let cut = ops.iter().any(|op| {
-        matches!(op, DrawOp::DrawPath { path, .. }
-            if path.steps().iter().any(|step| matches!(step,
-                compose_ui::PathStep::Combine(compose_ui::PathOperation::Difference)
-                | compose_ui::PathStep::CombineOr(compose_ui::PathOperation::Difference))))
-    });
-    assert!(cut, "{ops:?}");
+    let cut = |ops: &[DrawOp]| {
+        ops.iter().any(|op| {
+            matches!(op, DrawOp::ClipPath { path, .. }
+                if path.fill_type() == compose_ui::PathFillType::EvenOdd)
+        })
+    };
+    assert!(cut(&ops), "{ops:?}");
     // And not at rest, nothing to cut for.
     let mut ui = rule(false, TextFieldLabelPosition::cutout());
     let ops = ui.host().display_list().ops.clone();
-    assert!(!ops.iter().any(|op| matches!(op, DrawOp::DrawPath { path, .. }
-            if path.steps().iter().any(|step| matches!(step,
-                compose_ui::PathStep::Combine(compose_ui::PathOperation::Difference)
-                | compose_ui::PathStep::CombineOr(compose_ui::PathOperation::Difference))))));
+    assert!(!cut(&ops));
 }
 
 /// A label above with a supporting text: above, the field, below.
@@ -420,8 +417,9 @@ fn a_label_above_and_a_supporting_text_go_around_the_field() {
     ui.wait_for_idle();
     let (label, field, supporting) =
         (bounds(&mut ui, LABEL), bounds(&mut ui, FIELD), bounds(&mut ui, "supporting"));
-    assert_eq!(supporting.top, LABEL_SIZE + 4.0 + HEIGHT + 4.0);
-    assert_eq!(field.bottom, supporting.bottom);
+    // 10 and its 4 above are less than `MinSupportingTextLineHeight`: centered in that.
+    assert_eq!(supporting.top, LABEL_SIZE + 4.0 + HEIGHT + 1.0 + 4.0);
+    assert_eq!(field.bottom, supporting.bottom + 1.0);
     assert_eq!(label.right, field.right - 4.0, "at the end");
 }
 

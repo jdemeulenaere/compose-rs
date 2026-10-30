@@ -747,8 +747,9 @@ fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
     ui.advance_time_by(std::time::Duration::from_millis(300));
     let outlined = ui.on_node_with_tag("outlined").fetch_semantics_snapshot().bounds;
     let floated = label(&mut ui, "outlined label");
-    // (The field's node is its outline, inside the 8 dp above it for the label.)
-    assert_eq!(floated.top + floated.height() / 2.0, outlined.top, "on the edge");
+    // (The field's node has the 8 dp above the outline for the label, as
+    // `topPaddingForLabelCutout`.)
+    assert_eq!(floated.top + floated.height() / 2.0, outlined.top + 8.0, "on the edge");
     let list = ui.host().display_list();
     let open_path = list.ops.iter().any(|op| match op {
         DrawOp::DrawPath { path, .. } => {

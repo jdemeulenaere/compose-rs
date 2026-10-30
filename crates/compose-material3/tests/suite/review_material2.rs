@@ -206,7 +206,7 @@ fn a_disabled_text_fields_decoration_is_dimmed() {
         }
         _ => None,
     });
-    let expected = scheme.on_surface.with_alpha(0.04);
+    let expected = scheme.surface_container_highest;
     if container != Some(expected) {
         wrong.push(format!("container: {container:?}, Compose {expected:?}"));
     }
