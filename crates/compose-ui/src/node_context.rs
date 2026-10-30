@@ -149,9 +149,13 @@ impl NodeContext<'_> {
         self.node
     }
 
-    /// The size of the layout node it's on, as last measured: what its parent sees.
-    pub fn layout_size(&self) -> crate::IntSize {
-        self.tree.node(self.node).layers.first().map_or(crate::IntSize::ZERO, |layer| layer.size)
+    /// The size at its place in the chain, inside the layout modifiers before it, as last measured:
+    /// what a pointer event's bounds are, as Compose's `onRemeasured` tells a node there.
+    #[doc(hidden)]
+    pub fn measured_size(&self) -> crate::IntSize {
+        let value = self.tree.node(self.node);
+        let layer = self.index.map_or(0, |index| value.layer_of(index));
+        value.layers.get(layer).map_or(crate::IntSize::ZERO, |layer| layer.measured)
     }
 
     /// Whether the node is attached, as `Modifier.Node.isAttached`: its layout node is in the

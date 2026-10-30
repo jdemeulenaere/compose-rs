@@ -33,6 +33,15 @@ pub struct ViewConfiguration {
 }
 
 impl ViewConfiguration {
+    /// How far a pointer of `pointer_type` moves before it's a drag, as Compose's `pointerSlop`: a
+    /// mouse's 0.125 dp against a finger's 18 dp, for it has no tremor to tell from a drag.
+    pub fn pointer_slop(&self, pointer_type: crate::PointerType) -> f32 {
+        match pointer_type {
+            crate::PointerType::Mouse => self.touch_slop * (0.125 / 18.0),
+            _ => self.touch_slop,
+        }
+    }
+
     /// Android's defaults at `density`: a long press at 400 ms, double taps 40 to 300 ms
     /// apart, an 8 dp touch slop, a 2 dp handwriting slop, 48 dp touch targets, flings between
     /// 50 and 8,000 dp a second, a 16 dp handwriting gesture line margin (Android's

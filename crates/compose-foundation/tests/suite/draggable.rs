@@ -81,7 +81,7 @@ fn with_slop(ui: &mut ComposeTestRule, touch_slop: f32) {
     ui.advance_time_by_frame();
 }
 
-// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableTest.kt, draggable_horizontalDrag, draggable_verticalDrag
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/DraggableTest.kt, draggable_horizontalDrag, draggable_verticalDrag, draggable_verticalDrag_newState (its body is draggable_verticalDrag's)
 #[test]
 fn a_drag_along_the_axis_moves_it_and_across_it_does_not() {
     for (orientation, along, across) in [
@@ -257,7 +257,7 @@ fn a_mouse_press_starts_it_at_once_and_its_release_stops_it() {
 fn a_new_state_stops_the_drag() {
     let stopped = Rc::new(Cell::new(0));
     let on_stop = stops(&stopped);
-    let states = [DraggableState::new(|_| {}), DraggableState::new(|_| {})];
+    let states = [draggable_state(|_| {}), draggable_state(|_| {})];
     let state = mutable_state_of(0usize);
     let read = state.handle();
     let mut ui = drag_box(move || {
@@ -426,7 +426,7 @@ fn a_drag_of_a_higher_priority_stops_it_and_a_later_one_works() {
     let (total, add) = counter();
     let stopped = Rc::new(Cell::new(0));
     let on_stop = stops(&stopped);
-    let state = DraggableState::new(add);
+    let state = draggable_state(add);
     let given = state.clone();
     let mut ui = drag_box(move || {
         Modifier.draggable_with(
@@ -1004,7 +1004,7 @@ fn consumed_around(pass: PointerEventPass) {
     let (total, add) = counter();
     let consumed = Rc::new(Cell::new(0.0f32));
     let noted = consumed.clone();
-    let state = DraggableState::new(add);
+    let state = draggable_state(add);
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let noted = noted.clone();
         Box!(

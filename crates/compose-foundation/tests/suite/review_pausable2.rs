@@ -21,11 +21,11 @@ thread_local! {
 }
 
 fn within(millis: u64) -> Instant {
-    Instant::now() + Duration::from_millis(millis)
+    compose_ui::prefetch_now() + Duration::from_millis(millis)
 }
 
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+    compose_ui::prefetch_now() + Duration::from_secs(60)
 }
 
 fn in_tree(ui: &ComposeTestRule, tag: &str) -> bool {
@@ -37,7 +37,7 @@ fn RowPart(row: usize, part: usize) {
     ROW_PARTS.with(|parts| *parts.borrow_mut().entry(row).or_insert(0) += 1);
     let time = ROW_PART_TIME.get();
     if !time.is_zero() {
-        std::thread::sleep(time);
+        compose_ui::PrefetchClock::advance(time);
     }
     Box!(modifier = Modifier.size((25.dp(), 20.dp())).test_tag(format!("part {row}.{part}")));
 }
@@ -71,6 +71,7 @@ impl compose_ui::PrefetchRequest for WriteRequest {
 /// content (the paused composition is for its item only, D597), shown by the next frame.
 #[test]
 fn review2_another_lists_items_composed_in_a_requests_first_pass_show_at_once() {
+    let _clock = compose_ui::PrefetchClock::hold();
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
     ROW_PART_TIME.set(Duration::ZERO);
     use_optimizations(Optimizations::NONE);
@@ -160,6 +161,7 @@ fn requester(row: usize) -> compose_ui::FocusRequester {
 /// does.
 #[test]
 fn review2_a_paused_reused_items_requesters_attach_at_apply() {
+    let _clock = compose_ui::PrefetchClock::hold();
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
     ROW_PART_TIME.set(Duration::ZERO);
     use_optimizations(Optimizations::NONE);
@@ -306,6 +308,7 @@ fn nested_prefetch_after_switch(switch: bool) -> Option<usize> {
 
 #[test]
 fn review2_nested_lists_are_prefetched_after_the_list_gets_another_state() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let same = nested_prefetch_after_switch(false);
     let switched = nested_prefetch_after_switch(true);
     assert!(same.is_some_and(|cells| cells >= 2), "without a switch: {same:?}");
@@ -322,6 +325,7 @@ thread_local! {
 /// came after the update: the old focus stayed until then, and cleared what was set since.
 #[test]
 fn review2_a_paused_reused_active_node_is_reset_before_its_update() {
+    let _clock = compose_ui::PrefetchClock::hold();
     use_optimizations(Optimizations::NONE);
     let key = mutable_state_of(0u32);
     let read = key.handle();

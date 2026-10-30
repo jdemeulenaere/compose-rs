@@ -19,49 +19,84 @@ pub struct DragScope {
 }
 
 impl DragScope {
+    /// A scope calling `on_delta` with each drag, for a state of your own.
+    pub fn new(on_delta: impl Fn(f32) + 'static) -> DragScope {
+        DragScope { on_delta: Rc::new(on_delta) }
+    }
+
     /// Drags by `pixels`, as `dragBy`.
     pub fn drag_by(&self, pixels: f32) {
         (self.on_delta)(pixels)
     }
 }
 
-/// Where a drag's deltas go, as Compose's `DraggableState`. Compose's is an interface for a drag of
-/// your own; nothing needed it here so far, so it's the state `DraggableState(onDelta)` makes.
+/// What a state's `drag` runs.
+pub type DragBlock<'a> = Box<dyn FnOnce(DragScope) -> LocalBoxFuture<'a, ()> + 'a>;
+
+/// Where a drag's deltas go, as Compose's `DraggableState`, an interface for a drag of your own (a
+/// slider's state is one). The state `DraggableState(onDelta)` makes is [`DefaultDraggableState`],
+/// from [`draggable_state`]. `drag` itself is in [`DraggableStateExt`], on every state.
+pub trait DraggableState {
+    /// Runs `block` with this state's scope, as a mutation of `priority`: Compose's `drag`, boxed
+    /// so the trait is object-safe; call [`DraggableStateExt::drag`].
+    fn drag_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: DragBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>>;
+
+    /// Drags by `delta` pixels, outside any `drag`, as `dispatchRawDelta`.
+    fn dispatch_raw_delta(&self, delta: f32);
+}
+
+/// `drag` on every [`DraggableState`].
+pub trait DraggableStateExt: DraggableState {
+    /// Takes the drag for `block`, as `drag`: a drag going on of the same or a lower priority is
+    /// interrupted, one of a higher priority makes this one return [`MutationInterrupted`].
+    fn drag<'a, F, Fut>(
+        &'a self,
+        priority: MutatePriority,
+        block: F,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>>
+    where
+        F: FnOnce(DragScope) -> Fut + 'a,
+        Fut: std::future::Future<Output = ()> + 'a,
+    {
+        self.drag_boxed(priority, Box::new(move |scope| Box::pin(block(scope))))
+    }
+}
+
+impl<T: DraggableState + ?Sized> DraggableStateExt for T {}
+
+/// The state [`draggable_state`] makes, as `DraggableState(onDelta)`.
 #[derive(Clone)]
-pub struct DraggableState {
+pub struct DefaultDraggableState {
     on_delta: Rc<dyn Fn(f32)>,
     mutex: Rc<MutatorMutex>,
 }
 
-impl DraggableState {
-    /// A state calling `on_delta` with each delta (pixels along the axis), as
-    /// `DraggableState(onDelta)`.
-    pub fn new(on_delta: impl Fn(f32) + 'static) -> DraggableState {
-        DraggableState { on_delta: Rc::new(on_delta), mutex: Rc::default() }
-    }
+/// A state calling `on_delta` with each delta (pixels along the axis), as
+/// `DraggableState(onDelta)`.
+pub fn draggable_state(on_delta: impl Fn(f32) + 'static) -> DefaultDraggableState {
+    DefaultDraggableState { on_delta: Rc::new(on_delta), mutex: Rc::default() }
+}
 
-    /// Takes the drag for `block`, as `drag`: a drag going on of the same or a lower priority is
-    /// interrupted, one of a higher priority makes this one return [`MutationInterrupted`].
-    pub async fn drag<F, Fut>(
-        &self,
+impl DraggableState for DefaultDraggableState {
+    fn drag_boxed<'a>(
+        &'a self,
         priority: MutatePriority,
-        block: F,
-    ) -> Result<(), MutationInterrupted>
-    where
-        F: FnOnce(DragScope) -> Fut,
-        Fut: std::future::Future<Output = ()>,
-    {
+        block: DragBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
         let scope = DragScope { on_delta: self.on_delta.clone() };
-        self.mutex.mutate_with(scope, priority, block).await
+        Box::pin(self.mutex.mutate_with(scope, priority, block))
     }
 
-    /// Drags by `delta` pixels, outside any `drag`, as `dispatchRawDelta`.
-    pub fn dispatch_raw_delta(&self, delta: f32) {
+    fn dispatch_raw_delta(&self, delta: f32) {
         (self.on_delta)(delta)
     }
 }
 
-impl ComposeArg for DraggableState {
+impl ComposeArg for DefaultDraggableState {
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.on_delta, &other.on_delta)
     }
@@ -70,14 +105,14 @@ impl ComposeArg for DraggableState {
 /// A draggable state remembered at its call site, as `rememberDraggableState(onDelta)`: the
 /// newest `on_delta` is called.
 #[composable(non_restartable)]
-pub fn remember_draggable_state(on_delta: impl Fn(f32) + 'static) -> DraggableState {
+pub fn remember_draggable_state(on_delta: impl Fn(f32) + 'static) -> DefaultDraggableState {
     let latest = compose_runtime::remember(|| {
         Rc::new(RefCell::new(None::<compose_runtime::Callback<dyn Fn(f32)>>))
     });
     *latest.borrow_mut() = Some(on_delta);
     compose_runtime::remember(move || {
         let latest = latest.clone();
-        DraggableState::new(move |delta| {
+        draggable_state(move |delta| {
             let on_delta = latest.borrow().clone();
             if let Some(on_delta) = on_delta {
                 on_delta(delta);
@@ -86,8 +121,10 @@ pub fn remember_draggable_state(on_delta: impl Fn(f32) + 'static) -> DraggableSt
     })
 }
 
-/// Called when a drag starts, with where it started and the node's scope: what takes time goes in a
-/// task launched there, as Compose's suspending `onDragStarted`.
+/// Called when a drag starts, with where it started and the node's scope, before the first delta,
+/// as Compose's suspending `onDragStarted`, which it starts undispatched. What takes time goes in a
+/// task launched in the scope, whose body runs later, after the first delta: Compose's own body
+/// runs up to its first suspension before it.
 pub type OnDragStarted = Rc<dyn Fn(CoroutineScope, Offset)>;
 /// Called when a drag stops, with its velocity along the axis in pixels per second (0 if it's
 /// cancelled) and the node's scope.
@@ -133,9 +170,9 @@ impl Default for DraggableOptions {
 pub trait DraggableModifier {
     /// With what's most often given.
     #[allow(clippy::too_many_arguments)]
-    fn draggable(
+    fn draggable<S: DraggableState + ComposeArg + Clone + 'static>(
         self,
-        state: DraggableState,
+        state: S,
         orientation: Orientation,
         enabled: bool,
         reverse_direction: bool,
@@ -144,22 +181,26 @@ pub trait DraggableModifier {
     ) -> Modifier;
 
     /// With all of Compose's parameters.
-    fn draggable_with(
+    fn draggable_with<S: DraggableState + ComposeArg + Clone + 'static>(
         self,
-        state: DraggableState,
+        state: S,
         orientation: Orientation,
         options: DraggableOptions,
     ) -> Modifier;
 
     /// Drags any way are told to `state` as deltas, as `Modifier.draggable2D`; the slop is a
     /// distance.
-    fn draggable_2d(self, state: Draggable2DState, options: Draggable2DOptions) -> Modifier;
+    fn draggable_2d<S: Draggable2DState + ComposeArg + Clone + 'static>(
+        self,
+        state: S,
+        options: Draggable2DOptions,
+    ) -> Modifier;
 }
 
 impl DraggableModifier for Modifier {
-    fn draggable(
+    fn draggable<S: DraggableState + ComposeArg + Clone + 'static>(
         self,
-        state: DraggableState,
+        state: S,
         orientation: Orientation,
         enabled: bool,
         reverse_direction: bool,
@@ -179,17 +220,23 @@ impl DraggableModifier for Modifier {
         )
     }
 
-    fn draggable_with(
+    fn draggable_with<S: DraggableState + ComposeArg + Clone + 'static>(
         self,
-        state: DraggableState,
+        state: S,
         orientation: Orientation,
         options: DraggableOptions,
     ) -> Modifier {
-        self.then_custom(DraggableElement { state, orientation, options })
+        let dyn_state: Rc<dyn DraggableState> = Rc::new(state.clone());
+        self.then_custom(DraggableElement { state, dyn_state, orientation, options })
     }
 
-    fn draggable_2d(self, state: Draggable2DState, options: Draggable2DOptions) -> Modifier {
-        self.then_custom(Draggable2DElement { state, options })
+    fn draggable_2d<S: Draggable2DState + ComposeArg + Clone + 'static>(
+        self,
+        state: S,
+        options: Draggable2DOptions,
+    ) -> Modifier {
+        let dyn_state: Rc<dyn Draggable2DState> = Rc::new(state.clone());
+        self.then_custom(Draggable2DElement { state, dyn_state, options })
     }
 }
 
@@ -214,7 +261,9 @@ fn same_source(
 
 /// What a draggable's drag reads: its newest inputs.
 struct DraggableInputs {
-    state: DraggableState,
+    /// The state as given, to compare with the next one.
+    state_as_given: Box<dyn std::any::Any>,
+    state: Rc<dyn DraggableState>,
     orientation: Orientation,
     start_drag_immediately: bool,
     on_drag_started: Option<OnDragStarted>,
@@ -278,16 +327,18 @@ impl DragBehavior for DraggableBehavior {
     }
 }
 
-struct DraggableElement {
-    state: DraggableState,
+struct DraggableElement<S> {
+    state: S,
+    dyn_state: Rc<dyn DraggableState>,
     orientation: Orientation,
     options: DraggableOptions,
 }
 
-impl DraggableElement {
+impl<S: Clone + 'static> DraggableElement<S> {
     fn inputs(&self) -> DraggableInputs {
         DraggableInputs {
-            state: self.state.clone(),
+            state_as_given: Box::new(self.state.clone()),
+            state: self.dyn_state.clone(),
             orientation: self.orientation,
             start_drag_immediately: self.options.start_drag_immediately,
             on_drag_started: self.options.on_drag_started.clone(),
@@ -297,7 +348,7 @@ impl DraggableElement {
     }
 }
 
-impl ModifierNodeElement for DraggableElement {
+impl<S: DraggableState + ComposeArg + Clone + 'static> ModifierNodeElement for DraggableElement<S> {
     type Node = DragGestureNode;
     fn create(&self) -> Self::Node {
         DragGestureNode::new(
@@ -313,7 +364,7 @@ impl ModifierNodeElement for DraggableElement {
             behavior.as_any().downcast_ref::<DraggableBehavior>().expect("its element's");
         let reset = {
             let inputs = behavior.0.borrow();
-            !inputs.state.same(&self.state)
+            !inputs.state_as_given.downcast_ref::<S>().is_some_and(|old| old.same(&self.state))
                 || inputs.reverse_direction != self.options.reverse_direction
         };
         *behavior.0.borrow_mut() = self.inputs();
@@ -346,46 +397,80 @@ pub struct Drag2DScope {
 }
 
 impl Drag2DScope {
+    /// A scope calling `on_delta` with each drag, for a state of your own.
+    pub fn new(on_delta: impl Fn(Offset) + 'static) -> Drag2DScope {
+        Drag2DScope { on_delta: Rc::new(on_delta) }
+    }
+
     /// Drags by `pixels`, as `dragBy`.
     pub fn drag_by(&self, pixels: Offset) {
         (self.on_delta)(pixels)
     }
 }
 
-/// Where a 2D drag's deltas go, as `Draggable2DState`.
+/// What a 2D state's `drag` runs.
+pub type Drag2DBlock<'a> = Box<dyn FnOnce(Drag2DScope) -> LocalBoxFuture<'a, ()> + 'a>;
+
+/// Where a 2D drag's deltas go, as `Draggable2DState`, as [`DraggableState`] is for one axis.
+pub trait Draggable2DState {
+    /// Runs `block` with this state's scope, as a mutation of `priority`; call
+    /// [`Draggable2DStateExt::drag`].
+    fn drag_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: Drag2DBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>>;
+
+    /// Drags by `delta`, outside any `drag`, as `dispatchRawDelta`.
+    fn dispatch_raw_delta(&self, delta: Offset);
+}
+
+/// `drag` on every [`Draggable2DState`].
+pub trait Draggable2DStateExt: Draggable2DState {
+    /// Takes the drag for `block`, as `drag`.
+    fn drag<'a, F, Fut>(
+        &'a self,
+        priority: MutatePriority,
+        block: F,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>>
+    where
+        F: FnOnce(Drag2DScope) -> Fut + 'a,
+        Fut: std::future::Future<Output = ()> + 'a,
+    {
+        self.drag_boxed(priority, Box::new(move |scope| Box::pin(block(scope))))
+    }
+}
+
+impl<T: Draggable2DState + ?Sized> Draggable2DStateExt for T {}
+
+/// The state [`draggable_2d_state`] makes, as `Draggable2DState(onDelta)`.
 #[derive(Clone)]
-pub struct Draggable2DState {
+pub struct DefaultDraggable2DState {
     on_delta: Rc<dyn Fn(Offset)>,
     mutex: Rc<MutatorMutex>,
 }
 
-impl Draggable2DState {
-    /// A state calling `on_delta` with each delta, as `Draggable2DState(onDelta)`.
-    pub fn new(on_delta: impl Fn(Offset) + 'static) -> Draggable2DState {
-        Draggable2DState { on_delta: Rc::new(on_delta), mutex: Rc::default() }
-    }
+/// A state calling `on_delta` with each delta, as `Draggable2DState(onDelta)`.
+pub fn draggable_2d_state(on_delta: impl Fn(Offset) + 'static) -> DefaultDraggable2DState {
+    DefaultDraggable2DState { on_delta: Rc::new(on_delta), mutex: Rc::default() }
+}
 
-    /// Takes the drag for `block`, as `drag`.
-    pub async fn drag<F, Fut>(
-        &self,
+impl Draggable2DState for DefaultDraggable2DState {
+    fn drag_boxed<'a>(
+        &'a self,
         priority: MutatePriority,
-        block: F,
-    ) -> Result<(), MutationInterrupted>
-    where
-        F: FnOnce(Drag2DScope) -> Fut,
-        Fut: std::future::Future<Output = ()>,
-    {
+        block: Drag2DBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
         let scope = Drag2DScope { on_delta: self.on_delta.clone() };
-        self.mutex.mutate_with(scope, priority, block).await
+        Box::pin(self.mutex.mutate_with(scope, priority, block))
     }
 
-    /// Drags by `delta`, outside any `drag`, as `dispatchRawDelta`.
-    pub fn dispatch_raw_delta(&self, delta: Offset) {
+    fn dispatch_raw_delta(&self, delta: Offset) {
         (self.on_delta)(delta)
     }
 }
 
-impl ComposeArg for Draggable2DState {
+impl ComposeArg for DefaultDraggable2DState {
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.on_delta, &other.on_delta)
     }
@@ -394,14 +479,14 @@ impl ComposeArg for Draggable2DState {
 /// A 2D draggable state remembered at its call site, as `rememberDraggable2DState(onDelta)`: the
 /// newest `on_delta` is called.
 #[composable(non_restartable)]
-pub fn remember_draggable_2d_state(on_delta: impl Fn(Offset) + 'static) -> Draggable2DState {
+pub fn remember_draggable_2d_state(on_delta: impl Fn(Offset) + 'static) -> DefaultDraggable2DState {
     let latest = compose_runtime::remember(|| {
         Rc::new(RefCell::new(None::<compose_runtime::Callback<dyn Fn(Offset)>>))
     });
     *latest.borrow_mut() = Some(on_delta);
     compose_runtime::remember(move || {
         let latest = latest.clone();
-        Draggable2DState::new(move |delta| {
+        draggable_2d_state(move |delta| {
             let on_delta = latest.borrow().clone();
             if let Some(on_delta) = on_delta {
                 on_delta(delta);
@@ -438,7 +523,9 @@ impl Default for Draggable2DOptions {
 }
 
 struct Draggable2DInputs {
-    state: Draggable2DState,
+    /// The state as given, to compare with the next one.
+    state_as_given: Box<dyn std::any::Any>,
+    state: Rc<dyn Draggable2DState>,
     start_drag_immediately: bool,
     on_drag_started: Option<OnDragStarted>,
     on_drag_stopped: Option<OnDrag2DStopped>,
@@ -493,15 +580,17 @@ impl DragBehavior for Draggable2DBehavior {
     }
 }
 
-struct Draggable2DElement {
-    state: Draggable2DState,
+struct Draggable2DElement<S> {
+    state: S,
+    dyn_state: Rc<dyn Draggable2DState>,
     options: Draggable2DOptions,
 }
 
-impl Draggable2DElement {
+impl<S: Clone + 'static> Draggable2DElement<S> {
     fn inputs(&self) -> Draggable2DInputs {
         Draggable2DInputs {
-            state: self.state.clone(),
+            state_as_given: Box::new(self.state.clone()),
+            state: self.dyn_state.clone(),
             start_drag_immediately: self.options.start_drag_immediately,
             on_drag_started: self.options.on_drag_started.clone(),
             on_drag_stopped: self.options.on_drag_stopped.clone(),
@@ -510,7 +599,9 @@ impl Draggable2DElement {
     }
 }
 
-impl ModifierNodeElement for Draggable2DElement {
+impl<S: Draggable2DState + ComposeArg + Clone + 'static> ModifierNodeElement
+    for Draggable2DElement<S>
+{
     type Node = DragGestureNode;
     fn create(&self) -> Self::Node {
         DragGestureNode::new(
@@ -526,7 +617,7 @@ impl ModifierNodeElement for Draggable2DElement {
             behavior.as_any().downcast_ref::<Draggable2DBehavior>().expect("its element's");
         let reset = {
             let inputs = behavior.0.borrow();
-            !inputs.state.same(&self.state)
+            !inputs.state_as_given.downcast_ref::<S>().is_some_and(|old| old.same(&self.state))
                 || inputs.reverse_direction != self.options.reverse_direction
         };
         *behavior.0.borrow_mut() = self.inputs();

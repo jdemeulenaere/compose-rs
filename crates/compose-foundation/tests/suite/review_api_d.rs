@@ -247,6 +247,7 @@ fn a_sticky_header_of_a_reversed_list_sticks_to_the_bottom() {
 /// with a new range, and the header (outside it) must stay composed and drawn.
 #[test]
 fn a_sticky_header_survives_prefetch_between_frames() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
@@ -269,7 +270,7 @@ fn a_sticky_header_survives_prefetch_between_frames() {
         ui.host()
             .send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 45.0)));
         ui.wait_for_idle();
-        ui.host().prefetch(std::time::Instant::now() + Duration::from_millis(50));
+        ui.host().prefetch(compose_ui::prefetch_now() + Duration::from_millis(50));
         ui.wait_for_idle();
         assert_eq!(bounds(&mut ui, "header").top, 0.0);
     }

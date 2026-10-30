@@ -661,6 +661,21 @@ impl TextFieldNode {
         self.offset_at(Offset::new(x, y), context).unwrap_or(self.cursor)
     }
 
+    /// The offset a page up or down, the field's height away, as `jumpByPagesOffset`: on the line
+    /// most of the cursor would be on there.
+    fn by_page(&mut self, down: bool, context: &mut EventContext<'_>) -> usize {
+        let Some(paragraph) = self.paragraph else {
+            return if down { self.text.len() } else { 0 };
+        };
+        let rect = context.text_measurer().cursor_rect(paragraph, self.shown(self.cursor));
+        let height = context.text_measurer().metrics(paragraph).size.height as f32;
+        let page = context.measured_size().height as f32;
+        let middle = (rect.top + rect.bottom) / 2.0 + if down { page } else { -page };
+        // Past the text, its first or last line, where the cursor is across.
+        let y = middle.clamp(0.0, (height - 0.5).max(0.0));
+        self.offset_at(Offset::new(rect.left, y), context).unwrap_or(self.cursor)
+    }
+
     fn insert(&mut self, inserted: &str, typing: bool, context: &mut EventContext<'_>) {
         let inserted: String = if self.single_line {
             inserted.chars().filter(|c| *c != '\n').collect()
@@ -1477,6 +1492,12 @@ impl KeyInputModifierNode for TextFieldNode {
                 } else {
                     self.next_boundary(self.cursor)
                 };
+                self.move_cursor(cursor, extend, context);
+                true
+            }
+            // Taken even with nothing to move to, as Compose's: not left to a scroll around.
+            Key::PageUp | Key::PageDown => {
+                let cursor = self.by_page(key == Key::PageDown, context);
                 self.move_cursor(cursor, extend, context);
                 true
             }

@@ -330,7 +330,7 @@ impl ModifierNodeElement for ScrollElement {
             enabled: self.enabled,
             fling_behavior: self.fling_behavior.clone(),
             reverse_scrolling: self.reverse_scrolling,
-            drag: DragScroller::default(),
+            drag: DragScroller::along(self.vertical),
             laid_out: 0,
             rtl: false,
         }
@@ -349,6 +349,7 @@ impl ModifierNodeElement for ScrollElement {
         }
         node.state = self.state;
         node.vertical = self.vertical;
+        node.drag.set_vertical(self.vertical);
         node.enabled = self.enabled;
         node.fling_behavior = self.fling_behavior.clone();
         node.reverse_scrolling = self.reverse_scrolling;
@@ -724,7 +725,7 @@ impl PointerInputModifierNode for ScrollNode {
     /// It waits for a touch's drag past a press, so a clickable inside delays its press (not a
     /// mouse's, as Compose's scrollables, which a mouse doesn't drag).
     fn waits_for_gesture(&self, press: &PointerEvent) -> bool {
-        press.pointer_type != compose_ui::PointerType::Mouse
+        self.enabled && press.pointer_type != compose_ui::PointerType::Mouse
     }
 
     fn on_pointer_event(
@@ -994,7 +995,7 @@ pub(crate) struct DragScroller {
     dragged: Option<(MutableInteractionSource, DragStart)>,
     /// The nested-scroll connections around, as the last press or wheel turn found them.
     chain: NestedScrollChain,
-    /// The axis, for a cancel's fling dispatch.
+    /// The axis, given from the node's update, for what its targets scroll.
     vertical: bool,
 }
 
@@ -1053,6 +1054,16 @@ impl NestedScrollConnection for ScrollableConnection {
 }
 
 impl DragScroller {
+    /// A scroller along an axis: what its flings' and keys' targets read before any event.
+    pub(crate) fn along(vertical: bool) -> DragScroller {
+        DragScroller { vertical, ..DragScroller::default() }
+    }
+
+    /// Its axis changed.
+    pub(crate) fn set_vertical(&mut self, vertical: bool) {
+        self.vertical = vertical;
+    }
+
     /// Where its detection is, for the gestures inside.
     pub(crate) fn gesture_state(&self) -> GestureState {
         match &self.drag {
@@ -1080,7 +1091,7 @@ impl DragScroller {
         {
             return false;
         }
-        let size = context.layout_size();
+        let size = context.measured_size();
         let viewport = if vertical { size.height } else { size.width } as f32;
         // The pointer's way is the content's other: Page Down goes as a drag up.
         let delta = if page_up { -viewport } else { viewport };
@@ -1113,7 +1124,6 @@ impl DragScroller {
         flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
-        self.vertical = vertical;
         // The connections around: found on the way in, as a gesture or a wheel turn starts;
         // then this scrollable is one for those inside it.
         if pass == PointerEventPass::Initial
@@ -1217,7 +1227,7 @@ impl DragScroller {
                 // How far it is from the press (a tremor going back and forth isn't a drag).
                 let moved = position - drag.start;
                 let along = if vertical { moved.y } else { moved.x };
-                if along.abs() >= slop {
+                if along != 0.0 && along.abs() >= slop {
                     // At an angle that isn't its way, while it's the way of a gesture waiting
                     // around: that one goes first, as `DragGestureNode`.
                     let angle = moved.y.abs().atan2(moved.x.abs()).to_degrees();

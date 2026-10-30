@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_animation::{Animatable, AnimationSpec, tween};
-use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{
     Box, Column, ColumnScope, Row, Spacer, WindowInsets, WindowInsetsModifiers, WindowInsetsSides,
 };
@@ -362,7 +362,7 @@ pub fn ModalNavigationDrawer(
     let drag = {
         let dragged = drawer_state;
         compose_runtime::remember_keyed((drawer_state, density), move || {
-            DraggableState::new(move |delta| dragged.drag_by(delta, dragged.width(density)))
+            draggable_state(move |delta| dragged.drag_by(delta, dragged.width(density)))
         })
     };
     let threshold = density.to_px(VELOCITY_THRESHOLD);

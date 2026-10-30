@@ -35,11 +35,13 @@ pub use compose_ui::{
 pub use compose_ui::{BorderRenderer, BorderStroke};
 pub use dark_theme::is_system_in_dark_theme;
 pub use gestures::{
-    DefaultFlingBehavior, DefaultScrollableState, Drag2DScope, DragScope, Draggable2DOptions,
-    Draggable2DState, DraggableModifier, DraggableOptions, DraggableState, FlingBehavior,
+    DefaultDraggable2DState, DefaultDraggableState, DefaultFlingBehavior, DefaultScrollableState,
+    Drag2DScope, DragScope, Draggable2DOptions, Draggable2DState, Draggable2DStateExt,
+    DraggableModifier, DraggableOptions, DraggableState, DraggableStateExt, FlingBehavior,
     OnDrag2DStopped, OnDragStarted, OnDragStopped, Orientation, ScrollScope, ScrollableDefaults,
-    ScrollableModifier, ScrollableState, ScrollableStateExt, remember_draggable_2d_state,
-    remember_draggable_state, remember_scrollable_state, scrollable_state,
+    ScrollableModifier, ScrollableState, ScrollableStateExt, draggable_2d_state, draggable_state,
+    remember_draggable_2d_state, remember_draggable_state, remember_scrollable_state,
+    scrollable_state,
 };
 pub use image::{ContentScale, Image};
 pub use lazy::{

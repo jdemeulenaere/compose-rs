@@ -27,6 +27,8 @@ use crate::unit::{Density, IntSize, Offset};
 pub struct PointerInputChange {
     pub kind: PointerEventType,
     pub id: PointerId,
+    /// What the pointer is, as `type`.
+    pub pointer_type: crate::PointerType,
     pub position: Offset,
     /// Where the pointer was at its previous event, in the node as it's laid out now (so the
     /// node's own moves in between don't count), as `previousPosition`.
@@ -324,7 +326,17 @@ impl PointerInputScope {
         down: &PointerInputChange,
         axis: Option<Axis>,
     ) -> Option<(PointerInputChange, Offset)> {
-        let slop = self.touch_slop();
+        self.await_slop_or_cancellation(down, axis, self.touch_slop()).await
+    }
+
+    /// The same past `slop`, which Compose's detectors take from the press's pointer type
+    /// (`pointerSlop`) and its public `awaitTouchSlopOrCancellation` from a finger's.
+    async fn await_slop_or_cancellation(
+        &self,
+        down: &PointerInputChange,
+        axis: Option<Axis>,
+        slop: f32,
+    ) -> Option<(PointerInputChange, Offset)> {
         loop {
             let change = self.await_pointer_event(PointerEventPass::Main).await;
             if change.id != down.id {
@@ -340,7 +352,7 @@ impl PointerInputScope {
                         Some(Axis::X) => moved.x.abs(),
                         Some(Axis::Y) => moved.y.abs(),
                     };
-                    if distance > slop {
+                    if distance > 0.0 && distance >= slop {
                         change.consume();
                         // What's past the slop, in the direction moved.
                         let over = match axis {
@@ -371,7 +383,8 @@ impl PointerInputScope {
     pub async fn detect_drag_gestures(&self, gestures: DragGestures) {
         loop {
             let down = self.await_first_down(false).await;
-            let Some((start, over)) = self.await_touch_slop_or_cancellation(&down, None).await
+            let slop = self.view_configuration().pointer_slop(down.pointer_type);
+            let Some((start, over)) = self.await_slop_or_cancellation(&down, None, slop).await
             else {
                 continue;
             };
@@ -530,6 +543,7 @@ impl Future for AwaitPointerEvent {
                 Poll::Ready(PointerInputChange {
                     kind: event.kind,
                     id: event.pointer,
+                    pointer_type: event.pointer_type,
                     position: event.position,
                     previous_position: delivery.previous_position,
                     pressed: event.pressed,

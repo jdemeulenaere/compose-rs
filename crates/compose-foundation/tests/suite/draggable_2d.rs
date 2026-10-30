@@ -174,7 +174,7 @@ fn a_cancelled_touch_stops_the_drag() {
 fn a_new_state_stops_the_drag() {
     let stopped = Rc::new(Cell::new(0));
     let on_stop = stops(&stopped);
-    let states = [Draggable2DState::new(|_| {}), Draggable2DState::new(|_| {})];
+    let states = [draggable_2d_state(|_| {}), draggable_2d_state(|_| {})];
     let state = mutable_state_of(0usize);
     let read = state.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
@@ -225,7 +225,7 @@ fn a_drag_of_a_higher_priority_stops_it_and_a_later_one_works() {
     let (total, add) = counter();
     let stopped = Rc::new(Cell::new(0));
     let on_stop = stops(&stopped);
-    let state = Draggable2DState::new(add);
+    let state = draggable_2d_state(add);
     let given = state.clone();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let options = Draggable2DOptions {
@@ -388,4 +388,180 @@ fn reversed_the_velocity_is_negated() {
     });
     ui.wait_for_idle();
     assert!((velocity.get().x + 500.0).abs() < 1.0, "{:?}", velocity.get());
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_immediateStart_callsStopWithoutSlop
+#[test]
+fn a_mouse_press_starts_it_at_once_and_its_release_stops_it() {
+    let (started, stopped) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let told = started.clone();
+    let on_start: Option<OnDragStarted> = Some(Rc::new(move |_, _| told.set(told.get() + 1)));
+    let on_stop = stops(&stopped);
+    let mut ui = drag_box(
+        |_| {},
+        move || Draggable2DOptions {
+            start_drag_immediately: true,
+            on_drag_started: on_start.clone(),
+            on_drag_stopped: on_stop.clone(),
+            ..Draggable2DOptions::default()
+        },
+    );
+    ui.on_root().perform_mouse_input(|mouse| {
+        mouse.move_to(CENTER);
+        mouse.press(MouseButton::Primary);
+    });
+    ui.wait_for_idle();
+    assert_eq!(started.get(), 1);
+    ui.on_root().perform_mouse_input(|mouse| mouse.release(MouseButton::Primary));
+    ui.wait_for_idle();
+    assert_eq!(stopped.get(), 1);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_updates_startDragImmediately
+#[test]
+fn starting_immediately_can_change() {
+    let (total, add) = counter();
+    let immediately = mutable_state_of(false);
+    let read = immediately.handle();
+    let mut ui = drag_box(add, move || Draggable2DOptions {
+        start_drag_immediately: read.get(),
+        ..Draggable2DOptions::default()
+    });
+    let half_a_slop = ViewConfiguration::default().touch_slop / 2.0;
+    let move_a_bit = |ui: &mut ComposeTestRule| {
+        ui.on_root().perform_touch_input(|touch| {
+            touch.down(CENTER);
+            touch.move_by(Offset::new(half_a_slop, 0.0));
+            touch.up();
+        });
+        ui.wait_for_idle();
+    };
+    move_a_bit(&mut ui);
+    assert_eq!(total.get(), Offset::ZERO);
+    immediately.set(true);
+    ui.wait_for_idle();
+    move_a_bit(&mut ui);
+    assert_eq!(total.get(), Offset::new(half_a_slop, 0.0));
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_updates_onDragStarted
+#[test]
+fn the_newest_start_callback_is_called() {
+    let (first, second) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (told_first, told_second) = (first.clone(), second.clone());
+    let on_first: Option<OnDragStarted> =
+        Some(Rc::new(move |_, _| told_first.set(told_first.get() + 1)));
+    let on_second: Option<OnDragStarted> =
+        Some(Rc::new(move |_, _| told_second.set(told_second.get() + 1)));
+    let callback = mutable_state_of(0usize);
+    let read = callback.handle();
+    let mut ui = drag_box(
+        |_| {},
+        move || Draggable2DOptions {
+            on_drag_started: if read.get() == 0 { on_first.clone() } else { on_second.clone() },
+            ..Draggable2DOptions::default()
+        },
+    );
+    let drag = |ui: &mut ComposeTestRule| {
+        down_and_move(ui, Offset::new(100.0, 100.0));
+        ui.on_root().perform_touch_input(|touch| touch.up());
+        ui.wait_for_idle();
+    };
+    drag(&mut ui);
+    assert_eq!((first.get(), second.get()), (1, 0));
+    callback.set(1);
+    ui.wait_for_idle();
+    drag(&mut ui);
+    assert_eq!((first.get(), second.get()), (1, 1));
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_updates_onDragStopped
+#[test]
+fn the_newest_stop_callback_is_called_even_for_a_drag_going_on() {
+    let (first, second) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (on_first, on_second) = (stops(&first), stops(&second));
+    let callback = mutable_state_of(0usize);
+    let read = callback.handle();
+    let mut ui = drag_box(
+        |_| {},
+        move || Draggable2DOptions {
+            on_drag_stopped: if read.get() == 0 { on_first.clone() } else { on_second.clone() },
+            ..Draggable2DOptions::default()
+        },
+    );
+    down_and_move(&mut ui, Offset::new(100.0, 100.0));
+    callback.set(1);
+    ui.wait_for_idle();
+    ui.on_root().perform_touch_input(|touch| touch.up());
+    ui.wait_for_idle();
+    assert_eq!((first.get(), second.get()), (0, 1));
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_interactionSource_resetWhenDisposed
+#[test]
+fn a_drag_cancels_on_the_source_when_disposed() {
+    let source = MutableInteractionSource::new();
+    let recorded = record(source.as_source());
+    let shown = mutable_state_of(true);
+    let read = shown.handle();
+    let given = source.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        if read.get() {
+            let state = remember_draggable_2d_state!(|_| {});
+            Box!(
+                modifier = Modifier.size(100.dp()).draggable_2d(
+                    state,
+                    Draggable2DOptions {
+                        interaction_source: Some(given.clone()),
+                        ..Draggable2DOptions::default()
+                    }
+                )
+            );
+        }
+    });
+    down_and_move(&mut ui, Offset::new(50.0, 50.0));
+    assert_eq!(kinds(&recorded), ["Start"]);
+    shown.set(false);
+    ui.wait_for_idle();
+    assert_eq!(kinds(&recorded), ["Start", "DragCancel"]);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_cancelMidDown_shouldContinueWithNextDown
+#[test]
+fn a_touch_cancelled_at_its_press_leaves_the_next_to_drag() {
+    let (total, add) = counter();
+    let mut ui = drag_box(add, Draggable2DOptions::default);
+    ui.on_root().perform_touch_input(|touch| {
+        touch.down(CENTER);
+        touch.cancel();
+    });
+    ui.wait_for_idle();
+    assert_eq!(total.get(), Offset::ZERO);
+    down_and_move(&mut ui, Offset::new(100.0, 100.0));
+    assert!(total.get().x > 0.0);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Draggable2DTest.kt, draggable2D_noMomentumDragging_onDragStopped_shouldGenerateZeroVelocity
+#[test]
+fn a_pointer_that_stopped_before_its_release_has_no_velocity() {
+    let velocity = Rc::new(Cell::new(Velocity::new(1.0, 1.0)));
+    let told = velocity.clone();
+    let on_stop: Option<OnDrag2DStopped> = Some(Rc::new(move |_, at| told.set(at)));
+    let mut ui = drag_box(
+        |_| {},
+        move || Draggable2DOptions {
+            on_drag_stopped: on_stop.clone(),
+            ..Draggable2DOptions::default()
+        },
+    );
+    ui.on_root().perform_touch_input(|touch| {
+        touch.down(CENTER);
+        for _ in 0..30 {
+            touch.move_by(Offset::new(5.0, -10.0));
+        }
+        touch.advance_event_time(3000);
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(velocity.get(), Velocity::ZERO);
 }

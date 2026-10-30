@@ -5,7 +5,7 @@ use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
 use compose_animation::AnimationSpec;
-use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{Arrangement, Row, RowScope};
 use compose_runtime::{ComposeArg, composable, remember_coroutine_scope};
 use compose_ui::{
@@ -261,7 +261,7 @@ pub fn SwipeToDismissBox(
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
     let drag = {
         compose_runtime::remember_keyed(state, move || {
-            DraggableState::new(move |delta| {
+            draggable_state(move |delta| {
                 if let Some(inner) = state.inner() {
                     inner.anchored.drag_by(delta);
                 }

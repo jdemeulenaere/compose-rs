@@ -319,9 +319,9 @@ fn a_press_shows_until_its_let_go_or_it_leaves_the_handle() {
 /// consumed change: nothing here says it's dragged, so it's back at rest with the finger down.
 #[test]
 fn a_drag_taking_the_gesture_ends_the_press() {
-    use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+    use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
     let mut ui = handle_rule(move || {
-        let drag = remember(|| DraggableState::new(|_| {}));
+        let drag = remember(|| draggable_state(|_| {}));
         VerticalDragHandle!(
             modifier = Modifier.test_tag(TAG).draggable(
                 drag,
@@ -438,11 +438,11 @@ fn a_press_a_parent_takes_on_the_initial_pass_doesnt_show() {
 #[test]
 fn a_draggable_given_the_handles_source_shows_dragged() {
     use compose_foundation::gestures::{
-        DraggableModifier, DraggableOptions, DraggableState, Orientation,
+        DraggableModifier, DraggableOptions, Orientation, draggable_state,
     };
     use compose_ui::MutableInteractionSource;
     let mut ui = handle_rule(move || {
-        let drag = remember(|| DraggableState::new(|_| {}));
+        let drag = remember(|| draggable_state(|_| {}));
         let source = remember(MutableInteractionSource::new);
         VerticalDragHandle!(
             modifier = Modifier.test_tag(TAG).draggable_with(

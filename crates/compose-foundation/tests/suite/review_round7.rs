@@ -285,10 +285,10 @@ fn the_first_drag_amount_excludes_the_touch_slop() {
             })
         );
     });
-    press(&mut ui, 10.0, 10.0);
-    drag_to(&mut ui, 30.0, 10.0);
-    drag_to(&mut ui, 40.0, 10.0);
-    release(&mut ui, 40.0, 10.0);
+    send(&mut ui, finger(PointerEvent::press(Offset::new(10.0, 10.0)), 1));
+    send(&mut ui, finger(PointerEvent::moved(Offset::new(30.0, 10.0), true), 1));
+    send(&mut ui, finger(PointerEvent::moved(Offset::new(40.0, 10.0), true), 1));
+    send(&mut ui, finger(PointerEvent::release(Offset::new(40.0, 10.0)), 1));
     assert_eq!(*log.borrow(), vec!["drag 12", "drag 10"]);
 }
 

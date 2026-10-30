@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_animation::{AnimationSpec, FAST_OUT_SLOW_IN_EASING, Spring};
-use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{
     Box, Column, ColumnScope, WindowInsets, WindowInsetsModifiers, WindowInsetsProvider,
     WindowInsetsSides,
@@ -916,7 +916,7 @@ fn sheet_parts(
     let drag = {
         let state = sheet_state;
         compose_runtime::remember_keyed(sheet_state, move || {
-            DraggableState::new(move |delta| {
+            draggable_state(move |delta| {
                 if let Some(inner) = state.inner() {
                     inner.anchored.drag_by(delta);
                 }

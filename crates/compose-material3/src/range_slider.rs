@@ -989,7 +989,7 @@ impl PointerInputModifierNode for RangePressDragNode {
                     return;
                 }
                 let over = over + (event.position - last);
-                let slop = context.view_configuration().touch_slop;
+                let slop = context.view_configuration().pointer_slop(event.pointer_type);
                 if !released && over.x * over.x + over.y * over.y < slop * slop {
                     self.gesture =
                         Gesture::Down { pointer, last: event.position, x, is_start, press, over };

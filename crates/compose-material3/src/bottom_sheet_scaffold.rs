@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+use compose_foundation::gestures::{DraggableModifier, Orientation, draggable_state};
 use compose_foundation::layout::{Box, Column, ColumnScope};
 use compose_runtime::{CompositionLocalProvider, composable, remember_coroutine_scope};
 use compose_ui::{
@@ -190,7 +190,7 @@ fn standard_bottom_sheet(
     *connection.settle.borrow_mut() = settle.clone();
     let connection: Rc<dyn NestedScrollConnection> = connection;
     let drag = compose_runtime::remember_keyed(state, move || {
-        DraggableState::new(move |delta| {
+        draggable_state(move |delta| {
             if let Some(inner) = state.inner() {
                 inner.anchored.drag_by(delta);
             }

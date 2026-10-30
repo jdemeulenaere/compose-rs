@@ -8,9 +8,10 @@ mod mouse_wheel;
 mod scrollable;
 
 pub use draggable::{
-    Drag2DScope, DragScope, Draggable2DOptions, Draggable2DState, DraggableModifier,
-    DraggableOptions, DraggableState, OnDrag2DStopped, OnDragStarted, OnDragStopped,
-    remember_draggable_2d_state, remember_draggable_state,
+    DefaultDraggable2DState, DefaultDraggableState, Drag2DBlock, Drag2DScope, DragBlock, DragScope,
+    Draggable2DOptions, Draggable2DState, Draggable2DStateExt, DraggableModifier, DraggableOptions,
+    DraggableState, DraggableStateExt, OnDrag2DStopped, OnDragStarted, OnDragStopped,
+    draggable_2d_state, draggable_state, remember_draggable_2d_state, remember_draggable_state,
 };
 
 pub(crate) use drag_gesture::{DRAG_GESTURES, GestureState, aligned, parent_aligned};

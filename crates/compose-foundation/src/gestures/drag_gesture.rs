@@ -14,7 +14,7 @@ use compose_runtime::{ComposeArg, CoroutineScope, Job};
 use compose_ui::{
     DragInteraction, DragStart, EventContext, IntSize, ModifierNode, MutableInteractionSource,
     NodeContext, Offset, PointerEvent, PointerEventPass, PointerEventType, PointerId,
-    PointerInputModifierNode, PointerType, TraversableNode, TraverseKey, Velocity, VelocityTracker,
+    PointerInputModifierNode, TraversableNode, TraverseKey, Velocity, VelocityTracker,
 };
 
 use super::Orientation;
@@ -27,9 +27,6 @@ pub(crate) static DRAG_GESTURES: TraverseKey = TraverseKey::new("drag gesture");
 /// A gesture past the slop along an axis, past `HorizontalAngleUpperBounds` for the vertical.
 const HORIZONTAL_ANGLE_UPPER_BOUND: f32 = 30.0;
 const VERTICAL_ANGLE_UPPER_BOUND: f32 = 90.0;
-
-/// A mouse's slop against a finger's, as `mouseToTouchSlopRatio`.
-const MOUSE_TO_TOUCH_SLOP_RATIO: f32 = 0.125 / 18.0;
 
 /// What a drag sends its task, as `DragEvent`.
 enum DragEvent {
@@ -462,11 +459,6 @@ impl DragGestureNode {
                     }
                 }
             } else if event.kind == PointerEventType::Move {
-                let slop = if event.pointer_type == PointerType::Mouse {
-                    slop * MOUSE_TO_TOUCH_SLOP_RATIO
-                } else {
-                    slop
-                };
                 match self.slop.post_slop_offset(moved, slop, self.orientation) {
                     Some(post_slop) => {
                         self.accumulator = self.accumulator + moved;
@@ -670,6 +662,19 @@ impl PointerInputModifierNode for DragGestureNode {
         context: &mut EventContext<'_>,
     ) {
         self.listening_to_pointers = true;
+        // The pointers down are its own count of Compose's event's changes, which it has whether
+        // it's enabled or not: disabled meanwhile, it must not lose or keep one.
+        if pass == PointerEventPass::Initial {
+            match event.kind {
+                PointerEventType::Press => {
+                    if !self.pressed.contains(&event.pointer) {
+                        self.pressed.push(event.pointer);
+                    }
+                }
+                PointerEventType::Release => self.pressed.retain(|down| *down != event.pointer),
+                _ => {}
+            }
+        }
         if !self.enabled
             || !matches!(
                 event.kind,
@@ -689,17 +694,6 @@ impl PointerInputModifierNode for DragGestureNode {
         } else {
             Offset::ZERO
         };
-        if pass == PointerEventPass::Initial {
-            match event.kind {
-                PointerEventType::Press => {
-                    if !self.pressed.contains(&event.pointer) {
-                        self.pressed.push(event.pointer);
-                    }
-                }
-                PointerEventType::Release => self.pressed.retain(|down| *down != event.pointer),
-                _ => {}
-            }
-        }
         let time_millis = (crate::scroll::event_time(event) / 1_000_000) as i64;
         // Each pointer's velocity, from its first event, as `preProcessVelocity`.
         if pass == PointerEventPass::Main {
@@ -720,9 +714,13 @@ impl PointerInputModifierNode for DragGestureNode {
         let configuration = context.view_configuration();
         match self.detection {
             Detection::AwaitDown { .. } => self.process_await_down(event, pass, context),
-            Detection::AwaitTouchSlop { .. } => {
-                self.process_await_touch_slop(event, pass, moved, configuration.touch_slop, context)
-            }
+            Detection::AwaitTouchSlop { .. } => self.process_await_touch_slop(
+                event,
+                pass,
+                moved,
+                configuration.pointer_slop(event.pointer_type),
+                context,
+            ),
             Detection::AwaitGesturePickup { .. } => self.process_await_pickup(event, pass),
             Detection::Dragging { .. } => {
                 self.process_dragging(event, pass, moved, configuration.maximum_fling_velocity)

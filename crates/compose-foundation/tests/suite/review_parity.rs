@@ -43,7 +43,7 @@ fn reset() {
 }
 
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+    compose_ui::prefetch_now() + Duration::from_secs(60)
 }
 
 /// Counts its compositions, notes itself live while composed, and its disposal (not a
@@ -99,6 +99,7 @@ fn list(optimizations: Optimizations) -> (ComposeTestRule, Owned<LazyListState>)
 /// each of its items is composed next to the composed ones, from the line's end backward.
 #[test]
 fn a_grid_scrolled_back_prefetches_the_whole_line_before() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let (mut ui, state) = grid();
     state.dispatch_raw_delta(200.0);
     ui.wait_for_idle();
@@ -118,6 +119,7 @@ fn a_grid_scrolled_back_prefetches_the_whole_line_before() {
 
 #[test]
 fn a_grid_scrolled_back_line_by_line_composes_nothing_in_its_frames() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let (mut ui, state) = grid();
     state.dispatch_raw_delta(400.0);
     ui.wait_for_idle();
@@ -136,6 +138,7 @@ fn a_grid_scrolled_back_line_by_line_composes_nothing_in_its_frames() {
 
 #[test]
 fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let (mut ui, state) = list(Optimizations::NONE);
     for _ in 0..10 {
         state.dispatch_raw_delta(15.0);
@@ -158,6 +161,7 @@ fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
 
 #[test]
 fn a_grid_scrolled_back_composes_only_the_line_that_comes_into_view() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let (mut ui, state) = grid();
     state.dispatch_raw_delta(400.0);
     ui.wait_for_idle();
@@ -178,6 +182,7 @@ fn a_grid_scrolled_back_composes_only_the_line_that_comes_into_view() {
 /// unplaced, and deactivated by the next composition, a prefetch's or the next frame's).
 #[test]
 fn a_frame_where_an_item_only_leaves_runs_no_composition() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let (mut ui, state) = list(Optimizations::NONE);
     state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
@@ -203,6 +208,7 @@ fn a_frame_where_an_item_only_leaves_runs_no_composition() {
 /// those beyond the next one aren't kept.
 #[test]
 fn items_an_estimate_composed_beyond_the_next_one_are_let_go() {
+    let _clock = compose_ui::PrefetchClock::hold();
     reset();
     use_optimizations(Optimizations::NONE);
     let state = LazyListState::new(0, 0);
@@ -276,6 +282,7 @@ fn focus_search_list(
 
 #[test]
 fn a_focus_search_finding_a_row_far_on_lets_the_rows_it_laid_out_go() {
+    let _clock = compose_ui::PrefetchClock::hold();
     let mut ui = focus_search_list(Optimizations::NONE, 200, Some(51));
     ui.on_node_with_tag("row 51").assert_is_focused();
     let live = live_items();
@@ -284,6 +291,7 @@ fn a_focus_search_finding_a_row_far_on_lets_the_rows_it_laid_out_go() {
 
 #[test]
 fn a_focus_search_leaving_the_list_lets_the_rows_it_laid_out_go() {
+    let _clock = compose_ui::PrefetchClock::hold();
     for optimizations in [Optimizations::NONE, crate::legacy::optimizations()] {
         let mut ui = focus_search_list(optimizations, 41, None);
         ui.on_node_with_tag("after").assert_is_focused();
@@ -324,6 +332,7 @@ fn Carousel(row: usize) {
 /// anything (an item the window still knows is no request at all, `size_or_prefetch`).
 #[test]
 fn a_request_for_an_item_already_composed_learns_its_nested_lists_count() {
+    let _clock = compose_ui::PrefetchClock::hold();
     reset();
     use_optimizations(Optimizations::NONE);
     let state = LazyListState::new(0, 0);
@@ -362,6 +371,7 @@ fn a_request_for_an_item_already_composed_learns_its_nested_lists_count() {
 /// first visible item, and the frame showing the row composes no cell.
 #[test]
 fn a_nested_list_starting_scrolled_is_prefetched_from_its_first_visible_item() {
+    let _clock = compose_ui::PrefetchClock::hold();
     reset();
     use_optimizations(Optimizations::NONE);
     let state = LazyListState::new(0, 0);
@@ -406,13 +416,13 @@ thread_local! {
 #[composable]
 fn SlowRow(index: usize) {
     if let Some((compose, _)) = SLOW.get() {
-        std::thread::sleep(compose);
+        compose_ui::PrefetchClock::advance(compose);
     }
     Box!(
         modifier = Modifier
             .layout(|scope, measurable, constraints: Constraints| {
                 if let Some((_, measure)) = SLOW.get() {
-                    std::thread::sleep(measure);
+                    compose_ui::PrefetchClock::advance(measure);
                 }
                 let placeable = scope.measure(measurable, constraints);
                 scope.place(&placeable, 0, 0);
@@ -428,6 +438,7 @@ fn SlowRow(index: usize) {
 /// being disposed as an item never measured is (D460).
 #[test]
 fn an_item_composed_ahead_and_cancelled_is_kept_for_reuse() {
+    let _clock = compose_ui::PrefetchClock::hold();
     reset();
     use_optimizations(Optimizations::NONE);
     SLOW.set(None);
@@ -454,7 +465,10 @@ fn an_item_composed_ahead_and_cancelled_is_kept_for_reuse() {
         state.dispatch_raw_delta(6.0);
         ui.wait_for_idle();
     }
-    assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(7)), "measuring left");
+    assert!(
+        ui.host().prefetch(compose_ui::prefetch_now() + Duration::from_millis(7)),
+        "measuring left"
+    );
     SLOW.set(None);
     let list = |ui: &mut ComposeTestRule| {
         let row = ui.on_node_with_tag("row 2").node_id();
@@ -480,7 +494,7 @@ thread_local! {
 #[composable]
 fn Uneven(index: usize) {
     COMPOSED.with(|composed| *composed.borrow_mut().entry(index).or_insert(0) += 1);
-    std::thread::sleep(SLOW_CELLS.get());
+    compose_ui::PrefetchClock::advance(SLOW_CELLS.get());
     let height = [40.0, 20.0, 10.0][index % 3];
     Box!(modifier = Modifier.size((100.dp(), height.dp())));
 }
@@ -490,6 +504,7 @@ fn Uneven(index: usize) {
 /// a short last item makes it urgent sooner.
 #[test]
 fn a_grids_urgency_goes_by_the_last_visible_items_size() {
+    let _clock = compose_ui::PrefetchClock::hold();
     reset();
     use_optimizations(Optimizations::NONE);
     SLOW_CELLS.set(Duration::ZERO);
@@ -517,7 +532,7 @@ fn a_grids_urgency_goes_by_the_last_visible_items_size() {
         state.dispatch_raw_delta(10.0);
         ui.wait_for_idle();
     }
-    ui.host().prefetch(Instant::now() + Duration::from_millis(5));
+    ui.host().prefetch(compose_ui::prefetch_now() + Duration::from_millis(5));
     SLOW_CELLS.set(Duration::ZERO);
     assert_eq!(COMPOSED.with(|composed| composed.borrow().get(&12).copied()), Some(1));
 }

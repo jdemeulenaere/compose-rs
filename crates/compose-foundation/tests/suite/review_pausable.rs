@@ -25,7 +25,7 @@ const IDLE: Duration = Duration::from_millis(400);
 /// When the stall ends: just after the deadline.
 fn stall_until(deadline: Instant) {
     let end = deadline + Duration::from_millis(1);
-    std::thread::sleep(end.saturating_duration_since(Instant::now()));
+    compose_ui::PrefetchClock::advance(end.saturating_duration_since(compose_ui::prefetch_now()));
 }
 
 /// A cell (row, cell), its part (counted from 1) that stalls, and the deadline it stalls until.
@@ -37,7 +37,7 @@ thread_local! {
 }
 
 fn later() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+    compose_ui::prefetch_now() + Duration::from_secs(60)
 }
 
 fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
@@ -113,6 +113,7 @@ fn carousels(
 /// whole, ungated, and the carousel's `pending` stays set (its trims wait for good). No panic.
 #[test]
 fn review_a_turn_while_a_nested_request_is_paused_leaves_it_pending() {
+    let _clock = compose_ui::PrefetchClock::hold();
     turn_while_nested_paused(Optimizations::NONE);
 }
 
@@ -120,6 +121,7 @@ fn review_a_turn_while_a_nested_request_is_paused_leaves_it_pending() {
 /// paused composition of the composition, a misuse: it panics.
 #[test]
 fn review_a_turn_while_a_nested_request_is_paused_keeping_items_behind() {
+    let _clock = compose_ui::PrefetchClock::hold();
     turn_while_nested_paused(Optimizations::NONE.with(Optimization::KEEP_ITEMS_BEHIND, true));
 }
 
@@ -130,7 +132,7 @@ fn turn_while_nested_paused(optimizations: Optimizations) {
     // Row 7 composes (its carousel's first cell with it, as the carousel's first layout's) and
     // applies; its carousel's second cell (a nested request) pauses, out of time at its
     // second part.
-    let deadline = Instant::now() + IDLE;
+    let deadline = compose_ui::prefetch_now() + IDLE;
     CELL_STALL.set(Some(((7, 1), 2, deadline)));
     assert!(ui.host().prefetch(deadline), "work left");
     CELL_STALL.set(None);
@@ -191,6 +193,7 @@ fn PartsRow(index: usize) {
 /// frame) and applies it, only to remove it.
 #[test]
 fn review_a_list_leaving_completes_its_paused_item_first() {
+    let _clock = compose_ui::PrefetchClock::hold();
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
     ROW_STALL.set(None);
     use_optimizations(Optimizations::NONE);
@@ -211,13 +214,13 @@ fn review_a_list_leaving_completes_its_paused_item_first() {
     });
     scroll(&mut ui, *state, 5.0);
     // Row 7's request pauses out of time at its second part.
-    let deadline = Instant::now() + IDLE;
+    let deadline = compose_ui::prefetch_now() + IDLE;
     ROW_STALL.set(Some((7, 2, deadline)));
     assert!(ui.host().prefetch(deadline), "work left");
     ROW_STALL.set(None);
     let before = ROW_PARTS.with(|parts| parts.borrow().get(&7).copied().unwrap_or(0));
     assert!(before > 0 && before < 4, "row 7 paused after {before} parts");
-    let started = Instant::now();
+    let started = compose_ui::prefetch_now();
     shown.set(false);
     ui.wait_for_idle();
     let after = ROW_PARTS.with(|parts| parts.borrow().get(&7).copied().unwrap_or(0));
@@ -226,7 +229,7 @@ fn review_a_list_leaving_completes_its_paused_item_first() {
         before,
         "row 7 composed {} more parts ({:?}) in the frame removing its list",
         after - before,
-        started.elapsed()
+        compose_ui::prefetch_now().saturating_duration_since(started)
     );
 }
 
@@ -235,6 +238,7 @@ fn review_a_list_leaving_completes_its_paused_item_first() {
 /// completes the paused item, though nothing in the pass reaches it.
 #[test]
 fn review_a_recomposition_above_the_list_completes_its_paused_item_in_the_frame() {
+    let _clock = compose_ui::PrefetchClock::hold();
     ROW_PARTS.with(|parts| parts.borrow_mut().clear());
     ROW_STALL.set(None);
     use_optimizations(Optimizations::NONE);
@@ -260,7 +264,7 @@ fn review_a_recomposition_above_the_list_completes_its_paused_item_in_the_frame(
     });
     scroll(&mut ui, *state, 5.0);
     // Row 7's request pauses out of time at its second part.
-    let deadline = Instant::now() + IDLE;
+    let deadline = compose_ui::prefetch_now() + IDLE;
     ROW_STALL.set(Some((7, 2, deadline)));
     assert!(ui.host().prefetch(deadline), "work left");
     ROW_STALL.set(None);

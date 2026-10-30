@@ -691,7 +691,7 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
             reverse_direction: self.reverse_direction,
             fling_behavior: self.fling_behavior.clone(),
             interaction_source: self.interaction_source.clone(),
-            drag: crate::scroll::DragScroller::default(),
+            drag: crate::scroll::DragScroller::along(self.orientation == Orientation::Vertical),
         }
     }
 
@@ -713,6 +713,7 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
         node.state = Box::new(self.state.clone());
         node.dyn_state = self.dyn_state.clone();
         node.vertical = vertical;
+        node.drag.set_vertical(vertical);
         node.enabled = self.enabled;
         node.reverse_direction = self.reverse_direction;
         node.fling_behavior = self.fling_behavior.clone();
@@ -823,6 +824,12 @@ impl compose_ui::SemanticsModifierNode for ScrollableNode {
 }
 
 impl PointerInputModifierNode for ScrollableNode {
+    /// It waits for a touch's drag past a press, so a clickable inside delays its press (not a
+    /// mouse's, as Compose's scrollables, which a mouse doesn't drag).
+    fn waits_for_gesture(&self, press: &PointerEvent) -> bool {
+        self.enabled && press.pointer_type != compose_ui::PointerType::Mouse
+    }
+
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,

@@ -3206,7 +3206,7 @@ impl ModifierNodeElement for LazyScrollElement {
             reverse: self.reverse,
             enabled: self.enabled,
             fling_behavior: self.fling_behavior.clone(),
-            drag: DragScroller::default(),
+            drag: DragScroller::along(self.vertical),
             set_outer: outer_setter(self.state, axis.clone()),
             outer_axis: axis,
         }
@@ -3223,6 +3223,7 @@ impl ModifierNodeElement for LazyScrollElement {
         }
         node.state = self.state;
         node.vertical = self.vertical;
+        node.drag.set_vertical(self.vertical);
         node.reverse = self.reverse;
         node.fling_behavior = self.fling_behavior.clone();
         if node.enabled && !self.enabled {
