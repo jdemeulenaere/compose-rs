@@ -166,6 +166,9 @@ pub struct LayoutNode {
     /// (`UiTree::invalidate_semantics_of`, D1257): none for a node without semantics nodes, or
     /// not computed since.
     pub(crate) semantics: Option<Rc<crate::semantics::OwnSemantics>>,
+    /// Its semantics id, as Compose's `LayoutNode.semanticsId`: from the tree's counter, another
+    /// when the node is reused, so a service never sees one id for two contents (D1262).
+    pub(crate) semantics_id: i32,
 }
 
 impl LayoutNode {
@@ -200,6 +203,7 @@ impl LayoutNode {
             attaching: false,
             reattach_pending: false,
             semantics: None,
+            semantics_id: 0,
         }
     }
 
@@ -290,6 +294,8 @@ pub struct UiTree {
     pub(crate) laid_out_since_callbacks: bool,
     /// The last `EntryId` given to a chain entry.
     pub(crate) next_entry: u64,
+    /// The last semantics id given (the root's is 0).
+    last_semantics_id: i32,
     /// The window's insets, the host's state: read while measuring (insets paddings), so a
     /// change measures their readers again.
     pub(crate) window_insets:
@@ -378,6 +384,7 @@ impl UiTree {
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
             next_entry: 0,
+            last_semantics_id: 0,
             window_insets: None,
             measured_ahead: Vec::new(),
             kept: Vec::new(),
@@ -1264,7 +1271,12 @@ impl UiTree {
 
     /// Reuses `node` for new content (`Applier::reuse`, `reuse_paused` with `paused`).
     fn reuse_node(&mut self, node: NodeId, paused: bool) {
-        let Some(value) = self.get_mut(node) else { return };
+        if self.get(node).is_none() {
+            return;
+        }
+        let semantics_id = self.next_semantics_id();
+        let value = self.node_mut(node);
+        value.semantics_id = semantics_id;
         if std::mem::take(&mut value.deactivated) {
             self.set_requesters_attached(node, true);
             // Its parent has a child to measure again (an ordinary layout's, or a list's): it
@@ -1275,6 +1287,15 @@ impl UiTree {
                 self.invalidate_measure(parent);
             }
         } else {
+            // In use but not placed: its parent's last measurement left it out (a lazy list's
+            // slot, the item it wants not composed then). Its parent places the new content
+            // (D1264). A prefetch's content waits for the frame wanting it.
+            if !value.placed
+                && !paused
+                && let Some(parent) = self.parent_of(node)
+            {
+                self.invalidate_measure(parent);
+            }
             self.reset_modifier_state(node);
         }
         // Reset (if it wasn't when deactivated), detached and attached again after the pass,
@@ -1297,7 +1318,14 @@ impl UiTree {
 
     // ---- Releasing --------------------------------------------------------------------------
 
-    fn alloc(&mut self, node: LayoutNode) -> NodeId {
+    /// A semantics id no node had (non-negative: Android's views take -1 as the host's).
+    fn next_semantics_id(&mut self) -> i32 {
+        self.last_semantics_id = self.last_semantics_id.wrapping_add(1) & i32::MAX;
+        self.last_semantics_id
+    }
+
+    fn alloc(&mut self, mut node: LayoutNode) -> NodeId {
+        node.semantics_id = self.next_semantics_id();
         match self.free.pop() {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];

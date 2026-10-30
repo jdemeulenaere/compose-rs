@@ -2,13 +2,13 @@
 //! platform glue"): `Accessibility.kt`, an `AccessibilityNodeProvider`, reads it as virtual
 //! views when a service (TalkBack, Switch Access) asks.
 //!
-//! The merged tree is written in pre-order, one record per node: its virtual id (its node's
-//! index), its parent's (-1 for the root's children), its bounds in the view's pixels, flags,
+//! The merged tree is written in pre-order, one record per node: its virtual id (its semantics
+//! id), its parent's (-1 for the root's children), its bounds in the view's pixels, flags,
 //! role, and its texts. Little-endian, as the display list.
 
 use compose_ui::{
     Rect, Role, SemanticsActions as A, SemanticsProperties as P, SharedString, ToggleableState,
-    platform::{NodeId, SemanticsNode},
+    platform::{FrameStats, SemanticsNode, UiHost},
 };
 
 use crate::serialize::Writer;
@@ -44,13 +44,39 @@ pub mod flag {
 /// (`FrameStats::semantics_changed`, D1158). `Accessibility.kt` then reads the tree again when next
 /// asked, whether or not a service is on (a field write, as Compose's
 /// `currentSemanticsNodesInvalidated`), and tells the services on, if any (D630).
-pub fn semantics_may_have_changed(stats: &compose_ui::platform::FrameStats) -> bool {
+pub fn semantics_may_have_changed(stats: &FrameStats) -> bool {
     stats.recomposed || stats.measured || stats.semantics_changed
 }
 
-/// A node's virtual view id: its index (live nodes have distinct ones).
-pub fn virtual_id(node: NodeId) -> i32 {
-    (node.to_bits() & 0xFFFF_FFFF) as i32
+/// The merged tree the bridge keeps, for the record, the actions and the input method's options:
+/// built when first asked after a frame that may have changed it, or a change since the last
+/// frame (a focus moved by an event), as they'd each build it otherwise (D1259).
+#[derive(Default)]
+pub struct KeptSemanticsTree(Option<SemanticsNode>);
+
+impl KeptSemanticsTree {
+    /// A frame that did `stats` ran: returns whether the semantics may have changed
+    /// (`semantics_may_have_changed`), forgetting the tree if so.
+    pub fn after_frame(&mut self, stats: &FrameStats) -> bool {
+        let changed = semantics_may_have_changed(stats);
+        if changed {
+            self.0 = None;
+        }
+        changed
+    }
+
+    /// The tree, as it is now.
+    pub fn get(&mut self, ui: &UiHost) -> &SemanticsNode {
+        if ui.semantics_changed_since_frame() {
+            self.0 = None;
+        }
+        self.0.get_or_insert_with(|| ui.semantics_tree(true))
+    }
+}
+
+/// A node's virtual view id: its semantics id, which no other node or content had (D1262).
+pub fn virtual_id(node: &SemanticsNode) -> i32 {
+    node.semantics_id
 }
 
 /// Writes the merged tree `root` (its children: the root itself is the view).
@@ -128,7 +154,7 @@ fn flags(node: &SemanticsNode) -> u32 {
 /// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is.
 fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     let config = &node.config;
-    let id = virtual_id(node.id);
+    let id = virtual_id(node);
     let visible = clipped(node.bounds, clip);
     let bounds = visible.unwrap_or(node.bounds);
     let scroll = scroll_range(node);
@@ -204,7 +230,7 @@ fn scroll_range(node: &SemanticsNode) -> Option<(compose_ui::ScrollAxisRange, bo
 
 /// The node of virtual id `id` in `root`'s tree.
 pub fn find(root: &SemanticsNode, id: i32) -> Option<&SemanticsNode> {
-    if virtual_id(root.id) == id {
+    if virtual_id(root) == id {
         return Some(root);
     }
     root.children.iter().find_map(|child| find(child, id))
@@ -259,14 +285,14 @@ pub fn scroll_actions(node: &SemanticsNode) -> u8 {
 pub fn find_shown(root: &SemanticsNode, id: i32) -> Option<(&SemanticsNode, Rect)> {
     fn visit(node: &SemanticsNode, id: i32, clip: Rect) -> Option<(&SemanticsNode, Rect)> {
         let shown = clipped(node.bounds, clip);
-        if virtual_id(node.id) == id {
+        if virtual_id(node) == id {
             return Some((node, shown.unwrap_or(node.bounds)));
         }
         let scrolls = scroll_range(node).is_some();
         let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
         node.children.iter().find_map(|child| visit(child, id, inner))
     }
-    if virtual_id(root.id) == id {
+    if virtual_id(root) == id {
         return Some((root, root.bounds));
     }
     root.children.iter().find_map(|child| visit(child, id, root.bounds))

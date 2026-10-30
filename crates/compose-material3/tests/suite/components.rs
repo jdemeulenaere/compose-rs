@@ -411,6 +411,50 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
 
+/// What a slider's semantics say follows the application's value, its focus and its enabled
+/// state, and `SetProgress` goes from the value now (the semantics kept per node, D1257).
+#[test]
+fn a_sliders_semantics_follow_its_value_focus_and_enabled_state() {
+    let value = mutable_state_of(0.0f32);
+    let enabled = mutable_state_of(true);
+    let (handle, enabled_handle) = (value.handle(), enabled.handle());
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Slider!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("slider"),
+                enabled = enabled_handle.get(),
+            );
+        });
+    });
+    let current = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag("slider")
+            .fetch_semantics_node()
+            .config
+            .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+            .map(|info| info.current)
+    };
+    assert_eq!(current(&mut ui), Some(0.0));
+    value.set(0.5);
+    assert_eq!(current(&mut ui), Some(0.5));
+    ui.on_node_with_tag("slider").request_focus();
+    ui.on_node_with_tag("slider").assert_is_focused();
+    ui.on_node_with_tag("slider").perform_semantics_action_with(
+        &compose_ui::SemanticsActions::SET_PROGRESS,
+        |set| {
+            // The value it was given by the application isn't asked for again.
+            assert!(!set(0.5));
+            assert!(set(0.75));
+        },
+    );
+    assert_eq!(current(&mut ui), Some(0.75));
+    enabled.set(false);
+    ui.on_node_with_tag("slider").assert_is_not_enabled();
+    ui.on_node_with_tag("slider")
+        .assert(key_not_defined(&compose_ui::SemanticsProperties::FOCUSED));
+}
+
 /// `SetProgress` asks from the value last asked, as the slider's keys do: asked twice for the
 /// same stop before the application answers, it asks once.
 #[test]

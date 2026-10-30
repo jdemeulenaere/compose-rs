@@ -4,7 +4,7 @@
 use accesskit::{Action, ActionRequest, Node, NodeId as AccessNodeId, Rect, Toggled, TreeUpdate};
 use compose_ui::{
     Role, SemanticsActions as A, SemanticsProperties as P, ToggleableState,
-    platform::{NodeId, SemanticsNode, UiHost},
+    platform::{SemanticsNode, UiHost},
 };
 
 /// The whole tree, as AccessKit asks for it: the window, then the merged semantics nodes, the
@@ -15,37 +15,42 @@ pub(crate) fn tree_update(host: &UiHost, title: &str) -> TreeUpdate {
         let focused = tree.focused();
         let mut update = TreeUpdate {
             nodes: Vec::new(),
-            tree: Some(accesskit::TreeInfo::new(id(root.id))),
+            tree: Some(accesskit::TreeInfo::new(id(&root))),
             tree_id: accesskit::TreeId::ROOT,
-            focus: id(root.id),
+            focus: id(&root),
         };
         let mut window = Node::new(accesskit::Role::Window);
         window.set_label(title);
-        window.set_children(root.children.iter().map(|child| id(child.id)).collect::<Vec<_>>());
+        window.set_children(root.children.iter().map(id).collect::<Vec<_>>());
         let mut focus = None;
         for child in &root.children {
             add(child, &mut update.nodes, &mut |node| {
                 // The innermost semantics node at or above the focused one.
-                if focused.is_some_and(|focused| tree.is_at_or_below(focused, node)) {
-                    focus = Some(node);
+                if focused.is_some_and(|focused| tree.is_at_or_below(focused, node.id)) {
+                    focus = Some(id(node));
                 }
             });
         }
-        update.nodes.push((id(root.id), window));
+        update.nodes.push((id(&root), window));
         if let Some(focus) = focus {
-            update.focus = id(focus);
+            update.focus = focus;
         }
         update
     })
 }
 
-fn id(node: NodeId) -> AccessNodeId {
-    AccessNodeId(node.to_bits())
+/// A node's AccessKit id: its semantics id, which no other node or content had (D1262).
+fn id(node: &SemanticsNode) -> AccessNodeId {
+    AccessNodeId(node.semantics_id as u64)
 }
 
 /// Adds `node` and its descendants to `nodes`, telling `visit` each id (parents first).
-fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut dyn FnMut(NodeId)) {
-    visit(node.id);
+fn add(
+    node: &SemanticsNode,
+    nodes: &mut Vec<(AccessNodeId, Node)>,
+    visit: &mut dyn FnMut(&SemanticsNode),
+) {
+    visit(node);
     let config = &node.config;
     // Actions from the node's own configuration, as Compose's accessibility reads them.
     let own = node.unmerged_config();
@@ -139,8 +144,8 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
             access.add_action(Action::Focus);
         }
     }
-    access.set_children(node.children.iter().map(|child| id(child.id)).collect::<Vec<_>>());
-    nodes.push((id(node.id), access));
+    access.set_children(node.children.iter().map(id).collect::<Vec<_>>());
+    nodes.push((id(node), access));
     for child in &node.children {
         add(child, nodes, visit);
     }
@@ -157,26 +162,24 @@ fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
 /// value) as a semantics action. Returns whether a node did it. A disabled node's are refused,
 /// as Compose's delegate refuses them (`if (!node.enabled()) return false`, D1255).
 pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
-    let node = NodeId::from_bits(request.target_node.0);
-    let (disabled, range) = host.with_tree(|tree| {
+    let (node, disabled, range) = host.with_tree(|tree| {
         let root = tree.semantics_tree(true);
-        fn find(node: &SemanticsNode, id: NodeId) -> Option<&SemanticsNode> {
-            if node.id == id {
+        fn find(node: &SemanticsNode, target: AccessNodeId) -> Option<&SemanticsNode> {
+            if id(node) == target {
                 return Some(node);
             }
-            node.children.iter().find_map(|child| find(child, id))
+            node.children.iter().find_map(|child| find(child, target))
         }
-        let found = find(&root, node);
+        let found = find(&root, request.target_node);
         (
+            found.map(|found| found.id),
             found.is_none_or(|found| found.config.contains(&P::DISABLED)),
             found.and_then(|found| {
                 found.unmerged_config().get(&P::PROGRESS_BAR_RANGE_INFO).copied()
             }),
         )
     });
-    if disabled {
-        return false;
-    }
+    let (Some(node), false) = (node, disabled) else { return false };
     let progress = || range;
     let progress_to = match request.action {
         Action::Click => return host.perform_semantics_action(node, &A::ON_CLICK),
@@ -298,6 +301,37 @@ mod tests {
             target_node: node,
             data: None,
         }
+    }
+
+    /// A node reused is another AccessKit node: the old id's request does nothing (D1262).
+    #[test]
+    fn a_reused_node_has_another_id() {
+        use compose_foundation::layout::*;
+        use compose_runtime::{ReusableContent, mutable_state_of};
+        let key = mutable_state_of(0);
+        let handle = key.handle();
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = clicks.clone();
+        let mut host = host_with(move || {
+            let counted = counted.clone();
+            ReusableContent(handle.get(), move || {
+                let counted = counted.clone();
+                Box!(
+                    modifier = compose_ui::Modifier
+                        .size(compose_ui::UnitExt::dp(10))
+                        .clickable(move || counted.set(counted.get() + 1))
+                );
+            });
+        });
+        let (before, _) = first_node(&host);
+        key.set(1);
+        host.settle(10);
+        let (after, _) = first_node(&host);
+        assert_ne!(before, after);
+        assert!(!perform(&mut host, &click(before)), "no node has the old id");
+        assert_eq!(clicks.get(), 0);
+        assert!(perform(&mut host, &click(after)));
+        assert_eq!(clicks.get(), 1);
     }
 
     // Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, the actions read from `unmergedConfig`

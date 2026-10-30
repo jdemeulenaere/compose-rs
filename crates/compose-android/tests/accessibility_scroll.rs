@@ -291,7 +291,7 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
         node.children.iter().find_map(find)
     }
     let node = find(&root).expect("a node scrolling both ways");
-    let (found, shown) = find_shown(&root, virtual_id(node.id)).unwrap();
+    let (found, shown) = find_shown(&root, virtual_id(node)).unwrap();
     assert_eq!((shown.width(), shown.height()), (100.0, 50.0));
     assert_eq!(scroll_amount(found, RIGHT, shown), Some((100.0, 0.0)));
     assert_eq!(scroll_amount(found, DOWN, shown), Some((0.0, 50.0)));
@@ -342,7 +342,7 @@ fn a_card_around_a_scrolling_row_offers_no_scroll() {
     assert_eq!(record.flags & flag::SCROLL, 0, "{record:?}");
     assert_eq!(record.scroll, None);
     assert_eq!(scroll_actions(card), 0);
-    let (found, shown) = find_shown(&root, virtual_id(card.id)).unwrap();
+    let (found, shown) = find_shown(&root, virtual_id(card)).unwrap();
     for action in [scroll_action::FORWARD, scroll_action::RIGHT] {
         assert_eq!(scroll_amount(found, action, shown), None);
     }

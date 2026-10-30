@@ -604,7 +604,8 @@ impl UiHost {
         let quiet = self.with_tree(|tree| {
             tree.needs_draw = false;
             tree.apply_observed_writes();
-            !tree.needs_draw
+            // A frame tells a change of the semantics, drawn or not.
+            !tree.needs_draw && !tree.semantics_changed
         });
         self.framing.set(false);
         if quiet && !self.composition.has_invalidations() {
@@ -811,6 +812,12 @@ impl UiHost {
     {
         let config = self.with_tree(|tree| tree.unmerged_semantics_config(node))?;
         config.get(key)?.action.clone()
+    }
+
+    /// Whether a node's semantics changed since the last frame: the next frame's
+    /// `FrameStats::semantics_changed` so far (a focus change between frames, D1259).
+    pub fn semantics_changed_since_frame(&self) -> bool {
+        self.with_tree(|tree| tree.semantics_changed)
     }
 
     /// Performs `node`'s action `key` (an accessibility service's click or focus), as Compose's

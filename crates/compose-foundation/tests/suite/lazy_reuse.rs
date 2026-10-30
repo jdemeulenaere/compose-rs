@@ -745,3 +745,30 @@ fn review2_items_removed_before_while_at_the_end_keep_the_items_in_view() {
     assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
     assert_eq!(in_view.iter().copied().map(node_of).collect::<Vec<_>>(), nodes);
 }
+
+/// A list showing one item at a time, jumped to another: the item's slot is reused for the new
+/// one after the measurement found it not composed, and nothing else asks for another. The list
+/// places it all the same; it stayed unplaced, a blank list with nothing in the semantics.
+#[test]
+fn a_one_item_viewports_item_reused_after_a_jump_is_placed() {
+    use compose_foundation::layout::*;
+    let state = LazyListState::new(0, 0);
+    let list = *state;
+    let mut ui = compose_test(move || {
+        LazyColumn!(
+            modifier = Modifier.size((50.dp(), 20.dp())),
+            state = list,
+            |scope: LazyListScope| {
+                scope.items(100, |index| {
+                    Box!(modifier = Modifier.size((50.dp(), 20.dp())).test_tag(format!("{index}")));
+                });
+            }
+        );
+    });
+    for index in 1..6 {
+        state.scroll_to_item(index, 0);
+        ui.on_node_with_tag(&format!("{index}"))
+            .assert_is_displayed()
+            .assert_top_position_in_root_is_equal_to(0.dp());
+    }
+}

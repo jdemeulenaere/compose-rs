@@ -84,6 +84,7 @@ mod scrollbar;
 mod selection;
 mod selection_focus_hover_parity;
 mod semantics_actions;
+mod semantics_invalidation;
 mod semantics_modifier_node;
 mod semantics_properties;
 mod shadow;

@@ -175,3 +175,38 @@ fn an_open_drawer_takes_back_before_the_content() {
     assert_eq!(log.get(), 1, "the content got back while the drawer was open");
     assert!(state.is_closed());
 }
+
+/// The scrim's click follows `gestures_enabled`, and the sheet's content comes and goes from the
+/// semantics as the drawer opens and closes (the semantics kept per node, D1257).
+#[test]
+fn the_scrims_semantics_follow_the_drawer() {
+    let state = DrawerState::new(DrawerValue::Open);
+    let drawer = *state;
+    let gestures = mutable_state_of(true);
+    let handle = gestures.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            ModalNavigationDrawer!(
+                || {
+                    Text!("The sheet");
+                },
+                drawer_state = drawer,
+                gestures_enabled = handle.get(),
+                {
+                    Text!("The content");
+                }
+            );
+        });
+    });
+    let scrim = "Close navigation menu";
+    ui.on_node_with_text("The sheet").assert_exists();
+    ui.on_node_with_content_description(scrim).assert_has_click_action();
+    gestures.set(false);
+    ui.on_node_with_content_description(scrim).assert_has_no_click_action();
+    gestures.set(true);
+    ui.on_node_with_content_description(scrim).assert_has_click_action();
+    ui.on_node_with_content_description(scrim)
+        .perform_semantics_action(&compose_ui::SemanticsActions::ON_CLICK);
+    ui.advance_time_by(std::time::Duration::from_secs(1));
+    ui.on_node_with_content_description(scrim).assert_does_not_exist();
+}

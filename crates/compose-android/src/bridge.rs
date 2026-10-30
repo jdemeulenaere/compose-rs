@@ -448,9 +448,8 @@ struct Host {
     drawing_given: (usize, usize),
     /// What `semantics` last gave Kotlin: the semantics tree.
     semantics: Writer,
-    /// The merged semantics tree, built once after a frame that may have changed it, for the
-    /// record, the actions and the input method's options (D1259).
-    semantics_tree: Option<compose_ui::platform::SemanticsNode>,
+    /// The merged semantics tree, for the record, the actions and the input method's options.
+    semantics_tree: crate::accessibility::KeptSemanticsTree,
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
@@ -458,14 +457,6 @@ struct Host {
     /// Shown with performance hints enabled: its frames report the RenderThread's work
     /// (`performance_hint.rs`, D390).
     hint: bool,
-}
-
-impl Host {
-    /// The merged semantics tree, built if a frame may have changed it since (D1259).
-    fn semantics_tree(&mut self) -> &compose_ui::platform::SemanticsNode {
-        let ui = &self.ui;
-        self.semantics_tree.get_or_insert_with(|| ui.semantics_tree(true))
-    }
 }
 
 /// The host behind a pointer Kotlin keeps.
@@ -663,7 +654,7 @@ fn create(
         drawing: Writer { bytes: Vec::with_capacity(4096) },
         drawing_given: (0, 0),
         semantics: Writer::default(),
-        semantics_tree: None,
+        semantics_tree: Default::default(),
         first: true,
         ime_options: None,
         hint: false,
@@ -841,9 +832,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
         Some(false) => result |= flags::HIDE_KEYBOARD,
         None => {}
     }
-    if crate::accessibility::semantics_may_have_changed(&stats) {
+    if host.semantics_tree.after_frame(&stats) {
         result |= flags::SEMANTICS;
-        host.semantics_tree = None;
     }
     if host.ui.has_enabled_back_handlers() {
         result |= flags::BACK;
@@ -1080,7 +1070,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
         node.children.iter().find_map(password)
     }
     let options = host.ui.text_input_options().unwrap_or_default();
-    let masks_password = password(host.semantics_tree()).unwrap_or(false);
+    let masks_password = password(host.semantics_tree.get(&host.ui)).unwrap_or(false);
     crate::input_method::editor_info(options, masks_password).pack()
 }
 
@@ -1225,9 +1215,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics<'local>
 ) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let root = host.semantics_tree.take().unwrap_or_else(|| host.ui.semantics_tree(true));
-    crate::accessibility::write_tree(&root, &mut host.semantics);
-    host.semantics_tree = Some(root);
+    crate::accessibility::write_tree(host.semantics_tree.get(&host.ui), &mut host.semantics);
     host.semantics.bytes.reserve(1);
     let bytes = &mut host.semantics.bytes;
     with_env(&mut env, |env| {
@@ -1252,9 +1240,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
 ) -> jboolean {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let Some((found, shown)) = crate::accessibility::find_shown(host.semantics_tree(), id) else {
-        return false;
-    };
+    let tree = host.semantics_tree.get(&host.ui);
+    let Some((found, shown)) = crate::accessibility::find_shown(tree, id) else { return false };
     let node = found.id;
     use compose_ui::SemanticsActions as A;
     match action {

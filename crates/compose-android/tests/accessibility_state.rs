@@ -17,12 +17,14 @@ extern crate compose_runtime as compose;
 
 use std::collections::HashMap;
 
-use compose_android::accessibility::{flag, semantics_may_have_changed, write_tree};
+use compose_android::accessibility::{
+    KeptSemanticsTree, find_shown, flag, semantics_may_have_changed, virtual_id, write_tree,
+};
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{MutableState, mutable_state_of};
-use compose_ui::platform::UiHost;
+use compose_ui::platform::{self, UiHost};
 use compose_ui::*;
 
 // ---- The records, as `Accessibility.kt`'s `refresh` reads them ---------------------------------
@@ -398,4 +400,120 @@ fn a_semantics_only_frame_may_change_the_semantics() {
     assert!(!semantics_may_have_changed(&FrameStats::default()));
     let changed = FrameStats { semantics_changed: true, ..FrameStats::default() };
     assert!(semantics_may_have_changed(&changed));
+}
+
+// ---- The tree the bridge keeps (D1259) and its ids (D1262) ---------------------------------------
+
+fn kept_host(content: impl Fn() + 'static) -> UiHost {
+    let mut host = UiHost::new(
+        IntSize::new(400, 400),
+        Density::new(1.0),
+        Box::new(platform::FixedTextMeasurer::new()),
+    );
+    host.set_content(content);
+    host.settle(10);
+    host
+}
+
+fn node_with_tag<'a>(
+    node: &'a platform::SemanticsNode,
+    tag: &str,
+) -> Option<&'a platform::SemanticsNode> {
+    if node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|found| found.as_str() == tag) {
+        return Some(node);
+    }
+    node.children.iter().find_map(|child| node_with_tag(child, tag))
+}
+
+/// A frame that may have changed the semantics has the kept tree built anew; an idle frame keeps
+/// it.
+#[test]
+fn the_kept_tree_follows_the_frames() {
+    let text = mutable_state_of("one");
+    let handle = text.handle();
+    let mut host = kept_host(move || {
+        BasicText!(handle.get(), modifier = Modifier.test_tag("text"));
+    });
+    let mut kept = KeptSemanticsTree::default();
+    let first = kept.get(&host) as *const platform::SemanticsNode;
+    assert!(!kept.after_frame(&host.frame()), "an idle frame");
+    assert_eq!(kept.get(&host) as *const platform::SemanticsNode, first, "the same tree");
+    text.set("two");
+    assert!(kept.after_frame(&host.frame()));
+    let node = node_with_tag(kept.get(&host), "text").expect("the text");
+    let texts: Vec<&str> = node
+        .config
+        .get(&SemanticsProperties::TEXT)
+        .into_iter()
+        .flatten()
+        .map(|text| text.as_str())
+        .collect();
+    assert_eq!(texts, ["two"]);
+}
+
+/// A focus moved by an event, before the frame that tells it: what the input method's options
+/// and the actions read next is the new focus, as when each built its own tree (a password
+/// field just focused isn't read as a plain one).
+#[test]
+fn the_kept_tree_shows_a_focus_moved_between_frames() {
+    let mut host = kept_host(|| {
+        Column!({
+            Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("first"));
+            Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("second"));
+        });
+    });
+    let mut kept = KeptSemanticsTree::default();
+    let focused = |kept: &mut KeptSemanticsTree, host: &UiHost, tag: &str| {
+        node_with_tag(kept.get(host), tag).unwrap().config.get(&SemanticsProperties::FOCUSED)
+            == Some(&true)
+    };
+    assert!(!focused(&mut kept, &host, "first"));
+    let first = node_with_tag(kept.get(&host), "first").unwrap().id;
+    host.request_focus(first);
+    assert!(focused(&mut kept, &host, "first"), "before any frame");
+    assert!(kept.after_frame(&host.frame()));
+    assert!(focused(&mut kept, &host, "first"));
+    assert!(!focused(&mut kept, &host, "second"));
+}
+
+/// A lazy list's item reused: its record and its action go under a new id, the old one no longer
+/// finds anything. What a service focused on the old content isn't told the new is it.
+#[test]
+fn a_reused_item_is_another_virtual_view() {
+    let state = LazyListState::new(0, 0);
+    let list = *state;
+    let mut host = kept_host(move || {
+        LazyColumn!(
+            modifier = Modifier.size((50.dp(), 20.dp())),
+            state = list,
+            |scope: LazyListScope| {
+                scope.items(100, |index| {
+                    Box!(
+                        modifier = Modifier
+                            .size((50.dp(), 20.dp()))
+                            .clickable(|| {})
+                            .test_tag(format!("item{index}"))
+                    );
+                });
+            }
+        );
+    });
+    let mut kept = KeptSemanticsTree::default();
+    let mut seen = Vec::new();
+    for index in 0..8 {
+        state.scroll_to_item(index, 0);
+        while host.needs_frame() {
+            kept.after_frame(&host.frame());
+        }
+        let tree = kept.get(&host);
+        let node = node_with_tag(tree, &format!("item{index}")).expect("in the tree");
+        let id = virtual_id(node);
+        assert!(id >= 0, "-1 is the host view's");
+        assert!(!seen.contains(&id), "item {index}'s id {id} was another's");
+        assert!(find_shown(tree, id).is_some());
+        for old in &seen {
+            assert!(find_shown(tree, *old).is_none(), "the old id {old} is gone");
+        }
+        seen.push(id);
+    }
 }

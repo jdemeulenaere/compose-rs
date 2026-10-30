@@ -75,6 +75,9 @@ impl From<bool> for ToggleableState {
 #[derive(Clone, Debug)]
 pub struct SemanticsNode {
     pub id: NodeId,
+    /// As Compose's `SemanticsNode.id`: its layout node's semantics id, another when the node is
+    /// reused, what the accessibility bridges name the node by (D1262).
+    pub semantics_id: i32,
     pub bounds: Rect,
     /// Laid out right to left, as Compose's `layoutInfo.layoutDirection`: a horizontal
     /// scroll's left and right go the other way (D484).
@@ -336,7 +339,7 @@ impl UiTree {
 
     /// `node`'s configuration in the unmerged tree, as performing its actions reads it: its own
     /// with what its parts set (`PART_OF_PARENT`, a text field's inner field), found below it
-    /// without building the tree. `None` if it isn't a semantics node in use.
+    /// without building the tree. `None` if the unmerged tree leaves it out.
     pub fn unmerged_semantics_config(&mut self, node: NodeId) -> Option<SemanticsConfiguration> {
         if self.left_out(node) || self.get(node).is_some_and(|value| value.deactivated) {
             return None;
@@ -344,6 +347,19 @@ impl UiTree {
         let own = self.own_semantics(node)?;
         if own.config.is_empty() || own.config.contains(&PART_OF_PARENT) {
             return None;
+        }
+        // Out of the tree under a parent not placed or clearing what's below it. An overlay is
+        // a root of its own.
+        let mut at = node;
+        while !self.node(at).overlay
+            && let Some(parent) = self.node(at).parent
+        {
+            if self.left_out(parent)
+                || self.own_semantics(parent).is_some_and(|own| own.config.is_clearing_semantics)
+            {
+                return None;
+            }
+            at = parent;
         }
         let mut config = own.config.clone();
         if !config.is_clearing_semantics {
@@ -417,6 +433,7 @@ impl UiTree {
         let rtl = self.node(root).layout_direction == crate::alignment::LayoutDirection::Rtl;
         SemanticsNode {
             id: root,
+            semantics_id: self.node(root).semantics_id,
             bounds: self.bounds_in_root(root),
             rtl,
             config,
@@ -507,6 +524,7 @@ impl UiTree {
                     self.node(node).layout_direction == crate::alignment::LayoutDirection::Rtl;
                 out.push(SemanticsNode {
                     id: node,
+                    semantics_id: self.node(node).semantics_id,
                     bounds: Rect::from_offset_size(origin, size.into()),
                     rtl,
                     config,
