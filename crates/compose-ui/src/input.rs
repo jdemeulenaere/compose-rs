@@ -456,6 +456,21 @@ impl EventContext<'_> {
     }
 
     /// Runs `callback` after dispatch.
+    /// Whether `event`'s position is outside `bounds`, extended to the minimum touch target
+    /// around a smaller node, as `isOutOfBounds(size, extendedTouchPadding)`, the target's
+    /// `LOCAL_VIEW_CONFIGURATION`'s `minimum_touch_target_size`.
+    pub fn is_out_of_touch_target(&self, event: &PointerEvent, bounds: IntSize) -> bool {
+        let minimum = self.view_configuration().minimum_touch_target_size;
+        let density = self.density();
+        let horizontal = ((density.to_px(minimum.width) - bounds.width as f32) / 2.0).max(0.0);
+        let vertical = ((density.to_px(minimum.height) - bounds.height as f32) / 2.0).max(0.0);
+        let position = event.position;
+        position.x < -horizontal
+            || position.y < -vertical
+            || position.x > bounds.width as f32 + horizontal
+            || position.y > bounds.height as f32 + vertical
+    }
+
     pub fn call(&mut self, callback: &Callback<dyn Fn()>) {
         self.actions.push(Action::Call(callback.clone()));
     }

@@ -320,14 +320,43 @@ fn a_sized_extended_fab_animates() {
 fn the_shapes_are_the_tokens() {
     let _ui = rule(|| {
         let shapes = MaterialTheme::shapes();
-        assert_eq!(FloatingActionButtonDefaults::medium_shape(), shapes.large_increased);
+        assert_eq!(FloatingActionButtonDefaults::medium_shape(), ShapeDefaults::LARGE_INCREASED);
         assert_eq!(FloatingActionButtonDefaults::small_extended_fab_shape(), shapes.large);
         assert_eq!(
             FloatingActionButtonDefaults::medium_extended_fab_shape(),
-            shapes.large_increased
+            ShapeDefaults::LARGE_INCREASED
         );
         assert_eq!(FloatingActionButtonDefaults::large_extended_fab_shape(), shapes.extra_large);
     });
+}
+
+/// `mediumShape` and `mediumExtendedFabShape` are the constant, whatever the theme's shapes
+/// (Compose's "TODO: update to use token").
+#[test]
+fn the_medium_shapes_do_not_follow_the_theme() {
+    let _ui = rule(|| {
+        let shapes = Shapes { large_increased: ShapeDefaults::EXTRA_LARGE, ..Shapes::default() };
+        MaterialTheme!(shapes = shapes, {
+            assert_eq!(
+                FloatingActionButtonDefaults::medium_shape(),
+                ShapeDefaults::LARGE_INCREASED
+            );
+            assert_eq!(
+                FloatingActionButtonDefaults::medium_extended_fab_shape(),
+                ShapeDefaults::LARGE_INCREASED
+            );
+        });
+    });
+}
+
+/// `ElevationTokens.Level1`, `Level2` hovered.
+#[test]
+fn the_lowered_elevation_is_the_tokens() {
+    let lowered = FloatingActionButtonDefaults::lowered_elevation();
+    assert_eq!(lowered.default_elevation, compose_ui::Dp(1.0));
+    assert_eq!(lowered.pressed_elevation, compose_ui::Dp(1.0));
+    assert_eq!(lowered.focused_elevation, compose_ui::Dp(1.0));
+    assert_eq!(lowered.hovered_elevation, compose_ui::Dp(3.0));
 }
 
 // ---- animate_floating_action_button -----------------------------------------------------------

@@ -515,3 +515,33 @@ fn the_defaults_are_the_tokens() {
         });
     });
 }
+
+/// With `gestures_enabled` false a drag moves nothing, opening or closing.
+#[test]
+fn with_its_gestures_disabled_a_swipe_does_nothing() {
+    for (value, by, x) in [(DrawerValue::Closed, 500.0, 10.0), (DrawerValue::Open, -180.0, 200.0)] {
+        let state = DrawerState::new(value, |_| true);
+        let handle = *state;
+        let mut ui = ComposeTestRule::sized(IntSize::new(600, 600), move || {
+            MaterialTheme!({
+                DismissibleNavigationDrawer!(
+                    || {
+                        DismissibleDrawerSheet!(
+                            modifier = Modifier.test_tag(SHEET),
+                            |_: ColumnScope| {
+                                Box!(modifier = Modifier.fill_max_size().test_tag(CONTENT));
+                            }
+                        );
+                    },
+                    drawer_state = handle,
+                    gestures_enabled = false,
+                    || {
+                        Box!(modifier = Modifier.fill_max_size().test_tag(BODY));
+                    }
+                );
+            });
+        });
+        swipe(&mut ui, x, by);
+        assert_eq!(state.current_value(), value);
+    }
+}

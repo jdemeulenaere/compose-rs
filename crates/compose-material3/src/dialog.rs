@@ -487,6 +487,7 @@ impl MenuDefaults {
         dismiss_on_back_press: true,
         dismiss_on_click_outside: true,
         fills_window: false,
+        pass_through_outside: false,
     };
     /// No tonal elevation, as `TonalElevation`.
     pub const TONAL_ELEVATION: Dp = Dp(0.0);

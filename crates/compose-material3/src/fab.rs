@@ -85,9 +85,9 @@ impl FloatingActionButtonDefaults {
         MaterialTheme::shapes().large.clone()
     }
 
-    /// As `mediumShape`.
+    /// As `mediumShape`: the constant, not the theme's, as Compose's "TODO: update to use token".
     pub fn medium_shape() -> Shape {
-        MaterialTheme::shapes().large_increased.clone()
+        crate::theme::ShapeDefaults::LARGE_INCREASED
     }
 
     /// As `smallExtendedFabShape`.
@@ -95,9 +95,9 @@ impl FloatingActionButtonDefaults {
         MaterialTheme::shapes().large.clone()
     }
 
-    /// As `mediumExtendedFabShape`.
+    /// As `mediumExtendedFabShape`: the constant, as `medium_shape`.
     pub fn medium_extended_fab_shape() -> Shape {
-        MaterialTheme::shapes().large_increased.clone()
+        crate::theme::ShapeDefaults::LARGE_INCREASED
     }
 
     /// As `largeExtendedFabShape`.
@@ -120,13 +120,13 @@ impl FloatingActionButtonDefaults {
         }
     }
 
-    /// 3 dp, 4 dp hovered, as `loweredElevation()`.
+    /// 1 dp, 3 dp hovered (`ElevationTokens.Level1`, `Level2`), as `loweredElevation()`.
     pub fn lowered_elevation() -> FloatingActionButtonElevation {
         FloatingActionButtonElevation {
-            default_elevation: Dp(3.0),
-            pressed_elevation: Dp(3.0),
-            focused_elevation: Dp(3.0),
-            hovered_elevation: Dp(4.0),
+            default_elevation: Dp(1.0),
+            pressed_elevation: Dp(1.0),
+            focused_elevation: Dp(1.0),
+            hovered_elevation: Dp(3.0),
         }
     }
 

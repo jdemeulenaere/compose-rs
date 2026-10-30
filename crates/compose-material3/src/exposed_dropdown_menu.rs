@@ -111,8 +111,15 @@ pub fn ExposedDropdownMenuBox(
             keyboard: RefCell::new(None),
         })
     });
-    shared.on_expanded_change.replace(on_expanded_change.clone());
-    shared.keyboard.replace(compose_ui::LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current());
+    // The latest, for the anchors' nodes, once this composition's applied.
+    let keyboard = compose_ui::LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current();
+    compose_runtime::SideEffect({
+        let (shared, on_expanded_change) = (shared.clone(), on_expanded_change.clone());
+        move || {
+            shared.on_expanded_change.replace(on_expanded_change);
+            shared.keyboard.replace(keyboard);
+        }
+    });
 
     let positioned = shared.clone();
     let scope = ExposedDropdownMenuBoxScope { shared: shared.clone(), expanded };
@@ -258,8 +265,9 @@ struct ExpandableNode {
     shared: Rc<Shared>,
     anchor_type: ExposedDropdownMenuAnchorType,
     expanded: bool,
-    /// Between a press and its release, as Compose's `awaitEachGesture`.
-    pressed: bool,
+    /// The fingers down from a press that may be a click yet, as Compose's
+    /// `waitForUpOrCancellation`: the last one up is the click.
+    pressed: u32,
 }
 
 impl ModifierNodeElement for ExpandableElement {
@@ -269,7 +277,7 @@ impl ModifierNodeElement for ExpandableElement {
             shared: self.shared.clone(),
             anchor_type: self.anchor_type,
             expanded: self.expanded,
-            pressed: false,
+            pressed: 0,
         }
     }
     fn update(&self, node: &mut ExpandableNode) {
@@ -279,7 +287,7 @@ impl ModifierNodeElement for ExpandableElement {
         // A press the menu's opening or closing saw belongs to that: its release does nothing,
         // as Compose's `pointerInput` starting again. It's how a press that dismissed the menu
         // from outside doesn't open it again.
-        node.pressed = false;
+        node.pressed = 0;
     }
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.shared, &other.shared)
@@ -314,30 +322,38 @@ impl PointerInputModifierNode for ExpandableNode {
         context: &mut EventContext<'_>,
     ) {
         match (pass, event.kind) {
+            (PointerEventPass::Initial, PointerEventType::Press) if self.pressed > 0 => {
+                self.pressed += 1;
+            }
             (PointerEventPass::Initial, PointerEventType::Press) if !event.consumed => {
-                self.pressed = true;
+                self.pressed = 1;
                 if self.anchor_type == ExposedDropdownMenuAnchorType::SecondaryEditable {
                     event.consume();
                 }
             }
-            (PointerEventPass::Initial, PointerEventType::Release) if self.pressed => {
-                self.pressed = false;
-                let (shared, anchor_type, expanded) =
-                    (self.shared.clone(), self.anchor_type, self.expanded);
-                context.run(move || shared.toggle(anchor_type, expanded));
+            (PointerEventPass::Initial, PointerEventType::Release) if self.pressed > 0 => {
+                self.pressed -= 1;
+                if self.pressed == 0 {
+                    let (shared, anchor_type, expanded) =
+                        (self.shared.clone(), self.anchor_type, self.expanded);
+                    context.run(move || shared.toggle(anchor_type, expanded));
+                }
             }
             // Dragged out of the anchor, or a scroll took it, as `waitForUpOrCancellation`.
-            (PointerEventPass::Initial, PointerEventType::Move) => {
-                let (x, y) = (event.position.x, event.position.y);
-                let inside =
-                    x >= 0.0 && y >= 0.0 && x < bounds.width as f32 && y < bounds.height as f32;
-                self.pressed &= inside && !event.consumed;
+            (PointerEventPass::Initial, PointerEventType::Move)
+                if event.consumed || context.is_out_of_touch_target(event, bounds) =>
+            {
+                self.pressed = 0;
             }
-            (PointerEventPass::Final, PointerEventType::Move) => {
-                self.pressed &= !event.consumed;
+            (PointerEventPass::Final, PointerEventType::Move) if event.consumed => {
+                self.pressed = 0;
             }
             _ => {}
         }
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.pressed = 0;
     }
 }
 
@@ -506,7 +522,12 @@ pub fn ExposedDropdownMenu(
             ExposedDropdownMenuAnchorType::PrimaryEditable
                 | ExposedDropdownMenuAnchorType::SecondaryEditable
         ) && !shared.always_focusable.get();
-        let properties = PopupProperties { focusable: !focus_kept, ..PopupProperties::default() };
+        // With no accessibility service on, which the host doesn't say here: D1048.
+        let properties = PopupProperties {
+            focusable: !focus_kept,
+            pass_through_outside: true,
+            ..PopupProperties::default()
+        };
         compose_ui::PopupWithPositionProvider(
             position.clone() as Rc<dyn PopupPositionProvider>,
             Some(on_dismiss_request),
@@ -611,11 +632,13 @@ impl ExposedDropdownMenuDefaults {
         );
     }
 
-    /// A `TextField`'s colors in a box, as `textFieldColors()`: the container is the same when
-    /// disabled (`FilledAutocompleteTokens`).
+    /// A `TextField`'s colors in a box, as `textFieldColors()`: disabled, the container is the
+    /// same and the label opaque (`FilledAutocompleteTokens`).
     pub fn text_field_colors() -> TextFieldColors {
+        let scheme = MaterialTheme::color_scheme();
         TextFieldColors {
-            disabled_container_color: MaterialTheme::color_scheme().surface_container_highest,
+            disabled_container_color: scheme.surface_container_highest,
+            disabled_label_color: scheme.on_surface,
             ..TextFieldDefaults::colors()
         }
     }

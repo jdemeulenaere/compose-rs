@@ -181,11 +181,18 @@ impl DrawerState {
         self.animate_to(value, spec).await;
     }
 
-    /// Sets what it animates with, as Compose's drawer does from the motion scheme.
+    /// Sets what `open` and `close` animate with, as both drawers do from the motion scheme.
     fn set_motion(&self, motion: &MotionScheme) {
         if let Some(inner) = self.inner() {
             *inner.open_spec.borrow_mut() = motion.default_spatial_spec();
             *inner.close_spec.borrow_mut() = motion.fast_effects_spec();
+        }
+    }
+
+    /// Sets what a drag let go settles with, as only the modal drawer does: the dismissible one
+    /// keeps the tween.
+    fn set_settle_motion(&self, motion: &MotionScheme) {
+        if let Some(inner) = self.inner() {
             *inner.settle_spec.borrow_mut() = motion.default_spatial_spec();
         }
     }
@@ -414,6 +421,10 @@ pub fn ModalNavigationDrawer(
         })
     };
     let focus_requester = drawer_motion_and_focus(drawer_state);
+    {
+        let motion = MaterialTheme::motion_scheme();
+        compose_runtime::SideEffect(move || drawer_state.set_settle_motion(&motion));
+    }
     let modifier = drawer_gestures(modifier.fill_max_size(), drawer_state, gestures_enabled, scope);
     let state = drawer_state;
     Layout(

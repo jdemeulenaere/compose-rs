@@ -115,7 +115,7 @@ fn click(ui: &mut ComposeTestRule, tag: &str) {
     });
 }
 
-// Compose: edm_expandsOnClick_andCollapsesOnClickOutside
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_expandsOnClick_andCollapsesOnClickOutside
 #[test]
 fn expands_on_click_and_collapses_on_click_outside() {
     let (mut ui, _) = rule(false, false);
@@ -128,7 +128,7 @@ fn expands_on_click_and_collapses_on_click_outside() {
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 
-// Compose: edm_collapsesOnTextFieldClick
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_collapsesOnTextFieldClick
 #[test]
 fn collapses_on_text_field_click() {
     for editable in [false, true] {
@@ -158,8 +158,7 @@ fn a_press_that_dismissed_the_menu_does_not_open_it_on_release() {
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 
-// Compose: edm_notEditable_collapsesOnBackDispatch, edm_editable_collapsesOnBackDispatch,
-// edm_notEditable_collapsesOnBackPress, edm_editable_collapsesOnBackPress
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_notEditable_collapsesOnBackDispatch, edm_editable_collapsesOnBackDispatch, edm_notEditable_collapsesOnBackPress, edm_editable_collapsesOnBackPress
 #[test]
 fn collapses_on_back() {
     for editable in [false, true] {
@@ -172,7 +171,7 @@ fn collapses_on_back() {
     }
 }
 
-// Compose: edm_notEditable_collapsesOnEscapePress
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_notEditable_collapsesOnEscapePress
 #[test]
 fn not_editable_collapses_on_escape() {
     let (mut ui, _) = rule(true, false);
@@ -182,7 +181,7 @@ fn not_editable_collapses_on_escape() {
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 
-// Compose: edm_editable_collapsesOnEscapePress
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_collapsesOnEscapePress
 #[test]
 fn editable_collapses_on_escape_after_tab_gave_the_menu_the_focus() {
     let (mut ui, _) = rule(true, true);
@@ -195,7 +194,7 @@ fn editable_collapses_on_escape_after_tab_gave_the_menu_the_focus() {
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 
-// Compose: edm_notEditable_doesNotExpand_whenDisabled, edm_editable_doesNotExpand_whenDisabled
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_notEditable_doesNotExpand_whenDisabled, edm_editable_doesNotExpand_whenDisabled
 #[test]
 fn does_not_expand_when_disabled() {
     for editable in [false, true] {
@@ -217,7 +216,7 @@ fn does_not_expand_when_disabled() {
     }
 }
 
-// Compose: edm_editable_focusesTextField_whenClickedViaSemantics
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_focusesTextField_whenClickedViaSemantics
 #[test]
 fn editable_focuses_the_field_when_clicked_via_semantics() {
     // An autocomplete: empty text doesn't open it.
@@ -238,7 +237,7 @@ fn editable_focuses_the_field_when_clicked_via_semantics() {
     ui.on_node_with_tag(TF).assert_is_focused();
 }
 
-// Compose: edm_doesNotCollapse_whenTypingOnSoftKeyboard
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotCollapse_whenTypingOnSoftKeyboard
 #[test]
 fn does_not_collapse_when_typing() {
     let (mut ui, _) = rule(false, true);
@@ -252,7 +251,7 @@ fn does_not_collapse_when_typing() {
     ui.on_node_with_tag(ITEM).assert_is_displayed();
 }
 
-// Compose: edm_expandsAndFocusesTextField_whenTrailingIconClicked
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_expandsAndFocusesTextField_whenTrailingIconClicked
 #[test]
 fn expands_and_focuses_the_field_when_the_trailing_icon_is_clicked() {
     let (mut ui, _) = rule(false, true);
@@ -262,7 +261,7 @@ fn expands_and_focuses_the_field_when_the_trailing_icon_is_clicked() {
     ui.on_node_with_tag(ITEM).assert_is_displayed();
 }
 
-// Compose: edm_doesNotExpand_ifTouchEndsOutsideBounds
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotExpand_ifTouchEndsOutsideBounds
 #[test]
 fn does_not_expand_if_the_touch_ends_outside() {
     let (mut ui, expanded) = rule(false, false);
@@ -289,7 +288,7 @@ fn expands_if_the_touch_moves_inside() {
     assert!(expanded.get());
 }
 
-// Compose: edm_doesNotExpand_ifTouchIsPartOfScroll
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotExpand_ifTouchIsPartOfScroll
 #[test]
 fn does_not_expand_if_the_touch_is_part_of_a_scroll() {
     let state = mutable_state_of(false);
@@ -350,7 +349,7 @@ fn does_not_expand_if_the_touch_is_part_of_a_scroll() {
 
 /// The tree's Enter and Space go to what has the focus: for a not editable anchor it's the field
 /// when the menu's closed.
-// Compose: edm_expands_onEnterKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_expands_onEnterKey
 #[test]
 fn expands_on_enter() {
     let (mut ui, expanded) = rule(false, false);
@@ -361,7 +360,7 @@ fn expands_on_enter() {
 
 /// Compose's test injects Enter into the anchor's window; here it goes where the focus is, the
 /// open menu, which on a device is where it would go. So it doesn't toggle the menu.
-// Compose: edm_collapses_onEnterKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_collapses_onEnterKey
 #[test]
 fn an_open_focusable_menu_takes_enter_from_its_anchor() {
     let (mut ui, expanded) = rule(true, false);
@@ -370,7 +369,7 @@ fn an_open_focusable_menu_takes_enter_from_its_anchor() {
     assert!(expanded.get());
 }
 
-// Compose: edm_editable_expands_onEnterKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_expands_onEnterKey
 #[test]
 fn editable_expands_on_enter() {
     let (mut ui, expanded) = rule(false, true);
@@ -379,7 +378,7 @@ fn editable_expands_on_enter() {
     assert!(expanded.get());
 }
 
-// Compose: edm_editable_collapses_onEnterKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_collapses_onEnterKey
 #[test]
 fn editable_collapses_on_enter() {
     let (mut ui, expanded) = rule(true, true);
@@ -388,7 +387,7 @@ fn editable_collapses_on_enter() {
     assert!(!expanded.get());
 }
 
-// Compose: edm_editable_doesNotExpand_onSpacebarKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_doesNotExpand_onSpacebarKey
 #[test]
 fn editable_does_not_expand_on_space() {
     let (mut ui, expanded) = rule(false, true);
@@ -397,7 +396,7 @@ fn editable_does_not_expand_on_space() {
     assert!(!expanded.get());
 }
 
-// Compose: edm_editable_doesNotCollapse_onSpacebarKey
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_editable_doesNotCollapse_onSpacebarKey
 #[test]
 fn editable_does_not_collapse_on_space() {
     let (mut ui, expanded) = rule(true, true);
@@ -443,7 +442,7 @@ fn editable_menu_takes_the_keys_on_an_arrow() {
     assert!(field_takes_typing(&mut ui, "z"));
 }
 
-// Compose: edm_doesNotRecomposeOnScroll
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotRecomposeOnScroll
 #[test]
 fn does_not_recompose_on_scroll() {
     let count = Rc::new(Cell::new(0));
@@ -494,7 +493,7 @@ fn does_not_recompose_on_scroll() {
     assert_eq!(count.get(), 1);
 }
 
-// Compose: edm_anchorTypeIsUpdated_evenIfTextFieldIsNotClicked
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_anchorTypeIsUpdated_evenIfTextFieldIsNotClicked
 #[test]
 fn anchor_type_is_updated_even_if_the_field_is_not_clicked() {
     let state = mutable_state_of(false);
@@ -615,7 +614,7 @@ fn a_secondary_anchor_keeps_the_focus_in_the_field_and_says_what_it_does() {
     );
 }
 
-// Compose: edm_widthMatchesTextFieldWidth
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_widthMatchesTextFieldWidth
 #[test]
 fn width_matches_the_field() {
     let state = mutable_state_of(true);
@@ -672,7 +671,7 @@ fn not_matching_the_width_the_menu_is_as_wide_as_its_items() {
     assert_eq!(menu.get(), 120);
 }
 
-// Compose: edm_collapsesWithSelection_whenMenuItemClicked
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_collapsesWithSelection_whenMenuItemClicked
 #[test]
 fn collapses_with_the_selection_when_an_item_is_clicked() {
     let (mut ui, _) = rule(true, false);
@@ -684,7 +683,7 @@ fn collapses_with_the_selection_when_an_item_is_clicked() {
 
 /// The menu's height: the larger space beside the anchor, less the margins (48 dp), which is the
 /// height the ten items don't fit.
-// Compose: edm_resizesWithinWindowBounds_uponImeAppearance
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_resizesWithinWindowBounds_uponImeAppearance
 #[test]
 fn the_height_is_the_larger_space_beside_the_anchor_within_the_keyboard() {
     let height = Rc::new(Cell::new(0));
@@ -726,7 +725,7 @@ fn the_height_is_the_larger_space_beside_the_anchor_within_the_keyboard() {
     assert_eq!(height.get(), 500 - 100 - 48);
 }
 
-// Compose: edm_doesNotCrash_whenAnchorDetachedFirst
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotCrash_whenAnchorDetachedFirst
 #[test]
 fn does_not_crash_when_the_anchor_is_removed_with_the_menu_open() {
     let state = mutable_state_of(true);
@@ -765,7 +764,7 @@ fn does_not_crash_when_the_anchor_is_removed_with_the_menu_open() {
     ui.on_node_with_tag(ITEM).assert_does_not_exist();
 }
 
-// Compose: edm_withScrolledContent
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_withScrolledContent
 #[test]
 fn with_scrolled_content() {
     let scroll = Rc::new(Cell::new(None));
@@ -823,7 +822,7 @@ fn with_scrolled_content() {
     ui.on_node_with_tag("MenuContent 100").assert_is_displayed();
 }
 
-// Compose: edm_hasDropdownSemantics
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_hasDropdownSemantics
 #[test]
 fn has_dropdown_semantics() {
     let (mut ui, _) = rule(false, false);
@@ -837,7 +836,7 @@ fn at(x: i32, y: i32, size: IntSize) -> Rect {
     Rect::new(x as f32, y as f32, (x + size.width) as f32, (y + size.height) as f32)
 }
 
-// Compose: edm_positionProvider
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_positionProvider
 #[test]
 fn position_provider() {
     let top_window_insets = 50;
@@ -861,7 +860,7 @@ fn position_provider() {
     );
 }
 
-// Compose: edm_positionProvider_contentExceedsWindowHeight
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_positionProvider_contentExceedsWindowHeight
 #[test]
 fn position_provider_content_exceeds_the_window() {
     let provider = ExposedDropdownMenuPositionProvider::new(Density::new(1.0), 0);
@@ -1028,7 +1027,7 @@ fn box_anchor(
 }
 
 /// With nothing in it that takes the move, leaving the anchor is what cancels the press.
-// Compose: edm_doesNotExpand_ifTouchEndsOutsideBounds
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt, edm_doesNotExpand_ifTouchEndsOutsideBounds
 #[test]
 fn a_press_dragged_out_of_the_anchor_does_nothing() {
     let (mut ui, changes) =
@@ -1245,6 +1244,8 @@ fn the_text_field_colors() {
                 MaterialTheme::color_scheme().surface_container_highest
             );
             assert_eq!(colors.container_color, TextFieldDefaults::colors().container_color);
+            // Opaque, `FilledAutocompleteTokens.FieldDisabledLabelTextColor`.
+            assert_eq!(colors.disabled_label_color, MaterialTheme::color_scheme().on_surface);
             let outlined = ExposedDropdownMenuDefaults::outlined_text_field_colors();
             assert_eq!(
                 outlined.container_color,
@@ -1345,4 +1346,144 @@ fn the_height_above_the_anchor_is_within_the_status_bars() {
     let menu = menu_with_insets(IntSize::new(411, 891), 24, (0, 48), (780, 56), 30);
     assert_eq!(menu.height(), 708.0);
     assert_eq!(menu.top, 72.0);
+}
+
+/// A read-only menu doesn't block what's beneath: a press outside dismisses it, and the button
+/// there gets the click too, as `FLAG_NOT_TOUCH_MODAL` with no accessibility service on (the host
+/// doesn't say here: D1048).
+// Compose: compose/material3/material3/src/androidMain/kotlin/androidx/compose/material3/ExposedDropdownMenu.android.kt, popupPropertiesForAnchorType
+#[test]
+fn a_press_outside_a_read_only_menu_also_reaches_what_is_beneath() {
+    let state = mutable_state_of(true);
+    let expanded = state.handle();
+    let clicks = Rc::new(Cell::new(0));
+    let clicked = clicks.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+        let _ = &state;
+        let clicked = clicked.clone();
+        MaterialTheme!({
+            let clicked = clicked.clone();
+            Column!({
+                let clicked = clicked.clone();
+                Box!(
+                    modifier = Modifier
+                        .size(50.dp())
+                        .test_tag("beneath")
+                        .clickable(move || clicked.set(clicked.get() + 1))
+                );
+                ExposedDropdownMenuBox!(
+                    expanded.get(),
+                    move |value: bool| expanded.set(value),
+                    modifier = Modifier.offset(0.dp(), 100.dp()),
+                    |scope: ExposedDropdownMenuBoxScope| {
+                        Box!(
+                            modifier = Modifier.size(100.dp()).menu_anchor(
+                                &scope,
+                                ExposedDropdownMenuAnchorType::PrimaryNotEditable
+                            )
+                        );
+                        ExposedDropdownMenu!(
+                            scope.clone(),
+                            expanded.get(),
+                            move || expanded.set(false),
+                            |_: ColumnScope| {
+                                Box!(modifier = Modifier.size(50.dp()).test_tag(ITEM));
+                            }
+                        );
+                    }
+                );
+            });
+        });
+    });
+    ui.on_node_with_tag(ITEM).assert_is_displayed();
+    click(&mut ui, "beneath");
+    assert_eq!(clicks.get(), 1);
+    assert!(!expanded.get());
+    ui.on_node_with_tag(ITEM).assert_does_not_exist();
+}
+
+/// A press that dismissed a read-only menu, on its anchor, doesn't open it again either.
+#[test]
+fn a_press_on_the_anchor_that_dismissed_a_read_only_menu_does_not_open_it() {
+    let (mut ui, expanded) = rule(true, false);
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+    });
+    assert!(!expanded.get());
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| touch.up());
+    assert!(!expanded.get());
+}
+
+/// A press the platform cancels isn't a click.
+#[test]
+fn a_cancelled_press_is_no_click() {
+    let (mut ui, changes) =
+        box_anchor(ExposedDropdownMenuAnchorType::PrimaryNotEditable, Modifier, Modifier);
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+        touch.cancel();
+    });
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+        touch.up();
+    });
+    assert_eq!(changes.get(), 1);
+}
+
+/// A second finger doesn't end the press: the last one up is the click, as
+/// `waitForUpOrCancellation` wants every pointer up.
+#[test]
+fn the_click_is_the_last_fingers_release() {
+    let (mut ui, changes) =
+        box_anchor(ExposedDropdownMenuAnchorType::PrimaryNotEditable, Modifier, Modifier);
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| {
+        touch.down_pointer(0, Offset::new(10.0, 10.0));
+        touch.down_pointer(1, Offset::new(60.0, 60.0));
+        touch.up_pointer(1);
+    });
+    assert_eq!(changes.get(), 0);
+    ui.on_node_with_tag(TF).perform_touch_input(|touch| touch.up_pointer(0));
+    assert_eq!(changes.get(), 1);
+}
+
+/// A small anchor's out of bounds is beyond the minimum touch target around it, as
+/// `isOutOfBounds(size, extendedTouchPadding)`.
+#[test]
+fn a_small_anchors_bounds_extend_to_the_touch_target() {
+    let changes = Rc::new(Cell::new(0));
+    let out = changes.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+        let out = out.clone();
+        MaterialTheme!({
+            let out = out.clone();
+            ExposedDropdownMenuBox!(
+                false,
+                move |_: bool| out.set(out.get() + 1),
+                modifier = Modifier.offset(100.dp(), 100.dp()),
+                |scope: ExposedDropdownMenuBoxScope| {
+                    Box!(
+                        modifier = Modifier
+                            .size(20.dp())
+                            .menu_anchor(&scope, ExposedDropdownMenuAnchorType::PrimaryNotEditable)
+                            .test_tag(TF)
+                    );
+                }
+            );
+        });
+    });
+    let drag_and_release = |ui: &mut ComposeTestRule, by: f32| {
+        ui.on_node_with_tag(TF).perform_touch_input(|touch| {
+            touch.down(Offset::new(10.0, 10.0));
+            touch.move_by(Offset::new(by, 0.0));
+            touch.up();
+        });
+    };
+    // 10 px past the node, 14 is the padding.
+    drag_and_release(&mut ui, 20.0);
+    assert_eq!(changes.get(), 1);
+    drag_and_release(&mut ui, 25.0);
+    assert_eq!(changes.get(), 1);
 }

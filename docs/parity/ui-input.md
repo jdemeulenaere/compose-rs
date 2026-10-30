@@ -375,7 +375,7 @@ From `compose/ui/ui/api/current.txt` (deprecated entries left out; `restricted_c
 
 ### `androidx.compose.ui.input.key`
 
-- **key-input-api:** (`Modifier.onPreviewKeyEvent` and `KeyInputModifierNode.onPreKeyEvent` exist, D1044) `Key`'s full set of about 300 keys with `keyCode`, `Key(nativeKeyCode)` and `nativeKeyCode` (compose-rs has 15 named keys plus `Character(char)` and `Other(u32)`), `KeyEventType.Unknown`, `KeyEvent.utf16CodePoint`, `isAltPressed`/`isCtrlPressed`/`isMetaPressed`/`isShiftPressed` (compose-rs: `KeyModifiers` fields), `KeyEvent.nativeKeyEvent`, `SoftKeyboardInterceptionModifierNode`, `Modifier.onInterceptKeyBeforeSoftKeyboard`, `Modifier.onPreInterceptKeyBeforeSoftKeyboard`.
+- **key-input-api:** (`Modifier.onPreviewKeyEvent` and `KeyInputModifierNode.onPreKeyEvent` exist, D1044) `Key`'s full set of about 300 keys (an exposed menu's NumPad arrows wait for it, D1048) with `keyCode`, `Key(nativeKeyCode)` and `nativeKeyCode` (compose-rs has 15 named keys plus `Character(char)` and `Other(u32)`), `KeyEventType.Unknown`, `KeyEvent.utf16CodePoint`, `isAltPressed`/`isCtrlPressed`/`isMetaPressed`/`isShiftPressed` (compose-rs: `KeyModifiers` fields), `KeyEvent.nativeKeyEvent`, `SoftKeyboardInterceptionModifierNode`, `Modifier.onInterceptKeyBeforeSoftKeyboard`, `Modifier.onPreInterceptKeyBeforeSoftKeyboard`.
 
 ### `androidx.compose.ui.input.rotary`, `androidx.compose.ui.input.indirect`, `androidx.compose.ui.input`
 

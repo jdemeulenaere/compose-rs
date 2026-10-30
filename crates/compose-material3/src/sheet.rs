@@ -693,6 +693,7 @@ pub fn ModalBottomSheet(
         dismiss_on_back_press: properties.should_dismiss_on_back_press,
         dismiss_on_click_outside: false,
         fills_window: true,
+        pass_through_outside: false,
     };
     let SheetParts { dismiss, back, modifier: sheet_modifier, handle_click, handle_semantics } =
         parts;

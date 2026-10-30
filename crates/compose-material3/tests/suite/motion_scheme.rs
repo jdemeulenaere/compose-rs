@@ -1784,6 +1784,39 @@ fn a_drawer_let_go_settles_with_the_scheme() {
     });
 }
 
+/// A dismissible drawer's let go isn't the scheme's: only the modal drawer sets
+/// `anchoredDraggableMotionSpec`, so it keeps the 256 ms tween.
+#[test]
+fn a_dismissible_drawer_let_go_keeps_its_tween() {
+    for token in TOKENS {
+        let state = DrawerState::new(DrawerValue::Open, |_| true);
+        let handle = *state;
+        let mut ui = themed(long_only(token), move || {
+            DismissibleNavigationDrawer!(
+                {
+                    DismissibleDrawerSheet!(modifier = Modifier.test_tag("sheet"), |_| {
+                        Box!(modifier = Modifier.fill_max_size());
+                    });
+                },
+                drawer_state = handle,
+                {
+                    Box!(modifier = Modifier.fill_max_size());
+                }
+            );
+        });
+        ui.on_node_with_tag("sheet").perform_touch_input(|touch| {
+            let center = touch.center();
+            touch.down(center);
+            for _ in 0..10 {
+                touch.move_by(compose_ui::Offset::new(-4.0, 0.0));
+            }
+            touch.up();
+        });
+        let millis = idle_after(&mut ui);
+        assert!((200..=300).contains(&millis), "{millis} ms with {token:?} long");
+    }
+}
+
 /// A snackbar's fade on the fast effects spec and its scale on the fast spatial one, in and out, as
 /// `FadeInFadeOutWithScale`.
 #[test]

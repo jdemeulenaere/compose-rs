@@ -27,6 +27,9 @@ pub struct PopupProperties {
     /// Taking the whole window, the system bars and the keyboard's place too, as the full-screen
     /// dialog of a `ModalBottomSheet`; a popup's is what's visible, as Android's display frame.
     pub fills_window: bool,
+    /// A press outside also reaches what's beneath, as Android's `FLAG_NOT_TOUCH_MODAL`, though
+    /// the popup takes the focus: without the focus, it does anyway.
+    pub pass_through_outside: bool,
 }
 
 impl Default for PopupProperties {
@@ -36,6 +39,7 @@ impl Default for PopupProperties {
             dismiss_on_back_press: true,
             dismiss_on_click_outside: true,
             fills_window: false,
+            pass_through_outside: false,
         }
     }
 }
@@ -160,8 +164,9 @@ pub fn PopupWithPositionProvider(
             // A focusable popup's outside is there even when a press doesn't dismiss it.
             let dismiss =
                 on_dismiss_request.clone().filter(|_| properties.dismiss_on_click_outside);
+            let modal = properties.focusable && !properties.pass_through_outside;
             if properties.focusable || dismiss.is_some() {
-                let outside = if properties.focusable {
+                let outside = if modal {
                     Modifier.overlay(window.clone(), false)
                 } else {
                     Modifier.overlay_passing_through(window.clone())
@@ -170,7 +175,7 @@ pub fn PopupWithPositionProvider(
                     on_dismiss: dismiss.unwrap_or_else(|| compose_runtime::callback(|| {})),
                     inside: Rc::new(Cell::new(None)),
                     on_press: true,
-                    modal: properties.focusable,
+                    modal,
                 });
                 Layout(catcher, fill.clone(), compose_runtime::callback(|| {}));
             }

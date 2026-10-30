@@ -617,3 +617,39 @@ fn an_open_drawers_scrim_goes_after_the_content_in_the_traversal() {
     ui.on_node_with_content_description("Close navigation menu")
         .assert(expect_value(&SemanticsProperties::TRAVERSAL_INDEX, 1.0));
 }
+
+/// With `gestures_enabled` false a drag moves nothing, opening or closing.
+#[test]
+fn with_its_gestures_disabled_a_swipe_on_a_modal_drawer_does_nothing() {
+    for (value, from, by) in
+        [(DrawerValue::Closed, 10.0, 500.0), (DrawerValue::Open, 200.0, -180.0)]
+    {
+        let state = DrawerState::new(value, |_| true);
+        let handle = *state;
+        let mut ui = ComposeTestRule::sized(compose_ui::IntSize::new(600, 600), move || {
+            MaterialTheme!({
+                ModalNavigationDrawer!(
+                    || {
+                        ModalDrawerSheet!(|_: ColumnScope| {
+                            Box!(modifier = Modifier.fill_max_size());
+                        });
+                    },
+                    drawer_state = handle,
+                    gestures_enabled = false,
+                    || {
+                        Box!(modifier = Modifier.fill_max_size().test_tag("body"));
+                    }
+                );
+            });
+        });
+        ui.on_root().perform_touch_input(|touch| {
+            touch.down(compose_ui::Offset::new(from, 300.0));
+            for _ in 0..10 {
+                touch.move_by(compose_ui::Offset::new(by / 10.0, 0.0));
+            }
+            touch.up();
+        });
+        ui.wait_for_idle();
+        assert_eq!(state.current_value(), value);
+    }
+}

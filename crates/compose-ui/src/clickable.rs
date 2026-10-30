@@ -544,21 +544,6 @@ impl ClickableNode {
 
     // ---- Pointer -------------------------------------------------------------------------
 
-    /// Whether `event`'s position is outside the bounds, extended to the minimum touch target
-    /// around a smaller node, as `isOutOfBounds(size, extendedTouchPadding)`, the target's
-    /// `LOCAL_VIEW_CONFIGURATION`'s `minimum_touch_target_size`.
-    fn out_of_bounds(event: &PointerEvent, bounds: IntSize, context: &EventContext<'_>) -> bool {
-        let minimum = context.view_configuration().minimum_touch_target_size;
-        let density = context.density();
-        let horizontal = ((density.to_px(minimum.width) - bounds.width as f32) / 2.0).max(0.0);
-        let vertical = ((density.to_px(minimum.height) - bounds.height as f32) / 2.0).max(0.0);
-        let position = event.position;
-        position.x < -horizontal
-            || position.y < -vertical
-            || position.x > bounds.width as f32 + horizontal
-            || position.y > bounds.height as f32 + vertical
-    }
-
     fn handle_down(&mut self, event: &mut PointerEvent, context: &mut EventContext<'_>) {
         event.consume();
         self.down = Some(Down { pointer: event.pointer, position: event.position });
@@ -819,7 +804,7 @@ impl PointerInputModifierNode for ClickableNode {
                         self.handle_up(event, context);
                     } else if event.consumed
                         || event.kind == PointerEventType::Release
-                        || Self::out_of_bounds(event, bounds, context)
+                        || context.is_out_of_touch_target(event, bounds)
                     {
                         self.cancel_input();
                     }
