@@ -202,6 +202,9 @@ struct StatesShared {
     bits: std::cell::Cell<u8>,
     /// What draws the indication (its host's handle), once attached.
     handle: std::cell::Cell<Option<NodeHandle>>,
+    /// A draw is asked and the node hasn't drawn since: one request a frame (a press and its
+    /// release in one batch ask once).
+    asked: std::cell::Cell<bool>,
 }
 
 pub(crate) const PRESSED: u8 = 1;
@@ -231,8 +234,10 @@ impl InteractionStates {
                 | if ongoing.hovered() { HOVERED } else { 0 }
                 | if ongoing.focused() { FOCUSED } else { 0 };
             if shared.bits.replace(bits) != bits
+                && !shared.asked.get()
                 && let Some(handle) = shared.handle.get()
             {
+                shared.asked.set(true);
                 handle.invalidate_draw();
             }
         });
@@ -243,13 +248,15 @@ impl InteractionStates {
     pub(crate) fn attach(&mut self, context: &mut NodeContext<'_>) {
         self.start();
         self.shared.handle.set(Some(context.handle()));
-        if self.get() != 0 {
+        self.shared.asked.set(false);
+        if self.shared.bits.get() != 0 {
             context.invalidate_draw();
         }
     }
 
-    /// What's under way.
+    /// What's under way, as the node draws it (a later change asks to draw again).
     pub(crate) fn get(&self) -> u8 {
+        self.shared.asked.set(false);
         self.shared.bits.get()
     }
 
@@ -259,6 +266,7 @@ impl InteractionStates {
         self.listener = None;
         self.shared.bits.set(0);
         self.shared.handle.set(None);
+        self.shared.asked.set(false);
     }
 }
 
@@ -568,4 +576,232 @@ fn state_layer_factory(color: Color, radius: Option<Dp>) -> Rc<dyn IndicationNod
         layers.push((color, radius, factory.clone()));
         factory
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraints::Constraints;
+    use crate::host::UiHost;
+    use crate::interaction::{HoverInteraction, MutableInteractionSource, Press, PressInteraction};
+    use crate::layout::{Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope};
+    use crate::modifier::ClickableOptions;
+    use crate::unit::{Offset, UnitExt};
+    use compose_runtime::{MutableState, callback, mutable_state_of, remember};
+
+    /// Places its children only while `shown`.
+    struct Hiding(MutableState<bool>);
+
+    impl MeasurePolicy for Hiding {
+        fn measure(
+            &self,
+            scope: &mut MeasureScope<'_>,
+            measurables: &[Measurable],
+            constraints: Constraints,
+        ) -> MeasureResult {
+            let loose = constraints.loosen();
+            for &measurable in measurables {
+                let placeable = scope.measure(measurable, loose);
+                if self.0.get() {
+                    scope.place(&placeable, 0, 0);
+                }
+            }
+            scope.layout(20, 20)
+        }
+    }
+
+    /// A clickable drawing a state layer for `source`, a boundary of its own if `boundary`, in
+    /// a parent placing it only while `shown`.
+    fn host_of(
+        source: &MutableInteractionSource,
+        shown: MutableState<bool>,
+        boundary: bool,
+    ) -> UiHost {
+        let source = source.clone();
+        let host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            let source = source.clone();
+            let policy = remember(|| Rc::new(Hiding(shown)) as Rc<dyn MeasurePolicy>);
+            Layout(
+                Modifier,
+                policy,
+                callback(move || {
+                    let modifier = if boundary { Modifier.repaint_boundary() } else { Modifier };
+                    let options = ClickableOptions {
+                        interaction_source: Some(source.clone()),
+                        indication: Indication::bounded(Color::RED),
+                        ..ClickableOptions::DEFAULT
+                    };
+                    crate::layout::emit_layout_node(
+                        modifier.clickable_with(options, || {}).size(10.dp()),
+                        crate::layout::empty_measure_policy(),
+                        || {},
+                    );
+                }),
+            );
+        });
+        host
+    }
+
+    fn shaded(host: &UiHost) -> bool {
+        host.display_list().dump().contains("FF0000")
+    }
+
+    fn requests(host: &UiHost) -> usize {
+        host.with_tree(|tree| tree.focus_requests.node_invalidations.borrow().len())
+    }
+
+    /// A press and its release before the node draws ask to draw once, and once it has drawn,
+    /// the next interaction asks again.
+    #[test]
+    fn interactions_before_a_draw_ask_once_and_the_draw_lets_the_next_ask() {
+        let source = MutableInteractionSource::new();
+        let shown = mutable_state_of(true);
+        let mut host = host_of(&source, shown.handle(), false);
+        host.frame();
+        assert!(!shaded(&host));
+        let press = Press::new(Offset::ZERO);
+        source.try_emit(PressInteraction::Press(press));
+        assert_eq!(requests(&host), 1);
+        source.try_emit(PressInteraction::Release(press));
+        assert_eq!(requests(&host), 1, "a press and its release ask once");
+        host.frame();
+        assert!(!shaded(&host), "nothing under way when it drew");
+        let press = Press::new(Offset::ZERO);
+        source.try_emit(PressInteraction::Press(press));
+        assert_eq!(requests(&host), 1, "it drew: the next change asks");
+        host.frame();
+        assert!(shaded(&host));
+        source.try_emit(PressInteraction::Release(press));
+        host.frame();
+        assert!(!shaded(&host));
+    }
+
+    /// An interaction on a node nothing draws (its parent places it no more) wakes no endless
+    /// frames, and what it asked isn't lost: placed again, the node draws what's under way, and
+    /// its next interactions draw again.
+    fn a_node_not_drawn_draws_what_changed_when_it_is(boundary: bool) {
+        let source = MutableInteractionSource::new();
+        let shown = mutable_state_of(true);
+        let mut host = host_of(&source, shown.handle(), boundary);
+        host.frame();
+        shown.set(false);
+        host.frame();
+        assert!(!shaded(&host));
+
+        let press = Press::new(Offset::ZERO);
+        source.try_emit(PressInteraction::Press(press));
+        assert!(host.settle(10) < 10, "a node not drawn asks for no endless frames");
+        assert!(!shaded(&host));
+        assert!(!host.needs_frame());
+        // A second change while it isn't drawn: nothing more to ask.
+        source.try_emit(HoverInteraction::Enter(crate::interaction::HoverEnter::new()));
+        assert_eq!(requests(&host), 0);
+
+        shown.set(true);
+        host.frame();
+        assert!(shaded(&host), "placed again, it draws the press\n{}", host.display_list().dump());
+        assert!(host.settle(10) < 10);
+
+        source.try_emit(PressInteraction::Release(press));
+        assert_eq!(requests(&host), 1, "it drew: its next change asks again");
+    }
+
+    #[test]
+    fn a_boundary_not_placed_draws_what_changed_when_placed_again() {
+        a_node_not_drawn_draws_what_changed_when_it_is(true);
+    }
+
+    #[test]
+    fn a_node_not_placed_draws_what_changed_when_placed_again() {
+        a_node_not_drawn_draws_what_changed_when_it_is(false);
+    }
+
+    /// A boundary not placed keeps its group dirty until a frame draws it, then it's clean: what
+    /// a request on it left isn't dirty for good.
+    #[test]
+    fn a_request_on_a_boundary_not_placed_leaves_its_group_dirty_until_it_draws() {
+        fn dirty(host: &UiHost) -> Vec<bool> {
+            host.with_tree(|tree| {
+                let mut stack = vec![tree.root_id()];
+                let mut dirty = Vec::new();
+                while let Some(id) = stack.pop() {
+                    let value = tree.node(id);
+                    if value.chain.iter().any(|entry| {
+                        entry.node.downcast_ref::<crate::clickable::ClickableNode>().is_some()
+                    }) {
+                        dirty.push(value.retained.as_ref().expect("a boundary").dirty);
+                    }
+                    stack.extend(tree.children_of(id));
+                }
+                dirty
+            })
+        }
+        let source = MutableInteractionSource::new();
+        let shown = mutable_state_of(true);
+        let mut host = host_of(&source, shown.handle(), true);
+        host.frame();
+        shown.set(false);
+        host.frame();
+        assert_eq!(dirty(&host), [false]);
+        source.try_emit(PressInteraction::Press(Press::new(Offset::ZERO)));
+        host.settle(10);
+        assert_eq!(dirty(&host), [true], "drawn when a frame places it (D435)");
+        shown.set(true);
+        host.frame();
+        assert_eq!(dirty(&host), [false]);
+    }
+
+    /// Content moved under a resting mouse: the hover the frame's layout finds is drawn by the
+    /// clickable's own boundary in that frame (D1053), asked through its handle or not.
+    #[test]
+    fn a_hover_the_layout_finds_draws_in_that_frame() {
+        let source = MutableInteractionSource::new();
+        let given = source.clone();
+        let gap = mutable_state_of(20);
+        let gap_handle = gap.handle();
+        let mut host = UiHost::headless(100, 100);
+        let policy = |gap: MutableState<i32>| {
+            Rc::new(
+                move |scope: &mut MeasureScope<'_>,
+                      measurables: &[Measurable],
+                      constraints: Constraints| {
+                    let gap = gap.get();
+                    for &measurable in measurables {
+                        let placeable = scope.measure(measurable, constraints.loosen());
+                        scope.place(&placeable, 0, gap);
+                    }
+                    scope.layout(100, 100)
+                },
+            ) as Rc<dyn MeasurePolicy>
+        };
+        host.set_content(move || {
+            let given = given.clone();
+            let policy = remember(|| policy(gap_handle));
+            Layout(
+                Modifier,
+                policy,
+                callback(move || {
+                    let options = ClickableOptions {
+                        interaction_source: Some(given.clone()),
+                        indication: Indication::bounded(Color::RED),
+                        ..ClickableOptions::DEFAULT
+                    };
+                    crate::layout::emit_layout_node(
+                        Modifier.repaint_boundary().clickable_with(options, || {}).size(10.dp()),
+                        crate::layout::empty_measure_policy(),
+                        || {},
+                    );
+                }),
+            );
+        });
+        host.frame();
+        host.send_pointer(crate::input::PointerEvent::moved(Offset::new(5.0, 5.0), false));
+        host.frame();
+        assert!(!shaded(&host));
+        gap.set(0);
+        host.frame();
+        assert!(source.is_hovered(), "the layout found the hover");
+        assert!(shaded(&host), "not in that frame\n{}", host.display_list().dump());
+    }
 }

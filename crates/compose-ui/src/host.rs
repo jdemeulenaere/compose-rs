@@ -527,6 +527,8 @@ impl UiHost {
         if measured || hover_stale {
             let actions = self.with_tree(|tree| tree.refresh_hover());
             Self::run(actions);
+            // A hover it found draws in this frame (D1053), asked through a handle or not.
+            self.with_tree(|tree| tree.apply_node_requests());
         }
         let draw = crate::trace::section(c"compose-rs: draw");
         let (drew, actions) = self.with_tree(|tree| (tree.draw(), tree.take_pending_actions()));
