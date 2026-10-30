@@ -12,8 +12,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    BackHandler, Color, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
-    PointerEvent, SemanticsActions, SemanticsProperties, UnitExt,
+    BackHandler, Color, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier,
+    Offset, PointerEvent, SemanticsActions, SemanticsProperties, UnitExt,
     platform::FixedTextMeasurer,
 };
 

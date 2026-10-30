@@ -5,7 +5,7 @@
 //! Not ported: the two `*_bottomSheetOffsetTaggedAsMotionFrameOfReference` (Compose's
 //! frame-of-reference tags); the two `bottomSheetScaffold_landscape_*` (`@Ignore`d in Compose);
 //! `*_respectsMaterialThemeMotionScheme` (feature:motion-scheme); from `BottomSheetTest`, the
-//! `@Ignore`d wide-screen tests and the window-insets ones (feature:material-window-insets);
+//! `@Ignore`d wide-screen tests;
 //! `semanticsMatcher_hasActionLabel_findsNodeForAction` is a test of its own test helper
 //! (compose-test's `perform_semantics_action` covers it).
 
@@ -841,4 +841,148 @@ fn a_standalone_sheets_default_tonal_elevation_tints_the_surface() {
     let tinted = light_color_scheme().surface_color_at_elevation(BottomSheetDefaults::ELEVATION);
     assert_ne!(tinted, light_color_scheme().surface);
     assert!(fills_with(&mut ui, tinted), "{:?}", ui.host().display_list().ops);
+}
+
+/// A 256 dp box in a `BottomSheet` of `state` and `insets`, telling `consumed` what's consumed
+/// around it.
+fn sheet_with_insets(
+    state: SheetState,
+    insets: compose_foundation::layout::WindowInsets,
+    consumed: Rc<Cell<(i32, i32)>>,
+) -> impl Fn() + 'static {
+    move || {
+        let (insets, consumed) = (insets.clone(), consumed.clone());
+        MaterialTheme!({
+            let (insets, consumed) = (insets.clone(), consumed.clone());
+            BottomSheet!(state = state, content_window_insets = insets.clone(), move |_| {
+                let consumed = consumed.clone();
+                let density = compose_ui::LOCAL_DENSITY.current();
+                Box!(
+                    modifier = Modifier
+                        .fill_max_width()
+                        .height(SHEET_HEIGHT.dp())
+                        .test_tag(SHEET_TAG)
+                        .on_consumed_window_insets_changed(
+                            move |insets: compose_foundation::layout::WindowInsets| {
+                                consumed
+                                    .set((insets.get_top(&density), insets.get_bottom(&density)));
+                            }
+                        )
+                );
+            });
+        });
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, bottomSheet_imePadding
+#[test]
+fn a_standalone_sheets_content_keeps_its_height() {
+    let state = new_state(&STANDARD, SheetValue::Expanded);
+    let consumed = Rc::new(Cell::new((0, 0)));
+    let insets = compose_foundation::layout::WindowInsets::default();
+    let mut ui = compose_test(sheet_with_insets(*state, insets, consumed));
+    let height =
+        ui.on_node_unmerged(has_test_tag(SHEET_TAG)).fetch_semantics_node().bounds.height();
+    assert_eq!(height, SHEET_HEIGHT);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, bottomSheet_preservesLayoutDirection
+#[test]
+fn a_standalone_sheet_keeps_the_layout_direction() {
+    thread_local! { static SEEN: Cell<Option<compose_ui::LayoutDirection>> = const { Cell::new(None) }; }
+    let direction = mutable_state_of(compose_ui::LayoutDirection::Ltr);
+    let read = direction.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            CompositionLocalProvider(
+                compose_ui::LOCAL_LAYOUT_DIRECTION.provides(read.get()),
+                || {
+                    BottomSheet!(|_| {
+                        SEEN.with(|cell| {
+                            cell.set(Some(compose_ui::LOCAL_LAYOUT_DIRECTION.current()))
+                        });
+                        Box!(modifier = Modifier.fill_max_width().height(SHEET_HEIGHT.dp()));
+                    });
+                },
+            );
+        });
+    });
+    assert_eq!(SEEN.with(Cell::get), Some(compose_ui::LayoutDirection::Ltr));
+    direction.set(compose_ui::LayoutDirection::Rtl);
+    ui.wait_for_idle();
+    assert_eq!(SEEN.with(Cell::get), Some(compose_ui::LayoutDirection::Rtl));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, bottomSheetContent_respectsProvidedInsets
+#[test]
+fn a_standalone_sheets_content_gets_the_provided_insets() {
+    let state = new_state(&STANDARD, SheetValue::Expanded);
+    let consumed = Rc::new(Cell::new((0, 0)));
+    let insets = compose_foundation::layout::WindowInsets::new(0.dp(), 10.dp(), 0.dp(), 20.dp());
+    let _ui = compose_test(sheet_with_insets(*state, insets, consumed.clone()));
+    assert_eq!(consumed.get(), (10, 20));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, bottomSheetContent_halfScreen_consumesSheetOffsetAsTopInsets
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, bottomSheetContent_fullScreen_consumesOnlyProvidedContentWindowInsets
+/// At any value, only what's provided: the offset above a sheet in place isn't its content's.
+#[test]
+fn a_standalone_sheets_content_consumes_only_whats_provided() {
+    for value in [SheetValue::PartiallyExpanded, SheetValue::Expanded] {
+        let state = new_state(&STANDARD, value);
+        let consumed = Rc::new(Cell::new((0, 0)));
+        let insets = compose_foundation::layout::WindowInsets::new(0.dp(), 10.dp(), 0.dp(), 0.dp());
+        let _ui = compose_test(sheet_with_insets(*state, insets, consumed.clone()));
+        assert_eq!(consumed.get().0, 10, "{value:?}");
+    }
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetTest.kt, sheetWindowInsets_reportsOffset_asTopInset
+/// `SheetWindowInsets` is internal in both: read where a modal sheet's content sees it, the top
+/// it consumes following the sheet's offset.
+#[test]
+fn a_modal_sheets_content_sees_its_offset_as_consumed() {
+    let state = SheetState::new(
+        &[SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden],
+        || 56.0,
+        || 125.0,
+        SheetValue::PartiallyExpanded,
+        |_| true,
+    );
+    let handle = *state;
+    let consumed = Rc::new(RefCell::new(None));
+    let top = consumed.clone();
+    let mut ui = compose_test(move || {
+        let top = top.clone();
+        MaterialTheme!({
+            let top = top.clone();
+            ModalBottomSheet!(
+                || {},
+                sheet_state = handle,
+                content_window_insets = compose_foundation::layout::WindowInsets::default(),
+                move |_| {
+                    let top = top.clone();
+                    Box!(
+                        modifier = Modifier.fill_max_size().on_consumed_window_insets_changed(
+                            move |insets: compose_foundation::layout::WindowInsets| {
+                                *top.borrow_mut() = Some(insets);
+                            }
+                        )
+                    );
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    // Read as the sheet moves, as Compose's insets: the same insets at each offset.
+    let top = || {
+        let consumed = consumed.borrow();
+        consumed.as_ref().expect("heard").get_top(&compose_ui::Density::new(1.0))
+    };
+    assert_eq!(handle.current_value(), SheetValue::PartiallyExpanded);
+    assert!(top() > 0);
+    assert_eq!(top() as f32, handle.require_offset());
+    compose_runtime::platform::launch(async move { handle.expand().await });
+    ui.wait_for_idle();
+    assert_eq!(top(), 0);
 }

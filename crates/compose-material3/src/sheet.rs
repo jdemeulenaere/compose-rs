@@ -660,10 +660,12 @@ pub fn ModalBottomSheet(
             }
         });
     }
+    // Only the modal sheet's offset is consumed, as Compose's: a `BottomSheet` in place has its
+    // provided insets only.
     let parts = sheet_parts(
         sheet_state,
         on_dismiss_request,
-        modifier,
+        modifier.consume_window_insets(WindowInsets::from_provider(SheetWindowInsets(sheet_state))),
         sheet_gestures_enabled,
         scope,
         density,
@@ -919,19 +921,17 @@ fn sheet_parts(
         })
     };
     // Dragged once shown, and part of its content's scrolls, with its gestures.
-    let sheet_modifier = modifier
-        .consume_window_insets(WindowInsets::from_provider(SheetWindowInsets(sheet_state)))
-        .draggable(
-            drag,
-            Orientation::Vertical,
-            sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
-            false,
-            |_| {},
-            {
-                let settle = settle.clone();
-                move |velocity| settle(velocity)
-            },
-        );
+    let sheet_modifier = modifier.draggable(
+        drag,
+        Orientation::Vertical,
+        sheet_gestures_enabled && sheet_state.current_value() != SheetValue::Hidden,
+        false,
+        |_| {},
+        {
+            let settle = settle.clone();
+            move |velocity| settle(velocity)
+        },
+    );
     let sheet_modifier = if sheet_gestures_enabled {
         sheet_modifier.nested_scroll(connection)
     } else {
