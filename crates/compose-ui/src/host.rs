@@ -228,7 +228,10 @@ impl UiHost {
         }
     }
 
-    /// Called whenever the host needs a frame (state changed): a platform host schedules one.
+    /// Called when the host needs a frame, for a platform host to schedule one: when a send
+    /// invalidates what state read (at the end of the turn that wrote it; a write outside any
+    /// turn first asks for a turn through the executor's wake handler, D755), and when the host's
+    /// own properties change.
     pub fn set_frame_waker(&self, waker: impl Fn() + 'static) {
         *self.waker.borrow_mut() = Some(Rc::new(waker));
     }

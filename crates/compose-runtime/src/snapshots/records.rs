@@ -3,7 +3,6 @@
 //! the global one are open and need an older value (docs/parity/design/snapshots.md §3.3).
 
 use std::any::Any;
-use std::cell::Cell;
 
 /// A snapshot's id, as Compose's `SnapshotId`: records carry the id of the snapshot that wrote
 /// them.
@@ -29,10 +28,9 @@ pub(crate) struct Records<R> {
 }
 
 impl<R> Records<R> {
-    /// One record holding `data`, written now.
-    pub(crate) fn new(data: R) -> Records<R> {
-        let id = super::global::global_id();
-        Records { head: Record { id, version: next_version(), data }, rest: Vec::new() }
+    /// One record holding `data`, written in snapshot `id` as write `version`.
+    pub(crate) fn new(data: R, id: SnapshotId, version: u32) -> Records<R> {
+        Records { head: Record { id, version, data }, rest: Vec::new() }
     }
 
     /// The record a read sees.
@@ -41,14 +39,14 @@ impl<R> Records<R> {
         &self.head.data
     }
 
-    /// Makes the head the record a write in snapshot `id` overwrites, with a new version:
+    /// Makes the head the record of write `version` in snapshot `id`, once it is written:
     /// returns whether that's a new record for the snapshot (the head was written in an
     /// earlier one), as Compose's `overwritableRecord` records the state as modified then.
     /// While only the global snapshot exists nothing older can be read, so the head is
     /// overwritten in place (D752).
     #[inline]
-    pub(crate) fn write_in(&mut self, id: SnapshotId) -> bool {
-        self.head.version = next_version();
+    pub(crate) fn wrote_in(&mut self, id: SnapshotId, version: u32) -> bool {
+        self.head.version = version;
         let new_record = self.head.id != id;
         self.head.id = id;
         new_record
@@ -63,22 +61,6 @@ impl<R> Records<R> {
     pub(crate) fn len(&self) -> usize {
         1 + self.rest.len()
     }
-}
-
-thread_local! {
-    /// The last write's version on this thread.
-    static VERSION: Cell<u32> = const { Cell::new(0) };
-}
-
-/// A new write's version: each write's is distinct (they wrap after 2³² writes, far beyond
-/// what a derived state compares across).
-#[inline]
-pub(crate) fn next_version() -> u32 {
-    VERSION.with(|version| {
-        let next = version.get().wrapping_add(1);
-        version.set(next);
-        next
-    })
 }
 
 /// A state object's cell in the thread's arena, as Compose's `StateObject`, erased: what the

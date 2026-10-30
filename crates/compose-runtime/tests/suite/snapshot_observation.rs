@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compose_runtime::snapshots::{Snapshot, SnapshotStateObserver, StateObjectId};
+use compose_runtime::snapshots::{self, Snapshot, SnapshotStateObserver, StateObjectId};
 use compose_runtime::*;
 
 /// How many applies changed `state` while `block` ran and was sent, as `changesOf`.
@@ -624,4 +624,317 @@ fn a_write_outside_a_turn_wakes_the_host_and_one_in_a_turn_does_not() {
     second.set(2);
     assert_eq!(woken(), 1);
     Snapshot::send_apply_notifications();
+}
+
+// ---- What a send holds (D756) ------------------------------------------------------------------
+
+/// Counts what apply observers hear: applies, and the states in each.
+fn heard() -> (Rc<Cell<usize>>, Rc<RefCell<Vec<usize>>>, snapshots::ObserverHandle) {
+    let (applies, sizes): (Rc<Cell<usize>>, Rc<RefCell<Vec<usize>>>) = Default::default();
+    let (counted, listed) = (applies.clone(), sizes.clone());
+    let handle = Snapshot::register_apply_observer(move |changed, _| {
+        counted.set(counted.get() + 1);
+        listed.borrow_mut().push(changed.len());
+    });
+    (applies, sizes, handle)
+}
+
+/// `notifyObjectsInitialized` on the global snapshot is `advanceGlobalSnapshot`, which notifies:
+/// what was written before it is heard, once, then and not at the next send.
+#[test]
+fn notifying_objects_initialized_sends_what_changed() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let (applies, sizes, _handle) = heard();
+    state.set(1);
+    Snapshot::notify_objects_initialized();
+    assert_eq!(applies.get(), 1);
+    assert_eq!(*sizes.borrow(), [1]);
+    Snapshot::notify_objects_initialized();
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1, "nothing more to hear");
+}
+
+/// A state written by a pass's effect and again after the pass ended, with the global snapshot
+/// advanced in between and no send, is one change (the design's `in_global_modified`).
+#[test]
+fn a_change_set_holds_a_state_once() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    Snapshot::notify_objects_initialized();
+    let (applies, sizes, _observer) = heard();
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    composition.set_content(move || {
+        SideEffect(move || handle.set(1));
+    });
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1);
+    assert_eq!(*sizes.borrow(), [1], "the state is in the changes once");
+    // The next change is heard again.
+    state.set(3);
+    Snapshot::send_apply_notifications();
+    assert_eq!(*sizes.borrow(), [1, 1]);
+}
+
+/// A state a pass writes that it didn't make is a change, though nothing advanced the global
+/// snapshot since the state was made: the pass is a snapshot of its own, as Compose's.
+#[test]
+fn a_write_in_composition_to_a_state_made_before_the_pass_is_a_change() {
+    let (applies, sizes, _observer) = heard();
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    composition.set_content(move || handle.set(1));
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1);
+    assert_eq!(*sizes.borrow(), [1]);
+}
+
+/// A state made and written in the same pass isn't a change, as in Compose's composition snapshot.
+#[test]
+fn a_write_in_composition_to_a_state_the_pass_made_is_not_a_change() {
+    let (applies, _sizes, _observer) = heard();
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    composition.set_content(|| {
+        let state = remember(|| mutable_state_of(0));
+        state.set(1);
+    });
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 0);
+}
+
+/// `set_content` sends first, as `recompose`: an earlier write doesn't invalidate what the pass
+/// reads with its new value.
+#[test]
+fn set_content_sends_first() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    Snapshot::notify_objects_initialized();
+    state.set(1);
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    composition.set_content(move || {
+        handle.get();
+    });
+    assert!(!composition.has_invalidations(), "the pass read the value written");
+}
+
+/// A turn that panicked keeps its writes unsent; a later write outside a turn still asks the
+/// host for a tick, which sends both.
+#[test]
+fn writes_kept_by_a_turn_that_panicked_dont_stop_later_wakes() {
+    let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = wakes.clone();
+    compose_runtime::platform::set_wake_handler(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let woken = || wakes.swap(0, std::sync::atomic::Ordering::SeqCst);
+    let (first, second) = (mutable_state_of(0), mutable_state_of(0));
+    Snapshot::notify_objects_initialized();
+    let (applies, sizes, _observer) = heard();
+    let handle = first.handle();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _turn = compose_runtime::platform::Turn::begin();
+        handle.set(1);
+        panic!("in the turn");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(woken(), 0);
+    second.set(1);
+    assert_eq!(woken(), 1, "the write outside a turn asks for a tick");
+    second.set(2);
+    assert_eq!(woken(), 0, "once");
+    compose_runtime::platform::run_ready();
+    assert_eq!(applies.get(), 1);
+    assert_eq!(*sizes.borrow(), [2]);
+    first.set(2);
+    assert_eq!(woken(), 1, "and a send starts over");
+    Snapshot::send_apply_notifications();
+}
+
+/// An `edit` that panicked recorded no write: the next write to the state is a change.
+#[test]
+fn a_write_after_an_edit_that_panicked_is_a_change() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    Snapshot::notify_objects_initialized();
+    let (applies, _sizes, _observer) = heard();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        handle.edit(|_| panic!("in the edit"));
+    }));
+    assert!(unwound.is_err());
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1);
+}
+
+/// A `set` whose old value panics when dropped recorded its write first.
+#[test]
+fn a_write_whose_old_value_panics_when_dropped_is_a_change() {
+    #[derive(PartialEq)]
+    struct PanicsOnDrop(bool);
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            if self.0 && !std::thread::panicking() {
+                panic!("dropping the old value");
+            }
+        }
+    }
+    let state = mutable_state_of(PanicsOnDrop(true));
+    let handle = state.handle();
+    Snapshot::notify_objects_initialized();
+    let (applies, _sizes, _observer) = heard();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        handle.set(PanicsOnDrop(false));
+    }));
+    assert!(unwound.is_err());
+    Snapshot::send_apply_notifications();
+    assert_eq!(applies.get(), 1);
+}
+
+// ---- SnapshotStateObserver and the apply observers (D757) --------------------------------------
+
+/// `start` registers an apply observer, which sends what's pending first: a change made before
+/// it isn't heard.
+#[test]
+fn a_change_before_start_is_not_heard() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let observer = SnapshotStateObserver::new(|run| run());
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || state.get());
+    state.set(1);
+    observer.start();
+    assert_eq!(changes.get(), 0);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0, "sent before it started");
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+/// `notify_changes` is for an observer that isn't started too: its callers tell it directly.
+#[test]
+fn notify_changes_works_on_an_observer_not_started() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let observer = Rc::new(SnapshotStateObserver::new(|run| run()));
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || state.get());
+    let told = observer.clone();
+    let _apply = Snapshot::register_apply_observer(move |changed, snapshot| {
+        told.notify_changes(changed, snapshot);
+    });
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+/// An observation of the same scope nested inside `without_read_observation` observes: it started
+/// inside the barrier, whatever observation of that scope started outside it.
+#[test]
+fn the_same_scope_observed_inside_without_read_observation_observes() {
+    let state = mutable_state_of(0);
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || {
+        Snapshot::without_read_observation(|| {
+            observer.observe_reads("scope", &callback, || state.get());
+        });
+    });
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+/// And what the outer one reads after it still registers.
+#[test]
+fn the_outer_observation_of_a_scope_records_again_after_a_nested_one_in_a_barrier() {
+    let (inner, outer) = (mutable_state_of(0), mutable_state_of(0));
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || {
+        Snapshot::without_read_observation(|| {
+            observer.observe_reads("scope", &callback, || inner.get());
+            // In the barrier, outside the nested observation: hidden.
+            outer.get();
+        });
+    });
+    outer.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 0, "read in the barrier");
+    inner.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+/// A started observer is an apply observer as others are, heard in registration order, as
+/// `SnapshotStateObserver.start` registers one with `registerApplyObserver`.
+#[test]
+fn a_started_observer_hears_in_registration_order() {
+    let state = mutable_state_of(0);
+    Snapshot::notify_objects_initialized();
+    let order: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let log = order.clone();
+    let _before = Snapshot::register_apply_observer(move |_, _| log.borrow_mut().push("before"));
+    let observer = SnapshotStateObserver::new(|run| run());
+    let log = order.clone();
+    let callback: Callback = Rc::new(move |_| log.borrow_mut().push("observer"));
+    observer.observe_reads("scope", &callback, || state.get());
+    observer.start();
+    let log = order.clone();
+    let _after = Snapshot::register_apply_observer(move |_, _| log.borrow_mut().push("after"));
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(*order.borrow(), ["before", "observer", "after"]);
+}
+
+/// A write in composition is heard once, at the send, as Compose's composition snapshot applied.
+#[test]
+fn a_write_in_composition_calls_an_observer_back_once_at_the_send() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || state.get());
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    composition.set_content(move || handle.set(1));
+    assert_eq!(changes.get(), 0, "not before the send");
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1);
+}
+
+/// A derived state read under a scope calls it back when its result changes (its own cases come
+/// with step S2).
+#[test]
+fn a_derived_state_read_under_a_scope_calls_it_back_when_it_changes() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() / 2);
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    Snapshot::notify_objects_initialized();
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    let read = derived.as_state();
+    observer.observe_reads("scope", &callback, || read.get());
+    state.set(1);
+    Snapshot::send_apply_notifications();
+    compose_runtime::platform::flush_derived_states();
+    assert_eq!(changes.get(), 0, "the result is the same");
+    state.set(2);
+    Snapshot::send_apply_notifications();
+    compose_runtime::platform::flush_derived_states();
+    assert_eq!(changes.get(), 1);
 }

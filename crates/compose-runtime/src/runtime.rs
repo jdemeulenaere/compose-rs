@@ -209,6 +209,7 @@ pub(crate) fn release_if_empty() {
         fresh.cells.set_base(runtime.cells.next_base());
         fresh.scopes.set_base(runtime.scopes.next_base());
         fresh.compositions.base = runtime.compositions.next_base();
+        fresh.snapshots.continue_from(&runtime.snapshots);
         Some(std::mem::replace(runtime, fresh))
     })
     .flatten();

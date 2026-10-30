@@ -2,9 +2,10 @@
 //! calls a scope's callback when an applied change touches what it read (D753).
 //!
 //! It's built on the runtime's keyed read observer (`platform::ReadObserver`, which compose-ui's
-//! layout and drawing use): each callback gets one, and its scopes are interned to keys. The
-//! sends tell the observers the keys whose reads changed (D751); a started observer maps them
-//! back to scopes and calls the callbacks through its executor.
+//! layout and drawing use): each callback gets one, and its scopes are interned to keys. Started,
+//! it's an apply observer as others are, heard in registration order (D757): it maps the states
+//! changed to the keys that read them, and those to scopes, and calls the callbacks through its
+//! executor.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -12,7 +13,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::{Rc, Weak};
 
-use super::{ChangeSet, Snapshot};
+use super::{ChangeSet, ObserverHandle, Snapshot};
 use crate::observe::ReadObserver;
 
 /// What a callback group does without knowing its scope type.
@@ -44,21 +45,33 @@ type Executor = Box<dyn Fn(Box<dyn FnOnce()>)>;
 struct Inner {
     executor: Executor,
     groups: RefCell<Vec<Rc<dyn Group>>>,
-    started: Cell<bool>,
+    /// While started: its registration as an apply observer.
+    registration: RefCell<Option<ObserverHandle>>,
+}
+
+impl Inner {
+    fn notify_changes(&self, changes: &ChangeSet) {
+        let groups: Vec<Rc<dyn Group>> = self.groups.borrow().clone();
+        for group in groups {
+            group.notify_changes(changes);
+        }
+    }
 }
 
 impl<S: Hash + Eq + Clone + 'static> ScopeGroup<S> {
     fn new(owner: &Rc<Inner>, callback: Rc<dyn Fn(&S)>) -> Rc<ScopeGroup<S>> {
         Rc::new_cyclic(|group: &Weak<ScopeGroup<S>>| {
             let group = group.clone();
+            let observer = ReadObserver::new(move || {
+                if let Some(group) = group.upgrade() {
+                    group.invalidated();
+                }
+            });
+            observer.set_apply_driven();
             ScopeGroup {
                 owner: Rc::downgrade(owner),
                 callback,
-                observer: ReadObserver::new(move || {
-                    if let Some(group) = group.upgrade() {
-                        group.invalidated();
-                    }
-                }),
+                observer,
                 keys: RefCell::new(HashMap::new()),
                 scopes: RefCell::new(HashMap::new()),
                 next_key: Cell::new(1),
@@ -78,17 +91,19 @@ impl<S: Hash + Eq + Clone + 'static> ScopeGroup<S> {
         key
     }
 
-    /// The observer heard changes: the scopes are called, once each, if the observer is
-    /// started.
+    /// A derived state's result it read changed, which isn't a change sent: the scopes are
+    /// called, once each, if the observer is started.
     fn invalidated(&self) {
         let mut keys = Vec::new();
         self.observer.drain_invalidated(|key| keys.push(key));
-        self.fire(keys);
+        if self.owner.upgrade().is_some_and(|owner| owner.registration.borrow().is_some()) {
+            self.fire(keys);
+        }
     }
 
     fn fire(&self, mut keys: Vec<u64>) {
         let Some(owner) = self.owner.upgrade() else { return };
-        if !owner.started.get() || keys.is_empty() {
+        if keys.is_empty() {
             return;
         }
         keys.sort_unstable();
@@ -178,7 +193,7 @@ impl SnapshotStateObserver {
             inner: Rc::new(Inner {
                 executor: Box::new(on_changed_executor),
                 groups: RefCell::new(Vec::new()),
-                started: Cell::new(false),
+                registration: RefCell::new(None),
             }),
         }
     }
@@ -235,21 +250,30 @@ impl SnapshotStateObserver {
         self.drop_empty_groups();
     }
 
-    /// Starts hearing changes, as `start()`.
+    /// Starts hearing changes, as `start()`: an apply observer, registered now, so what's
+    /// pending is sent first and not heard.
     pub fn start(&self) {
-        self.inner.started.set(true);
+        if self.inner.registration.borrow().is_some() {
+            return;
+        }
+        let inner = Rc::downgrade(&self.inner);
+        let registration = Snapshot::register_apply_observer(move |changes, _| {
+            if let Some(inner) = inner.upgrade() {
+                inner.notify_changes(changes);
+            }
+        });
+        *self.inner.registration.borrow_mut() = Some(registration);
     }
 
     /// Stops hearing changes, as `stop()`.
     pub fn stop(&self) {
-        self.inner.started.set(false);
+        let registration = self.inner.registration.borrow_mut().take();
+        drop(registration);
     }
 
-    /// Tells the observer `changes` were applied, as the test-only `notifyChanges`.
+    /// Tells the observer `changes` were applied, as `notifyChanges`, started or not.
     pub fn notify_changes(&self, changes: &ChangeSet, _snapshot: &Snapshot) {
-        for group in self.groups() {
-            group.notify_changes(changes);
-        }
+        self.inner.notify_changes(changes);
     }
 
     /// Forgets every observation, as `clear()`.

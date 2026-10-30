@@ -47,6 +47,8 @@ impl Composition {
     /// new one: groups with the same keys keep their state.
     pub fn set_content(&self, content: impl Fn() + 'static) {
         let content: Rc<dyn Fn()> = Rc::new(content);
+        // The changes of the turn so far invalidate their readers first (D751), as `recompose`.
+        crate::snapshots::Snapshot::send_apply_notifications();
         // What was asked of the paused composition, if any, first.
         crate::pausable::run_requests(self.id);
         // A composition closed at thread exit composes nothing.
@@ -304,6 +306,9 @@ impl Pass {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
+            // As Compose's composition takes a snapshot: what it writes of what's made before
+            // is a change, what it makes isn't (D756).
+            crate::snapshots::advance_around_pass(runtime);
             let Runtime {
                 compositions,
                 cells,
@@ -461,7 +466,7 @@ impl Pass {
         let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
             // As Compose applies the composition's snapshot: what it made is initialized.
-            crate::snapshots::pass_composed(runtime);
+            crate::snapshots::advance_around_pass(runtime);
             runtime.pause = None;
             runtime.pausable_pass = false;
             runtime.resume_next = None;
@@ -481,7 +486,7 @@ impl Pass {
         drop(finishing);
         with_runtime(|runtime| {
             // What its effects made is initialized too, as the end of Compose's frame (D754).
-            crate::snapshots::pass_composed(runtime);
+            crate::snapshots::advance_around_pass(runtime);
             // An effect may have dropped the composition.
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.deferred.restore(deferred);

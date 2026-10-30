@@ -11,7 +11,6 @@
 //! composition snapshot's write observer does (D703, D712), and reach the apply observers at
 //! the next send.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{SnapshotId, StateObjectId};
@@ -52,19 +51,15 @@ pub(crate) struct Snapshots {
     sending: u32,
     /// Turns in progress, which send at their end: a write in one doesn't wake the host.
     turns: u32,
-}
-
-thread_local! {
-    /// The global snapshot's id, read by every write (const-initialized: no lazy check).
-    static GLOBAL: Cell<SnapshotId> = const { Cell::new(super::records::FIRST_GLOBAL) };
+    /// The global snapshot's id: what a write's record takes.
+    global: SnapshotId,
+    /// The last write's version (a new write's is the next, each write's distinct; they wrap
+    /// after 2³² writes, far beyond what a derived state compares across).
+    version: u32,
     /// Whether a write must tell observers (a write observer frame, a global write observer).
-    static WRITES_OBSERVED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// The global snapshot's id.
-#[inline]
-pub(crate) fn global_id() -> SnapshotId {
-    GLOBAL.with(Cell::get)
+    writes_observed: bool,
+    /// A write outside a turn asked the host for a turn since the last send.
+    woken: bool,
 }
 
 impl Snapshots {
@@ -80,7 +75,30 @@ impl Snapshots {
             reads_observed: false,
             sending: 0,
             turns: 0,
+            global: super::records::FIRST_GLOBAL,
+            version: 0,
+            writes_observed: false,
+            woken: false,
         }
+    }
+
+    /// The global snapshot's id.
+    #[inline]
+    pub(crate) fn global(&self) -> SnapshotId {
+        self.global
+    }
+
+    /// A new write's version.
+    #[inline]
+    pub(crate) fn next_version(&mut self) -> u32 {
+        self.version = self.version.wrapping_add(1);
+        self.version
+    }
+
+    /// The ids and versions go on in a runtime replacing this one.
+    pub(crate) fn continue_from(&mut self, other: &Snapshots) {
+        self.global = other.global;
+        self.version = other.version;
     }
 
     /// Whether the global snapshot has changes to send.
@@ -123,19 +141,16 @@ impl Snapshots {
             self.frames[self.barrier_top as usize..].iter().any(|frame| frame.read.is_some());
     }
 
-    fn update_writes_observed(&self) {
-        let observed = !self.global_write_observers.is_empty()
+    fn update_writes_observed(&mut self) {
+        self.writes_observed = !self.global_write_observers.is_empty()
             || self.frames.iter().any(|frame| frame.write.is_some());
-        WRITES_OBSERVED.with(|flag| flag.set(observed));
     }
 
     /// Advances the global snapshot; returns the id it had.
     fn advance(&mut self) -> SnapshotId {
-        GLOBAL.with(|global| {
-            let previous = global.get();
-            global.set(previous + 1);
-            previous
-        })
+        let previous = self.global;
+        self.global = previous + 1;
+        previous
     }
 }
 
@@ -226,7 +241,7 @@ fn take_observer<F>(observers: &mut Vec<(u64, F)>, handle: u64) -> Option<F> {
 impl Snapshot {
     /// The snapshot code runs in: the global one (until isolated snapshots, S5).
     pub fn current() -> Snapshot {
-        Snapshot { id: global_id() }
+        Snapshot { id: with_runtime(|runtime| runtime.snapshots.global) }
     }
 
     /// The snapshot's id, as `snapshotId`: the global snapshot's grows as it advances.
@@ -288,9 +303,10 @@ impl Snapshot {
 
     /// States made until now count as initialized: a later write to one is a change the apply
     /// observers hear, as `Snapshot.notifyObjectsInitialized()` (a state written in the global
-    /// snapshot that made it isn't one, as in Compose). It advances the global snapshot.
+    /// snapshot that made it isn't one, as in Compose). It advances the global snapshot, as
+    /// `advanceGlobalSnapshot`, so what changed is sent; during a pass only the id advances.
     pub fn notify_objects_initialized() {
-        with_runtime(|runtime| runtime.snapshots.advance());
+        send(true);
     }
 
     /// Runs `block` with `read_observer` called for each state it reads and `write_observer`
@@ -334,7 +350,7 @@ impl FrameGuard {
             }
             snapshots.update_reads_observed();
             if writes {
-                WRITES_OBSERVED.with(|flag| flag.set(true));
+                snapshots.writes_observed = true;
             }
         });
         FrameGuard
@@ -382,20 +398,28 @@ pub(crate) fn notify_read(id: StateId) {
 /// says it made a new record in the global snapshot (its readable one was older).
 #[inline]
 pub(crate) fn wrote(id: StateId, new_record: bool, composing: bool) {
-    let (wake, requested) = with_runtime(|runtime| {
-        let mut wake = new_record && record_modified(runtime, id, !composing);
+    let (wake, requested, observed) = with_runtime(|runtime| {
+        let snapshots = &mut runtime.snapshots;
+        let read_by_derived =
+            runtime.cells.record_write(id, new_record, !composing, &mut snapshots.modified);
+        // The first change since a send, outside any turn, asks the host for one.
+        let mut wake = new_record && snapshots.turns == 0 && !snapshots.woken;
+        snapshots.woken |= wake;
+        let observed = snapshots.writes_observed;
         // In composition the write invalidated everything at once.
         if composing {
-            return (wake, false);
+            return (wake, false, observed);
         }
         // Derived states reading it are marked now: no read is behind what it derives from.
-        wake |= crate::state::invalidate_cell(
-            runtime,
-            id,
-            crate::scope::ScopeId::NONE,
-            crate::state::Invalidation::DERIVED,
-        );
-        (wake, frames_requested(runtime))
+        if read_by_derived {
+            wake |= crate::state::invalidate_cell(
+                runtime,
+                id,
+                crate::scope::ScopeId::NONE,
+                crate::state::Invalidation::DERIVED,
+            );
+        }
+        (wake, frames_requested(runtime), observed)
     });
     if wake {
         crate::executor::wake_host();
@@ -403,21 +427,9 @@ pub(crate) fn wrote(id: StateId, new_record: bool, composing: bool) {
     if requested {
         request_frames();
     }
-    if WRITES_OBSERVED.with(Cell::get) {
+    if observed {
         notify_write(id, composing);
     }
-}
-
-/// Adds `id` to the global snapshot's modified list; `pending`: its readers are invalidated at
-/// the send (a write in composition invalidated them already). Returns whether the host should
-/// be woken for a send (the first change since one, outside any turn).
-fn record_modified(runtime: &mut Runtime, id: StateId, pending: bool) -> bool {
-    let first = runtime.snapshots.modified.is_empty();
-    runtime.snapshots.modified.push(id);
-    if pending {
-        runtime.cells.set_pending(id);
-    }
-    first && runtime.snapshots.turns == 0
 }
 
 /// Calls the write observers of the frames, innermost first, and the global ones for a write
@@ -439,14 +451,11 @@ fn notify_write(id: StateId, composing: bool) {
 }
 
 /// Ends the global snapshot's changes: advances it, invalidates the readers of what changed and
-/// calls the apply observers. With `always`, it advances even with nothing to send. Nothing
-/// while a pass composes (its writes invalidate at once; the next turn sends).
+/// calls the apply observers. With `always`, it advances even with nothing to send. It sends
+/// nothing while a pass composes (its writes invalidate at once; the next turn sends).
 fn send(always: bool) {
     let sent = with_runtime(|runtime| {
-        if runtime.is_composing() {
-            return None;
-        }
-        if runtime.snapshots.modified.is_empty() {
+        if runtime.is_composing() || runtime.snapshots.modified.is_empty() {
             if always {
                 runtime.snapshots.advance();
             }
@@ -455,16 +464,15 @@ fn send(always: bool) {
         let modified = std::mem::take(&mut runtime.snapshots.modified);
         let previous = runtime.snapshots.advance();
         runtime.snapshots.sending += 1;
+        runtime.snapshots.woken = false;
         let mut flush = false;
         for &id in &modified {
-            if runtime.cells.take_pending(id) {
-                flush |= crate::state::invalidate_cell(
-                    runtime,
-                    id,
-                    crate::scope::ScopeId::NONE,
-                    crate::state::Invalidation::READERS,
-                );
-            }
+            flush |= crate::state::invalidate_cell(
+                runtime,
+                id,
+                crate::scope::ScopeId::NONE,
+                crate::state::Invalidation::SENT,
+            );
         }
         let requested = frames_requested(runtime);
         let observers: Option<Vec<ApplyObserver>> = (!runtime.snapshots.apply_observers.is_empty())
@@ -561,10 +569,11 @@ impl Drop for Turn {
     }
 }
 
-/// Advances the global snapshot after a pass composed, as applying Compose's composition
-/// snapshot does, and again after its end-of-pass work, as `Recomposer`'s
-/// `notifyObjectsInitialized` (D754): states made in the pass or by its effects are initialized,
-/// so their next writes are changes.
-pub(crate) fn pass_composed(runtime: &mut Runtime) {
+/// Advances the global snapshot, without sending, around a pass: when it starts, as Compose's
+/// composition takes a snapshot of its own, so what it writes of what was made before is a
+/// change (D756); when it composed, as applying that snapshot does; after its end-of-pass work,
+/// as `Recomposer`'s `notifyObjectsInitialized` (D754), so what it and its effects made is
+/// initialized and their next writes are changes.
+pub(crate) fn advance_around_pass(runtime: &mut Runtime) {
     runtime.snapshots.advance();
 }

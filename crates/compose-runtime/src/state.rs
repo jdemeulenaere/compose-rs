@@ -71,6 +71,8 @@ struct CellEntry {
     refresh: Option<std::rc::Weak<dyn crate::derived::Refresh>>,
     /// Written outside composition since the last send: its readers are invalidated then.
     pending: bool,
+    /// In the global snapshot's modified list.
+    in_global_modified: bool,
     /// A derived state's calculation may have read it (it stays set): a write marks those dirty.
     read_by_derived: bool,
     created_at: &'static Location<'static>,
@@ -130,6 +132,7 @@ impl Cells {
                 stale: false,
                 refresh: None,
                 pending: false,
+                in_global_modified: false,
                 read_by_derived: false,
                 created_at,
                 freed: (0, created_at),
@@ -161,6 +164,7 @@ impl Cells {
         entry.stale = false;
         entry.refresh = None;
         entry.pending = false;
+        entry.in_global_modified = false;
         entry.read_by_derived = false;
         self.dirty_derived.remove(&id.index);
         self.free.push(id.index);
@@ -241,16 +245,25 @@ impl Cells {
         self.entries.len() - self.free.len()
     }
 
-    /// Marks a cell written outside composition: the next send invalidates its readers.
-    pub(crate) fn set_pending(&mut self, id: StateId) {
-        if let Ok(entry) = self.entry(id) {
-            entry.pending = true;
+    /// Records a write in the global snapshot: with `new_record`, a change, in `modified` once;
+    /// `pending`, made outside composition: the next send invalidates its readers. Returns
+    /// whether a derived state's calculation may have read it.
+    pub(crate) fn record_write(
+        &mut self,
+        id: StateId,
+        new_record: bool,
+        pending: bool,
+        modified: &mut Vec<StateId>,
+    ) -> bool {
+        let Ok(entry) = self.entry(id) else { return false };
+        if new_record {
+            if !entry.in_global_modified {
+                entry.in_global_modified = true;
+                modified.push(id);
+            }
+            entry.pending |= pending;
         }
-    }
-
-    /// Whether the cell was written outside composition since the last send; clears it.
-    pub(crate) fn take_pending(&mut self, id: StateId) -> bool {
-        self.entry(id).is_ok_and(|entry| std::mem::take(&mut entry.pending))
+        entry.read_by_derived
     }
 }
 
@@ -351,8 +364,8 @@ fn register_observed_read(
 /// A state object's cell, out of the arena.
 type StateRc = Rc<dyn StateObjectCell>;
 
-/// `write_cell` or `try_write_cell`: the cell, and whether a pass is composing.
-type CellLookup = fn(StateId, &'static Location<'static>) -> Result<(StateRc, bool), Stale>;
+/// `write_cell` or `try_write_cell`: the cell, and what the write needs of the runtime.
+type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Writing, Stale>;
 
 /// Looks a cell up for reading, registering the read. A dirty derived state's result is
 /// refreshed first, outside the borrow.
@@ -526,13 +539,24 @@ fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'stat
     if snapshots.reads_observed() { Read::Observed(cell) } else { Read::Cell(cell) }
 }
 
+/// A cell looked up for writing, and what the write needs of the runtime, read in the borrow
+/// that looked it up.
+struct Writing {
+    cell: StateRc,
+    /// A pass is composing.
+    composing: bool,
+    /// The global snapshot's id.
+    snapshot: crate::snapshots::SnapshotId,
+    version: u32,
+}
+
 /// Looks a cell up for writing.
-fn write_cell(id: StateId, at: &'static Location<'static>) -> Result<(StateRc, bool), Stale> {
+fn write_cell(id: StateId, at: &'static Location<'static>) -> Result<Writing, Stale> {
     with_runtime(|runtime| write_cell_in(runtime, id, at))
 }
 
 /// Like [`write_cell`], for `try_set`: a stale cell once the thread's runtime is gone.
-fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<(StateRc, bool), Stale> {
+fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<Writing, Stale> {
     try_with_runtime(|runtime| write_cell_in(runtime, id, at))
         .unwrap_or(Err(Stale { created_at: None }))
 }
@@ -543,10 +567,12 @@ fn write_cell_in(
     runtime: &mut Runtime,
     id: StateId,
     _at: &'static Location<'static>,
-) -> Result<(StateRc, bool), Stale> {
+) -> Result<Writing, Stale> {
     let composing = runtime.is_composing();
     let entry = runtime.cells.entry(id)?;
-    Ok((entry.cell.as_ref().expect("a live cell").state(), composing))
+    let cell = entry.cell.as_ref().expect("a live cell").state();
+    let version = runtime.snapshots.next_version();
+    Ok(Writing { cell, composing, snapshot: runtime.snapshots.global(), version })
 }
 
 /// What a write did.
@@ -614,15 +640,20 @@ pub(crate) struct Invalidation {
     /// The derived states that read it: their results are marked dirty (a read recomputes
     /// them), and their readers invalidated on the condition that they changed.
     pub derived: bool,
+    /// It's the send, for a state in the global snapshot's modified list: only a write outside
+    /// composition still has readers to invalidate.
+    pub sent: bool,
 }
 
 impl Invalidation {
-    pub(crate) const ALL: Invalidation = Invalidation { readers: true, derived: true };
+    pub(crate) const ALL: Invalidation = Invalidation { readers: true, derived: true, sent: false };
     /// At a write outside composition: derived states are marked at once, so no read is behind
     /// what it derives from; the readers wait for the send (D751).
-    pub(crate) const DERIVED: Invalidation = Invalidation { readers: false, derived: true };
+    pub(crate) const DERIVED: Invalidation =
+        Invalidation { readers: false, derived: true, sent: false };
     /// At the send.
-    pub(crate) const READERS: Invalidation = Invalidation { readers: true, derived: false };
+    pub(crate) const SENT: Invalidation =
+        Invalidation { readers: true, derived: false, sent: true };
 }
 
 /// [`invalidate_readers_except`]'s work, in the runtime's borrow: frame requests are queued.
@@ -641,9 +672,11 @@ pub(crate) fn invalidate_cell(
         let Ok(entry) = cells.entry(id) else {
             return false;
         };
-        // At a write, nearly always: no derived state read it.
-        if !reach.readers && !entry.read_by_derived {
-            return false;
+        if reach.sent {
+            entry.in_global_modified = false;
+            if !std::mem::take(&mut entry.pending) {
+                return false;
+            }
         }
         let mut requested = false;
         if reach.readers {
@@ -664,6 +697,7 @@ pub(crate) fn invalidate_cell(
                 true
             });
         }
+        let derived_result = entry.refresh.is_some();
         // Reads observed in layout and drawing: their observers hear the keys. A derived
         // state's observer marks its result dirty, and stale: what it read changed. The derived
         // states reading a dirty one are dirty too, stale only if it changes (`None`: no dirty
@@ -678,12 +712,12 @@ pub(crate) fn invalidate_cell(
                     Some(cell) => {
                         if reach.derived {
                             dirty.push((cell, None));
-                            let _ = observers.invalidate(read);
+                            let _ = observers.invalidate(read, false);
                         }
                     }
                     None => {
                         if reach.readers
-                            && let Some(notify) = observers.invalidate(read)
+                            && let Some(notify) = observers.invalidate(read, derived_result)
                         {
                             frame_requests.push(notify);
                             requested = true;
@@ -774,8 +808,10 @@ impl<T: 'static> StateCell<T> {
         equivalent: fn(&T, &T) -> bool,
         created_at: &'static Location<'static>,
     ) -> Self {
+        let (snapshot, version) =
+            with_runtime(|runtime| (runtime.snapshots.global(), runtime.snapshots.next_version()));
         StateCell {
-            records: RefCell::new(Records::new(ValueRecord { value })),
+            records: RefCell::new(Records::new(ValueRecord { value }, snapshot, version)),
             borrowed_at: Cell::new(None),
             equivalent,
             created_at,
@@ -806,15 +842,12 @@ impl<T: 'static> StateCell<T> {
         }
     }
 
-    /// The writable record's value: a new write, in the global snapshot. Also whether it made
-    /// a new record there (the readable one was written in an earlier global snapshot).
-    fn write(&self, at: &'static Location<'static>) -> (CellMut<'_, T>, bool) {
+    /// The writable record, to overwrite ([`CellMut::wrote_in`] says the write is done).
+    fn write(&self, at: &'static Location<'static>) -> CellMut<'_, T> {
         match self.records.try_borrow_mut() {
-            Ok(mut records) => {
+            Ok(records) => {
                 self.borrowed_at.set(Some(at));
-                let new_record = records.write_in(crate::snapshots::global_id());
-                let value = RefMut::map(records, |records| &mut records.head.data.value);
-                (CellMut { value, cell: self }, new_record)
+                CellMut { records, cell: self }
             }
             Err(_) => self.conflict(at),
         }
@@ -853,20 +886,30 @@ impl<T> Drop for CellRef<'_, T> {
 }
 
 struct CellMut<'a, T> {
-    value: RefMut<'a, T>,
+    records: RefMut<'a, Records<ValueRecord<T>>>,
     cell: &'a StateCell<T>,
+}
+
+impl<T> CellMut<'_, T> {
+    /// The write is done, as `version` in `snapshot`: whether it made a new record in the global
+    /// snapshot (the readable one was written in an earlier one). Not called if it panicked, so
+    /// the next write to the state is still a change.
+    #[inline]
+    fn wrote_in(&mut self, snapshot: crate::snapshots::SnapshotId, version: u32) -> bool {
+        self.records.wrote_in(snapshot, version)
+    }
 }
 
 impl<T> Deref for CellMut<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        &self.value
+        &self.records.head.data.value
     }
 }
 
 impl<T> DerefMut for CellMut<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        &mut self.value
+        &mut self.records.head.data.value
     }
 }
 
@@ -1119,8 +1162,11 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn set(&self, value: T) {
         let at = Location::caller();
-        if let Some(written) = self.write(value, at).unwrap_or_else(|error| stale(error, at)) {
+        if let Some((written, old)) = self.write(value, at).unwrap_or_else(|error| stale(error, at))
+        {
             after_write(self.id, written);
+            // User code, and the write is told before it can panic.
+            drop(old);
         }
     }
 
@@ -1149,17 +1195,16 @@ impl<T: 'static> MutableState<T> {
             drop(old);
             return;
         }
-        let lookup: CellLookup = |id, _| {
+        let lookup: CellLookup = |id, at| {
             with_runtime(|runtime| {
-                runtime
-                    .cells
-                    .entry(id)
-                    .map(|entry| (entry.cell.as_ref().expect("a live cell").state(), false))
+                write_cell_in(runtime, id, at)
+                    .map(|writing| Writing { composing: false, ..writing })
             })
         };
-        if self.write_with(value, at, lookup).ok().flatten().is_some() {
+        if let Ok(Some((_, old))) = self.write_with(value, at, lookup) {
             let skip = with_runtime(|runtime| runtime.reading_scope());
             invalidate_readers_except(self.id, skip);
+            drop(old);
         }
     }
 
@@ -1184,10 +1229,12 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn edit<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let at = Location::caller();
-        let (cell, composing) = write_cell(self.id, at).unwrap_or_else(|error| stale(error, at));
+        let Writing { cell, composing, snapshot, version } =
+            write_cell(self.id, at).unwrap_or_else(|error| stale(error, at));
         let (result, new_record) = {
-            let (mut value, new_record) = StateCell::<T>::of(&cell).write(at);
-            (f(&mut value), new_record)
+            let mut record = StateCell::<T>::of(&cell).write(at);
+            let result = f(&mut record);
+            (result, record.wrote_in(snapshot, version))
         };
         drop(cell);
         after_write(self.id, Written { new_record, composing });
@@ -1210,8 +1257,9 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn try_set(&self, value: T) -> bool {
         match self.write_with(value, Location::caller(), try_write_cell) {
-            Ok(Some(written)) => {
+            Ok(Some((written, old))) => {
                 after_write(self.id, written);
+                drop(old);
                 true
             }
             Ok(None) => true,
@@ -1229,8 +1277,12 @@ impl<T: 'static> MutableState<T> {
         State { handle: *self }
     }
 
-    /// What the write did, or `None` if the policy found the value equivalent.
-    fn write(&self, value: T, at: &'static Location<'static>) -> Result<Option<Written>, Stale> {
+    /// What the write did and the old value, or `None` if the policy found the value equivalent.
+    fn write(
+        &self,
+        value: T,
+        at: &'static Location<'static>,
+    ) -> Result<Option<(Written, T)>, Stale> {
         self.write_with(value, at, write_cell)
     }
 
@@ -1239,8 +1291,8 @@ impl<T: 'static> MutableState<T> {
         value: T,
         at: &'static Location<'static>,
         lookup: CellLookup,
-    ) -> Result<Option<Written>, Stale> {
-        let (cell, composing) = lookup(self.id, at)?;
+    ) -> Result<Option<(Written, T)>, Stale> {
+        let Writing { cell, composing, snapshot, version } = lookup(self.id, at)?;
         let cell = StateCell::<T>::of(&cell);
         let equivalent = {
             let current = cell.read(at);
@@ -1249,11 +1301,11 @@ impl<T: 'static> MutableState<T> {
         if equivalent {
             return Ok(None);
         }
-        let (mut record, new_record) = cell.write(at);
+        let mut record = cell.write(at);
         let old = std::mem::replace(&mut *record, value);
+        let new_record = record.wrote_in(snapshot, version);
         drop(record);
-        drop(old);
-        Ok(Some(Written { new_record, composing }))
+        Ok(Some((Written { new_record, composing }, old)))
     }
 }
 

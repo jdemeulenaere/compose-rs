@@ -21,6 +21,9 @@ pub(crate) struct ObserverEntry {
     invalidated: Vec<u64>,
     /// `notify` is queued, and not called again until the invalidated keys are drained.
     pending: bool,
+    /// It hears changes as an apply observer does (`SnapshotStateObserver`): invalidations
+    /// reach it only for a derived state's result, which isn't a change sent (D757).
+    apply_driven: bool,
     /// A derived state's result cell, marked dirty when a read is invalidated.
     dirty_cell: Option<crate::state::StateId>,
 }
@@ -75,8 +78,15 @@ impl Observers {
     }
 
     /// Records that a write invalidated `read`; returns the notification to queue, if any.
-    pub(crate) fn invalidate(&mut self, read: &ObservedRead) -> Option<Rc<dyn Fn()>> {
+    pub(crate) fn invalidate(
+        &mut self,
+        read: &ObservedRead,
+        derived_result: bool,
+    ) -> Option<Rc<dyn Fn()>> {
         let entry = self.entries.get_mut(read.observer as usize)?.as_mut()?;
+        if entry.apply_driven && !derived_result {
+            return None;
+        }
         if !entry.invalidated.contains(&read.key) {
             entry.invalidated.push(read.key);
         }
@@ -114,6 +124,7 @@ impl ReadObserver {
                 epochs: HashMap::default(),
                 invalidated: Vec::new(),
                 pending: false,
+                apply_driven: false,
                 dirty_cell: None,
             };
             let index = match observers.entries.iter().position(Option::is_none) {
@@ -146,12 +157,16 @@ impl ReadObserver {
     fn observe_with<R>(&self, key: u64, exclusive: bool, f: impl FnOnce() -> R) -> R {
         let previous = with_runtime(|runtime| {
             // Inside an observation of the same key (a node's layout modifiers around its
-            // policy), the reads add to it.
-            if runtime
+            // policy), the reads add to it, seen from here: a `without_read_observation` around
+            // this one hides what's read outside it, not in it.
+            let previous = runtime.observing;
+            if let Some(observing) = runtime
                 .observing
-                .is_some_and(|observing| observing.observer == self.index && observing.key == key)
+                .as_mut()
+                .filter(|observing| observing.observer == self.index && observing.key == key)
             {
-                return runtime.observing;
+                observing.depth = runtime.snapshots.depth();
+                return previous;
             }
             let epoch = match runtime.observers.entry(self.index, self.serial) {
                 Some(entry) => {
@@ -179,6 +194,18 @@ impl ReadObserver {
         }
         let _restore = Restore(previous);
         f()
+    }
+
+    /// Makes this observer hear changes as an apply observer does, by [`keys_reading`]: an
+    /// invalidation reaches it only for a derived state's result.
+    ///
+    /// [`keys_reading`]: Self::keys_reading
+    pub(crate) fn set_apply_driven(&self) {
+        with_runtime(|runtime| {
+            if let Some(entry) = runtime.observers.entry(self.index, self.serial) {
+                entry.apply_driven = true;
+            }
+        });
     }
 
     /// Makes this observer a derived state's: an invalidated read marks `cell` dirty.
