@@ -126,10 +126,14 @@ pub(crate) fn on_free_tree<R>(key: u32, f: impl FnOnce(&mut UiTree) -> R) -> Opt
     let mut result = None;
     let mut actions = Vec::new();
     let mut dirty = false;
+    // Inside a block's transaction: what it queues for application code waits for it.
+    let in_block = crate::node_context::tree_is_set_aside(key);
     with_free_tree(key, &mut |tree: &mut UiTree| {
         if let Some(f) = f.take() {
             result = Some(f(tree));
-            actions = tree.take_pending_actions();
+            if !in_block {
+                actions = tree.take_pending_actions();
+            }
             dirty = tree.needs_draw || tree.semantics_changed;
         }
     });
@@ -309,8 +313,10 @@ impl UiTree {
             // Below the container, not it (`isDescendantOf`).
             let Some(entry) = head.filter(|_| node != container) else { continue };
             let Some(target) = self.own_target_at_entry(node, entry) else { continue };
+            // Its layout's bounds and its own: one moved by a modifier off where its node is laid
+            // out isn't found there (the rectangles of `RectManager`, then `intersects`).
             let bounds = self.focus_rect_of(target);
-            if !overlaps(&bounds) {
+            if !overlaps(&self.bounds_in_root(node)) || !overlaps(&bounds) {
                 continue;
             }
             if self.focus.active == Some(target) {
@@ -517,15 +523,6 @@ impl FocusRequester {
                 success
             }
         }
-    }
-
-    /// As `requestFocus` on the tree in a transaction: its result is real.
-    pub(crate) fn request_focus_on_tree(
-        &self,
-        tree: &mut UiTree,
-        direction: FocusDirection,
-    ) -> bool {
-        self.perform_on_tree(tree, RequesterOperation::Request(direction))
     }
 
     /// As `findFocusTarget`: for each node attached, the first target below it that `on_found`

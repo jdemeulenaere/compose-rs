@@ -128,6 +128,7 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldNode;
     fn create(&self) -> TextFieldNode {
         TextFieldNode {
+            is_focus_target: self.enabled,
             // At the start, as Compose's `TextFieldValue` with no selection given.
             cursor: 0,
             anchor: 0,
@@ -313,6 +314,8 @@ struct Press {
 }
 
 pub(crate) struct TextFieldNode {
+    /// Disabled, it isn't a focus target, as `undelegate(textFieldFocusableNode)` (D1274).
+    is_focus_target: bool,
     /// The text shown: `value`, with the edits made since the last frame.
     text: String,
     /// The application's value, as composition last gave it.
@@ -717,7 +720,13 @@ impl ModifierNode for TextFieldNode {
         Some(self)
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
-        Some(self)
+        if self.is_focus_target { Some(self) } else { None }
+    }
+    fn focus_target_wanted(&self) -> Option<bool> {
+        Some(self.enabled)
+    }
+    fn set_is_focus_target(&mut self, is_target: bool) {
+        self.is_focus_target = is_target;
     }
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)

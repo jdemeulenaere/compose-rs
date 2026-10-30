@@ -188,7 +188,7 @@ pub struct LayoutNode {
     pub(crate) view_configuration: u16,
     /// The composite key hash where it's composed, as `LayoutNode.compositeKeyHash`: what a saved
     /// focused child is found by again. Read only for nodes with a focus target (0: not read).
-    pub(crate) composite_key_hash: u64,
+    pub(crate) composite_key: compose_runtime::CompositeKeyToken,
 }
 
 impl LayoutNode {
@@ -230,7 +230,7 @@ impl LayoutNode {
             locals: compose_runtime::CompositionLocalAnchor::NONE,
             density: Density::default(),
             view_configuration: 0,
-            composite_key_hash: 0,
+            composite_key: compose_runtime::CompositeKeyToken::NONE,
         }
     }
 
@@ -1037,12 +1037,17 @@ impl UiTree {
         let mut locals_updated: SmallVec<[u16; 1]> = SmallVec::new();
         // The updated event nodes: told their state when the pass ends.
         let mut focus_events: SmallVec<[EntryId; 1]> = SmallVec::new();
+        // The entries whose update makes them a focus target, or not one any more.
+        let mut target_flips: SmallVec<[(EntryId, bool); 1]> = SmallVec::new();
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
                 if !old.same(new) {
                     let entry = &mut value.chain[index];
                     nodes::update(new, &mut *entry.node);
+                    if let Some(flip) = entry.focus_target_flip() {
+                        target_flips.push(flip);
+                    }
                     let updated = entry.after_update();
                     if updated.delegated {
                         delegated.push(entry.id);
@@ -1079,6 +1084,9 @@ impl UiTree {
             }
             drop(previous);
             self.focus_chain_changed(node, invalidated, &focus_events);
+            for (entry, wanted) in target_flips {
+                self.flip_focus_target(node, entry, wanted);
+            }
             self.auto_invalidate(node, invalidated, NodeKinds::NONE, parent_data_changed);
             if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
                 self.note_updated_layer(node);
@@ -1103,6 +1111,9 @@ impl UiTree {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
                         nodes::update(element, &mut *entry.node);
+                        if let Some(flip) = entry.focus_target_flip() {
+                            target_flips.push(flip);
+                        }
                         let updated = entry.after_update();
                         if updated.delegated {
                             delegated.push(entry.id);
@@ -1207,6 +1218,9 @@ impl UiTree {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Removed(node, detaching));
         }
         self.focus_chain_changed(node, invalidated, &focus_events);
+        for (entry, wanted) in target_flips {
+            self.flip_focus_target(node, entry, wanted);
+        }
         self.auto_invalidate(node, invalidated, structural, parent_data_changed);
         if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
             self.note_updated_layer(node);
@@ -1373,6 +1387,12 @@ impl UiTree {
             value.overlay = overlay;
             if overlay {
                 self.overlays.push(node);
+                // What has the focus now is what it gives it back to: its content's effects
+                // may ask for the focus before it's laid out.
+                if self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open) {
+                    let before = self.focus.active;
+                    self.focus_restore.push((node, before));
+                }
             } else {
                 self.overlays.retain(|existing| *existing != node);
             }
@@ -1558,7 +1578,7 @@ impl UiTree {
         let semantics_id = self.next_semantics_id();
         let value = self.node_mut(node);
         value.semantics_id = semantics_id;
-        value.composite_key_hash = 0;
+        value.composite_key = compose_runtime::CompositeKeyToken::NONE;
         if std::mem::take(&mut value.deactivated) {
             // Its parent has a child to measure again (an ordinary layout's, or a list's): it
             // measures it again if it asked to while deactivated (`needs_measure` kept), as

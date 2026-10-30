@@ -14,7 +14,7 @@ use crate::tree::{NodeId, UiTree};
 use crate::unit::Rect;
 
 /// An `on_enter` or `on_exit` block.
-pub type FocusEnterExitBlock = Rc<dyn Fn(&mut FocusEnterExitScope<'_>)>;
+pub type FocusEnterExitBlock = Rc<dyn Fn(&mut FocusEnterExitScope)>;
 
 /// What's said of a focus target, as Compose's `FocusProperties`.
 #[derive(Clone)]
@@ -52,12 +52,12 @@ impl FocusProperties {
     pub const UNSET_FOCUS_RECT: Rect = Rect::new(f32::NAN, f32::NAN, f32::NAN, f32::NAN);
 
     /// Sets `on_enter`.
-    pub fn set_on_enter(&mut self, block: impl Fn(&mut FocusEnterExitScope<'_>) + 'static) {
+    pub fn set_on_enter(&mut self, block: impl Fn(&mut FocusEnterExitScope) + 'static) {
         self.on_enter = Some(Rc::new(block));
     }
 
     /// Sets `on_exit`.
-    pub fn set_on_exit(&mut self, block: impl Fn(&mut FocusEnterExitScope<'_>) + 'static) {
+    pub fn set_on_exit(&mut self, block: impl Fn(&mut FocusEnterExitScope) + 'static) {
         self.on_exit = Some(Rc::new(block));
     }
 }
@@ -84,14 +84,14 @@ impl Default for FocusProperties {
 /// What an `on_enter` or `on_exit` block is given, as Compose's `FocusEnterExitScope`. The tree is
 /// in a transaction meanwhile: `FocusRequester`s and the `FocusManager` asked here act as the block
 /// returns, and `request_focus` here acts at once, with its result (D1270).
-pub struct FocusEnterExitScope<'a> {
-    tree: &'a mut UiTree,
+pub struct FocusEnterExitScope {
+    tree: u32,
     requested_focus_direction: FocusDirection,
     canceled: bool,
 }
 
-impl<'a> FocusEnterExitScope<'a> {
-    pub(crate) fn new(tree: &'a mut UiTree, direction: FocusDirection) -> FocusEnterExitScope<'a> {
+impl FocusEnterExitScope {
+    pub(crate) fn new(tree: u32, direction: FocusDirection) -> FocusEnterExitScope {
         FocusEnterExitScope { tree, requested_focus_direction: direction, canceled: false }
     }
 
@@ -105,34 +105,38 @@ impl<'a> FocusEnterExitScope<'a> {
         self.canceled = true;
     }
 
-    /// Asks `requester` to take the focus now, redirecting the change, as
-    /// `requester.requestFocus()` in Compose's block. Returns whether it took it.
-    pub fn request_focus(&mut self, requester: FocusRequester) -> bool {
-        requester.request_focus_on_tree(self.tree, FocusDirection::Enter)
-    }
-
     pub(crate) fn is_canceled(&self) -> bool {
         self.canceled
     }
 
     /// The restorer's: `restoreFocusedChild` of what's at or below entry `entry` of `node`.
     fn restore_focused_child_at(&mut self, node: NodeId, entry: EntryId) -> bool {
-        for target in self.tree.self_and_children_targets(node, entry) {
-            if self.tree.restore_focused_child_of(Some(target)) {
-                return true;
+        self.on_tree(|tree| {
+            tree.self_and_children_targets(node, entry)
+                .into_iter()
+                .any(|target| tree.restore_focused_child_of(Some(target)))
+        })
+    }
+
+    /// `f` on the tree set aside for this block.
+    fn on_tree(&self, f: impl FnOnce(&mut UiTree) -> bool) -> bool {
+        let mut f = Some(f);
+        let mut done = false;
+        crate::node_context::with_free_tree(self.tree, &mut |tree: &mut UiTree| {
+            if let Some(f) = f.take() {
+                done = f(tree);
             }
-        }
-        false
+        });
+        done
     }
 
     /// The restorer's: `saveFocusedChild` of what's at or below entry `entry` of `node`.
     fn save_focused_child_at(&mut self, node: NodeId, entry: EntryId) -> bool {
-        for target in self.tree.self_and_children_targets(node, entry) {
-            if self.tree.save_focused_child_of(Some(target)) {
-                return true;
-            }
-        }
-        false
+        self.on_tree(|tree| {
+            tree.self_and_children_targets(node, entry)
+                .into_iter()
+                .any(|target| tree.save_focused_child_of(Some(target)))
+        })
     }
 }
 
@@ -237,7 +241,7 @@ impl ModifierNode for FocusRestorerNode {
                 if fallback == FocusRequester::CANCEL {
                     scope.cancel_focus_change();
                 } else {
-                    scope.request_focus(fallback);
+                    fallback.request_focus();
                 }
             }
         }));

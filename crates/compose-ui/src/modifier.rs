@@ -1100,6 +1100,16 @@ pub trait ModifierNode: Any {
     fn as_focus_event(&mut self) -> Option<&mut dyn FocusEventModifierNode> {
         None
     }
+    /// For a node that's a focus target only at times, as Compose's nodes `undelegate` theirs
+    /// when they're disabled (D1274): whether it should be one, asked after each update.
+    #[doc(hidden)]
+    fn focus_target_wanted(&self) -> Option<bool> {
+        None
+    }
+    /// The tree's answer to `focus_target_wanted`, once it's safe: `as_focus_target` follows it
+    /// (asked again now).
+    #[doc(hidden)]
+    fn set_is_focus_target(&mut self, _is_target: bool) {}
     /// What `NodeContext::request_focus` and its like act from, as `FocusRequesterModifierNode`.
     fn as_focus_requester(&mut self) -> Option<&mut dyn FocusRequesterModifierNode> {
         None

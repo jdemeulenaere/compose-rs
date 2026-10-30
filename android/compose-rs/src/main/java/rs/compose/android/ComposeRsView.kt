@@ -239,8 +239,15 @@ class ComposeRsView @JvmOverloads constructor(
 
     private var lifecycleSource: LifecycleSource? = null
 
+    /** The input mode is the view system's, as `AndroidComposeView`'s. */
+    private val touchModeChangeListener =
+        ViewTreeObserver.OnTouchModeChangeListener { touchMode ->
+            if (host != 0L) ComposeRsNative.setInputMode(host, touchMode)
+        }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        viewTreeObserver.addOnTouchModeChangeListener(touchModeChangeListener)
         ComposeRsRuntime.attach(this)
         accessibility.attach()
         insets.resetState()
@@ -249,6 +256,7 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        viewTreeObserver.removeOnTouchModeChangeListener(touchModeChangeListener)
         ComposeRsRuntime.detach(this)
         destroy()
         accessibility.detach()
@@ -291,6 +299,7 @@ class ComposeRsView @JvmOverloads constructor(
             HostViewModels.tokenOf(this),
         )
         savedState = null
+        ComposeRsNative.setInputMode(host, isInTouchMode)
         sendConfiguration(resources.configuration)
         ComposeRsNative.setWindowInsets(host, insets.values)
         insets.cutoutPath?.let { ComposeRsNative.setWindowCutoutPath(host, it) }

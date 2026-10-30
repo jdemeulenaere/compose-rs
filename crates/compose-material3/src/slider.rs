@@ -1142,6 +1142,8 @@ struct SliderInput {
 }
 
 struct SliderInputNode {
+    /// Disabled, it isn't a focus target (D1274).
+    is_focus_target: bool,
     state: SliderState,
     on_value_change: Callback<dyn Fn(f32)>,
     on_value_change_finished: Option<Callback<dyn Fn()>>,
@@ -1167,6 +1169,7 @@ impl ModifierNodeElement for SliderInput {
     type Node = SliderInputNode;
     fn create(&self) -> SliderInputNode {
         SliderInputNode {
+            is_focus_target: self.enabled,
             state: self.state,
             on_value_change: self.on_value_change.clone(),
             on_value_change_finished: self.on_value_change_finished.clone(),
@@ -1392,7 +1395,13 @@ impl ModifierNode for SliderInputNode {
         Some(self)
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
-        Some(self)
+        if self.is_focus_target { Some(self) } else { None }
+    }
+    fn focus_target_wanted(&self) -> Option<bool> {
+        Some(self.enabled)
+    }
+    fn set_is_focus_target(&mut self, is_target: bool) {
+        self.is_focus_target = is_target;
     }
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)

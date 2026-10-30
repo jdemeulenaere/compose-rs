@@ -390,13 +390,13 @@ impl UiTree {
     /// Attaches the modifier nodes of the subtree at `root`, as `LayoutNode.attach`: every one
     /// marked attached first, then their `on_attach`, children before parents.
     fn attach_subtree(&mut self, root: NodeId) {
-        let nodes = self.subtree(root);
+        // Post-order, each node's children in their order, as `LayoutNode.attach`.
+        let nodes = self.subtree_post_order(root);
         for &node in &nodes {
             self.node_mut(node).attaching = false;
             self.mark_attached(node);
         }
-        // Post-order, each node's children in their order, as `LayoutNode.attach`.
-        for node in self.subtree_post_order(root) {
+        for node in nodes {
             self.run_attach(node);
         }
     }

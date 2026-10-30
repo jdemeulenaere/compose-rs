@@ -597,9 +597,6 @@ fn create(
     let view_ref = Rc::new(env.new_global_ref(view).expect("compose-android: a global ref"));
     let mut ui = UiHost::new(size, density, Box::new(AndroidTextMeasurer::new(text)));
     ui.with_tree(|tree| tree.set_clipboard(Rc::new(JniClipboard { view: view_ref.clone() })));
-    // Android starts a window in touch mode; a key leaves it, a touch enters it, as
-    // `AndroidComposeView.onTouchModeChanged` hears the view system's (D1272).
-    ui.set_input_mode(compose_ui::InputMode::Touch);
     // The replayer keeps a render node per group: those of unplaced items too (D380).
     ui.set_keep_unplaced_groups(true);
     let optimizations = Optimizations::from_bits(optimizations as u64);
@@ -736,6 +733,24 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
     let optimizations = Optimizations::from_bits(bits as u64);
     host.groups.set_optimizations(optimizations);
     host.ui.set_optimizations(optimizations);
+}
+
+/// `ComposeRsNative.setInputMode(host, touch)`: the view system's touch mode, from `isInTouchMode`
+/// when the host starts and from `OnTouchModeChangeListener` after that, as `AndroidComposeView`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setInputMode(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    touch: jboolean,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.set_system_input_mode(if touch {
+        compose_ui::InputMode::Touch
+    } else {
+        compose_ui::InputMode::Keyboard
+    });
 }
 
 /// `ComposeRsNative.parseOptimizations(text)`: the bits of a list of optimizations (`none`,
@@ -1121,7 +1136,6 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
         }
     };
     let time = platform::now_nanos().saturating_sub(age.max(0) as u64).max(1);
-    host.ui.set_input_mode(compose_ui::InputMode::Touch);
     host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch).at_time(time));
 }
 
@@ -1244,9 +1258,6 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         meta: meta & 0x10000 != 0,
     };
     let kind = if down { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
-    if down {
-        host.ui.set_input_mode(compose_ui::InputMode::Keyboard);
-    }
     let consumed = host.ui.send_key(KeyEvent { key, kind, modifiers });
     // A typed character's text, unless it's a shortcut, as the desktop host does.
     if down

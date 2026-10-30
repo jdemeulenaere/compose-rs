@@ -360,6 +360,24 @@ impl ChainEntry {
         }
     }
 
+    /// Its node wants to be a focus target, or not to be one any more, and isn't that yet.
+    pub(crate) fn focus_target_flip(&self) -> Option<(EntryId, bool)> {
+        let wanted = self.node.focus_target_wanted()?;
+        (wanted != self.own.any(NodeKinds::FOCUS_TARGET)).then_some((self.id, wanted))
+    }
+
+    /// Takes `wanted` for its being a focus target: its kinds probed again.
+    pub(crate) fn set_is_focus_target(&mut self, wanted: bool) {
+        self.node.set_is_focus_target(wanted);
+        self.own = NodeKinds::of(&mut *self.node, self.own.any(NodeKinds::OBSERVED));
+        self.kinds = match self.node.delegates() {
+            Some(delegates) if self.state & entry_state::DELEGATING != 0 => {
+                self.own | delegates.refresh_kinds(self.own)
+            }
+            _ => self.own,
+        };
+    }
+
     /// After its element updated its node: its kinds again if the update delegated or
     /// undelegated. Says if it did (what's left of that runs when the pass ends), and if a layer
     /// came or went with it.

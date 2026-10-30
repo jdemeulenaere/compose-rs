@@ -94,9 +94,10 @@ pub use remember::{
 };
 pub use reusable::{ReusableContent, ReusableContentHost};
 pub use saveable::{
-    AutoSaver, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable, Saveable,
-    SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash, list_saver,
-    map_saver, remember_saveable, remember_saveable_with, saver,
+    AutoSaver, CompositeKeyToken, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable,
+    Saveable, SaveableStateRegistry, SavedState, SavedValue, Saver, composite_key_hash_of,
+    current_composite_key_hash, current_composite_key_token, list_saver, map_saver,
+    remember_saveable, remember_saveable_with, saver,
 };
 pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
 pub use scope::RecomposeScope;

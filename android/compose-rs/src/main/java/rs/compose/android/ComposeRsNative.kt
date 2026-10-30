@@ -35,6 +35,9 @@ internal object ComposeRsNative {
     /** The bits a list of optimizations names (Rust's names), or -1 for an unknown one. */
     @JvmStatic external fun parseOptimizations(list: String): Long
 
+    /** The view system's touch mode: the input mode (Keyboard when it's false). */
+    @JvmStatic external fun setInputMode(host: Long, touch: Boolean)
+
     @JvmStatic external fun resize(host: Long, width: Int, height: Int)
 
     @JvmStatic external fun setDensity(host: Long, density: Float, fontScale: Float)

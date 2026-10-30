@@ -571,8 +571,52 @@ pub static LOCAL_SAVEABLE_STATE_REGISTRY: CompositionLocal<Option<SaveableStateR
 pub fn current_composite_key_hash() -> u64 {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
-        let table = &runtime.compositions.data(composition).table;
-        let mut group = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        let group = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        composite_key_hash_at(&runtime.compositions.data(composition).table, group)
+    })
+}
+
+/// Where `current_composite_key_hash` would be read: cheap to keep at each node, its hash
+/// computed only if it's asked for (`composite_key_hash_of`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompositeKeyToken {
+    composition: u32,
+    group: u32,
+}
+
+impl CompositeKeyToken {
+    /// No place: its hash is 0.
+    pub const NONE: CompositeKeyToken = CompositeKeyToken { composition: NONE, group: NONE };
+}
+
+/// The place composing now, for `composite_key_hash_of` later.
+///
+/// # Panics
+///
+/// Outside composition.
+pub fn current_composite_key_token() -> CompositeKeyToken {
+    with_runtime(|runtime| CompositeKeyToken {
+        composition: runtime.check_composing(),
+        group: runtime.frames.last().map_or(NONE, |frame| frame.group),
+    })
+}
+
+/// `current_composite_key_hash` at a place kept by `current_composite_key_token`, while what's
+/// composed there lives, its groups walked now, as `LayoutNode.compositeKeyHash`: a lazy list's
+/// items differ by their providers' keys, and their registries are their own.
+pub fn composite_key_hash_of(token: CompositeKeyToken) -> u64 {
+    if token == CompositeKeyToken::NONE {
+        return 0;
+    }
+    with_runtime(|runtime| {
+        let table = &runtime.compositions.data(token.composition).table;
+        composite_key_hash_at(table, token.group)
+    })
+}
+
+fn composite_key_hash_at(table: &crate::slot_table::SlotTable, group: u32) -> u64 {
+    {
+        let mut group = group;
         let mut hash = 0u64;
         while group != NONE {
             let entry = &table[group];
@@ -607,7 +651,7 @@ pub fn current_composite_key_hash() -> u64 {
             group = entry.parent;
         }
         hash
-    })
+    }
 }
 
 /// What `remember_saveable` can remember: a `Clone` value (saved as itself), an

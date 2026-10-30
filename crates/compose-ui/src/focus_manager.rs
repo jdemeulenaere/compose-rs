@@ -61,9 +61,9 @@ impl FocusManager {
     /// children and `Exit` to its parent. With nothing focused, `Next`, `Down` and `Right` start
     /// from the window's top left, `Previous`, `Up` and `Left` from its bottom right.
     ///
-    /// Returns whether the focus moved (where the tree is busy, from inside a pass or an
-    /// `on_enter` block, the move waits for it: whether a tree was asked; a search waiting for a
-    /// lazy list's next item answers `false`, D477).
+    /// Returns whether the focus moved (where the tree is busy, from inside a pass, the move waits
+    /// for it: whether a tree was asked; a search waiting for a lazy list's next item answers
+    /// `true`, as it's expected to find it, D477).
     pub fn move_focus(&self, direction: FocusDirection) -> bool {
         match self.requests.upgrade() {
             Some(requests) => perform_or_queue(&requests, FocusRequest::Move(direction)),

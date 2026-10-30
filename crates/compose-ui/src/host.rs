@@ -1003,6 +1003,13 @@ impl UiHost {
         self.with_tree(|tree| tree.input_mode.set_input_mode(mode));
     }
 
+    /// The system's input mode, from a host whose system decides it (Android's touch mode): it
+    /// can't be asked for touch mode any more, as `AndroidComposeView`'s manager.
+    pub fn set_system_input_mode(&mut self, mode: crate::input_mode::InputMode) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        self.with_tree(|tree| tree.input_mode.set_system_input_mode(mode));
+    }
+
     /// Moves focus to `node`'s focus target.
     pub fn request_focus(&mut self, node: NodeId) {
         let _turn = compose_runtime::platform::Turn::begin();

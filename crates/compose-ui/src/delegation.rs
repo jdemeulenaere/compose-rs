@@ -707,7 +707,12 @@ impl UiTree {
     /// `node`'s chain after an entry's kinds went from `before` to `after`: its aggregates and
     /// layers, and what holds its layers (`remap_captures`). Returns whether its parent data
     /// changed.
-    fn entry_kinds_changed(&mut self, node: NodeId, before: NodeKinds, after: NodeKinds) -> bool {
+    pub(crate) fn entry_kinds_changed(
+        &mut self,
+        node: NodeId,
+        before: NodeKinds,
+        after: NodeKinds,
+    ) -> bool {
         let layers_changed = before.any(NodeKinds::LAYOUT) != after.any(NodeKinds::LAYOUT);
         if layers_changed {
             let value = self.node_mut(node);

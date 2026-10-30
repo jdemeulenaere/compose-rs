@@ -62,8 +62,9 @@ impl UiTree {
     pub(crate) fn move_focus_with(&mut self, direction: FocusDirection, wrap: bool) -> bool {
         if self.has_beyond_bounds_moves() {
             self.beyond_search.moves.push_back(direction);
-            return false;
+            return true;
         }
+        self.focus.move_stopped = false;
         let moved = self.search_and_move_focus(direction, wrap);
         if !self.focus.search_waiting {
             self.end_beyond_bounds();
@@ -81,22 +82,37 @@ impl UiTree {
             request_success
         });
         if self.focus.search_waiting {
-            return false;
+            // It goes on as the list is laid out, and it's expected to find something.
+            return true;
         }
         if found == Some(true) && active_before != self.focus.active {
             // A request during the search took the focus.
             return true;
         }
         // Cancelled.
-        let Some(found) = found else { return false };
+        let Some(found) = found else {
+            self.focus.move_stopped = true;
+            return false;
+        };
         if found && request_success {
             return true;
         }
         if is_one_dimensional(direction) && wrap {
             // Wraps around: clears the focus and takes it as initially.
-            return self.clear_focus_with(false, true, direction) && self.take_focus(direction);
+            if !self.clear_focus_with(false, true, direction) {
+                self.focus.move_stopped = true;
+                return false;
+            }
+            return self.take_focus(direction);
         }
         false
+    }
+
+    /// Whether `target` is the own target of the modal overlay showing: a window's root, which
+    /// doesn't take the focus by a search (D1269).
+    fn is_modal_root(&self, target: FocusTargetRef) -> bool {
+        self.modal_overlay() == Some(target.node)
+            && self.target_index(target).is_some_and(|index| index < self.root_branch().1)
     }
 
     /// As `FocusOwner.takeFocus`.
@@ -214,7 +230,9 @@ impl UiTree {
             FocusDirection::Exit => {
                 let active = self.focus.active?;
                 for ancestor in self.targets_above(active) {
-                    if self.fetch_focus_properties(ancestor).can_focus {
+                    if !self.is_modal_root(ancestor)
+                        && self.fetch_focus_properties(ancestor).can_focus
+                    {
                         return Some(on_found(self, ancestor));
                     }
                 }
@@ -263,7 +281,8 @@ impl UiTree {
                                 FocusDirection::Previous,
                                 on_found,
                             )
-                            || (self.fetch_focus_properties(child).can_focus
+                            || (!self.is_modal_root(child)
+                                && self.fetch_focus_properties(child).can_focus
                                 && on_found(self, child))
                     }
                     // It has the focus: its children were visited, only its siblings are left.
@@ -341,7 +360,10 @@ impl UiTree {
                     }
                 }
                 match place {
-                    Some(target) if self.fetch_focus_properties(target).can_focus => {
+                    Some(target)
+                        if !self.is_modal_root(target)
+                            && self.fetch_focus_properties(target).can_focus =>
+                    {
                         on_found(self, target)
                     }
                     _ => false,

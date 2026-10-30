@@ -20,11 +20,16 @@ pub enum InputMode {
 #[derive(Clone)]
 pub struct InputModeManager {
     mode: Rc<OwnedState<InputMode>>,
+    /// The system decides: asking for touch mode answers whether it's in it.
+    system_decides: Rc<std::cell::Cell<bool>>,
 }
 
 impl InputModeManager {
     pub(crate) fn new() -> InputModeManager {
-        InputModeManager { mode: Rc::new(compose_runtime::mutable_state_of(InputMode::Keyboard)) }
+        InputModeManager {
+            mode: Rc::new(compose_runtime::mutable_state_of(InputMode::Keyboard)),
+            system_decides: Rc::default(),
+        }
     }
 
     /// The input mode, as state: what reads it is told when it changes, as `inputMode`.
@@ -33,10 +38,18 @@ impl InputModeManager {
     }
 
     /// Asks for a mode, as `requestInputMode`: whether it's the mode now (a host decides: a
-    /// headless or desktop one always grants it).
+    /// headless or desktop one always grants it; Android has no way into touch mode from code).
     pub fn request_input_mode(&self, mode: InputMode) -> bool {
+        if self.system_decides.get() && mode == InputMode::Touch {
+            return self.mode.get() == InputMode::Touch;
+        }
         self.mode.set(mode);
         true
+    }
+
+    pub(crate) fn set_system_input_mode(&self, mode: InputMode) {
+        self.system_decides.set(true);
+        self.mode.set(mode);
     }
 
     pub(crate) fn set_input_mode(&self, mode: InputMode) {

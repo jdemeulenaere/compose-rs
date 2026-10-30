@@ -238,6 +238,8 @@ struct Down {
 
 /// The clickable family's node.
 pub(crate) struct ClickableNode {
+    /// Disabled, it isn't a focus target, as `undelegate(focusableNode)` (D1274).
+    is_focus_target: bool,
     spec: Clickable,
     combined: Option<Combined>,
     /// Its semantics' click, built once per update (D1258).
@@ -278,6 +280,7 @@ impl ClickableNode {
             ..Shared::default()
         };
         ClickableNode {
+            is_focus_target: spec.enabled,
             spec,
             combined,
             click_action: RefCell::default(),
@@ -740,7 +743,13 @@ impl ModifierNode for ClickableNode {
         Some(self)
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
-        Some(self)
+        if self.is_focus_target { Some(self) } else { None }
+    }
+    fn focus_target_wanted(&self) -> Option<bool> {
+        Some(self.spec.enabled)
+    }
+    fn set_is_focus_target(&mut self, is_target: bool) {
+        self.is_focus_target = is_target;
     }
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)

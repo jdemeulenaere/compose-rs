@@ -612,8 +612,9 @@ impl UiTree {
             if waiting {
                 self.needs_draw = true;
             }
-            // Consumed only if the focus moved, as Compose's key dispatch.
-            consumed = moved || waiting;
+            // Consumed if the focus moved, or if it was stopped from moving, as Compose's key
+            // dispatch (`?: return true`, `if (!clearedFocusSuccessfully) return true`).
+            consumed = moved || waiting || self.focus.move_stopped;
         }
         (consumed, actions)
     }

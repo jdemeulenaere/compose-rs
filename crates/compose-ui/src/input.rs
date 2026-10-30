@@ -290,6 +290,9 @@ pub enum Action {
 pub struct FocusBatch {
     generation: crate::focus::FocusGeneration,
     started_at: Option<u64>,
+    /// Queued by `performRequestFocus`, whose telling stops if a callback moves the focus: a
+    /// clear's goes on.
+    droppable: bool,
 }
 
 impl FocusBatch {
@@ -303,7 +306,9 @@ impl FocusBatch {
 /// them that follow one moving the focus aren't delivered.
 pub(crate) fn run_actions(mut actions: Vec<Action>) {
     for action in &mut actions {
-        if let Action::FocusEvent { focus, .. } | Action::FocusChange { focus, .. } = action {
+        if let Action::FocusEvent { focus, .. } | Action::FocusChange { focus, .. } = action
+            && focus.droppable
+        {
             focus.started_at = Some(focus.generation.get());
         }
     }
@@ -455,7 +460,8 @@ impl EventContext<'_> {
         last: Option<Rc<std::cell::Cell<Option<crate::focus::FocusState>>>>,
     ) {
         let generation = self.context.tree.focus_requests.focus_generation.clone();
-        let focus = FocusBatch { generation, started_at: None };
+        let droppable = self.context.tree.focus.requesting;
+        let focus = FocusBatch { generation, started_at: None, droppable };
         self.actions.push(Action::FocusEvent { callback, state, last, focus });
     }
 
@@ -467,7 +473,8 @@ impl EventContext<'_> {
         current: crate::focus::FocusState,
     ) {
         let generation = self.context.tree.focus_requests.focus_generation.clone();
-        let focus = FocusBatch { generation, started_at: None };
+        let droppable = self.context.tree.focus.requesting;
+        let focus = FocusBatch { generation, started_at: None, droppable };
         self.actions.push(Action::FocusChange { callback, previous, current, focus });
     }
 

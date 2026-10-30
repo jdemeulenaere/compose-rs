@@ -83,9 +83,14 @@ impl UiTree {
                         overlay.focused_once = true;
                     }
                 }
+                // A request from its content's effect came first: it's kept (D1268).
                 let before = self.focus.active;
-                self.focus_restore.push((node, before));
-                self.focus_without_scrolling(node);
+                if !self.focus_restore.iter().any(|each| each.0 == node) {
+                    self.focus_restore.push((node, before));
+                }
+                if !before.is_some_and(|active| self.is_at_or_below(active.node, node)) {
+                    self.focus_without_scrolling(node);
+                }
             }
         }
     }
@@ -137,7 +142,8 @@ impl UiTree {
                 }
             }
             if self.focus.active.is_none()
-                && let Some(before) = before.filter(|target| self.get(target.node).is_some())
+                && let Some(before) =
+                    before.filter(|&target| self.target_can_be_given_focus(target))
             {
                 self.refocus_without_scrolling(before);
             }

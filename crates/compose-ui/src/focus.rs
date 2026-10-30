@@ -122,6 +122,14 @@ pub(crate) struct FocusOwner {
     /// nothing scrolls, and a modal overlay opening in this frame, which takes it next, doesn't
     /// shut it out.
     pub(crate) moved_by_tree: bool,
+    /// `performRequestFocus` runs: what it tells application code stops if one of them moves the
+    /// focus (D1271).
+    pub(crate) requesting: bool,
+    /// The last search was cancelled, or refused by what can't lose the focus: a key is consumed
+    /// though nothing moved (D1275).
+    pub(crate) move_stopped: bool,
+    /// Targets disabled while holding the focus, leaving their chains once it's gone (D1274).
+    pub(crate) target_flips: SmallVec<[(NodeId, EntryId); 1]>,
     /// A search waits for a container to lay out more beyond its bounds (D477): it unwinds, and
     /// is made again after the next layout.
     pub(crate) search_waiting: bool,
@@ -328,6 +336,12 @@ impl UiTree {
     }
 
     /// Whether `target` is attached: its entry is in its chain, attached, and its delegate there.
+    /// Whether `target` is there to be given the focus back: attached, and not put aside.
+    pub(crate) fn target_can_be_given_focus(&mut self, target: FocusTargetRef) -> bool {
+        self.get(target.node).is_some_and(|value| !value.deactivated)
+            && self.target_is_attached(target)
+    }
+
     fn target_is_attached(&mut self, target: FocusTargetRef) -> bool {
         let Some(index) = self.target_index(target) else { return false };
         let entry = &mut self.node_mut(target.node).chain[index];
@@ -459,7 +473,7 @@ impl UiTree {
 
     /// The first branches of a walk down from the root: the tree's root, or while a modal overlay
     /// shows, what's below that overlay's own target, as a window's root isn't a stop.
-    fn root_branch(&self) -> (NodeId, usize) {
+    pub(crate) fn root_branch(&self) -> (NodeId, usize) {
         match self.modal_overlay() {
             Some(modal) => {
                 let chain = &self.node(modal).chain;
@@ -847,6 +861,10 @@ impl UiTree {
     }
 
     fn assign_focus(&mut self, target: FocusTargetRef, direction: FocusDirection) -> bool {
+        // The tree moving it (an overlay's), no one's block has a say.
+        if self.focus.moved_by_tree {
+            return self.perform_request_focus(target);
+        }
         match self.perform_custom_request_focus(Some(target), direction) {
             CustomDestination::None => self.perform_request_focus(target),
             CustomDestination::Redirected => true,
@@ -858,8 +876,24 @@ impl UiTree {
     /// diffed with the new one's), the focus granted, then the callbacks in Compose's order,
     /// each followed by "did a callback move the focus? then stop".
     pub(crate) fn perform_request_focus(&mut self, target: FocusTargetRef) -> bool {
+        let requesting = mem::replace(&mut self.focus.requesting, true);
+        let done = self.request_focus_of_target(target);
+        self.focus.requesting = requesting;
+        done
+    }
+
+    fn request_focus_of_target(&mut self, target: FocusTargetRef) -> bool {
         if !self.focus.moved_by_tree && self.is_occluded_by_modal(target.node) {
-            return false;
+            // A dialog is a window of its own in Compose, which doesn't refuse this: it's what
+            // has the focus when the modal closes (D1269).
+            let modal = self.modal_overlay();
+            return match self.focus_restore.iter_mut().rfind(|each| Some(each.0) == modal) {
+                Some(entry) => {
+                    entry.1 = Some(target);
+                    true
+                }
+                None => false,
+            };
         }
         let previous_active = self.focus.active;
         let previous_state = self.focus_state_of(target);
@@ -886,7 +920,7 @@ impl UiTree {
         }
         if clear_previous
             && let Some(previous) = previous_active
-            && !self.prepare_to_clear_focus(Some(previous), false, true)
+            && !self.prepare_to_clear_focus(Some(previous), self.focus.moved_by_tree, true)
         {
             // Clearing the previous node was refused.
             return false;
@@ -1086,23 +1120,20 @@ impl UiTree {
         }
     }
 
-    /// Runs an `on_enter` or `on_exit` block: application code, with the tree in a transaction.
-    /// What it asks of requesters and the focus manager is done as it returns (a block can use
-    /// its scope's `request_focus` for a result, D1270). Returns whether it cancelled.
+    /// Runs an `on_enter` or `on_exit` block: application code, inside a transaction. What it
+    /// asks of requesters and the focus manager acts at once with real results, the tree set
+    /// aside where they find it (D1270). Returns whether it cancelled.
     pub(crate) fn run_enter_exit_block(
         &mut self,
         block: &crate::focus_properties::FocusEnterExitBlock,
         direction: FocusDirection,
     ) -> bool {
-        let queued = self.focus_requests.pending.borrow().len();
-        let mut scope = crate::focus_properties::FocusEnterExitScope::new(&mut *self, direction);
-        block(&mut scope);
-        let canceled = scope.is_canceled();
-        let asked = self.focus_requests.pending.borrow_mut().split_off(queued);
-        for request in asked {
-            self.perform_focus_request_in_transaction(request);
-        }
-        canceled
+        let key = self.key;
+        crate::node_context::with_tree_set_aside(self, || {
+            let mut scope = crate::focus_properties::FocusEnterExitScope::new(key, direction);
+            block(&mut scope);
+            scope.is_canceled()
+        })
     }
 
     /// Clears the focus, as `clearFocus(force, refreshFocusEvents, …, focusDirection)`: unless
@@ -1323,6 +1354,64 @@ impl UiTree {
 
     /// What entry `index` of `node` delegates to changed: an active target that was a delegate
     /// undelegated loses the focus (it was told by its `on_detach`, if it cares).
+    /// Entry `entry` of `node` should be a focus target, or not any more (D1274): holding the focus
+    /// it loses it first, its focusability having said so, when the pass ends.
+    pub(crate) fn flip_focus_target(&mut self, node: NodeId, entry: EntryId, wanted: bool) {
+        if !wanted
+            && self.focus.active.is_some_and(|active| active.node == node && active.entry == entry)
+        {
+            self.focus.target_flips.push((node, entry));
+            self.focus.recheck_active = true;
+            return;
+        }
+        self.apply_focus_target_flip(node, entry, wanted);
+    }
+
+    fn apply_focus_target_flip(&mut self, node: NodeId, entry: EntryId, wanted: bool) {
+        let Some(index) = self.entry_index(node, entry) else { return };
+        let chain_entry = &mut self.node_mut(node).chain[index];
+        let before = chain_entry.kinds;
+        chain_entry.set_is_focus_target(wanted);
+        let after = chain_entry.kinds;
+        self.entry_kinds_changed(node, before, after);
+        if !wanted {
+            self.forget_saved_child_of(FocusTargetRef {
+                node,
+                entry,
+                delegate: EntryId::NO_DELEGATE,
+            });
+        }
+        // Listeners hear another target now, those of this chain and those above it.
+        let value = self.node(node);
+        let events: SmallVec<[EntryId; 2]> = value
+            .chain
+            .iter()
+            .filter(|each| each.kinds.any(NodeKinds::FOCUS_EVENT))
+            .map(|each| each.id)
+            .collect();
+        for each in events {
+            self.focus.invalidated_events.push((node, each));
+        }
+        let mut above = self.focus_parent_of(node);
+        while let Some(id) = above {
+            let Some(value) = self.get(id) else { break };
+            let is_target = value.kinds.any(NodeKinds::FOCUS_TARGET);
+            let events: SmallVec<[EntryId; 2]> = value
+                .chain
+                .iter()
+                .filter(|each| each.kinds.any(NodeKinds::FOCUS_EVENT))
+                .map(|each| each.id)
+                .collect();
+            for each in events {
+                self.focus.invalidated_events.push((id, each));
+            }
+            if is_target {
+                break;
+            }
+            above = self.focus_parent_of(id);
+        }
+    }
+
     pub(crate) fn focus_delegates_changed(&mut self, node: NodeId) {
         if let Some(active) = self.focus.active
             && active.node == node
@@ -1362,14 +1451,22 @@ impl UiTree {
         if !self.focus.recheck_active && self.focus.invalidated_events.is_empty() {
             return;
         }
-        let events = mem::take(&mut self.focus.invalidated_events);
         if mem::take(&mut self.focus.recheck_active) {
             self.invalidate_active_target();
         }
+        for (node, entry) in mem::take(&mut self.focus.target_flips) {
+            self.apply_focus_target_flip(node, entry, false);
+        }
+        let events = mem::take(&mut self.focus.invalidated_events);
         if events.is_empty() {
             return;
         }
         let mut events: SmallVec<[(NodeId, EntryId); 4]> = events;
+        // Attached and updated in one pass, it's told once, as Compose's invalidation set.
+        if events.len() > 1 {
+            let mut seen = std::collections::HashSet::with_capacity(events.len());
+            events.retain(|each| seen.insert(*each));
+        }
         if let Some(active) = self.focus.active {
             let active_state = self.focus_state_of(active);
             let kinds = NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_EVENT;
@@ -1603,7 +1700,7 @@ impl UiTree {
         }
         for child in self.focus_children(place) {
             if self.focus_state_of(child).has_focus() {
-                let hash = self.node(child.node).composite_key_hash;
+                let hash = self.composite_key_hash_of(child.node);
                 self.focus.saved_children.insert(place, hash);
                 if let Some(target) = place {
                     self.save_focused_child_in_registry(target, hash);
@@ -1624,7 +1721,7 @@ impl UiTree {
         let Some(saved) = saved else { return false };
         self.focus.saved_children.insert(place, saved);
         for child in self.focus_children(place) {
-            if self.node(child.node).composite_key_hash == saved {
+            if self.composite_key_hash_of(child.node) == saved {
                 return self.restore_focused_child_of(Some(child))
                     // When a request fails it tries a child: not when restoring failed, which
                     // has its own fallback.
@@ -1638,11 +1735,27 @@ impl UiTree {
     /// The saveable registry's key for `target`'s saved child, as Compose's
     /// `PrevFocusedChild + compositeKeyHash`.
     fn focused_child_registry_key(&self, target: FocusTargetRef) -> u64 {
-        self.node(target.node).composite_key_hash.rotate_left(13) ^ 0x7066_6300
+        self.composite_key_hash_of(target.node).rotate_left(13) ^ 0x7066_6300
+    }
+
+    /// The hash of where `node` is composed, as `LayoutNode.compositeKeyHash`.
+    fn composite_key_hash_of(&self, node: NodeId) -> u64 {
+        compose_runtime::composite_key_hash_of(self.node(node).composite_key)
+    }
+
+    /// The registry a target saves in: the one around it, else the host's.
+    fn saveable_registry_of(
+        &self,
+        target: FocusTargetRef,
+    ) -> Option<compose_runtime::SaveableStateRegistry> {
+        self.node(target.node)
+            .locals
+            .get(&compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY)
+            .or_else(|| self.saveable_registry.clone())
     }
 
     fn save_focused_child_in_registry(&mut self, target: FocusTargetRef, hash: u64) {
-        let Some(registry) = self.saveable_registry.clone() else { return };
+        let Some(registry) = self.saveable_registry_of(target) else { return };
         let key = self.focused_child_registry_key(target);
         let entry = registry
             .register_provider(key, move || Some(compose_runtime::SavedValue::Int(hash as i64)));
@@ -1652,7 +1765,7 @@ impl UiTree {
     }
 
     fn consume_restored_focused_child(&mut self, target: FocusTargetRef) -> Option<u64> {
-        let registry = self.saveable_registry.clone()?;
+        let registry = self.saveable_registry_of(target)?;
         let key = self.focused_child_registry_key(target);
         match registry.consume_restored(key)? {
             compose_runtime::SavedValue::Int(hash) => Some(hash as u64),
@@ -1664,7 +1777,12 @@ impl UiTree {
     fn forget_saved_child_of(&mut self, target: FocusTargetRef) {
         self.focus.saved_children.remove(&Some(target));
         if let Some(entry) = self.focus.registrations.remove(&target) {
-            entry.unregister();
+            // After the pass: a lazy item's holder saves what's registered as the item leaves,
+            // its effects forgotten after its nodes are gone.
+            self.focus_requests
+                .side_effects
+                .borrow_mut()
+                .push(Box::new(move || entry.unregister()));
         }
     }
 }

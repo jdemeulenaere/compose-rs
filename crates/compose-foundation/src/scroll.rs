@@ -269,15 +269,15 @@ impl ScrollModifiers for Modifier {
         fling_behavior: Option<Rc<dyn FlingBehavior>>,
         reverse_scrolling: bool,
     ) -> Modifier {
-        // Its content a group for focus searches, as `ScrollableNode`'s target.
-        self.then_custom(ScrollElement {
+        // Its content a group for focus searches, as `ScrollableNode`'s target: outside what's
+        // scrolled, so that its rectangle is the viewport's.
+        self.focus_group().then_custom(ScrollElement {
             state,
             vertical: true,
             enabled,
             fling_behavior,
             reverse_scrolling,
         })
-        .focus_group()
     }
 
     fn horizontal_scroll_with(
@@ -287,14 +287,13 @@ impl ScrollModifiers for Modifier {
         fling_behavior: Option<Rc<dyn FlingBehavior>>,
         reverse_scrolling: bool,
     ) -> Modifier {
-        self.then_custom(ScrollElement {
+        self.focus_group().then_custom(ScrollElement {
             state,
             vertical: false,
             enabled,
             fling_behavior,
             reverse_scrolling,
         })
-        .focus_group()
     }
 }
 

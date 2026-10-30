@@ -392,9 +392,52 @@ pub(crate) fn requests_of(key: u32) -> Option<Rc<FocusRequests>> {
     TREES.with(|trees| trees.borrow().get(&key)?.requests.upgrade())
 }
 
+thread_local! {
+    /// The trees whose `on_enter` or `on_exit` block runs: where `with_free_tree` finds them.
+    static TREE_SET_ASIDE: std::cell::RefCell<Vec<UiTree>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// What stands in for a tree set aside, kept for the next block.
+    static STAND_IN: std::cell::RefCell<Option<UiTree>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Whether the tree of `key` is set aside for a block: what's done on it is inside a transaction.
+pub(crate) fn tree_is_set_aside(key: u32) -> bool {
+    TREE_SET_ASIDE.with(|slot| slot.borrow().iter().any(|tree| tree.key == key))
+}
+
+/// Runs `block` (an `on_enter` or `on_exit` block, application code) with `tree` where
+/// `with_free_tree` finds it, as Compose's blocks run with requests acting at once (D1270).
+pub(crate) fn with_tree_set_aside<R>(tree: &mut UiTree, block: impl FnOnce() -> R) -> R {
+    let stand_in = STAND_IN.with(|stand_in| stand_in.borrow_mut().take()).unwrap_or_else(|| {
+        UiTree::new(
+            crate::unit::Density::new(1.0),
+            Box::new(crate::fixed_text::FixedTextMeasurer::new()),
+        )
+    });
+    let real = std::mem::replace(tree, stand_in);
+    TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(real));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(block));
+    let real = TREE_SET_ASIDE
+        .with(|slot| slot.borrow_mut().pop())
+        .expect("compose-ui: the tree set aside for a block is there as it returns");
+    let stand_in = std::mem::replace(tree, real);
+    STAND_IN.with(|slot| *slot.borrow_mut() = Some(stand_in));
+    result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 /// Runs `f` with the tree of `key` if it's free (its host's composition holds it and nothing
 /// borrows it), the tree allowing measurements meanwhile. Returns whether `f` ran.
 pub(crate) fn with_free_tree(key: u32, f: &mut dyn FnMut(&mut UiTree)) -> bool {
+    let set_aside = TREE_SET_ASIDE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.last().is_some_and(|tree| tree.key == key) { slot.pop() } else { None }
+    });
+    if let Some(mut tree) = set_aside {
+        let allowed = std::mem::replace(&mut tree.remeasure_allowed, true);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut tree)));
+        tree.remeasure_allowed = allowed;
+        TREE_SET_ASIDE.with(|slot| slot.borrow_mut().push(tree));
+        return result.map(|_| true).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
     let Some(borrow) = TREES.with(|trees| trees.borrow().get(&key)?.borrow.clone()) else {
         return false;
     };
