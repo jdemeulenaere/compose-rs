@@ -628,8 +628,11 @@ fn a_write_outside_a_turn_wakes_the_host_and_one_in_a_turn_does_not() {
 
 // ---- What a send holds (D756) ------------------------------------------------------------------
 
-/// Counts what apply observers hear: applies, and the states in each.
-fn heard() -> (Rc<Cell<usize>>, Rc<RefCell<Vec<usize>>>, snapshots::ObserverHandle) {
+/// What apply observers heard: the applies, the states in each, and the registration.
+type Heard = (Rc<Cell<usize>>, Rc<RefCell<Vec<usize>>>, snapshots::ObserverHandle);
+
+/// Counts what apply observers hear.
+fn heard() -> Heard {
     let (applies, sizes): (Rc<Cell<usize>>, Rc<RefCell<Vec<usize>>>) = Default::default();
     let (counted, listed) = (applies.clone(), sizes.clone());
     let handle = Snapshot::register_apply_observer(move |changed, _| {

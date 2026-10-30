@@ -500,7 +500,7 @@ fn prefetching_and_drawing_ahead_are_turns() {
                 let write = write.clone();
                 scope.items(1000, move |_| {
                     let (effect, draw) = (write.clone(), write.clone());
-                    SideEffect(move || effect());
+                    SideEffect(effect);
                     Box!(
                         modifier = Modifier.size((100.dp(), 20.dp())).draw_behind(move |_| draw()),
                         {}
