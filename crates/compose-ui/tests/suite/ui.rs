@@ -727,7 +727,8 @@ fn an_events_writes_ask_for_a_frame_by_the_time_it_returns() {
     let node = host.with_tree(|tree| tree.focus_order()[0]);
     host.request_focus(node);
     host.frame();
-    let events: [(&str, &dyn Fn(&mut UiHost)); 4] = [
+    type Event<'a> = (&'a str, &'a dyn Fn(&mut UiHost));
+    let events: [Event; 4] = [
         ("a pointer's release", &|host| {
             host.send_pointer(PointerEvent::press(Offset::new(5.0, 5.0)));
             host.frame();
