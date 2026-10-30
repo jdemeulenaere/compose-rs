@@ -479,9 +479,9 @@ One entry per feature. Sizes:
 - **Tests:** `PhysicsAnimationTest` (1), `AnimatableTest` (1), `SingleValueAnimationTest` (1), `TransitionTest` (2).
 - **Dependencies:** none.
 
-#### motion-duration-scale (S–M, not exp.): done but Android's animator scale and two frame loops of their own (D827)
+#### motion-duration-scale (S–M, not exp.): done but Android's animator scale (D827)
 
-- **Done:** the scale of the thread and of a task's future, read by `Animatable`, `animate`, `Transition`, `SeekableTransitionState` and `InfiniteTransition`; the test rule's and `ComposeUiTestConfig`'s. **Left:** `ComposeRsView` passing Android's `ANIMATOR_DURATION_SCALE` on (Kotlin, not buildable here); `animate_scroll_by` and Material 3's tabs, whose own frame loops ignore the scale.
+- **Done:** the scale of the thread and of a task's future, read by `Animatable`, `animate`, `Transition`, `SeekableTransitionState` and `InfiniteTransition`; the test rule's and `ComposeUiTestConfig`'s. **Left:** `ComposeRsView` passing Android's `ANIMATOR_DURATION_SCALE` on (Kotlin, not buildable here).
 
 - **API:** `MotionDurationScale` (a runtime/ui coroutine-context element: a scale of 0 finishes animations at once, as Android's animator scale), honoured by every animation; `with_infinite_animation_frame_nanos`/`_millis` and the `InfiniteAnimationPolicy` they consult.
 - **Tests:** `DurationScaleTest`, `DurationScaleTransitionTest`.
