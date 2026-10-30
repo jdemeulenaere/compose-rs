@@ -176,15 +176,16 @@ fn an_open_drawer_takes_back_before_the_content() {
     assert!(state.is_closed());
 }
 
-/// The scrim's click follows `gestures_enabled`, and the sheet's content comes and goes from the
-/// semantics as the drawer opens and closes (the semantics kept per node, D1257).
+/// The scrim's semantics follow the drawer (kept per node, D1257): there while it's open, as
+/// Compose's `Scrim(onClick = if (drawerState.isOpen) onDismissRequest else null)`; with gestures
+/// off, a click that does nothing, its `onDismissRequest` asking them.
 #[test]
 fn the_scrims_semantics_follow_the_drawer() {
-    let state = DrawerState::new(DrawerValue::Open, |_| true);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let drawer = *state;
     let gestures = mutable_state_of(true);
     let handle = gestures.handle();
-    let mut ui = compose_test(move || {
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
         MaterialTheme!({
             ModalNavigationDrawer!(
                 || {
@@ -199,14 +200,25 @@ fn the_scrims_semantics_follow_the_drawer() {
         });
     });
     let scrim = "Close navigation menu";
+    ui.on_node_with_content_description(scrim).assert_does_not_exist();
+    compose_runtime::platform::launch(async move { drawer.open().await });
+    ui.advance_time_by(std::time::Duration::from_millis(50));
     ui.on_node_with_text("The sheet").assert_exists();
+    ui.on_node_with_content_description(scrim).assert_does_not_exist();
+    ui.advance_time_by(std::time::Duration::from_secs(1));
     ui.on_node_with_content_description(scrim).assert_has_click_action();
     gestures.set(false);
-    ui.on_node_with_content_description(scrim).assert_has_no_click_action();
+    ui.advance_time_by_frame();
+    ui.on_node_with_content_description(scrim)
+        .assert_has_click_action()
+        .perform_semantics_action(&compose_ui::SemanticsActions::ON_CLICK);
+    ui.advance_time_by(std::time::Duration::from_secs(1));
+    assert_eq!(state.current_value(), DrawerValue::Open);
     gestures.set(true);
-    ui.on_node_with_content_description(scrim).assert_has_click_action();
+    ui.advance_time_by_frame();
     ui.on_node_with_content_description(scrim)
         .perform_semantics_action(&compose_ui::SemanticsActions::ON_CLICK);
     ui.advance_time_by(std::time::Duration::from_secs(1));
+    assert_eq!(state.current_value(), DrawerValue::Closed);
     ui.on_node_with_content_description(scrim).assert_does_not_exist();
 }

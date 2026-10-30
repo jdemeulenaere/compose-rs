@@ -12,7 +12,7 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    BackHandler, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
+    BackHandler, Color, Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, Offset,
     PointerEvent, SemanticsActions, SemanticsProperties, UnitExt,
     platform::FixedTextMeasurer,
 };
@@ -496,15 +496,15 @@ fn a_drawer_has_a_dismiss_action_only_while_open() {
     let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let handle = *state;
     let mut ui = compose_test(drawer_of(handle));
-    let pane = || has_test_tag(DRAWER_TAG);
-    ui.on_node_unmerged(pane()).on_parent().assert(key_not_defined(&SemanticsActions::DISMISS));
+    let pane = || expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into());
+    ui.on_node_unmerged(pane()).assert(key_not_defined(&SemanticsActions::DISMISS));
     compose_runtime::platform::launch(async move { handle.open().await });
     ui.wait_for_idle();
-    ui.on_node_unmerged(pane()).on_parent().assert(key_is_defined(&SemanticsActions::DISMISS));
-    ui.on_node_unmerged(pane()).on_parent().perform_semantics_action(&SemanticsActions::DISMISS);
+    ui.on_node_unmerged(pane()).assert(key_is_defined(&SemanticsActions::DISMISS));
+    ui.on_node_unmerged(pane()).perform_semantics_action(&SemanticsActions::DISMISS);
     ui.wait_for_idle();
     assert_eq!(state.current_value(), DrawerValue::Closed);
-    ui.on_node_unmerged(pane()).on_parent().assert(key_not_defined(&SemanticsActions::DISMISS));
+    ui.on_node_unmerged(pane()).assert(key_not_defined(&SemanticsActions::DISMISS));
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalNavigationDrawerTest.kt, navigationDrawer_drawerContainerIsOffScreen_whenClosed
@@ -517,4 +517,103 @@ fn a_closed_drawers_pane_is_off_screen() {
         .fetch_semantics_node()
         .bounds;
     assert_eq!(bounds.left, -360.0);
+}
+
+/// A drawer with a focusable in its sheet and another in its content.
+fn drawer_with_buttons(state: DrawerState) -> impl Fn() + 'static {
+    move || {
+        MaterialTheme!({
+            ModalNavigationDrawer!(
+                {
+                    ModalDrawerSheet!(modifier = Modifier.test_tag(DRAWER_TAG), |_| {
+                        Button!(on_click = || {}, modifier = Modifier.test_tag("in drawer"), {
+                            Text!("Drawer");
+                        });
+                    });
+                },
+                drawer_state = state,
+                {
+                    Button!(on_click = || {}, modifier = Modifier.test_tag("in content"), {
+                        Text!("Content");
+                    });
+                }
+            );
+        });
+    }
+}
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationDrawer.kt, "Only place the drawer when it's visible so that keyboard focus doesn't navigate to an offscreen element"
+#[test]
+fn keyboard_focus_stays_out_of_a_closed_drawer() {
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
+    let mut ui = compose_test(drawer_with_buttons(*state));
+    ui.on_node_with_tag("in drawer").assert_does_not_exist();
+    ui.press_key(compose_ui::Key::Tab);
+    ui.on_node_with_tag("in content").assert_is_focused();
+    ui.press_key(compose_ui::Key::Tab);
+    ui.on_node_with_tag("in content").assert_is_focused();
+}
+
+/// Closed after being open, it's out of the focus's way again, its pane still off screen.
+#[test]
+fn keyboard_focus_stays_out_of_a_drawer_closed_again() {
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
+    let handle = *state;
+    let mut ui = compose_test(drawer_with_buttons(handle));
+    ui.on_node_with_tag("in drawer").assert_is_focused();
+    compose_runtime::platform::launch(async move { handle.close().await });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in drawer").assert_does_not_exist();
+    ui.press_key(compose_ui::Key::Tab);
+    ui.on_node_with_tag("in content").assert_is_focused();
+    let pane = expect_value(&SemanticsProperties::PANE_TITLE, "Navigation menu".into());
+    assert_eq!(ui.on_node_unmerged(pane).fetch_semantics_node().bounds.left, -240.0);
+}
+
+/// While it's closed its content records nothing: a frame costs what the screen shows.
+#[test]
+fn a_closed_drawers_content_draws_nothing() {
+    let marker = Color::from_rgb(10, 20, 30);
+    let drawer = move |state: DrawerState| {
+        move || {
+            MaterialTheme!({
+                ModalNavigationDrawer!(
+                    {
+                        ModalDrawerSheet!(
+                            drawer_container_color = marker,
+                            modifier = Modifier.test_tag(DRAWER_TAG),
+                            |_| {}
+                        );
+                    },
+                    drawer_state = state,
+                    {
+                        Box!(modifier = Modifier.fill_max_size());
+                    }
+                );
+            });
+        }
+    };
+    let draws = |ui: &mut ComposeTestRule| {
+        ui.host().display_list().ops.iter().any(|op| match op {
+            compose_ui::platform::DrawOp::DrawRect(_, paint)
+            | compose_ui::platform::DrawOp::DrawRoundRect(_, _, paint)
+            | compose_ui::platform::DrawOp::DrawPath { paint, .. } => paint.color == marker,
+            _ => false,
+        })
+    };
+    let closed = DrawerState::new(DrawerValue::Closed, |_| true);
+    let mut ui = compose_test(drawer(*closed));
+    assert!(!draws(&mut ui), "{:?}", ui.host().display_list().ops);
+    let open = DrawerState::new(DrawerValue::Open, |_| true);
+    let mut ui = compose_test(drawer(*open));
+    assert!(draws(&mut ui), "{:?}", ui.host().display_list().ops);
+}
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationDrawer.kt, ModalNavigationDrawer, Scrim(onClick = if (drawerState.isOpen) onDismissRequest else null)
+#[test]
+fn an_open_drawers_scrim_goes_after_the_content_in_the_traversal() {
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
+    let mut ui = compose_test(drawer_of(*state));
+    ui.on_node_with_content_description("Close navigation menu")
+        .assert(expect_value(&SemanticsProperties::TRAVERSAL_INDEX, 1.0));
 }

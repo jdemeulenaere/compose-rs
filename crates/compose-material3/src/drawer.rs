@@ -389,7 +389,7 @@ pub fn ModalNavigationDrawer(
                 // closes the drawer if `confirm_state_change` lets it, as Compose's.
                 let fraction = state;
                 let close = compose_runtime::callback(move || {
-                    if state.confirm_state_change(DrawerValue::Closed) {
+                    if gestures_enabled && state.confirm_state_change(DrawerValue::Closed) {
                         scope.launch(async move { state.close().await });
                     }
                 });
@@ -405,9 +405,9 @@ pub fn ModalNavigationDrawer(
                         })
                         .then_custom(ScrimElement {
                             close,
-                            enabled: gestures_enabled,
+                            enabled: state.is_open(),
                             description: Some("Close navigation menu".into()),
-                            traversal_index: None,
+                            traversal_index: Some(1.0),
                         }),
                     Alignment::TOP_START,
                     false,
@@ -424,8 +424,9 @@ pub fn ModalNavigationDrawer(
                     }),
                 );
             }
-            // The sheet, composed, measured and placed even while closed, as Compose's: its width
-            // gives the closed offset. Opened, its first focusable takes the
+            // The sheet's pane, composed and measured even while closed, as Compose's: its width
+            // gives the closed offset. What's in it is placed only while it shows, so that
+            // keyboard focus doesn't reach it off screen. Opened, its first focusable takes the
             // focus, as Compose's `LaunchedEffect(isOpen) { focusRequester.requestFocus() }`.
             let drawer_content = drawer_content.clone();
             // Its pane, dismissed while open, as Compose's: refused by `confirm_state_change`.
@@ -440,14 +441,52 @@ pub fn ModalNavigationDrawer(
                     });
                 }
             });
-            Box(
+            let pane_policy = compose_runtime::remember_keyed(state, move || {
+                Rc::new(DrawerPaneLayout { state }) as Rc<dyn MeasurePolicy>
+            });
+            Layout(
                 pane.focus_requester(focus_requester),
-                Alignment::TOP_START,
-                false,
-                compose_runtime::callback(move |_| drawer_content()),
+                pane_policy,
+                compose_runtime::callback(move || drawer_content()),
             );
         }),
     );
+}
+
+/// The layout around a drawer's content, as the `Layout` of Compose's `ModalNavigationDrawer`: as
+/// big as what's in it, which it places only while the drawer shows.
+struct DrawerPaneLayout {
+    state: DrawerState,
+}
+
+impl MeasurePolicy for DrawerPaneLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let loose = Constraints::new(
+            0,
+            constraints.max_width,
+            0,
+            constraints.max_height,
+        );
+        let placeables: Vec<_> = measurables.iter().map(|it| scope.measure(*it, loose)).collect();
+        let width = placeables.iter().map(|it| it.width).max().unwrap_or(0);
+        let height = placeables.iter().map(|it| it.height).max().unwrap_or(0);
+        // Read while measuring, as `DrawerLayout`'s offset.
+        if self.state.fraction() != 0.0 {
+            for placeable in &placeables {
+                scope.place_relative(placeable, 0, 0);
+            }
+        }
+        scope.layout(constraints.constrain_width(width), constraints.constrain_height(height))
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "ModalNavigationDrawerPane"
+    }
 }
 
 /// `Strings.NavigationMenu`.
@@ -552,14 +591,15 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 }
 
 impl compose_ui::SemanticsModifierNode for ScrimNode {
+    /// None unless it can be clicked, as `Scrim`, whose semantics come with its `onClick`.
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
-        if let Some(description) = &self.description {
-            config.set_content_description(description.clone());
-        }
-        if let Some(index) = self.traversal_index {
-            config.set_traversal_index(index);
-        }
         if self.enabled {
+            if let Some(description) = &self.description {
+                config.set_content_description(description.clone());
+            }
+            if let Some(index) = self.traversal_index {
+                config.set_traversal_index(index);
+            }
             let close = self.close.clone();
             config.on_click(None, move || {
                 close();
@@ -604,7 +644,8 @@ impl MeasurePolicy for DrawerLayout {
             inner.width.set(sheet.width.max(1) as f32);
         }
         // Read while measuring: a frame of the slide places the sheet again only. Closed, off
-        // the start, as Compose's offset: placed, and so in the semantics, as Compose's.
+        // the start, as Compose's offset: the pane is placed, and so in the semantics, what's
+        // in it not (`DrawerPaneLayout`).
         let hidden = 1.0 - self.state.fraction();
         scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
         scope.layout(width, height)
@@ -726,11 +767,11 @@ pub fn NavigationDrawerItem(
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 56.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
         .fill_max_width()
         .background_with(container, pill.clone())
-        .clip(pill)
+        .clip(pill.clone())
         .clickable_with(
             ClickableOptions {
                 role: Some(Role::Tab),
-                indication: crate::ripple::default_ripple(),
+                indication: crate::ripple::shaped_ripple(pill.clone()),
                 ..ClickableOptions::DEFAULT
             },
             on_click,
