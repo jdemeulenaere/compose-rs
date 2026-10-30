@@ -456,6 +456,7 @@ impl UiTree {
             for (index, child) in children.iter().enumerate() {
                 let child = self.node_mut(child.node);
                 child.placed = false;
+                child.measured_in_block = false;
                 if child.deactivated {
                     active = active.min(index);
                 } else if active < index {
@@ -616,6 +617,10 @@ impl UiTree {
     /// Mirrors what a right-to-left layout of `width` placed relatively: each at its `x` from
     /// the right edge, as Compose's `placeRelative` (placement order kept).
     fn mirror(&mut self, relative: Vec<(crate::layout::Placeable, IntOffset)>, width: i32) {
+        // A layout of no width mirrors nothing, as `placeAutoMirrored`.
+        if width == 0 {
+            return;
+        }
         for (placeable, at) in relative {
             let measurable = placeable.measurable;
             let position = IntOffset::new(width - at.x - placeable.width, at.y);
@@ -652,13 +657,15 @@ impl UiTree {
     ) {
         let value = self.node_mut(node);
         let told = value.kinds.any(NodeKinds::ON_PLACED);
-        // Placed at last: what its blocks wait for was passed over while it wasn't.
-        let waiting = (value.needs_placement || value.subtree_needs_placement)
-            .then_some(value.parent)
-            .flatten();
+        let waiting = value.needs_placement || value.subtree_needs_placement;
+        if layer == 0 {
+            // A measurement or block clears its children's before it runs.
+            assert!(run == 0 || !value.placed, "compose-ui: a child was placed twice");
+        } else {
+            assert!(run == 0 || value.content_placed_in != run, "compose-ui: placed twice");
+            value.content_placed_in = run;
+        }
         let entry = &mut value.layers[layer];
-        assert!(run == 0 || entry.placed_in != run, "compose-ui: a child was placed twice");
-        entry.placed_in = run;
         entry.position = position;
         let offset = position + centering(entry);
         let moved = entry.offset != offset;
@@ -675,8 +682,8 @@ impl UiTree {
         if told {
             self.placed_layers.push((node, layer as u32));
         }
-        if waiting.is_some() {
-            self.note_placement_below(waiting);
+        if waiting {
+            self.placed_with_blocks_waiting(node);
         }
     }
 }

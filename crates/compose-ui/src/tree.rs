@@ -108,8 +108,6 @@ pub(crate) struct Layer {
     pub(crate) offset: IntOffset,
     /// The measurement that last measured it, to reject measuring it twice.
     pub(crate) measured_in: u64,
-    /// The measurement or placement block that last placed it, to reject placing it twice.
-    pub(crate) placed_in: u64,
 }
 
 /// One UI element, as Compose's `LayoutNode`.
@@ -144,6 +142,9 @@ pub struct LayoutNode {
     pub(crate) needs_placement: bool,
     /// One of a descendant must.
     pub(crate) subtree_needs_placement: bool,
+    /// The measurement or block that last placed a layer inside it, to reject placing it twice.
+    /// (Its parent placing it twice is `placed`, cleared before each.)
+    pub(crate) content_placed_in: u64,
     /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
     /// size places the parent again, doesn't measure it.
     pub(crate) measured_in_block: bool,
@@ -226,6 +227,7 @@ impl LayoutNode {
             placed: false,
             placements: None,
             needs_placement: false,
+            content_placed_in: 0,
             subtree_needs_placement: false,
             measured_in_block: false,
             layer_moved: false,
@@ -1453,6 +1455,10 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
+        // Those of layers gone: the rest measure again, whatever they were.
+        if let Some(placements) = &mut value.placements {
+            placements.blocks.truncate(value.layers.len());
+        }
         self.refresh_parent_data(node)
     }
 

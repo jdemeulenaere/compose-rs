@@ -4,7 +4,6 @@
 //! place`): that's a block reading nothing, and keeps nothing (docs/parity/design/
 //! placement-and-lookahead.md §3).
 
-use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
 use smallvec::SmallVec;
@@ -17,17 +16,27 @@ use crate::unit::{Density, IntOffset};
 
 type Block = Rc<dyn Fn(&mut PlacementScope<'_>)>;
 
+/// The block a layer's measurement left its placing to.
+pub(crate) struct LayerBlock {
+    block: Block,
+    /// That measurement: what it measured, a block can't measure again, as Compose's
+    /// `measuredByParent`.
+    measure_run: u64,
+    /// It hasn't run since: what it places was just measured, no child being placed yet.
+    first: bool,
+}
+
 /// The placement blocks of a node's layers.
 #[derive(Default)]
 pub(crate) struct NodePlacements {
     /// Per layer: the block of its last measurement, if it left its placing to one.
-    pub(crate) blocks: SmallVec<[Option<Block>; 2]>,
-    /// The measurement that made the node's blocks, if none ran since: their first run is part
-    /// of it (what it measured a block can't measure again).
-    first_run: Option<u64>,
-    /// Per layer: the constraints a block measured the layer inside it with, as a layout node
-    /// answers a measurement that's the same as its last without measuring.
-    content_constraints: SmallVec<[Option<Constraints>; 2]>,
+    pub(crate) blocks: SmallVec<[Option<LayerBlock>; 2]>,
+}
+
+impl NodePlacements {
+    fn any(&self) -> bool {
+        self.blocks.iter().any(Option::is_some)
+    }
 }
 
 /// What a placement block places with, as `Placeable.PlacementScope`.
@@ -35,8 +44,8 @@ pub struct PlacementScope<'a> {
     scope: MeasureScope<'a>,
     /// The width the layout reported, to mirror in.
     width: i32,
-    /// This run of the block isn't its measurement's: nothing's changed unless it was asked to.
-    again: bool,
+    /// The measurement of the layer whose block this is: what it measured can't be measured here.
+    measure_run: u64,
 }
 
 impl PlacementScope<'_> {
@@ -44,7 +53,8 @@ impl PlacementScope<'_> {
     ///
     /// # Panics
     ///
-    /// If this run already placed it, or the measurement it's part of did.
+    /// If this run already placed it, or the measurement it's part of did (the fused path and a
+    /// block don't mix: `layout_with` panics on a child placed before it).
     pub fn place(&mut self, placeable: &Placeable, x: i32, y: i32) {
         self.scope.place(placeable, x, y);
     }
@@ -57,9 +67,10 @@ impl PlacementScope<'_> {
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left layout,
     /// mirrored in the layout's width.
     pub fn place_relative(&mut self, placeable: &Placeable, x: i32, y: i32) {
+        // A layout of no width mirrors nothing, as `placeAutoMirrored`.
         let x = match self.layout_direction() {
-            LayoutDirection::Ltr => x,
-            LayoutDirection::Rtl => self.width - x - placeable.width,
+            LayoutDirection::Rtl if self.width != 0 => self.width - x - placeable.width,
+            _ => x,
         };
         self.place(placeable, x, y);
     }
@@ -69,28 +80,22 @@ impl PlacementScope<'_> {
     ///
     /// # Panics
     ///
-    /// If this run or the measurement it's part of already measured it.
+    /// If this run already measured it, or the measurement this block is from did, as
+    /// `trackMeasurementByParent`.
     pub fn measure(&mut self, measurable: Measurable, constraints: Constraints) -> Placeable {
-        let layer = measurable.layer as usize;
-        if layer > 0 {
-            let tree = &mut *self.scope.base.tree;
-            let value = tree.node_mut(measurable.node);
-            let placements = value.placements.get_or_insert_with(Default::default);
-            if placements.content_constraints.len() <= layer {
-                placements.content_constraints.resize(layer + 1, None);
-            }
-            let last = placements.content_constraints[layer].replace(constraints);
-            // A layer has no cache of its own: as a node measured with the same constraints.
-            if self.again && last == Some(constraints) {
-                let entry = &value.layers[layer];
-                let (size, measured) = (entry.size, entry.measured);
-                let width = size.width;
-                let height = size.height;
-                return Placeable { measurable, width, height, measured };
-            }
-        }
+        let tree = &*self.scope.base.tree;
+        let value = tree.node(measurable.node);
+        let measured_in = if measurable.layer == 0 {
+            value.measured_in
+        } else {
+            value.layers[measurable.layer as usize].measured_in
+        };
+        assert!(
+            measured_in != self.measure_run,
+            "compose-ui: measured twice: in a measurement and its placement block"
+        );
         let placeable = self.scope.measure(measurable, constraints);
-        if layer == 0 {
+        if measurable.layer == 0 {
             self.scope.base.tree.node_mut(measurable.node).measured_in_block = true;
         }
         placeable
@@ -122,42 +127,49 @@ impl UiTree {
         &mut self,
         node: NodeId,
         layer: usize,
-        run: u64,
+        measure_run: u64,
         block: Block,
     ) {
         let value = self.node_mut(node);
         let placements = value.placements.get_or_insert_with(Default::default);
         if placements.blocks.len() <= layer {
-            placements.blocks.resize(layer + 1, None);
+            placements.blocks.resize_with(layer + 1, || None);
         }
-        placements.blocks[layer] = Some(block);
-        placements.first_run = Some(run);
-        self.invalidate_placement_flags(node);
+        placements.blocks[layer] = Some(LayerBlock { block, measure_run, first: true });
+        self.mark_needs_placement(node);
     }
 
-    /// What `node`'s blocks read changed, or it asked: they run again, in the next layout's
-    /// placement pass, and it isn't measured, as `requestRelayout`. A node placing inside its
-    /// measurement has no other way: it's measured.
+    /// `node` asked to be placed again, as `invalidatePlacement`, or a child measured in its block
+    /// has a new size: its blocks run, or, placing inside its measurement, it's measured.
     pub(crate) fn invalidate_placement_of(&mut self, node: NodeId) {
         let Some(value) = self.get(node) else { return };
-        let has_block = value
-            .placements
-            .as_ref()
-            .is_some_and(|placements| placements.blocks.iter().any(Option::is_some));
-        if !has_block {
-            self.invalidate_measure(node);
-            return;
+        if value.placements.as_ref().is_some_and(|placements| placements.any()) {
+            self.mark_needs_placement(node);
+        } else {
+            self.invalidate_layout_of(node);
         }
-        // A deactivated node's run when it's reused.
-        self.invalidate_placement_flags(node);
-        self.needs_draw = true;
     }
 
-    fn invalidate_placement_flags(&mut self, node: NodeId) {
+    /// What `node`'s blocks read changed: they run again in the next layout's placement pass,
+    /// and it isn't measured, as `requestRelayout`. Those of a measurement that made none since
+    /// are over: nothing to do.
+    pub(crate) fn placement_read_changed(&mut self, node: NodeId) {
+        let Some(value) = self.get(node) else { return };
+        if value.placements.as_ref().is_some_and(|placements| placements.any()) {
+            self.mark_needs_placement(node);
+        }
+    }
+
+    /// `node`'s blocks must run. Not placed or deactivated, it only waits, as `requestRelayout`
+    /// marking it pending: nothing's asked of a frame until it's placed (`place_in_run`).
+    fn mark_needs_placement(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         value.needs_placement = true;
-        let parent = value.parent;
-        self.note_placement_below(parent);
+        if value.placed && !value.deactivated {
+            let parent = value.parent;
+            self.note_placement_below(parent);
+            self.needs_draw = true;
+        }
     }
 
     /// `node` and its ancestors have something below them for the placement pass.
@@ -176,12 +188,13 @@ impl UiTree {
     /// Runs the blocks waiting in `node`'s subtree, top down: each once its node is placed, the
     /// children it places after it. A child not placed keeps what it waits for until it is.
     pub(crate) fn place_pass(&mut self, node: NodeId) {
-        let value = self.node_mut(node);
-        if std::mem::take(&mut value.needs_placement) {
+        if self.node(node).needs_placement {
             self.run_placement_blocks(node);
+            // What measuring its own content asked of it is done too.
+            self.node_mut(node).needs_placement = false;
         }
-        let value = self.node_mut(node);
-        if std::mem::take(&mut value.subtree_needs_placement) {
+        // Cleared after: what the children's blocks place climbs no higher than this.
+        if self.node(node).subtree_needs_placement {
             for index in 0..self.node(node).children.len() {
                 let Some(child) = self.node(node).children.get(index).map(|child| child.node)
                 else {
@@ -195,65 +208,80 @@ impl UiTree {
                     self.place_pass(child);
                 }
             }
+            self.node_mut(node).subtree_needs_placement = false;
         }
     }
 
+    /// `node` was placed with blocks waiting in it or under it, passed over until now.
+    #[cold]
+    pub(crate) fn placed_with_blocks_waiting(&mut self, node: NodeId) {
+        let parent = self.node(node).parent;
+        self.note_placement_below(parent);
+    }
+
     /// Runs `node`'s blocks, outermost first, under one observation: what they read places it
-    /// again. A block that isn't its measurement's first has nothing placed yet.
+    /// again. Each is read when its turn comes: an outer block measuring what's inside it makes
+    /// the inner one. A panic leaves the flags as they were, for a later layout (`place_pass`
+    /// clears them after).
     fn run_placement_blocks(&mut self, node: NodeId) {
-        let value = self.node_mut(node);
-        let Some(placements) = &mut value.placements else { return };
-        let first_run = placements.first_run.take();
-        let blocks: SmallVec<[(usize, Block); 2]> = (placements.blocks.iter().enumerate())
-            .filter_map(|(layer, block)| Some((layer, block.clone()?)))
-            .collect();
-        let again = first_run.is_none();
         let observer = self.observer.clone();
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut run = || {
-                for (layer, block) in &blocks {
-                    self.run_placement_block(node, *layer, first_run, block);
+        let mut run = || {
+            let mut layer = 0;
+            let mut again = false;
+            while let Some(found) = self.block_of_layer(node, layer) {
+                if let Some((block, measure_run, first)) = found {
+                    again |= !first;
+                    self.run_placement_block(node, layer, measure_run, first, &block);
                 }
-            };
-            match &observer {
-                Some(observer) => {
-                    observer.observe(observation_key(node, Observation::Placement), run)
-                }
-                None => run(),
+                layer += 1;
             }
-        }));
-        if let Err(panic) = result {
-            self.node_mut(node).needs_placement = true;
-            panic::resume_unwind(panic);
-        }
+            again
+        };
+        let again = match &observer {
+            Some(observer) => observer.observe(observation_key(node, Observation::Placement), run),
+            None => run(),
+        };
         if again && self.node(node).kinds.any(crate::node_chain::NodeKinds::ON_PLACED) {
             self.placed_layers.push((node, 0));
         }
+    }
+
+    /// The block of `layer` of `node` now, if it has one (with what its run needs), or `None` past
+    /// its last.
+    #[allow(clippy::type_complexity)]
+    fn block_of_layer(&mut self, node: NodeId, layer: usize) -> Option<Option<(Block, u64, bool)>> {
+        let blocks = &mut self.node_mut(node).placements.as_mut()?.blocks;
+        Some(blocks.get_mut(layer)?.as_mut().map(|entry| {
+            let first = std::mem::replace(&mut entry.first, false);
+            (entry.block.clone(), entry.measure_run, first)
+        }))
     }
 
     fn run_placement_block(
         &mut self,
         node: NodeId,
         layer: usize,
-        first_run: Option<u64>,
+        measure_run: u64,
+        first: bool,
         block: &Block,
     ) {
-        let again = first_run.is_none();
         let value = self.node_mut(node);
         let width = value.layers[layer].measured.width;
         let places_children = layer + 1 == value.layers.len();
-        if again && places_children {
+        if !first && places_children {
             // What it doesn't place now isn't placed, as `markSubtreeAsNotPlaced`.
             for index in 0..self.node(node).children.len() {
                 let child = self.node(node).children[index].node;
-                self.node_mut(child).placed = false;
+                let child = self.node_mut(child);
+                child.placed = false;
+                child.measured_in_block = false;
             }
             self.invalidate_children_draw_of(node);
         }
-        let run = first_run.unwrap_or_else(|| self.next_measure_run());
+        let run = self.next_measure_run();
         let mut scope = MeasureScope::new(&mut *self, node, run);
         scope.layer = layer;
-        let mut placement = PlacementScope { scope, width, again };
+        let mut placement = PlacementScope { scope, width, measure_run };
         block(&mut placement);
     }
 }

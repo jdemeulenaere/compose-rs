@@ -369,6 +369,7 @@ impl IntrinsicMeasureScope<'_> {
             relative: Vec::new(),
             intrinsic: Some(kind),
             layer: 0,
+            placed: false,
         }
     }
 }
@@ -387,6 +388,8 @@ pub struct MeasureScope<'a> {
     pub(crate) intrinsic: Option<Intrinsic>,
     /// The layer it measures: what a `layout_with`'s block places.
     pub(crate) layer: usize,
+    /// It placed a child: `layout_with` is a mistake.
+    pub(crate) placed: bool,
 }
 
 impl<'a> std::ops::Deref for MeasureScope<'a> {
@@ -411,6 +414,7 @@ impl<'a> MeasureScope<'a> {
             relative: Vec::new(),
             intrinsic: None,
             layer: 0,
+            placed: false,
         }
     }
 
@@ -454,7 +458,6 @@ impl<'a> MeasureScope<'a> {
                 "compose-ui: a measure policy measured the same child twice in one measurement"
             );
             child.measured_in = self.run;
-            child.measured_in_block = false;
             tree.measure_node(measurable.node, constraints)
         } else {
             assert_eq!(
@@ -494,6 +497,7 @@ impl<'a> MeasureScope<'a> {
         if self.intrinsic.is_some() {
             return;
         }
+        self.placed = true;
         let measurable = placeable.measurable;
         let layer = measurable.layer as usize;
         self.base.tree.place_in_run(measurable.node, layer, position, self.run);
@@ -528,6 +532,11 @@ impl<'a> MeasureScope<'a> {
     ) -> MeasureResult {
         let result = self.layout(width, height);
         if self.intrinsic.is_none() {
+            // Compose has one place to place from; a block that ran after would be a second.
+            assert!(
+                !self.placed,
+                "compose-ui: a measurement placed a child and left its placing to a block too"
+            );
             let (node, layer, run) = (self.base.node, self.layer, self.run);
             self.base.tree.set_placement_block(node, layer, run, Rc::new(block));
         }

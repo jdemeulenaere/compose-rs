@@ -279,10 +279,17 @@ fn a_parent_isn_t_placed_again_for_a_child_modifier_s_block() {
 #[test]
 fn a_modifier_s_block_may_measure_what_it_places() {
     let size = Rc::new(Cell::new(IntSize::ZERO));
-    let s = size.clone();
-    let _host = host(move || {
-        let s = s.clone();
+    let (modifier_measures, measures, blocks) = (count(), count(), count());
+    let (s, mm, m, b) = (size.clone(), modifier_measures.clone(), measures.clone(), blocks.clone());
+    let policy = measure_policy(move |scope, _, _| {
+        bump(&m);
+        let b = b.clone();
+        scope.layout_with(10, 10, move |_| bump(&b))
+    });
+    let mut host = host(move || {
+        let (s, mm) = (s.clone(), mm.clone());
         let measuring = Modifier.layout(move |scope, measurable, constraints| {
+            bump(&mm);
             let s = s.clone();
             scope.layout_with(100, 100, move |placement| {
                 let placeable = placement.measure(measurable, constraints);
@@ -290,9 +297,41 @@ fn a_modifier_s_block_may_measure_what_it_places() {
                 placement.place(&placeable, 0, 0);
             })
         });
-        Stack(measuring, callback(|| Leaf(sized(10))));
+        Layout(measuring, policy.clone(), callback(|| {}));
     });
     assert_eq!(size.get(), IntSize::new(10, 10));
+    assert_eq!((modifier_measures.get(), measures.get(), blocks.get()), (1, 1, 1));
+    host.frame();
+    host.frame();
+    assert_eq!((modifier_measures.get(), measures.get(), blocks.get()), (1, 1, 1), "at rest");
+    host.with_tree(|tree| assert!(!tree.layout(IntSize::new(200, 100)), "nothing's waiting"));
+}
+
+/// A block measuring its modifier's content again, running again: it's measured again, as a
+/// coordinator's `measure`, which keeps nothing, and the inner block is the new measurement's.
+#[test]
+fn a_modifier_s_block_run_again_measures_its_content_again() {
+    let model = mutable_state_of(0);
+    let (measures, blocks) = (count(), count());
+    let (v, m, b) = (model.handle(), measures.clone(), blocks.clone());
+    let policy = measure_policy(move |scope, _, _| {
+        bump(&m);
+        let b = b.clone();
+        scope.layout_with(10, 10, move |_| bump(&b))
+    });
+    let mut host = host(move || {
+        let measuring = Modifier.layout(move |scope, measurable, constraints| {
+            scope.layout_with(100, 100, move |placement| {
+                v.get();
+                let placeable = placement.measure(measurable, constraints);
+                placement.place(&placeable, 0, 0);
+            })
+        });
+        Layout(measuring, policy.clone(), callback(|| {}));
+    });
+    model.set(1);
+    host.frame();
+    assert_eq!((measures.get(), blocks.get()), (2, 2));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureInPlacementTest.kt, measureInLayoutPlacement
@@ -789,6 +828,53 @@ fn a_block_run_again_keeps_a_child_centered_in_constraints_it_ignores() {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/InvalidatingNotPlacedChildTest.kt, childRedrawAndRelayoutRequestedWhileNotPlaced
 #[test]
+fn a_child_changed_while_not_placed_shows_it_when_it_s_placed() {
+    let place = mutable_state_of(true);
+    let color = mutable_state_of(Color::GREEN);
+    let (p, c) = (place.handle(), color.handle());
+    let parent = measure_policy(move |scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            if p.get() {
+                placement.place(&placeable, 0, 0);
+            }
+        })
+    });
+    let mut host = host(move || {
+        Layout(
+            Modifier,
+            parent.clone(),
+            callback(move || {
+                // Its block reads the color too, as the test's `useDuringLayout`.
+                let layout = Modifier.layout(move |scope, measurable, constraints| {
+                    let placeable = scope.measure(measurable, constraints);
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        c.get();
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                Leaf(sized(10).then(layout).draw_behind(move |scope| {
+                    scope.draw_rect(scope.bounds(), Paint::fill(c.get()));
+                }));
+            }),
+        );
+    });
+    let drawn = |host: &UiHost| host.display_list().dump();
+    let green = drawn(&host);
+    place.set(false);
+    host.frame();
+    assert!(!drawn(&host).contains("rect "));
+    color.set(Color::RED);
+    host.frame();
+    assert!(!drawn(&host).contains("rect "));
+    place.set(true);
+    host.frame();
+    assert!(drawn(&host).contains("rect "));
+    assert_ne!(drawn(&host), green, "the new color");
+}
+
+/// A block's child invalidated while it's not placed waits, and runs its block when it's placed.
+#[test]
 fn a_block_of_a_child_invalidated_while_not_placed_runs_when_it_s_placed() {
     let (place, model) = (mutable_state_of(true), mutable_state_of(0));
     let (p, v) = (place.handle(), model.handle());
@@ -818,7 +904,8 @@ fn a_block_of_a_child_invalidated_while_not_placed_runs_when_it_s_placed() {
     place.set(false);
     host.frame();
     model.set(1);
-    host.frame();
+    let stats = host.frame();
+    assert!(!stats.drew, "it only waits, as `requestRelayout` marks it pending");
     assert_eq!(seen.get(), 0, "not placed");
     place.set(true);
     host.frame();
@@ -887,9 +974,10 @@ fn a_block_mirrors_what_it_places_relatively_in_the_layout_s_width() {
 #[test]
 fn a_measurement_placing_itself_after_a_block_drops_it() {
     let (use_block, model) = (mutable_state_of(true), mutable_state_of(0));
-    let blocks = count();
-    let (u, v, b) = (use_block.handle(), model.handle(), blocks.clone());
+    let (blocks, measures) = (count(), count());
+    let (u, v, b, m) = (use_block.handle(), model.handle(), blocks.clone(), measures.clone());
     let policy = measure_policy(move |scope, _, _| {
+        bump(&m);
         if u.get() {
             let b = b.clone();
             scope.layout_with(10, 10, move |_| {
@@ -904,13 +992,14 @@ fn a_measurement_placing_itself_after_a_block_drops_it() {
     assert_eq!(blocks.get(), 1);
     use_block.set(false);
     host.frame();
+    let measured = measures.get();
     model.set(1);
     host.frame();
     assert_eq!(blocks.get(), 1);
+    assert_eq!(measures.get(), measured, "the read of a block that's gone measures nothing");
 }
 
-/// A block's child is placed by the time what's drawn is listed: its own block's after its
-/// parent's, top down.
+/// A block's child's block runs after its parent's, top down.
 #[test]
 fn blocks_run_top_down() {
     let order = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -950,4 +1039,399 @@ fn a_placeable_knows_its_size_before_its_constraints() {
     let _host = host(move || {
         Layout(Modifier, policy.clone(), callback(|| Leaf(Modifier.required_size(100.dp()))));
     });
+}
+
+// ---- Layers, and what mixes ----------------------------------------------------------------------
+
+/// A chain losing a layout modifier: the block of a layer that's gone is gone.
+#[test]
+fn a_chain_losing_a_layout_modifier_keeps_its_policy_s_block() {
+    let on = mutable_state_of(true);
+    let (blocks, o) = (count(), on.handle());
+    let b = blocks.clone();
+    let policy = measure_policy(move |scope, _, _| {
+        let b = b.clone();
+        scope.layout_with(10, 10, move |_| bump(&b))
+    });
+    let mut host = host(move || {
+        let modifier = if o.get() {
+            Modifier.layout(|scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                scope.place(&placeable, 0, 0);
+                scope.layout(placeable.width, placeable.height)
+            })
+        } else {
+            Modifier
+        };
+        Layout(modifier, policy.clone(), callback(|| {}));
+    });
+    assert_eq!(blocks.get(), 1);
+    on.set(false);
+    host.frame();
+    assert_eq!(blocks.get(), 2);
+    on.set(true);
+    host.frame();
+    assert_eq!(blocks.get(), 3);
+}
+
+/// Measured in the modifier's measurement and its block: what a first run may do is the layer's.
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasuringPlacingTwiceIsNotAllowedTest.kt, measureInBothStages
+#[test]
+#[should_panic(expected = "twice")]
+fn a_modifier_measuring_in_its_measurement_and_its_block_panics() {
+    let policy = measure_policy(|scope, _, _| scope.layout_with(10, 10, |_| {}));
+    let _host = host(move || {
+        let modifier = Modifier.layout(|scope, measurable, constraints| {
+            scope.measure(measurable, constraints);
+            scope.layout_with(10, 10, move |placement| {
+                placement.measure(measurable, constraints);
+            })
+        });
+        Layout(modifier, policy.clone(), callback(|| {}));
+    });
+}
+
+/// A block running again measuring what its measurement measured, as `trackMeasurementByParent`.
+#[test]
+#[should_panic(expected = "twice")]
+fn a_block_run_again_measuring_what_its_measurement_measured_panics() {
+    let model = mutable_state_of(false);
+    let v = model.handle();
+    let policy = measure_policy(move |scope, measurables, constraints| {
+        let child = measurables[0];
+        scope.measure(child, constraints);
+        scope.layout_with(10, 10, move |placement| {
+            if v.get() {
+                placement.measure(child, constraints);
+            }
+        })
+    });
+    let mut host = host(move || Layout(Modifier, policy.clone(), callback(|| Leaf(sized(1)))));
+    model.set(true);
+    host.frame();
+}
+
+/// `place` in a measurement beside a block: one place to place from.
+#[test]
+#[should_panic(expected = "left its placing to a block too")]
+fn placing_in_a_measurement_and_leaving_it_to_a_block_panics() {
+    let policy = measure_policy(|scope, measurables, constraints| {
+        let (first, second) = (measurables[0], measurables[1]);
+        let placeable = scope.measure(first, constraints);
+        scope.place(&placeable, 0, 0);
+        let other = scope.measure(second, constraints);
+        scope.layout_with(10, 10, move |placement| placement.place(&other, 0, 0))
+    });
+    let _host = host(move || {
+        Layout(
+            Modifier,
+            policy.clone(),
+            callback(|| {
+                Leaf(sized(1));
+                Leaf(sized(1));
+            }),
+        );
+    });
+}
+
+/// A modifier placing its content twice: not the parent's, a layer's.
+#[test]
+#[should_panic(expected = "placed twice")]
+fn a_modifier_placing_its_content_twice_panics() {
+    let _host = host(|| {
+        Leaf(Modifier.layout(|scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            scope.place(&placeable, 0, 0);
+            scope.place(&placeable, 1, 1);
+            scope.layout(placeable.width, placeable.height)
+        }));
+    });
+}
+
+/// Blocks run outermost first, on the first frame and running again; the parent's before its
+/// child's.
+#[test]
+fn blocks_run_from_the_outermost_layer_and_the_parent_first() {
+    let order = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let model = mutable_state_of(0);
+    let v = model.handle();
+    let logged = {
+        let order = order.clone();
+        move |name: &'static str| {
+            let order = order.clone();
+            move || order.borrow_mut().push(name)
+        }
+    };
+    let (parent_log, modifier_log, policy_log) =
+        (logged("parent"), logged("modifier"), logged("policy"));
+    let parent = measure_policy(move |scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        let log = parent_log.clone();
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            v.get();
+            log();
+            placement.place(&placeable, 0, 0);
+        })
+    });
+    let policy = measure_policy(move |scope, _, _| {
+        let log = policy_log.clone();
+        scope.layout_with(10, 10, move |_| {
+            v.get();
+            log();
+        })
+    });
+    let mut host = host(move || {
+        let (policy, modifier_log) = (policy.clone(), modifier_log.clone());
+        Layout(
+            Modifier,
+            parent.clone(),
+            callback(move || {
+                let log = modifier_log.clone();
+                let modifier = Modifier.layout(move |scope, measurable, constraints| {
+                    let placeable = scope.measure(measurable, constraints);
+                    let log = log.clone();
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        v.get();
+                        log();
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                Layout(modifier, policy.clone(), callback(|| {}));
+            }),
+        );
+    });
+    assert_eq!(*order.borrow(), ["parent", "modifier", "policy"]);
+    order.borrow_mut().clear();
+    model.set(1);
+    host.frame();
+    assert_eq!(*order.borrow(), ["parent", "modifier", "policy"]);
+}
+
+/// A block running again under a repaint boundary: what it stops placing, or places in another
+/// order, is drawn so, nothing having moved.
+#[test]
+fn a_block_run_again_draws_what_it_placed_differently() {
+    let (reversed, only_first) = (mutable_state_of(false), mutable_state_of(false));
+    let (r, o) = (reversed.handle(), only_first.handle());
+    let policy = measure_policy(move |scope, measurables, constraints| {
+        let first = scope.measure(measurables[0], constraints);
+        let second = scope.measure(measurables[1], constraints);
+        scope.layout_with(10, 10, move |placement| {
+            let reversed = r.get();
+            if reversed {
+                placement.place(&second, 0, 0);
+            }
+            placement.place(&first, 0, 0);
+            if !reversed && !o.get() {
+                placement.place(&second, 0, 0);
+            }
+        })
+    });
+    let mut host = host(move || {
+        Layout(
+            Modifier.repaint_boundary(),
+            policy.clone(),
+            callback(|| {
+                Leaf(sized(5).background(Color::RED));
+                Leaf(sized(5).background(Color::BLUE));
+            }),
+        );
+    });
+    let before = host.display_list().dump();
+    reversed.set(true);
+    host.frame();
+    let swapped = host.display_list().dump();
+    assert_ne!(swapped, before, "the other order");
+    reversed.set(false);
+    only_first.set(true);
+    host.frame();
+    assert!(host.display_list().dump().len() < before.len(), "one left");
+}
+
+/// Its parent measured it in a block, then in its measurement: a new size measures the parent.
+#[test]
+fn a_child_no_longer_measured_in_a_block_measures_its_parent_again() {
+    let (in_block, size) = (mutable_state_of(true), mutable_state_of(5));
+    let measures = count();
+    let (i, s, m) = (in_block.handle(), size.handle(), measures.clone());
+    let policy = measure_policy(move |scope, measurables, constraints| {
+        bump(&m);
+        let child = measurables[0];
+        if i.get() {
+            scope.layout_with(100, 100, move |placement| {
+                let placeable = placement.measure(child, constraints);
+                placement.place(&placeable, 0, 0);
+            })
+        } else {
+            let placeable = scope.measure(child, constraints);
+            scope.place(&placeable, 0, 0);
+            scope.layout(100, 100)
+        }
+    });
+    let mut host = host(move || {
+        Layout(
+            Modifier,
+            policy.clone(),
+            callback(move || {
+                Leaf(Modifier.layout(move |scope, measurable, _| {
+                    let size = s.get();
+                    let placeable = scope.measure(measurable, Constraints::fixed(size, size));
+                    scope.place(&placeable, 0, 0);
+                    scope.layout(size, size)
+                }));
+            }),
+        );
+    });
+    in_block.set(false);
+    host.frame();
+    let measured = measures.get();
+    size.set(6);
+    host.frame();
+    assert_eq!(measures.get(), measured + 1);
+}
+
+/// `on_placed` hears a block running again, as a coordinator placed again.
+#[test]
+fn a_block_run_again_tells_on_placed() {
+    let model = mutable_state_of(0);
+    let told = count();
+    let (v, t) = (model.handle(), told.clone());
+    let policy = measure_policy(move |scope, _, _| {
+        scope.layout_with(10, 10, move |_| {
+            v.get();
+        })
+    });
+    let mut host = host(move || {
+        let t = t.clone();
+        Layout(
+            Modifier.on_placed(move |_: LayoutCoordinates| bump(&t)),
+            policy.clone(),
+            callback(|| {}),
+        );
+    });
+    assert_eq!(told.get(), 1);
+    model.set(1);
+    host.frame();
+    assert_eq!(told.get(), 2);
+}
+
+/// A block's panic leaves its work to do, for a later layout.
+#[test]
+fn a_block_that_panicked_runs_again() {
+    let model = mutable_state_of(false);
+    let (v, runs) = (model.handle(), count());
+    let r = runs.clone();
+    let child = measure_policy(move |scope, _, _| {
+        let r = r.clone();
+        scope.layout_with(10, 10, move |_| {
+            bump(&r);
+            assert!(!v.get() || r.get() > 2, "once");
+        })
+    });
+    let parent = measure_policy(|scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    });
+    let mut host = host(move || {
+        let child = child.clone();
+        Layout(
+            Modifier,
+            parent.clone(),
+            callback(move || Layout(Modifier, child.clone(), callback(|| {}))),
+        );
+    });
+    model.set(true);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.frame();
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(runs.get(), 2);
+    host.frame();
+    assert_eq!(runs.get(), 3, "it wasn't lost");
+}
+
+/// A layout of no width mirrors nothing, as `placeAutoMirrored`, in a block and in a measurement.
+#[test]
+fn a_layout_of_no_width_mirrors_nothing() {
+    let in_block = measure_policy(|scope, measurables, _| {
+        let placeable = scope.measure(measurables[0], Constraints::fixed(10, 10));
+        scope.layout_with(0, 20, move |placement| placement.place_relative(&placeable, 5, 0))
+    });
+    let in_measure = measure_policy(|scope, measurables, _| {
+        let placeable = scope.measure(measurables[0], Constraints::fixed(10, 10));
+        scope.place_relative(&placeable, 5, 0);
+        scope.layout(0, 20)
+    });
+    for (policy, tag) in [(in_block, "block"), (in_measure, "measure")] {
+        let host = host(move || {
+            let policy = policy.clone();
+            CompositionLocalProvider(
+                LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl),
+                move || {
+                    Layout(
+                        Modifier,
+                        policy.clone(),
+                        callback(move || Leaf(Modifier.test_tag(tag))),
+                    );
+                },
+            );
+        });
+        assert_eq!(left_of(&host, tag), 5.0, "{tag}");
+    }
+}
+
+/// `invalidate_placement` of a node placing inside its measurement is a read of its measurement:
+/// what's before its inner layer isn't drawn for it, as D522's rule for such a read.
+#[test]
+fn invalidating_placement_of_a_fused_node_draws_only_what_its_layout_changed() {
+    struct Fused(Rc<Cell<Option<NodeHandle>>>);
+    impl ModifierNode for Fused {
+        fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+            Some(self)
+        }
+        fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+            self.0.set(Some(context.handle()));
+        }
+    }
+    impl LayoutModifierNode for Fused {
+        fn measure(
+            &mut self,
+            scope: &mut MeasureScope<'_>,
+            content: Measurable,
+            constraints: Constraints,
+        ) -> MeasureResult {
+            let placeable = scope.measure(content, constraints);
+            scope.place(&placeable, 0, 0);
+            scope.layout(placeable.width, placeable.height)
+        }
+    }
+    struct FusedElement(Rc<Cell<Option<NodeHandle>>>);
+    impl ModifierNodeElement for FusedElement {
+        type Node = Fused;
+        fn create(&self) -> Fused {
+            Fused(self.0.clone())
+        }
+        fn update(&self, _: &mut Fused) {}
+        fn same(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    let drawn = count();
+    let handle: Rc<Cell<Option<NodeHandle>>> = Rc::default();
+    let (d, h) = (drawn.clone(), handle.clone());
+    let mut host = host(move || {
+        let d = d.clone();
+        Leaf(
+            sized(10)
+                .repaint_boundary()
+                .draw_behind(move |_| bump(&d))
+                .graphics_layer(|layer| layer.alpha = 0.5)
+                .then_custom(FusedElement(h.clone())),
+        );
+    });
+    let before = drawn.get();
+    handle.get().expect("attached").invalidate_placement();
+    host.frame();
+    assert_eq!(drawn.get(), before);
 }

@@ -783,3 +783,38 @@ fn a_focused_grid_item_past_the_end_comes_in_as_far_as_it_is_past() {
     ui.wait_for_idle();
     assert_eq!(main_offset(&state, lazy, 5), 25);
 }
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPinnableItem.kt, the pinned stay composed and placed out of view; back in view it's placed where it is, once
+#[test]
+fn a_pinned_item_scrolled_back_is_placed_once_where_it_is() {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyGridState::new(0, 0);
+    let handle = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(1),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = handle,
+            |scope: LazyGridScope| {
+                scope.items(100, |index| {
+                    Box!(
+                        modifier = Modifier
+                            .size((100.dp(), 50.dp()))
+                            .focusable()
+                            .test_tag(index.to_string())
+                    );
+                });
+            }
+        );
+    });
+    ui.on_node_with_tag("1").request_focus();
+    let _ = run(&mut ui, async move { handle.scroll_to_item(40, 0).await });
+    ui.wait_for_idle();
+    // Pinned, it's placed out of view.
+    let bounds = ui.on_node_with_tag("1").get_unclipped_bounds_in_root();
+    assert!(bounds.bottom <= 0.dp(), "{bounds:?}");
+    let _ = run(&mut ui, async move { handle.scroll_to_item(1, 0).await });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("1").assert_top_position_in_root_is_equal_to(0.dp());
+    ui.on_node_with_tag("2").assert_top_position_in_root_is_equal_to(50.dp());
+}

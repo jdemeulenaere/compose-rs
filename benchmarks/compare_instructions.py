@@ -107,7 +107,9 @@ def main():
         archive = subprocess.run(
             ["git", "archive", args.base], cwd=repo, stdout=subprocess.PIPE, check=True
         )
-        subprocess.run(["tar", "-x", "-C", source], input=archive.stdout, check=True)
+        # -m: the extraction's time, not the commit's. Cargo trusts a file older than its last
+        # build, so a --scratch reused for a later revision would link the earlier one's crates.
+        subprocess.run(["tar", "-x", "-m", "-C", source], input=archive.stdout, check=True)
         base = source
     binaries = {
         "base": build(base.resolve(), scratch / "base-target"),

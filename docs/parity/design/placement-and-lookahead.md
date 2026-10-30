@@ -173,7 +173,7 @@ run_blocks(node):
 - **Observation keys**: the observation kind takes three bits instead of two (`tree.rs:32-46`), for `Placement` and lookahead's two kinds (§7.6); generations wrap at 2^29 in keys, harmless (a stale key only causes a spurious invalidation).
 - **Placing twice** panics, in both the fused and the deferred path, ending divergence §5.1 (`MeasuringPlacingTwiceIsNotAllowedTest`, `DrawReorderingTest.placingTheSameItemTwiceIsNotAllowed…`). Each policy run already has a run id (`next_measure_run`, `measure.rs:386-389`); the place check compares it.
 
-As built (D1209): `Layer::placed_in` is a measurement's run, or a block's; `NodePlacements::first_run` makes a block's first run part of its measurement; a child measured in a block is flagged (`measured_in_block`), so a new size places its parent. `place_with_z` waits for 3.16, `coordinates` and `current` for PL-2 and PL-4.
+As built (D1209, D1210): no `Layer::placed_in`, whose 8 bytes per inline layer were measured: a parent placing twice is `placed`, cleared before each measurement and block run, and a modifier placing its content twice is one node-level `content_placed_in`. `NodePlacements::blocks` holds a `LayerBlock` per layer, with the measurement's run and whether it has run yet; a block run has its own run id. A child measured in a block is flagged (`measured_in_block`), so a new size places its parent. `blocks` follows `layers` when a chain loses a layout modifier. `place_with_z` waits for 3.16, `coordinates` and `current` for PL-2 and PL-4.
 
 ### 3.5 Placement callbacks
 
@@ -429,7 +429,7 @@ Estimated from the code paths, to be confirmed with `cargo bench -p compose-benc
 
 | Step | Per-node cost when unused | Where it shows |
 |---|---|---|
-| Placement pass | One flag test per layout (`root.subtree_needs_placement`); in `UiTree::place` a `placed_in` compare and store and, on a move, one `u32` test (`coordinate_readers_below`); `LayoutNode` +16 bytes (`placements`, flags, counter) | Within noise on every bench. A layout with deferred blocks pays one boxed closure per measurement (~25-40 ns) and the block's run: built-ins stay immediate so no bench pays it |
+| Placement pass | One flag test per layout (`root.subtree_needs_placement`); in `UiTree::place` a `placed` test and, for a layer inside a node, a `content_placed_in` compare and store, and on a move, one `u32` test (`coordinate_readers_below`, PL-2); `LayoutNode` +16 bytes (`placements` 8, `content_placed_in` 8, flags in padding) | `first_frame_feed` +0.14 %, `first_frame_big` +0.28 %, `grid_pixel` +0.52 % (+0.18 %, +0.26 %, +0.78 % with fat LTO, inside their spreads): D1209. A layout with deferred blocks pays one boxed closure per measurement (~25-40 ns) and the block's run: built-ins stay immediate so no bench pays it |
 | Live coordinates | Nothing on hot paths (queries only) | — |
 | Rulers | A bit test in the provider walk only when read | — |
 | Intrinsics | One branch in `MeasureScope::measure` and `place`; deleting the probe path removes a branch from `measure_node` | Within noise; screens with intrinsic layouts (menus) get cheaper (no probing measurement) or dearer (formulas walk children twice), per layout: measured by foundation's own intrinsic step |

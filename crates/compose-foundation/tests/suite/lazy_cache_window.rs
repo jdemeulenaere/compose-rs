@@ -1902,6 +1902,58 @@ fn a_scroll_back_into_a_section_requests_from_its_header_once_composed() {
     assert_eq!(requested(state), [20]);
 }
 
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPinnableItem.kt, the pinned stay composed and placed out of view: what's in a kept range and pinned too is placed where it is, and once
+#[test]
+fn a_list_scrolled_back_into_a_section_places_each_item_once_where_it_is() {
+    let (mut ui, state, seen) = sectioned(40, 0, 3.0, ITEM, None);
+    let state = *state;
+    idle(&mut ui);
+    state.dispatch_raw_delta(ITEM * 3.0);
+    ui.wait_for_idle();
+    idle(&mut ui);
+    state.dispatch_raw_delta(-ITEM * 2.0);
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 41);
+    assert!(seen.exists(41));
+    // In view where it is, the kept range's and the pinned one; its header sticking above it.
+    for (item, top) in [(41, 0), (42, 30), (43, 60), (21, 0)] {
+        ui.on_node_with_tag(&item.to_string()).assert_top_position_in_root_is_equal_to(top.dp());
+    }
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPinnableItem.kt, the pinned stay composed and placed out of view; back in view it's placed where it is, once
+#[test]
+fn a_pinned_item_scrolled_back_is_placed_once_where_it_is() {
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = handle,
+            |scope: LazyListScope| {
+                scope.items(100, |index| {
+                    Box!(
+                        modifier = Modifier
+                            .size((100.dp(), 50.dp()))
+                            .focusable()
+                            .test_tag(index.to_string())
+                    );
+                });
+            }
+        );
+    });
+    ui.on_node_with_tag("1").request_focus();
+    let _ = crate::scroll_support::run(&mut ui, async move { handle.scroll_to_item(40, 0).await });
+    ui.wait_for_idle();
+    let bounds = ui.on_node_with_tag("1").get_unclipped_bounds_in_root();
+    assert!(bounds.bottom <= 0.dp(), "{bounds:?}");
+    let _ = crate::scroll_support::run(&mut ui, async move { handle.scroll_to_item(1, 0).await });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("1").assert_top_position_in_root_is_equal_to(0.dp());
+    ui.on_node_with_tag("2").assert_top_position_in_root_is_equal_to(50.dp());
+}
+
 // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyListLayoutInfo.kt, visibleItemsAverageSize: the sticking header counts
 #[test]
 fn the_default_windows_average_counts_the_sticking_header() {
