@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1550): 33 source files (23,746 lines), 83 modules with 1123 `#[test]`s; the statuses below are the current ones.
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1551): 35 source files (25,143 lines), 84 modules with 1166 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -18,11 +18,11 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `ported` | 27 | 405 |
+| `ported` | 28 | 433 |
 | `covered` | 1 | 7 |
 | `port` | 15 | 182 |
 | `partial` | 39 | 1,119 |
-| `feature:<name>` | 75 | 1,023 |
+| `feature:<name>` | 74 | 995 |
 | `n/a` | 4 | 34 |
 | **Total** | **161** | **2,770** |
 
@@ -184,8 +184,8 @@ Screenshot tests (`*ScreenshotTest.kt`) compare against Android goldens, which c
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TimePickerTest.kt` | 73 | time picker layouts, state, hour/minute selection (click, drag, a11y), AM/PM, semantics, TimeInput keyboard entry and validation, focus advance, restoration, clock face values, TimeScroll, toggles, large fonts | `feature:time-picker` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ToggleButtonScreenshotTest.kt` | 35 | ToggleButton/Elevated/FilledTonal/Outlined, checked, disabled, pressed shapes, with icon, light/dark | `feature:toggle-button` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ToggleButtonTest.kt` | 16 | toggle button semantics, content positions, default colors, shapes, sizes, stateful border | `feature:toggle-button` |  |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipScreenshotTest.kt` | 4 | plain and rich tooltips light/dark | `partial` | `PlainTooltip`'s look exists (shown through foundation's `TooltipArea`); `RichTooltip` needs feature:tooltip-box. |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipTest.kt` | 28 | tooltip sizes and padding, TooltipBox behavior (long press, focus, Escape, persistent), positioning and flipping, caret, global/local sync, hover, semantics | `feature:tooltip-box` |  |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipScreenshotTest.kt` | 4 | plain and rich tooltips light/dark | `partial` | Their parts are in `suite/tooltip.rs` (sizes, padding, colors, the caret's points, D1551); no images. |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipTest.kt` | 28 | tooltip sizes and padding, TooltipBox behavior (long press, focus, Escape, persistent), positioning and flipping, caret, global/local sync, hover, semantics | `ported` | `suite/tooltip.rs` (all 28; the trackpad's are the mouse's here, the baselines 80 % of the styles' lines until alignment lines, D1551), with `Label` and what a mutation pass found the 28 leave open. |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TypographyTest.kt` | 5 | Typography(fontFamily) default and custom font family, merging with null-family styles | `ported` | `suite/theme.rs` (all 5: `Typography::from_font_family` and `with_default_font_family`, D1008). |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/WavyProgressIndicatorScreenshotTest.kt` | 19 | linear and circular wavy indicators, determinate/indeterminate, amplitude, RTL, strokes | `feature:wavy-progress` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/WavyProgressIndicatorTest.kt` | 25 | wavy indicators' semantics, NaN and coercion, sizes, colors, bounds, lambda updates | `feature:wavy-progress` |  |
@@ -354,7 +354,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `ripple` (done for the common node, D1025) | `ripple()`, `RippleOptions`, `RippleConfiguration`, `LOCAL_RIPPLE_CONFIGURATION`, `RippleThemeConfiguration`, `LOCAL_RIPPLE_THEME_CONFIGURATION`, `RippleDefaults`, material3-ripple's common node | Animated ripples from the press position, hover/focus/drag state layers, inset focus rings, configurable per subtree | `suite/ripple.rs` | the deprecated `RippleAlpha` left out | L | no |
 | `split-button` | `SplitButtonLayout`, `SplitButtonDefaults` (leading and trailing buttons per kind), `SplitButtonShapes` | A button paired with a trailing menu button, inner corners morphing on press and check | SplitButtonScreenshotTest, SplitButtonTest (33) | button-shapes; toggle-button | M | no |
 | `exposed-dropdown-menu` (done, D1044) | `ExposedDropdownMenuBox`, `ExposedDropdownMenuBoxScope.menuAnchor/exposedDropdownSize/ExposedDropdownMenu`, `ExposedDropdownMenuAnchorType`, `ExposedDropdownMenuDefaults` | A text field (editable or read-only) anchoring a menu as wide as it, with key, back and focus handling | ExposedDropdownMenuTest (31) | menus-complete; `Popup` (exists); semantics (dropdown role exists) | M | no |
-| `tooltip-box` | `TooltipBox`, `TooltipState`, `rememberTooltipState`, `TooltipScope`, `RichTooltip`, `PlainTooltip`'s scope and caret, `TooltipDefaults`, `TooltipAnchorPosition`, `Label` | Tooltips shown on long press, hover and focus, positioned around an anchor with a caret, plain or rich, synced so one shows at a time | TooltipTest, half of TooltipScreenshotTest (28 + 2) | dep:generic-shape for the caret; foundation's `TooltipArea` is desktop hover only; long press (exists) | M | yes |
+| `tooltip-box` (done, D1551) | `TooltipBox`, `TooltipState`, `rememberTooltipState`, `TooltipScope`, `RichTooltip`, `PlainTooltip`'s scope and caret, `TooltipDefaults`, `TooltipAnchorPosition`, `Label` | Tooltips shown on long press, hover and focus, positioned around an anchor with a caret, plain or rich, synced so one shows at a time | TooltipTest, half of TooltipScreenshotTest (28 + 2) | dep:generic-shape for the caret; foundation's `TooltipArea` is desktop hover only; long press (exists) | M | yes |
 | `dynamic-color` | `dynamicLightColorScheme(context)`, `dynamicDarkColorScheme(context)`, and the HCT utilities behind them | Color schemes from the Android 12+ wallpaper colors | ColorUtilTest, 2 ColorSchemeTest tests (29) | Android: reading the system's `system_accent*`/`system_neutral*` colors through the Kotlin bridge (docs/06's host events); none on desktop | M | no |
 | `dismissible-permanent-drawers` (done, D1043) | `DismissibleNavigationDrawer`, `DismissibleDrawerSheet`, `PermanentNavigationDrawer`, `PermanentDrawerSheet` | Drawers that push the content aside, or always show | DismissibleNavigationDrawerTest, PermanentNavigationDrawerTest (25) | drawer-state-complete; semantics-gaps (pane title, dismiss action) | M | no |
 | `app-bar-row-column` | `AppBarRow`, `AppBarColumn`, `AppBarScope`, `AppBarOverflowIndicator`, `AppBarMenuState` | Rows and columns of app bar actions that overflow into a menu | AppBarRowTest, AppBarRowScreenshotTest, AppBarColumnTest, AppBarColumnScreenshotTest (22) | a menu (exists) | M | no |

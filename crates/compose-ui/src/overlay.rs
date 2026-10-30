@@ -14,7 +14,7 @@ use crate::unit::{IntOffset, IntSize, Rect};
 
 /// Where an overlay goes, as Compose's `PopupPositionProvider`: from its anchor's bounds and the
 /// window's size (both in the root's pixels) and its own size.
-pub trait PopupPositionProvider: 'static {
+pub trait PopupPositionProvider: std::any::Any {
     /// As `calculatePosition(anchorBounds, windowSize, layoutDirection, popupContentSize)`.
     fn position(
         &self,

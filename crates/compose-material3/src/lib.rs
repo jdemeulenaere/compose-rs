@@ -30,6 +30,7 @@ mod lazy_animation;
 mod list_item;
 mod motion;
 mod navigation;
+mod parent_semantics;
 mod progress;
 mod range_slider;
 mod ripple;
@@ -44,6 +45,7 @@ mod swipe_to_dismiss;
 mod tabs;
 mod text_field;
 mod theme;
+mod tooltip;
 
 pub use app_bar::{
     BottomAppBar, BottomAppBarDefaults, CenterAlignedTopAppBar, LargeTopAppBar, MediumTopAppBar,
@@ -147,8 +149,8 @@ pub use slider::{
     VerticalSlider, remember_slider_state,
 };
 pub use snackbar::{
-    ContentSnackbar, PlainTooltip, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration,
-    SnackbarHost, SnackbarHostState, SnackbarResult, SnackbarVisuals,
+    ContentSnackbar, Snackbar, SnackbarData, SnackbarDefaults, SnackbarDuration, SnackbarHost,
+    SnackbarHostState, SnackbarResult, SnackbarVisuals,
 };
 pub use swipe_to_dismiss::{
     SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,
@@ -168,6 +170,11 @@ pub use theme::{
     ProvideTextStyle, ShapeDefaults, Shapes, ThemeValue, TypeScaleToken, TypeScaleTokens,
     Typography, content_color_for, dark_color_scheme, expressive_light_color_scheme,
     light_color_scheme,
+};
+pub use tooltip::{
+    DefaultTooltipCaretShape, Label, PlainTooltip, RichTooltip, RichTooltipColors,
+    TooltipAnchorPosition, TooltipBox, TooltipDefaults, TooltipPositionProvider, TooltipScope,
+    TooltipState, caret_x, remember_tooltip_state,
 };
 
 // What the defaults of the composables name through `crate::`.

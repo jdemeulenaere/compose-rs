@@ -55,6 +55,19 @@ pub struct MutatorMutex {
     inner: Rc<RefCell<MutexState>>,
 }
 
+/// The same mutex, as Kotlin's identity for a class with no `equals`.
+impl PartialEq for MutatorMutex {
+    fn eq(&self, other: &MutatorMutex) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl compose_runtime::ComposeArg for MutatorMutex {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 #[derive(Default)]
 struct MutexState {
     /// The mutation running.

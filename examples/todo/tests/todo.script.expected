@@ -35,17 +35,17 @@ StackMeasurePolicy [0,0 400x800]
         TextFieldDecoration [0,0 298x56] Modifier.size(280.dp.._ x 56.dp.._).on_focus_changed.draw_behind
           EmptyMeasurePolicy [16,19 266x18] Modifier.TextField {editable_text="" editable focusable focused part_of_parent TextSelectionRange=TextRange(0, 0)}
           EmptyMeasurePolicy [0,54 298x2] Modifier.size(_ x 2.dp).background(#FF6750A4, Rectangle)
-      BoxMeasurePolicy [298,4 70x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+      BoxMeasurePolicy [298,4 70x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 70x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 22x20] Modifier.Text {text=["Add"]}
     RowColumnMeasurePolicy [0,56 254x48]
-      BoxMeasurePolicy [0,0 70x48] Modifier.minimum_touch_target(48.dp).background(#1A1D1B20, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = false) {role=Button clickable disabled merged}
+      BoxMeasurePolicy [0,0 70x48] Modifier.minimum_touch_target(48.dp).background(#1A1D1B20, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = false).childSemantics {role=Button clickable disabled merged}
         RowColumnMeasurePolicy [0,0 70x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 22x20] Modifier.Text {text=["All"]}
-      BoxMeasurePolicy [78,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+      BoxMeasurePolicy [78,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 91x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 43x20] Modifier.Text {text=["Active"]}
-      BoxMeasurePolicy [177,0 77x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+      BoxMeasurePolicy [177,0 77x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 77x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 29x20] Modifier.Text {text=["Done"]}
     LazyList [0,104 368x664] Modifier.weight(1, true).fill_max_width(1).clip(Rectangle).lazy_scroll.focus_group {vertical_scroll=0/0}
@@ -53,13 +53,13 @@ StackMeasurePolicy [0,0 400x800]
         RowColumnMeasurePolicy [0,0 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
           EmptyMeasurePolicy [0,0 48x48] Modifier.tri_state_toggleable(Off, enabled = true).minimum_touch_target(48.dp).indication.padding(2.dp, 2.dp, 2.dp, 2.dp).wrap_content.required_size(20.dp x 20.dp).draw_behind {role=Checkbox toggle=Off clickable focusable merged}
           EmptyMeasurePolicy [48,15 221x18] Modifier.weight(1, true).Text {text=["milk"]}
-          BoxMeasurePolicy [269,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+          BoxMeasurePolicy [269,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
             RowColumnMeasurePolicy [0,0 91x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
               EmptyMeasurePolicy [0,2 43x20] Modifier.Text {text=["Remove"]}
       LazyItem [0,56 368x56] Modifier.repaint_boundary
         RowColumnMeasurePolicy [0,0 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
           EmptyMeasurePolicy [0,0 48x48] Modifier.tri_state_toggleable(Off, enabled = true).minimum_touch_target(48.dp).indication.padding(2.dp, 2.dp, 2.dp, 2.dp).wrap_content.required_size(20.dp x 20.dp).draw_behind {role=Checkbox toggle=Off clickable focusable merged}
           EmptyMeasurePolicy [48,15 221x18] Modifier.weight(1, true).Text {text=["eggs"]}
-          BoxMeasurePolicy [269,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+          BoxMeasurePolicy [269,0 91x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true).childSemantics {role=Button clickable focusable merged}
             RowColumnMeasurePolicy [0,0 91x40] Modifier.default_min_size.padding(24.dp, 8.dp, 24.dp, 8.dp)
               EmptyMeasurePolicy [0,2 43x20] Modifier.Text {text=["Remove"]}
