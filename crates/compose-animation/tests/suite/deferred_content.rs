@@ -1,7 +1,6 @@
 //! `DeferredAnimatedContent` against Compose's `DeferredAnimatedContentTest`: a pending target's
 //! content is composed but held, both contents can be moved by hand, and the transition takes up
-//! from there; an interruption waits while it is pending. The contents are read from the tree:
-//! `onGloballyPositioned` isn't called for a layer's change alone (Compose's is, D828).
+//! from there; an interruption waits while it is pending.
 
 #![allow(non_snake_case)]
 
@@ -66,7 +65,17 @@ fn rule_of(
             ContentKey::state(),
             move |scope| mutable_spec(scope),
             move |_, target: &'static str| {
-                Box!(modifier = Modifier.size(size(target)).test_tag(format!("content_{target}")));
+                let tag = format!("content_{target}");
+                let measured = tag.clone();
+                Box!(
+                    modifier = Modifier.size(size(target)).test_tag(tag).on_globally_positioned(
+                        move |coordinates: compose_ui::LayoutCoordinates| {
+                            let width = coordinates.bounds_in_root().width();
+                            MEASURED_WIDTHS
+                                .with(|widths| widths.borrow_mut().insert(measured.clone(), width));
+                        }
+                    )
+                );
             },
         );
     });
@@ -92,10 +101,14 @@ fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
     ui.density().to_px(bounds.top)
 }
 
-/// A tagged box's width in the root in pixels, its layer's scale counted.
-fn width(ui: &mut ComposeTestRule, tag: &str) -> f32 {
-    let bounds = ui.on_node_with_tag(tag).get_bounds_in_root();
-    ui.density().to_px(bounds.right - bounds.left)
+thread_local! {
+    /// Each tagged box's width in the root in pixels, its layer's scale counted, as the test's
+    /// `onGloballyPositioned { it.boundsInRoot().width }`.
+    static MEASURED_WIDTHS: RefCell<std::collections::HashMap<String, f32>> = RefCell::default();
+}
+
+fn width(_: &mut ComposeTestRule, tag: &str) -> f32 {
+    MEASURED_WIDTHS.with(|widths| widths.borrow()[tag])
 }
 
 // Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt, waitToEnterTest

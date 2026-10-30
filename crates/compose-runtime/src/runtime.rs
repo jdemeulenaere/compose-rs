@@ -35,7 +35,10 @@ pub(crate) struct Runtime {
     pub active: Option<ActivePass>,
     /// Moves on each time a provider's values change in a way that recomposes its content (a
     /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
-    pub providers_epoch: u32,
+    /// The last `Group::provider_version` given.
+    pub provider_versions: u32,
+    /// The compositions being disposed, while their nodes' `on_detach` may read their providers.
+    pub disposing_data: Vec<(CompositionId, CompositionData)>,
     /// The frames of the pass in progress; kept between passes for its capacity.
     pub frames: Vec<Frame>,
     /// Scratch stack for removing subtrees; kept for its capacity.
@@ -104,7 +107,8 @@ impl Runtime {
             cells: Cells::new(),
             scopes: Scopes::new(),
             compositions: Compositions::new(),
-            providers_epoch: 0,
+            provider_versions: 0,
+            disposing_data: Vec::new(),
             active: None,
             frames: Vec::new(),
             removal_stack: Vec::new(),
@@ -578,11 +582,6 @@ impl Compositions {
         self.entries[index as usize].data.as_mut().expect("composition of a live scope or pass")
     }
 
-    /// The composition `index`, if it's live.
-    pub fn try_data(&self, index: u32) -> Option<&CompositionData> {
-        self.entries.get(index as usize)?.data.as_ref()
-    }
-
     pub fn data(&self, index: u32) -> &CompositionData {
         self.entries[index as usize].data.as_ref().expect("composition of a live scope or pass")
     }
@@ -717,6 +716,8 @@ fn remove_subtree(
             }
             step.entered = true;
             step.next_child = group.first_child;
+            // A provider's first slot stays with it (`retire_provider`): it holds no observer.
+            step.taken = u32::from(group.is_provider() && !group.slots.is_empty());
         }
         // Its slots before the next child.
         let child = step.next_child;
@@ -735,11 +736,17 @@ fn remove_subtree(
         }
         if child == NONE {
             let group = &mut table[index];
-            group.slots.clear();
+            if !group.is_provider() {
+                group.slots.clear();
+            }
             if let Some(kept) = group.kept.take() {
                 deferred.removed_values.push(SlotValue::Plain(kept));
             }
-            table.free(index);
+            if group.is_provider() {
+                table.retire_provider(index);
+            } else {
+                table.free(index);
+            }
             continue;
         }
         let under_node = step.under_node || table[index].kind == GroupKind::Node;

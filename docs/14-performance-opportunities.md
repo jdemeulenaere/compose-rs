@@ -144,6 +144,7 @@ Round 14's `all` round against its parity round ([12](12-android-performance.md)
   - **Profiles:** simpleperf, symbolized with the unstripped library.
 - **Headless:** Apple M4 Pro (14 cores), criterion and a probe binary with a counting allocator (`perf/runtime-probe`). Timing runs held a machine-wide lock that also waited for builds to finish. One stray ~30 s build overlapped the runtime investigation's first baseline run (not used) and ~9 s of the desktop runs (not enough to change their averages).
 - **Desktop:** a 2560 × 1440 external display at scale 1 (no Retina display), 144 Hz. Real windows up to 2560 × 1324 px; 2× and 4K from a headless renderer bench.
+- **Instructions:** `benchmarks/compare_instructions.py <revision or checkout>` builds both sides of `benchmarks/examples/instructions.rs` (fixed iterations of the ui, lazy and animation scenarios), alternates their runs and compares the medians of the instructions retired (`/usr/bin/time -l`, macOS). It moves by fractions of a percent where timing swings up to 4x with other builds running. It counts work, not time: cache misses and allocation contention don't show, so a change it can't see is still for criterion on a quiet machine. Not in CI.
 - **Noise:** run-to-run work varies by ±3–4 % (scroll more); TotalTime's standard deviation is 3–7 ms, so startup effects under ~2 ms needed n ≥ 36. Some single-trace figures (a first frame's phases, the system's share of a frame) are marked as such.
 
 ## Android: the frame path

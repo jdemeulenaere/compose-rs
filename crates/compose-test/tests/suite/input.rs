@@ -887,3 +887,31 @@ fn lock_keys_toggle() {
         assert!(!keys.is_num_lock_on());
     });
 }
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/MultiModalInjectionScope.kt, viewConfiguration
+/// The scope's density and view configuration are the node's, as `semanticsNode.layoutInfo`'s,
+/// a subtree providing its own.
+#[test]
+fn an_injection_scope_has_its_node_s_density_and_view_configuration() {
+    use compose_runtime::{CompositionLocalProvider, callback};
+    use compose_ui::{Density, LOCAL_DENSITY, LOCAL_VIEW_CONFIGURATION, ViewConfiguration};
+    let density = Density::new(3.0);
+    let configuration =
+        ViewConfiguration { long_press_timeout_millis: 1234, ..ViewConfiguration::default() };
+    let mut ui = compose_test(move || {
+        CompositionLocalProvider(
+            (LOCAL_DENSITY.provides(density), LOCAL_VIEW_CONFIGURATION.provides(configuration)),
+            || {
+                compose_ui::Layout(
+                    Modifier.size(10.dp()).test_tag("node"),
+                    compose_ui::empty_measure_policy(),
+                    callback(|| {}),
+                );
+            },
+        );
+    });
+    ui.on_node_with_tag("node").perform_touch_input(|scope| {
+        assert_eq!(scope.density(), density);
+        assert_eq!(scope.view_configuration().long_press_timeout_millis, 1234);
+    });
+}

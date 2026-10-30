@@ -251,6 +251,9 @@ pub(crate) struct ClickableNode {
     indication_draws_content: bool,
     /// `LOCAL_INDICATION`'s factory where the node is, as `localIndicationNodeFactory`.
     local_indication: Option<Rc<dyn IndicationNodeFactory>>,
+    /// It turned to the local indication in an update, which has no context: read at the next
+    /// `run_lifecycle`, or the event that makes it.
+    local_indication_unread: bool,
     /// Whether `indication` is attached: one made or replaced where the node has no context
     /// (an event, an update) is attached by `run_lifecycle`, from a task.
     indication_attached: bool,
@@ -288,6 +291,7 @@ impl ClickableNode {
             indication: None,
             indication_draws_content: false,
             local_indication: None,
+            local_indication_unread: false,
             indication_attached: false,
             retired: Vec::new(),
             down: None,
@@ -312,8 +316,14 @@ impl ClickableNode {
             self.shared.borrow_mut().source = spec.interaction_source.clone();
             indication_dirty = true;
         }
-        // A local one stays what the node read, as `localIndicationNodeFactory`.
+        // A local one stays what the node read, as `localIndicationNodeFactory`: read again when
+        // it turns to it (Compose's `updateCommon` calls `onObservedReadsChanged`), and forgotten
+        // when it doesn't use it.
         let mut spec = spec;
+        let turned_local = spec.use_local_indication && !self.spec.use_local_indication;
+        if turned_local || !spec.use_local_indication {
+            self.local_indication = None;
+        }
         if spec.use_local_indication {
             spec.indication = self.local_indication.clone();
         }
@@ -357,6 +367,10 @@ impl ClickableNode {
         if indication_dirty {
             self.recreate_indication();
         }
+        if turned_local {
+            self.local_indication_unread = true;
+            self.schedule_lifecycle();
+        }
     }
 
     /// Makes the indication's node (and, without a source given, the node's own source) if
@@ -382,6 +396,7 @@ impl ClickableNode {
     /// Reads `LOCAL_INDICATION` where the node is, if it uses it, observing it, as
     /// `onObservedReadsChanged`; a new one makes its node again.
     fn read_local_indication(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        let unread = std::mem::take(&mut self.local_indication_unread);
         if !self.spec.use_local_indication {
             return;
         }
@@ -396,6 +411,9 @@ impl ClickableNode {
         self.spec.indication = factory;
         if had {
             self.recreate_indication();
+            context.invalidate_draw();
+        } else if unread && self.spec.interaction_source.is_some() && self.initialize_indication() {
+            // Turned to it, with a source given: it's made at once.
             context.invalidate_draw();
         }
     }
@@ -443,6 +461,9 @@ impl ClickableNode {
         for node in self.retired.drain(..) {
             crate::indication::detach_and_release(node, context);
         }
+        if self.local_indication_unread && context.is_attached() {
+            self.read_local_indication(context);
+        }
         if context.is_attached()
             && !self.indication_attached
             && let Some(node) = &mut self.indication
@@ -454,6 +475,9 @@ impl ClickableNode {
 
     /// Makes the indication if needed; if it was just made, the node draws again to show it.
     fn initialize_indication_in(&mut self, context: &mut EventContext<'_>) {
+        if self.local_indication_unread {
+            self.read_local_indication(context);
+        }
         if self.initialize_indication() {
             context.invalidate_draw();
         }
@@ -786,9 +810,8 @@ impl ModifierNode for ClickableNode {
         &mut self,
         context: &mut crate::node_context::NodeContext<'_>,
     ) {
-        self.read_local_indication(context);
-        self.run_lifecycle(context);
-        // What it reads where it is, as a delegate's would be told.
+        // What it reads where it is, as a delegate's would be told. `LOCAL_INDICATION` it reads
+        // again only through its observation, as Compose's `onObservedReadsChanged` (D1184).
         if let Some(indication) = &mut self.indication {
             indication.on_composition_locals_changed(context);
         }

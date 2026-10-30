@@ -797,6 +797,87 @@ fn with_a_source_the_local_indication_is_made_at_once() {
     assert_eq!(seen.created(), 1);
 }
 
+/// Turning to `Indication::LOCAL`, it reads the local then, as `updateCommon`'s
+/// `onObservedReadsChanged`.
+#[test]
+fn a_clickable_turning_to_the_local_indication_shows_it() {
+    let (seen, indication) = test_indication();
+    let local = mutable_state_of(false);
+    let l = local.handle();
+    let mut ui = compose_test(move || {
+        CompositionLocalProvider(LOCAL_INDICATION.provides(indication.clone()), move || {
+            let options = ClickableOptions {
+                indication: if l.get() { Indication::LOCAL } else { Indication::NONE },
+                ..ClickableOptions::DEFAULT
+            };
+            Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}).test_tag(TAG));
+        });
+    });
+    local.set(true);
+    ui.wait_for_idle();
+    assert_eq!(seen.created(), 0, "without a source, at the first press");
+    let at = center(&mut ui, TAG);
+    touch_down(&mut ui, at);
+    assert_eq!(seen.created(), 1);
+    assert_eq!(seen_kinds(&seen), ["Press"]);
+}
+
+/// ... pressed before the task reading it ran too.
+#[test]
+fn a_clickable_turning_to_the_local_indication_shows_it_at_once_with_a_source() {
+    let (seen, indication) = test_indication();
+    let local = mutable_state_of(false);
+    let l = local.handle();
+    let source = MutableInteractionSource::new();
+    let mut ui = compose_test(move || {
+        let source = source.clone();
+        CompositionLocalProvider(LOCAL_INDICATION.provides(indication.clone()), move || {
+            let options = ClickableOptions {
+                indication: if l.get() { Indication::LOCAL } else { Indication::NONE },
+                interaction_source: Some(source.clone()),
+                ..ClickableOptions::DEFAULT
+            };
+            Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+        });
+    });
+    assert_eq!(seen.created(), 0);
+    local.set(true);
+    ui.wait_for_idle();
+    assert_eq!(seen.created(), 1);
+}
+
+/// Local, then explicit, then local: what it read before isn't kept across.
+#[test]
+fn a_clickable_back_to_the_local_indication_reads_it_again() {
+    let (first, first_indication) = test_indication();
+    let (second, second_indication) = test_indication();
+    let (explicit, explicit_indication) = test_indication();
+    let which = mutable_state_of(0);
+    let w = which.handle();
+    let source = MutableInteractionSource::new();
+    let mut ui = compose_test(move || {
+        let local = if w.get() == 2 { second_indication.clone() } else { first_indication.clone() };
+        let explicit = explicit_indication.clone();
+        let source = source.clone();
+        CompositionLocalProvider(LOCAL_INDICATION.provides(local), move || {
+            let options = ClickableOptions {
+                indication: if w.get() == 1 { explicit.clone() } else { Indication::LOCAL },
+                interaction_source: Some(source.clone()),
+                ..ClickableOptions::DEFAULT
+            };
+            Box!(modifier = Modifier.size(20.dp()).clickable_with(options, || {}));
+        });
+    });
+    assert_eq!(first.created(), 1);
+    which.set(1);
+    ui.wait_for_idle();
+    assert_eq!(explicit.created(), 1);
+    which.set(2);
+    ui.wait_for_idle();
+    assert_eq!(second.created(), 1);
+    assert_eq!(first.created(), 1);
+}
+
 /// With no source, the local indication's node is made at the first press, with a source of
 /// the clickable's own, and sees that press.
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ClickableTest.kt, localIndication_noInteractionSource_lazilyCreated_pointerInput

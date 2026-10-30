@@ -43,6 +43,10 @@ pub(crate) struct RetainedDrawing {
     pub(crate) dirty: bool,
     /// Its layer's properties must be computed again (its block read state that changed).
     pub(crate) layer_dirty: bool,
+    /// Those properties, computed ahead of the drawing to know what they move
+    /// (`note_layer_change`), with what they were computed for: its block runs once a frame.
+    pub(crate) layer_ahead:
+        Option<(LayerProperties, crate::unit::Density, crate::alignment::LayoutDirection)>,
     /// Its group drew something when last listed (not `empty`).
     draws: bool,
 }
@@ -97,6 +101,7 @@ impl RetainedDrawing {
             layer: None,
             dirty: true,
             layer_dirty: true,
+            layer_ahead: None,
             draws: false,
         }
     }
@@ -498,7 +503,7 @@ impl UiTree {
         }
         // Its size (the pivot, the clip) may have changed with its content.
         if dirty || layer_dirty {
-            let layer = self.layer_properties(node, observer);
+            let layer = self.layer_ahead(node).or_else(|| self.layer_properties(node, observer));
             if let Some(retained) = self.node_mut(node).retained.as_mut() {
                 retained.layer = layer;
             }
@@ -683,9 +688,27 @@ impl UiTree {
         true
     }
 
+    /// The properties computed ahead for `node`'s layer, if they're for what it is now.
+    fn layer_ahead(&mut self, node: NodeId) -> Option<LayerProperties> {
+        let retained = self.node_mut(node).retained.as_mut()?;
+        retained.layer_ahead.as_ref()?;
+        let (properties, density, direction) = retained.layer_ahead.take()?;
+        let value = self.node(node);
+        let index = value.retained.as_ref()?.layer_entry? as usize;
+        let layer = value.layer_of(index);
+        let bounds = crate::unit::Rect::from_offset_size(
+            self.layer_origins(node)[layer],
+            value.layers[layer].measured.into(),
+        );
+        (properties.bounds == bounds
+            && density == value.density
+            && direction == value.layout_direction)
+            .then_some(properties)
+    }
+
     /// The properties of `node`'s graphics layer whose properties are its group's, its block
     /// run under its own observation: a write to what it read changes only them.
-    fn layer_properties(
+    pub(crate) fn layer_properties(
         &mut self,
         node: NodeId,
         observer: Option<&compose_runtime::platform::ReadObserver>,

@@ -275,8 +275,9 @@ fn passes_nested_dialogs_give_the_focus_back_in_turn() {
 
 // ---- Density -------------------------------------------------------------------------------
 
-/// `LocalDensity` changing recomposes what's below it (popups included): it's a static local,
-/// as Compose's `staticCompositionLocalOf`, so its provider's content composes again whole.
+/// `LocalDensity` changing recomposes what's below it (popups included): static when provided,
+/// as Compose's `computedDefaultOf` (its default computed, its provider's value
+/// static), so its provider's content composes again whole.
 // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt, LocalDensity
 #[test]
 fn a_density_change_recomposes_the_content_below_it() {

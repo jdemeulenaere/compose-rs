@@ -33,6 +33,6 @@ Statuses: `covered` (compose-rs tests exercise it, cited), `port` (the feature e
 - **Missing features** are implemented with Compose's names, defaults and behaviour, test first, in the dependency order the ledgers give.
 - **Ledgers stay current:** a piece of work updates its rows' statuses and its features' entries in the same commit.
 - **Decisions** made along the way are rows in the decision log as usual, "(agent)" for an agent's. Each workstream has its own block of numbers, given in its brief, so parallel branches don't collide.
-- **Performance:** compose-rs's speed is a feature. A change on a hot path (composition, layout, drawing, lazy layouts, text) runs the relevant headless benchmarks (`benchmarks/benches`) before and after and reports the change; a regression needs a reason, recorded.
+- **Performance:** compose-rs's speed is a feature. A change on a hot path (composition, layout, drawing, lazy layouts, text) runs the relevant headless benchmarks (`benchmarks/benches`) before and after and reports the change; a regression needs a reason, recorded. Timing swings up to 4x on a loaded machine, so `benchmarks/compare_instructions.py <revision>` counts the instructions each side retires on fixed work (ui, lazy and animation scenarios), by median: what to quote when the two disagree (docs/14, "Method").
 - **Compile speed:** tests go into each crate's existing `tests/suite` binary (one per crate), not new test binaries.
 - **Reviews:** every merged piece has had an adversarial review by a fresh agent.

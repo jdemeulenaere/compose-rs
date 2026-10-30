@@ -474,6 +474,7 @@ impl Pass {
         let freeing = std::mem::take(&mut finishing.freeing);
         let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));
         drop(freed);
+        free_retired_providers(self.id);
         drop(finishing);
         with_runtime(|runtime| {
             // What its effects made is initialized too, as the end of Compose's frame (D754).
@@ -572,6 +573,15 @@ impl<A: Applier> ApplierRef<A> {
     }
 }
 
+/// The removals' lifecycle has run: `id`'s provider groups removed go, what they provided dropped
+/// outside the runtime's borrow.
+pub(crate) fn free_retired_providers(id: CompositionId) {
+    let slots = with_runtime(|runtime| {
+        runtime.compositions.get_mut(id).map(|data| data.table.free_retired_providers())
+    });
+    drop(slots);
+}
+
 /// Applies the end-of-pass work in rule R1's order. With `run_effects` false (disposal), side
 /// effects are dropped without running.
 fn apply_deferred(
@@ -610,6 +620,7 @@ fn apply_deferred(
 
 /// A composition taken out of the runtime, to be released outside the borrow.
 struct Disposal {
+    id: CompositionId,
     /// The composition's data, dropped once its values are released. When the composition is
     /// only closed (at thread exit), its handle keeps a closed copy in the arena.
     data: Option<CompositionData>,
@@ -629,7 +640,7 @@ impl Disposal {
             misuse(ComposeError::DisposedDuringPass)
         }
         let data = runtime.compositions.remove(id)?;
-        Some(Disposal::empty(runtime, data))
+        Some(Disposal::empty(runtime, id, data))
     }
 
     /// Empties a composition still owned by its handle, at thread exit, and closes it: the handle
@@ -644,10 +655,10 @@ impl Disposal {
         runtime.compositions.closed += 1;
         // The old data (its frame requester, its applier's last references) drops in `run`,
         // outside the runtime's borrow.
-        Some(Disposal::empty(runtime, data))
+        Some(Disposal::empty(runtime, id, data))
     }
 
-    fn empty(runtime: &mut Runtime, mut data: CompositionData) -> Disposal {
+    fn empty(runtime: &mut Runtime, id: CompositionId, mut data: CompositionData) -> Disposal {
         let Runtime { scopes, removal_stack, disposing, .. } = runtime;
         // Counts as live while its values drop: cells they retire wait for the end of the
         // disposal, as they would wait for the end of a pass.
@@ -659,6 +670,7 @@ impl Disposal {
         let top_level_nodes = if data.poisoned { 0 } else { data.table[SENTINEL].node_count };
         data.table[SENTINEL].node_count = 0;
         Disposal {
+            id,
             applier: data.applier.clone(),
             root_node: data.root_node,
             data: Some(data),
@@ -678,11 +690,16 @@ impl Disposal {
                 applier.remove(self.root_node, 0, self.top_level_nodes as usize);
             }
         }
+        // Its data stays where a node's `on_detach` finds its providers, even if one panics.
+        let readable = ReadableWhileDisposing(self.id);
+        if let Some(data) = self.data.take() {
+            with_runtime(|runtime| runtime.disposing_data.push((self.id, data)));
+        }
         apply_deferred(&applier, &mut self.deferred, false);
         drop(applier);
-        let Disposal { data, deferred, .. } = self;
+        let Disposal { deferred, .. } = self;
         drop(deferred);
-        drop(data);
+        drop(readable);
         drop(disposing);
         // Free the state cells the disposals retired once none is left, and everything if no
         // composition is left to run the pass that would free them.
@@ -701,6 +718,20 @@ impl Disposal {
         }
         request_frames();
         crate::runtime::release_if_empty();
+    }
+}
+
+/// A composition being disposed: what it holds dropped when it ends, outside the runtime's
+/// borrow.
+struct ReadableWhileDisposing(CompositionId);
+
+impl Drop for ReadableWhileDisposing {
+    fn drop(&mut self) {
+        let data = try_with_runtime(|runtime| {
+            let index = runtime.disposing_data.iter().position(|(id, _)| *id == self.0)?;
+            Some(runtime.disposing_data.remove(index).1)
+        });
+        drop(data);
     }
 }
 

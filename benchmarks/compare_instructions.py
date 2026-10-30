@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Compares the instructions two checkouts retire on fixed work (examples/instructions.rs).
+
+Timing on a loaded machine swings up to 4x; retired instructions move by a fraction of a percent
+(docs/14, "Method"). macOS: reads `/usr/bin/time -l`. Not for CI.
+
+    benchmarks/compare_instructions.py main                     # this checkout against a revision
+    benchmarks/compare_instructions.py ../other --rounds 5      # ... or another checkout
+    benchmarks/compare_instructions.py main grid_step:500       # scenario:iterations
+"""
+import argparse
+import os
+import pathlib
+import re
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent
+EXAMPLE = "instructions"
+# Iterations about a second of work each.
+SCENARIOS = {
+    "counter_click": 5000,
+    "todo_toggle": 40,
+    "first_frame_feed": 200,
+    "first_frame_big": 10,
+    "list_scroll": 3000,
+    "feed_pixel": 5000,
+    "feed_step": 1000,
+    "stress_pixel": 3000,
+    "stress_step": 500,
+    "grid_pixel": 3000,
+    "grid_step": 500,
+    "feed_animated": 3000,
+    "stress_animation": 500,
+    "cells_animated": 1000,
+    "cells_animated_positioned": 1000,
+}
+
+
+def build(checkout, target):
+    """Builds the example in `checkout`, an older one being lent this one's source."""
+    example = checkout / "benchmarks/examples" / f"{EXAMPLE}.rs"
+    lent = not example.exists()
+    if lent:
+        example.parent.mkdir(exist_ok=True)
+        shutil.copy(HERE / "examples" / f"{EXAMPLE}.rs", example)
+    try:
+        subprocess.run(
+            ["cargo", "build", "--release", "-p", "compose-benchmarks", "--example", EXAMPLE],
+            cwd=checkout,
+            env={**os.environ, "CARGO_TARGET_DIR": str(target)},
+            check=True,
+        )
+    finally:
+        if lent:
+            example.unlink()
+    return target / "release/examples" / EXAMPLE
+
+
+def retired(binary, scenario, iterations):
+    done = subprocess.run(
+        ["/usr/bin/time", "-l", binary, scenario, str(iterations)], capture_output=True, text=True
+    )
+    if done.returncode != 0:
+        sys.exit(f"{binary} {scenario}: exit {done.returncode}\n{done.stderr}")
+    return int(re.search(r"(\d+)\s+instructions retired", done.stderr).group(1)) / iterations
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("base", help="a checkout's path, or a revision of this repository")
+    parser.add_argument("scenarios", nargs="*", help="scenario:iterations (default: all)")
+    parser.add_argument("--rounds", type=int, default=3, help="runs of each side, alternating")
+    parser.add_argument("--scratch", help="where the builds go (default: a temporary directory)")
+    args = parser.parse_args()
+    repo = HERE.parent
+    scratch = pathlib.Path(args.scratch or tempfile.mkdtemp(prefix="compare-instructions-"))
+    scratch.mkdir(parents=True, exist_ok=True)
+    base = pathlib.Path(args.base)
+    if not base.is_dir():
+        source = scratch / "base-src"
+        shutil.rmtree(source, ignore_errors=True)
+        source.mkdir()
+        archive = subprocess.run(
+            ["git", "archive", args.base], cwd=repo, stdout=subprocess.PIPE, check=True
+        )
+        subprocess.run(["tar", "-x", "-C", source], input=archive.stdout, check=True)
+        base = source
+    binaries = {
+        "base": build(base.resolve(), scratch / "base-target"),
+        "this": build(repo, scratch / "this-target"),
+    }
+    wanted = [
+        (name, int(count)) for name, count in (one.split(":") for one in args.scenarios)
+    ] or list(SCENARIOS.items())
+    print(f'{"scenario":28} {"base":>12} {"this":>12} {"change":>8} {"spread":>8}  (per iteration)')
+    for scenario, iterations in wanted:
+        runs = {"base": [], "this": []}
+        for round_ in range(args.rounds):
+            for side in ("base", "this") if round_ % 2 == 0 else ("this", "base"):
+                runs[side].append(retired(binaries[side], scenario, iterations))
+        a, b = statistics.median(runs["base"]), statistics.median(runs["this"])
+        spread = max(max(r) / min(r) - 1 for r in runs.values())
+        print(
+            f"{scenario:28} {a:12.0f} {b:12.0f} {100 * (b - a) / a:+7.2f}% {100 * spread:7.2f}%",
+            flush=True,
+        )
+    print(f"Builds in {scratch}: delete them when done.")
+
+
+if __name__ == "__main__":
+    main()

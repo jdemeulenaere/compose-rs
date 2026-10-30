@@ -297,13 +297,15 @@ fn what_on_remeasured_reads_is_not_observed() {
         }
     }
 
-    let (r, m) = (read.handle(), measured.clone());
+    let parent_measured = Rc::new(Cell::new(0));
+    let (r, m, p) = (read.handle(), measured.clone(), parent_measured.clone());
     let policy = measure_policy(move |scope, _, _| {
         m.set(m.get() + 1);
         scope.layout(1, 1)
     });
     let outer = measure_policy(move |scope, measurables, constraints| {
-        // Measured inside this layout's own observation.
+        p.set(p.get() + 1);
+        // Measured inside this layout's own observation, which it mustn't add to.
         let placeables: Vec<_> =
             measurables.iter().map(|m| scope.measure(*m, constraints)).collect();
         for placeable in &placeables {
@@ -321,10 +323,10 @@ fn what_on_remeasured_reads_is_not_observed() {
             }),
         );
     });
-    assert_eq!(measured.get(), 1);
+    assert_eq!((measured.get(), parent_measured.get()), (1, 1));
     read.set(1);
     host.frame();
-    assert_eq!(measured.get(), 1, "a read in on_remeasured measures nothing");
+    assert_eq!((measured.get(), parent_measured.get()), (1, 1), "a read in on_remeasured");
 }
 
 #[test]
@@ -434,6 +436,29 @@ fn modifier_on_placed_reports_where_it_is_outer_first() {
         *order.borrow(),
         [("parent", Offset::new(5.0, 5.0)), ("child", Offset::new(5.0, 5.0))]
     );
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/MeasurePassDelegate.kt, placeOuterCoordinator
+#[test]
+fn on_placed_goes_depth_first_in_placement_order() {
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let o = order.clone();
+    let told = move |name: &'static str| {
+        let o = o.clone();
+        Modifier.on_placed(move |_: LayoutCoordinates| o.borrow_mut().push(name))
+    };
+    let _host = host(move || {
+        let told = told.clone();
+        Column(
+            told("top"),
+            callback(move || {
+                let (a, b) = (told.clone(), told.clone());
+                stack(told("P1").size(px(5)), move || Leaf(a("C1").size(px(1))));
+                stack(told("P2").size(px(5)), move || Leaf(b("C2").size(px(1))));
+            }),
+        );
+    });
+    assert_eq!(*order.borrow(), ["top", "P1", "C1", "P2", "C2"]);
 }
 
 #[test]
@@ -818,6 +843,126 @@ fn a_position_written_back_by_its_callback_is_drawn_in_the_same_frame() {
     offset.set(4.0);
     host.frame();
     assert_eq!(written.get(), 4.0);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, updateLayerBlock
+#[test]
+fn a_layer_built_in_composition_tells_a_child() {
+    let offset = mutable_state_of(0.0f32);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (o, s) = (offset.handle(), seen.clone());
+    let positioned: Callback<dyn Fn(LayoutCoordinates)> =
+        (move |coordinates: LayoutCoordinates| {
+            s.borrow_mut().push(coordinates.position_in_root().x)
+        })
+        .into_callback();
+    let mut host = host(move || {
+        let x = o.get();
+        let positioned = positioned.clone();
+        stack(Modifier.graphics_layer(move |layer| layer.translation_x = x), move || {
+            Leaf(Modifier.size(px(5)).on_globally_positioned(positioned.clone()));
+        });
+    });
+    offset.set(5.0);
+    host.frame();
+    assert_eq!(*seen.borrow(), [0.0, 5.0]);
+}
+
+/// Its block runs once a frame for a change that moves nothing, someone listening: the frame's
+/// drawing uses what the comparison computed.
+#[test]
+fn a_layer_s_block_runs_once_a_frame_for_a_listener() {
+    let alpha = mutable_state_of(1.0f32);
+    let runs = Rc::new(Cell::new(0));
+    let (a, r) = (alpha.handle(), runs.clone());
+    let mut host = host(move || {
+        let r = r.clone();
+        Leaf(
+            Modifier
+                .graphics_layer(move |layer| {
+                    r.set(r.get() + 1);
+                    layer.alpha = a.get();
+                })
+                .on_globally_positioned(|_: LayoutCoordinates| {})
+                .size(px(5)),
+        );
+    });
+    alpha.set(0.5);
+    runs.set(0);
+    host.frame();
+    assert_eq!(runs.get(), 1);
+}
+
+/// What was computed ahead isn't what's drawn when the layer has changed since: a callback told
+/// where the node is writes the state again.
+#[test]
+fn a_layer_written_again_before_the_drawing_draws_the_last() {
+    let offset = mutable_state_of(0.0f32);
+    let doubled = mutable_state_of(0.0f32);
+    let (o, d) = (offset.handle(), doubled.handle());
+    let mut host = host(move || {
+        Leaf(
+            Modifier
+                .graphics_layer(move |layer| layer.translation_x = o.get() + d.get())
+                .on_globally_positioned(move |coordinates: LayoutCoordinates| {
+                    if o.get() != 0.0 {
+                        d.set(10.0);
+                    }
+                    let _ = coordinates;
+                })
+                .draw_behind(|_| {})
+                .size(px(5)),
+        );
+    });
+    offset.set(1.0);
+    host.frame();
+    let translated = host.with_tree(|tree| {
+        tree.display_list()
+            .groups
+            .iter()
+            .filter_map(|group| group.layer.as_ref())
+            .any(|layer| layer.translation.x == 11.0)
+    });
+    assert!(translated);
+}
+
+/// A layer whose listener left reads its block only to draw.
+#[test]
+fn a_layer_whose_listener_left_runs_its_block_only_to_draw() {
+    let offset = mutable_state_of(0.0f32);
+    let listens = mutable_state_of(true);
+    let runs = Rc::new(Cell::new(0));
+    let (o, l, r) = (offset.handle(), listens.handle(), runs.clone());
+    let positioned: Callback<dyn Fn(LayoutCoordinates)> =
+        (|_: LayoutCoordinates| {}).into_callback();
+    let mut host = host(move || {
+        let r = r.clone();
+        let positioned = positioned.clone();
+        let listening = l.get();
+        stack(Modifier, move || {
+            let r = r.clone();
+            let positioned = positioned.clone();
+            stack(
+                Modifier.graphics_layer(move |layer| {
+                    r.set(r.get() + 1);
+                    layer.translation_x = o.get();
+                }),
+                move || {
+                    if listening {
+                        Leaf(Modifier.size(px(5)).on_globally_positioned(positioned.clone()));
+                    }
+                },
+            );
+            // A listener elsewhere keeps the list from being empty.
+            Leaf(Modifier.size(px(5)).on_globally_positioned(|_: LayoutCoordinates| {}));
+        });
+    });
+    listens.set(false);
+    host.frame();
+    offset.set(1.0);
+    runs.set(0);
+    host.frame();
+    assert_eq!(runs.get(), 1, "drawn, not compared");
 }
 
 #[test]

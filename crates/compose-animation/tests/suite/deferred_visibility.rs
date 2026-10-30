@@ -79,6 +79,7 @@ fn fixture(
                     modifier = Modifier.size(100.dp()).test_tag("content").on_globally_positioned(
                         move |coordinates: compose_ui::LayoutCoordinates| {
                             seen_x.set(coordinates.position_in_root().x);
+                            MEASURED_WIDTH.set(coordinates.bounds_in_root().width());
                         }
                     )
                 );
@@ -88,11 +89,14 @@ fn fixture(
     Fixture { ui, state, x, composed, outer_size }
 }
 
-/// The box's width in the root in pixels, its layer's scale counted: read from the tree, as
-/// `onGloballyPositioned` isn't called for a layer's change alone (Compose's is, D828).
-fn width(ui: &mut ComposeTestRule) -> f32 {
-    let bounds = ui.on_node_with_tag("content").get_bounds_in_root();
-    ui.density().to_px(bounds.right - bounds.left)
+thread_local! {
+    /// The box's width in the root in pixels, its layer's scale counted, as the test's
+    /// `onGloballyPositioned { measuredWidth = it.boundsInRoot().width }`.
+    static MEASURED_WIDTH: Cell<f32> = const { Cell::new(0.0) };
+}
+
+fn width(_: &mut ComposeTestRule) -> f32 {
+    MEASURED_WIDTH.get()
 }
 
 /// The box's width in the frame before it leaves, moving the clock until it has.

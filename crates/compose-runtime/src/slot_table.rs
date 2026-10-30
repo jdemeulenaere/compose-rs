@@ -105,7 +105,8 @@ pub(crate) struct Group {
     /// The number of nodes this group contributes to its nearest node ancestor: 1 for a node
     /// group, the sum of its children's counts otherwise.
     pub node_count: u32,
-    /// The node of a node group.
+    /// The node of a node group; a provider's group holds its version here
+    /// (`provider_version`): one more field would grow every group by 8 bytes.
     pub node: NodeRef,
     /// The recompose scope of a restart group.
     pub scope: ScopeId,
@@ -127,6 +128,19 @@ impl Group {
         self.flags & PROVIDER != 0
     }
 
+    /// A provider's group: what its content sees, as a number no earlier state of any provider
+    /// had (`Runtime::provider_versions`), moved by its own change, by a change around it its
+    /// content runs again for, and by its id being used again. A node's
+    /// `CompositionLocalAnchor` holds it. 0 before it has one.
+    pub fn provider_version(&self) -> u32 {
+        if self.node.is_none() { 0 } else { self.node.bits() as u32 }
+    }
+
+    pub fn set_provider_version(&mut self, version: u32) {
+        debug_assert!(self.kind != GroupKind::Node);
+        self.node = NodeRef::new(u64::from(version));
+    }
+
     pub fn deactivated(&self) -> bool {
         self.flags & DEACTIVATED != 0
     }
@@ -143,14 +157,16 @@ impl Group {
 pub(crate) struct SlotTable {
     pub groups: Vec<Group>,
     free: Vec<u32>,
-    /// How many provider groups' ids have been used again: what a `CompositionLocalAnchor` kept
-    /// no longer means that provider.
-    pub provider_reuses: u32,
+    /// The provider groups removed by the pass under way, kept with what they provide: a node
+    /// removed with one still reads it in its `on_detach`, as Compose's reads its map, and
+    /// their ids don't come back before those ran (`free_retired_providers`).
+    retired_providers: Vec<u32>,
 }
 
 impl SlotTable {
     pub fn new() -> SlotTable {
-        let mut table = SlotTable { groups: Vec::new(), free: Vec::new(), provider_reuses: 0 };
+        let mut table =
+            SlotTable { groups: Vec::new(), free: Vec::new(), retired_providers: Vec::new() };
         let sentinel = table.alloc(GroupKind::Root, 0, 0, NONE);
         debug_assert_eq!(sentinel, SENTINEL);
         table
@@ -161,9 +177,6 @@ impl SlotTable {
         if let Some(index) = self.free.pop() {
             let group = &mut self.groups[index as usize];
             debug_assert!(group.kind == GroupKind::Free && group.slots.is_empty());
-            if group.is_provider() {
-                self.provider_reuses = self.provider_reuses.wrapping_add(1);
-            }
             group.key = key;
             group.data_key = data_key;
             group.kind = kind;
@@ -225,6 +238,24 @@ impl SlotTable {
         group.restart = None;
         group.dirty = false;
         self.free.push(index);
+    }
+
+    /// Keeps `index`, a provider's group removed, with what it provides (its first slot), until
+    /// `free_retired_providers`.
+    pub fn retire_provider(&mut self, index: u32) {
+        self.groups[index as usize].slots.truncate(1);
+        self.retired_providers.push(index);
+    }
+
+    /// Frees the providers retired, the removals' lifecycle having run. What they provided, to
+    /// drop outside the runtime's borrow.
+    pub fn free_retired_providers(&mut self) -> Vec<Slot> {
+        let mut slots = Vec::new();
+        for index in std::mem::take(&mut self.retired_providers) {
+            slots.append(&mut self.groups[index as usize].slots);
+            self.free(index);
+        }
+        slots
     }
 
     /// Links `group` after `after` among `parent`'s children, or first if `after` is `NONE`.

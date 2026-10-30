@@ -431,6 +431,335 @@ fn nodes_under_providers_next_to_each_other_get_their_own_density() {
     assert_eq!(*seen.borrow(), [2.0, 2.0, 3.0, 2.0, 2.0, 4.0]);
 }
 
+// ---- What a node reads as it goes -----------------------------------------------------------------
+
+type Pair = Rc<Cell<Option<(i32, i32)>>>;
+
+/// Reads `(LOCAL_INT, LOCAL_STATIC_INT)` in its `on_detach`, as a node may: in Compose it's still
+/// attached there, and reads what it read.
+struct DetachReader(Pair);
+
+impl ModifierNode for DetachReader {
+    fn on_detach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(Some((
+            context.current_value_of(&LOCAL_INT),
+            context.current_value_of(&LOCAL_STATIC_INT),
+        )));
+    }
+}
+
+struct DetachReaderElement(Pair);
+
+impl ModifierNodeElement for DetachReaderElement {
+    type Node = DetachReader;
+    fn create(&self) -> DetachReader {
+        DetachReader(self.0.clone())
+    }
+    fn update(&self, _: &mut DetachReader) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_node_removed_with_its_provider_reads_it_in_on_detach() {
+    let show = mutable_state_of(true);
+    let read: Pair = Rc::default();
+    let (w, r) = (show.handle(), read.clone());
+    let mut host = host(move || {
+        if w.get() {
+            let r = r.clone();
+            CompositionLocalProvider(
+                (LOCAL_INT.provides(7), LOCAL_STATIC_INT.provides(8)),
+                move || Leaf(Modifier.then_custom(DetachReaderElement(r.clone()))),
+            );
+        }
+    });
+    show.set(false);
+    host.frame();
+    assert_eq!(read.get(), Some((7, 8)));
+}
+
+#[test]
+fn a_provider_coming_in_the_pass_another_goes_does_not_take_its_nodes_reads() {
+    let v = mutable_state_of(0);
+    let read: Pair = Rc::default();
+    let (w, r) = (v.handle(), read.clone());
+    let mut host = host(move || {
+        let (first, second) = (r.clone(), r.clone());
+        stack(Modifier, move || {
+            let r = first.clone();
+            key(w.get(), || {
+                if w.get() == 0 {
+                    let r = r.clone();
+                    CompositionLocalProvider(
+                        (LOCAL_INT.provides(7), LOCAL_STATIC_INT.provides(8)),
+                        move || Leaf(Modifier.then_custom(DetachReaderElement(r.clone()))),
+                    );
+                }
+            });
+        });
+        let _ = second;
+        stack(Modifier, move || {
+            key(w.get(), || {
+                if w.get() == 1 {
+                    CompositionLocalProvider(
+                        (LOCAL_INT.provides(70), LOCAL_STATIC_INT.provides(80)),
+                        || Leaf(Modifier),
+                    );
+                }
+            });
+        });
+    });
+    v.set(1);
+    host.frame();
+    assert_eq!(read.get(), Some((7, 8)));
+}
+
+#[test]
+fn a_node_reads_its_provider_in_on_detach_when_the_host_goes() {
+    let read: Pair = Rc::default();
+    let r = read.clone();
+    let host = host(move || {
+        let r = r.clone();
+        CompositionLocalProvider(
+            (LOCAL_INT.provides(7), LOCAL_STATIC_INT.provides(8)),
+            move || Leaf(Modifier.then_custom(DetachReaderElement(r.clone()))),
+        );
+    });
+    drop(host);
+    assert_eq!(read.get(), Some((7, 8)));
+}
+
+/// Told when what's provided where it is changes, as a consumer is, with the layouts counted.
+#[derive(Clone, Default)]
+struct Consumed {
+    told: Rc<Cell<u32>>,
+    measured: Rc<Cell<u32>>,
+}
+
+struct ConsumerNode(Consumed);
+
+impl ModifierNode for ConsumerNode {
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+    fn on_composition_locals_changed(&mut self, _: &mut NodeContext<'_>) {
+        self.0.told.set(self.0.told.get() + 1);
+    }
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for ConsumerNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.0.measured.set(self.0.measured.get() + 1);
+        let placeable = scope.measure(content, constraints);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
+struct ConsumerElement(Consumed);
+
+impl ModifierNodeElement for ConsumerElement {
+    type Node = ConsumerNode;
+    fn create(&self) -> ConsumerNode {
+        ConsumerNode(self.0.clone())
+    }
+    fn update(&self, _: &mut ConsumerNode) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_provider_changing_next_to_a_consumer_does_not_tell_it() {
+    let v = mutable_state_of(0);
+    let recompose = mutable_state_of(0);
+    let consumed = Consumed::default();
+    let (w, c, r) = (v.handle(), consumed.clone(), recompose.handle());
+    let mut host = host(move || {
+        let w = w;
+        stack(Modifier, move || {
+            CompositionLocalProvider(LOCAL_STATIC_INT.provides(w.get()), || Leaf(Modifier));
+        });
+        let c = c.clone();
+        stack(Modifier, move || {
+            r.get();
+            Leaf(Modifier.then_custom(ConsumerElement(c.clone())));
+        });
+    });
+    let measured = consumed.measured.get();
+    v.set(1);
+    recompose.set(1);
+    host.frame();
+    assert_eq!(consumed.told.get(), 0);
+    assert_eq!(consumed.measured.get(), measured);
+}
+
+#[test]
+fn a_provider_group_used_again_elsewhere_does_not_tell_a_consumer() {
+    let v = mutable_state_of(0);
+    let recompose = mutable_state_of(0);
+    let consumed = Consumed::default();
+    let (w, c, r) = (v.handle(), consumed.clone(), recompose.handle());
+    let mut host = host(move || {
+        let w = w;
+        stack(Modifier, move || {
+            key(w.get(), || CompositionLocalProvider(LOCAL_INT.provides(1), || Leaf(Modifier)));
+        });
+        let c = c.clone();
+        stack(Modifier, move || {
+            r.get();
+            Leaf(Modifier.then_custom(ConsumerElement(c.clone())));
+        });
+    });
+    let measured = consumed.measured.get();
+    for value in 1..4 {
+        v.set(value);
+        recompose.set(value);
+        host.frame();
+    }
+    assert_eq!(consumed.told.get(), 0);
+    assert_eq!(consumed.measured.get(), measured);
+}
+
+#[test]
+fn a_change_above_tells_a_consumer_under_a_nested_provider() {
+    let v = mutable_state_of(0);
+    let consumed = Consumed::default();
+    let (w, c) = (v.handle(), consumed.clone());
+    let mut host = host(move || {
+        let c = c.clone();
+        CompositionLocalProvider(LOCAL_STATIC_INT.provides(w.get()), move || {
+            let c = c.clone();
+            CompositionLocalProvider(LOCAL_INT.provides(1), move || {
+                Leaf(Modifier.then_custom(ConsumerElement(c.clone())));
+            });
+        });
+    });
+    v.set(1);
+    host.frame();
+    assert_eq!(consumed.told.get(), 1);
+}
+
+/// What the last node resolved isn't shared once a provider above both has changed: the nodes
+/// are composed one at a time, the one before still holding what it read.
+#[test]
+fn a_new_density_above_reaches_nodes_under_sibling_providers() {
+    let density = mutable_state_of(Density { density: 2.0, font_scale: 1.0 });
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let policy = measure_policy(move |scope, _, _| {
+        s.borrow_mut().push(scope.density().density);
+        scope.layout(0, 0)
+    });
+    let mut host = with_density(density.handle(), move || {
+        let (a, b) = (policy.clone(), policy.clone());
+        CompositionLocalProvider(LOCAL_INT.provides(1), move || {
+            Layout(Modifier, a.clone(), callback(|| {}));
+        });
+        CompositionLocalProvider(LOCAL_INT.provides(2), move || {
+            Layout(Modifier, b.clone(), callback(|| {}));
+        });
+    });
+    seen.borrow_mut().clear();
+    density.set(Density { density: 3.0, font_scale: 1.0 });
+    host.frame();
+    assert_eq!(*seen.borrow(), [3.0, 3.0]);
+}
+
+#[test]
+fn an_anchor_outliving_its_composition_reads_defaults() {
+    let kept = Rc::new(Cell::new(CompositionLocalAnchor::NONE));
+    let k = kept.clone();
+    let first = host(move || {
+        CompositionLocalProvider(LOCAL_INT.provides(1), || {
+            k.set(current_composition_local_anchor());
+        });
+    });
+    drop(first);
+    // In the same slot of the arena, with another provider.
+    let second = host(|| {
+        CompositionLocalProvider(LOCAL_INT.provides(2), || Leaf(Modifier));
+    });
+    assert_eq!(kept.get().get(&LOCAL_INT), 0);
+    assert_eq!(kept.get().map().get(&LOCAL_INT), 0);
+    drop(second);
+    // One with fewer groups than it has: nothing at its place.
+    let third = host(|| {});
+    assert_eq!(kept.get().get(&LOCAL_INT), 0);
+    drop(third);
+}
+
+/// Knows its layout node, to ask the tree what it holds.
+struct WhereItIs(Rc<Cell<Option<compose_ui::platform::NodeId>>>);
+
+impl ModifierNode for WhereItIs {
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.set(Some(context.layout_node()));
+    }
+}
+
+struct WhereItIsElement(Rc<Cell<Option<compose_ui::platform::NodeId>>>);
+
+impl ModifierNodeElement for WhereItIsElement {
+    type Node = WhereItIs;
+    fn create(&self) -> WhereItIs {
+        WhereItIs(self.0.clone())
+    }
+    fn update(&self, _: &mut WhereItIs) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// A subtree animating its view configuration keeps a tree's table small, what its nodes hold
+/// right: the 65,535 a node's index holds aren't reached.
+#[test]
+fn a_view_configuration_animated_in_a_subtree_stays_right() {
+    let value = mutable_state_of(0u32);
+    let (animated, steady): (Rc<Cell<_>>, Rc<Cell<_>>) = Default::default();
+    let (v, a, s) = (value.handle(), animated.clone(), steady.clone());
+    let with_timeout = |millis| ViewConfiguration {
+        long_press_timeout_millis: millis,
+        ..ViewConfiguration::default()
+    };
+    let mut host = host(move || {
+        let s = s.clone();
+        CompositionLocalProvider(LOCAL_VIEW_CONFIGURATION.provides(with_timeout(7)), move || {
+            Leaf(Modifier.then_custom(WhereItIsElement(s.clone())));
+        });
+        let a = a.clone();
+        CompositionLocalProvider(
+            LOCAL_VIEW_CONFIGURATION.provides(with_timeout(u64::from(v.get()) + 1000)),
+            move || Leaf(Modifier.then_custom(WhereItIsElement(a.clone()))),
+        );
+    });
+    let timeout = |host: &UiHost, node: &Rc<Cell<Option<compose_ui::platform::NodeId>>>| {
+        let node = node.get().expect("attached");
+        host.with_tree(|tree| tree.view_configuration_of(node).long_press_timeout_millis)
+    };
+    for frame in 1..300 {
+        value.set(frame);
+        host.frame();
+        assert_eq!(timeout(&host, &animated), u64::from(frame) + 1000);
+    }
+    assert_eq!(timeout(&host, &steady), 7, "one a node holds stays");
+}
+
+/// A `Box`: a stack of `content`.
+fn stack(modifier: Modifier, content: impl Fn() + 'static) {
+    Stack(modifier, callback(content));
+}
+
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutNodeDensityTest.kt, compositionLocalDensityChangeTriggersRemeasure
 #[test]
 fn a_new_local_density_measures_with_it() {

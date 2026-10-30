@@ -254,6 +254,93 @@ fn a_content_color_change_shows_at_once_during_a_drag() {
     assert_eq!(one_circle(&mut ui).color, Color::GREEN.with_alpha(0.16));
 }
 
+/// Made above a provider and used below it, it reads what's provided where it's used, as
+/// Compose's `currentValueOf` (D1184).
+#[test]
+fn a_ripple_made_outside_a_provider_reads_it_where_it_is() {
+    let source = MutableInteractionSource::new();
+    let s = source.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let s = s.clone();
+        MaterialTheme!({
+            let modifier =
+                Modifier.size(40.dp()).test_tag(TAG).indication(s.clone(), default_ripple());
+            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(Color::RED), move || {
+                Box!(modifier = modifier.clone());
+            });
+        });
+    });
+    source.try_emit(DragInteraction::Start(DragStart::new()));
+    settle(&mut ui);
+    assert_eq!(one_circle(&mut ui).color, Color::RED.with_alpha(0.16));
+}
+
+fn over_a_changing_provider(
+    source: &MutableInteractionSource,
+    gives: MutableState<bool>,
+    made: impl Fn(&MutableInteractionSource) -> Modifier + 'static,
+) -> ComposeTestRule {
+    let source = source.clone();
+    let made = Rc::new(made);
+    ComposeTestRule::with_manual_clock(move || {
+        let (source, made) = (source.clone(), made.clone());
+        MaterialTheme!({
+            let (source, made) = (source.clone(), made.clone());
+            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(Color::BLUE), move || {
+                let (source, made) = (source.clone(), made.clone());
+                let given = if gives.get() {
+                    vec![LOCAL_CONTENT_COLOR.provides(Color::RED)]
+                } else {
+                    vec![]
+                };
+                CompositionLocalProvider(given, move || {
+                    Box!(modifier = Modifier.size(40.dp()).test_tag(TAG).then(made(&source)));
+                });
+            });
+        });
+    })
+}
+
+/// A provider's set of locals changing over a ripple kept: it reads what's now provided, through
+/// the map it keeps, told by its host.
+#[test]
+fn a_kept_ripple_reads_what_a_changed_provider_gives() {
+    let source = MutableInteractionSource::new();
+    let gives = mutable_state_of(true);
+    let mut ui = over_a_changing_provider(&source, gives.handle(), |source| {
+        Modifier.indication(source.clone(), default_ripple())
+    });
+    source.try_emit(DragInteraction::Start(DragStart::new()));
+    settle(&mut ui);
+    assert_eq!(one_circle(&mut ui).color, Color::RED.with_alpha(0.16));
+    gives.set(false);
+    ui.advance_time_by_frame();
+    assert_eq!(one_circle(&mut ui).color, Color::BLUE.with_alpha(0.16));
+}
+
+/// ... told by a clickable hosting it.
+#[test]
+fn a_clickable_s_kept_ripple_reads_what_a_changed_provider_gives() {
+    let source = MutableInteractionSource::new();
+    let gives = mutable_state_of(true);
+    let mut ui = over_a_changing_provider(&source, gives.handle(), |source| {
+        Modifier.clickable_with(
+            compose_ui::ClickableOptions {
+                indication: default_ripple(),
+                interaction_source: Some(source.clone()),
+                ..compose_ui::ClickableOptions::DEFAULT
+            },
+            || {},
+        )
+    });
+    source.try_emit(DragInteraction::Start(DragStart::new()));
+    settle(&mut ui);
+    assert_eq!(one_circle(&mut ui).color, Color::RED.with_alpha(0.16));
+    gives.set(false);
+    ui.advance_time_by_frame();
+    assert_eq!(one_circle(&mut ui).color, Color::BLUE.with_alpha(0.16));
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/RippleTest.kt, rippleConfiguration_color_dragged
 #[test]
 fn a_configurations_color_wins_over_the_content_color() {

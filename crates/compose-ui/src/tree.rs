@@ -252,6 +252,9 @@ impl LayoutNode {
     }
 }
 
+/// How many view configurations a tree keeps before forgetting those no node holds.
+const MOST_VIEW_CONFIGURATIONS: usize = 64;
+
 /// What a layout node takes from the composition locals where it's composed, as
 /// `LayoutNode.compositionLocalMap`'s setter does.
 #[derive(Clone, Copy)]
@@ -339,6 +342,10 @@ pub struct UiTree {
     /// The nodes (flagged `layer_moved`) one of whose graphics layers transforms differently
     /// since the callbacks last ran, if a node wants to know where it is.
     pub(crate) layers_moved: Vec<NodeId>,
+    /// Moves when a position-aware node leaves: what the graphics layers keep of what they told
+    /// is good only if they kept it since (`GraphicsLayerNode::note_transform`), so a layer no
+    /// one under it listens to any more doesn't run its block for nothing.
+    pub(crate) position_listeners: u32,
     /// The last `EntryId` given to a chain entry.
     pub(crate) next_entry: u64,
     /// The last semantics id given (the root's is 0).
@@ -457,6 +464,7 @@ impl UiTree {
             layout_nodes_told: false,
             placed_layers: Vec::new(),
             layers_moved: Vec::new(),
+            position_listeners: 0,
             next_entry: 0,
             last_semantics_id: 0,
             window_insets: crate::configuration::WindowInsetsSource::NONE,
@@ -523,6 +531,11 @@ impl UiTree {
 
     pub fn root_id(&self) -> NodeId {
         self.root
+    }
+
+    /// The density of `node`, as `LayoutInfo.density`.
+    pub fn density_of(&self, node: NodeId) -> Density {
+        self.get(node).map_or(self.density, |value| value.density)
     }
 
     pub fn density(&self) -> Density {
@@ -605,17 +618,46 @@ impl UiTree {
         self.auto_invalidate(node, invalidated, NodeKinds::NONE, false);
     }
 
-    /// `configuration`'s place in `view_configurations`.
+    /// `configuration`'s place in `view_configurations`, by equality: a subtree animating one
+    /// (a provider of each frame's) leaves only those its nodes hold.
     fn view_configuration_index(
         &mut self,
         configuration: crate::view_configuration::ViewConfiguration,
     ) -> u16 {
-        let found = self.view_configurations.iter().position(|known| *known == configuration);
-        let index = found.unwrap_or_else(|| {
-            self.view_configurations.push(configuration);
-            self.view_configurations.len() - 1
+        if let Some(found) =
+            self.view_configurations.iter().position(|known| *known == configuration)
+        {
+            return found as u16 + 1;
+        }
+        if self.view_configurations.len() >= MOST_VIEW_CONFIGURATIONS {
+            self.forget_unused_view_configurations();
+        }
+        self.view_configurations.push(configuration);
+        assert!(self.view_configurations.len() < usize::from(u16::MAX), "too many in use");
+        self.view_configurations.len() as u16
+    }
+
+    /// Keeps the view configurations nodes hold, in the same order, and moves their indices.
+    fn forget_unused_view_configurations(&mut self) {
+        let mut kept = vec![0u16; self.view_configurations.len() + 1];
+        for node in self.slots.iter().filter_map(|slot| slot.node.as_ref()) {
+            kept[usize::from(node.view_configuration)] = 1;
+        }
+        let mut next = 0;
+        let mut index = 0;
+        self.view_configurations.retain(|_| {
+            index += 1;
+            let keep = kept[index] != 0;
+            if keep {
+                next += 1;
+                kept[index] = next;
+            }
+            keep
         });
-        index as u16 + 1
+        kept[0] = 0;
+        for node in self.slots.iter_mut().filter_map(|slot| slot.node.as_mut()) {
+            node.view_configuration = kept[usize::from(node.view_configuration)];
+        }
     }
 
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
@@ -893,7 +935,7 @@ impl UiTree {
                 Observation::InnerLayers => {
                     if self.get(node).is_some_and(|value| !value.deactivated) {
                         self.invalidate_inner_layers(node);
-                        self.note_layer_change(node);
+                        self.note_layer_change(node, false);
                     }
                 }
                 Observation::Layer => {
@@ -902,8 +944,11 @@ impl UiTree {
                     let value = self.get_mut(node);
                     if let Some(retained) = value.and_then(|value| value.retained.as_mut()) {
                         retained.layer_dirty = true;
+                        if retained.layer_ahead.is_some() {
+                            retained.layer_ahead = None;
+                        }
                     }
-                    self.note_layer_change(node);
+                    self.note_layer_change(node, true);
                 }
                 Observation::Semantics => self.invalidate_semantics_of(node),
             }
@@ -1004,6 +1049,9 @@ impl UiTree {
             drop(previous);
             self.revalidate_focus(node, None);
             self.auto_invalidate(node, invalidated, NodeKinds::NONE, parent_data_changed);
+            if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
+                self.note_updated_layer(node);
+            }
             return;
         }
         let matched = match_kinds(old, new, Element::same_kind);
@@ -1125,6 +1173,9 @@ impl UiTree {
         }
         self.revalidate_focus(node, Some(&matched));
         self.auto_invalidate(node, invalidated, structural, parent_data_changed);
+        if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
+            self.note_updated_layer(node);
+        }
     }
 
     /// Invalidates what a chain change's nodes' `kinds` say, as Compose's auto-invalidation

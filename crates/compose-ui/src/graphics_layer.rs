@@ -134,8 +134,8 @@ pub(crate) struct GraphicsLayerNode {
     /// Its last path outline, with what it was made for (D1059).
     outline: std::cell::RefCell<Option<CachedOutline>>,
     /// How it transformed when a node under it last asked where it is, as Compose's
-    /// `layerPositionalProperties`; `None` if none did.
-    positional: Cell<Option<LayerTransform>>,
+    /// `layerPositionalProperties`, with `UiTree::position_listeners` then; `None` if none did.
+    positional: Cell<Option<(u32, LayerTransform)>>,
 }
 
 /// What of a layer moves what's in it, as Compose's `LayerPositionalProperties`.
@@ -150,7 +150,11 @@ struct LayerTransform {
 impl LayerTransform {
     fn of(properties: &LayerProperties) -> LayerTransform {
         LayerTransform {
-            pivot: properties.pivot,
+            // Around its own top left: its group's place isn't what it does.
+            pivot: Offset::new(
+                properties.pivot.x - properties.bounds.left,
+                properties.pivot.y - properties.bounds.top,
+            ),
             scale: properties.scale,
             rotation: properties.rotation,
             translation: properties.translation,
@@ -205,19 +209,20 @@ impl GraphicsLayerNode {
     }
 
     /// Keeps how `properties` transform, which a node under it was just told.
-    pub(crate) fn note_transform(&self, properties: &LayerProperties) {
-        self.positional.set(Some(LayerTransform::of(properties)));
+    pub(crate) fn note_transform(&self, properties: &LayerProperties, listeners: u32) {
+        self.positional.set(Some((listeners, LayerTransform::of(properties))));
     }
 
-    /// Whether a node under it was told where it is.
-    pub(crate) fn told_a_node(&self) -> bool {
-        self.positional.get().is_some()
+    /// Whether a node under it was told where it is, and may still listen.
+    pub(crate) fn told_a_node(&self, listeners: u32) -> bool {
+        self.positional.get().is_some_and(|(kept, _)| kept == listeners)
     }
 
     /// Whether `properties` transform differently from what a node under it was last told. Its
     /// other properties (an alpha) move nothing, as `onCommitAffectingLayerParams`.
     pub(crate) fn transform_changed(&self, properties: &LayerProperties) -> bool {
-        self.positional.get() != Some(LayerTransform::of(properties))
+        self.positional.get().map(|(_, transform)| transform)
+            != Some(LayerTransform::of(properties))
     }
 
     /// Its properties for a layer of `size` at `origin` (in its group), its outline laid out

@@ -79,7 +79,8 @@ impl crate::tree::UiTree {
     }
 
     /// The view configuration where `node` is composed (the host's, for what isn't composed).
-    pub(crate) fn view_configuration_of(&self, node: crate::tree::NodeId) -> ViewConfiguration {
+    /// The view configuration of `node`, as `LayoutInfo.viewConfiguration`.
+    pub fn view_configuration_of(&self, node: crate::tree::NodeId) -> ViewConfiguration {
         match self.get(node).map_or(0, |value| value.view_configuration) {
             0 => self.view_configuration(),
             index => self.view_configurations[index as usize - 1],

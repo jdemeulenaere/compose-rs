@@ -24,7 +24,7 @@ use crate::__private::ReplaceGroup;
 use crate::compose_arg::ComposeArg;
 use crate::hash::key_of;
 use crate::remember::remember;
-use crate::runtime::with_runtime;
+use crate::runtime::{CompositionId, Runtime, with_runtime};
 use crate::slot_table::NONE;
 use crate::state::{MutationPolicy, OwnedState};
 
@@ -476,13 +476,15 @@ pub fn current_composition_local_map() -> CompositionLocalMap {
 /// node, so it's the nearest provider group and nothing else: no map is built, and
 /// [`get`](CompositionLocalAnchor::get) walks the providers when asked, outside composition too.
 /// Two anchors are equal while what they read can only have changed through a dynamic local's
-/// state: a provider's static value or its set of locals changing moves the epoch, as a provider
-/// group's id being used again does.
+/// state: a provider's static value or its set of locals changing moves its version
+/// (`Group::provider_version`) and those of the providers in its content, not anyone else's.
+/// An anchor whose provider has moved on, or whose composition is gone, reads defaults: its node
+/// is about to be composed again, or gone.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CompositionLocalAnchor {
-    composition: u32,
+    composition: CompositionId,
     provider: u32,
-    epoch: u32,
+    version: u32,
 }
 
 impl Default for CompositionLocalAnchor {
@@ -493,8 +495,25 @@ impl Default for CompositionLocalAnchor {
 
 impl CompositionLocalAnchor {
     /// Reads no provider: every local reads its default.
-    pub const NONE: CompositionLocalAnchor =
-        CompositionLocalAnchor { composition: NONE, provider: NONE, epoch: 0 };
+    pub const NONE: CompositionLocalAnchor = CompositionLocalAnchor {
+        composition: CompositionId { index: NONE, generation: 0 },
+        provider: NONE,
+        version: 0,
+    };
+
+    /// The slot table of its composition, if its provider is as it was. A composition being
+    /// disposed is still there for its nodes' `on_detach`.
+    fn table<'a>(&self, runtime: &'a Runtime) -> Option<&'a crate::slot_table::SlotTable> {
+        let disposing = runtime.disposing_data.iter().find(|(id, _)| *id == self.composition);
+        let data = match disposing {
+            Some((_, data)) => data,
+            None => runtime.compositions.get(self.composition)?,
+        };
+        let provider = data.table.groups.get(self.provider as usize)?;
+        (provider.kind != crate::slot_table::GroupKind::Free
+            && provider.provider_version() == self.version)
+            .then_some(&data.table)
+    }
 
     /// The value of `local` here, or its default, as `currentValueOf`. A dynamic local is a
     /// state's value: reading it is observed where reads are (measuring, drawing, a composing
@@ -518,49 +537,52 @@ impl CompositionLocalAnchor {
             return CompositionLocalMap::empty();
         }
         let entries = with_runtime(|runtime| {
-            let data = runtime.compositions.try_data(self.composition);
-            data.map_or_else(Vec::new, |data| entries_visible_from(&data.table, self.provider))
+            let table = self.table(runtime);
+            table.map_or_else(Vec::new, |table| entries_visible_from(table, self.provider))
         });
         CompositionLocalMap { entries: entries.into() }
     }
 
-    /// Whether a static `local` reads here what it reads at `other`, known with a look at two
-    /// provider groups: `other`'s nearest, or the one around it, or a sibling of it, none of those
-    /// that differ providing it. Saves the walk up to the providers of a layout node's density
+    /// Whether static `locals` read here what they read at `other`, known with a look at two
+    /// provider groups: `other`'s nearest, the one around it, or a sibling of it, none of those
+    /// that differ providing them. Saves the walk up to the providers of a layout node's density
     /// when a list's item is a provider of its own (`false` only says it isn't known).
     #[doc(hidden)]
     pub fn reads_same_statics_as(&self, other: &CompositionLocalAnchor, locals: &[u64]) -> bool {
-        if self.composition != other.composition || self.epoch != other.epoch {
+        if self.composition != other.composition {
             return false;
         }
         if self.provider == other.provider {
-            return true;
+            return self.version == other.version;
         }
         if self.provider == NONE || other.provider == NONE {
             return false;
         }
         with_runtime(|runtime| {
-            let Some(data) = runtime.compositions.try_data(self.composition) else { return false };
-            let table = &data.table;
-            let (mine, theirs) = (self.provider, other.provider);
-            // Gone, it provides nothing any more: what it gave `other` isn't known.
-            if table[theirs].kind == crate::slot_table::GroupKind::Free {
-                return false;
-            }
-            let (around_mine, around_theirs) =
-                (table[mine].enclosing_provider, table[theirs].enclosing_provider);
+            // Gone or moved on, what it gave `other` isn't known.
+            let Some(table) = other.table(runtime) else { return false };
+            let Some(mine) = table.groups.get(self.provider as usize) else { return false };
+            let theirs = &table.groups[other.provider as usize];
             let provides = |group: u32| {
                 entries_of(table, group).is_some_and(|entries| {
                     let entries = entries.entries.borrow();
                     entries.iter().any(|entry| locals.contains(&entry.local))
                 })
             };
-            if around_mine == theirs {
-                !provides(mine)
-            } else if around_theirs == mine {
-                !provides(theirs)
+            // Versions only grow: what's around it changed after `other` read it if its version
+            // is the later, the nodes being composed one at a time.
+            let unchanged_since = |around: u32| {
+                around == NONE || table.groups[around as usize].provider_version() < other.version
+            };
+            if mine.enclosing_provider == other.provider {
+                !provides(self.provider)
+            } else if theirs.enclosing_provider == self.provider {
+                unchanged_since(self.provider) && !provides(other.provider)
             } else {
-                around_mine == around_theirs && !provides(mine) && !provides(theirs)
+                mine.enclosing_provider == theirs.enclosing_provider
+                    && unchanged_since(mine.enclosing_provider)
+                    && !provides(self.provider)
+                    && !provides(other.provider)
             }
         })
     }
@@ -570,7 +592,7 @@ impl CompositionLocalAnchor {
             return None;
         }
         with_runtime(|runtime| {
-            let table = &runtime.compositions.try_data(self.composition)?.table;
+            let table = self.table(runtime)?;
             let mut group = self.provider;
             while group != NONE {
                 if let Some(holder) = entries_of(table, group).and_then(|entries| {
@@ -594,13 +616,12 @@ impl CompositionLocalAnchor {
 pub fn current_composition_local_anchor() -> CompositionLocalAnchor {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
+        let id = runtime.active.expect("composing").composition;
         let table = &runtime.compositions.data(composition).table;
         let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        CompositionLocalAnchor {
-            composition,
-            provider: table.provider_at_or_above(composing),
-            epoch: runtime.providers_epoch.wrapping_add(table.provider_reuses),
-        }
+        let provider = table.provider_at_or_above(composing);
+        let version = if provider == NONE { 0 } else { table[provider].provider_version() };
+        CompositionLocalAnchor { composition: id, provider, version }
     })
 }
 

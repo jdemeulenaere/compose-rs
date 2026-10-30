@@ -2,8 +2,10 @@
 //! `observeReads` (docs/parity/design/modifier-nodes.md §3.9, step MN-7).
 
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::rc::{Rc, Weak};
 
+use compose_runtime::KeyHasher;
 use compose_runtime::platform::ReadObserver;
 use smallvec::SmallVec;
 
@@ -26,9 +28,9 @@ pub(crate) struct NodeObservations {
     /// Made on first use.
     observer: Option<Rc<ReadObserver>>,
     /// Each observation's entry.
-    entries: HashMap<u64, (NodeId, EntryId)>,
+    entries: HashMap<u64, (NodeId, EntryId), BuildHasherDefault<KeyHasher>>,
     /// Each observing entry's current observation.
-    current: HashMap<EntryId, u64>,
+    current: HashMap<EntryId, u64, BuildHasherDefault<KeyHasher>>,
     next_key: u64,
 }
 

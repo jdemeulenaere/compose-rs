@@ -69,3 +69,29 @@ fn combined_overrides_apply_in_order() {
     });
     assert_eq!(seen.get(), Some((LayoutDirection::Ltr, true)));
 }
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/deviceconfigurationoverride/DeviceConfigurationOverrideTest.kt, fontScaleOverride_overridesFontScale
+#[test]
+fn a_font_scale_override_is_what_the_content_sees_and_measures_with() {
+    let seen = Rc::new(Cell::new(None));
+    let read = seen.clone();
+    let configured = Rc::new(Cell::new(None));
+    let c = configured.clone();
+    let measured = Rc::new(Cell::new(None));
+    let m = measured.clone();
+    let policy = compose_ui::measure_policy(move |scope, _, _| {
+        m.set(Some(scope.density().font_scale));
+        scope.layout(0, 0)
+    });
+    compose_test(move || {
+        let (read, c, policy) = (read.clone(), c.clone(), policy.clone());
+        DeviceConfigurationOverride!(DeviceConfigurationOverride::font_scale(1.5), {
+            read.set(Some(compose_ui::LOCAL_DENSITY.current().font_scale));
+            c.set(Some(compose_ui::LOCAL_CONFIGURATION.current().font_scale));
+            compose_ui::Layout(Modifier, policy.clone(), compose_runtime::callback(|| {}));
+        });
+    });
+    assert_eq!(seen.get(), Some(1.5));
+    assert_eq!(configured.get(), Some(1.5));
+    assert_eq!(measured.get(), Some(1.5));
+}

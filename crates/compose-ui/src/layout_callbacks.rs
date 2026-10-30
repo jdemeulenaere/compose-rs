@@ -266,6 +266,7 @@ impl UiTree {
         if !self.positioned.is_empty() && (laid_out || !self.layers_moved.is_empty()) {
             self.layout_nodes_told = true;
             let mut positioned = mem::take(&mut self.positioned);
+            let listening = positioned.len();
             let waited = mem::replace(&mut self.delegates_wait, true);
             positioned.retain(|&node| {
                 if laid_out || self.under_a_moved_layer(node) {
@@ -275,6 +276,7 @@ impl UiTree {
                 }
             });
             self.delegates_wait = waited;
+            let left = positioned.len() < listening;
             // Those that came with what the nodes delegated.
             for node in mem::take(&mut self.positioned) {
                 if !positioned.contains(&node) {
@@ -283,6 +285,9 @@ impl UiTree {
             }
             self.positioned = positioned;
             self.sync_noted_delegates();
+            if left {
+                self.forget_layers_no_one_listens_to();
+            }
         }
         if !self.layers_moved.is_empty() {
             for node in mem::take(&mut self.layers_moved) {
@@ -296,8 +301,10 @@ impl UiTree {
 
     /// One of `node`'s graphics layers may have changed: if it now transforms differently from
     /// what a node under it was last told, those under it are told, with no layout, as
-    /// `NodeCoordinator`'s `onCommitAffectingLayerParams`.
-    pub(crate) fn note_layer_change(&mut self, node: NodeId) {
+    /// `NodeCoordinator.updateLayerParameters`. Its block runs here only if a node under it was
+    /// told; with `keep`, a state's change, what it computes for the node's group is what the
+    /// frame's drawing uses, observed as there.
+    pub(crate) fn note_layer_change(&mut self, node: NodeId, keep: bool) {
         if self.positioned.is_empty() {
             return;
         }
@@ -305,18 +312,49 @@ impl UiTree {
         if value.layer_moved || value.deactivated || !value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
             return;
         }
-        let moved = (0..value.chain.len()).any(|index| {
-            let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>();
-            // Its block runs again only if a node under it was told (D1187).
-            graphics.is_some_and(|graphics| {
-                graphics.told_a_node()
-                    && graphics.transform_changed(&self.properties_of_layer(node, index, graphics))
-            })
-        });
+        let group_layer = value.retained.as_ref().and_then(|retained| retained.layer_entry);
+        let listeners = self.position_listeners;
+        let mut moved = false;
+        for index in 0..value.chain.len() {
+            let value = self.node(node);
+            let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() else {
+                continue;
+            };
+            if !graphics.told_a_node(listeners) {
+                continue;
+            }
+            if keep && group_layer == Some(index as u16) {
+                let observer = self.observer.clone();
+                let Some(properties) = self.layer_properties(node, observer.as_deref()) else {
+                    continue;
+                };
+                let value = self.node(node);
+                let graphics =
+                    value.chain[index].node.downcast_ref::<GraphicsLayerNode>().expect("a layer");
+                moved |= graphics.transform_changed(&properties);
+                let (density, direction) = (value.density, value.layout_direction);
+                let retained = self.node_mut(node).retained.as_mut().expect("its group");
+                retained.layer_ahead = Some((properties, density, direction));
+            } else {
+                moved |=
+                    graphics.transform_changed(&self.properties_of_layer(node, index, graphics));
+            }
+        }
         if moved {
             self.node_mut(node).layer_moved = true;
             self.layers_moved.push(node);
         }
+    }
+
+    /// An updated element changed a layer of `node` while composing, as
+    /// `NodeCoordinator.updateLayerBlock`: its block's reads aren't the composing scope's.
+    pub(crate) fn note_updated_layer(&mut self, node: NodeId) {
+        if let Some(retained) = self.node_mut(node).retained.as_mut() {
+            retained.layer_ahead = None;
+        }
+        compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+            self.note_layer_change(node, false);
+        });
     }
 
     /// The properties of `graphics`, the node of chain entry `index` of `node`, seen from the
@@ -337,6 +375,17 @@ impl UiTree {
         )
     }
 
+    /// A position-aware node left: only the layers those left map through keep what they told.
+    fn forget_layers_no_one_listens_to(&mut self) {
+        self.position_listeners = self.position_listeners.wrapping_add(1);
+        for &node in &self.positioned {
+            if self.get(node).is_some() {
+                let layer = self.node(node).layers.len() - 1;
+                self.map_to_root(node, layer, None, Offset::ZERO);
+            }
+        }
+    }
+
     /// Whether `node` or an ancestor has a graphics layer that moved.
     fn under_a_moved_layer(&self, node: NodeId) -> bool {
         let mut current = Some(node);
@@ -355,22 +404,27 @@ impl UiTree {
     /// ones first as a placement goes: those whose node is placed, a layer measured but not
     /// placed being told when it is.
     fn notify_placed(&mut self) {
-        let mut placed: SmallVec<[(u32, u64, u32, NodeId); 4]> = SmallVec::new();
+        // Each by the place orders from the root: a parent, then what's in it, then its next
+        // sibling (`MeasurePassDelegate`'s placement is depth first).
+        type Path = SmallVec<[u64; 8]>;
+        let mut placed: SmallVec<[(Path, u32, NodeId); 4]> = SmallVec::new();
         for (node, layer) in mem::take(&mut self.placed_layers) {
             let Some(value) = self.get(node) else { continue };
-            let order = value.place_order;
-            let mut depth = 0;
+            let mut path: Path = SmallVec::new();
+            path.push(value.place_order);
             let mut current = value.parent;
             while let Some(parent) = current {
-                depth += 1;
-                current = self.node(parent).parent;
+                let value = self.node(parent);
+                path.push(value.place_order);
+                current = value.parent;
             }
-            placed.push((depth, order, layer, node));
+            path.reverse();
+            placed.push((path, layer, node));
         }
-        placed.sort_unstable_by_key(|&(depth, order, layer, _)| (depth, order, layer));
+        placed.sort_unstable_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
         placed.dedup_by_key(|&mut (.., node)| node);
         let waited = mem::replace(&mut self.delegates_wait, true);
-        for (_, _, layer, node) in placed {
+        for (_, layer, node) in placed {
             let layer = layer as usize;
             // A node removed by what an earlier one did stays out.
             if self.get(node).is_none_or(|value| value.deactivated || layer >= value.layers.len())
@@ -568,7 +622,7 @@ impl UiTree {
                     continue;
                 };
                 let properties = self.properties_of_layer(current, index, graphics);
-                graphics.note_transform(&properties);
+                graphics.note_transform(&properties, self.position_listeners);
                 point = properties.map(point);
             }
             if value.overlay {

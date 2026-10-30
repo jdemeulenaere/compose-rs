@@ -1094,7 +1094,11 @@ impl Runtime {
     /// The provider group composing now changed what it provides in a way its content can't
     /// see through state: every body in its content runs, as Compose's `providersInvalid`.
     pub(crate) fn invalidate_providers(&mut self) {
-        self.providers_epoch = self.providers_epoch.wrapping_add(1);
+        let composition = self.check_composing();
+        let group = self.body_frame().group;
+        self.provider_versions += 1;
+        let version = self.provider_versions;
+        self.compositions.data_mut(composition).table[group].set_provider_version(version);
         if self.providers_invalid == 0 {
             self.providers_invalid = self.frames.len();
         }
@@ -1111,6 +1115,11 @@ impl Runtime {
         // Its children were allocated under it as a provider, or it has none yet.
         debug_assert!(group.is_provider() || group.first_child == NONE);
         group.set_flag(crate::slot_table::PROVIDER, true);
+        // New, or what's around it changed: what its content sees isn't what it saw.
+        if group.provider_version() == 0 || self.providers_invalid != 0 {
+            self.provider_versions += 1;
+            group.set_provider_version(self.provider_versions);
+        }
     }
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {

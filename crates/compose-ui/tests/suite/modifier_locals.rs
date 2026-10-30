@@ -24,7 +24,9 @@ fn read() -> Read {
     Rc::new(Cell::new(""))
 }
 
-/// `Modifier.modifierLocalConsumer { read = LOCAL_STRING.current }`.
+/// `Modifier.modifierLocalConsumer { read = LOCAL_STRING.current }`. The tests make it outside
+/// their content and clone it in: the same element, so its node runs because the manager found
+/// it (a provider's change), not because its element is new.
 fn consumer(read: &Read) -> Modifier {
     Modifier.modifier_local_consumer({
         let read = read.clone();
@@ -128,8 +130,8 @@ fn a_panic_in_a_default_reaches_the_reader() {
 #[test]
 fn a_local_nothing_provides_reads_its_default() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(consumer(&v)));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(v.clone()));
     assert_eq!(value.get(), DEFAULT);
 }
 
@@ -137,8 +139,8 @@ fn a_local_nothing_provides_reads_its_default() {
 #[test]
 fn what_s_provided_after_a_consumer_isn_t_read() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(consumer(&v).then(provider("Provided"))));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(v.clone().then(provider("Provided"))));
     assert_eq!(value.get(), DEFAULT);
 }
 
@@ -146,8 +148,8 @@ fn what_s_provided_after_a_consumer_isn_t_read() {
 #[test]
 fn what_s_provided_just_before_a_consumer_is_read() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(provider("Provided").then(consumer(&v))));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(provider("Provided").then(v.clone())));
     assert_eq!(value.get(), "Provided");
 }
 
@@ -155,8 +157,8 @@ fn what_s_provided_just_before_a_consumer_is_read() {
 #[test]
 fn what_s_provided_before_a_consumer_is_read_past_other_modifiers() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(provider("Provided").size(100.dp()).then(consumer(&v))));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(provider("Provided").size(100.dp()).then(v.clone())));
     assert_eq!(value.get(), "Provided");
 }
 
@@ -164,8 +166,8 @@ fn what_s_provided_before_a_consumer_is_read_past_other_modifiers() {
 #[test]
 fn the_last_provided_before_a_consumer_is_read() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(provider("1").then(provider("2")).then(consumer(&v))));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(provider("1").then(provider("2")).then(v.clone())));
     assert_eq!(value.get(), "2");
 }
 
@@ -213,9 +215,9 @@ fn two_locals_of_different_types_are_each_read() {
 fn a_new_provider_gives_its_value() {
     let value = read();
     let first = mutable_state_of(true);
-    let (v, f) = (value.clone(), first.handle());
+    let (v, f) = (consumer(&value), first.handle());
     let mut host = host(move || {
-        Leaf(provider(if f.get() { "Provider1" } else { "Provider2" }).then(consumer(&v)));
+        Leaf(provider(if f.get() { "Provider1" } else { "Provider2" }).then(v.clone()));
     });
     assert_eq!(value.get(), "Provider1");
     first.set(false);
@@ -245,10 +247,10 @@ fn a_new_provider_gives_its_value_once_with_nothing_between() {
 fn a_provider_gone_gives_the_default() {
     let value = read();
     let has = mutable_state_of(true);
-    let (v, h) = (value.clone(), has.handle());
+    let (v, h) = (consumer(&value), has.handle());
     let mut host = host(move || {
         let modifier = if h.get() { provider("Provided") } else { Modifier };
-        Leaf(modifier.then(consumer(&v)));
+        Leaf(modifier.then(v.clone()));
     });
     assert_eq!(value.get(), "Provided");
     has.set(false);
@@ -261,10 +263,10 @@ fn a_provider_gone_gives_the_default() {
 fn a_consumer_leaving_reads_the_default() {
     let value = read();
     let include = mutable_state_of(true);
-    let (v, i) = (value.clone(), include.handle());
+    let (v, i) = (consumer(&value), include.handle());
     let mut host = host(move || {
         if i.get() {
-            Leaf(provider("Provided").then(consumer(&v)));
+            Leaf(provider("Provided").then(v.clone()));
         }
     });
     assert_eq!(value.get(), "Provided");
@@ -278,9 +280,9 @@ fn a_consumer_leaving_reads_the_default() {
 fn a_provider_s_new_value_is_read() {
     let value = read();
     let provided = mutable_state_of("Value 1");
-    let (v, p) = (value.clone(), provided.handle());
+    let (v, p) = (consumer(&value), provided.handle());
     let mut host = host(move || {
-        Leaf(Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(consumer(&v)));
+        Leaf(Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(v.clone()));
     });
     assert_eq!(value.get(), "Value 1");
     provided.set("Value 2");
@@ -293,10 +295,10 @@ fn a_provider_s_new_value_is_read() {
 fn a_provider_added_is_read() {
     let value = read();
     let has = mutable_state_of(false);
-    let (v, h) = (value.clone(), has.handle());
+    let (v, h) = (consumer(&value), has.handle());
     let mut host = host(move || {
         let modifier = if h.get() { provider("Provided") } else { Modifier };
-        Leaf(modifier.then(consumer(&v)));
+        Leaf(modifier.then(v.clone()));
     });
     assert_eq!(value.get(), DEFAULT);
     has.set(true);
@@ -309,10 +311,10 @@ fn a_provider_added_is_read() {
 fn a_provider_removed_gives_the_one_before_it() {
     let value = read();
     let has = mutable_state_of(true);
-    let (v, h) = (value.clone(), has.handle());
+    let (v, h) = (consumer(&value), has.handle());
     let mut host = host(move || {
         let second = if h.get() { provider("Parent2") } else { Modifier };
-        Leaf(provider("Parent1").then(second).then(consumer(&v)));
+        Leaf(provider("Parent1").then(second).then(v.clone()));
     });
     assert_eq!(value.get(), "Parent2");
     has.set(false);
@@ -325,11 +327,11 @@ fn a_provider_removed_gives_the_one_before_it() {
 fn a_provider_moved_after_a_consumer_isn_t_read() {
     let value = read();
     let moved = mutable_state_of(false);
-    let (v, m) = (value.clone(), moved.handle());
+    let (v, m) = (consumer(&value), moved.handle());
     let mut host = host(move || {
         let before = if m.get() { Modifier } else { provider("Provided") };
         let after = if m.get() { provider("Provided") } else { Modifier };
-        Leaf(before.then(consumer(&v)).then(after));
+        Leaf(before.then(v.clone()).then(after));
     });
     assert_eq!(value.get(), "Provided");
     moved.set(true);
@@ -342,11 +344,11 @@ fn a_provider_moved_after_a_consumer_isn_t_read() {
 fn a_provider_moved_after_a_consumer_gives_the_one_before_it() {
     let value = read();
     let moved = mutable_state_of(false);
-    let (v, m) = (value.clone(), moved.handle());
+    let (v, m) = (consumer(&value), moved.handle());
     let mut host = host(move || {
         let before = if m.get() { Modifier } else { provider("Parent2") };
         let after = if m.get() { provider("Parent2") } else { Modifier };
-        Leaf(provider("Parent1").then(before).then(consumer(&v)).then(after));
+        Leaf(provider("Parent1").then(before).then(v.clone()).then(after));
     });
     assert_eq!(value.get(), "Parent2");
     moved.set(true);
@@ -359,11 +361,11 @@ fn a_provider_moved_after_a_consumer_gives_the_one_before_it() {
 fn a_provider_moved_still_before_a_consumer_gives_the_same() {
     let value = read();
     let moved = mutable_state_of(false);
-    let (v, m) = (value.clone(), moved.handle());
+    let (v, m) = (consumer(&value), moved.handle());
     let mut host = host(move || {
         let before = if m.get() { Modifier } else { provider("Provided") };
         let after = if m.get() { provider("Provided") } else { Modifier };
-        Leaf(before.size(100.dp()).then(after).then(consumer(&v)));
+        Leaf(before.size(100.dp()).then(after).then(v.clone()));
     });
     moved.set(true);
     host.frame();
@@ -399,9 +401,9 @@ fn one_change_of_a_provider_runs_a_consumer_once() {
 #[test]
 fn what_a_child_provides_isn_t_read_above_it() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
-        Stack!(modifier = consumer(&v), {
+        Stack!(modifier = v.clone(), {
             Leaf(provider("Provided"));
         });
     });
@@ -412,11 +414,11 @@ fn what_a_child_provides_isn_t_read_above_it() {
 #[test]
 fn what_a_parent_provides_is_read() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Provided"), {
-            Leaf(consumer(&v));
+            Leaf(v.clone());
         });
     });
     assert_eq!(value.get(), "Provided");
@@ -426,13 +428,13 @@ fn what_a_parent_provides_is_read() {
 #[test]
 fn what_a_grandparent_provides_is_read() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Provided"), {
             let v = v.clone();
             Stack!({
-                Leaf(consumer(&v));
+                Leaf(v.clone());
             });
         });
     });
@@ -443,11 +445,11 @@ fn what_a_grandparent_provides_is_read() {
 #[test]
 fn a_provider_in_the_same_layout_node_wins_over_a_parent_s() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Parent"), {
-            Leaf(provider("Same").then(consumer(&v)));
+            Leaf(provider("Same").then(v.clone()));
         });
     });
     assert_eq!(value.get(), "Same");
@@ -457,13 +459,13 @@ fn a_provider_in_the_same_layout_node_wins_over_a_parent_s() {
 #[test]
 fn the_nearest_parent_s_value_is_read() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Grandparent"), {
             let v = v.clone();
             Stack!(modifier = provider("Parent"), {
-                Leaf(consumer(&v));
+                Leaf(v.clone());
             });
         });
     });
@@ -513,11 +515,11 @@ fn two_locals_of_different_types_from_a_parent_are_each_read() {
 /// A consumer below `parent`, in a composable that skips (its parent changes alone).
 fn below(parent: impl Fn() -> Modifier + 'static) -> (UiHost, Read) {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let host = host(move || {
         let v = v.clone();
         Stack!(modifier = parent(), {
-            Leaf(consumer(&v));
+            Leaf(v.clone());
         });
     });
     (host, value)
@@ -578,14 +580,14 @@ fn a_parent_s_provider_removed_gives_the_default() {
 fn a_parent_s_provider_removed_gives_the_one_above() {
     let has = mutable_state_of(true);
     let value = read();
-    let (v, h) = (value.clone(), has.handle());
+    let (v, h) = (consumer(&value), has.handle());
     let mut host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Grandparent"), {
             let v = v.clone();
             let parent = if h.get() { provider("Parent") } else { Modifier };
             Stack!(modifier = parent, {
-                Leaf(consumer(&v));
+                Leaf(v.clone());
             });
         });
     });
@@ -602,7 +604,7 @@ fn moved_provider(
 ) {
     let moved = mutable_state_of(false);
     let value = read();
-    let (v, m) = (value.clone(), moved.handle());
+    let (v, m) = (consumer(&value), moved.handle());
     let mut host = host(move || {
         let v = v.clone();
         let top = grandparent.map_or(Modifier, provider);
@@ -611,7 +613,7 @@ fn moved_provider(
             let parent = if m.get() { Modifier } else { provider("Moved") };
             Stack!(modifier = parent, {
                 let child = if m.get() { provider("Moved") } else { Modifier };
-                Leaf(consumer(&v).then(child));
+                Leaf(v.clone().then(child));
             });
         });
     });
@@ -638,7 +640,7 @@ fn a_provider_moved_below_a_consumer_gives_the_one_above() {
 fn a_provider_moved_still_above_a_consumer_gives_the_same() {
     let moved = mutable_state_of(false);
     let value = read();
-    let (v, m) = (value.clone(), moved.handle());
+    let (v, m) = (consumer(&value), moved.handle());
     let mut host = host(move || {
         let v = v.clone();
         let top = if m.get() { Modifier } else { provider("Moved") };
@@ -646,7 +648,7 @@ fn a_provider_moved_still_above_a_consumer_gives_the_same() {
             let v = v.clone();
             let parent = if m.get() { provider("Moved") } else { Modifier };
             Stack!(modifier = parent, {
-                Leaf(consumer(&v));
+                Leaf(v.clone());
             });
         });
     });
@@ -661,8 +663,8 @@ fn a_provider_moved_still_above_a_consumer_gives_the_same() {
 #[test]
 fn a_node_doesn_t_read_what_it_provides() {
     let value = read();
-    let v = value.clone();
-    let _host = host(move || Leaf(consumer(&v).then(provider("Provided"))));
+    let v = consumer(&value);
+    let _host = host(move || Leaf(v.clone().then(provider("Provided"))));
     assert_eq!(value.get(), DEFAULT);
 }
 
@@ -670,11 +672,11 @@ fn a_node_doesn_t_read_what_it_provides() {
 #[test]
 fn a_node_reads_what_its_parent_provides_not_what_it_provides() {
     let value = read();
-    let v = value.clone();
+    let v = consumer(&value);
     let _host = host(move || {
         let v = v.clone();
         Stack!(modifier = provider("Parent"), {
-            Leaf(consumer(&v).then(provider("Provided")));
+            Leaf(v.clone().then(provider("Provided")));
         });
     });
     assert_eq!(value.get(), "Parent");
@@ -683,14 +685,14 @@ fn a_node_reads_what_its_parent_provides_not_what_it_provides() {
 fn three_levels(outer: Option<&'static str>, show_inner: bool) -> (UiHost, Read, OwnedState<bool>) {
     let inner = mutable_state_of(show_inner);
     let value = read();
-    let (v, i) = (value.clone(), inner.handle());
+    let (v, i) = (consumer(&value), inner.handle());
     let host = host(move || {
         let v = v.clone();
         Stack!(modifier = outer.map_or(Modifier, provider), {
             let v = v.clone();
             let modifier = if i.get() { provider("Inner") } else { Modifier };
             Stack!(modifier = modifier, {
-                Leaf(consumer(&v).then(provider("")));
+                Leaf(v.clone().then(provider("")));
             });
         });
     });
@@ -742,12 +744,12 @@ fn a_provider_coming_is_read_by_a_grandchild_instead_of_the_default() {
 fn a_new_value_in_a_recomposition_reaches_a_child_that_skips() {
     let provided = mutable_state_of("Value 1");
     let value = read();
-    let (v, p) = (value.clone(), provided.handle());
+    let (v, p) = (consumer(&value), provided.handle());
     let mut host = host(move || {
         let v = v.clone();
         let current = p.get();
         Stack!(modifier = provider(current), {
-            Leaf(consumer(&v).then(provider("")));
+            Leaf(v.clone().then(provider("")));
         });
     });
     assert_eq!(value.get(), "Value 1");
@@ -778,8 +780,8 @@ fn entity(modifier: impl Fn() -> Modifier + 'static, attached: bool) -> (UiHost,
 #[test]
 fn a_consumer_not_attached_isn_t_run() {
     let value = read();
-    let v = value.clone();
-    let (_host, _) = entity(move || consumer(&v), false);
+    let v = consumer(&value);
+    let (_host, _) = entity(move || v.clone(), false);
     assert_eq!(value.get(), "");
 }
 
@@ -803,8 +805,8 @@ fn a_new_consumer_with_no_provider_reads_the_default() {
 #[test]
 fn a_consumer_detached_with_no_provider_reads_the_default() {
     let value = read();
-    let v = value.clone();
-    let (mut host, shown) = entity(move || consumer(&v), true);
+    let v = consumer(&value);
+    let (mut host, shown) = entity(move || v.clone(), true);
     value.set("");
     shown.set(false);
     host.frame();
@@ -815,8 +817,8 @@ fn a_consumer_detached_with_no_provider_reads_the_default() {
 #[test]
 fn a_consumer_not_attached_with_a_provider_isn_t_run() {
     let value = read();
-    let v = value.clone();
-    let (_host, _) = entity(move || provider("Provided").then(consumer(&v)), false);
+    let v = consumer(&value);
+    let (_host, _) = entity(move || provider("Provided").then(v.clone()), false);
     assert_eq!(value.get(), "");
 }
 
@@ -825,9 +827,9 @@ fn a_consumer_not_attached_with_a_provider_isn_t_run() {
 fn a_provided_value_changing_runs_the_consumer_with_it() {
     let provided = mutable_state_of("Initial");
     let value = read();
-    let (v, p) = (value.clone(), provided.handle());
+    let (v, p) = (consumer(&value), provided.handle());
     let (mut host, _) = entity(
-        move || Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(consumer(&v)),
+        move || Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(v.clone()),
         true,
     );
     assert_eq!(value.get(), "Initial");
@@ -841,9 +843,9 @@ fn a_provided_value_changing_runs_the_consumer_with_it() {
 fn a_provided_value_changing_after_a_detach_doesn_t_run_the_consumer() {
     let provided = mutable_state_of("Initial");
     let value = read();
-    let (v, p) = (value.clone(), provided.handle());
+    let (v, p) = (consumer(&value), provided.handle());
     let (mut host, shown) = entity(
-        move || Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(consumer(&v)),
+        move || Modifier.modifier_local_provider(&LOCAL_STRING, move || p.get()).then(v.clone()),
         true,
     );
     shown.set(false);
@@ -859,10 +861,10 @@ fn a_provided_value_changing_after_a_detach_doesn_t_run_the_consumer() {
 fn a_new_consumer_with_a_provider_reads_its_value() {
     let value = read();
     let version = mutable_state_of(0);
-    let (v, n) = (value.clone(), version.handle());
+    let (v, n) = (consumer(&value), version.handle());
     let mut host = host(move || {
         n.get();
-        Leaf(provider("Provided").then(consumer(&v)));
+        Leaf(provider("Provided").then(v.clone()));
     });
     value.set("");
     version.set(1);
@@ -874,8 +876,8 @@ fn a_new_consumer_with_a_provider_reads_its_value() {
 #[test]
 fn a_consumer_detached_with_a_provider_reads_the_default() {
     let value = read();
-    let v = value.clone();
-    let (mut host, shown) = entity(move || provider("Provided").then(consumer(&v)), true);
+    let v = consumer(&value);
+    let (mut host, shown) = entity(move || provider("Provided").then(v.clone()), true);
     value.set("");
     shown.set(false);
     host.frame();
@@ -991,4 +993,32 @@ fn reading_detached_panics() {
     host.frame();
     let node: NodeHandle = held.borrow().unwrap();
     node.with_node(|_: &mut ReadingNode, context| context.modifier_local_current(&LOCAL_STRING));
+}
+
+/// Below a provider of the same local, a change above it isn't seen: nothing to run for.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/modifier/ModifierLocalManager.kt, invalidateConsumersOfNodeForKey
+#[test]
+fn a_change_above_another_provider_of_it_runs_nothing_below_that() {
+    let runs = Rc::new(Cell::new(0));
+    let top = mutable_state_of("Top");
+    let r = runs.clone();
+    let reader = Modifier.modifier_local_consumer(move |scope| {
+        scope.current(&LOCAL_STRING);
+        r.set(r.get() + 1);
+    });
+    let t = top.handle();
+    let middle = provider("Middle");
+    let mut host = host(move || {
+        let (reader, middle) = (reader.clone(), middle.clone());
+        Stack!(modifier = provider(t.get()), {
+            let reader = reader.clone();
+            Stack!(modifier = middle.clone(), {
+                Leaf(reader.clone());
+            });
+        });
+    });
+    assert_eq!(runs.get(), 1);
+    top.set("New");
+    host.frame();
+    assert_eq!(runs.get(), 1);
 }

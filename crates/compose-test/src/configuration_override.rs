@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use compose_runtime::{Callback, ComposeArg, CompositionLocalProvider, composable};
-use compose_ui::{LOCAL_CONFIGURATION, LOCAL_LAYOUT_DIRECTION, LayoutDirection};
+use compose_ui::{LOCAL_CONFIGURATION, LOCAL_DENSITY, LOCAL_LAYOUT_DIRECTION, LayoutDirection};
 
 /// An override applied to the content it wraps, as Compose's `DeviceConfigurationOverride`
 /// fun interface: its `apply` composes the content once, under the overridden values.
@@ -40,6 +40,22 @@ impl DeviceConfigurationOverride {
             let mut configuration = LOCAL_CONFIGURATION.current();
             configuration.night_mode = is_dark_mode;
             CompositionLocalProvider(LOCAL_CONFIGURATION.provides(configuration), &**content);
+        })
+    }
+
+    /// The content at `font_scale`, its density otherwise as it was, as
+    /// `DeviceConfigurationOverride.FontScale`. A node takes its density where it's composed
+    /// (D1183), so its text measures at it.
+    pub fn font_scale(font_scale: f32) -> DeviceConfigurationOverride {
+        DeviceConfigurationOverride::new(move |content| {
+            let mut density = LOCAL_DENSITY.current();
+            density.font_scale = font_scale;
+            let mut configuration = LOCAL_CONFIGURATION.current();
+            configuration.font_scale = font_scale;
+            CompositionLocalProvider(
+                (LOCAL_DENSITY.provides(density), LOCAL_CONFIGURATION.provides(configuration)),
+                &**content,
+            );
         })
     }
 

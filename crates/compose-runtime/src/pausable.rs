@@ -945,6 +945,7 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         applier.on_paused_end();
         applier.on_end_changes();
     }
+    crate::composition::free_retired_providers(id);
     // The segments in order: each paused scope's where it paused.
     let mut flat = Flat::default();
     flat.forgotten.append(&mut deferred.removed_values);
@@ -1119,6 +1120,7 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
     } else if let Ok(mut applier) = applier.try_borrow_mut() {
         applier.on_paused_end();
     }
+    crate::composition::free_retired_providers(id);
     // Observers remembered in the regions were never told: abandoned; the values of reused
     // content that left are forgotten.
     let Flat { forgotten, effects, observers } = flat;

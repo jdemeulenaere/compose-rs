@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use compose_ui::{
     Density, Dp, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent,
-    PointerId, PointerType, Rect, ViewConfiguration,
+    PointerId, PointerType, Rect, ViewConfiguration, platform::NodeId,
 };
 
 use crate::interaction::SemanticsNodeInteraction;
@@ -95,11 +95,18 @@ pub struct InjectionScope<'r> {
     visible_size: IntSize,
     root: Rect,
     density: Density,
+    view_configuration: ViewConfiguration,
 }
 
 impl<'r> InjectionScope<'r> {
-    fn new(rule: &'r mut ComposeTestRule, bounds: Rect, root: Rect) -> InjectionScope<'r> {
-        let density = rule.density();
+    fn new(
+        rule: &'r mut ComposeTestRule,
+        node: NodeId,
+        bounds: Rect,
+        root: Rect,
+    ) -> InjectionScope<'r> {
+        let (density, view_configuration) =
+            rule.host.with_tree(|tree| (tree.density_of(node), tree.view_configuration_of(node)));
         InjectionScope {
             rule,
             origin: Offset::new(bounds.left, bounds.top),
@@ -109,6 +116,7 @@ impl<'r> InjectionScope<'r> {
             ),
             root,
             density,
+            view_configuration,
         }
     }
 
@@ -117,15 +125,15 @@ impl<'r> InjectionScope<'r> {
         EVENT_PERIOD_MILLIS
     }
 
-    /// The density, as the scope's `Density`.
+    /// The node's density, as the scope's `Density` (`semanticsNode.layoutInfo.density`).
     pub fn density(&self) -> Density {
         self.density
     }
 
-    /// As `viewConfiguration`.
-    /// The host's, which its gesture detectors use (`UiHost::set_view_configuration`).
+    /// The node's, as `viewConfiguration` (`semanticsNode.layoutInfo.viewConfiguration`), which
+    /// its gesture detectors use.
     pub fn view_configuration(&self) -> ViewConfiguration {
-        self.rule.host.view_configuration()
+        self.view_configuration
     }
 
     /// The node's visible size (its bounds clipped by the clips around it), as `visibleSize`.
@@ -1276,7 +1284,7 @@ fn toggle_lock(input: &mut InputState, key: Key) {
 impl SemanticsNodeInteraction<'_> {
     /// The node's visible bounds in the root (clipped), and the root's.
     #[track_caller]
-    fn injection_bounds(&mut self) -> (Rect, Rect) {
+    fn injection_bounds(&mut self) -> (NodeId, Rect, Rect) {
         let node = self.fetch_semantics_node();
         let root = self.rule.host.semantics_tree(true).bounds;
         let bounds = self
@@ -1284,7 +1292,7 @@ impl SemanticsNodeInteraction<'_> {
             .host
             .with_tree(|tree| tree.semantics_bounds_in_root(node.id))
             .map_or(node.bounds, |(_, clipped)| clipped);
-        (bounds, root)
+        (node.id, bounds, root)
     }
 
     /// Sends the touch gestures `block` makes on the node, then waits for idle, as
@@ -1294,8 +1302,8 @@ impl SemanticsNodeInteraction<'_> {
         &mut self,
         block: impl FnOnce(&mut TouchInjectionScope<'_>),
     ) -> &mut Self {
-        let (bounds, root) = self.injection_bounds();
-        let mut scope = TouchInjectionScope(InjectionScope::new(self.rule, bounds, root));
+        let (node, bounds, root) = self.injection_bounds();
+        let mut scope = TouchInjectionScope(InjectionScope::new(self.rule, node, bounds, root));
         block(&mut scope);
         self.rule.wait_for_idle();
         self
@@ -1308,8 +1316,8 @@ impl SemanticsNodeInteraction<'_> {
         &mut self,
         block: impl FnOnce(&mut MouseInjectionScope<'_>),
     ) -> &mut Self {
-        let (bounds, root) = self.injection_bounds();
-        let mut scope = MouseInjectionScope(InjectionScope::new(self.rule, bounds, root));
+        let (node, bounds, root) = self.injection_bounds();
+        let mut scope = MouseInjectionScope(InjectionScope::new(self.rule, node, bounds, root));
         block(&mut scope);
         self.rule.wait_for_idle();
         self
@@ -1322,8 +1330,8 @@ impl SemanticsNodeInteraction<'_> {
         &mut self,
         block: impl FnOnce(&mut KeyInjectionScope<'_>),
     ) -> &mut Self {
-        let (bounds, root) = self.injection_bounds();
-        let mut scope = KeyInjectionScope(InjectionScope::new(self.rule, bounds, root));
+        let (node, bounds, root) = self.injection_bounds();
+        let mut scope = KeyInjectionScope(InjectionScope::new(self.rule, node, bounds, root));
         block(&mut scope);
         self.rule.wait_for_idle();
         self
