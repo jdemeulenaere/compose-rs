@@ -449,7 +449,7 @@ fn a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action() {
     // and nothing moves (D864).
     state.request_scroll_to_item(0, 0);
     ui.wait_for_idle();
-    assert!(ui.host().perform_semantics_action(
+    assert!(ui.host().perform_semantics_action_with(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, -100.0)
@@ -525,14 +525,14 @@ fn scroll_by_goes_towards_the_end_of_a_reversed_list() {
         .unwrap();
     assert!(range.reverse_scrolling);
     // Back towards the first item: already there (handled, nothing moves, D864).
-    assert!(ui.host().perform_semantics_action(
+    assert!(ui.host().perform_semantics_action_with(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, -100.0)
     ));
     ui.wait_for_idle();
     assert_eq!(given.first_visible_item_index(), 0);
-    assert!(ui.host().perform_semantics_action(
+    assert!(ui.host().perform_semantics_action_with(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, 100.0)

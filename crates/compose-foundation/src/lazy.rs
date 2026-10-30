@@ -3020,9 +3020,10 @@ fn outer_setter(state: LazyListState, axis: Rc<Cell<(bool, bool)>>) -> crate::sc
 }
 
 impl ModifierNodeElement for LazyScrollElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
+    type Node = LazyScrollNode;
+    fn create(&self) -> LazyScrollNode {
         let axis = Rc::new(Cell::new((self.vertical, self.reverse)));
-        Box::new(LazyScrollNode {
+        LazyScrollNode {
             state: self.state,
             dyn_state: Rc::new(self.state),
             vertical: self.vertical,
@@ -3032,39 +3033,35 @@ impl ModifierNodeElement for LazyScrollElement {
             drag: DragScroller::default(),
             set_outer: outer_setter(self.state, axis.clone()),
             outer_axis: axis,
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<LazyScrollNode>() {
-            // A fling scrolls the state it started with: a new state stops it (the old one's
-            // owner may be going, D240).
-            if node.state != self.state {
-                node.drag.cancel();
-                node.drag.stop_fling();
-                node.dyn_state = Rc::new(self.state);
-                node.set_outer = outer_setter(self.state, node.outer_axis.clone());
-            }
-            node.state = self.state;
-            node.vertical = self.vertical;
-            node.reverse = self.reverse;
-            node.fling_behavior = self.fling_behavior.clone();
-            if node.enabled && !self.enabled {
-                node.drag.cancel();
-                node.drag.stop_fling();
-            }
-            node.enabled = self.enabled;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<LazyScrollElement>().is_some_and(|other| {
-            other.vertical == self.vertical
-                && other.reverse == self.reverse
-                && other.enabled == self.enabled
-                && other.state.same(&self.state)
-                && same_fling(&other.fling_behavior, &self.fling_behavior)
-        })
+    fn update(&self, node: &mut LazyScrollNode) {
+        // A fling scrolls the state it started with: a new state stops it (the old one's
+        // owner may be going, D240).
+        if node.state != self.state {
+            node.drag.cancel();
+            node.drag.stop_fling();
+            node.dyn_state = Rc::new(self.state);
+            node.set_outer = outer_setter(self.state, node.outer_axis.clone());
+        }
+        node.state = self.state;
+        node.vertical = self.vertical;
+        node.reverse = self.reverse;
+        node.fling_behavior = self.fling_behavior.clone();
+        if node.enabled && !self.enabled {
+            node.drag.cancel();
+            node.drag.stop_fling();
+        }
+        node.enabled = self.enabled;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.vertical == self.vertical
+            && other.reverse == self.reverse
+            && other.enabled == self.enabled
+            && other.state.same(&self.state)
+            && same_fling(&other.fling_behavior, &self.fling_behavior)
     }
 
     fn name(&self) -> &'static str {
@@ -3102,25 +3099,21 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-    }
-
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        _context: &mut EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
         // Not offered with user scrolling off, as Compose's (the range stays).
         if !self.enabled {
-            return false;
+            return;
         }
-        // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491); handled even
-        // where the list can't move that way, as Compose's (its action always returns true).
-        let delta = if self.vertical { y } else { x };
-        if delta != 0.0 {
-            self.state.dispatch(delta, None);
-        }
-        delta != 0.0
+        let (state, vertical) = (self.state, self.vertical);
+        config.scroll_by(None, move |x, y| {
+            // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491); handled
+            // even where the list can't move that way, as Compose's (its action always returns
+            // true).
+            let delta = if vertical { y } else { x };
+            if delta != 0.0 {
+                state.dispatch(delta, None);
+            }
+            delta != 0.0
+        });
     }
 }
 

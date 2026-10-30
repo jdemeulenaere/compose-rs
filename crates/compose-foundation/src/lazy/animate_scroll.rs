@@ -54,7 +54,7 @@ pub(crate) async fn animate_scroll_to_item(
     let target_distance = TARGET_DISTANCE_DP * density;
     let bound_distance = BOUND_DISTANCE_DP * density;
     let minimum_distance = MINIMUM_DISTANCE_DP * density;
-    let mut anim = AnimationState::new(0.0, 0.0);
+    let mut anim = AnimationState::new(0.0f32);
     let found = if is_item_visible(scope, index) {
         Some(scope.calculate_distance_to(index, 0))
     } else {
@@ -70,7 +70,7 @@ pub(crate) async fn animate_scroll_to_item(
     };
     let Some(item_offset) = found else { return };
     // In view: a seek to its offset, at the search's velocity.
-    let mut anim = anim.with_value(0.0);
+    let anim = at_zero(&anim);
     let target = (item_offset + scroll_offset) as f32;
     let mut previous = 0.0f32;
     let sequential = anim.velocity() != 0.0;
@@ -93,6 +93,17 @@ pub(crate) async fn animate_scroll_to_item(
     })
     .await;
     scope.snap_to_item(index, scroll_offset);
+}
+
+/// The same state at 0, as Compose's `anim.copy(value = 0f)`: its velocity and frame times kept.
+fn at_zero(anim: &AnimationState<f32>) -> AnimationState<f32> {
+    AnimationState::with(
+        0.0,
+        anim.velocity_vector(),
+        anim.last_frame_time_nanos(),
+        anim.finished_time_nanos(),
+        anim.is_running(),
+    )
 }
 
 /// The search for an item out of view: stretches of a spring towards it until it's in view
@@ -129,7 +140,7 @@ async fn search(
         } else {
             -target_distance
         };
-        *anim = anim.clone().with_value(0.0);
+        *anim = at_zero(anim);
         let mut previous = 0.0f32;
         let mut outcome: Option<Option<i32>> = None;
         let sequential = anim.velocity() != 0.0;

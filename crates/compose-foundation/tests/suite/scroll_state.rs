@@ -332,7 +332,10 @@ fn the_semantics_follow_the_offset_enabled_or_not() {
         swipe(&mut ui, Offset::new(x, 90.0), Offset::new(x, 10.0), 200);
         ui.wait_for_idle();
         let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
-        let range = node.config.vertical_scroll_axis_range.expect("a vertical scroll range");
+        let range = node
+            .config
+            .get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+            .expect("a vertical scroll range");
         assert_eq!(range.value, state.value() as f32);
         assert_eq!(state.value() > 0, enabled, "only an enabled scroller takes the swipe");
     }
@@ -422,8 +425,12 @@ fn semantics_scroll_by_is_handled_at_an_edge() {
     let state = *owner;
     let mut ui = scrollable_content(Config::Vertical, state, || 100, true);
     let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
-    let back = compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -10.0 };
-    assert!(ui.host().perform_semantics_action(node.id, back), "at the start, backward");
+    let handled = ui.host().perform_semantics_action_with(
+        node.id,
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, -10.0),
+    );
+    assert!(handled, "at the start, backward");
     assert_eq!(state.value(), 0);
 
     // A state consuming nothing: always at an edge.
@@ -437,6 +444,10 @@ fn semantics_scroll_by_is_handled_at_an_edge() {
         );
     });
     let node = ui.on_node_with_tag("scrollable").fetch_semantics_node();
-    let forward = compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 10.0 };
-    assert!(ui.host().perform_semantics_action(node.id, forward), "consuming nothing");
+    let handled = ui.host().perform_semantics_action_with(
+        node.id,
+        &compose_ui::SemanticsActions::SCROLL_BY,
+        |scroll| scroll(0.0, 10.0),
+    );
+    assert!(handled, "consuming nothing");
 }

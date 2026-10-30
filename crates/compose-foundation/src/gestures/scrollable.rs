@@ -729,8 +729,10 @@ struct ScrollableNode {
 impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
     for ScrollableElement<S>
 {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ScrollableNode {
+    type Node = ScrollableNode;
+
+    fn create(&self) -> ScrollableNode {
+        ScrollableNode {
             state: Box::new(self.state.clone()),
             dyn_state: self.dyn_state.clone(),
             vertical: self.orientation == Orientation::Vertical,
@@ -739,11 +741,10 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
             fling_behavior: self.fling_behavior.clone(),
             interaction_source: self.interaction_source.clone(),
             drag: crate::scroll::DragScroller::default(),
-        })
+        }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<ScrollableNode>() else { return };
+    fn update(&self, node: &mut ScrollableNode) {
         let same_state = node.state.downcast_ref::<S>().is_some_and(|old| old.same(&self.state));
         let vertical = self.orientation == Orientation::Vertical;
         // A new state, axis or direction starts the gesture handling over, as Compose's
@@ -767,15 +768,13 @@ impl<S: ScrollableState + ComposeArg + Clone + 'static> ModifierNodeElement
         node.interaction_source = self.interaction_source.clone();
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ScrollableElement<S>>().is_some_and(|other| {
-            other.state.same(&self.state)
-                && other.orientation == self.orientation
-                && other.enabled == self.enabled
-                && other.reverse_direction == self.reverse_direction
-                && same_fling(&other.fling_behavior, &self.fling_behavior)
-                && other.interaction_source == self.interaction_source
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.state.same(&self.state)
+            && other.orientation == self.orientation
+            && other.enabled == self.enabled
+            && other.reverse_direction == self.reverse_direction
+            && same_fling(&other.fling_behavior, &self.fling_behavior)
+            && other.interaction_source == self.interaction_source
     }
 
     fn name(&self) -> &'static str {
@@ -792,38 +791,35 @@ impl ModifierNode for ScrollableNode {
         Some(self)
     }
 
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.cancel();
         self.drag.stop_fling();
     }
 
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag.cancel();
         self.drag.stop_fling();
     }
 }
 
 impl compose_ui::SemanticsModifierNode for ScrollableNode {
-    fn apply_semantics(&self, _config: &mut compose_ui::SemanticsConfiguration) {}
-
     /// Scrolls by the action's delta along the axis, as Compose's scrollable's `scrollBy`
     /// action (compose-rs scrolls at once, D491).
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        _context: &mut EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+    fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
         if !self.enabled {
-            return false;
+            return;
         }
-        // The state's own way, as Compose's `semanticsScrollBy` (its two reversals cancel);
-        // handled even where nothing moves (an edge), as Compose's action returns true (D877).
-        let delta = if self.vertical { y } else { x };
-        if delta != 0.0 {
-            self.dyn_state.dispatch_raw_delta(delta);
-        }
-        true
+        let (state, vertical) = (self.dyn_state.clone(), self.vertical);
+        config.scroll_by(None, move |x, y| {
+            // The state's own way, as Compose's `semanticsScrollBy` (its two reversals cancel);
+            // handled even where nothing moves (an edge), as Compose's action returns true
+            // (D877).
+            let delta = if vertical { y } else { x };
+            if delta != 0.0 {
+                state.dispatch_raw_delta(delta);
+            }
+            true
+        });
     }
 }
 

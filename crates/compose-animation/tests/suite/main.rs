@@ -8,7 +8,6 @@ mod animated_content_scope;
 mod animated_visibility;
 mod animation;
 mod animation_objects;
-mod animation_state;
 mod animation_vector;
 mod composite_hash;
 mod content;

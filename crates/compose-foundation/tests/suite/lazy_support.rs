@@ -156,12 +156,14 @@ impl Lazy {
         tag: &str,
         distance: f32,
     ) {
-        let action = if self.vertical {
-            compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: distance }
-        } else {
-            compose_ui::SemanticsAction::ScrollBy { x: distance, y: 0.0 }
-        };
-        ui.on_node_with_tag(tag).perform_semantics_action(action);
+        let vertical = self.vertical;
+        ui.on_node_with_tag(tag).perform_semantics_action_with(
+            &compose_ui::SemanticsActions::SCROLL_BY,
+            |scroll| {
+                let (x, y) = if vertical { (0.0, distance) } else { (distance, 0.0) };
+                scroll(x, y);
+            },
+        );
         ui.wait_for_idle();
     }
 

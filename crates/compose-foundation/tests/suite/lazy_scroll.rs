@@ -155,11 +155,11 @@ fn animated_scrolls_move_the_semantics_scroll_range() {
         let range = |ui: &mut ComposeTestRule| {
             let config = ui.on_node_with_tag(TAG).fetch_semantics_node().config;
             let range = if vertical {
-                config.vertical_scroll_axis_range
+                config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
             } else {
-                config.horizontal_scroll_axis_range
+                config.get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
             };
-            range.expect("a scroll range")
+            *range.expect("a scroll range")
         };
         let _ = run(&mut ui, async move { handle.animate_scroll_by(1.0, spring()).await });
         let first = range(&mut ui);

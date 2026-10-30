@@ -337,37 +337,33 @@ impl ModifierNodeElement for ScrollElement {
             drag: DragScroller::default(),
             laid_out: 0,
             rtl: false,
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ScrollNode>() {
-            // A fling scrolls the state it started with: a new state stops it (the old one's
-            // owner may be going, D240).
-            if node.state != self.state {
-                node.drag.cancel();
-                node.drag.stop_fling();
-                node.dyn_state = Rc::new(self.state);
-            }
-            if node.enabled && !self.enabled {
-                node.drag.cancel();
-            }
-            node.state = self.state;
-            node.vertical = self.vertical;
-            node.enabled = self.enabled;
-            node.fling_behavior = self.fling_behavior.clone();
-            node.reverse_scrolling = self.reverse_scrolling;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ScrollElement>().is_some_and(|other| {
-            other.vertical == self.vertical
-                && other.state.same(&self.state)
-                && other.enabled == self.enabled
-                && other.reverse_scrolling == self.reverse_scrolling
-                && same_fling(&other.fling_behavior, &self.fling_behavior)
-        })
+    fn update(&self, node: &mut ScrollNode) {
+        // A fling scrolls the state it started with: a new state stops it (the old one's
+        // owner may be going, D240).
+        if node.state != self.state {
+            node.drag.cancel();
+            node.drag.stop_fling();
+            node.dyn_state = Rc::new(self.state);
+        }
+        if node.enabled && !self.enabled {
+            node.drag.cancel();
+        }
+        node.state = self.state;
+        node.vertical = self.vertical;
+        node.enabled = self.enabled;
+        node.fling_behavior = self.fling_behavior.clone();
+        node.reverse_scrolling = self.reverse_scrolling;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.vertical == self.vertical
+            && other.state.same(&self.state)
+            && other.enabled == self.enabled
+            && other.reverse_scrolling == self.reverse_scrolling
+            && same_fling(&other.fling_behavior, &self.fling_behavior)
     }
 
     fn name(&self) -> &'static str {
@@ -468,25 +464,20 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-    }
-
-    fn perform_action(
-        &mut self,
-        action: compose_ui::SemanticsAction,
-        _context: &mut compose_ui::EventContext<'_>,
-    ) -> bool {
-        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
         // Not offered when disabled, as Compose's scrollable (the range stays).
         if !self.enabled {
-            return false;
+            return;
         }
-        // Towards the content's end (its value growing), as Compose's (D491); handled even
-        // where nothing moves (an edge), as Compose's action returns true (D877).
-        let delta = if self.vertical { y } else { x };
-        if delta != 0.0 {
-            self.state.dispatch_raw_delta(delta);
-        }
-        true
+        let (state, vertical) = (self.state, self.vertical);
+        config.scroll_by(None, move |x, y| {
+            // Towards the content's end (its value growing), as Compose's (D491); handled even
+            // where nothing moves (an edge), as Compose's action returns true (D877).
+            let delta = if vertical { y } else { x };
+            if delta != 0.0 {
+                state.dispatch_raw_delta(delta);
+            }
+            true
+        });
     }
 }
 
@@ -494,7 +485,7 @@ impl ModifierNode for ScrollNode {
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.cancel();
         self.drag.stop_fling();
     }

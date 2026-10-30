@@ -1023,13 +1023,17 @@ fn semantics_scrolling_is_not_offered_with_user_scrolling_off() {
         let state = LazyListState::new(0, 0);
         let mut ui = five_thirty_px_items(lazy, *state);
         let node = ui.on_node_with_tag(LIST).fetch_semantics_node();
-        let action = compose_ui::SemanticsAction::ScrollBy { x: 30.0, y: 30.0 };
-        assert!(!ui.host().perform_semantics_action(node.id, action), "{lazy:?}");
+        let scrolled = ui.host().perform_semantics_action_with(
+            node.id,
+            &compose_ui::SemanticsActions::SCROLL_BY,
+            |scroll| scroll(30.0, 30.0),
+        );
+        assert!(!scrolled, "{lazy:?}");
         // But the read-only scroll range stays.
         let range = if lazy.vertical {
-            node.config.vertical_scroll_axis_range
+            node.config.get(&compose_ui::SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
         } else {
-            node.config.horizontal_scroll_axis_range
+            node.config.get(&compose_ui::SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
         };
         assert!(range.is_some(), "{lazy:?}");
         assert_eq!(state.first_visible_item_index(), 0);
