@@ -33,6 +33,8 @@ pub(crate) struct Runtime {
     pub scopes: Scopes,
     pub compositions: Compositions,
     pub active: Option<ActivePass>,
+    /// The shared appliers lent to the passes of the compositions using them (D1304).
+    pub lent: Vec<crate::context::Lend>,
     /// Moves on each time a provider's values change in a way that recomposes its content (a
     /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
     /// The last `Group::provider_version` given.
@@ -112,6 +114,7 @@ impl Runtime {
             provider_versions: 0,
             disposing_data: Vec::new(),
             active: None,
+            lent: Vec::new(),
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
@@ -164,9 +167,14 @@ impl Runtime {
     }
 
     /// The applier of the composition whose pass is running.
+    #[inline]
     pub fn active_applier(&self) -> Rc<RefCell<dyn ErasedApplier>> {
         let Some(active) = self.active else { misuse(ComposeError::NotComposing) };
-        self.compositions.data(active.composition.index).applier.clone()
+        let applier = &self.compositions.data(active.composition.index).applier;
+        if self.lent.is_empty() {
+            return applier.clone();
+        }
+        crate::context::resolve_applier(&self.lent, applier)
     }
 }
 
@@ -226,6 +234,7 @@ pub(crate) fn release_if_empty() {
         fresh.cells.set_base(runtime.cells.next_base());
         fresh.scopes.set_base(runtime.scopes.next_base());
         fresh.compositions.base = runtime.compositions.next_base();
+        fresh.compositions.contexts.set_base(runtime.compositions.contexts.next_base());
         fresh.snapshots.continue_from(&runtime.snapshots);
         Some(std::mem::replace(runtime, fresh))
     })
@@ -415,7 +424,12 @@ pub(crate) fn invalidate_scope_parts(
     }
     if !data.pending {
         data.pending = true;
-        let requester = data.frame_requester.clone();
+        let requester = if data.parent.is_some() {
+            let data = compositions.data(scope.composition);
+            compositions.frame_requester_of(data)
+        } else {
+            data.frame_requester.clone()
+        };
         let mut requested = false;
         if let Some(requester) = requester {
             frame_requests.push(requester);
@@ -512,6 +526,8 @@ pub(crate) struct CompositionData {
     /// A frame was requested and not yet served.
     pub pending: bool,
     pub poisoned: bool,
+    /// A pass of it is composing: an outer one, while a nested one runs, too.
+    pub composing: bool,
     /// Its last pass is applying its end-of-pass work.
     pub finishing: bool,
     /// Emptied at thread exit while its handle still owns it: passes compose nothing.
@@ -521,6 +537,15 @@ pub(crate) struct CompositionData {
     pub frame_requester: Option<Rc<dyn Fn()>>,
     /// The recomposer it's under, if not the thread's default.
     pub recomposer: Option<crate::recomposer::Recomposer>,
+    /// The place in another composition it's under, if any.
+    pub parent: Option<crate::context::ContextId>,
+    /// The compositions under its contexts, in the order they were made: what recomposing it
+    /// goes on to (D1303).
+    pub children: Vec<CompositionId>,
+    /// What it last read above its root, if it's a child: [`Compositions::provider_epoch`].
+    pub provider_epoch: Option<u64>,
+    /// Where its applier goes while it's lent, kept (D1304).
+    pub lending_cell: Option<Rc<RefCell<dyn ErasedApplier>>>,
     pub deferred: Deferred,
     /// The paused composition in progress, if any (Compose's `pendingPausedComposition`).
     pub paused: Option<Box<crate::pausable::Paused>>,
@@ -534,11 +559,16 @@ impl CompositionData {
             root_node,
             pending: false,
             poisoned: false,
+            composing: false,
             finishing: false,
             closed: false,
             disposed: false,
             frame_requester: None,
             recomposer: None,
+            parent: None,
+            children: Vec::new(),
+            provider_epoch: None,
+            lending_cell: None,
             deferred: Deferred::default(),
             paused: None,
         }
@@ -553,6 +583,11 @@ impl CompositionData {
 
     pub fn has_invalidations(&self) -> bool {
         self.table[SENTINEL].dirty
+    }
+
+    /// Whether a frame has something to compose in it.
+    pub fn has_own_work(&self) -> bool {
+        self.has_invalidations() && !self.poisoned && !self.closed && !self.finishing
     }
 
     /// Whether a paused composition of it is neither applied nor cancelled.
@@ -574,6 +609,7 @@ pub(crate) struct Compositions {
     pub closed: usize,
     /// What an invalidation asks while a recomposer's loop is running.
     pub recomposer_wake: Option<Rc<dyn Fn()>>,
+    pub contexts: crate::context::Contexts,
     /// The generation of new entries (odd): after a reset, above every earlier one.
     base: u32,
 }
@@ -586,6 +622,7 @@ impl Compositions {
             live: 0,
             closed: 0,
             recomposer_wake: None,
+            contexts: crate::context::Contexts::new(),
             base: 1,
         }
     }

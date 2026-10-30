@@ -28,6 +28,7 @@ mod compose_arg;
 mod compose_node;
 mod composer;
 mod composition;
+mod context;
 mod deep_link_key;
 mod derived;
 mod effects;
@@ -64,6 +65,7 @@ pub use compose_node::{
 };
 pub use composer::current_recompose_scope;
 pub use composition::{ApplierRef, Composition, PausableComposition, ReusableComposition};
+pub use context::{CompositionContext, remember_composition_context};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, KeyedSideEffect,
@@ -91,8 +93,8 @@ pub use local::{
 };
 pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};
 pub use recomposer::{
-    CancellationHandle, CompositionContext, Recomposer, RecomposerInfo, RecomposerState,
-    running_recomposers, with_running_recomposer,
+    CancellationHandle, Recomposer, RecomposerInfo, RecomposerState, running_recomposers,
+    with_running_recomposer,
 };
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,

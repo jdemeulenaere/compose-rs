@@ -1,7 +1,7 @@
 //! Compose's `CompoundHashKeyTests`, adapted: `current_composite_key_hash_code` is unique for
 //! adjacent, repeated and conditional calls, stable across recompositions and recreation, and
 //! moves with keys. Its values differ from Compose's by design (D290). The subcomposition tests
-//! wait for composition contexts.
+//! are in composition_context.rs.
 
 #![allow(non_snake_case)]
 

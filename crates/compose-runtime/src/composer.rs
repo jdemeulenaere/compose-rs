@@ -594,7 +594,7 @@ impl Runtime {
         // Content being reused is deactivated whatever the caller says, as Compose's
         // `changed(active)` answers true then (its slots read as empty).
         let changed = changed || self.reusing != 0;
-        let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
+        let Runtime { compositions, scopes, frames, removal_stack, recorded_changes, .. } = self;
         let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
         let mut ops = Vec::new();
         let depth = frames.len();
@@ -632,6 +632,7 @@ impl Runtime {
         }
         let deferred = deferred_of(deferred, paused, frame.region);
         if changed && !frame.inserting {
+            *recorded_changes += 1;
             // Pre-order, as removals: a group's slots before its children's.
             let group = &mut table[frame.group];
             group.set_flag(crate::slot_table::DEACTIVATED, true);

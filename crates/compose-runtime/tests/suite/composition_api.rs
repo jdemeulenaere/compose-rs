@@ -15,6 +15,10 @@ use compose_runtime::*;
 
 use crate::mock::*;
 
+fn default_context() -> CompositionContext {
+    Recomposer::current_thread().as_context()
+}
+
 /// Calls of a remember observer.
 #[derive(Default)]
 struct Calls {
@@ -150,7 +154,7 @@ fn content_set_with_reuse_forgets_though_it_s_the_same() {
     let calls = Rc::new(Calls::default());
     let active = mutable_state_of(true);
     let read = active.handle();
-    let composition = Composition::reusable(ViewApplier::new());
+    let composition = Composition::reusable(ViewApplier::new(), default_context());
     let content = {
         let calls = calls.clone();
         move || {
@@ -181,7 +185,7 @@ fn content_set_with_reuse_forgets_though_it_s_the_same() {
 #[test]
 fn deactivating_forgets_and_reuse_remembers_again() {
     let calls = Rc::new(Calls::default());
-    let composition = Composition::reusable(ViewApplier::new());
+    let composition = Composition::reusable(ViewApplier::new(), default_context());
     let content = {
         let calls = calls.clone();
         move || RememberingLinear(calls.clone())
@@ -200,7 +204,7 @@ fn deactivating_forgets_and_reuse_remembers_again() {
 #[test]
 fn deactivated_nodes_are_kept_and_reused() {
     let (deactivated, reused) = (Counter::new(), Counter::new());
-    let composition = Composition::reusable(ViewApplier::new());
+    let composition = Composition::reusable(ViewApplier::new(), default_context());
     let content = {
         let (deactivated, reused) = (deactivated.clone(), reused.clone());
         move || {
@@ -231,7 +235,7 @@ fn deactivated_nodes_are_kept_and_reused() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionReusingTests.kt, setContentWithReuse_throwInInitialComposition_preservesOriginalException
 #[test]
 fn a_panic_setting_content_with_reuse_is_the_content_s() {
-    let composition = Composition::reusable(ViewApplier::new());
+    let composition = Composition::reusable(ViewApplier::new(), default_context());
     let panic = catch_unwind(AssertUnwindSafe(|| {
         composition.set_content_with_reuse(|| std::panic::panic_any(7i32));
     }))
@@ -354,7 +358,7 @@ const PAUSED_AT_EACH: &str = "+A, ^z, ^Y, *B, -A, +B, *Linear, -B, +A:1, *C, *D,
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, canPauseContent
 #[test]
 fn paused_at_each_point_a_composable_runs_after_its_caller() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| A!());
     let iterations = resume_till_complete(&paused, || true);
     paused.apply();
@@ -366,7 +370,7 @@ fn paused_at_each_point_a_composable_runs_after_its_caller() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, canPauseReusableContent
 #[test]
 fn content_set_with_reuse_for_the_first_time_pauses_as_new_content() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content_with_reuse(|| A!());
     let iterations = resume_till_complete(&paused, || true);
     paused.apply();
@@ -378,7 +382,7 @@ fn content_set_with_reuse_for_the_first_time_pauses_as_new_content() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, canPauseReusingContent
 #[test]
 fn content_reused_pauses_as_new_content() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content_with_reuse(|| A!());
     resume_till_complete(&paused, || false);
     paused.apply();
@@ -393,7 +397,7 @@ fn content_reused_pauses_as_new_content() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, reuseFromRoot_preventsGroupIndexCollisionWithRootKey
 #[test]
 fn reusing_from_the_root_finds_a_group_of_any_index() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let content = || {
         for index in 0..94 {
             key(index, || {});
@@ -412,7 +416,7 @@ fn reusing_from_the_root_finds_a_group_of_any_index() {
 fn nothing_is_attached_before_apply() {
     // The pass makes nodes and updates them, in no parent (D591), as they return values: what
     // Compose's recording applier keeps from the tree is what's attached.
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let shown =
         |composition: &Composition| composition.with_applier(|a: &mut ViewApplier| a.roots().len());
     let paused = composition.set_pausable_content(|| A!());
@@ -438,7 +442,7 @@ fn observers_are_remembered_only_in_apply_in_order() {
             report(&format!("!{}", self.0));
         }
     }
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| {
         remember_observer(|| Named("a"));
         report("C(a)");
@@ -485,7 +489,7 @@ fn observers_are_remembered_in_the_order_composed_at_once() {
             report(self.0);
         }
     }
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| {
         remember_observer(|| Named("L0B"));
         Linear!(|| {
@@ -513,7 +517,7 @@ fn observers_are_remembered_in_the_order_composed_at_once() {
 fn deactivating_in_a_paused_composition(times: usize) {
     let (active, text) = (mutable_state_of(true), mutable_state_of("Value".to_string()));
     let (is_active, shown) = (active.handle(), text.handle());
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(move || {
         ReusableContentHost(is_active.get(), || Text!(&shown.get()));
     });
@@ -551,7 +555,7 @@ fn content_deactivated_and_active_while_paused_applies() {
 #[test]
 #[should_panic(expected = "Test error")]
 fn a_panic_in_paused_content_comes_out_of_resume() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| panic!("Test error"));
     paused.resume(|| false);
 }
@@ -559,7 +563,7 @@ fn a_panic_in_paused_content_comes_out_of_resume() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, pausableComposition_throwInResumeWithReuse_preservesOriginalException
 #[test]
 fn a_panic_in_paused_reused_content_is_the_content_s() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content_with_reuse(|| std::panic::panic_any(7i32));
     let panic = catch_unwind(AssertUnwindSafe(|| paused.resume(|| false))).unwrap_err();
     assert_eq!(panic.downcast_ref::<i32>(), Some(&7));
@@ -570,7 +574,7 @@ fn a_panic_in_paused_reused_content_is_the_content_s() {
 #[test]
 #[should_panic(expected = "test")]
 fn a_panic_in_an_effect_comes_out_of_apply() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| {
         DisposableEffect((), |_| panic!("test"));
     });
@@ -582,7 +586,7 @@ fn a_panic_in_an_effect_comes_out_of_apply() {
 #[test]
 #[should_panic(expected = "paused composition")]
 fn content_can_t_be_set_after_a_cancel() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| Text!("Some text"));
     paused.cancel();
     let again = composition.set_pausable_content(|| Text!("Some other text"));
@@ -592,7 +596,7 @@ fn content_can_t_be_set_after_a_cancel() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, pausableComposition_isAppliedReturnsCorrectValue
 #[test]
 fn a_paused_composition_says_when_it_s_applied() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| {
         DisposableEffect((), |scope| scope.on_dispose(|| {}));
     });
@@ -606,7 +610,7 @@ fn a_paused_composition_says_when_it_s_applied() {
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/PausableCompositionTests.kt, pausableComposition_isCancelledReturnsCorrectValue
 #[test]
 fn a_paused_composition_says_when_it_s_cancelled() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| {
         DisposableEffect((), |scope| scope.on_dispose(|| {}));
     });
@@ -621,7 +625,7 @@ fn a_paused_composition_says_when_it_s_cancelled() {
 #[test]
 fn a_cancel_abandons_what_a_paused_composition_remembered() {
     let calls = Rc::new(Calls::default());
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let held = calls.clone();
     let paused = composition.set_pausable_content(move || {
         let held = held.clone();
@@ -638,7 +642,8 @@ fn a_cancel_abandons_what_a_paused_composition_remembered() {
 fn another_composition_s_effect_can_deactivate_it() {
     let state = mutable_state_of(false);
     let read = state.handle();
-    let held: Rc<PausableComposition> = Rc::new(Composition::pausable(ViewApplier::new()));
+    let held: Rc<PausableComposition> =
+        Rc::new(Composition::pausable(ViewApplier::new(), default_context()));
     let outer = Composition::new(ViewApplier::new());
     let inner = held.clone();
     outer.set_content(move || {
@@ -669,7 +674,7 @@ fn a_scope_paused_twice_composes_once_more() {
     let composed = Rc::new(Cell::new(false));
     let text = mutable_state_of("blah".to_string());
     let read = text.handle();
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let content = {
         let composed = composed.clone();
         move || {
@@ -709,7 +714,7 @@ fn what_a_paused_composition_dropped_is_abandoned_and_the_last_remembered() {
     }
     let (enable, name) = (mutable_state_of(true), mutable_state_of("A"));
     let (is_enabled, key) = (enable.handle(), name.handle());
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(move || {
         if is_enabled.get() {
             let name = key.get();
@@ -745,7 +750,7 @@ fn what_a_paused_composition_dropped_is_abandoned_and_the_last_remembered() {
 fn reusable_content_in_paused_reused_content_keeps_order() {
     let key = mutable_state_of(0);
     let read = key.handle();
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let content = move || {
         Linear!(move || {
             ReusableContent(read.get(), || {});
@@ -769,7 +774,7 @@ fn reusable_content_in_paused_reused_content_keeps_order() {
 #[test]
 #[should_panic(expected = "paused composition")]
 fn deactivating_while_paused_panics() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let _paused = composition.set_pausable_content(|| Text("Some text"));
     composition.deactivate();
 }
@@ -787,7 +792,7 @@ fn a_reusable_compositions_root_is_in_no_hash() {
     let expected = hash.get();
     assert_ne!(expected, 0);
 
-    let reusable = Composition::reusable(ViewApplier::new());
+    let reusable = Composition::reusable(ViewApplier::new(), default_context());
     reusable.set_content(content.clone());
     assert_eq!(hash.get(), expected);
     reusable.set_content_with_reuse(content.clone());
@@ -795,7 +800,7 @@ fn a_reusable_compositions_root_is_in_no_hash() {
     reusable.set_content_with_reuse(content.clone());
     assert_eq!(hash.get(), expected, "reused again");
 
-    let pausable = Composition::pausable(ViewApplier::new());
+    let pausable = Composition::pausable(ViewApplier::new(), default_context());
     let paused = pausable.set_pausable_content(content);
     resume_till_complete(&paused, || false);
     paused.apply();
@@ -845,7 +850,7 @@ fn a_composition_disposed_in_a_frame_runs_none_of_its_work() {
 #[test]
 #[should_panic(expected = "paused composition")]
 fn content_can_t_be_set_while_paused() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let _paused = composition.set_pausable_content(|| Text("Some text"));
     composition.set_content(|| Text("Some text"));
 }
@@ -853,7 +858,7 @@ fn content_can_t_be_set_while_paused() {
 #[test]
 #[should_panic(expected = "paused composition")]
 fn content_can_t_be_set_with_reuse_while_paused() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let _paused = composition.set_pausable_content(|| Text("Some text"));
     composition.set_content_with_reuse(|| Text("Some text"));
 }
@@ -863,7 +868,7 @@ fn content_can_t_be_set_with_reuse_while_paused() {
 fn disposing_cancels_what_s_paused() {
     let calls = Rc::new(Calls::default());
     let held = calls.clone();
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(move || RememberingLinear(held.clone()));
     resume_till_complete(&paused, || false);
     assert_eq!(counts(&calls), (0, 0, 0));
@@ -886,7 +891,7 @@ fn a_paused_deactivation_happens_at_apply() {
     let deactivated = Counter::new();
     let active = mutable_state_of(true);
     let read = active.handle();
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let content = {
         let deactivated = deactivated.clone();
         move || {
@@ -916,7 +921,7 @@ fn a_paused_deactivation_happens_at_apply() {
 #[test]
 #[should_panic(expected = "paused composition")]
 fn resuming_what_s_complete_panics() {
-    let composition = Composition::pausable(ViewApplier::new());
+    let composition = Composition::pausable(ViewApplier::new(), default_context());
     let paused = composition.set_pausable_content(|| Text("Some text"));
     resume_till_complete(&paused, || false);
     paused.resume(|| false);

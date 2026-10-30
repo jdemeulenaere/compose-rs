@@ -6,11 +6,12 @@ use std::fmt::Write as _;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::applier::{Applier, ErasedApplier};
+use crate::applier::{Applier, ErasedApplier, NodeRef};
 use crate::composer::{Frame, Mode, NodeOp, apply_node_op, current, flush_node_moves, run_walk};
+use crate::context::CompositionContext;
 use crate::error::{ComposeError, misuse};
 use crate::hash::key_of;
-use crate::recomposer::{CompositionContext, Recomposer};
+use crate::recomposer::Recomposer;
 use crate::remember::dispatch_forgotten;
 use crate::runtime::{
     ActivePass, CompositionData, CompositionId, Deferred, Runtime, remove_siblings, request_frames,
@@ -36,7 +37,8 @@ impl Composition {
     /// A composition emitting nodes into `applier`.
     pub fn new<A: Applier>(applier: A) -> Composition {
         let root_node = applier.root();
-        let applier: Rc<RefCell<dyn ErasedApplier>> = Rc::new(RefCell::new(applier));
+        let applier: Rc<RefCell<dyn ErasedApplier>> =
+            Rc::new(RefCell::new(crate::applier::SharedApplier::new(applier)));
         let id = with_runtime(|runtime| {
             runtime.compositions.alloc(CompositionData::new(applier, root_node))
         });
@@ -48,37 +50,45 @@ impl Composition {
     /// parent)`.
     pub fn with_parent<A: Applier>(applier: A, parent: CompositionContext) -> Composition {
         let composition = Composition::new(applier);
-        with_runtime(|runtime| {
-            composition.data(runtime).recomposer = Some(parent.recomposer);
-        });
+        with_runtime(|runtime| runtime.compositions.register(composition.id, parent));
         composition
+    }
+
+    /// A composition under `parent` using the applier of its composition, its nodes below `root`
+    /// (`platform::subcomposition`).
+    pub(crate) fn sharing_applier(parent: CompositionContext, root: NodeRef) -> Composition {
+        let applier = crate::context::parent_applier(parent);
+        let id = with_runtime(|runtime| {
+            let id = runtime.compositions.alloc(CompositionData::new(applier, root));
+            runtime.compositions.register(id, parent);
+            id
+        });
+        register_exit_guard();
+        Composition { id, _not_send: PhantomData }
     }
 
     /// What it's under, as `parent`.
     pub fn parent(&self) -> CompositionContext {
-        let recomposer = with_runtime(|runtime| self.data(runtime).recomposer);
+        let (recomposer, place) = with_runtime(|runtime| {
+            let data = self.data(runtime);
+            (data.recomposer, data.parent)
+        });
+        if place.is_some() {
+            return CompositionContext { recomposer, place };
+        }
         recomposer.unwrap_or_else(Recomposer::current_thread).as_context()
     }
 
     /// A composition whose content can be reused and deactivated, as
     /// `ReusableComposition(applier, parent)`.
-    pub fn reusable<A: Applier>(applier: A) -> ReusableComposition {
-        ReusableComposition {
-            composition: Composition::new(applier),
-            root: Rc::new(ReusableRoot::new(false)),
-        }
+    pub fn reusable<A: Applier>(applier: A, parent: CompositionContext) -> ReusableComposition {
+        ReusableComposition::of(Composition::with_parent(applier, parent), false)
     }
 
     /// A composition whose content can be composed in pauses, as
     /// `PausableComposition(applier, parent)`.
-    pub fn pausable<A: Applier>(applier: A) -> PausableComposition {
-        PausableComposition {
-            reusable: ReusableComposition {
-                composition: Composition::new(applier),
-                root: Rc::new(ReusableRoot::new(true)),
-            },
-            last: RefCell::new(None),
-        }
+    pub fn pausable<A: Applier>(applier: A, parent: CompositionContext) -> PausableComposition {
+        PausableComposition::of(Composition::with_parent(applier, parent))
     }
 
     /// Disposes it now, as `dispose`: what it holds goes in rule R1's order (nodes and their
@@ -88,7 +98,7 @@ impl Composition {
         // Paused content is discarded first, its nodes released and its observers abandoned.
         crate::pausable::cancel_for_disposal(self.id);
         let disposal = with_runtime(|runtime| {
-            if runtime.active.is_some_and(|active| active.composition == self.id) {
+            if runtime.compositions.get(self.id).is_some_and(|data| data.composing) {
                 misuse(ComposeError::DisposedDuringPass)
             }
             let disposal = Disposal::close(runtime, self.id);
@@ -126,8 +136,11 @@ impl Composition {
                 misuse(ComposeError::Disposed)
             }
         });
-        // The changes of the turn so far invalidate their readers first (D751), as `recompose`.
-        crate::snapshots::Snapshot::send_apply_notifications();
+        // The changes of the turn so far invalidate their readers first (D751), as `recompose`;
+        // those of a pass it's nested in are for that pass's apply.
+        if !with_runtime(|runtime| runtime.is_composing()) {
+            crate::snapshots::Snapshot::send_apply_notifications();
+        }
         // What was asked of the paused composition, if any, first.
         crate::pausable::run_requests(self.id);
         // A composition closed at thread exit composes nothing.
@@ -143,6 +156,9 @@ impl Composition {
         // What was asked of the paused composition, if any, first (a cancel during a layout, a
         // completion a layout needs).
         crate::pausable::run_requests(self.id);
+        if with_runtime(|runtime| !self.data(runtime).children.is_empty()) {
+            return recompose_tree(self.id);
+        }
         let Some(pass) = Pass::begin(self.id, Mode::Walk) else {
             return false;
         };
@@ -151,18 +167,26 @@ impl Composition {
         true
     }
 
-    /// Whether some scope is invalid, so [`recompose`](Composition::recompose) would run a pass.
+    /// Whether some scope is invalid here or in a composition under it, so
+    /// [`recompose`](Composition::recompose) would run a pass.
     pub fn has_invalidations(&self) -> bool {
         // The turn's changes invalidate their readers first (D751).
         let (invalid, busy, unsent) = with_runtime(|runtime| {
             let unsent = runtime.snapshots.has_changes();
-            (self.data(runtime).has_invalidations(), runtime.is_busy(), unsent)
+            (self.invalid_in_tree(runtime), runtime.is_busy(), unsent)
         });
         if busy || !unsent {
             return invalid;
         }
         crate::snapshots::Snapshot::send_apply_notifications();
-        with_runtime(|runtime| self.data(runtime).has_invalidations())
+        with_runtime(|runtime| self.invalid_in_tree(runtime))
+    }
+
+    #[inline]
+    fn invalid_in_tree(&self, runtime: &mut Runtime) -> bool {
+        let compositions = &runtime.compositions;
+        let data = compositions.get(self.id).expect("a live composition");
+        data.has_invalidations() || (!data.children.is_empty() && compositions.has_work_below(data))
     }
 
     /// Sets the function called when a scope of this composition becomes invalid while none
@@ -173,8 +197,8 @@ impl Composition {
             let data = self.data(runtime);
             let old = data.frame_requester.replace(requester.clone());
             // Invalidated before a requester was set: it gets the frame now.
-            if data.has_invalidations() {
-                data.pending = true;
+            if self.invalid_in_tree(runtime) {
+                self.data(runtime).pending = true;
                 runtime.frame_requests.push(requester);
             }
             old
@@ -190,7 +214,10 @@ impl Composition {
         }) {
             flush_node_moves();
         }
-        let applier = with_runtime(|runtime| self.data(runtime).applier.clone());
+        let applier = with_runtime(|runtime| {
+            let data = runtime.compositions.get(self.id).expect("a live composition");
+            crate::context::resolve_applier(&runtime.lent, &data.applier)
+        });
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         let applier = applier
@@ -410,6 +437,10 @@ impl std::ops::Deref for ReusableComposition {
 }
 
 impl ReusableComposition {
+    pub(crate) fn of(composition: Composition, pausable: bool) -> ReusableComposition {
+        ReusableComposition { composition, root: Rc::new(ReusableRoot::new(pausable)) }
+    }
+
     /// Sets the content, as [`Composition::set_content`]: deactivated, it comes back reusing what
     /// was there.
     pub fn set_content(&self, content: impl Fn() + 'static) {
@@ -464,6 +495,13 @@ impl std::ops::Deref for PausableComposition {
 }
 
 impl PausableComposition {
+    pub(crate) fn of(composition: Composition) -> PausableComposition {
+        PausableComposition {
+            reusable: ReusableComposition::of(composition, true),
+            last: RefCell::new(None),
+        }
+    }
+
     /// Sets the content, to compose in the paused composition this returns, as
     /// `setPausableContent`: deactivated, it comes back reusing what was there.
     ///
@@ -540,6 +578,107 @@ pub(crate) enum PassKind {
     Resume,
 }
 
+/// Whether what `id`, a child composition, reads above its root moved since its last pass, as
+/// `startRoot`'s `changed(parentProvider)`: its whole content composes, from its root, then. Its
+/// first pass has nothing to compare, nor one whose place is gone, which keeps what it had.
+fn providers_changed(runtime: &mut Runtime, id: CompositionId, mode: Mode) -> bool {
+    let compositions = &mut runtime.compositions;
+    let data = compositions.get(id).expect("a live composition");
+    let Some(epoch) = data.parent.and_then(|place| compositions.provider_epoch(place)) else {
+        return false;
+    };
+    let data = compositions.get_mut(id).expect("a live composition");
+    let last = data.provider_epoch.replace(epoch);
+    if !last.is_some_and(|last| last != epoch) {
+        return false;
+    }
+    // A walk reaches its content by what's invalid.
+    let root = data.table[SENTINEL].first_child;
+    if mode == Mode::Walk && root != NONE && !data.table[root].scope.is_none() {
+        let scope = data.table[root].scope;
+        crate::runtime::invalidate_scope(runtime, scope);
+    }
+    true
+}
+
+/// What a pass nested in another (a child composition composing at once, in a body of its parent)
+/// keeps of the pass it's in, which goes on when it ends: every per-pass field of the runtime
+/// (`take` names them all, so a new field is decided on).
+struct OuterPass {
+    active: Option<ActivePass>,
+    frames: Vec<Frame>,
+    abandoned_groups: bool,
+    reusing: usize,
+    providers_invalid: usize,
+    pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
+    pausable_pass: bool,
+    resume_next: Option<(u32, bool)>,
+}
+
+impl OuterPass {
+    fn take(runtime: &mut Runtime) -> Option<Box<OuterPass>> {
+        // No `..`: what a new field means here is to be said.
+        let Runtime {
+            active,
+            frames,
+            abandoned_groups,
+            reusing,
+            providers_invalid,
+            pause,
+            pausable_pass,
+            resume_next,
+            // Flushed before a nested pass begins (`Pass::begin_as`).
+            pending_move: _,
+            // Held only from `start_group` to `start_branch_group_of`, no user code between.
+            branch_removal: _,
+            // Empty but during a removal or a walk's step.
+            removal_stack: _,
+            // Whole-thread: these go on through nested passes.
+            node_changes: _,
+            cells: _,
+            scopes: _,
+            compositions: _,
+            lent: _,
+            provider_versions: _,
+            disposing_data: _,
+            frame_requests: _,
+            snapshots: _,
+            observers: _,
+            observing: _,
+            disposing: _,
+            finishing: _,
+            exiting: _,
+            bodies_run: _,
+            state_reads: _,
+            recorded_changes: _,
+            recomposition_counts: _,
+        } = runtime;
+        active.is_some().then(|| {
+            Box::new(OuterPass {
+                active: active.take(),
+                frames: std::mem::take(frames),
+                abandoned_groups: *abandoned_groups,
+                reusing: *reusing,
+                providers_invalid: *providers_invalid,
+                pause: pause.take(),
+                pausable_pass: *pausable_pass,
+                resume_next: resume_next.take(),
+            })
+        })
+    }
+
+    fn restore(self, runtime: &mut Runtime) {
+        runtime.active = self.active;
+        runtime.frames = self.frames;
+        runtime.abandoned_groups = self.abandoned_groups;
+        runtime.reusing = self.reusing;
+        runtime.providers_invalid = self.providers_invalid;
+        runtime.pause = self.pause;
+        runtime.pausable_pass = self.pausable_pass;
+        runtime.resume_next = self.resume_next;
+    }
+}
+
 /// A pass in progress. If it is dropped without [`finish`](Pass::finish), a panic unwound
 /// through it: the composition is poisoned.
 pub(crate) struct Pass {
@@ -548,6 +687,8 @@ pub(crate) struct Pass {
     finished: bool,
     /// What it composes in, as `Recomposer.composing` (§3.13).
     snapshot: Option<crate::snapshots::PassSnapshot>,
+    /// The pass it's nested in, if any.
+    outer: Option<Box<OuterPass>>,
 }
 
 impl Pass {
@@ -565,10 +706,34 @@ impl Pass {
         should_pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
     ) -> Option<Pass> {
         let resume = kind == PassKind::Resume;
-        let (applier, snapshot) = with_runtime(|runtime| {
-            if runtime.active.is_some() {
+        // A nested pass may share the applier of the one it's in: that one's moves go first.
+        if with_runtime(|runtime| runtime.active.is_some()) {
+            flush_node_moves();
+        }
+        let (applier, snapshot, outer) = with_runtime(|runtime| {
+            let data = runtime.compositions.get_mut(id).expect("a live composition");
+            if data.composing {
                 misuse(ComposeError::PassInProgress)
             }
+            if data.closed {
+                return None;
+            }
+            if data.poisoned {
+                misuse(ComposeError::Poisoned)
+            }
+            if data.finishing && mode != Mode::Walk {
+                misuse(ComposeError::PassInProgress)
+            }
+            if data.finishing {
+                return None;
+            }
+            let sentinel = &mut data.table[SENTINEL];
+            if mode == Mode::Walk && !sentinel.dirty && !resume {
+                return None;
+            }
+            crate::snapshots::PassSnapshot::check_can_begin(&runtime.snapshots);
+            let providers_changed = data.parent.is_some() && providers_changed(runtime, id, mode);
+            let outer = OuterPass::take(runtime);
             let Runtime {
                 compositions,
                 snapshots,
@@ -581,28 +746,11 @@ impl Pass {
                 pause,
                 pausable_pass,
                 resume_next,
+                lent,
                 ..
             } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
-            if data.closed {
-                return None;
-            }
-            if data.poisoned {
-                misuse(ComposeError::Poisoned)
-            }
-            if data.finishing {
-                // Its last pass is still applying its end-of-pass work: the next pass waits
-                // until it ends, which then requests a frame for it.
-                if mode == Mode::Walk {
-                    return None;
-                }
-                misuse(ComposeError::PassInProgress)
-            }
             let sentinel = &mut data.table[SENTINEL];
-            if mode == Mode::Walk && !sentinel.dirty && !resume {
-                return None;
-            }
-            crate::snapshots::PassSnapshot::check_can_begin(snapshots);
             let dirty = sentinel.dirty && !resume;
             if !resume {
                 sentinel.dirty = false;
@@ -613,12 +761,17 @@ impl Pass {
             *active = Some(ActivePass { composition: id, composing: true });
             *abandoned_groups = false;
             *reusing = 0;
-            *providers_invalid = 0;
+            // The sentinel's depth: to the end of the pass.
+            *providers_invalid = usize::from(providers_changed);
             *pause = should_pause;
             *pausable_pass = kind != PassKind::Whole;
             *resume_next = None;
-            cells.begin_pass();
-            frames.clear();
+            data.composing = true;
+            // Rule R2's "the next pass" is the next outermost one.
+            if outer.is_none() {
+                cells.begin_pass();
+                frames.clear();
+            }
             frames.push(Frame {
                 group: SENTINEL,
                 mode: if resume { Mode::Normal } else { mode },
@@ -641,9 +794,9 @@ impl Pass {
                 resuming: false,
                 paused: false,
             });
-            Some((data.applier.clone(), snapshot))
+            Some((crate::context::resolve_applier(lent, &data.applier), snapshot, outer))
         })?;
-        let pass = Pass { id, kind, finished: false, snapshot: Some(snapshot) };
+        let pass = Pass { id, kind, finished: false, snapshot: Some(snapshot), outer };
         applier
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
@@ -741,16 +894,24 @@ impl Pass {
     /// as finishing from here until [`apply_work`].
     fn end_composing(&mut self, applier: Rc<RefCell<dyn ErasedApplier>>) -> Composed {
         let mut snapshot = self.snapshot.take().expect("the pass's snapshot");
+        let outer = self.outer.take();
         let (deferred, freeing) = with_runtime(|runtime| {
-            runtime.active = None;
             snapshot.leave(&mut runtime.snapshots);
-            runtime.pause = None;
-            runtime.pausable_pass = false;
-            runtime.resume_next = None;
+            let freeing = if outer.is_some() { Vec::new() } else { runtime.cells.end_pass() };
+            match outer {
+                Some(outer) => outer.restore(runtime),
+                None => {
+                    runtime.active = None;
+                    runtime.pause = None;
+                    runtime.pausable_pass = false;
+                    runtime.resume_next = None;
+                }
+            }
             runtime.finishing += 1;
             let data = runtime.compositions.get_mut(self.id).expect("a live composition");
+            data.composing = false;
             data.finishing = true;
-            (std::mem::take(&mut data.deferred), runtime.cells.end_pass())
+            (std::mem::take(&mut data.deferred), freeing)
         });
         // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
@@ -758,6 +919,63 @@ impl Pass {
         let committed = snapshot.commit();
         Composed { id: self.id, applier, deferred, finishing, committed }
     }
+}
+
+/// Composes what's invalid in `id` and the compositions under it, parents first: each composes,
+/// its snapshot applied, before those under it, its work left in `composed`. A panic poisons the
+/// composition it was composing and comes back: what's composed is for the caller to apply.
+pub(crate) fn compose_tree(
+    id: CompositionId,
+    composed: &mut Vec<Composed>,
+) -> std::thread::Result<()> {
+    // One whose pass panicked isn't its parent's to report again.
+    let poisoned = with_runtime(|runtime| runtime.compositions.get(id).is_none_or(|d| d.poisoned));
+    if !poisoned {
+        let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::pausable::run_requests(id);
+            let pass = Pass::begin(id, Mode::Walk)?;
+            run_walk(0);
+            Some(pass.finish_composing())
+        }))?;
+        composed.extend(pass);
+    }
+    let children = with_runtime(|runtime| {
+        runtime.compositions.get(id).map_or_else(Vec::new, |data| data.children.clone())
+    });
+    for child in children {
+        // What holds it may have just gone, in the parent's pass.
+        let going = with_runtime(|runtime| {
+            let compositions = &runtime.compositions;
+            compositions.get(child).is_none_or(|data| compositions.is_going(data))
+        });
+        if !going {
+            compose_tree(child, composed)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`Composition::recompose`] of a composition with compositions under it: all of them compose,
+/// then all of their work runs, parents first, as the Recomposer's `toApply`.
+fn recompose_tree(id: CompositionId) -> bool {
+    with_runtime(|runtime| {
+        if runtime.compositions.get(id).is_some_and(|data| data.poisoned) {
+            misuse(ComposeError::Poisoned)
+        }
+    });
+    let mut composed = Vec::new();
+    let mut panic = compose_tree(id, &mut composed).err();
+    let changed = !composed.is_empty();
+    for pass in composed {
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply_work(pass)));
+        if let Err(caught) = applied {
+            panic.get_or_insert(caught);
+        }
+    }
+    if let Some(panic) = panic {
+        std::panic::resume_unwind(panic);
+    }
+    changed
 }
 
 /// A pass that's composed, its snapshot's apply done: what [`apply_work`] needs.
@@ -774,6 +992,8 @@ pub(crate) struct Composed {
 pub(crate) fn apply_work(composed: Composed) {
     use crate::snapshots::Committed;
     let Composed { id, applier, mut deferred, mut finishing, committed } = composed;
+    // The one it's using now, if it's lent.
+    let applier = with_runtime(|runtime| crate::context::resolve_applier(&runtime.lent, &applier));
     let observer_panic = match committed {
         Committed::Applied => None,
         Committed::ObserverPanicked(panic) => Some(panic),
@@ -784,6 +1004,9 @@ pub(crate) fn apply_work(composed: Composed) {
                     data.poisoned = true;
                 }
             });
+            if let Ok(mut applier) = applier.try_borrow_mut() {
+                applier.abandon_changes();
+            }
             drop(finishing);
             drop(deferred);
             match committed {
@@ -807,8 +1030,11 @@ pub(crate) fn apply_work(composed: Composed) {
     free_retired_providers(id);
     drop(finishing);
     with_runtime(|runtime| {
-        // What its effects made is initialized too, as the end of Compose's frame (D754).
-        crate::snapshots::advance_after_pass(runtime);
+        // What its effects made is initialized too, as the end of Compose's frame (D754); nested
+        // in a pass, at that pass's, as `composerWasComposing`.
+        if !runtime.is_composing() {
+            crate::snapshots::advance_after_pass(runtime);
+        }
         // An effect may have dropped the composition.
         if let Some(data) = runtime.compositions.get_mut(id) {
             data.deferred.restore(deferred);
@@ -844,8 +1070,9 @@ impl Drop for Finishing {
                 // Invalidated while it finished: a frame for it.
                 if data.has_invalidations() && !data.pending {
                     data.pending = true;
-                    if let Some(requester) = &data.frame_requester {
-                        runtime.frame_requests.push(requester.clone());
+                    let data = runtime.compositions.get(self.id).expect("just found");
+                    if let Some(requester) = runtime.compositions.frame_requester_of(data) {
+                        runtime.frame_requests.push(requester);
                     }
                 }
             }
@@ -861,22 +1088,39 @@ impl Drop for Pass {
         // A panic unwound through the pass. Nothing can be trusted to continue it; keep the
         // slot table for disposal, which frees everything exactly once.
         let mut snapshot = self.snapshot.take();
+        let outer = self.outer.take();
+        // It began its changes and won't end them; those of what's around it go on.
+        let applier = try_with_runtime(|runtime| {
+            let data = runtime.compositions.get(self.id)?;
+            Some(crate::context::resolve_applier(&runtime.lent, &data.applier))
+        });
+        if let Some(Some(applier)) = applier
+            && let Ok(mut applier) = applier.try_borrow_mut()
+        {
+            applier.abandon_changes();
+        }
         let cleaned = try_with_runtime(|runtime| {
             if let Some(snapshot) = &mut snapshot {
                 snapshot.leave(&mut runtime.snapshots);
             }
             if runtime.active.is_some_and(|active| active.composition == self.id) {
-                runtime.active = None;
-                runtime.frames.clear();
-                runtime.reusing = 0;
-                runtime.providers_invalid = 0;
-                runtime.pause = None;
-                runtime.pausable_pass = false;
-                runtime.resume_next = None;
                 runtime.pending_move = None;
-                runtime.cells.abort_pass();
+                match outer {
+                    Some(outer) => outer.restore(runtime),
+                    None => {
+                        runtime.active = None;
+                        runtime.frames.clear();
+                        runtime.reusing = 0;
+                        runtime.providers_invalid = 0;
+                        runtime.pause = None;
+                        runtime.pausable_pass = false;
+                        runtime.resume_next = None;
+                        runtime.cells.abort_pass();
+                    }
+                }
             }
             if let Some(data) = runtime.compositions.get_mut(self.id) {
+                data.composing = false;
                 data.poisoned = true;
             }
         });
@@ -934,15 +1178,20 @@ fn apply_deferred(
     {
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+        // Those of a composition below a node of its parent's may have gone with it.
         for node in deferred.deactivated_nodes.drain(..) {
-            applier.deactivate(node);
+            if applier.contains(node) {
+                applier.deactivate(node);
+            }
         }
         if std::mem::take(&mut deferred.repeated_releases) {
             let mut released = std::collections::HashSet::new();
             deferred.released_nodes.retain(|node| released.insert(node.bits()));
         }
         for node in deferred.released_nodes.drain(..) {
-            applier.release(node);
+            if applier.contains(node) {
+                applier.release(node);
+            }
         }
         applier.on_end_changes();
     }
@@ -974,7 +1223,7 @@ struct Disposal {
 
 impl Disposal {
     fn take(runtime: &mut Runtime, id: CompositionId) -> Option<Disposal> {
-        if runtime.active.is_some_and(|active| active.composition == id) {
+        if runtime.compositions.get(id).is_some_and(|data| data.composing) {
             if std::thread::panicking() {
                 // Unwinding through our own pass: leak rather than abort with a double panic.
                 return None;
@@ -988,7 +1237,7 @@ impl Disposal {
     /// Empties a composition still owned by its handle, at thread exit, and closes it: the handle
     /// stays usable (an empty tree; passes compose nothing) until its owner drops it.
     fn close(runtime: &mut Runtime, id: CompositionId) -> Option<Disposal> {
-        if runtime.active.is_some_and(|active| active.composition == id) {
+        if runtime.compositions.get(id).is_some_and(|data| data.composing) {
             return None;
         }
         let data = runtime.compositions.get_mut(id).filter(|data| !data.closed)?;
@@ -1001,7 +1250,11 @@ impl Disposal {
     }
 
     fn empty(runtime: &mut Runtime, id: CompositionId, mut data: CompositionData) -> Disposal {
-        let Runtime { scopes, removal_stack, disposing, .. } = runtime;
+        // It's its parent's no more; those under it compose on, by their owners.
+        if let Some(place) = data.parent.take() {
+            runtime.compositions.remove_child(place, id);
+        }
+        let Runtime { scopes, removal_stack, disposing, lent, .. } = runtime;
         // Counts as live while its values drop: cells they retire wait for the end of the
         // disposal, as they would wait for the end of a pass.
         *disposing += 1;
@@ -1013,7 +1266,7 @@ impl Disposal {
         data.table[SENTINEL].node_count = 0;
         Disposal {
             id,
-            applier: data.applier.clone(),
+            applier: crate::context::resolve_applier(lent, &data.applier),
             root_node: data.root_node,
             data: Some(data),
             deferred,
@@ -1028,7 +1281,8 @@ impl Disposal {
             let mut applier =
                 applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
             applier.on_begin_changes();
-            if self.top_level_nodes > 0 {
+            // Below a node of its parent's, what it holds may have been released with that node.
+            if self.top_level_nodes > 0 && applier.contains(self.root_node) {
                 applier.remove(self.root_node, 0, self.top_level_nodes as usize);
             }
         }
@@ -1094,7 +1348,7 @@ impl Drop for Disposing {
 fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
     let data = runtime.compositions.get(id).ok_or("disposed composition")?;
     let table = &data.table;
-    let in_pass = runtime.active.is_some_and(|active| active.composition == id);
+    let in_pass = data.composing;
     // Paused content's group: its content's dirty marks and invalid scopes wait for a resume,
     // and it counts the nodes it has in the tree, not those it will have once applied.
     let region_at = |group: u32| {

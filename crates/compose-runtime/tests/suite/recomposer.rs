@@ -105,7 +105,7 @@ fn invalidated_scopes_recompose_on_the_next_frame_and_once_each() {
 }
 
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/RecomposerTests.kt, testInsertDuringRecomposition
-// (in the composition itself: subcompositions need composition-context)
+// (in the composition itself; composition_context.rs has it in a child)
 #[test]
 fn inserting_content_that_writes_state_while_composing() {
     #[composable]

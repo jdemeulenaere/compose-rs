@@ -572,7 +572,7 @@ pub fn current_composite_key_hash_code() -> u64 {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
         let group = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        composite_key_hash_at(&runtime.compositions.data(composition).table, group)
+        composite_key_hash_at(&runtime.compositions, runtime.compositions.data(composition), group)
     })
 }
 
@@ -609,61 +609,69 @@ pub fn composite_key_hash_of(token: CompositeKeyToken) -> u64 {
         return 0;
     }
     with_runtime(|runtime| {
-        let table = &runtime.compositions.data(token.composition).table;
-        composite_key_hash_at(table, token.group)
+        let data = runtime.compositions.data(token.composition);
+        composite_key_hash_at(&runtime.compositions, data, token.group)
     })
 }
 
-fn composite_key_hash_at(table: &crate::slot_table::SlotTable, group: u32) -> u64 {
-    {
-        let mut group = group;
-        let mut hash = 0u64;
-        while group != NONE {
-            let entry = &table[group];
-            // What a reusable composition's root adds isn't in a hash: it hashes as a plain one.
-            if entry.key == crate::reusable::REUSE_ROOT_KEY {
-                group = crate::slot_table::SENTINEL;
-                continue;
-            }
-            if entry.key == crate::pausable::PAUSABLE_KEY
-                && entry.parent != NONE
-                && table[entry.parent].key == crate::reusable::REUSE_ROOT_KEY
-            {
-                group = entry.parent;
-                continue;
-            }
-            // Groups of one key under one parent (two calls of a composable: keys here are per
-            // composable, where Compose's are per call site) are told apart by their order among
-            // themselves; a `key(…)` group by its key alone.
-            let mut ordinal = 0u64;
-            if entry.kind != GroupKind::Movable && entry.parent != NONE {
-                let mut sibling = table[entry.parent].first_child;
-                while sibling != NONE && sibling != group {
-                    let other = &table[sibling];
-                    if other.key == entry.key
-                        && other.data_key == entry.data_key
-                        && other.kind == entry.kind
-                    {
-                        ordinal += 1;
-                    }
-                    sibling = other.next_sibling;
-                }
-            }
-            hash = hash.rotate_left(3)
-                ^ entry.key
-                ^ entry.data_key.rotate_left(29)
-                ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            // A `SaveableStateProvider`'s values are found by their place within it, wherever
-            // it is: its registry is theirs alone (D290).
-            if entry.kind == GroupKind::Reusable
-                && entry.key == crate::saveable_state_holder::PROVIDER_GROUP
-            {
-                break;
-            }
-            group = entry.parent;
+pub(crate) fn composite_key_hash_at(
+    compositions: &crate::runtime::Compositions,
+    data: &crate::runtime::CompositionData,
+    group: u32,
+) -> u64 {
+    let table = &data.table;
+    let mut group = group;
+    let mut hash = 0u64;
+    while group != NONE {
+        let entry = &table[group];
+        // What a reusable composition's root adds isn't in a hash: it hashes as a plain one.
+        if entry.key == crate::reusable::REUSE_ROOT_KEY {
+            group = crate::slot_table::SENTINEL;
+            continue;
         }
-        hash
+        if entry.key == crate::pausable::PAUSABLE_KEY
+            && entry.parent != NONE
+            && table[entry.parent].key == crate::reusable::REUSE_ROOT_KEY
+        {
+            group = entry.parent;
+            continue;
+        }
+        // Groups of one key under one parent (two calls of a composable: keys here are per
+        // composable, where Compose's are per call site) are told apart by their order among
+        // themselves; a `key(…)` group by its key alone.
+        let mut ordinal = 0u64;
+        if entry.kind != GroupKind::Movable && entry.parent != NONE {
+            let mut sibling = table[entry.parent].first_child;
+            while sibling != NONE && sibling != group {
+                let other = &table[sibling];
+                if other.key == entry.key
+                    && other.data_key == entry.data_key
+                    && other.kind == entry.kind
+                {
+                    ordinal += 1;
+                }
+                sibling = other.next_sibling;
+            }
+        }
+        hash = hash.rotate_left(3)
+            ^ entry.key
+            ^ entry.data_key.rotate_left(29)
+            ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        // A `SaveableStateProvider`'s values are found by their place within it, wherever
+        // it is: its registry is theirs alone (D290).
+        if entry.kind == GroupKind::Reusable
+            && entry.key == crate::saveable_state_holder::PROVIDER_GROUP
+        {
+            return hash;
+        }
+        group = entry.parent;
     }
+    // A child composition's hash goes on from its context's, as Compose's starts from it, kept
+    // when its place is gone.
+    if let Some(place) = data.parent {
+        hash = hash.rotate_left(3) ^ compositions.contexts.key_hash(place);
+    }
+    hash
 }
 
 /// What `remember_saveable` can remember: a `Clone` value (saved as itself), an

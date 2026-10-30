@@ -24,7 +24,7 @@ use crate::__private::ReplaceGroup;
 use crate::compose_arg::ComposeArg;
 use crate::hash::key_of;
 use crate::remember::remember;
-use crate::runtime::{CompositionId, Runtime, with_runtime};
+use crate::runtime::{CompositionData, CompositionId, Compositions, Runtime, with_runtime};
 use crate::slot_table::NONE;
 use crate::state::{MutationPolicy, OwnedState};
 
@@ -345,9 +345,24 @@ impl<T: 'static> CompositionLocal<T> {
 fn find_provided(local: u64) -> Option<Rc<dyn Any>> {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
-        let table = &runtime.compositions.data(composition).table;
+        let data = runtime.compositions.data(composition);
         let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        let mut group = table.provider_at_or_above(composing);
+        let group = data.table.provider_at_or_above(composing);
+        find_from(&runtime.compositions, data, group, local)
+    })
+}
+
+/// The holder of `local` in the provider `group` of `data` or those above it, going on above a
+/// child composition's root at its context.
+fn find_from(
+    compositions: &Compositions,
+    data: &CompositionData,
+    group: u32,
+    local: u64,
+) -> Option<Rc<dyn Any>> {
+    let (mut data, mut group) = (data, group);
+    loop {
+        let table = &data.table;
         while group != NONE {
             if let Some(holder) = entries_of(table, group).and_then(|entries| {
                 let entries = entries.entries.borrow();
@@ -357,8 +372,18 @@ fn find_provided(local: u64) -> Option<Rc<dyn Any>> {
             }
             group = table[group].enclosing_provider;
         }
-        None
-    })
+        (data, group) = above_root(compositions, data)?;
+    }
+}
+
+/// The composition a child composition's root is under and the nearest provider there: where
+/// what's provided goes on from, as Compose's `parentContext.getCompositionLocalScope()`.
+fn above_root<'a>(
+    compositions: &'a Compositions,
+    data: &CompositionData,
+) -> Option<(&'a CompositionData, u32)> {
+    let (parent, place) = compositions.context_place(data.parent?)?;
+    Some((parent, parent.table.provider_at_or_above(place)))
 }
 
 /// A provider group's entries.
@@ -376,44 +401,47 @@ fn entries_of(table: &crate::slot_table::SlotTable, group: u32) -> Option<Rc<Pro
 fn visible_entries() -> Vec<Entry> {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
-        let table = &runtime.compositions.data(composition).table;
+        let data = runtime.compositions.data(composition);
         let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        entries_visible_from(table, table.provider_at_or_above(composing))
+        let group = data.table.provider_at_or_above(composing);
+        entries_visible_from(&runtime.compositions, data, group)
     })
 }
 
 /// What `group`, a provider, and those above it provide, nearest first, a local once.
-fn entries_visible_from(table: &crate::slot_table::SlotTable, mut group: u32) -> Vec<Entry> {
+fn entries_visible_from(
+    compositions: &Compositions,
+    data: &CompositionData,
+    group: u32,
+) -> Vec<Entry> {
+    let (mut data, mut group) = (data, group);
     let mut visible: Vec<Entry> = Vec::new();
-    while group != NONE {
-        if let Some(entries) = entries_of(table, group) {
-            for entry in entries.entries.borrow().iter() {
-                if !visible.iter().any(|seen| seen.local == entry.local) {
-                    visible.push(Entry { owned: false, given: false, ..entry.clone() });
+    loop {
+        let table = &data.table;
+        while group != NONE {
+            if let Some(entries) = entries_of(table, group) {
+                for entry in entries.entries.borrow().iter() {
+                    if !visible.iter().any(|seen| seen.local == entry.local) {
+                        visible.push(Entry { owned: false, given: false, ..entry.clone() });
+                    }
                 }
             }
+            group = table[group].enclosing_provider;
         }
-        group = table[group].enclosing_provider;
+        let Some(above) = above_root(compositions, data) else { return visible };
+        (data, group) = above;
     }
-    visible
 }
 
 /// Whether a provider above the provider group starting now provides `local`.
 fn provided_above(local: u64) -> bool {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
-        let table = &runtime.compositions.data(composition).table;
+        let data = runtime.compositions.data(composition);
         let provider = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        let mut group = if provider == NONE { NONE } else { table[provider].enclosing_provider };
-        while group != NONE {
-            if entries_of(table, group).is_some_and(|entries| {
-                entries.entries.borrow().iter().any(|entry| entry.local == local)
-            }) {
-                return true;
-            }
-            group = table[group].enclosing_provider;
-        }
-        false
+        let table = &data.table;
+        let group = if provider == NONE { NONE } else { table[provider].enclosing_provider };
+        find_from(&runtime.compositions, data, group, local).is_some()
     })
 }
 
@@ -501,9 +529,9 @@ impl CompositionLocalAnchor {
         version: 0,
     };
 
-    /// The slot table of its composition, if its provider is as it was. A composition being
-    /// disposed is still there for its nodes' `on_detach`.
-    fn table<'a>(&self, runtime: &'a Runtime) -> Option<&'a crate::slot_table::SlotTable> {
+    /// Its composition, if its provider is as it was. A composition being disposed is still there
+    /// for its nodes' `on_detach`.
+    fn data<'a>(&self, runtime: &'a Runtime) -> Option<&'a CompositionData> {
         let disposing = runtime.disposing_data.iter().find(|(id, _)| *id == self.composition);
         let data = match disposing {
             Some((_, data)) => data,
@@ -512,7 +540,11 @@ impl CompositionLocalAnchor {
         let provider = data.table.groups.get(self.provider as usize)?;
         (provider.kind != crate::slot_table::GroupKind::Free
             && provider.provider_version() == self.version)
-            .then_some(&data.table)
+            .then_some(data)
+    }
+
+    fn table<'a>(&self, runtime: &'a Runtime) -> Option<&'a crate::slot_table::SlotTable> {
+        self.data(runtime).map(|data| &data.table)
     }
 
     /// The value of `local` here, or its default, as `currentValueOf`. A dynamic local is a
@@ -537,8 +569,10 @@ impl CompositionLocalAnchor {
             return CompositionLocalMap::empty();
         }
         let entries = with_runtime(|runtime| {
-            let table = self.table(runtime);
-            table.map_or_else(Vec::new, |table| entries_visible_from(table, self.provider))
+            let data = self.data(runtime);
+            data.map_or_else(Vec::new, |data| {
+                entries_visible_from(&runtime.compositions, data, self.provider)
+            })
         });
         CompositionLocalMap { entries: entries.into() }
     }
@@ -592,21 +626,7 @@ impl CompositionLocalAnchor {
             return None;
         }
         with_runtime(|runtime| {
-            let table = self.table(runtime)?;
-            let mut group = self.provider;
-            while group != NONE {
-                if let Some(holder) = entries_of(table, group).and_then(|entries| {
-                    let entries = entries.entries.borrow();
-                    entries
-                        .iter()
-                        .find(|entry| entry.local == local)
-                        .map(|entry| entry.holder.clone())
-                }) {
-                    return Some(holder);
-                }
-                group = table[group].enclosing_provider;
-            }
-            None
+            find_from(&runtime.compositions, self.data(runtime)?, self.provider, local)
         })
     }
 }
@@ -616,11 +636,23 @@ impl CompositionLocalAnchor {
 pub fn current_composition_local_anchor() -> CompositionLocalAnchor {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
-        let id = runtime.active.expect("composing").composition;
-        let table = &runtime.compositions.data(composition).table;
+        let mut id = runtime.active.expect("composing").composition;
+        let compositions = &runtime.compositions;
+        let mut data = compositions.data(composition);
         let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        let provider = table.provider_at_or_above(composing);
-        let version = if provider == NONE { 0 } else { table[provider].provider_version() };
+        let mut provider = data.table.provider_at_or_above(composing);
+        // In a child composition with none of its own: what's above its root is what it reads, so
+        // no provider here says there's none at all.
+        while provider == NONE {
+            let Some((above, above_data, place)) =
+                data.parent.and_then(|place| compositions.context_at(place))
+            else {
+                break;
+            };
+            (id, data) = (above, above_data);
+            provider = data.table.provider_at_or_above(place);
+        }
+        let version = if provider == NONE { 0 } else { data.table[provider].provider_version() };
         CompositionLocalAnchor { composition: id, provider, version }
     })
 }

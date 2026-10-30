@@ -113,6 +113,14 @@ pub trait Applier: 'static {
         )
     }
 
+    /// Whether `node` is in the tree, by its generation: a composition sharing this applier may be
+    /// disposed after the node it's under was released, with its nodes, and the node's place given
+    /// to another. An applier that composes no composition below a node of a composition's needn't
+    /// implement it.
+    fn contains(&self, _node: NodeRef) -> bool {
+        true
+    }
+
     /// Called before a pass applies its first change.
     fn on_begin_changes(&mut self) {}
 
@@ -144,13 +152,30 @@ pub(crate) trait ErasedApplier {
     /// Takes the node out of `node`, as `insert_erased`, and makes it in no parent.
     fn create_erased(&mut self, node: &mut dyn Any) -> Option<NodeRef>;
     fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef);
+    fn contains(&self, node: NodeRef) -> bool;
     fn on_begin_changes(&mut self);
     fn on_end_changes(&mut self);
+    /// A pass that won't end its changes, by a panic.
+    fn abandon_changes(&mut self);
     fn on_paused_end(&mut self);
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-impl<A: Applier> ErasedApplier for A {
+/// An applier as compositions share it: what `begin` and `end` mean for the tree is the outermost
+/// pair, as a nested pass's end comes while the pass around it is composing, with its nodes in the
+/// tree (D31), and in a frame the passes composed before any of their work runs.
+pub(crate) struct SharedApplier<A> {
+    applier: A,
+    changing: u32,
+}
+
+impl<A> SharedApplier<A> {
+    pub(crate) fn new(applier: A) -> SharedApplier<A> {
+        SharedApplier { applier, changing: 0 }
+    }
+}
+
+impl<A: Applier> ErasedApplier for SharedApplier<A> {
     fn insert_erased(
         &mut self,
         parent: NodeRef,
@@ -158,55 +183,69 @@ impl<A: Applier> ErasedApplier for A {
         node: &mut dyn Any,
     ) -> Option<NodeRef> {
         let node = node.downcast_mut::<Option<A::Node>>()?.take()?;
-        Some(Applier::insert(self, parent, index, node))
+        Some(Applier::insert(&mut self.applier, parent, index, node))
     }
 
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {
-        Applier::remove(self, parent, index, count)
+        Applier::remove(&mut self.applier, parent, index, count)
     }
 
     fn move_nodes(&mut self, parent: NodeRef, from: usize, to: usize, count: usize) {
-        Applier::move_nodes(self, parent, from, to, count)
+        Applier::move_nodes(&mut self.applier, parent, from, to, count)
     }
 
     fn release(&mut self, node: NodeRef) {
-        Applier::release(self, node)
+        Applier::release(&mut self.applier, node)
     }
 
     fn reuse(&mut self, node: NodeRef) {
-        Applier::reuse(self, node)
+        Applier::reuse(&mut self.applier, node)
     }
 
     fn reuse_paused(&mut self, node: NodeRef) -> bool {
-        Applier::reuse_paused(self, node)
+        Applier::reuse_paused(&mut self.applier, node)
     }
 
     fn deactivate(&mut self, node: NodeRef) {
-        Applier::deactivate(self, node)
+        Applier::deactivate(&mut self.applier, node)
     }
 
     fn create_erased(&mut self, node: &mut dyn Any) -> Option<NodeRef> {
         let node = node.downcast_mut::<Option<A::Node>>()?.take()?;
-        Some(Applier::create(self, node))
+        Some(Applier::create(&mut self.applier, node))
     }
 
     fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
-        Applier::attach(self, parent, index, node)
+        Applier::attach(&mut self.applier, parent, index, node)
+    }
+
+    fn contains(&self, node: NodeRef) -> bool {
+        Applier::contains(&self.applier, node)
     }
 
     fn on_begin_changes(&mut self) {
-        Applier::on_begin_changes(self)
+        self.changing += 1;
+        if self.changing == 1 {
+            Applier::on_begin_changes(&mut self.applier)
+        }
     }
 
     fn on_end_changes(&mut self) {
-        Applier::on_end_changes(self)
+        self.changing -= 1;
+        if self.changing == 0 {
+            Applier::on_end_changes(&mut self.applier)
+        }
+    }
+
+    fn abandon_changes(&mut self) {
+        self.changing = self.changing.saturating_sub(1);
     }
 
     fn on_paused_end(&mut self) {
-        Applier::on_paused_end(self)
+        Applier::on_paused_end(&mut self.applier)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+        &mut self.applier
     }
 }

@@ -168,6 +168,10 @@ impl<N: 'static> Applier for NodeTree<N> {
         NodeTree::root(self)
     }
 
+    fn contains(&self, node: NodeRef) -> bool {
+        NodeTree::contains(self, node)
+    }
+
     fn insert(&mut self, parent: NodeRef, index: usize, node: N) -> NodeRef {
         let parent = self.index(parent);
         let len = self.entries[parent as usize].children.len();
@@ -235,6 +239,12 @@ impl<N: 'static> Applier for NodeTree<N> {
         }
         // Values drop last, with the tree consistent, in case their Drop looks at it.
         drop(values);
+    }
+}
+
+impl<N: 'static> crate::context::LendableApplier for NodeTree<N> {
+    fn placeholder() -> Self {
+        NodeTree::new()
     }
 }
 

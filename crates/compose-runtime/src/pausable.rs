@@ -843,7 +843,8 @@ impl PausedComposition {
             if !Rc::ptr_eq(&paused.state, &self.state) {
                 return false;
             }
-            let busy = busy || data.finishing || data.applier.try_borrow_mut().is_err();
+            let applier = crate::context::resolve_applier(&runtime.lent, &data.applier);
+            let busy = busy || data.finishing || applier.try_borrow_mut().is_err();
             if busy {
                 paused.cancel_requested = true;
             }
@@ -958,7 +959,8 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         let paused = data.paused.take()?;
         data.finishing = true;
         runtime.finishing += 1;
-        Some((paused, data.applier.clone()))
+        let applier = data.applier.clone();
+        Some((paused, crate::context::resolve_applier(&runtime.lent, &applier)))
     });
     state.set(PausedState::Applied);
     let Some((mut paused, applier)) = taken else { return };
@@ -1091,14 +1093,16 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         if runtime.active.is_some_and(|active| active.composition == id) {
             misuse(ComposeError::PassInProgress)
         }
-        let Runtime { compositions, scopes, removal_stack, finishing, frame_requests, .. } =
-            runtime;
+        let Runtime {
+            compositions, scopes, removal_stack, finishing, frame_requests, lent, ..
+        } = runtime;
         let data = compositions.get_mut(id)?;
         let mut paused = data.paused.take()?;
         if data.poisoned {
             // Disposal releases what the slot table holds; the nodes made apart go with the
             // applier.
-            return Some((paused, Vec::new(), Flat::default(), data.applier.clone(), false));
+            let applier = crate::context::resolve_applier(lent, &data.applier);
+            return Some((paused, Vec::new(), Flat::default(), applier, false));
         }
         // Ended by the `Finishing` guard below, whatever there is to remove.
         data.finishing = true;
@@ -1147,7 +1151,7 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         // The values the regions forgot (reused content's), and their observers, which get
         // `on_abandoned` (never remembered).
         flatten(&mut paused.segments, 0, &mut flat);
-        let applier = data.applier.clone();
+        let applier = crate::context::resolve_applier(lent, &data.applier);
         for scope in enclosing {
             invalidate_scope_parts(scopes, compositions, frame_requests, None, scope, None);
         }

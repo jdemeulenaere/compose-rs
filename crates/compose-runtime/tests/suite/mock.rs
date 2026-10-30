@@ -123,11 +123,21 @@ impl Default for ViewApplier {
     }
 }
 
+impl compose_runtime::platform::LendableApplier for ViewApplier {
+    fn placeholder() -> ViewApplier {
+        ViewApplier::new()
+    }
+}
+
 impl Applier for ViewApplier {
     type Node = View;
 
     fn root(&self) -> NodeRef {
         self.tree.root()
+    }
+
+    fn contains(&self, node: NodeRef) -> bool {
+        self.tree.contains(node)
     }
 
     fn insert(&mut self, parent: NodeRef, index: usize, node: View) -> NodeRef {

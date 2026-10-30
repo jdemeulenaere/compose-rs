@@ -46,6 +46,11 @@ pub enum ComposeError {
     /// Groups were left open by a panic that unwound through composables and was caught
     /// (`catch_unwind`) inside the composition.
     CaughtPanic,
+    /// A composition sharing its parent's applier was asked of a context with no place in a
+    /// composition that's there.
+    NoParentApplier,
+    /// An applier was lent that its composition's holder hadn't borrowed.
+    ApplierNotHeld,
     /// A paused composition was started while another of the same composition was in progress,
     /// or resumed, applied or cancelled out of order (applied before it was complete, resumed
     /// after it was applied or cancelled).
@@ -62,6 +67,12 @@ impl fmt::Display for ComposeError {
                      {type_name} are lost: remember an Rc of it"
                 );
             }
+            ComposeError::NoParentApplier => {
+                "a composition sharing its parent's applier needs a context in a live composition"
+            }
+            ComposeError::ApplierNotHeld => {
+                "with_lent_applier lends the applier its caller holds from Composition::with_applier"
+            }
             ComposeError::Disposed => "the composition is disposed",
             ComposeError::RecomposerRunning => "the recomposer is already running",
             ComposeError::RecomposerShutDown => "the recomposer is cancelled or closed",
@@ -70,7 +81,7 @@ impl fmt::Display for ComposeError {
             }
             ComposeError::NotComposing => "the composer was used outside a composition pass",
             ComposeError::PassInProgress => {
-                "a composition pass is already running on this thread (one pass at a time)"
+                "a composition pass is already running for this composition"
             }
             ComposeError::UnbalancedGroups => {
                 "unbalanced groups: an end without a matching start, or the wrong kind of end"

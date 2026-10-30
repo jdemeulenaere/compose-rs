@@ -297,9 +297,53 @@ fn effects_under_a_running_recomposer(c: &mut Criterion) {
     runner.cancel();
 }
 
+static BENCH_LOCAL: CompositionLocal<i32> = CompositionLocal::new("bench.local", || 0);
+
+fn subcomposition(c: &mut Criterion) {
+    // A child under a place of its parent, composed at once in the parent's body.
+    c.bench_function("compose a child under a place", |b| {
+        b.iter_with_large_drop(|| {
+            let composition = Composition::new(Tree::new());
+            composition.set_content(|| {
+                let parent = remember_composition_context();
+                let child = Composition::with_parent(Tree::new(), parent);
+                child.set_content(|| {
+                    black_box(BENCH_LOCAL.current());
+                });
+                remember(|| std::rc::Rc::new(child));
+            });
+            composition
+        })
+    });
+    // A parent's new value, recomposing only what read it below the context.
+    let value = mutable_state_of(0);
+    let handle = value.handle();
+    let composition = Composition::new(Tree::new());
+    composition.set_content(move || {
+        CompositionLocalProvider(BENCH_LOCAL.provides(handle.get()), || {
+            let parent = remember_composition_context();
+            let child =
+                remember(|| std::rc::Rc::new(Composition::with_parent(Tree::new(), parent)));
+            let first = remember(|| std::rc::Rc::new(std::cell::Cell::new(true)));
+            if first.replace(false) {
+                child.set_content(|| {
+                    black_box(BENCH_LOCAL.current());
+                });
+            }
+        });
+    });
+    c.bench_function("recompose a child from its parent's local", |b| {
+        b.iter(|| {
+            value.update(|value| value + 1);
+            composition.recompose()
+        })
+    });
+}
+
 criterion_group!(
     benches,
     effects_under_a_running_recomposer,
+    subcomposition,
     counter_click,
     toggle_one_row,
     skipped_composables,

@@ -5,6 +5,10 @@
 
 pub use crate::applier::{Applier, NodeRef};
 pub use crate::composer::{Composer, KeptArguments, current};
+pub use crate::context::{
+    LendableApplier, pausable_subcomposition, reusable_subcomposition, subcomposition,
+    with_lent_applier,
+};
 pub use crate::derived::flush_derived_states;
 pub use crate::executor::{
     Delay, WithFrame, advance_clock, cancel_current_task, current_job, dispatch_frame, fire_timers,
@@ -22,6 +26,11 @@ pub use crate::state::{
     live_state_count, snapshot_paths_are_plain, state_observed_read_count, state_reader_capacity,
     state_reader_count, state_records,
 };
+
+/// The number of composition contexts on this thread. For tests.
+pub fn live_context_count() -> usize {
+    crate::runtime::with_runtime(|runtime| runtime.compositions.contexts.live_count())
+}
 
 /// The number of live recompose scopes on this thread. For tests.
 pub fn live_scope_count() -> usize {

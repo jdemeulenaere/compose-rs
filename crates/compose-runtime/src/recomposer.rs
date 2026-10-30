@@ -13,12 +13,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::task::{Poll, Waker};
 
-use crate::composer::{Mode, run_walk};
-use crate::composition::{Composed, Pass, apply_work};
+use crate::composition::{Composed, apply_work, compose_tree};
+use crate::context::CompositionContext;
 use crate::error::{ComposeError, misuse};
 use crate::executor::{Job, finished_job, launch, launch_owned, with_frame_nanos};
 use crate::runtime::{CompositionId, with_runtime};
-use crate::slot_table::SENTINEL;
 use crate::snapshots::Snapshot;
 use crate::state::{MutableState, ObjectHandle, Owned, OwnedState, State, mutable_state_of};
 
@@ -130,23 +129,6 @@ impl std::fmt::Debug for Recomposer {
     }
 }
 
-/// A point compositions compose under, as `CompositionContext`: for now a recomposer (D1301).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct CompositionContext {
-    pub(crate) recomposer: Recomposer,
-}
-
-impl CompositionContext {
-    /// Schedules `action` for the end of the current or next frame, as
-    /// `scheduleFrameEndCallback`.
-    pub fn schedule_frame_end_callback(
-        &self,
-        action: impl FnOnce() + 'static,
-    ) -> CancellationHandle {
-        self.recomposer.schedule_frame_end_callback(action)
-    }
-}
-
 /// What cancels a frame-end callback, as `CancellationHandle`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CancellationHandle {
@@ -244,7 +226,7 @@ impl Recomposer {
 
     /// A context of this recomposer, as a `Recomposer` is a `CompositionContext` there.
     pub fn as_context(&self) -> CompositionContext {
-        CompositionContext { recomposer: *self }
+        CompositionContext::of_recomposer(*self)
     }
 
     pub fn as_recomposer_info(&self) -> RecomposerInfo {
@@ -274,10 +256,8 @@ impl Recomposer {
                 .filter(|id| {
                     compositions.get(*id).is_some_and(|data| {
                         self.holds(data, is_default)
-                            && !data.poisoned
-                            && !data.closed
-                            && !data.finishing
-                            && data.table[SENTINEL].dirty
+                            && compositions.is_tree_root(data)
+                            && (data.has_own_work() || compositions.has_work_below(data))
                     })
                 })
                 .collect()
@@ -798,19 +778,10 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
             break;
         }
         for id in invalid {
-            let composed = catch_unwind(AssertUnwindSafe(|| {
-                crate::pausable::run_requests(id);
-                let pass = Pass::begin(id, Mode::Walk)?;
-                run_walk(0);
-                Some(pass.finish_composing())
-            }));
-            match composed {
-                Ok(composed) => to_apply.extend(composed),
-                // The pass's drop poisoned it. What's composed is applied before it goes on.
-                Err(caught) => {
-                    panic = Some(caught);
-                    break;
-                }
+            // What's composed is applied before a panic goes on.
+            if let Err(caught) = compose_tree(id, &mut to_apply) {
+                panic = Some(caught);
+                break;
             }
         }
         if panic.is_some() {

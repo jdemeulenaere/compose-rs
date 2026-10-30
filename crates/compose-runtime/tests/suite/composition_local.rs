@@ -1,7 +1,7 @@
 //! Compose's `CompositionLocalTests`, adapted: dynamic and static locals, several values per
 //! provider, `provides_default`, computed defaults and `provides_computed`,
-//! `CompositionLocalContext`, `with_composition_local(s)`. The subcomposition tests wait for
-//! composition contexts, the host-default ones for host defaults.
+//! `CompositionLocalContext`, `with_composition_local(s)`. The subcomposition tests are in
+//! composition_context.rs; the host-default ones wait for host defaults.
 
 #![allow(non_snake_case)]
 
