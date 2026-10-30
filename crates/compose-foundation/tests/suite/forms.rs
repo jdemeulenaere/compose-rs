@@ -45,7 +45,9 @@ fn grid() -> (ComposeTestRule, compose_ui::FocusManager) {
 fn the_focus_manager_moves_the_focus_in_two_dimensions() {
     let (mut ui, manager) = grid();
     let mut step = |direction: FocusDirection, expected: &str| {
-        assert!(manager.move_focus(direction));
+        let was = ui.on_node_with_tag(expected).fetch_semantics_node().config.clone();
+        let moved = manager.move_focus(direction);
+        assert_eq!(moved, was.get(&compose_ui::SemanticsProperties::FOCUSED) != Some(&true));
         ui.wait_for_idle();
         ui.on_node_with_tag(expected).assert_is_focused();
     };

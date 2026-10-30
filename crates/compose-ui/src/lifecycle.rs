@@ -293,6 +293,12 @@ impl UiTree {
                 continue;
             }
             let delegating = entry.state & entry_state::DELEGATING != 0;
+            // An event node hears its state when the pass ends, as `autoInvalidateInsertedNode`.
+            if entry.kinds.any(NodeKinds::FOCUS_EVENT) {
+                let id = entry.id;
+                self.focus.invalidated_events.push((node, id));
+            }
+            let entry = &mut self.node_mut(node).chain[index];
             // A built-in element's node has no `on_attach` (`for_custom_entries`).
             if !entry.kinds.any(NodeKinds::OBSERVED) {
                 entry.state |= entry_state::ATTACH_RAN;
@@ -368,6 +374,19 @@ impl UiTree {
         order
     }
 
+    /// `root` and its descendants, each after its children, which are in their order.
+    fn subtree_post_order(&self, root: NodeId) -> Vec<NodeId> {
+        let mut order = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            let Some(value) = self.get(node) else { continue };
+            order.push(node);
+            stack.extend(value.children.iter().map(|child| child.node));
+        }
+        order.reverse();
+        order
+    }
+
     /// Attaches the modifier nodes of the subtree at `root`, as `LayoutNode.attach`: every one
     /// marked attached first, then their `on_attach`, children before parents.
     fn attach_subtree(&mut self, root: NodeId) {
@@ -376,8 +395,8 @@ impl UiTree {
             self.node_mut(node).attaching = false;
             self.mark_attached(node);
         }
-        // Post-order: the reverse of a pre-order with children reversed is children-first.
-        for &node in nodes.iter().rev() {
+        // Post-order, each node's children in their order, as `LayoutNode.attach`.
+        for node in self.subtree_post_order(root) {
             self.run_attach(node);
         }
     }
@@ -386,6 +405,7 @@ impl UiTree {
     /// `on_detach`, parents before children, tail to head, every one still attached; then they
     /// are marked detached.
     pub(crate) fn detach_subtree(&mut self, root: NodeId) {
+        self.focus_subtree_detaching(root);
         let nodes = self.subtree(root);
         for &node in &nodes {
             self.for_custom_entries(node, entry_state::ATTACH_RAN, true, detach_with_delegates);
@@ -401,6 +421,7 @@ impl UiTree {
     /// node reused from the kept pool, detached when it was deactivated, nor the entries the
     /// pass made (D1156).
     pub(crate) fn reset_and_detach(&mut self, node: NodeId) {
+        self.focus_node_resetting(node);
         let count = self.get(node).map_or(0, |value| value.chain.len());
         for step in 0..count {
             let index = count - 1 - step;
@@ -433,6 +454,9 @@ impl UiTree {
         // A context reaches its layout node: none without it (released first, which runs these
         // steps itself, `release_removed_in_subtree`; this guards the rest).
         let alive = self.get(node).is_some();
+        if alive {
+            self.focus_entries_removed(node, &mut entries);
+        }
         for (entry, place) in entries.iter_mut().rev() {
             if alive && entry.state & entry_state::ATTACH_RAN != 0 {
                 let traverse_key = traverse_key_of(&mut *entry.node, entry.own);
@@ -493,6 +517,7 @@ impl UiTree {
         // The consumers that have read something first: those attaching now read what's there.
         self.run_modifier_local_changes();
         self.run_lifecycle_steps();
+        self.flush_focus_invalidations();
         self.removed_parents.clear();
     }
 

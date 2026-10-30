@@ -17,7 +17,7 @@ fn Leaf(modifier: Modifier) {
     Box!(modifier = modifier.size(10.dp()));
 }
 
-const KINDS: [&str; 12] = [
+const KINDS: [&str; 13] = [
     "clickable",
     "clickable_with",
     "toggleable",
@@ -27,6 +27,7 @@ const KINDS: [&str; 12] = [
     "combined_clickable",
     "combined_clickable_with",
     "on_focus_changed",
+    "on_focus_event",
     "on_key_event",
     "on_size_changed",
     "on_globally_positioned",
@@ -47,11 +48,12 @@ fn Parent(kind: usize, counter: MutableState<i32>) {
         6 => Leaf(Modifier.combined_clickable(None, None, move || counter.set(0))),
         7 => Leaf(Modifier.combined_clickable_with(options, None, None, move || counter.set(0))),
         8 => Leaf(Modifier.on_focus_changed(move |_| counter.set(0))),
-        9 => Leaf(Modifier.on_key_event(move |_| {
+        9 => Leaf(Modifier.on_focus_event(move |_| counter.set(0))),
+        10 => Leaf(Modifier.on_key_event(move |_| {
             counter.set(0);
             false
         })),
-        10 => Leaf(Modifier.on_size_changed(move |_| counter.set(0))),
+        11 => Leaf(Modifier.on_size_changed(move |_| counter.set(0))),
         _ => Leaf(Modifier.on_globally_positioned(move |_| counter.set(0))),
     }
 }

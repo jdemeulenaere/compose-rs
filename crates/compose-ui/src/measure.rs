@@ -83,11 +83,9 @@ impl UiTree {
                         overlay.focused_once = true;
                     }
                 }
-                let before = self.focused();
+                let before = self.focus.active;
                 self.focus_restore.push((node, before));
-                let mut actions = std::mem::take(&mut self.pending_actions);
-                self.focus_into(node, false, &mut actions);
-                self.pending_actions = actions;
+                self.focus_without_scrolling(node);
             }
         }
     }
@@ -133,15 +131,15 @@ impl UiTree {
             self.focus_restore.remove(index);
             // Overlays opened over it pass their restore on to it.
             for later in 0..self.focus_restore.len() {
-                if self.focus_restore[later].1.is_some_and(|node| self.get(node).is_none()) {
+                if self.focus_restore[later].1.is_some_and(|target| self.get(target.node).is_none())
+                {
                     self.focus_restore[later].1 = before;
                 }
             }
-            let focus_lost = self.focused().is_none_or(|focused| self.get(focused).is_none());
-            if focus_lost && let Some(before) = before.filter(|node| self.get(*node).is_some()) {
-                let mut actions = std::mem::take(&mut self.pending_actions);
-                self.focus_into(before, false, &mut actions);
-                self.pending_actions = actions;
+            if self.focus.active.is_none()
+                && let Some(before) = before.filter(|target| self.get(target.node).is_some())
+            {
+                self.refocus_without_scrolling(before);
             }
         }
     }

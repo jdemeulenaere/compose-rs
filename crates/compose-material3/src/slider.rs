@@ -1501,12 +1501,28 @@ impl PointerInputModifierNode for SliderInputNode {
 }
 
 impl FocusTargetModifierNode for SliderInputNode {
-    fn can_focus(&self) -> bool {
-        self.enabled
+    fn focusability(&self) -> compose_ui::Focusability {
+        if self.enabled {
+            compose_ui::Focusability::ALWAYS
+        } else {
+            compose_ui::Focusability::NEVER
+        }
     }
-    fn on_focus_changed(&mut self, focused: bool, _context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: compose_ui::FocusState,
+        current: compose_ui::FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
+        if self.focused == focused {
+            return;
+        }
         self.focused = focused;
         self.emit_focus(focused);
+        if focused {
+            context.bring_into_view();
+        }
     }
 }
 

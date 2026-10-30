@@ -650,6 +650,8 @@ impl ScrollableModifier for Modifier {
             fling_behavior,
             interaction_source,
         })
+        // Its content a group for focus searches, as `ScrollableNode`'s target.
+        .focus_group()
     }
 }
 

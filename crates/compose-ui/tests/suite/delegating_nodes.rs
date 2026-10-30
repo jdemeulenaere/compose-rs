@@ -1031,7 +1031,13 @@ impl KeyInputModifierNode for Interactive {
 }
 
 impl FocusTargetModifierNode for Interactive {
-    fn on_focus_changed(&mut self, focused: bool, _: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: FocusState,
+        current: FocusState,
+        _context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         log(format!("focus {} {focused}", self.label));
     }
 }
@@ -1113,11 +1119,12 @@ fn a_gesture_in_progress_goes_on_for_the_delegates_that_remain() {
 }
 
 #[test]
-fn the_focus_goes_to_the_newest_focus_target_delegate_and_keys_to_each_key_delegate() {
+fn the_focus_goes_to_the_first_focus_target_delegate_and_keys_to_each_key_delegate() {
     let mut host = two_interactive();
     let leaf = host.with_tree(|tree| tree.children_of(tree.root_id()).next().expect("the leaf"));
     host.with_tree(|tree| tree.request_focus(leaf));
-    assert_eq!(take_log(), ["focus second true"]);
+    // As `visitChildren`'s `dispatchForKind`: the targets of a node in the order delegated.
+    assert_eq!(take_log(), ["focus first true"]);
     host.send_key(KeyEvent::down(Key::Enter));
     assert_eq!(take_log(), ["key first", "key second"]);
 }
@@ -1836,7 +1843,13 @@ impl ModifierNode for DelegatesOnEvents {
 }
 
 impl FocusTargetModifierNode for DelegatesOnEvents {
-    fn on_focus_changed(&mut self, focused: bool, _: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: FocusState,
+        current: FocusState,
+        _context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         if focused && self.label == "focus" {
             self.add();
         }

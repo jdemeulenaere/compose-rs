@@ -155,12 +155,18 @@ impl UiHost {
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
         let observer = compose_runtime::platform::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
+        let saveable_registry = compose_runtime::SaveableStateRegistry::new(None);
         let window_insets = Rc::new(crate::configuration::HostInsets::new());
         let insets_source = crate::configuration::WindowInsetsSource::of(window_insets.clone());
         composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_source(insets_source));
         let navigation_events = compose_navigation_event::NavigationEventDispatcher::new();
         UiHost {
-            composition,
+            composition: {
+                composition.with_applier(|tree: &mut UiTree| {
+                    tree.saveable_registry = Some(saveable_registry.clone());
+                });
+                composition
+            },
             lifecycle: HostLifecycle::new(),
             size,
             frame_requested,
@@ -179,7 +185,7 @@ impl UiHost {
                 &navigation_events,
                 handlers_changed,
             ),
-            saveable_registry: compose_runtime::SaveableStateRegistry::new(None),
+            saveable_registry,
             configuration: compose_runtime::mutable_state_of(
                 crate::configuration::Configuration::from_window(size, density, false),
             ),
@@ -793,9 +799,7 @@ impl UiHost {
     }
 
     fn run(actions: Vec<Action>) {
-        for action in actions {
-            action.run();
-        }
+        crate::input::run_actions(actions);
     }
 
     /// Measures and places what the writes observed since invalidated, then runs the layout
@@ -983,6 +987,20 @@ impl UiHost {
         self.handle_focus_requests();
         self.wake_if_dirty();
         done
+    }
+
+    /// The input mode, as `LOCAL_INPUT_MODE_MANAGER`'s `input_mode`: `Keyboard` unless the host
+    /// says otherwise.
+    pub fn input_mode(&self) -> crate::input_mode::InputMode {
+        self.with_tree(|tree| tree.input_mode.input_mode())
+    }
+
+    /// Sets the input mode: a platform with a touch screen says when it's being used
+    /// (`InputMode::Touch`) and when keys are (`InputMode::Keyboard`), as Android's touch mode.
+    /// In touch mode, a focused target of `Focusability::SYSTEM_DEFINED` loses the focus.
+    pub fn set_input_mode(&mut self, mode: crate::input_mode::InputMode) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        self.with_tree(|tree| tree.input_mode.set_input_mode(mode));
     }
 
     /// Moves focus to `node`'s focus target.

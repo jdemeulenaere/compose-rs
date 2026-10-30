@@ -777,7 +777,13 @@ impl SemanticsModifierNode for FocusWithoutDrawingNode {
 }
 
 impl FocusTargetModifierNode for FocusWithoutDrawingNode {
-    fn on_focus_changed(&mut self, focused: bool, _context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: compose_ui::FocusState,
+        current: compose_ui::FocusState,
+        _context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         self.0 = focused;
     }
 }

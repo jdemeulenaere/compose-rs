@@ -380,7 +380,9 @@ fn tab_moves_focus_through_clickables_and_enter_clicks() {
             Leaf(
                 Modifier
                     .size(10.dp())
-                    .on_focus_changed(|focused| log(format!("a focused {focused}")))
+                    .on_focus_changed(|state: FocusState| {
+                        log(format!("a focused {}", state.has_focus()))
+                    })
                     .clickable(|| log("a")),
             );
             Leaf(Modifier.size(10.dp()).clickable(|| log("b")));
@@ -854,7 +856,12 @@ impl PointerInputModifierNode for EveryEventNode {
 }
 
 impl FocusTargetModifierNode for EveryEventNode {
-    fn on_focus_changed(&mut self, _focused: bool, _context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: FocusState,
+        _current: FocusState,
+        _context: &mut EventContext<'_>,
+    ) {
         self.write();
     }
 }

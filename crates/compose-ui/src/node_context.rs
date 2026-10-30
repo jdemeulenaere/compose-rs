@@ -367,6 +367,7 @@ pub(crate) fn register_tree(requests: &Rc<FocusRequests>) -> u32 {
         next.set(next.get() + 1);
         next.get()
     });
+    requests.tree_key.set(key);
     let registration = Registration { requests: Rc::downgrade(requests), borrow: None };
     TREES.with(|trees| trees.borrow_mut().insert(key, registration));
     key
@@ -406,6 +407,16 @@ pub(crate) fn with_free_tree(key: u32, f: &mut dyn FnMut(&mut UiTree)) -> bool {
 }
 
 impl NodeHandle {
+    /// The layout node and the entry or delegate it names.
+    pub(crate) fn place(&self) -> (NodeId, EntryId) {
+        (self.node, self.entry)
+    }
+
+    /// The key of its tree.
+    pub(crate) fn tree_key(&self) -> u32 {
+        self.tree
+    }
+
     /// Whether the node is attached, as `isAttached`.
     pub fn is_attached(&self) -> bool {
         requests_of(self.tree)

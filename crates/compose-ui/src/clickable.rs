@@ -894,16 +894,27 @@ impl SemanticsModifierNode for ClickableNode {
 }
 
 impl FocusTargetModifierNode for ClickableNode {
-    fn can_focus(&self) -> bool {
-        self.spec.enabled
+    fn focusability(&self) -> crate::focus::Focusability {
+        if self.spec.enabled {
+            crate::focus::Focusability::SYSTEM_DEFINED
+        } else {
+            crate::focus::Focusability::NEVER
+        }
     }
 
-    fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: crate::focus::FocusState,
+        current: crate::focus::FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         if self.focused == focused {
             return;
         }
         self.focused = focused;
         if focused {
+            context.bring_into_view();
             self.initialize_indication_in(context);
             // As `FocusableNode.emitInteraction`.
             let shared = self.shared.borrow();

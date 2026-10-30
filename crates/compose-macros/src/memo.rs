@@ -100,6 +100,7 @@ const CALLBACK_MODIFIERS: &[&str] = &[
     "combined_clickable",
     "combined_clickable_with",
     "on_focus_changed",
+    "on_focus_event",
     "on_key_event",
     "on_size_changed",
     "on_globally_positioned",

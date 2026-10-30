@@ -496,11 +496,15 @@ impl UiTree {
             self.invalidate_measure(node);
         }
         if requests.clear_focus {
-            self.clear_focus_into(actions);
+            self.clear_focus_with(false, true, crate::focus_manager::FocusDirection::Exit);
         }
         if let Some(forward) = requests.move_focus {
-            let moved = self.move_focus(forward);
-            actions.extend(moved);
+            let direction = if forward {
+                crate::focus_manager::FocusDirection::Next
+            } else {
+                crate::focus_manager::FocusDirection::Previous
+            };
+            self.move_focus_with(direction, true);
         }
         // A press inside a nested container is its: the containers around it let it be.
         let mut started: Option<NodeId> = None;
@@ -514,12 +518,15 @@ impl UiTree {
             self.handle_selection(request);
         }
         if let Some(node) = requests.focus {
-            self.request_focus_into(node, actions);
+            self.request_focus_at_or_below(node, crate::focus_manager::FocusDirection::Enter);
             if let Some(tap) = requests.focus_tap {
-                self.tell_focus_tap(tap, actions);
+                self.tell_focus_tap(node, tap);
             }
         }
-        self.update_focus_listeners(actions);
+        if let Some(node) = requests.bring_into_view {
+            self.bring_focused_into_view(node);
+        }
+        actions.append(&mut self.pending_actions);
     }
 
     // ---- Keys and text ----------------------------------------------------------------------
@@ -533,9 +540,19 @@ impl UiTree {
     fn key_path(&mut self) -> Vec<(NodeId, usize, EntryId)> {
         let mut path = Vec::new();
         let mut node = self.focused().or_else(|| self.modal_overlay());
+        // From the last before the next target after the active one: what's below that target is
+        // its, as `lastLocalNode`.
+        let mut end = self.focus.active.and_then(|active| {
+            let index = self.target_index(active)?;
+            let chain = &self.node(active.node).chain;
+            chain[index + 1..]
+                .iter()
+                .position(|entry| entry.kinds.any(NodeKinds::FOCUS_TARGET))
+                .map(|next| index + 1 + next)
+        });
         while let Some(id) = node {
             let value = self.node_mut(id);
-            for index in (0..value.chain.len()).rev() {
+            for index in (0..end.take().unwrap_or(value.chain.len())).rev() {
                 let entry = &mut value.chain[index];
                 if !entry.kinds.any(NodeKinds::KEY_INPUT) {
                     continue;
@@ -583,12 +600,20 @@ impl UiTree {
         }
         self.apply_requests(requests, &mut actions);
         if !consumed && event.key == Key::Tab && event.kind == KeyEventType::KeyDown {
-            actions.extend(self.move_focus(!event.modifiers.shift));
+            let direction = if event.modifiers.shift {
+                crate::focus_manager::FocusDirection::Previous
+            } else {
+                crate::focus_manager::FocusDirection::Next
+            };
+            let (moved, moved_actions) = self.move_focus_in(direction);
+            actions.extend(moved_actions);
             // A search waiting for a lazy list's next item asks for the frame laying it out.
-            if self.has_beyond_bounds_moves() {
+            let waiting = self.has_beyond_bounds_moves();
+            if waiting {
                 self.needs_draw = true;
             }
-            consumed = true;
+            // Consumed only if the focus moved, as Compose's key dispatch.
+            consumed = moved || waiting;
         }
         (consumed, actions)
     }

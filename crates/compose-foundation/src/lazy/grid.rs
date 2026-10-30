@@ -1170,13 +1170,17 @@ fn LazyGrid(
             },
         )
     };
-    let modifier = modifier.clip(compose_ui::RECTANGLE_SHAPE).then_custom(LazyScrollElement {
-        state: list,
-        vertical,
-        reverse,
-        enabled: user_scroll_enabled,
-        fling_behavior,
-    });
+    let modifier = modifier
+        .clip(compose_ui::RECTANGLE_SHAPE)
+        .then_custom(LazyScrollElement {
+            state: list,
+            vertical,
+            reverse,
+            enabled: user_scroll_enabled,
+            fling_behavior,
+        })
+        // Its items a group for focus searches, as Compose's `scrollingContainer`.
+        .focus_group();
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).
     let holder = compose_runtime::remember_saveable_state_holder();

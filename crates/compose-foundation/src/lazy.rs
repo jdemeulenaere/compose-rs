@@ -1920,13 +1920,17 @@ fn LazyList(
                 as Rc<dyn MeasurePolicy>
         })
     };
-    let modifier = modifier.clip(compose_ui::RECTANGLE_SHAPE).then_custom(LazyScrollElement {
-        state,
-        vertical,
-        reverse,
-        enabled: user_scroll_enabled,
-        fling_behavior,
-    });
+    let modifier = modifier
+        .clip(compose_ui::RECTANGLE_SHAPE)
+        .then_custom(LazyScrollElement {
+            state,
+            vertical,
+            reverse,
+            enabled: user_scroll_enabled,
+            fling_behavior,
+        })
+        // Its items a group for focus searches, as Compose's `scrollingContainer`.
+        .focus_group();
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away, as Compose's
     // `LazySaveableStateHolder` (D290).
@@ -2107,16 +2111,17 @@ fn LazyItem(
     let target = prefetch::item_target(&inner, item_key);
     let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
-    let modifier = Modifier.lazy_item_boundary().on_focus_changed(move |focused: bool| {
-        if focused {
-            if let Some(inner) = near.inner() {
-                inner.pinned_near.set(index);
+    let modifier =
+        Modifier.lazy_item_boundary().on_focus_changed(move |state: compose_ui::FocusState| {
+            if state.has_focus() {
+                if let Some(inner) = near.inner() {
+                    inner.pinned_near.set(index);
+                }
+                pinned.set(Some(item_key));
+            } else if pinned.get() == Some(item_key) {
+                pinned.set(None);
             }
-            pinned.set(Some(item_key));
-        } else if pinned.get() == Some(item_key) {
-            pinned.set(None);
-        }
-    });
+        });
     Layout(
         modifier,
         policy,

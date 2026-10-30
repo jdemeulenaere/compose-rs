@@ -353,9 +353,12 @@ fn review2_a_paused_reused_active_node_is_reset_before_its_update() {
         "reset as the pass reused it, as composed at once: its old content's focus cleared"
     );
     let new = REUSED_REQUESTER.get().expect("composed");
-    // The reused node shows the new content's requester, as composed at once it would.
-    assert!(new.request_focus(), "the new content's requester on the active node");
+    // The reused node's modifier nodes are attached again at the apply (D1162): so is the new
+    // content's requester, as Compose's, whose nodes hold a requester from `onAttach`.
+    assert!(!new.request_focus(), "the new content's requester waits for the apply");
     paused.apply();
+    ui.wait_for_idle();
+    assert!(new.request_focus(), "the new content's requester on the active node");
     ui.wait_for_idle();
     ui.on_node_with_tag("reused").assert_is_focused();
     ui.host().composition().validate();

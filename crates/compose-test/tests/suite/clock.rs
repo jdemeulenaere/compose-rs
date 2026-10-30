@@ -396,7 +396,9 @@ fn a_focus_changes_state_shows_at_the_next_frame() {
         Column!({
             Box!(
                 modifier = Modifier
-                    .on_focus_changed(move |has_focus: bool| focused.set(has_focus))
+                    .on_focus_changed(
+                        move |state: compose_ui::FocusState| focused.set(state.has_focus())
+                    )
                     .focus_requester(attached)
                     .focusable()
                     .size(10.dp())

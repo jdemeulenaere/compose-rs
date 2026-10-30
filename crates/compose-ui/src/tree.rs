@@ -30,6 +30,8 @@ pub(crate) enum Observation {
     InnerLayers = 3,
     /// Its semantics modifiers' `apply_semantics` (D1257).
     Semantics = 4,
+    /// What its active target's focus properties read.
+    FocusProperties = 5,
 }
 
 /// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
@@ -45,7 +47,8 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
         1 => Observation::Draw,
         2 => Observation::Layer,
         3 => Observation::InnerLayers,
-        _ => Observation::Semantics,
+        4 => Observation::Semantics,
+        _ => Observation::FocusProperties,
     };
     (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
 }
@@ -183,6 +186,9 @@ pub struct LayoutNode {
     /// Its view configuration where it's composed (`LOCAL_VIEW_CONFIGURATION`): an index in
     /// `UiTree::view_configurations`, shared by the nodes with one value, 0 for the host's.
     pub(crate) view_configuration: u16,
+    /// The composite key hash where it's composed, as `LayoutNode.compositeKeyHash`: what a saved
+    /// focused child is found by again. Read only for nodes with a focus target (0: not read).
+    pub(crate) composite_key_hash: u64,
 }
 
 impl LayoutNode {
@@ -224,6 +230,7 @@ impl LayoutNode {
             locals: compose_runtime::CompositionLocalAnchor::NONE,
             density: Density::default(),
             view_configuration: 0,
+            composite_key_hash: 0,
         }
     }
 
@@ -299,8 +306,11 @@ pub struct UiTree {
     pub(crate) draw_version: u64,
     /// A handler asked for the platform's input method to be reset.
     pub(crate) input_method_reset: bool,
-    pub(crate) focus: Option<crate::focus::Focus>,
-    pub(crate) focus_listeners_dirty: bool,
+    pub(crate) focus: crate::focus::FocusOwner,
+    /// The input mode, which `Focusability::SYSTEM_DEFINED` reads (`LOCAL_INPUT_MODE_MANAGER`).
+    pub(crate) input_mode: crate::input_mode::InputModeManager,
+    /// The host's saveable registry, where a saved focused child outlives a recreation.
+    pub(crate) saveable_registry: Option<compose_runtime::SaveableStateRegistry>,
     /// Actions queued outside dispatch, run by the host after the frame.
     pub(crate) pending_actions: Vec<crate::input::Action>,
     /// The overlay nodes, in the order they became overlays: later ones over earlier ones (and
@@ -308,7 +318,7 @@ pub struct UiTree {
     pub(crate) overlays: Vec<NodeId>,
     /// Overlays that took the focus when they opened, each with what had it before: focused
     /// again once the overlay is gone, as a window regains its focus.
-    pub(crate) focus_restore: Vec<(NodeId, Option<NodeId>)>,
+    pub(crate) focus_restore: Vec<(NodeId, Option<crate::focus::FocusTargetRef>)>,
     /// The window's size, from the last layout.
     pub(crate) window: IntSize,
     /// Counts placements, for children's placement order.
@@ -445,8 +455,9 @@ impl UiTree {
             needs_draw: true,
             draw_version: 0,
             input_method_reset: false,
-            focus: None,
-            focus_listeners_dirty: false,
+            focus: crate::focus::FocusOwner::default(),
+            input_mode: crate::input_mode::InputModeManager::new(),
+            saveable_registry: None,
             pending_actions: Vec::new(),
             overlays: Vec::new(),
             focus_restore: Vec::new(),
@@ -964,6 +975,7 @@ impl UiTree {
                     self.note_layer_change(node, true);
                 }
                 Observation::Semantics => self.invalidate_semantics_of(node),
+                Observation::FocusProperties => self.focus_properties_read_changed(node),
             }
         });
     }
@@ -1023,6 +1035,8 @@ impl UiTree {
         let mut layers_changed = false;
         // The entries with modifier locals updated.
         let mut locals_updated: SmallVec<[u16; 1]> = SmallVec::new();
+        // The updated event nodes: told their state when the pass ends.
+        let mut focus_events: SmallVec<[EntryId; 1]> = SmallVec::new();
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
@@ -1034,7 +1048,11 @@ impl UiTree {
                         delegated.push(entry.id);
                     }
                     layers_changed |= updated.layers;
-                    invalidated |= entry.updated_kinds();
+                    let kinds = entry.updated_kinds();
+                    invalidated |= kinds;
+                    if kinds.any(NodeKinds::FOCUS_EVENT) {
+                        focus_events.push(entry.id);
+                    }
                     if entry.kinds.any(NodeKinds::LOCALS) {
                         locals_updated.push(index as u16);
                     }
@@ -1060,7 +1078,7 @@ impl UiTree {
                 parent_data_changed |= self.refresh_custom_parent_data(node);
             }
             drop(previous);
-            self.revalidate_focus(node, None);
+            self.focus_chain_changed(node, invalidated, &focus_events);
             self.auto_invalidate(node, invalidated, NodeKinds::NONE, parent_data_changed);
             if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
                 self.note_updated_layer(node);
@@ -1090,7 +1108,11 @@ impl UiTree {
                             delegated.push(entry.id);
                         }
                         layers_changed |= updated.layers;
-                        invalidated |= entry.updated_kinds();
+                        let kinds = entry.updated_kinds();
+                        invalidated |= kinds;
+                        if kinds.any(NodeKinds::FOCUS_EVENT) {
+                            focus_events.push(entry.id);
+                        }
                         if entry.kinds.any(NodeKinds::LOCALS) {
                             locals_updated.push(index as u16);
                         }
@@ -1184,7 +1206,7 @@ impl UiTree {
         if !detaching.is_empty() {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::Removed(node, detaching));
         }
-        self.revalidate_focus(node, Some(&matched));
+        self.focus_chain_changed(node, invalidated, &focus_events);
         self.auto_invalidate(node, invalidated, structural, parent_data_changed);
         if invalidated.any(NodeKinds::GRAPHICS_LAYER) {
             self.note_updated_layer(node);
@@ -1198,8 +1220,8 @@ impl UiTree {
     /// gives back the focus, by the layout: it lays out again, as Compose's popup updates its
     /// window. A semantics node's change forgets what the node kept and is told in the frame's
     /// stats; a pointer node come or gone has the resting mouse's hover refreshed (an
-    /// `Enter` for one that came under it), as the layout does; focus is revalidated by the chain
-    /// change itself.
+    /// `Enter` for one that came under it), as the layout does; focus has what the chain change
+    /// said at the pass's end (`focus_chain_changed`).
     pub(crate) fn auto_invalidate(
         &mut self,
         node: NodeId,
@@ -1271,11 +1293,6 @@ impl UiTree {
     /// Recomputes what the chain's nodes can do, its layers and its parent data. Returns
     /// whether the parent data changed.
     pub(crate) fn refresh_chain(&mut self, node: NodeId) -> bool {
-        let focus_requests = self.focus_requests.clone();
-        // A node not in the tree yet (a paused composition's, until applied) or deactivated has
-        // its requesters attached when it's attached or reused, as Compose's modifier nodes attach
-        // as the composition is applied.
-        let live = self.shows_requesters(node);
         let value = self.node_mut(node);
         value.layout_indices.clear();
         // The aggregates, from the tail: each entry's kinds and those after it.
@@ -1286,13 +1303,6 @@ impl UiTree {
         }
         value.kinds = aggregate;
         for (index, entry) in value.chain.iter_mut().enumerate() {
-            if entry.kinds.any(NodeKinds::FOCUS_REQUESTER)
-                && live
-                && let Some(requester) =
-                    entry.node.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
-            {
-                requester.attach(&focus_requests, node);
-            }
             if entry.kinds.any(NodeKinds::LAYOUT) {
                 value.layout_indices.push(index as u16);
             }
@@ -1403,9 +1413,6 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
-        // A new listener reports its initial state.
-        let listens = value.kinds.any(NodeKinds::FOCUS_EVENT);
-        self.focus_listeners_dirty |= listens;
         self.refresh_parent_data(node)
     }
 
@@ -1538,53 +1545,8 @@ impl UiTree {
         for entry in self.hovered.iter_mut().filter(|entry| entry.node == node) {
             entry.version = version;
         }
-        if self.focused() == Some(node) {
-            self.focus = None;
-            self.focus_listeners_dirty = true;
-        }
         if self.text_selection.as_ref().is_some_and(|selection| selection.container() == node) {
             self.text_selection = None;
-        }
-    }
-
-    /// Whether `node` is in the tree (its ancestors up to the root) and none of them is
-    /// deactivated: where its focus requesters are attached.
-    fn shows_requesters(&self, node: NodeId) -> bool {
-        let mut current = node;
-        loop {
-            let Some(value) = self.get(current) else { return false };
-            if value.deactivated {
-                return false;
-            }
-            if current == self.root {
-                return true;
-            }
-            match value.parent {
-                Some(parent) => current = parent,
-                None => return false,
-            }
-        }
-    }
-
-    /// The focus requesters on `node` (`Modifier.focus_requester`), detached while it's
-    /// deactivated: a requester of content kept for reuse focuses nothing, as Compose's
-    /// detached nodes. Attached again when it's reused.
-    fn set_requesters_attached(&mut self, node: NodeId, attached: bool) {
-        let requests = self.focus_requests.clone();
-        let value = self.node_mut(node);
-        if !value.kinds.any(NodeKinds::FOCUS_REQUESTER) {
-            return;
-        }
-        for entry in &mut value.chain {
-            if let Some(requester) =
-                entry.node.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
-            {
-                if attached {
-                    requester.attach(&requests, node);
-                } else {
-                    requester.detach();
-                }
-            }
         }
     }
 
@@ -1596,8 +1558,8 @@ impl UiTree {
         let semantics_id = self.next_semantics_id();
         let value = self.node_mut(node);
         value.semantics_id = semantics_id;
+        value.composite_key_hash = 0;
         if std::mem::take(&mut value.deactivated) {
-            self.set_requesters_attached(node, true);
             // Its parent has a child to measure again (an ordinary layout's, or a list's): it
             // measures it again if it asked to while deactivated (`needs_measure` kept), as
             // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
@@ -1679,10 +1641,7 @@ impl UiTree {
                 observer.forget(observation_key(id, Observation::Layer));
                 observer.forget(observation_key(id, Observation::InnerLayers));
                 observer.forget(observation_key(id, Observation::Semantics));
-            }
-            if self.focused() == Some(id) {
-                self.focus = None;
-                self.focus_listeners_dirty = true;
+                observer.forget(observation_key(id, Observation::FocusProperties));
             }
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
@@ -1766,16 +1725,6 @@ impl Applier for UiTree {
                 self.queue_lifecycle(crate::lifecycle::Lifecycle::Attach(id));
             }
         }
-        // In the tree now: its requesters, and those of what was attached to it, attach.
-        if self.shows_requesters(id) {
-            let mut stack = vec![id];
-            while let Some(next) = stack.pop() {
-                if self.get(next).is_some_and(|value| !value.deactivated) {
-                    self.set_requesters_attached(next, true);
-                    stack.extend(self.node(next).children.iter().map(|child| child.node));
-                }
-            }
-        }
     }
 
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {
@@ -1821,8 +1770,8 @@ impl Applier for UiTree {
     /// reset, detached and attached again after the pass (`on_end_changes`); then composition
     /// gives it its new modifier and policy, which measure it again if they changed.
     fn reuse_paused(&mut self, node: NodeRef) -> bool {
-        // A deactivated node is shown again (its focus requesters attached) at apply; one still
-        // shown is reset now, before the pass updates it, as unpaused.
+        // A deactivated node is shown again at apply; one still shown is reset now, before the
+        // pass updates it, as unpaused.
         let id = NodeId::from_ref(node);
         if self.get(id).is_none_or(|value| value.deactivated) {
             return false;
@@ -1857,8 +1806,7 @@ impl Applier for UiTree {
     /// stays in the tree, but its parent no longer measures it (`measurables` leave it out), so
     /// it isn't placed, drawn, hit, focused or in the semantics, in any layout; nothing measures
     /// it, whatever it read (what it reads marks it to measure once reused); its modifier nodes
-    /// are reset and detached, as Compose's `resetModifierState`, and its focus requesters
-    /// detached, until content reuses it.
+    /// are reset and detached, as Compose's `resetModifierState`, until content reuses it.
     fn deactivate(&mut self, node: NodeRef) {
         let node = NodeId::from_ref(node);
         let Some(value) = self.get_mut(node) else { return };
@@ -1879,7 +1827,6 @@ impl Applier for UiTree {
         // measures nothing around content leaving).
         self.node_mut(node).deactivated = true;
         self.reset_and_detach(node);
-        self.set_requesters_attached(node, false);
         self.measured_ahead.retain(|ahead| *ahead != node);
         self.kept.retain(|kept| *kept != node);
         if self.bring_into_view_after_layout == Some(node) {
@@ -1891,6 +1838,11 @@ impl Applier for UiTree {
     /// orders (lifecycle.rs); their side effects, once the host releases the tree.
     fn on_end_changes(&mut self) {
         self.run_lifecycle();
+        // What the focus system told application code in the pass (a target removed, a listener
+        // attached) runs now: the values the pass removed are forgotten next, which the callbacks
+        // of what left may still write, as Compose's run in its `onEndApplyChanges` (D1273).
+        let actions = std::mem::take(&mut self.pending_actions);
+        crate::input::run_actions(actions);
     }
 
     fn release(&mut self, node: NodeRef) {

@@ -63,7 +63,8 @@ fn ListRow(index: usize) {
     let modifier = Modifier
         .size((100.dp(), 20.dp()))
         .test_tag(format!("row {index}"))
-        .focus_requester(requester);
+        .focus_requester(requester)
+        .focusable();
     Row!(modifier = modifier, {
         for part in 0..4 {
             Part(index, part);

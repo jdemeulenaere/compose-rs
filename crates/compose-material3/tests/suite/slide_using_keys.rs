@@ -23,7 +23,9 @@ fn screen(
             Slider!(
                 state,
                 move |new| state.set_value(new),
-                modifier = Modifier.on_focus_changed(move |now: bool| focused.set(now)),
+                modifier = Modifier.on_focus_changed(
+                    move |now: compose_ui::FocusState| focused.set(now.has_focus())
+                ),
             );
         });
     }

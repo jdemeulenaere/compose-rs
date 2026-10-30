@@ -333,6 +333,15 @@ pub(crate) fn dispatch_for_kind(
     }
 }
 
+/// `dispatch_for_kind` from `delegate`.
+pub(crate) fn dispatch_delegate_for_kind(
+    delegate: &mut DelegateEntry,
+    kind: NodeKinds,
+    f: &mut dyn FnMut(&mut dyn ModifierNode, EntryId),
+) {
+    dispatch_for_kind(&mut *delegate.node, delegate.own, kind, delegate.id, f);
+}
+
 /// `dispatch_for_kind` for a node out of a tree, its own kinds probed: what tests of the dispatch
 /// order use, as Compose's `assertDispatchOrder`. Not for apps.
 #[doc(hidden)]
@@ -394,15 +403,6 @@ fn first_delegate_of_kind<'a>(
 ) -> Option<&'a mut (dyn ModifierNode + 'static)> {
     let id = first_delegate_id(node, kind)?;
     find_delegate(node, id).map(|found| &mut *found.node)
-}
-
-/// `first_of_kind`'s node as a name: `NO_DELEGATE` for `node` itself.
-pub(crate) fn first_id_of_kind(
-    node: &mut dyn ModifierNode,
-    own: NodeKinds,
-    kind: NodeKinds,
-) -> Option<EntryId> {
-    if own.any(kind) { Some(EntryId::NO_DELEGATE) } else { first_delegate_id(node, kind) }
 }
 
 /// The first delegate of `kind` below `node`, a level at a time.
@@ -682,8 +682,11 @@ impl UiTree {
             requests.node_invalidations.borrow_mut().push((node, id, Invalidation::ParentData));
             requests.wake();
         }
-        if changes.any(NodeKinds::FOCUS_TARGET) {
-            self.revalidate_focus(node, None);
+        if changes.any(NodeKinds::FOCUS_TARGET | NodeKinds::FOCUS_PROPERTIES) {
+            self.focus_delegates_changed(node);
+        }
+        if changes.any(NodeKinds::FOCUS_EVENT) {
+            self.focus.invalidated_events.push((node, id));
         }
         self.auto_invalidate(node, changes, changes, parent_data_changed);
         self.drain_remeasures();

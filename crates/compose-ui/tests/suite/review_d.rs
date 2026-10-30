@@ -237,7 +237,7 @@ fn losing_the_focus_target_from_the_chain_notifies_on_focus_changed() {
         Leaf(
             Modifier
                 .size(10.dp())
-                .on_focus_changed(|focused| log(format!("focused {focused}")))
+                .on_focus_changed(|state: FocusState| log(format!("focused {}", state.has_focus())))
                 .then(tail),
         );
     });
@@ -256,9 +256,13 @@ fn losing_the_focus_target_from_the_chain_notifies_on_focus_changed() {
 #[test]
 fn on_focus_changed_observes_a_focused_child() {
     let mut host = host(|| {
-        Stack!(modifier = Modifier.on_focus_changed(|focused| log(format!("parent {focused}"))), {
-            Leaf(Modifier.size(10.dp()).clickable(|| {}));
-        });
+        Stack!(
+            modifier = Modifier
+                .on_focus_changed(|state: FocusState| log(format!("parent {}", state.has_focus()))),
+            {
+                Leaf(Modifier.size(10.dp()).clickable(|| {}));
+            }
+        );
     });
     take_log();
     host.send_key(KeyEvent::down(Key::Tab));
@@ -274,7 +278,7 @@ fn on_focus_changed_reports_the_initial_state() {
         Leaf(
             Modifier
                 .size(10.dp())
-                .on_focus_changed(|focused| log(format!("focused {focused}")))
+                .on_focus_changed(|state: FocusState| log(format!("focused {}", state.has_focus())))
                 .focusable(),
         );
     });
@@ -341,7 +345,13 @@ impl LayoutModifierNode for GrowOnFocusNode {
 }
 
 impl FocusTargetModifierNode for GrowOnFocusNode {
-    fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: FocusState,
+        current: FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         self.focused = focused;
         context.invalidate_measure();
     }

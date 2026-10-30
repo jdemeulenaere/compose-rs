@@ -527,7 +527,13 @@ impl PointerInputModifierNode for SelectionContainerNode {
 }
 
 impl FocusTargetModifierNode for SelectionContainerNode {
-    fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: crate::focus::FocusState,
+        current: crate::focus::FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         if self.focused && !focused {
             context.requests.selection.push(SelectionRequest::Clear { container: context.node });
         }

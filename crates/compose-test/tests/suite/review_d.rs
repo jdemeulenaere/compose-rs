@@ -56,8 +56,12 @@ impl ModifierNode for FieldNode {
 }
 
 impl FocusTargetModifierNode for FieldNode {
-    fn can_focus(&self) -> bool {
-        self.enabled
+    fn focusability(&self) -> compose_ui::Focusability {
+        if self.enabled {
+            compose_ui::Focusability::ALWAYS
+        } else {
+            compose_ui::Focusability::NEVER
+        }
     }
 }
 

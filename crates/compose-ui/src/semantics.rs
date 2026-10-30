@@ -410,7 +410,7 @@ impl UiTree {
 
     /// Binds a `RequestFocus` offered without an action (`request_focus_of_node`) to `node`:
     /// performing it asks the tree to focus the node's focus target, as a `FocusRequester`
-    /// does, once the tree is free (D1251).
+    /// does: at once where the tree is free (D1251, D1268).
     fn bind_request_focus(&self, node: NodeId, config: &mut SemanticsConfiguration) {
         let unbound = config
             .get(&SemanticsActions::REQUEST_FOCUS)
@@ -419,10 +419,10 @@ impl UiTree {
             let requests = std::rc::Rc::downgrade(&self.focus_requests);
             let label = config.get(&SemanticsActions::REQUEST_FOCUS).and_then(|a| a.label.clone());
             config.request_focus(label, move || match requests.upgrade() {
-                Some(requests) => {
-                    requests.push(crate::focus_requester::FocusRequest::Node(node));
-                    true
-                }
+                Some(requests) => crate::focus_requester::perform_or_queue(
+                    &requests,
+                    crate::focus_requester::FocusRequest::Node(node),
+                ),
                 None => false,
             });
         }

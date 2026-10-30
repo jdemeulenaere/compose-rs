@@ -30,7 +30,9 @@ mod draw_modifiers;
 mod fixed_text;
 mod focus;
 mod focus_manager;
+mod focus_properties;
 mod focus_requester;
+mod focus_search;
 mod font;
 mod graphics;
 mod graphics_layer;
@@ -38,6 +40,7 @@ mod host;
 mod image;
 mod indication;
 mod input;
+mod input_mode;
 mod interaction;
 mod intl;
 mod layout;
@@ -109,7 +112,7 @@ pub mod platform {
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};
-    pub use crate::input::Action;
+    pub use crate::input::{Action, FocusBatch};
     pub use crate::layout::emit_layout_node;
     pub use crate::layout::{NO_INTRINSICS_MESSAGE, StackMeasurePolicy};
     pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
@@ -167,11 +170,15 @@ pub use content_scale::ContentScale;
 pub use delegation::{Delegate, Delegates};
 pub use draw::{DrawScope, SharedPath};
 pub use draw_modifiers::{CacheDrawScope, ContentDrawScope, DrawResult};
+pub use focus::{FocusState, FocusTargetNode, Focusability, focus_target_modifier_node};
 pub use focus_manager::{
     FocusDirection, FocusManager, LOCAL_FOCUS_MANAGER, LOCAL_SOFTWARE_KEYBOARD_CONTROLLER,
     SoftwareKeyboardController,
 };
-pub use focus_requester::FocusRequester;
+pub use focus_properties::{
+    FocusEnterExitBlock, FocusEnterExitScope, FocusProperties, FocusPropertiesModifierNode,
+};
+pub use focus_requester::{FocusRequester, FocusRequesterRefs};
 pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 pub use graphics::{
     Color, CornerSize, CornerSizes, CustomShape, DrawStyle, Outline, Paint, PaintStyle,
@@ -187,6 +194,7 @@ pub use input::{
     EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent, PointerEventPass,
     PointerEventType, PointerIcon, PointerId, PointerType, WheelStep,
 };
+pub use input_mode::{InputMode, InputModeManager, LOCAL_INPUT_MODE_MANAGER};
 pub use interaction::{
     DragInteraction, DragStart, Focus, FocusInteraction, HoverEnter, HoverInteraction, Interaction,
     InteractionSource, Interactions, Listener, MutableInteractionSource, Press, PressInteraction,
@@ -204,10 +212,10 @@ pub use layout_callbacks::{
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,
-    FocusTargetModifierNode, InspectorInfo, KeyInputModifierNode, LayoutModifierNode, Modifier,
-    ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
-    PointerInputModifierNode, ReleaseContext, RowScope, SemanticsModifierNode, SizeSpec,
-    WeightScope,
+    FocusEventModifierNode, FocusRequesterModifierNode, FocusTargetModifierNode, InspectorInfo,
+    KeyInputModifierNode, LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement,
+    PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode, ReleaseContext, RowScope,
+    SemanticsModifierNode, SizeSpec, WeightScope,
 };
 pub use modifier_local::{
     ModifierLocal, ModifierLocalMap, ModifierLocalModifierNode, ModifierLocalReadScope,

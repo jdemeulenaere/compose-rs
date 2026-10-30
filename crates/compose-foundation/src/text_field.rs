@@ -1266,8 +1266,12 @@ impl PointerInputModifierNode for TextFieldNode {
 }
 
 impl FocusTargetModifierNode for TextFieldNode {
-    fn can_focus(&self) -> bool {
-        self.enabled
+    fn focusability(&self) -> compose_ui::Focusability {
+        if self.enabled {
+            compose_ui::Focusability::ALWAYS
+        } else {
+            compose_ui::Focusability::NEVER
+        }
     }
 
     /// A tap on a decoration around the field (a Material container's padding) puts the cursor
@@ -1289,8 +1293,20 @@ impl FocusTargetModifierNode for TextFieldNode {
         context.invalidate_measure();
     }
 
-    fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: compose_ui::FocusState,
+        current: compose_ui::FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
+        if self.focused == focused {
+            return;
+        }
         self.focused = focused;
+        if focused {
+            context.bring_into_view();
+        }
         if !focused {
             // As Compose's `onBlur`: a composition in progress is committed, and the
             // selection collapses to its end (`deselect`).

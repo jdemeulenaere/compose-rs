@@ -613,14 +613,23 @@ pub fn emit_layout_node(
             },
         }
     });
-    composer.with_applier(|tree: &mut UiTree| {
+    let id = composer.with_applier(|tree: &mut UiTree| {
         let id = tree.id_of(node);
         if let Some(resolved) = resolved {
             tree.set_locals(id, resolved);
         }
         tree.set_measure_policy(id, measure_policy);
         tree.set_modifier(id, modifier);
+        // Only a node with a focus target is found by its hash, once where it's composed.
+        let value = tree.node(id);
+        (value.kinds.any(crate::node_chain::NodeKinds::FOCUS_TARGET)
+            && value.composite_key_hash == 0)
+            .then_some(id)
     });
+    if let Some(id) = id {
+        let hash = compose_runtime::current_composite_key_hash();
+        composer.with_applier(|tree: &mut UiTree| tree.node_mut(id).composite_key_hash = hash);
+    }
     content();
     composer.end_group();
 }

@@ -55,9 +55,10 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
             handle: None,
             scope: None,
         }),
-        Element::OnFocusChanged(callback) => {
-            Box::new(OnFocusChangedNode { callback: callback.clone(), last: None })
-        }
+        Element::OnFocusChanged(callback) => Box::new(OnFocusChangedNode {
+            callback: callback.clone(),
+            last: Rc::new(std::cell::Cell::new(None)),
+        }),
         Element::OnKeyEvent(callback) => Box::new(OnKeyEventNode(callback.clone())),
         Element::TestTag(tag) => Box::new(TestTagNode(tag.clone())),
         Element::Semantics(merge, properties) => {
@@ -571,11 +572,20 @@ impl ModifierNode for FocusableNode {
 }
 
 impl FocusTargetModifierNode for FocusableNode {
-    fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
+    fn on_focus_changed(
+        &mut self,
+        _previous: crate::focus::FocusState,
+        current: crate::focus::FocusState,
+        context: &mut EventContext<'_>,
+    ) {
+        let focused = current.is_focused();
         if self.focused == focused {
             return;
         }
         self.focused = focused;
+        if focused {
+            context.bring_into_view();
+        }
         // As `FocusableNode.emitInteraction`.
         if let Some(source) = &self.interaction_source {
             let scope = match self.scope {
@@ -613,16 +623,20 @@ impl SemanticsModifierNode for FocusableNode {
     }
 }
 
-/// `on_focus_changed`: its callback, and the state it last reported.
+/// `on_focus_changed`: its callback, and the state it last reported (to the application: what's
+/// told it runs after the transaction, and doesn't if the focus moved meanwhile).
 pub(crate) struct OnFocusChangedNode {
-    pub(crate) callback: Callback<dyn Fn(bool)>,
-    pub(crate) last: Option<bool>,
+    pub(crate) callback: Callback<dyn Fn(crate::focus::FocusState)>,
+    pub(crate) last: Rc<std::cell::Cell<Option<crate::focus::FocusState>>>,
 }
 
 impl ModifierNode for OnFocusChangedNode {
     /// Reused, it reports the new content's focus to the new callback.
     fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
-        self.last = None;
+        self.last.set(None);
+    }
+    fn as_focus_event(&mut self) -> Option<&mut dyn crate::modifier::FocusEventModifierNode> {
+        Some(self)
     }
 }
 

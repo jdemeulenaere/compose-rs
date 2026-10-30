@@ -476,7 +476,7 @@ fn decorated_field(
                     Dp::UNSPECIFIED,
                     Dp::UNSPECIFIED,
                 ))
-                .on_focus_changed(move |now| focused.set(now));
+                .on_focus_changed(move |now: compose_ui::FocusState| focused.set(now.is_focused()));
             container = match variant {
                 Variant::Filled => {
                     let shape = TextFieldDefaults::shape();

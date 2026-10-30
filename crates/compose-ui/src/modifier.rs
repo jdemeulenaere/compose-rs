@@ -480,9 +480,13 @@ impl Modifier {
         self.then_element(Element::Focusable(interaction_source))
     }
 
-    /// Calls `on_focus_changed` when the focus target after it in the chain gains or loses
-    /// focus, as `Modifier.onFocusChanged`.
-    pub fn on_focus_changed(self, on_focus_changed: impl IntoCallback<dyn Fn(bool)>) -> Modifier {
+    /// Calls `on_focus_changed` with the state of the focus target it covers (the next one after
+    /// it in its chain or below it) when it changes, and once when it's attached, as
+    /// `Modifier.onFocusChanged`.
+    pub fn on_focus_changed(
+        self,
+        on_focus_changed: impl IntoCallback<dyn Fn(crate::focus::FocusState)>,
+    ) -> Modifier {
         self.then_element(Element::OnFocusChanged(on_focus_changed.into_callback()))
     }
 
@@ -821,7 +825,7 @@ pub(crate) enum Element {
     Clip(Shape),
     Clickable(Clickable),
     Focusable(Option<crate::interaction::MutableInteractionSource>),
-    OnFocusChanged(Callback<dyn Fn(bool)>),
+    OnFocusChanged(Callback<dyn Fn(crate::focus::FocusState)>),
     OnKeyEvent(Callback<dyn Fn(KeyEvent) -> bool>),
     TestTag(SharedString),
     Semantics(bool, Rc<SemanticsConfiguration>),
@@ -1084,6 +1088,20 @@ pub trait ModifierNode: Any {
         None
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        None
+    }
+    /// Says what the focus target below it is, as `FocusPropertiesModifierNode`.
+    fn as_focus_properties(
+        &mut self,
+    ) -> Option<&mut dyn crate::focus_properties::FocusPropertiesModifierNode> {
+        None
+    }
+    /// Told the focus events of the target it covers, as `FocusEventModifierNode`.
+    fn as_focus_event(&mut self) -> Option<&mut dyn FocusEventModifierNode> {
+        None
+    }
+    /// What `NodeContext::request_focus` and its like act from, as `FocusRequesterModifierNode`.
+    fn as_focus_requester(&mut self) -> Option<&mut dyn FocusRequesterModifierNode> {
         None
     }
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
@@ -1445,16 +1463,42 @@ pub trait SemanticsModifierNode {
     }
 }
 
-/// A focus target, as `FocusTargetModifierNode`.
+/// A focus target, as `FocusTargetModifierNode`: what it is and what it's told; the logic (its
+/// state, the transactions, the searches) is the tree's. `Modifier.focus_target` and
+/// `focus_target_modifier_node` make one to use as it is.
 pub trait FocusTargetModifierNode {
-    fn can_focus(&self) -> bool {
-        true
+    /// Whether it can take the focus, `focus_properties` around it having the last word. A change
+    /// is told with `NodeContext::invalidate_focus_properties` or by an update of its element.
+    fn focusability(&self) -> crate::focus::Focusability {
+        crate::focus::Focusability::ALWAYS
     }
-    fn on_focus_changed(&mut self, _focused: bool, _context: &mut EventContext<'_>) {}
+    /// Its state changed, as the `onFocusChange` of Compose's target: inside the transaction
+    /// (what it asks through `context` is applied as it returns). Application code is called
+    /// after it, with `context.run`.
+    fn on_focus_changed(
+        &mut self,
+        _previous: crate::focus::FocusState,
+        _current: crate::focus::FocusState,
+        _context: &mut EventContext<'_>,
+    ) {
+    }
     /// Focus came from a tap at `position` (in this target's coordinates, possibly outside its
     /// bounds), on a decoration around it.
     fn on_focus_tap(&mut self, _position: crate::unit::Offset, _context: &mut EventContext<'_>) {}
 }
+
+/// A node told the focus events of the target it covers (the first after it in its chain or below
+/// it, until another target above that one), as `FocusEventModifierNode`.
+pub trait FocusEventModifierNode {
+    /// Each event of that target, a change or not, and once when the node is attached or updated.
+    /// `state` is the target's, or `Inactive` if none is around; inside the transaction, as
+    /// `FocusTargetModifierNode::on_focus_changed`.
+    fn on_focus_event(&mut self, state: crate::focus::FocusState, context: &mut EventContext<'_>);
+}
+
+/// A node `NodeContext::request_focus` and its like act from, on the targets at and below it, as
+/// `FocusRequesterModifierNode`.
+pub trait FocusRequesterModifierNode {}
 
 /// A node that receives key and text events while it or a descendant has focus, as
 /// `KeyInputModifierNode`. Returning true consumes the event.

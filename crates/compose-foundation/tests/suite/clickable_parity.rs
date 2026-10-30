@@ -601,7 +601,7 @@ fn a_clickable_disabled_while_focused_loses_the_focus() {
             modifier = Modifier
                 .test_tag(TAG)
                 .focus_requester(requester)
-                .on_focus_changed(move |focus| seen.set(focus))
+                .on_focus_changed(move |focus: compose_ui::FocusState| seen.set(focus.has_focus()))
                 .clickable_with(options, || {})
         );
     });

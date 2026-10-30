@@ -78,6 +78,9 @@ impl NodeKinds {
             | NodeKinds::ON_PLACED.0
             | NodeKinds::GLOBAL_POSITION_AWARE.0
             | NodeKinds::FOCUS_TARGET.0
+            | NodeKinds::FOCUS_PROPERTIES.0
+            | NodeKinds::FOCUS_EVENT.0
+            | NodeKinds::FOCUS_REQUESTER.0
             | NodeKinds::KEY_INPUT.0
             | NodeKinds::TRAVERSABLE.0
             | NodeKinds::COMPOSITION_LOCAL_CONSUMER.0
@@ -137,6 +140,8 @@ impl NodeKinds {
         add(node.as_pointer_input().is_some(), NodeKinds::POINTER_INPUT);
         add(node.as_semantics().is_some(), NodeKinds::SEMANTICS);
         add(node.as_focus_target().is_some(), NodeKinds::FOCUS_TARGET);
+        add(node.as_focus_properties().is_some(), NodeKinds::FOCUS_PROPERTIES);
+        add(node.as_focus_event().is_some(), NodeKinds::FOCUS_EVENT);
         add(node.as_key_input().is_some(), NodeKinds::KEY_INPUT);
         add(node.as_global_position_aware().is_some(), NodeKinds::GLOBAL_POSITION_AWARE);
         add(node.as_parent_data().is_some(), NodeKinds::PARENT_DATA);
@@ -145,18 +150,11 @@ impl NodeKinds {
         add(node.is_repaint_boundary(), NodeKinds::REPAINT_BOUNDARY);
         add(node.is_beyond_bounds_layout(), NodeKinds::BEYOND_BOUNDS_LAYOUT);
         add(
-            node.downcast_ref::<crate::nodes::OnFocusChangedNode>().is_some(),
-            NodeKinds::FOCUS_EVENT,
-        );
-        add(
             node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some(),
             NodeKinds::GRAPHICS_LAYER,
         );
         add(node.downcast_ref::<crate::overlay::OverlayNode>().is_some(), NodeKinds::OVERLAY);
-        add(
-            node.downcast_ref::<crate::focus_requester::FocusRequesterNode>().is_some(),
-            NodeKinds::FOCUS_REQUESTER,
-        );
+        add(node.as_focus_requester().is_some(), NodeKinds::FOCUS_REQUESTER);
         // Only a node with a lifecycle may be one.
         if observed_or_lifecycle {
             add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
@@ -317,14 +315,6 @@ impl ChainEntry {
         crate::delegation::find_delegate(&mut *self.node, delegate).map(|found| found.node_mut())
     }
 
-    /// Its focus target: its node, or its first delegate that is one.
-    pub(crate) fn focus_target(
-        &mut self,
-    ) -> Option<&mut dyn crate::modifier::FocusTargetModifierNode> {
-        crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)?
-            .as_focus_target()
-    }
-
     /// Its node's clip for hit testing, or a delegate's.
     #[inline]
     pub(crate) fn hit_clip_at(
@@ -356,11 +346,6 @@ impl ChainEntry {
     /// Its beyond-bounds layout: its node, or its first delegate that is one.
     pub(crate) fn beyond_bounds(&mut self) -> Option<&mut (dyn ModifierNode + 'static)> {
         crate::delegation::first_of_kind(&mut *self.node, self.own, NodeKinds::BEYOND_BOUNDS_LAYOUT)
-    }
-
-    /// The name of its focus target: `NO_DELEGATE` for its node, else a delegate's.
-    pub(crate) fn focus_target_id(&mut self) -> Option<EntryId> {
-        crate::delegation::first_id_of_kind(&mut *self.node, self.own, NodeKinds::FOCUS_TARGET)
     }
 
     /// What an update of its node auto-invalidates: its kinds, unless it says not to, as Compose's

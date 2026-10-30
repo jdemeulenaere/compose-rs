@@ -1,6 +1,8 @@
 //! Input events: pointer, key and text, and what their handlers can do (docs/06-ui.md, "Input,
 //! focus and semantics").
 
+use std::rc::Rc;
+
 use compose_runtime::Callback;
 
 use crate::tree::NodeId;
@@ -266,6 +268,48 @@ pub enum Action {
     Call(Callback<dyn Fn()>),
     CallWithBool(Callback<dyn Fn(bool)>, bool),
     Run(Box<dyn FnOnce()>),
+    /// A focus event for application code: not delivered if a callback of its batch moved the
+    /// focus, as Compose's transactions stop telling then (`run_actions`); nor, with `last`
+    /// (`on_focus_changed`), if it's what was delivered last.
+    FocusEvent {
+        callback: Callback<dyn Fn(crate::focus::FocusState)>,
+        state: crate::focus::FocusState,
+        last: Option<Rc<std::cell::Cell<Option<crate::focus::FocusState>>>>,
+        focus: FocusBatch,
+    },
+    /// The `on_focus_change` of a `FocusTargetNode`, dropped as `FocusEvent`.
+    FocusChange {
+        callback: Callback<dyn Fn(crate::focus::FocusState, crate::focus::FocusState)>,
+        previous: crate::focus::FocusState,
+        current: crate::focus::FocusState,
+        focus: FocusBatch,
+    },
+}
+
+/// Where a focus action's batch started: its generation of the focus.
+pub struct FocusBatch {
+    generation: crate::focus::FocusGeneration,
+    started_at: Option<u64>,
+}
+
+impl FocusBatch {
+    /// A callback of the batch moved the focus.
+    fn is_stale(&self) -> bool {
+        self.started_at.is_some_and(|started_at| started_at != self.generation.get())
+    }
+}
+
+/// Runs `actions`, what a dispatch or a focus transaction left, in order: the focus actions among
+/// them that follow one moving the focus aren't delivered.
+pub(crate) fn run_actions(mut actions: Vec<Action>) {
+    for action in &mut actions {
+        if let Action::FocusEvent { focus, .. } | Action::FocusChange { focus, .. } = action {
+            focus.started_at = Some(focus.generation.get());
+        }
+    }
+    for action in actions {
+        action.run();
+    }
 }
 
 impl Action {
@@ -274,6 +318,23 @@ impl Action {
             Action::Call(callback) => callback(),
             Action::CallWithBool(callback, value) => callback(value),
             Action::Run(function) => function(),
+            Action::FocusChange { callback, previous, current, focus } => {
+                if !focus.is_stale() {
+                    callback(previous, current);
+                }
+            }
+            Action::FocusEvent { callback, state, last, focus } => {
+                if focus.is_stale() {
+                    return;
+                }
+                if let Some(last) = last {
+                    if last.get() == Some(state) {
+                        return;
+                    }
+                    last.set(Some(state));
+                }
+                callback(state);
+            }
         }
     }
 }
@@ -353,6 +414,8 @@ pub(crate) struct Requests {
     pub(crate) reset_input_method: bool,
     /// Show (true) or hide (false) the on-screen keyboard.
     pub(crate) software_keyboard: Option<bool>,
+    /// The handling node asks to be shown (`EventContext::bring_into_view`).
+    pub(crate) bring_into_view: Option<NodeId>,
 }
 
 impl EventContext<'_> {
@@ -375,6 +438,37 @@ impl EventContext<'_> {
     /// Runs `function` after dispatch.
     pub fn run(&mut self, function: impl FnOnce() + 'static) {
         self.actions.push(Action::Run(Box::new(function)));
+    }
+
+    /// Asks the scrolling containers around this node to show it, as a focused node does
+    /// (`FocusableNode`'s `bringIntoView`): once it's placed, if it isn't yet.
+    pub fn bring_into_view(&mut self) {
+        self.requests.bring_into_view = Some(self.context.node);
+    }
+
+    /// Queues a focus event for application code (`on_focus_event`, `on_focus_changed`), as
+    /// `Action::FocusEvent`.
+    pub(crate) fn focus_event_action(
+        &mut self,
+        callback: Callback<dyn Fn(crate::focus::FocusState)>,
+        state: crate::focus::FocusState,
+        last: Option<Rc<std::cell::Cell<Option<crate::focus::FocusState>>>>,
+    ) {
+        let generation = self.context.tree.focus_requests.focus_generation.clone();
+        let focus = FocusBatch { generation, started_at: None };
+        self.actions.push(Action::FocusEvent { callback, state, last, focus });
+    }
+
+    /// Queues the `on_focus_change` of a `FocusTargetNode`, as `Action::FocusChange`.
+    pub(crate) fn focus_change_action(
+        &mut self,
+        callback: Callback<dyn Fn(crate::focus::FocusState, crate::focus::FocusState)>,
+        previous: crate::focus::FocusState,
+        current: crate::focus::FocusState,
+    ) {
+        let generation = self.context.tree.focus_requests.focus_generation.clone();
+        let focus = FocusBatch { generation, started_at: None };
+        self.actions.push(Action::FocusChange { callback, previous, current, focus });
     }
 
     /// Moves focus to this node's focus target, as `FocusRequester.requestFocus`.
