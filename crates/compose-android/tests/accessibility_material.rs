@@ -55,7 +55,7 @@ fn center(node: &SemanticsSnapshot) -> (f32, f32) {
 /// What a touch at `(x, y)` finds, by what it says.
 fn found_at(host: &UiHost, x: f32, y: f32) -> SemanticsSnapshot {
     let root = host.accessibility_tree();
-    let id = node_at(&root, x, y).expect("something's there");
+    let id = node_at(host, x, y).expect("something's there");
     by_id(&root, id).expect("in the tree").clone()
 }
 

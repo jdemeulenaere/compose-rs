@@ -353,17 +353,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             val selectionEnd = buffer.getInt()
             val granularities = buffer.get().toInt()
             val testTag = buffer.readString()
-            val extras = HashMap<String, Any>()
-            repeat(buffer.get().toInt() and 0xFF) {
-                val key = buffer.readString()
-                extras[key] = when (buffer.get().toInt()) {
-                    0 -> buffer.getInt()
-                    1 -> buffer.getFloat()
-                    2 -> buffer.get().toInt() != 0
-                    3 -> buffer.readString()
-                    else -> Unsendable
-                }
-            }
+            val extras = buffer.readExtras()
             val actionCount = buffer.get().toInt() and 0xFF
             val actionCodes = IntArray(actionCount)
             val actionLabels = Array(actionCount) {
@@ -380,6 +370,25 @@ internal class Accessibility(private val view: ComposeRsView) :
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
         }
         nodes = read
+    }
+
+    /** `accessibility::write_extra`'s, as many as it says: nothing to keep for most nodes. */
+    private fun ByteBuffer.readExtras(): Map<String, Any> {
+        val count = getInt()
+        if (count == 0) return emptyMap()
+        val extras = HashMap<String, Any>(count)
+        repeat(count) {
+            val key = readString()
+            extras[key] = when (get().toInt()) {
+                0 -> getInt()
+                1 -> getFloat()
+                2 -> get().toInt() != 0
+                3 -> readString()
+                5 -> ArrayList<String>().also { texts -> repeat(getInt()) { texts.add(readString()) } }
+                else -> Unsendable
+            }
+        }
+        return extras
     }
 
     private fun ByteBuffer.readString(): String {
@@ -561,14 +570,17 @@ internal class Accessibility(private val view: ComposeRsView) :
                 }
                 info.extras.putParcelableArray(extraDataKey, rects)
             }
-            EXTRA_SHAPE_TYPE_KEY, EXTRA_SHAPE_RECT_KEY, EXTRA_SHAPE_CORNERS_KEY, EXTRA_SHAPE_REGION_KEY ->
-                if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, extraDataKey)
+            EXTRA_SHAPE_TYPE_KEY -> if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, 0)
+            EXTRA_SHAPE_RECT_KEY -> if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, 1)
+            EXTRA_SHAPE_CORNERS_KEY -> if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, 2)
+            EXTRA_SHAPE_REGION_KEY -> if (node.flags and HAS_SHAPE != 0) addShapeExtra(virtualViewId, info, 3)
             else -> when (val value = node.extras[extraDataKey]) {
                 null -> {}
                 is Int -> info.extras.putInt(extraDataKey, value)
                 is Float -> info.extras.putFloat(extraDataKey, value)
                 is Boolean -> info.extras.putBoolean(extraDataKey, value)
                 is String -> info.extras.putString(extraDataKey, value)
+                is ArrayList<*> -> info.extras.putSerializable(extraDataKey, value)
                 else -> throw IllegalStateException(
                     "Accessibility extra values must be either Serializable or Parcelable.",
                 )
@@ -576,14 +588,13 @@ internal class Accessibility(private val view: ComposeRsView) :
         }
     }
 
-    /**
-     * The shape's extras (`accessibility::write_shape_extra`), as Compose's: its type comes with what
-     * it describes, as it had to make the outline for it; a key for what this shape hasn't sets nothing.
-     */
-    private fun addShapeExtra(id: Int, info: AccessibilityNodeInfo, key: String) {
-        val buffer = view.semanticsShape(id) ?: return
+    /** Sets what Rust says [key] asks of the shape (`accessibility::write_shape_extra`). */
+    private fun addShapeExtra(id: Int, info: AccessibilityNodeInfo, key: Int) {
+        val buffer = view.semanticsShape(id, key) ?: return
         buffer.order(ByteOrder.LITTLE_ENDIAN)
         buffer.position(0)
+        val set = buffer.get().toInt()
+        if (set == 0) return
         val kind = buffer.get().toInt()
         val left = buffer.getFloat()
         val top = buffer.getFloat()
@@ -591,8 +602,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         val bottom = buffer.getFloat()
         val bounds = Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
         val extras = info.extras
-        if (kind == 2) {
-            if (key != EXTRA_SHAPE_TYPE_KEY && key != EXTRA_SHAPE_REGION_KEY) return
+        if (set and SHAPE_SET_TYPE != 0) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)
+        if (set and SHAPE_SET_RECT != 0) extras.putParcelable(EXTRA_SHAPE_RECT_KEY, bounds)
+        if (set and SHAPE_SET_CORNERS != 0) {
+            extras.putFloatArray(EXTRA_SHAPE_CORNERS_KEY, FloatArray(8) { buffer.getFloat() })
+        }
+        if (set and SHAPE_SET_REGION != 0) {
             val offsetX = buffer.getFloat()
             val offsetY = buffer.getFloat()
             val path = Path()
@@ -600,21 +615,22 @@ internal class Accessibility(private val view: ComposeRsView) :
             path.offset(offsetX, offsetY)
             val region = Region()
             region.setPath(path, Region(bounds))
-            if (key == EXTRA_SHAPE_TYPE_KEY) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)
             extras.putParcelable(EXTRA_SHAPE_REGION_KEY, region)
-            return
-        }
-        if (key == EXTRA_SHAPE_REGION_KEY || (key == EXTRA_SHAPE_CORNERS_KEY && kind == 0)) return
-        if (key == EXTRA_SHAPE_TYPE_KEY) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)
-        if (key != EXTRA_SHAPE_CORNERS_KEY) extras.putParcelable(EXTRA_SHAPE_RECT_KEY, bounds)
-        if (kind == 1 && key != EXTRA_SHAPE_RECT_KEY) {
-            extras.putFloatArray(EXTRA_SHAPE_CORNERS_KEY, FloatArray(8) { buffer.getFloat() })
         }
     }
 
     override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
         if (virtualViewId == HOST_VIEW_ID) return view.performAccessibilityAction(action, arguments)
         refresh()
+        // Before finding the node: one that left is asked by the system to let go of it, and coming
+        // back would say it still has it.
+        if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
+            if (accessibilityFocused != virtualViewId) return false
+            accessibilityFocused = View.NO_ID
+            view.invalidate()
+            send(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+            return true
+        }
         val node = nodes.get(virtualViewId) ?: return false
         if (hiddenFromService(node, isRequestFromAccessibilityTool())) return false
         // As Compose's delegate: the accessibility focus moves to a disabled node, and a text is
@@ -630,18 +646,13 @@ internal class Accessibility(private val view: ComposeRsView) :
                 send(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
                 true
             }
-            AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
-                if (accessibilityFocused != virtualViewId) return false
-                accessibilityFocused = View.NO_ID
-                view.invalidate()
-                send(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
-                true
-            }
             android.R.id.accessibilityActionShowOnScreen -> {
                 if (node.flags and DISABLED != 0) return false
                 when (view.showSemanticsOnScreen(virtualViewId)) {
                     // Nothing here scrolls it: what's around the view may.
-                    -1 -> view.requestRectangleOnScreen(node.bounds)
+                    -1 -> view.semanticsRectangleOnScreen(virtualViewId)?.let { (left, top, right, bottom) ->
+                        view.requestRectangleOnScreen(Rect(left, top, right, bottom))
+                    } == true
                     0 -> false
                     else -> true
                 }
@@ -663,6 +674,23 @@ internal class Accessibility(private val view: ComposeRsView) :
                 if (done && code == CODE_CLICK) send(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
                 done
             }
+        }
+    }
+
+    /** What has the focus, as Compose's provider: the keyboard's, or a service's. */
+    override fun findFocus(focus: Int): AccessibilityNodeInfo? {
+        refresh()
+        return when (focus) {
+            AccessibilityNodeInfo.FOCUS_ACCESSIBILITY ->
+                if (accessibilityFocused == View.NO_ID) null else createAccessibilityNodeInfo(accessibilityFocused)
+            AccessibilityNodeInfo.FOCUS_INPUT -> {
+                for (index in 0 until nodes.size()) {
+                    val node = nodes.valueAt(index)
+                    if (node.flags and FOCUSED != 0) return createAccessibilityNodeInfo(node.id)
+                }
+                null
+            }
+            else -> throw IllegalArgumentException("Unknown focus type: $focus")
         }
     }
 
@@ -746,6 +774,8 @@ internal class Accessibility(private val view: ComposeRsView) :
         event.setSource(view, virtualViewId)
         event.packageName = view.context.packageName
         markSensitive(event, virtualViewId)
+        // Never read out, as Compose's `createEvent`.
+        event.isPassword = (nodes.get(virtualViewId)?.flags ?: 0) and PASSWORD != 0
         parent.requestSendAccessibilityEvent(view, event)
     }
 
@@ -810,6 +840,12 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val EXTRA_SHAPE_RECT_KEY = "androidx.compose.ui.semantics.shapeRect"
         const val EXTRA_SHAPE_CORNERS_KEY = "androidx.compose.ui.semantics.shapeCorners"
         const val EXTRA_SHAPE_REGION_KEY = "androidx.compose.ui.semantics.shapeRegion"
+
+        // `accessibility::shape_set`'s.
+        const val SHAPE_SET_TYPE = 1
+        const val SHAPE_SET_RECT = 1 shl 1
+        const val SHAPE_SET_CORNERS = 1 shl 2
+        const val SHAPE_SET_REGION = 1 shl 3
 
         /** An extra of what can't go in a `Bundle`: asking for it throws, as Compose's. */
         val Unsendable = Any()

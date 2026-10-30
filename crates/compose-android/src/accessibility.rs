@@ -135,6 +135,9 @@ pub struct KeptSemanticsTree {
     tree: Option<SemanticsSnapshot>,
     /// What's covered was taken out of it: only a service's asking pays for that.
     pruned: bool,
+    /// Whether the focused field masks its text, found before anything's taken out: a field
+    /// scrolled away is what a keyboard still types a password in.
+    focused_password: Option<bool>,
 }
 
 impl KeptSemanticsTree {
@@ -150,7 +153,7 @@ impl KeptSemanticsTree {
 
     /// The tree, as it is now.
     pub fn get(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
-        self.get_with_covered(ui);
+        self.build(ui);
         let pruned = std::mem::replace(&mut self.pruned, true);
         let tree = self.tree.as_mut().expect("kept");
         if !pruned {
@@ -159,17 +162,38 @@ impl KeptSemanticsTree {
         tree
     }
 
-    /// The tree, what's covered in it or not: for what doesn't depend on that, as a keyboard's
-    /// options (`bridge.rs`).
-    pub fn get_with_covered(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
+    /// Whether the focused field masks its text, if a field is focused, as a keyboard's options ask
+    /// (`bridge.rs`): the whole tree's answer, what's covered or scrolled away too, for no pruning.
+    pub fn focused_password(&mut self, ui: &UiHost) -> Option<bool> {
+        self.build(ui);
+        self.focused_password
+    }
+
+    /// Whether what's kept has what's covered taken out.
+    pub fn is_pruned(&self) -> bool {
+        self.pruned
+    }
+
+    fn build(&mut self, ui: &UiHost) {
         if ui.semantics_changed_since_frame() {
             self.tree = None;
         }
         if self.tree.is_none() {
+            let tree = ui.accessibility_tree_with_covered();
+            self.focused_password = focused_field_masks(&tree);
             self.pruned = false;
+            self.tree = Some(tree);
         }
-        self.tree.get_or_insert_with(|| ui.accessibility_tree_with_covered())
     }
+}
+
+/// Whether the focused field in `node` masks its text.
+fn focused_field_masks(node: &SemanticsSnapshot) -> Option<bool> {
+    let config = &node.config;
+    if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {
+        return Some(config.contains(&P::PASSWORD));
+    }
+    node.children.iter().find_map(focused_field_masks)
 }
 
 /// A node's virtual view id: its semantics id, which no other node or content had (D1262).
@@ -295,6 +319,8 @@ pub enum ExtraValue<'a> {
     Float(f32),
     Bool(bool),
     Text(&'a str),
+    /// A `StringList`: a `Bundle` takes it, as Compose's `ArrayList`, a `Serializable`.
+    Texts(&'a compose_ui::StringList),
     /// What can't be sent: asked for, `Accessibility.kt` throws, as Compose's.
     Unsendable,
 }
@@ -310,6 +336,7 @@ pub fn extras_of(node: &SemanticsSnapshot) -> Vec<(&'static str, ExtraValue<'_>)
             compose_ui::ValueSlot::Float(it) => ExtraValue::Float(*it),
             compose_ui::ValueSlot::Bool(it) => ExtraValue::Bool(*it),
             compose_ui::ValueSlot::String(it) => ExtraValue::Text(it.as_str()),
+            compose_ui::ValueSlot::Strings(it) => ExtraValue::Texts(it),
             _ => ExtraValue::Unsendable,
         };
         extras.push((extra, value));
@@ -317,8 +344,8 @@ pub fn extras_of(node: &SemanticsSnapshot) -> Vec<(&'static str, ExtraValue<'_>)
     extras
 }
 
-/// An extra's kind (u8: 0 an integer, 1 a float, 2 a boolean, 3 a text, 4 nothing that can be sent),
-/// then its value.
+/// An extra's kind (u8: 0 an integer, 1 a float, 2 a boolean, 3 a text, 4 nothing that can be sent,
+/// 5 a list of texts: how many, then each), then its value.
 fn write_extra(out: &mut Writer, value: &ExtraValue<'_>) {
     match value {
         ExtraValue::Int(it) => {
@@ -338,7 +365,27 @@ fn write_extra(out: &mut Writer, value: &ExtraValue<'_>) {
             write_string(out, it);
         }
         ExtraValue::Unsendable => out.u8(4),
+        ExtraValue::Texts(texts) => {
+            out.u8(5);
+            out.u32(texts.len() as u32);
+            for text in texts.iter() {
+                write_string(out, text.as_str());
+            }
+        }
     }
+}
+
+/// The rectangle to ask of what's around the view when nothing in it scrolls node `id`, as Compose's
+/// `scrollOntoScreen`: its bounds in the root, not what's left uncovered of them, whole pixels around
+/// them.
+pub fn rectangle_on_screen(ui: &UiHost, id: i32) -> Option<[i32; 4]> {
+    let bounds = ui.semantics_owner().get(id)?.bounds_in_root();
+    Some([
+        bounds.left.floor() as i32,
+        bounds.top.floor() as i32,
+        bounds.right.ceil() as i32,
+        bounds.bottom.ceil() as i32,
+    ])
 }
 
 /// `node`'s shape as a service asks for it, as Compose's `ExtraDataShape*`: its outline, relative to
@@ -378,11 +425,58 @@ pub fn shape_extra(ui: &UiHost, node: &SemanticsSnapshot) -> Option<ShapeExtra> 
     })
 }
 
-/// Writes a `ShapeExtra`, as `Accessibility.kt` reads it: its kind (u8: 0 a rectangle, 1 rounded, 2
-/// any path), its bounds (4 × f32), then the eight radii, or where the path's moved (2 × f32) and its
-/// contents (`serialize::write_path_contents`).
-pub fn write_shape_extra(extra: &ShapeExtra, out: &mut Writer) {
+/// What a service may ask of a shape, each its own key (`Accessibility.kt`'s `EXTRA_SHAPE_*`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapeExtraKey {
+    Type,
+    Rect,
+    Corners,
+    Region,
+}
+
+impl ShapeExtraKey {
+    /// `ComposeRsNative.semanticsShape`'s number for it.
+    pub fn from_code(code: i32) -> Option<ShapeExtraKey> {
+        match code {
+            0 => Some(ShapeExtraKey::Type),
+            1 => Some(ShapeExtraKey::Rect),
+            2 => Some(ShapeExtraKey::Corners),
+            3 => Some(ShapeExtraKey::Region),
+            _ => None,
+        }
+    }
+}
+
+/// What asking for `key` sets, as bits, as Compose's: its type comes with what it describes, as it
+/// had to make the outline for it, and a key for what this shape hasn't sets nothing.
+pub mod shape_set {
+    pub const TYPE: u8 = 1;
+    pub const RECT: u8 = 1 << 1;
+    pub const CORNERS: u8 = 1 << 2;
+    pub const REGION: u8 = 1 << 3;
+}
+
+fn shape_extras_set(extra: &ShapeExtra, key: ShapeExtraKey) -> u8 {
+    use shape_set::*;
+    match (extra, key) {
+        (ShapeExtra::Rectangle(_), ShapeExtraKey::Type) => TYPE | RECT,
+        (ShapeExtra::Rectangle(_), ShapeExtraKey::Rect) => RECT,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Type) => TYPE | RECT | CORNERS,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Rect) => RECT,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Corners) => CORNERS,
+        (ShapeExtra::Generic(..), ShapeExtraKey::Type) => TYPE | REGION,
+        (ShapeExtra::Generic(..), ShapeExtraKey::Region) => REGION,
+        _ => 0,
+    }
+}
+
+/// Writes a `ShapeExtra` for `key`, as `Accessibility.kt` reads it: what's to be set (u8,
+/// `shape_set`), its kind (u8: 0 a rectangle, 1 rounded, 2 any path), its bounds (4 × f32), then the
+/// eight radii, or where the path's moved (2 × f32) and its contents
+/// (`serialize::write_path_contents`).
+pub fn write_shape_extra(extra: &ShapeExtra, key: ShapeExtraKey, out: &mut Writer) {
     out.bytes.clear();
+    out.u8(shape_extras_set(extra, key));
     let rect = |out: &mut Writer, rect: &Rect| {
         out.f32(rect.left);
         out.f32(rect.top);
@@ -464,49 +558,11 @@ fn in_written_order(node: &SemanticsSnapshot) -> Vec<(usize, &SemanticsSnapshot)
 }
 
 /// The node a touch at `(x, y)` in the root finds for a service, as Compose's
-/// `hitTestSemanticsAndInteropAt`: front to back, in drawing order, those not important looked
-/// through to what's around them; a sibling under one hit isn't looked at.
-pub fn node_at(root: &SemanticsSnapshot, x: f32, y: f32) -> Option<i32> {
-    enum Hit {
-        Nothing,
-        /// Something's here, that a service doesn't read, so what's around it is asked.
-        LookedThrough,
-        Found(i32),
-    }
-    fn visit(node: &SemanticsSnapshot, x: f32, y: f32, clip: Rect) -> Hit {
-        let shown = clipped(node.bounds, clip);
-        let scrolls = scroll_range(node).is_some();
-        let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
-        let mut hit = Hit::Nothing;
-        for child in node.children.iter().rev() {
-            match visit(child, x, y, inner) {
-                Hit::Nothing => continue,
-                found @ Hit::Found(_) => return found,
-                Hit::LookedThrough => {
-                    hit = Hit::LookedThrough;
-                    break;
-                }
-            }
-        }
-        let on_it = shown.is_some_and(|shown| {
-            x >= shown.left && x < shown.right && y >= shown.top && y < shown.bottom
-        });
-        if !on_it {
-            return hit;
-        }
-        if compose_ui::is_important_for_accessibility(node) {
-            return Hit::Found(virtual_id(node));
-        }
-        Hit::LookedThrough
-    }
-    for child in root.children.iter().rev() {
-        match visit(child, x, y, root.bounds) {
-            Hit::Nothing => continue,
-            Hit::Found(id) => return Some(id),
-            Hit::LookedThrough => return None,
-        }
-    }
-    None
+/// `hitTestSemanticsAndInteropAt`, walking the layouts as it does (`SemanticsOwner::
+/// accessibility_hit_test`): what a service wouldn't read isn't there for it, the touch target
+/// counts, and so does each clip.
+pub fn node_at(ui: &UiHost, x: f32, y: f32) -> Option<i32> {
+    ui.semantics_owner().accessibility_hit_test(compose_ui::Offset::new(x, y))
 }
 
 use compose_ui::clipped_by as clipped;
@@ -748,7 +804,7 @@ fn write_node(
     out.u8(movement_granularities(node) as u8);
     write_string(out, text_of(node.unmerged_config().get(&P::TEST_TAG)));
     let extras = extras_of(node);
-    out.u8(extras.len() as u8);
+    out.u32(extras.len() as u32);
     for (key, value) in &extras {
         write_string(out, key);
         write_extra(out, value);

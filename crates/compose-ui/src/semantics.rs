@@ -605,21 +605,24 @@ impl UiTree {
     /// overlays (laid out next frame), the whole tree.
     pub fn accessibility_tree(&mut self) -> SemanticsSnapshot {
         let mut root = self.semantics_tree(true);
+        let Some(first) = self.overlay_shutting_out() else { return root };
+        let shown: SmallVec<[NodeId; 4]> = self.overlays[first..].iter().copied().collect();
+        root.children
+            .retain(|child| shown.iter().any(|&overlay| self.is_at_or_below(child.id, overlay)));
+        root
+    }
+
+    /// Where the overlays' first window a service is shut in by is, if any: what's under it isn't
+    /// there for it.
+    pub(crate) fn overlay_shutting_out(&self) -> Option<usize> {
         let below = self.focus.other_windows.iter().rev().map(|other| other.window);
         let windows: SmallVec<[Option<NodeId>; 2]> =
             std::iter::once(self.focus.window).chain(below).collect();
         let shutting_out = windows
             .iter()
             .flatten()
-            .find(|&&window| self.overlay_node(window).is_some_and(|it| it.shuts_out));
-        let Some(&top) = shutting_out else { return root };
-        let Some(first) = self.overlays.iter().position(|&overlay| overlay == top) else {
-            return root;
-        };
-        let shown: SmallVec<[NodeId; 4]> = self.overlays[first..].iter().copied().collect();
-        root.children
-            .retain(|child| shown.iter().any(|&overlay| self.is_at_or_below(child.id, overlay)));
-        root
+            .find(|&&window| self.overlay_node(window).is_some_and(|it| it.shuts_out))?;
+        self.overlays.iter().position(|overlay| overlay == shutting_out)
     }
 
     /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are

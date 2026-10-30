@@ -177,10 +177,12 @@ internal object ComposeRsNative {
     @JvmStatic external fun characterLocations(host: Long, id: Int, start: Int, length: Int): FloatArray?
 
     /** The shape of virtual view [id], or null (`accessibility::write_shape_extra`). */
-    @JvmStatic external fun semanticsShape(host: Long, id: Int): ByteBuffer?
+    @JvmStatic external fun semanticsShape(host: Long, id: Int, key: Int): ByteBuffer?
 
     /** Scrolls what's around virtual view [id] to show it: 1 it did, 0 not, -1 nothing scrolls. */
     @JvmStatic external fun showOnScreen(host: Long, id: Int): Int
+
+    @JvmStatic external fun rectangleOnScreen(host: Long, id: Int): IntArray?
 
     /** What the content's `remember_saveable`s hold, for the saved instance state, or null. */
     @JvmStatic external fun saveState(host: Long): ByteArray?

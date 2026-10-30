@@ -1430,12 +1430,6 @@ internal class Replayer(var text: TextMeasurer) {
         paths.put(id, kept)
     }
 
-    /**
-     * Reads a path's contents into [path] (empty): its fill type, its steps (D535: a stack
-     * machine of operands, `Path.op`s, `addPath`s and fill types, run with scratch paths from
-     * [stepPaths], as Compose's `Path.op` runs `android.graphics.Path.op`; an operation that fails
-     * leaves its first path as it was, as Android's), then its commands.
-     */
     private fun defineImage(buffer: ByteBuffer) {
         val id = buffer.getInt()
         val width = buffer.getInt()
@@ -1536,7 +1530,6 @@ internal class Replayer(var text: TextMeasurer) {
         const val MAX_MASKS_PER_PATH = 4
         /** Dropped paths kept for new definitions: a canvas's paths replaced each frame (D410). */
         const val PATH_POOL_CAPACITY = 64
-        const val STEP_POOL_CAPACITY = 16
         /**
          * A recording that drew paths new in one of the last this many frames draws this
          * frame's new paths without masks (D411): they change every frame.

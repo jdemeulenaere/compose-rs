@@ -881,11 +881,14 @@ class ComposeRsView @JvmOverloads constructor(
         return ComposeRsNative.performAction(host, id, action, value)
     }
 
-    internal fun semanticsShape(id: Int) =
-        if (host != 0L) ComposeRsNative.semanticsShape(host, id) else null
+    internal fun semanticsShape(id: Int, key: Int) =
+        if (host != 0L) ComposeRsNative.semanticsShape(host, id, key) else null
 
     internal fun showSemanticsOnScreen(id: Int): Int =
         if (host != 0L) ComposeRsNative.showOnScreen(host, id) else 0
+
+    internal fun semanticsRectangleOnScreen(id: Int): IntArray? =
+        if (host != 0L) ComposeRsNative.rectangleOnScreen(host, id) else null
 
     internal fun characterLocations(id: Int, start: Int, length: Int): FloatArray? =
         if (host != 0L) ComposeRsNative.characterLocations(host, id, start, length) else null

@@ -64,7 +64,7 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         let tag = u32_at(&mut at) as usize;
         at += tag;
         // No extras in these scenes.
-        at += 1;
+        at += 4;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -83,7 +83,7 @@ fn written(content: fn()) -> Vec<Record> {
     host.settle(10);
     let mut writer = Writer::default();
     write_tree(
-        &host.semantics_tree(true),
+        &host.accessibility_tree(),
         &mut compose_android::accessibility::KeptCustomActions::default(),
         &mut writer,
     );
@@ -126,20 +126,36 @@ fn a_lazy_list_is_a_scrolling_container_with_its_items_in_it() {
 }
 
 #[test]
-fn what_a_scrolling_column_clips_away_is_hidden() {
+fn what_a_scrolling_column_clips_away_is_left_out() {
     let records = written(ScrollingRows);
     let column = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
     assert_eq!(column.scroll, Some((0.0, 100.0, 100.0)));
+    assert!(records.iter().all(|record| record.flags & flag::HIDDEN == 0));
+    assert!(records.iter().all(|record| !record.text.starts_with("row 5")));
+    // The last row in view is visible.
+    let row = records.iter().find(|record| record.text == "row 4").unwrap();
+    assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
+}
+
+/// The tree before what's covered is left out, as a test's or a keyboard's: past the clip, hidden.
+#[test]
+fn what_a_scrolling_column_clips_away_is_hidden_in_the_whole_tree() {
+    let mut host = UiHost::headless(200, 200);
+    host.set_content(ScrollingRows);
+    host.settle(10);
+    let mut writer = Writer::default();
+    write_tree(
+        &host.accessibility_tree_with_covered(),
+        &mut compose_android::accessibility::KeptCustomActions::default(),
+        &mut writer,
+    );
+    let records = records(&writer.bytes);
     let hidden: Vec<&str> = records
         .iter()
         .filter(|record| record.flags & flag::HIDDEN != 0)
         .map(|record| record.text.as_str())
         .collect();
     assert_eq!(hidden, ["row 5", "row 6", "row 7", "row 8", "row 9"]);
-    // The last row in view is visible.
-    let row = records.iter().find(|record| record.text == "row 4").unwrap();
-    assert_eq!(row.flags & flag::HIDDEN, 0);
-    assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
 }
 
 /// A page of 100 px each way.
@@ -170,7 +186,7 @@ fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsSnapshot {
         }
         node.children.iter().find_map(find)
     }
-    find(&host.semantics_tree(true)).expect("a scrolling node")
+    find(&host.accessibility_tree()).expect("a scrolling node")
 }
 
 fn rtl(content: impl Fn() + 'static) {
@@ -292,7 +308,7 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
     let mut host = UiHost::headless(200, 200);
     host.set_content(BothAxes);
     host.settle(10);
-    let root = host.semantics_tree(true);
+    let root = host.accessibility_tree();
     fn find(
         node: &compose_ui::platform::SemanticsSnapshot,
     ) -> Option<&compose_ui::platform::SemanticsSnapshot> {
@@ -345,7 +361,7 @@ fn a_card_around_a_scrolling_row_offers_no_scroll() {
     let mut host = UiHost::headless(200, 200);
     host.set_content(CardAroundARow);
     host.settle(10);
-    let root = host.semantics_tree(true);
+    let root = host.accessibility_tree();
     let card = root
         .children
         .iter()
@@ -457,7 +473,7 @@ fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsSnapshot 
         }
         node.children.iter().find_map(find)
     }
-    find(&host.semantics_tree(true)).expect("a scrolling node")
+    find(&host.accessibility_tree()).expect("a scrolling node")
 }
 
 fn shows_text(host: &UiHost, text: &str) -> bool {
@@ -467,7 +483,7 @@ fn shows_text(host: &UiHost, text: &str) -> bool {
             .is_some_and(|texts| texts.iter().any(|it| it.as_str() == text))
             || node.children.iter().any(|child| find(child, text))
     }
-    find(&host.semantics_tree(true), text)
+    find(&host.accessibility_tree(), text)
 }
 
 /// Compose's `testScrollAction`, from the middle: 47 items and 13 px in, 1,000 px either side.
@@ -572,12 +588,12 @@ fn tagged_id(host: &UiHost, tag: &str) -> i32 {
         }
         node.children.iter().find_map(|child| visit(child, tag))
     }
-    visit(&host.semantics_tree(true), tag).expect("tagged")
+    visit(&host.accessibility_tree(), tag).expect("tagged")
 }
 
 fn show(host: &mut UiHost, tag: &str) -> Option<bool> {
     let id = tagged_id(host, tag);
-    let tree = host.semantics_tree(true);
+    let tree = host.accessibility_tree();
     let shown = show_on_screen(host, &tree, id);
     host.settle(20);
     shown
@@ -761,10 +777,135 @@ fn with_nothing_around_it_scrolling_the_view_is_asked() {
     host.set_content(|| Square("alone", 20));
     host.settle(5);
     assert_eq!(show(&mut host, "alone"), None);
-    let kotlin = include_str!(
-        "../../../android/compose-rs/src/main/java/rs/compose/android/Accessibility.kt"
+    let id = host.semantics_owner().unmerged_root_semantics_node().children()[0].id();
+    assert_eq!(
+        compose_android::accessibility::rectangle_on_screen(&host, id),
+        Some([0, 0, 20, 20])
     );
-    assert!(kotlin.contains("-1 -> view.requestRectangleOnScreen(node.bounds)"));
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// The outer one moves for where the inner one has moved it, not for where it was.
+#[test]
+fn showing_a_node_in_a_nested_scroller_counts_what_the_nearer_one_moved_it() {
+    let mut host = UiHost::headless(400, 800);
+    let outer = **Box::leak(Box::new(ScrollState::new(0)));
+    let inner = **Box::leak(Box::new(ScrollState::new(0)));
+    host.set_content(move || {
+        Box!({
+            Column!(modifier = Modifier.size((200.dp(), 200.dp())).vertical_scroll(outer), {
+                Box!(modifier = Modifier.size((200.dp(), 150.dp())));
+                Column!(modifier = Modifier.size((200.dp(), 200.dp())).vertical_scroll(inner), {
+                    Box!(modifier = Modifier.size((200.dp(), 30.dp())));
+                    Square("target", 180);
+                });
+                Box!(modifier = Modifier.size((200.dp(), 300.dp())));
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "target"), Some(true));
+    assert_eq!(inner.value(), 10);
+    assert_eq!(outer.value(), 150);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// One of them doing it is enough.
+#[test]
+fn showing_a_node_says_it_scrolled_if_any_around_it_did() {
+    let mut host = UiHost::headless(400, 800);
+    let inner = **Box::leak(Box::new(ScrollState::new(0)));
+    host.set_content(move || {
+        let refuses = Modifier.size(300.dp()).semantics(|config| {
+            config.scroll_by(None, |_, _| false);
+        });
+        Box!(modifier = refuses, {
+            Column!(modifier = Modifier.size(200.dp()).vertical_scroll(inner), {
+                Box!(modifier = Modifier.size((200.dp(), 180.dp())));
+                Square("target", 50);
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "target"), Some(true));
+    assert_eq!(inner.value(), 30);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ShowOnScreenAccessibilityTest.kt, testPerformAction_showOnScreen_lazyRow
+#[test]
+fn showing_a_node_of_a_reversed_row_goes_the_other_way() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyRow!(
+                modifier = Modifier.size(200.dp()),
+                state = state,
+                reverse_layout = true,
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 150));
+                    scope.item(|| Square("second", 150));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "second"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 100);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// A padding with no room left inside it isn't taken off.
+#[test]
+fn a_padding_leaving_no_room_is_not_what_a_node_is_shown_within() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyColumn!(
+                modifier = Modifier.size(100.dp()),
+                state = state,
+                content_padding = PaddingValues::new(0.dp(), 60.dp(), 0.dp(), 60.dp()),
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 70));
+                    scope.item(|| Square("second", 70));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "first"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 30);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// The whole of it, in whole pixels around it: what's covered or its touch target don't count.
+#[test]
+fn the_rectangle_asked_of_the_view_is_its_bounds_floored_and_ceiled() {
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(|| {
+        Box!({
+            Box!(
+                modifier = Modifier
+                    .graphics_layer(|layer| {
+                        layer.translation_x = 1.5;
+                        layer.translation_y = 2.5;
+                    })
+                    .size(10.dp())
+                    .clickable(|| {})
+            );
+            // Over its top half.
+            BasicText!("over", modifier = Modifier.size((100.dp(), 7.dp())));
+        });
+    });
+    host.settle(5);
+    let owner = host.semantics_owner();
+    let small = owner.unmerged_root_semantics_node().children()[0].id();
+    assert_eq!(
+        compose_android::accessibility::rectangle_on_screen(&host, small),
+        Some([1, 2, 12, 13])
+    );
+    assert_eq!(compose_android::accessibility::rectangle_on_screen(&host, -5), None);
 }
 
 #[test]

@@ -704,7 +704,7 @@ impl UiTree {
 
     /// The bounding box in the root of a rectangle of `size` at the origin of layer `layer` of
     /// `node` (seen by its chain entry `before_entry`), through the graphics layers around it.
-    fn rect_in_root(
+    pub(crate) fn rect_in_root(
         &self,
         node: NodeId,
         layer: usize,
@@ -712,8 +712,17 @@ impl UiTree {
         size: IntSize,
     ) -> Rect {
         let (width, height) = (size.width as f32, size.height as f32);
-        let corners = [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)]
-            .map(|(x, y)| self.map_to_root(node, layer, before_entry, Offset::new(x, y)));
+        let corners = self.map_all_to_root(
+            node,
+            layer,
+            before_entry,
+            [
+                Offset::new(0.0, 0.0),
+                Offset::new(width, 0.0),
+                Offset::new(0.0, height),
+                Offset::new(width, height),
+            ],
+        );
         let min = |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::INFINITY, f32::min);
         let max =
             |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
@@ -730,11 +739,24 @@ impl UiTree {
         before_entry: Option<usize>,
         point: Offset,
     ) -> Offset {
+        let [point] = self.map_all_to_root(node, layer, before_entry, [point]);
+        point
+    }
+
+    /// `map_to_root` of several points, one walk up for them all.
+    fn map_all_to_root<const N: usize>(
+        &self,
+        node: NodeId,
+        layer: usize,
+        before_entry: Option<usize>,
+        points: [Offset; N],
+    ) -> [Offset; N] {
         let (mut current, mut layer, mut before) = (node, layer, before_entry);
-        let mut point = point;
+        let mut points = points;
         loop {
             let value = self.node(current);
-            point = point + layer_origin(value, layer);
+            let origin = layer_origin(value, layer);
+            points = points.map(|point| point + origin);
             let end = before.unwrap_or(value.chain.len());
             // The innermost first.
             for index in (0..end).rev() {
@@ -744,20 +766,21 @@ impl UiTree {
                 };
                 let properties = self.properties_of_layer(current, index, graphics);
                 graphics.note_transform(&properties, self.position_listeners);
-                point = properties.map(point);
+                points = points.map(|point| properties.map(point));
             }
             if value.overlay {
-                return point + value.overlay_origin;
+                return points.map(|point| point + value.overlay_origin);
             }
             let position = value.layers[0].offset;
-            point = point + Offset::new(position.x as f32, position.y as f32);
+            let moved = Offset::new(position.x as f32, position.y as f32);
+            points = points.map(|point| point + moved);
             match value.parent {
                 Some(parent) => {
                     current = parent;
                     layer = self.node(parent).layers.len() - 1;
                     before = None;
                 }
-                None => return point,
+                None => return points,
             }
         }
     }

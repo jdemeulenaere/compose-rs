@@ -1590,16 +1590,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    fn password(node: &compose_ui::platform::SemanticsSnapshot) -> Option<bool> {
-        use compose_ui::SemanticsProperties as P;
-        let config = &node.config;
-        if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {
-            return Some(config.contains(&P::PASSWORD));
-        }
-        node.children.iter().find_map(password)
-    }
     let options = host.ui.text_input_options().unwrap_or_default();
-    let masks_password = password(host.semantics_tree.get_with_covered(&host.ui)).unwrap_or(false);
+    let masks_password = host.semantics_tree.focused_password(&host.ui).unwrap_or(false);
     crate::input_method::editor_info(options, masks_password).pack()
 }
 
@@ -1876,7 +1868,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_characterLocation
     .unwrap_or_default()
 }
 
-/// `ComposeRsNative.semanticsShape(host, id)`: virtual view `id`'s shape
+/// `ComposeRsNative.semanticsShape(host, id, key)`: virtual view `id`'s shape for what `key` asks
 /// (`accessibility::write_shape_extra`), null with none; read before the next call about semantics.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsShape<'local>(
@@ -1884,14 +1876,16 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsShape<'l
     _class: JClass<'local>,
     host: jlong,
     id: jint,
+    key: jint,
 ) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let tree = host.semantics_tree.get(&host.ui);
     let extra = crate::accessibility::find(tree, id)
         .and_then(|node| crate::accessibility::shape_extra(&host.ui, node));
-    let Some(extra) = extra else { return JByteBuffer::default() };
-    crate::accessibility::write_shape_extra(&extra, &mut host.semantics);
+    let key = crate::accessibility::ShapeExtraKey::from_code(key);
+    let (Some(extra), Some(key)) = (extra, key) else { return JByteBuffer::default() };
+    crate::accessibility::write_shape_extra(&extra, key, &mut host.semantics);
     host.semantics.bytes.reserve(1);
     let bytes = &mut host.semantics.bytes;
     with_env(&mut env, |env| {
@@ -1915,6 +1909,27 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_showOnScreen(
     crate::accessibility::show_on_screen(&mut host.ui, tree, id).map_or(-1, i32::from)
 }
 
+/// `ComposeRsNative.rectangleOnScreen(host, id)`: `accessibility::rectangle_on_screen`, left, top,
+/// right and bottom; null if it's gone.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_rectangleOnScreen<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    id: jint,
+) -> JIntArray<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let rectangle = crate::accessibility::rectangle_on_screen(&host.ui, id);
+    with_env(&mut env, |env| {
+        let Some(rectangle) = rectangle else { return Ok(JIntArray::default()) };
+        let array = env.new_int_array(rectangle.len())?;
+        array.set_region(env, 0, &rectangle)?;
+        Ok::<_, jni::errors::Error>(array)
+    })
+    .unwrap_or_default()
+}
+
 /// `ComposeRsNative.nodeAt(host, x, y)`: the virtual view a touch there finds (`accessibility::
 /// node_at`), -1 for none.
 #[unsafe(no_mangle)]
@@ -1927,8 +1942,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nodeAt(
 ) -> jint {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let tree = host.semantics_tree.get(&host.ui);
-    crate::accessibility::node_at(tree, x, y).unwrap_or(-1)
+    crate::accessibility::node_at(&host.ui, x, y).unwrap_or(-1)
 }
 
 /// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes

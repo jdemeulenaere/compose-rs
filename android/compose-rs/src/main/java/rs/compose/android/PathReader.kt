@@ -97,6 +97,6 @@ internal class PathReader {
 
     private companion object {
         /** How many scratch paths are kept for a path's steps. */
-        const val STEP_POOL_CAPACITY = 4
+        const val STEP_POOL_CAPACITY = 16
     }
 }

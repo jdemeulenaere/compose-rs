@@ -684,7 +684,8 @@ impl<T: SemanticsValue> SemanticsPropertyKey<T> {
         }
     }
 
-    /// Marks the key important for accessibility (Compose's `AccessibilityKey`).
+    /// A key exposed to a service among its node's extras under `accessibility_extra_key`, as
+    /// `accessibilityExtraKey`, merging by Compose's default: the parent's, else the child's.
     pub const fn with_accessibility_extra(
         name: &'static str,
         accessibility_extra_key: &'static str,
@@ -692,11 +693,12 @@ impl<T: SemanticsValue> SemanticsPropertyKey<T> {
     where
         T: Clone,
     {
-        let mut key = SemanticsPropertyKey::with_merge_policy(name, parent_only::<T>);
+        let mut key = SemanticsPropertyKey::with_merge_policy(name, parent_or_child::<T>);
         key.accessibility_extra_key = Some(accessibility_extra_key);
         key
     }
 
+    /// Marks the key important for accessibility (Compose's `AccessibilityKey`).
     pub const fn for_accessibility(mut self) -> SemanticsPropertyKey<T> {
         self.important_for_accessibility = true;
         self
