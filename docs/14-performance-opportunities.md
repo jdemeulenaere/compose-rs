@@ -1096,6 +1096,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | The proc macro at opt-level 3 | 67 → 65 ms of expansion |
 | Thinning monomorphization | about 2 % of an edit |
 | Avoiding the system's per-frame costs on Android | about 60 % of the animation's main thread, the same in Compose; inherent to a `View` |
+| Chasing the focus model's `counter_click` (+1.98 %) and `feed_pixel` (+1.34 %) | mostly code layout, D1285: under fat LTO +0.91 % and +0.48 %; the next commit, which adds nothing but a check to either path, moved them by -1.44 % and -0.68 %; in `sample`, what names the focus goes from 2.7 % to 4.0 % and from 0.3 % to 0.6 % of the samples, the rest moves between symbols |
 
 ## Caveats
 
