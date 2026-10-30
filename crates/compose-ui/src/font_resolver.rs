@@ -7,11 +7,11 @@ use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use compose_runtime::platform::{launch, poll_now};
-use compose_runtime::{OwnedState, delay, mutable_state_of};
+use compose_runtime::{Job, OwnedState, delay, mutable_state_of};
 
 use crate::font::{
     Font, FontFamily, FontLoadingStrategy, FontMatcher, FontSource, FontStyle, FontSynthesis,
@@ -70,7 +70,8 @@ impl<K: PartialEq, V: Clone> Recent<K, V> {
     }
 
     fn get(&mut self, key: &K) -> Option<V> {
-        let found = self.entries.iter().position(|(kept, _)| kept == key)?;
+        // From the most recent: the one asked again, nearly always.
+        let found = self.entries.iter().rposition(|(kept, _)| kept == key)?;
         let entry = self.entries.remove(found);
         let value = entry.1.clone();
         self.entries.push(entry);
@@ -123,12 +124,22 @@ impl FontResults {
 }
 
 /// What a resolution is asked, as Compose's `TypefaceRequest`.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct TypefaceRequest {
     family: Option<FontFamily>,
     weight: FontWeight,
     style: FontStyle,
     synthesis: FontSynthesis,
+}
+
+impl PartialEq for TypefaceRequest {
+    /// The cheap fields first: the family may be a list of fonts.
+    fn eq(&self, other: &Self) -> bool {
+        self.weight == other.weight
+            && self.style == other.style
+            && self.synthesis == other.synthesis
+            && self.family == other.family
+    }
 }
 
 /// A text stack's fonts: its loader and what's been loaded and resolved.
@@ -145,6 +156,25 @@ impl PlatformFonts {
             requests: RefCell::new(Recent::new(CACHE_SIZE)),
             results: RefCell::default(),
         })
+    }
+
+    /// See [`PlatformFontLoader::release_dropped`].
+    pub fn release_dropped(&self) {
+        self.loader.release_dropped();
+    }
+
+    /// Whether what `family` at `weight` and `style` resolves to is cached: for tests, as
+    /// Compose's look into its `TypefaceRequestCache`.
+    #[doc(hidden)]
+    pub fn has_cached_request(
+        &self,
+        family: Option<&FontFamily>,
+        weight: FontWeight,
+        style: FontStyle,
+        synthesis: FontSynthesis,
+    ) -> bool {
+        let request = TypefaceRequest { family: family.cloned(), weight, style, synthesis };
+        self.requests.borrow_mut().get(&request).is_some()
     }
 
     /// `family` at `weight` and `style`, as Compose's `FontFamily.Resolver.resolve`.
@@ -335,16 +365,16 @@ impl PlatformFonts {
     }
 
     /// `font` loaded and cached, as Compose's `loadWithTimeoutOrNull` in `runCached`: a timeout,
-    /// an error or nothing is a permanent failure.
+    /// an error, a load that cancels itself or nothing is a permanent failure.
     async fn load_with_timeout_or_none(&self, font: &Font) -> LoadedFont {
         if let Some(cached) = self.cached_font(font) {
             return cached;
         }
-        let load = self.await_load(font);
-        let loaded = match with_timeout_or_none(load).await {
-            None => None,
-            Some(Ok(loaded)) => loaded,
-            Some(Err(error)) => {
+        let load = child_task(self.await_load(font));
+        let loaded = match with_timeout_or_none(Box::pin(load)).await {
+            None | Some(None) => None,
+            Some(Some(Ok(loaded))) => loaded,
+            Some(Some(Err(error))) => {
                 // It's no fatal error, and nothing else hears it.
                 log::warn!("Unable to load font {font:?}: {error}");
                 None
@@ -436,9 +466,10 @@ impl PlatformFonts {
                 Err(format!("Unable to load font {font:?}"))
             };
         }
-        let loaded = with_timeout_or_none(self.await_load(font)).await;
+        let load = child_task(self.await_load(font));
+        let loaded = with_timeout_or_none(Box::pin(load)).await;
         match loaded {
-            Some(Ok(Some(typeface))) => {
+            Some(Some(Ok(Some(typeface)))) => {
                 self.cache_font(font, Some(typeface), true);
                 Ok(())
             }
@@ -446,7 +477,7 @@ impl PlatformFonts {
                 // A timeout or a failure is thrown, and leaves nothing behind in Compose's: a
                 // later resolution may try again.
                 let reason = match other {
-                    Some(Err(error)) => format!(": {error}"),
+                    Some(Some(Err(error))) => format!(": {error}"),
                     _ => String::new(),
                 };
                 Err(format!("Unable to load font {font:?}{reason}"))
@@ -469,16 +500,78 @@ impl Drop for LoadCompletion {
     fn drop(&mut self) {
         self.loader.cacheable.set(false);
         let Some(fonts) = self.fonts.upgrade() else { return };
+        // Read first: a read may run what's observing it, not under `requests`' borrow.
+        let value = self.loader.value.get();
         let mut requests = fonts.requests.borrow_mut();
         if self.active.get() {
             // From now on immediately what it came to.
-            let value = self.loader.value.get();
             requests
                 .put(self.request.clone(), TypefaceResult::Immutable { value, cacheable: true });
         } else {
             requests.remove(&self.request);
         }
     }
+}
+
+/// What a [`child_task`] and what waits for it share.
+struct ChildState<T> {
+    result: RefCell<Option<T>>,
+    ended: Cell<bool>,
+    waker: RefCell<Option<Waker>>,
+}
+
+/// Marks a child's end, however it ends: dropped with its future if it's cancelled.
+struct ChildEnd<T>(Rc<ChildState<T>>);
+
+impl<T> Drop for ChildEnd<T> {
+    fn drop(&mut self) {
+        self.0.ended.set(true);
+        if let Some(waker) = self.0.waker.borrow_mut().take() {
+            waker.wake();
+        }
+    }
+}
+
+/// A [`child_task`], ending in its output, or `None` if it was cancelled. Dropped, it cancels it.
+struct ChildTask<T> {
+    state: Rc<ChildState<T>>,
+    job: Job,
+}
+
+impl<T> Future for ChildTask<T> {
+    type Output = Option<T>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<T>> {
+        if self.state.ended.get() {
+            return Poll::Ready(self.state.result.borrow_mut().take());
+        }
+        *self.state.waker.borrow_mut() = Some(context.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for ChildTask<T> {
+    fn drop(&mut self) {
+        self.job.cancel();
+    }
+}
+
+/// `future` as a task of its own, started as far as it goes: a load cancelling itself (Compose's
+/// loader throwing `CancellationException`) ends it, not the fonts waiting on it, as Compose's
+/// `withTimeoutOrNull` catches what the load threw.
+fn child_task<T: 'static>(future: Pin<Box<dyn Future<Output = T>>>) -> ChildTask<T> {
+    let state = Rc::new(ChildState {
+        result: RefCell::new(None),
+        ended: Cell::new(false),
+        waker: RefCell::new(None),
+    });
+    let end = ChildEnd(state.clone());
+    let job = launch(async move {
+        let output = future.await;
+        *end.0.result.borrow_mut() = Some(output);
+    });
+    poll_now(job);
+    ChildTask { state, job }
 }
 
 /// Lets the other tasks run once.
@@ -537,9 +630,14 @@ impl ResolvedFonts {
         Some(typeface)
     }
 
-    /// Whether a font arrived since.
+    /// Whether a font arrived since. The read of a state: what asks is told when one does.
     pub fn is_stale(&self) -> bool {
         self.0.iter().any(|(result, typeface)| result.value() != *typeface)
+    }
+
+    /// Whether none was resolved: all the platform's own families.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

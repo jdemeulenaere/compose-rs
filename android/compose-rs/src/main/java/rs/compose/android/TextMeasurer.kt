@@ -57,9 +57,6 @@ internal class TextMeasurer(
     /** Released paragraphs' nodes, for the next ones (D195). */
     private val pool = RenderNodePool("paragraph", NODE_POOL_CAPACITY)
     private val typefaces = HashMap<Long, Typeface>()
-    /** The typefaces of fonts Rust resolved (`family` 5 in a request), by their number there. */
-    private val loaded = ArrayList<Typeface>()
-    private val loadedNumbers = HashMap<Typeface, Int>()
     /**
      * A paint per paragraph style, shared by the layouts of that style: a paint's native side
      * otherwise waits for the collector. A layout only reads its paint, but [drawInPaint] swaps
@@ -134,15 +131,6 @@ internal class TextMeasurer(
         return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
     }
 
-    /** [typeface]'s number, or -1 without one. */
-    private fun numberOf(typeface: Typeface?): Int {
-        if (typeface == null) return -1
-        return loadedNumbers.getOrPut(typeface) {
-            loaded.add(typeface)
-            loaded.size - 1
-        }
-    }
-
     /** Applies a font's variation settings, as Compose's `setFontVariationSettings`. */
     private fun varied(typeface: Typeface?, settings: String): Typeface? {
         if (typeface == null || settings.isEmpty()) return typeface
@@ -152,44 +140,44 @@ internal class TextMeasurer(
         return paint.typeface
     }
 
-    /** A font of [bytes], as Compose's fonts of a file descriptor: -1 if they aren't one. */
-    fun loadFontBytes(bytes: ByteArray, weight: Int, italic: Boolean, settings: String): Int =
+    /** A direct buffer of [bytes], which a font of them and its variations share. */
+    fun directBuffer(bytes: ByteArray): ByteBuffer {
+        val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+        buffer.put(bytes)
+        buffer.rewind()
+        return buffer
+    }
+
+    /**
+     * A font of a direct buffer, as Compose's fonts of a file descriptor: -1 if it isn't one. Its
+     * weight and slant are its table's, as Compose's `TypefaceBuilderCompat` lets them be, so a
+     * bold font isn't taken for a regular one to fake.
+     */
+    fun loadFontBuffer(buffer: ByteBuffer, settings: String): Int =
         try {
-            val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
-            buffer.put(bytes)
-            buffer.rewind()
-            val slant =
-                if (italic) android.graphics.fonts.FontStyle.FONT_SLANT_ITALIC
-                else android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT
             val font = android.graphics.fonts.Font.Builder(buffer)
-                .setWeight(weight.coerceIn(1, 1000))
-                .setSlant(slant)
                 .setFontVariationSettings(settings)
                 .build()
             val family = android.graphics.fonts.FontFamily.Builder(font).build()
-            numberOf(Typeface.CustomFallbackBuilder(family).setStyle(font.style).build())
+            register(Typeface.CustomFallbackBuilder(family).setStyle(font.style).build())
         } catch (_: Exception) {
             -1
         }
 
     /** A font of a file, as Compose's `Font(File)`: -1 if it can't be read. */
-    fun loadFontFile(path: String, weight: Int, italic: Boolean, settings: String): Int =
+    fun loadFontFile(path: String, settings: String): Int =
         try {
-            numberOf(
-                Typeface.Builder(java.io.File(path)).setWeight(weight.coerceIn(1, 1000))
-                    .setItalic(italic).setFontVariationSettings(settings).build()
+            register(
+                Typeface.Builder(java.io.File(path)).setFontVariationSettings(settings).build()
             )
         } catch (_: Exception) {
             -1
         }
 
     /** A font of the package's assets, as Compose's `Font(path, assetManager)`. */
-    fun loadFontAsset(path: String, weight: Int, italic: Boolean, settings: String): Int =
+    fun loadFontAsset(path: String, settings: String): Int =
         try {
-            numberOf(
-                Typeface.Builder(assets!!, path).setWeight(weight.coerceIn(1, 1000))
-                    .setItalic(italic).setFontVariationSettings(settings).build()
-            )
+            register(Typeface.Builder(assets!!, path).setFontVariationSettings(settings).build())
         } catch (_: Exception) {
             -1
         }
@@ -205,33 +193,42 @@ internal class TextMeasurer(
 
     /** The platform's default or a generic family, as Compose's `PlatformTypefaces`. */
     fun createTypeface(name: String?, weight: Int, italic: Boolean): Int =
-        numberOf(platformTypeface(name, weight, italic))
+        register(platformTypeface(name, weight, italic))
 
     /**
      * A family on the device, as Compose's `optionalOnDeviceFontFamilyByName`: -1 if it isn't
-     * there (what a missing family gives is the default's).
+     * there (what a missing family gives is the default's), or if it can't take its settings.
      */
-    fun loadDeviceFont(name: String, weight: Int, italic: Boolean, settings: String): Int {
-        val typeface = platformTypeface(name, weight, italic)
-        val generic = name == "sans-serif" || name == "serif" || name == "monospace" || name == "cursive"
-        if (!generic) {
-            val weightOf = weight.coerceIn(1, 1000)
-            if (
-                typeface == Typeface.create(Typeface.DEFAULT, weightOf, italic) ||
-                    typeface == platformTypeface(null, weight, italic)
-            ) {
-                return -1
-            }
+    fun loadDeviceFont(name: String, weight: Int, italic: Boolean, settings: String): Int =
+        try {
+            val typeface = platformTypeface(name, weight, italic)
+            val generic =
+                name == "sans-serif" || name == "serif" || name == "monospace" || name == "cursive"
+            val missing =
+                !generic && (
+                    typeface == Typeface.create(Typeface.DEFAULT, weight.coerceIn(1, 1000), italic) ||
+                        typeface == platformTypeface(null, weight, italic)
+                )
+            if (missing) -1 else register(varied(typeface, settings))
+        } catch (_: Exception) {
+            -1
         }
-        return numberOf(varied(typeface, settings))
-    }
 
     /** A typeface faked to [weight] and [italic], as Compose's `synthesizeTypeface`. */
-    fun synthesizeTypeface(number: Int, weight: Int, italic: Boolean): Int =
-        numberOf(Typeface.create(loaded[number], weight.coerceIn(1, 1000), italic))
+    fun synthesizeTypeface(number: Int, weight: Int, italic: Boolean): Int {
+        val typeface = synchronized(loaded) { loaded[number] } ?: return -1
+        return register(Typeface.create(typeface, weight.coerceIn(1, 1000), italic))
+    }
+
+    /** Rust let go of typeface [number]: it goes with the last paragraph's paint holding it. */
+    fun releaseTypeface(number: Int) {
+        synchronized(loaded) { loaded.remove(number) }
+    }
 
     private fun typeface(style: PaintStyle): Typeface {
-        if (style.family == 5) return loaded[style.typeface]
+        if (style.family == 5) {
+            return synchronized(loaded) { loaded[style.typeface] } ?: Typeface.DEFAULT
+        }
         val key = (style.family.toLong() shl 40) or (style.weight.toLong() shl 8) or
             (if (style.italic) 1L else 0L) or ((style.familyName?.hashCode()?.toLong() ?: 0L) shl 48)
         return typefaces.getOrPut(key) {
@@ -1024,6 +1021,24 @@ internal class TextMeasurer(
 
     private companion object {
         const val TAG = "compose-rs"
+        /**
+         * The typefaces of fonts Rust resolved (`family` 5 in a request), by a number never used
+         * again: process-wide, as a typeface kept past a host or shared between views is one
+         * (D1121). Workers register too (D1122).
+         */
+        val loaded = HashMap<Int, Typeface>()
+        var nextTypeface = 0
+
+        /** [typeface]'s number, or -1 without one. */
+        fun register(typeface: Typeface?): Int {
+            if (typeface == null) return -1
+            return synchronized(loaded) {
+                val number = nextTypeface++
+                loaded[number] = typeface
+                number
+            }
+        }
+
         /** About ten list items' paragraphs: what a fling releases before composing more. */
         const val NODE_POOL_CAPACITY = 64
         const val PAINT_CACHE_CAPACITY = 64

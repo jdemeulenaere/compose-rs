@@ -15,7 +15,7 @@
 // The call macros name the runtime `compose`.
 extern crate compose_runtime as compose;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -24,13 +24,17 @@ use compose_android::serialize::{
     GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag,
     write_display_list, write_groups_ahead,
 };
-use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
+use compose_android::text::{
+    AndroidTextMeasurer, AndroidTypeface, LaidOut, TextBackend, take_dropped_typefaces,
+};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{mutable_state_of, remember};
 use compose_ui::platform::Optimizations;
 use compose_ui::{
-    Color, Density, DrawTextOptions, IntSize, Offset, PointerEvent, Rect, TextStyle, UnitExt,
+    Color, Density, DrawTextOptions, Font, FontOptions, FontStyle, FontVariation,
+    FontVariationSettings, FontWeight, IntSize, Offset, PointerEvent, Rect, TextStyle, Typeface,
+    UnitExt,
     platform::{ParagraphMetrics, UiHost},
     remember_text_measurer,
 };
@@ -433,6 +437,60 @@ fn one_layout_in_two_colors_in_a_frame_draws_only_live_paragraphs() {
     // Drawn again in the same paints: nothing new, nothing lost.
     assert_eq!(*checked.live.0.borrow(), live_at_start);
     assert!(checked.kept > 0, "no group was kept");
+}
+
+/// Fonts of the fake: the numbers live as Kotlin would hold them, given back as `JniFonts` does.
+#[derive(Default)]
+struct FakeFonts {
+    next: Cell<u32>,
+    live: Rc<RefCell<HashSet<u32>>>,
+}
+
+impl compose_ui::platform::PlatformFontLoader for FakeFonts {
+    fn load_blocking(&self, _font: &Font) -> Result<Option<Typeface>, String> {
+        let number = self.next.get();
+        self.next.set(number + 1);
+        self.live.borrow_mut().insert(number);
+        Ok(Some(Typeface::new(AndroidTypeface(number))))
+    }
+    fn create_default(&self, _: FontWeight, _: FontStyle) -> Typeface {
+        Typeface::new("default")
+    }
+    fn create_named(&self, _: &str, _: FontWeight, _: FontStyle) -> Typeface {
+        Typeface::new("named")
+    }
+    fn release_dropped(&self) {
+        for number in take_dropped_typefaces() {
+            assert!(self.live.borrow_mut().remove(&number), "typeface {number} released twice");
+        }
+    }
+}
+
+/// An animated variation: each frame a typeface, which goes when nothing holds it.
+#[test]
+fn an_animated_variation_holds_a_bounded_number_of_typefaces() {
+    let step_owner = mutable_state_of(1i32);
+    let step = step_owner.handle();
+    let fonts = Rc::new(FakeFonts::default());
+    let live = fonts.live.clone();
+    let measurer = AndroidTextMeasurer::with_fonts(Live::default(), fonts);
+    let mut host = UiHost::new(IntSize::new(200, 200), Density::new(1.0), Box::new(measurer));
+    host.set_content(move || {
+        let settings = FontVariationSettings::new([FontVariation::weight(step.get())]);
+        let font = Font::from_bytes(
+            b"a variable font",
+            FontOptions { variation_settings: Some(settings), ..FontOptions::default() },
+        );
+        let style = TextStyle { font_family: Some(font.to_font_family()), ..TextStyle::DEFAULT };
+        BasicText!("animated", style = style);
+    });
+    host.frame();
+    for value in 2..=300 {
+        step.set(value);
+        host.frame();
+    }
+    // The fonts' and the requests' caches, the paragraph's.
+    assert!(live.borrow().len() <= 34, "{} typefaces", live.borrow().len());
 }
 
 /// A lazy list's items drawing with a shared measurer, scrolled with prefetching between frames:

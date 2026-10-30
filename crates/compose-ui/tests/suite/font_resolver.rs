@@ -9,7 +9,9 @@ use std::rc::Rc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use compose_runtime::platform::{advance_clock, fire_timers, launch, run_ready, set_manual_clock};
+use compose_runtime::platform::{
+    advance_clock, cancel_current_task, fire_timers, launch, run_ready, set_manual_clock,
+};
 use compose_ui::platform::{PlatformFontLoader, PlatformFonts, ResolvedFonts};
 use compose_ui::{
     Font, FontFamily, FontLoadingStrategy, FontOptions, FontStyle, FontSynthesis, FontWeight,
@@ -131,6 +133,32 @@ impl TypefaceLoader for Faux {
     }
 }
 
+struct CancellingLoader {
+    loads: Rc<Cell<u32>>,
+}
+
+impl TypefaceLoader for CancellingLoader {
+    fn load_blocking(
+        &self,
+        _: &dyn PlatformFontLoader,
+        _: &Font,
+    ) -> Result<Option<Typeface>, String> {
+        Err("async".to_string())
+    }
+
+    fn await_load(
+        self: Rc<Self>,
+        _: Rc<dyn PlatformFontLoader>,
+        _: Font,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Typeface>, String>>>> {
+        Box::pin(async move {
+            self.loads.set(self.loads.get() + 1);
+            cancel_current_task();
+            std::future::pending().await
+        })
+    }
+}
+
 /// One test's platform, fonts and what they asked.
 struct Fixture {
     default: Typeface,
@@ -205,11 +233,27 @@ impl Fixture {
         while run_ready() {}
     }
 
-    /// As `advanceTimeBy(Font.MaximumAsyncTimeoutMillis)`.
+    /// As `advanceTimeBy(Font.MaximumAsyncTimeoutMillis)`, exactly.
     fn advance_past_the_timeout(&self) {
-        advance_clock(Duration::from_millis(Font::MAXIMUM_ASYNC_TIMEOUT_MILLIS + 1));
+        self.advance(15_000);
+    }
+
+    fn advance(&self, millis: u64) {
+        advance_clock(Duration::from_millis(millis));
         fire_timers();
         self.run_current();
+    }
+
+    /// A font whose load cancels itself, its task's, each time counted in `loads`: what
+    /// `throw CancellationException()` is in Compose's loaders.
+    fn cancelling(&self, loads: &Rc<Cell<u32>>) -> Font {
+        Font::from_loader(
+            Rc::new(CancellingLoader { loads: loads.clone() }),
+            FontOptions {
+                loading_strategy: Some(FontLoadingStrategy::Async),
+                ..FontOptions::default()
+            },
+        )
     }
 
     /// `family`'s preload, started, its result to read when it ends.
@@ -359,12 +403,17 @@ fn a_timeout_moves_on_to_the_fallback() {
     let family = FontFamily::of([test.asynchronous("first"), test.asynchronous("second")]);
     let reply = test.resolve(&family);
     assert!(is_async(&reply, &test.default));
-    test.advance_past_the_timeout();
+    // Not a moment before.
+    test.advance(14_999);
+    assert_eq!(test.requests.pending(), ["first"]);
+    test.advance(1);
     // The first never answered: it's still asked, and given up on.
     assert_eq!(test.requests.pending(), ["first", "second"]);
     test.requests.complete("second", &expected);
     test.run_current();
     assert!(is_async(&reply, &expected));
+    assert!(is_immutable(&test.resolve(&family), &expected));
+    assert_eq!(test.requests.pending(), ["first"]);
     assert_eq!(test.requests.completed(), ["second"]);
 }
 
@@ -478,16 +527,32 @@ fn an_optional_font_there_first_is_all_that_loads() {
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontListFontFamilyTypefaceAdapterTest.kt, cancellationIsConsideredLoadError
 #[test]
-fn a_load_that_fails_alone_leaves_the_default() {
+fn a_load_that_cancels_itself_is_a_failure() {
     let test = Fixture::new();
-    let family = test.asynchronous("async").to_font_family();
+    let loads = Rc::new(Cell::new(0));
+    let family = test.cancelling(&loads).to_font_family();
     let reply = test.resolve(&family);
-    test.requests.error("async");
     test.run_current();
     assert!(is_async(&reply, &test.default));
     // It's over, and final: nothing loads again.
     assert!(is_immutable(&test.resolve(&family), &test.default));
-    assert!(test.requests.pending().is_empty());
+    assert_eq!(loads.get(), 1);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontListFontFamilyTypefaceAdapterTest.kt, cancellationOfFirstRequest_cannotCancelJob
+#[test]
+fn a_load_that_cancels_itself_does_not_cancel_its_fallback() {
+    let test = Fixture::new();
+    let expected = typeface("serif");
+    let loads = Rc::new(Cell::new(0));
+    let family = FontFamily::of([test.cancelling(&loads), test.asynchronous("fallback")]);
+    test.resolve(&family);
+    test.run_current();
+    assert_eq!(test.requests.pending(), ["fallback"]);
+    test.requests.complete("fallback", &expected);
+    test.run_current();
+    assert!(is_immutable(&test.resolve(&family), &expected));
+    assert_eq!(loads.get(), 1);
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontListFontFamilyTypefaceAdapterTest.kt, cancellationOfFirstLoad_stillDoesSecond_inFallback
@@ -502,6 +567,60 @@ fn the_failure_of_the_first_load_leaves_the_second_to_arrive() {
     test.requests.complete("second", &expected);
     test.run_current();
     assert!(is_immutable(&test.resolve(&family), &expected));
+}
+
+#[test]
+fn a_blocking_font_that_fails_does_not_go_on_to_the_next() {
+    let test = Fixture::new();
+    let throwing = test.font(
+        "throwing",
+        FontLoadingStrategy::Blocking,
+        Err("always fails to load".to_string()),
+        FontWeight::NORMAL,
+        FontStyle::Normal,
+    );
+    let family = FontFamily::of([throwing, test.blocking("next", &typeface("next"))]);
+    assert!(is_immutable(&test.resolve(&family), &test.default));
+    assert_eq!(test.requests.completed(), ["throwing"]);
+}
+
+/// Fills the fonts' cache of recent results with others', past what it keeps.
+fn fill_the_recent_fonts(test: &Fixture) {
+    for _ in 0..17 {
+        let other = test.blocking("other", &typeface("other"));
+        test.resolve(&other.to_font_family());
+    }
+}
+
+#[test]
+fn a_failure_is_for_good_past_the_recent_fonts() {
+    let test = Fixture::new();
+    let font = test.asynchronous("async");
+    let family = font.to_font_family();
+    test.resolve(&family);
+    test.requests.error("async");
+    test.run_current();
+    fill_the_recent_fonts(&test);
+    let another = FontFamily::of([font, test.asynchronous("fallback")]);
+    test.resolve(&another);
+    assert_eq!(test.requests.pending(), ["fallback"]);
+}
+
+#[test]
+fn fifteen_other_fonts_leave_a_font_loaded_in_the_recent_ones() {
+    let test = Fixture::new();
+    let font = test.blocking("kept", &typeface("kept"));
+    test.resolve(&font.to_font_family());
+    for _ in 0..15 {
+        test.resolve(&test.blocking("other", &typeface("other")).to_font_family());
+    }
+    // Another family, past the requests' cache: its font is the one already loaded.
+    let another = FontFamily::of([font, test.asynchronous("unused")]);
+    let completed_before =
+        test.requests.completed.borrow().iter().filter(|n| **n == "kept").count();
+    test.resolve(&another);
+    let completed = test.requests.completed.borrow().iter().filter(|n| **n == "kept").count();
+    assert_eq!(completed, completed_before);
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontListFontFamilyTypefaceAdapterTest.kt, throwingFont_doesntThrow
@@ -582,6 +701,16 @@ fn a_load_that_finds_nothing_gives_nothing() {
 }
 
 // Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/font/AsyncFontListLoaderTest.kt, loadWithTimeoutOrNull_nullsOnCancellation
+#[test]
+fn a_load_cancelled_gives_nothing() {
+    let test = Fixture::new();
+    let loads = Rc::new(Cell::new(0));
+    let family = test.cancelling(&loads).to_font_family();
+    let reply = test.resolve(&family);
+    test.run_current();
+    assert_eq!(reply.value(), test.default);
+}
+
 #[test]
 fn a_load_that_never_ends_gives_nothing_after_the_timeout() {
     let test = Fixture::new();
@@ -716,7 +845,53 @@ fn an_optional_font_missing_preloads_the_async_one() {
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontFamilyResolverImplPreloadTest.kt, preload_insertsTypefaceIntoCache
 #[test]
-fn a_preloaded_font_is_there_at_once() {
+fn a_preload_puts_a_blocking_fonts_result_in_the_cache() {
+    let test = Fixture::new();
+    let family = test.blocking("blocking", &typeface("mono")).to_font_family();
+    let cached = || {
+        test.fonts.has_cached_request(
+            Some(&family),
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontSynthesis::All,
+        )
+    };
+    assert!(!cached());
+    assert_eq!(*test.preload(&family).borrow(), Some(Ok(())));
+    assert!(cached());
+    assert_eq!(test.requests.completed(), ["blocking"]);
+}
+
+#[test]
+fn a_preloaded_font_stays_past_the_recent_fonts() {
+    let test = Fixture::new();
+    let expected = typeface("mono");
+    let font = test.asynchronous("async");
+    let preload = test.preload(&font.to_font_family());
+    test.requests.complete("async", &expected);
+    test.run_current();
+    assert_eq!(*preload.borrow(), Some(Ok(())));
+    fill_the_recent_fonts(&test);
+    // Another family of it, past the requests' cache too: there at once, nothing loaded.
+    let another = FontFamily::of([font, test.blocking("fallback", &typeface("fallback"))]);
+    assert!(is_immutable(&test.resolve(&another), &expected));
+    assert!(test.requests.pending().is_empty());
+}
+
+#[test]
+fn a_failed_preload_leaves_the_font_to_try_again() {
+    let test = Fixture::new();
+    let family = test.asynchronous("async").to_font_family();
+    let preload = test.preload(&family);
+    test.requests.error("async");
+    test.run_current();
+    assert!(matches!(&*preload.borrow(), Some(Err(_))));
+    test.resolve(&family);
+    assert_eq!(test.requests.pending(), ["async"]);
+}
+
+#[test]
+fn a_preloaded_async_font_is_there_at_once() {
     let test = Fixture::new();
     let expected = typeface("mono");
     let family = test.asynchronous("async").to_font_family();
@@ -749,6 +924,18 @@ fn a_default_typeface_is_made_once() {
         test.fonts.resolve(None, FontWeight::NORMAL, FontStyle::Normal, FontSynthesis::All);
     }
     assert_eq!(test.platform.created.get(), 1);
+}
+
+#[test]
+fn another_synthesis_is_another_request() {
+    let test = Fixture::new();
+    let family = test.blocking("blocking", &typeface("a")).to_font_family();
+    let at = |synthesis| {
+        test.fonts.resolve(Some(&family), FontWeight::BOLD, FontStyle::Normal, synthesis).value()
+    };
+    let (none, all) = (at(FontSynthesis::None), at(FontSynthesis::All));
+    assert_eq!(synthesized(&none), None);
+    assert_eq!(synthesized(&all), Some(&Synthesized { weight: 700, italic: false }));
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontFamilyResolverImplTest.kt, resultsNotSame_forDifferentFontWeight
@@ -814,10 +1001,14 @@ fn the_seventeenth_result_evicts_the_first() {
         test.fonts.resolve(None, weight, FontStyle::Normal, FontSynthesis::All);
     };
     resolve(FontWeight::new(1));
-    sixteen_weights().for_each(resolve);
-    assert_eq!(test.platform.created.get(), 17);
+    sixteen_weights().take(15).for_each(resolve);
+    assert_eq!(test.platform.created.get(), 16);
+    // Sixteen fit.
     resolve(FontWeight::new(1));
-    assert_eq!(test.platform.created.get(), 18);
+    assert_eq!(test.platform.created.get(), 16);
+    sixteen_weights().skip(15).for_each(resolve);
+    resolve(FontWeight::new(50));
+    assert_eq!(test.platform.created.get(), 18, "the least recently used went");
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/font/FontFamilyResolverImplTest.kt, resultsAreNotEvicted_whenCacheOverfills_ifUsedRecently_cacheSize16
@@ -952,6 +1143,27 @@ fn a_weight_below_600_is_not_faked() {
         FontWeight::NORMAL,
         FontStyle::Normal,
         FontWeight::W500,
+        FontStyle::Normal,
+        FontSynthesis::Weight,
+    );
+    assert_eq!(result, loaded);
+    // At 600 it is.
+    let (result, _) = synthesis_of(
+        FontWeight::NORMAL,
+        FontStyle::Normal,
+        FontWeight::W600,
+        FontStyle::Normal,
+        FontSynthesis::Weight,
+    );
+    assert_eq!(synthesized(&result), Some(&Synthesized { weight: 600, italic: false }));
+}
+
+#[test]
+fn a_font_already_bold_is_not_faked_bolder() {
+    let (result, loaded) = synthesis_of(
+        FontWeight::W600,
+        FontStyle::Normal,
+        FontWeight::W700,
         FontStyle::Normal,
         FontSynthesis::Weight,
     );

@@ -816,6 +816,7 @@ name = "compose-skia"
 version = "0.1.0"
 dependencies = [
  "compose",
+ "compose-runtime",
  "compose-ui",
  "counter",
  "pkg-config",

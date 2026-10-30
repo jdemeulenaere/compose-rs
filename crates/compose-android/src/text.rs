@@ -16,6 +16,7 @@ use compose_ui::{
         ResolvedFonts, TextLayoutOptions, TextMeasurer, TextPosition,
     },
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -93,9 +94,28 @@ pub struct LaidOut {
     pub max_intrinsic_width: Option<f32>,
 }
 
-/// A typeface of `TextMeasurer.kt`, by its number there.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// A typeface of `TextMeasurer.kt`, by its number there: process-wide and never reused, so one
+/// kept past a host or shared between views (D1121) is that typeface for each. Dropped, the
+/// number is queued for the Kotlin table to let it go ([`take_dropped_typefaces`]).
+#[derive(PartialEq, Eq, Debug)]
 pub struct AndroidTypeface(pub u32);
+
+thread_local! {
+    /// The main thread's: a [`compose_ui::Typeface`] stays on it.
+    static DROPPED_TYPEFACES: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+impl Drop for AndroidTypeface {
+    fn drop(&mut self) {
+        // After the thread's locals, the process is going: nothing to give back.
+        let _ = DROPPED_TYPEFACES.try_with(|dropped| dropped.borrow_mut().push(self.0));
+    }
+}
+
+/// The numbers of the typefaces dropped since the last call.
+pub fn take_dropped_typefaces() -> Vec<u32> {
+    DROPPED_TYPEFACES.with(|dropped| std::mem::take(&mut *dropped.borrow_mut()))
+}
 
 struct Entry {
     /// The fonts its styles resolved to.
@@ -394,8 +414,13 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 
     fn release(&mut self, paragraph: ParagraphHandle) {
         let handle = paragraph.0 as u32;
-        if self.paragraphs.remove(&handle).is_some() {
+        if let Some(entry) = self.paragraphs.remove(&handle) {
             self.backend.release(handle);
+            // It may have been the last to hold its typefaces.
+            if !entry.resolved_fonts.is_empty() {
+                drop(entry);
+                self.fonts.release_dropped();
+            }
         }
     }
 }

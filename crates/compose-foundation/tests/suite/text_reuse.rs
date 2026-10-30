@@ -647,3 +647,39 @@ fn a_measurers_cached_layout_is_not_found_when_its_font_arrived() {
     let third = measurer.measure("Hello", options());
     assert!(!Rc::ptr_eq(&first.multi_paragraph, &third.multi_paragraph));
 }
+
+#[test]
+fn a_text_is_laid_out_again_when_a_spans_font_arrives() {
+    let arriving: Rc<RefCell<Option<compose_ui::Typeface>>> = Rc::default();
+    let font = compose_ui::Font::from_loader(
+        Rc::new(ArrivingFont { typeface: arriving.clone() }),
+        compose_ui::FontOptions {
+            loading_strategy: Some(compose_ui::FontLoadingStrategy::Async),
+            ..Default::default()
+        },
+    );
+    let family = font.to_font_family();
+    let text = compose_ui::AnnotatedString::build(|builder| {
+        builder.with_style(
+            compose_ui::SpanStyle {
+                font_family: Some(family.clone()),
+                ..compose_ui::SpanStyle::DEFAULT
+            },
+            |builder| {
+                builder.append("Hello");
+            },
+        );
+    });
+    let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
+    let mut host = UiHost::new(IntSize::new(400, 400), Density::new(1.0), Box::new(measurer));
+    host.set_content(move || {
+        BasicAnnotatedText!(text.clone());
+    });
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 1);
+    *arriving.borrow_mut() = Some(compose_ui::Typeface::new("arrived"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    host.frame();
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 2);
+}

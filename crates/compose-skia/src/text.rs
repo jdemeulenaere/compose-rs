@@ -11,6 +11,10 @@ use skia_safe::textlayout::{
     TextStyle as SkiaTextStyle, TypefaceFontProvider,
 };
 use skia_safe::{Data, FontArguments, FontMgr, FontStyle, Typeface, font_arguments, font_style};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 
 /// The families tried first, as Compose Desktop's default `FontFamily.SansSerif`, before the
@@ -53,9 +57,38 @@ fn families(family: Option<&compose_ui::FontFamily>) -> Vec<&'static str> {
 /// The system's fonts and those given. No typeface is synthesized (D1121).
 struct SkiaFontLoader {
     manager: FontMgr,
+    /// The typeface of each source lately read, the least recently used first: a variation of it
+    /// costs a clone, not the file again.
+    bases: RefCell<Vec<(compose_ui::FontSource, Typeface)>>,
+}
+
+/// The sources [`SkiaFontLoader`] keeps a typeface of.
+const BASE_TYPEFACES: usize = 16;
+
+/// The typefaces SkParagraph knows at once: past it, a new [`TypefaceFontProvider`]. A paragraph
+/// holds its own, and a family asked again is registered again.
+const REGISTERED_TYPEFACES: usize = 64;
+
+fn path_of(font: &compose_ui::Font) -> Option<std::path::PathBuf> {
+    match font.source() {
+        compose_ui::FontSource::File(path) => Some(path.to_path_buf()),
+        // On the desktop an asset is a file.
+        compose_ui::FontSource::Asset(path) => Some(std::path::PathBuf::from(path.as_str())),
+        _ => None,
+    }
 }
 
 impl SkiaFontLoader {
+    fn base_of(&self, font: &compose_ui::Font) -> Option<Typeface> {
+        let mut bases = self.bases.borrow_mut();
+        let found = bases.iter().position(|(source, _)| source == font.source())?;
+        let entry = bases.remove(found);
+        let typeface = entry.1.clone();
+        bases.push(entry);
+        Some(typeface)
+    }
+
+    /// `font`'s typeface from `data`, kept for its next variation.
     fn typeface_of(
         &self,
         data: &[u8],
@@ -65,6 +98,11 @@ impl SkiaFontLoader {
             .manager
             .new_from_data(Data::new_copy(data), None)
             .ok_or_else(|| format!("not a font: {font:?}"))?;
+        let mut bases = self.bases.borrow_mut();
+        if bases.len() == BASE_TYPEFACES {
+            bases.remove(0);
+        }
+        bases.push((font.source().clone(), typeface.clone()));
         Ok(Some(varied(typeface, font)))
     }
 
@@ -127,15 +165,16 @@ impl PlatformFontLoader for SkiaFontLoader {
         font: &compose_ui::Font,
     ) -> Result<Option<compose_ui::Typeface>, String> {
         use compose_ui::FontSource;
-        let read = |path: &std::path::Path| {
-            std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))
-        };
+        if let Some(base) = self.base_of(font) {
+            return Ok(Some(compose_ui::Typeface::new(varied(base, font))));
+        }
         let loaded = match font.source() {
             FontSource::Bytes(bytes) => self.typeface_of(bytes.as_slice(), font)?,
-            FontSource::File(path) => self.typeface_of(&read(path)?, font)?,
-            // On the desktop an asset is a file.
-            FontSource::Asset(path) => {
-                self.typeface_of(&read(std::path::Path::new(path.as_str()))?, font)?
+            FontSource::File(_) | FontSource::Asset(_) => {
+                let path = path_of(font).expect("a file's");
+                let data =
+                    std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                self.typeface_of(&data, font)?
             }
             FontSource::DeviceFamily(name) => {
                 let mut styles = self.manager.match_family(name.name());
@@ -148,6 +187,24 @@ impl PlatformFontLoader for SkiaFontLoader {
             FontSource::Loader(_) => return Err("a font of an application's loader".to_string()),
         };
         Ok(loaded.map(compose_ui::Typeface::new))
+    }
+
+    /// A file is read on a worker: the frame asking goes on with the fallback, as Compose's
+    /// `ResourcesCompat`'s callback lets it.
+    fn await_load(
+        self: Rc<Self>,
+        font: compose_ui::Font,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<compose_ui::Typeface>, String>>>> {
+        let path = path_of(&font).filter(|_| self.base_of(&font).is_none());
+        Box::pin(async move {
+            let Some(path) = path else { return self.load_blocking(&font) };
+            let data = compose_runtime::spawn_background(move || {
+                std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))
+            })
+            .await?;
+            let typeface = self.typeface_of(&data, &font)?;
+            Ok(typeface.map(compose_ui::Typeface::new))
+        })
     }
 
     fn create_default(
@@ -285,7 +342,7 @@ pub struct SkiaTextMeasurer {
     fonts: Rc<PlatformFonts>,
     /// The typefaces of fonts given, under an alias each, for SkParagraph to find by family.
     provider: TypefaceFontProvider,
-    aliases: Vec<(u32, String)>,
+    aliases: HashMap<u32, String>,
     paragraphs: Vec<Option<Entry>>,
     free: Vec<u64>,
 }
@@ -309,9 +366,12 @@ impl SkiaTextMeasurer {
         collection.set_asset_font_manager(Some(FontMgr::from(provider.clone())));
         SkiaTextMeasurer {
             collection,
-            fonts: PlatformFonts::new(Rc::new(SkiaFontLoader { manager: font_manager })),
+            fonts: PlatformFonts::new(Rc::new(SkiaFontLoader {
+                manager: font_manager,
+                bases: RefCell::default(),
+            })),
             provider,
-            aliases: Vec::new(),
+            aliases: HashMap::new(),
             paragraphs: Vec::new(),
             free: Vec::new(),
         }
@@ -321,6 +381,11 @@ impl SkiaTextMeasurer {
     /// queries).
     pub fn skia_paragraph(&self, handle: ParagraphHandle) -> Option<&Paragraph> {
         self.paragraphs.get(handle.0 as usize)?.as_ref().map(|entry| &entry.paragraph)
+    }
+
+    /// The typefaces SkParagraph knows now: for tests that they stay bounded.
+    pub fn registered_typefaces(&self) -> usize {
+        self.aliases.len()
     }
 
     /// The number of live paragraphs: for leak tests.
@@ -335,14 +400,19 @@ impl SkiaTextMeasurer {
             .downcast_ref::<Typeface>()
             .or_else(|| resolved.downcast_ref::<Option<Typeface>>().and_then(Option::as_ref))?;
         let id = typeface.unique_id();
-        if let Some((_, alias)) = self.aliases.iter().find(|(kept, _)| *kept == id) {
+        if let Some(alias) = self.aliases.get(&id) {
             return Some(alias.clone());
+        }
+        if self.aliases.len() >= REGISTERED_TYPEFACES {
+            self.provider = TypefaceFontProvider::new();
+            self.collection.set_asset_font_manager(Some(FontMgr::from(self.provider.clone())));
+            self.aliases.clear();
         }
         let alias = format!("compose-rs font {id}");
         self.provider.register_typeface(typeface.clone(), alias.as_str());
         // What the collection knew of the provider's families.
         self.collection.clear_caches();
-        self.aliases.push((id, alias.clone()));
+        self.aliases.insert(id, alias.clone());
         Some(alias)
     }
 

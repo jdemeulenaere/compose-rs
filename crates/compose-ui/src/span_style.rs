@@ -100,7 +100,7 @@ impl SpanStyle {
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
             font_synthesis: other.font_synthesis.or(self.font_synthesis),
-            font_family: other.font_family.clone().or_else(|| self.font_family.clone()),
+            font_family: other.font_family.as_ref().or(self.font_family.as_ref()).cloned(),
             font_feature_settings: other
                 .font_feature_settings
                 .clone()

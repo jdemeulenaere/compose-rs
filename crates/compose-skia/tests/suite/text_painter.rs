@@ -12,10 +12,12 @@ use compose::runtime::*;
 use compose::ui::platform::{Renderer, SharedTextMeasurer, UiHost};
 use compose::ui::{
     AnnotatedString, Color, Constraints, Density, DeviceFontFamilyName, DrawScope,
-    DrawTextLayoutOptions, DrawTextOptions, Font, FontFamily, FontFamilyResolver, FontOptions,
-    IntSize, LOCAL_FONT_FAMILY_RESOLVER, LayoutDirection, LocaleList, Modifier, Offset, Size,
+    DrawTextLayoutOptions, DrawTextOptions, Font, FontFamily, FontFamilyResolver,
+    FontLoadingStrategy, FontOptions, FontVariation, FontVariationSettings, IntSize,
+    LOCAL_FONT_FAMILY_RESOLVER, LayoutDirection, LocaleList, Modifier, Offset, Size,
     TextDecoration, TextLayoutResult, TextMeasureOptions, TextMeasurer, TextOverflow, TextPainter,
-    TextStyle, UnitExt, create_font_family_resolver, remember_text_measurer,
+    TextStyle, Typeface, TypefaceLoader, UnitExt, create_font_family_resolver,
+    remember_text_measurer,
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
@@ -782,8 +784,9 @@ fn drawing_a_layout_twice_in_another_color_keeps_one_repainted_paragraph() {
 
 // ---- Fonts on the real stack -------------------------------------------------------------------
 
-/// A monospaced font file of this system, if it has one we know.
-fn monospaced_font_file() -> Option<&'static str> {
+/// A monospaced font file of this system. No bundled fonts (D94; the test font is coming): a
+/// system with none of these fails here, rather than these tests passing with nothing asserted.
+fn monospaced_font_file() -> &'static str {
     [
         "/System/Library/Fonts/Monaco.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -791,6 +794,19 @@ fn monospaced_font_file() -> Option<&'static str> {
     ]
     .into_iter()
     .find(|path| std::path::Path::new(path).exists())
+    .expect("these tests need a monospaced font file: install DejaVu Sans Mono")
+}
+
+/// A variable font file of this system, with a `wght` axis.
+fn variable_font_file() -> &'static str {
+    [
+        "/System/Library/Fonts/SFNS.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans[wght].ttf",
+        "/usr/share/fonts/noto/NotoSans[wght].ttf",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())
+    .expect("these tests need a variable font file: install Noto Sans")
 }
 
 fn width_of(text: &str, family: &FontFamily) -> i32 {
@@ -810,7 +826,7 @@ fn width_of(text: &str, family: &FontFamily) -> i32 {
 
 #[test]
 fn a_font_of_a_file_is_what_a_text_is_laid_out_in() {
-    let Some(path) = monospaced_font_file() else { return };
+    let path = monospaced_font_file();
     let family = Font::from_file(path, FontOptions::default()).to_font_family();
     assert_eq!(width_of("iiiiiiii", &family), width_of("WWWWWWWW", &family));
     // Not the default family's, which is proportional.
@@ -822,7 +838,7 @@ fn a_font_of_a_file_is_what_a_text_is_laid_out_in() {
 
 #[test]
 fn a_font_of_bytes_is_what_a_text_is_laid_out_in() {
-    let Some(path) = monospaced_font_file() else { return };
+    let path = monospaced_font_file();
     let bytes: std::sync::Arc<[u8]> = std::fs::read(path).expect("the font").into();
     let family = Font::from_shared_bytes(bytes, FontOptions::default()).to_font_family();
     assert_eq!(width_of("iiiiiiii", &family), width_of("WWWWWWWW", &family));
@@ -836,7 +852,7 @@ fn a_blocking_font_that_cannot_be_read_is_the_default() {
 
 #[test]
 fn a_device_family_that_is_missing_goes_on_to_the_next_font() {
-    let Some(path) = monospaced_font_file() else { return };
+    let path = monospaced_font_file();
     let missing = Font::from_device_family(
         DeviceFontFamilyName::new("No Such Family"),
         FontOptions::default(),
@@ -847,7 +863,7 @@ fn a_device_family_that_is_missing_goes_on_to_the_next_font() {
 
 #[test]
 fn a_span_in_a_font_of_its_own_is_laid_out_in_it() {
-    let Some(path) = monospaced_font_file() else { return };
+    let path = monospaced_font_file();
     let family = Font::from_file(path, FontOptions::default()).to_font_family();
     let in_font = |text: &'static str| {
         AnnotatedString::build(|builder| {
@@ -875,4 +891,214 @@ fn a_span_in_a_font_of_its_own_is_laid_out_in_it() {
         measurer.measure(in_font(text), options).size.width
     };
     assert_eq!(measure("iiiiiiii"), measure("WWWWWWWW"));
+}
+
+/// `text`'s width in `path` at `wght`.
+fn width_at_weight(path: &str, weight: i32) -> i32 {
+    let settings = FontVariationSettings::new([FontVariation::weight(weight)]);
+    let font = Font::from_file(
+        path,
+        FontOptions { variation_settings: Some(settings), ..FontOptions::default() },
+    );
+    width_of("Hamburgefonstiv", &font.to_font_family())
+}
+
+#[test]
+fn a_variable_font_is_laid_out_at_its_settings() {
+    let path = variable_font_file();
+    assert!(width_at_weight(path, 900) > width_at_weight(path, 100));
+}
+
+#[test]
+fn an_animated_variation_registers_a_bounded_number_of_typefaces() {
+    let path = variable_font_file();
+    let mut measurer = SkiaTextMeasurer::new();
+    let density = Density::new(1.0);
+    for weight in 1..=300 {
+        let settings = FontVariationSettings::new([FontVariation::weight(weight)]);
+        let font = Font::from_file(
+            path,
+            FontOptions { variation_settings: Some(settings), ..FontOptions::default() },
+        );
+        let style = TextStyle { font_family: Some(font.to_font_family()), ..style_of(40.0) };
+        let handle = compose::ui::platform::TextMeasurer::layout(
+            &mut measurer,
+            "Hello",
+            &style,
+            Default::default(),
+            Constraints::unbounded(),
+            &density,
+        );
+        compose::ui::platform::TextMeasurer::release(&mut measurer, handle);
+    }
+    assert!(measurer.registered_typefaces() <= 64, "{}", measurer.registered_typefaces());
+}
+
+#[test]
+fn a_paragraph_outlives_the_typefaces_being_registered_anew() {
+    let path = monospaced_font_file();
+    let mut measurer = SkiaTextMeasurer::new();
+    let density = Density::new(1.0);
+    let family = Font::from_file(path, FontOptions::default()).to_font_family();
+    let style = TextStyle { font_family: Some(family), ..style_of(40.0) };
+    let first = compose::ui::platform::TextMeasurer::layout(
+        &mut measurer,
+        "iiiiiiii",
+        &style,
+        Default::default(),
+        Constraints::unbounded(),
+        &density,
+    );
+    // Other fonts, past the bound.
+    let variable = variable_font_file();
+    for weight in 1..=70 {
+        let settings = FontVariationSettings::new([FontVariation::weight(weight)]);
+        let font = Font::from_file(
+            variable,
+            FontOptions { variation_settings: Some(settings), ..FontOptions::default() },
+        );
+        let style = TextStyle { font_family: Some(font.to_font_family()), ..style_of(40.0) };
+        let handle = compose::ui::platform::TextMeasurer::layout(
+            &mut measurer,
+            "Hello",
+            &style,
+            Default::default(),
+            Constraints::unbounded(),
+            &density,
+        );
+        compose::ui::platform::TextMeasurer::release(&mut measurer, handle);
+    }
+    // It answers still, and a text in its font asks for it again.
+    let width = compose::ui::platform::TextMeasurer::metrics(&measurer, first).size.width;
+    let again = compose::ui::platform::TextMeasurer::layout(
+        &mut measurer,
+        "WWWWWWWW",
+        &style,
+        Default::default(),
+        Constraints::unbounded(),
+        &density,
+    );
+    assert_eq!(compose::ui::platform::TextMeasurer::metrics(&measurer, again).size.width, width);
+}
+
+/// A font that arrives when asked, from `path`.
+struct Arriving {
+    path: &'static str,
+    now: Rc<std::cell::Cell<bool>>,
+}
+
+impl TypefaceLoader for Arriving {
+    fn load_blocking(
+        &self,
+        _: &dyn compose::ui::platform::PlatformFontLoader,
+        _: &Font,
+    ) -> Result<Option<Typeface>, String> {
+        Err("async".to_string())
+    }
+
+    fn await_load(
+        self: Rc<Self>,
+        platform: Rc<dyn compose::ui::platform::PlatformFontLoader>,
+        _: Font,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Typeface>, String>>>>
+    {
+        Box::pin(async move {
+            while !self.now.get() {
+                delay(std::time::Duration::from_millis(5)).await;
+            }
+            platform.load_blocking(&Font::from_file(self.path, FontOptions::default()))
+        })
+    }
+}
+
+fn run_until(host: &mut UiHost, done: impl Fn(&UiHost) -> bool) {
+    for _ in 0..200 {
+        if done(host) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        host.frame();
+    }
+}
+
+#[test]
+fn a_parent_of_intrinsic_width_follows_a_font_arriving() {
+    // The text is 16 thin letters in the default font; in the monospaced one that arrives, wide.
+    let path = monospaced_font_file();
+    let now = Rc::new(std::cell::Cell::new(false));
+    let font = Font::from_loader(
+        Rc::new(Arriving { path, now: now.clone() }),
+        FontOptions {
+            loading_strategy: Some(FontLoadingStrategy::Async),
+            ..FontOptions::default()
+        },
+    );
+    let style = TextStyle { font_family: Some(font.to_font_family()), ..style_of(40.0) };
+    let heard: Rc<RefCell<Option<TextLayoutResult>>> = Rc::default();
+    let keep = heard.clone();
+    let mut host =
+        UiHost::new(IntSize::new(2000, 800), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(move || {
+        let keep = keep.clone();
+        let style = style.clone();
+        Box!(modifier = Modifier.width(compose::ui::IntrinsicSize::Max), {
+            let keep = keep.clone();
+            BasicText!(
+                "iiiiiiiiiiiiiiii",
+                style = style.clone(),
+                on_text_layout = move |result: TextLayoutResult| *keep.borrow_mut() = Some(result)
+            );
+        });
+    });
+    host.frame();
+    let before = heard.borrow().clone().expect("laid out");
+    assert_eq!(before.line_count, 1);
+    now.set(true);
+    let arrived = heard.clone();
+    let first_width = before.size.width;
+    run_until(&mut host, move |_| {
+        arrived.borrow().as_ref().is_some_and(|result| result.size.width != first_width)
+    });
+    host.frame();
+    let after = heard.borrow().clone().expect("laid out");
+    assert!(after.size.width > before.size.width, "{} {}", after.size.width, before.size.width);
+    assert_eq!(after.line_count, 1, "wrapped at the old font's width");
+}
+
+#[test]
+fn an_async_font_of_a_file_does_not_stop_the_first_frame() {
+    let path = monospaced_font_file();
+    let font = Font::from_file(
+        path,
+        FontOptions {
+            loading_strategy: Some(FontLoadingStrategy::Async),
+            ..FontOptions::default()
+        },
+    );
+    let style = TextStyle { font_family: Some(font.to_font_family()), ..style_of(40.0) };
+    let heard: Rc<RefCell<Option<TextLayoutResult>>> = Rc::default();
+    let keep = heard.clone();
+    let mut host =
+        UiHost::new(IntSize::new(2000, 800), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(move || {
+        let keep = keep.clone();
+        BasicText!(
+            "iiiiiiiiiiiiiiii",
+            style = style.clone(),
+            on_text_layout = move |result: TextLayoutResult| *keep.borrow_mut() = Some(result)
+        );
+    });
+    host.frame();
+    let first = heard.borrow().clone().expect("laid out").size.width;
+    let mono = width_of(
+        "iiiiiiiiiiiiiiii",
+        &Font::from_file(path, FontOptions::default()).to_font_family(),
+    );
+    // The fallback, proportional, in the first frame: the worker has only begun.
+    assert_ne!(first, mono);
+    let arrived = heard.clone();
+    run_until(&mut host, move |_| {
+        arrived.borrow().as_ref().is_some_and(|result| result.size.width == mono)
+    });
+    assert_eq!(heard.borrow().as_ref().expect("laid out").size.width, mono);
 }

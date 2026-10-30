@@ -154,9 +154,16 @@ impl std::hash::Hash for FontFamily {
 }
 
 /// The fonts of a family, as Compose's `FontListFontFamily`. Cloning shares them.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct FontListFontFamily {
     fonts: Rc<[Font]>,
+}
+
+impl PartialEq for FontListFontFamily {
+    /// The same list, nearly always: a style's family, cloned.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.fonts, &other.fonts) || self.fonts == other.fonts
+    }
 }
 
 impl FontListFontFamily {
@@ -258,6 +265,11 @@ impl fmt::Debug for FontBytes {
 /// Loads a font that isn't a platform's to find, as Compose's `AndroidFont.TypefaceLoader`: from
 /// a server, a font provider, anything. The platform makes the typeface: give it the bytes when
 /// they're here ([`Font::from_shared_bytes`] and [`PlatformFontLoader::load_blocking`]).
+///
+/// A load starts inside a text's layout, under
+/// [`SharedTextMeasurer`](crate::platform::SharedTextMeasurer)'s borrow: `load_blocking`, and
+/// `await_load` up to its first wait, must not measure text, which would panic as a `RefCell`
+/// borrowed twice.
 pub trait TypefaceLoader {
     /// For a `Blocking` or `OptionalLocal` font. `Err` is Compose's exception.
     fn load_blocking(
@@ -336,7 +348,7 @@ impl Default for FontOptions {
 }
 
 /// A font of a [`FontFamily`], as Compose's `Font`. Cloning shares what it comes from.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct Font {
     source: FontSource,
     weight: FontWeight,
@@ -424,6 +436,17 @@ impl Font {
     /// A family of this font, as Compose's `Font.toFontFamily`.
     pub fn to_font_family(&self) -> FontFamily {
         FontFamily::of([self.clone()])
+    }
+}
+
+impl PartialEq for Font {
+    /// The cheap fields first: a family's fonts mostly differ there, and bytes are long.
+    fn eq(&self, other: &Self) -> bool {
+        self.weight == other.weight
+            && self.style == other.style
+            && self.loading_strategy == other.loading_strategy
+            && self.variation_settings == other.variation_settings
+            && self.source == other.source
     }
 }
 
@@ -546,6 +569,9 @@ pub trait PlatformFontLoader {
     fn create_default(&self, weight: FontWeight, style: FontStyle) -> Typeface;
     /// The generic family `name` at `weight` and `style`.
     fn create_named(&self, name: &str, weight: FontWeight, style: FontStyle) -> Typeface;
+    /// Gives the platform back what the typefaces dropped since held: a paragraph in fonts was
+    /// released, or a load ended. Nothing by default.
+    fn release_dropped(&self) {}
     /// `typeface` faked to `weight` and italic, as Compose's `synthesizeTypeface`. The default
     /// leaves it (the desktop, D1121).
     fn synthesize(&self, typeface: &Typeface, _weight: FontWeight, _italic: bool) -> Typeface {

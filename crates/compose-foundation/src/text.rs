@@ -469,14 +469,9 @@ impl TextNode {
         // constraints can differ.
         let current =
             self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
-        // A font arrived, whose state its layout read: nothing kept of it is good, as Compose's
-        // `hasStaleResolvedFonts`. Asked only of a text with fonts of its own, for a frame's many
-        // others: the measure of a screen of text shows it.
-        let fonts_may_arrive = self.text.has_span_styles()
-            || matches!(self.style.font_family, Some(compose_ui::FontFamily::FontList(_)));
-        let current = current.filter(|&paragraph| {
-            !fonts_may_arrive || !scope.text_measurer().has_stale_resolved_fonts(paragraph)
-        });
+        // A font arrived, whose state its layout read: nothing kept of it is good.
+        let current =
+            current.filter(|&paragraph| !self.is_stale(&*scope.text_measurer(), paragraph));
         let relaid = match (current, self.constraints) {
             (Some(paragraph), Some(old)) => new_layout_will_be_different(
                 reuses_at_same_width(scope),
@@ -491,6 +486,8 @@ impl TextNode {
         if !relaid {
             return false;
         }
+        // What the lines of "H" measured was in the old font.
+        self.min_height = None;
         self.density = Some(density);
         self.direction = direction;
         let mut measurer = scope.text_measurer();
@@ -521,6 +518,20 @@ impl TextNode {
         true
     }
 
+    /// Whether a font `paragraph` asked for arrived since, as Compose's `hasStaleResolvedFonts`:
+    /// nothing kept of it is good. The read of its state: the node measuring, or the parent
+    /// asking its intrinsics, is told when one does. Asked only of a text with fonts of its own,
+    /// for a frame's many others: the measure of a screen of text shows it.
+    fn is_stale(
+        &self,
+        measurer: &dyn compose_ui::platform::TextMeasurer,
+        paragraph: ParagraphHandle,
+    ) -> bool {
+        let fonts_may_arrive = self.text.has_span_styles()
+            || matches!(self.style.font_family, Some(compose_ui::FontFamily::FontList(_)));
+        fonts_may_arrive && measurer.has_stale_resolved_fonts(paragraph)
+    }
+
     /// The paragraph an intrinsic height at `constraints` reads, leaving the measured one and
     /// its constraints as they are: the measured paragraph if the constraints wouldn't lay it
     /// out again, else the intrinsics' own, laid out again by the same rule (D554).
@@ -533,9 +544,14 @@ impl TextNode {
     ) -> ParagraphHandle {
         let reuse = reuses_at_same_width(scope);
         let mut measurer = scope.text_measurer();
-        if let (Some(paragraph), Some(old)) = (self.paragraph, self.constraints)
-            && self.density == Some(density)
-            && self.direction == direction
+        // A font arrived: the paragraphs kept are as good as none, and nothing's reused of them.
+        let measured = self
+            .paragraph
+            .filter(|_| self.density == Some(density) && self.direction == direction)
+            .filter(|&paragraph| !self.is_stale(&*measurer, paragraph));
+        let probe_is_stale =
+            self.probe.as_ref().is_some_and(|probe| self.is_stale(&*measurer, probe.paragraph));
+        if let (Some(paragraph), Some(old)) = (measured, self.constraints)
             && !new_layout_will_be_different(
                 reuse,
                 &mut *measurer,
@@ -548,6 +564,7 @@ impl TextNode {
             return paragraph;
         }
         if let Some(probe) = &mut self.probe
+            && !probe_is_stale
             && probe.density == density
             && probe.direction == direction
             && !new_layout_will_be_different(
@@ -566,8 +583,6 @@ impl TextNode {
             measurer.release(old.paragraph);
         }
         // From what the measurer kept of the measured paragraph, where it's in this setting.
-        let measured =
-            self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
         let paragraph = measurer.layout_probe(
             measured,
             &self.text,
@@ -721,11 +736,13 @@ impl TextNode {
     fn intrinsic_widths(&mut self, scope: &mut IntrinsicMeasureScope<'_>) -> (i32, i32) {
         let density = scope.density();
         let direction = scope.layout_direction();
-        let paragraph = match self.paragraph {
-            Some(paragraph) if self.density == Some(density) && self.direction == direction => {
-                paragraph
-            }
-            _ => self.probe_paragraph(scope, Constraints::unbounded(), density, direction),
+        let measured = self
+            .paragraph
+            .filter(|_| self.density == Some(density) && self.direction == direction)
+            .filter(|&paragraph| !self.is_stale(&*scope.text_measurer(), paragraph));
+        let paragraph = match measured {
+            Some(paragraph) => paragraph,
+            None => self.probe_paragraph(scope, Constraints::unbounded(), density, direction),
         };
         let own_width = scope.text_measurer().max_intrinsic_width(paragraph);
         let max = match own_width {
