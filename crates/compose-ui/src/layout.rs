@@ -368,6 +368,8 @@ impl IntrinsicMeasureScope<'_> {
             run: 0,
             relative: Vec::new(),
             intrinsic: Some(kind),
+            layer: 0,
+            placed: false,
         }
     }
 }
@@ -384,6 +386,10 @@ pub struct MeasureScope<'a> {
     /// In an intrinsic measurement (a default intrinsic function measuring), the intrinsic
     /// asked: measuring returns it, placing does nothing.
     pub(crate) intrinsic: Option<Intrinsic>,
+    /// The layer it measures: what a `layout_with`'s block places.
+    pub(crate) layer: usize,
+    /// It placed a child: `layout_with` is a mistake.
+    pub(crate) placed: bool,
 }
 
 impl<'a> std::ops::Deref for MeasureScope<'a> {
@@ -407,6 +413,8 @@ impl<'a> MeasureScope<'a> {
             run,
             relative: Vec::new(),
             intrinsic: None,
+            layer: 0,
+            placed: false,
         }
     }
 
@@ -482,12 +490,17 @@ impl<'a> MeasureScope<'a> {
         self.place_at(placeable, IntOffset::new(x, y))
     }
 
+    /// # Panics
+    ///
+    /// If this measurement already placed it, as Compose does: it would break the drawing order.
     pub fn place_at(&mut self, placeable: &Placeable, position: IntOffset) {
         if self.intrinsic.is_some() {
             return;
         }
+        self.placed = true;
         let measurable = placeable.measurable;
-        self.base.tree.place(measurable.node, measurable.layer as usize, position);
+        let layer = measurable.layer as usize;
+        self.base.tree.place_in_run(measurable.node, layer, position, self.run);
     }
 
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left
@@ -500,6 +513,34 @@ impl<'a> MeasureScope<'a> {
         if self.layout_direction() == LayoutDirection::Rtl {
             self.relative.push((*placeable, IntOffset::new(x, y)));
         }
+    }
+
+    /// The result of a measurement of `width` by `height` whose children `block` places, as
+    /// `MeasureScope.layout(width, height) { … }`: once this node has been placed, in the
+    /// layout's placement pass, top down. What the block reads places it again and doesn't
+    /// measure it; it may ask where it is, and measure a child. `place` in `measure`, and
+    /// `layout`, is its fast path, for what reads nothing while placing: no block is kept.
+    ///
+    /// # Panics
+    ///
+    /// As [`layout`](Self::layout).
+    pub fn layout_with(
+        &mut self,
+        width: i32,
+        height: i32,
+        block: impl Fn(&mut crate::placement::PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        let result = self.layout(width, height);
+        if self.intrinsic.is_none() {
+            // Compose has one place to place from; a block that ran after would be a second.
+            assert!(
+                !self.placed,
+                "compose-ui: a measurement placed a child and left its placing to a block too"
+            );
+            let (node, layer, run) = (self.base.node, self.layer, self.run);
+            self.base.tree.set_placement_block(node, layer, run, Rc::new(block));
+        }
+        result
     }
 
     /// The result of a measurement of `width` by `height`, as `MeasureScope.layout`.

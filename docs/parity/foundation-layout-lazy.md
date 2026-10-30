@@ -331,6 +331,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **layout-modifiers:**
   - `requiredSize(w, h)`, `requiredSizeIn`, `requiredWidthIn`, `requiredHeightIn` (`required_width`/`required_height` came with intrinsics, D1203);
   - `absolutePadding`, `absoluteOffset(x, y)`, `offset { IntOffset }` and `absoluteOffset { IntOffset }`;
+  - after the placement pass's coordinates (PL-2), `offset { }`, the scroll modifier's placing (`scroll.rs`, its `measure`), sheets and swipe-to-dismiss move to `layout_with`: what they read should place and not measure, as `OffsetTest`'s no-remeasure case asks, and it's a real gain for scrolling;
   - `PaddingValues.Absolute`, `PaddingValues.plus`/`minus`, `calculateStartPadding`/`calculateEndPadding` (check compose-rs's `PaddingValues` for the `calculate*` methods);
   - `BoxScope.matchParentSize`, `Arrangement.Absolute` (Left, Right, Center, SpaceBetween/Around/Evenly, `spacedBy`, `aligned`), `Modifier.visible`.
 - **intrinsics:** done (D1200–D1205): `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and Compose's intrinsics on every layout here. Flow layouts, `FlexBox` and `Grid` bring theirs.

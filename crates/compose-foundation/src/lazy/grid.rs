@@ -2309,6 +2309,12 @@ impl MeasurePolicy for LazyGridLayout {
             if (item < composed_start || item >= composed_end)
                 && Some(item) != header
                 && let Some((placeable, cross)) = m.item(item)
+                // Not one the window's room already placed: a child is placed once (D1210).
+                && !ahead_lines.iter().chain(&placed).chain(&beyond_lines).any(|&(line, _)| {
+                    m.measured_line(line).is_some_and(|(start, end, _)| {
+                        m.cells[start..end].iter().any(|(other, _)| *other == placeable)
+                    })
+                })
             {
                 let size = if vertical { placeable.height } else { placeable.width };
                 let at = if item < first_item { -size - main_max } else { main_max * 2 };

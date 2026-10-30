@@ -24,8 +24,7 @@ pub(crate) enum Invalidation {
     Draw,
     /// `LayoutModifierNode.invalidateMeasurement`.
     Measurement,
-    /// `LayoutModifierNode.invalidatePlacement` (a measurement until placement is a pass of its
-    /// own).
+    /// `LayoutModifierNode.invalidatePlacement`: its blocks run; a node with none is measured.
     Placement,
     /// `LayoutModifierNode.invalidateLayer`: the graphics layer's properties.
     Layer,
@@ -256,8 +255,8 @@ impl NodeContext<'_> {
         self.invalidate(Invalidation::Measurement);
     }
 
-    /// Places the node's layout node again, as `invalidatePlacement` (compose-rs places as it
-    /// measures: a measurement).
+    /// Places the node's layout node again, as `invalidatePlacement`: its placement blocks run,
+    /// and a layout placing inside its measurement is measured.
     pub fn invalidate_placement(&mut self) {
         self.invalidate(Invalidation::Placement);
     }

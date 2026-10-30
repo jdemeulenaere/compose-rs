@@ -20,6 +20,7 @@ mod observer_nodes;
 mod paragraph;
 mod paragraph_style;
 mod parent_data;
+mod placement_pass;
 mod retained_drawing;
 mod review_d;
 mod review_d2;

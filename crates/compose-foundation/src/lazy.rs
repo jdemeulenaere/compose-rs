@@ -2966,6 +2966,8 @@ impl MeasurePolicy for LazyListLayout {
                 && Some(pinned) != header
                 && !prefetch.detached.borrow().contains(&pinned)
                 && let Some(placeable) = measure(pinned, &mut sizes)
+                // Not one the window's room already placed: a child is placed once (D1210).
+                && !ahead.iter().chain(&placed).chain(&beyond).any(|(other, _)| *other == placeable)
             {
                 let at =
                     if pinned < index { -main_of(&placeable) - main_max } else { main_max * 2 };

@@ -32,6 +32,8 @@ pub(crate) enum Observation {
     Semantics = 4,
     /// What its active target's focus properties read.
     FocusProperties = 5,
+    /// Its placement blocks (`MeasureScope::layout_with`): they run again, it isn't measured.
+    Placement = 6,
 }
 
 /// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
@@ -48,7 +50,8 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
         2 => Observation::Layer,
         3 => Observation::InnerLayers,
         4 => Observation::Semantics,
-        _ => Observation::FocusProperties,
+        5 => Observation::FocusProperties,
+        _ => Observation::Placement,
     };
     (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
 }
@@ -130,8 +133,21 @@ pub struct LayoutNode {
     pub(crate) needs_measure: bool,
     /// Some descendant needs measuring.
     pub(crate) subtree_needs_measure: bool,
-    /// Whether the parent placed it in its last measurement: unplaced nodes aren't drawn.
+    /// Whether the parent placed it in its last measurement or placement block: unplaced nodes
+    /// aren't drawn.
     pub(crate) placed: bool,
+    /// The placement blocks of its layers (`MeasureScope::layout_with`): most nodes have none.
+    pub(crate) placements: Option<Box<crate::placement::NodePlacements>>,
+    /// A placement block of it must run.
+    pub(crate) needs_placement: bool,
+    /// One of a descendant must.
+    pub(crate) subtree_needs_placement: bool,
+    /// The measurement or block that last placed a layer inside it, to reject placing it twice.
+    /// (Its parent placing it twice is `placed`, cleared before each.)
+    pub(crate) content_placed_in: u64,
+    /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
+    /// size places the parent again, doesn't measure it.
+    pub(crate) measured_in_block: bool,
     /// In `UiTree::layers_moved`.
     pub(crate) layer_moved: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
@@ -209,6 +225,11 @@ impl LayoutNode {
             needs_measure: true,
             subtree_needs_measure: false,
             placed: false,
+            placements: None,
+            needs_placement: false,
+            content_placed_in: 0,
+            subtree_needs_placement: false,
+            measured_in_block: false,
             layer_moved: false,
             measured_in: 0,
             intrinsics_asked: false,
@@ -976,6 +997,7 @@ impl UiTree {
                 }
                 Observation::Semantics => self.invalidate_semantics_of(node),
                 Observation::FocusProperties => self.focus_properties_read_changed(node),
+                Observation::Placement => self.placement_read_changed(node),
             }
         });
     }
@@ -1433,6 +1455,10 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
+        // Those of layers gone: the rest measure again, whatever they were.
+        if let Some(placements) = &mut value.placements {
+            placements.blocks.truncate(value.layers.len());
+        }
         self.refresh_parent_data(node)
     }
 
@@ -1664,6 +1690,9 @@ impl UiTree {
                 observer.forget(observation_key(id, Observation::InnerLayers));
                 observer.forget(observation_key(id, Observation::Semantics));
                 observer.forget(observation_key(id, Observation::FocusProperties));
+                if value.placements.is_some() {
+                    observer.forget(observation_key(id, Observation::Placement));
+                }
             }
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);

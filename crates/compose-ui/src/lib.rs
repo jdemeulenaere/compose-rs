@@ -64,6 +64,7 @@ mod paragraph_style;
 mod parent_data;
 mod path;
 mod pinnable;
+mod placement;
 mod platform_services;
 mod platform_text_style;
 mod pointer_input;
@@ -239,6 +240,7 @@ pub use path::{
     PathFillType, PathOperation, PathStep, RoundRect,
 };
 pub use pinnable::{FocusPin, LOCAL_PINNABLE_CONTAINER, PinnableContainer, PinnedHandle};
+pub use placement::PlacementScope;
 pub use platform_services::{
     DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,
     LOCAL_URI_HANDLER, PlatformUriHandler, UriHandler, check_uri, uri_for_log,

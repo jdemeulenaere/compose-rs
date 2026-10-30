@@ -701,7 +701,8 @@ impl UiTree {
         }
         match what {
             Invalidation::Draw => self.invalidate_draw_of_entry(node, index),
-            Invalidation::Measurement | Invalidation::Placement => self.invalidate_layout_of(node),
+            Invalidation::Placement => self.invalidate_placement_of(node),
+            Invalidation::Measurement => self.invalidate_layout_of(node),
             Invalidation::Layer => self.invalidate_layer_of_entry(node, index),
             // Computed again when next asked; the frame says they may have changed.
             Invalidation::Semantics => self.invalidate_semantics_of(node),
