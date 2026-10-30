@@ -274,6 +274,57 @@ fn a_negative_animator_duration_scale_is_0() {
     compose_android::set_animator_duration_scale(1.0);
 }
 
+/// What `AndroidXViewModels.kt` holds: a store outliving hosts until it's cleared for good, with a
+/// token for each and none for 0 (a view with no owner keeps its own).
+#[test]
+fn a_retained_view_model_store_lives_until_it_is_cleared() {
+    use compose_lifecycle::{ViewModel, ViewModelBase};
+
+    #[derive(Default)]
+    struct Model {
+        base: ViewModelBase,
+        cleared: Rc<Cell<bool>>,
+    }
+    impl ViewModel for Model {
+        fn base(&self) -> &ViewModelBase {
+            &self.base
+        }
+        fn on_cleared(&self) {
+            self.cleared.set(true);
+        }
+    }
+
+    assert!(compose_android::retained_view_model_store(0).is_none());
+    let (token, other) = (
+        compose_android::new_retained_view_model_store(),
+        compose_android::new_retained_view_model_store(),
+    );
+    assert_ne!(token, 0);
+    assert_ne!(token, other);
+    let store = compose_android::retained_view_model_store(token).unwrap();
+    assert_eq!(compose_android::retained_view_model_store(token).unwrap(), store);
+    let cleared = Rc::new(Cell::new(false));
+    store.put("key", Rc::new(Model { cleared: cleared.clone(), ..Default::default() }));
+    // A host given it: it goes, the store stays.
+    let mut ui = compose_test::ComposeTestRule::empty(UiHost::new(
+        IntSize::new(10, 10),
+        compose_ui::Density::new(1.0),
+        Box::new(FixedTextMeasurer::new()),
+    ));
+    ui.host().set_retained_view_model_store(store.clone());
+    ui.set_content(|| {});
+    ui.host().set_lifecycle_state(compose_lifecycle::LifecycleState::Destroyed);
+    drop(ui);
+    assert!(!cleared.get());
+    compose_android::clear_retained_view_model_store(token);
+    assert!(cleared.get());
+    assert!(compose_android::retained_view_model_store(token).is_none());
+    // Cleared twice: nothing. The other: there still.
+    compose_android::clear_retained_view_model_store(token);
+    assert!(compose_android::retained_view_model_store(other).is_some());
+    compose_android::clear_retained_view_model_store(other);
+}
+
 /// `ComposeRsView` sends `Lifecycle.State`'s ordinals (`Lifecycle.kt`).
 #[test]
 fn the_lifecycle_states_are_in_androidx_s_order() {

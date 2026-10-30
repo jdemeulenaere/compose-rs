@@ -287,6 +287,7 @@ class ComposeRsView @JvmOverloads constructor(
             savedState,
             optimizations,
             lifecycle.state,
+            HostViewModels.tokenOf(this),
         )
         savedState = null
         sendConfiguration(resources.configuration)

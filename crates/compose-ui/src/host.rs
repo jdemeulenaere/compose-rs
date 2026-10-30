@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compose_lifecycle::{LifecycleOwner, LifecycleRegistry, LifecycleState};
+use compose_lifecycle::{LifecycleOwner, LifecycleRegistry, LifecycleState, ViewModelStore};
 use compose_runtime::Composition;
 
 use crate::display_list::FlatDisplayList;
@@ -262,13 +262,13 @@ impl UiHost {
 
     /// The host's lifecycle, what `LOCAL_LIFECYCLE_OWNER` gives its content.
     pub fn lifecycle(&self) -> compose_lifecycle::Lifecycle {
-        self.lifecycle.0.lifecycle()
+        self.lifecycle.registry.lifecycle()
     }
 
     /// Moves the host's lifecycle, as its platform's does (an activity's, a window's focus). Once
     /// destroyed, it stays so. `Initialized` is `Created`: a lifecycle can't go back to it.
     pub fn set_lifecycle_state(&self, state: LifecycleState) {
-        let registry = &self.lifecycle.0;
+        let registry = &self.lifecycle.registry;
         if registry.current_state() != LifecycleState::Destroyed {
             registry.set_current_state(if state == LifecycleState::Initialized {
                 LifecycleState::Created
@@ -276,6 +276,18 @@ impl UiHost {
                 state
             });
         }
+    }
+
+    /// The store of view models its content gets by default, as an activity's.
+    pub fn view_model_store(&self) -> ViewModelStore {
+        self.lifecycle.view_models.clone()
+    }
+
+    /// Makes `store` that store, before the content, kept by the caller when the host goes: what a
+    /// platform does to keep view models across a configuration change (D838).
+    pub fn set_retained_view_model_store(&mut self, store: ViewModelStore) {
+        self.lifecycle.view_models = store;
+        self.lifecycle.clears_view_models = false;
     }
 
     /// Lays the content out in `direction` (the window's: right-to-left for Arabic or Hebrew
@@ -438,7 +450,8 @@ impl UiHost {
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
             let constants = HostLocals {
-                lifecycle: self.lifecycle.0.lifecycle(),
+                lifecycle: self.lifecycle.registry.lifecycle(),
+                view_models: Rc::new(self.lifecycle.view_models.clone()),
                 scheduler: self.prefetch_scheduler.clone(),
                 back_dispatcher: self.back_dispatcher.clone(),
                 saveable_registry: self.saveable_registry.clone(),
@@ -950,27 +963,36 @@ impl UiHost {
 
 /// The root's locals that never change, provided outermost.
 /// The host's lifecycle, as an Android view's owner or a desktop window's: resumed from the start
-/// unless the host says otherwise (a test's, D837), destroyed with it.
-struct HostLifecycle(LifecycleRegistry);
+/// unless the host says otherwise (a test's, D837), destroyed with it; and its view models, cleared
+/// then unless the platform keeps them (across a configuration change, D838).
+struct HostLifecycle {
+    registry: LifecycleRegistry,
+    view_models: ViewModelStore,
+    clears_view_models: bool,
+}
 
 impl HostLifecycle {
     fn new() -> HostLifecycle {
         let registry = LifecycleRegistry::new();
         registry.set_current_state(LifecycleState::Resumed);
-        HostLifecycle(registry)
+        HostLifecycle { registry, view_models: ViewModelStore::new(), clears_view_models: true }
     }
 }
 
 impl Drop for HostLifecycle {
     fn drop(&mut self) {
-        if self.0.current_state() != LifecycleState::Destroyed {
-            self.0.set_current_state(LifecycleState::Destroyed);
+        if self.registry.current_state() != LifecycleState::Destroyed {
+            self.registry.set_current_state(LifecycleState::Destroyed);
+        }
+        if self.clears_view_models {
+            self.view_models.clear();
         }
     }
 }
 
 struct HostLocals {
     lifecycle: compose_lifecycle::Lifecycle,
+    view_models: Rc<ViewModelStore>,
     scheduler: crate::prefetch::PrefetchScheduler,
     back_dispatcher: crate::back::OnBackPressedDispatcher,
     saveable_registry: compose_runtime::SaveableStateRegistry,
@@ -983,8 +1005,10 @@ impl HostLocals {
     /// One provider for them all: each group more is what every local read above the content's
     /// own providers walks (D839).
     fn provide(&self, content: impl FnOnce()) {
+        let view_models: compose_lifecycle::ViewModelStoreOwnerRef = self.view_models.clone();
         compose_runtime::CompositionLocalProvider(
             (
+                compose_lifecycle::LOCAL_VIEW_MODEL_STORE_OWNER.provides(Some(view_models)),
                 compose_lifecycle::LOCAL_LIFECYCLE_OWNER.provides(self.lifecycle.clone()),
                 crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(self.scheduler.clone())),
                 crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER

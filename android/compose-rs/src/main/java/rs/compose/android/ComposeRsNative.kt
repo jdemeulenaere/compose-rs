@@ -18,6 +18,7 @@ internal object ComposeRsNative {
         saved: ByteArray?,
         optimizations: Long,
         lifecycleState: Int,
+        viewModelStore: Long,
     ): Long
 
     @JvmStatic external fun destroy(host: Long)
@@ -40,6 +41,12 @@ internal object ComposeRsNative {
 
     /** Where the view's lifecycle is, by the ordinal of AndroidX's `Lifecycle.State`. */
     @JvmStatic external fun setLifecycleState(host: Long, state: Int)
+
+    /** A view model store surviving hosts, by its token, for [AndroidXViewModels]. */
+    @JvmStatic external fun newViewModelStore(): Long
+
+    /** Clears that store for good. */
+    @JvmStatic external fun clearViewModelStore(token: Long)
 
     /** `Settings.Global.ANIMATOR_DURATION_SCALE`: the main thread's animations follow it. */
     @JvmStatic external fun setAnimatorDurationScale(scale: Float)

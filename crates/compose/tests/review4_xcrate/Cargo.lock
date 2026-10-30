@@ -16,6 +16,7 @@ version = "0.1.0"
 dependencies = [
  "compose-animation",
  "compose-foundation",
+ "compose-lifecycle",
  "compose-material3",
  "compose-navigation",
  "compose-runtime",
@@ -39,6 +40,13 @@ dependencies = [
  "compose-runtime",
  "compose-ui",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "compose-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "compose-runtime",
 ]
 
 [[package]]
@@ -81,6 +89,7 @@ dependencies = [
 name = "compose-ui"
 version = "0.1.0"
 dependencies = [
+ "compose-lifecycle",
  "compose-runtime",
  "futures-core",
  "log",

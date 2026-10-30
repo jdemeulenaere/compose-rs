@@ -7,10 +7,10 @@ use LifecycleState::*;
 use compose_lifecycle::*;
 use compose_test::*;
 
-fn invoked(
-    state: LifecycleState,
-    drop_unless: fn(&TestLifecycleOwner, Rc<dyn Fn()>) -> Rc<dyn Fn()>,
-) -> bool {
+/// `drop_unless_started` or `drop_unless_resumed`.
+type DropUnless = fn(&TestLifecycleOwner, Rc<dyn Fn()>) -> Rc<dyn Fn()>;
+
+fn invoked(state: LifecycleState, drop_unless: DropUnless) -> bool {
     let owner = TestLifecycleOwner::new(Created);
     if state != Created {
         owner.set_current_state(state);

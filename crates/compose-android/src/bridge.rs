@@ -501,6 +501,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     saved: JByteArray<'local>,
     optimizations: jlong,
     lifecycle_state: jint,
+    view_model_store: jlong,
 ) -> jlong {
     with_env(&mut env, |env| {
         create(
@@ -516,6 +517,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
             &saved,
             optimizations,
             lifecycle_state,
+            view_model_store,
         )
     })
 }
@@ -534,6 +536,7 @@ fn create(
     saved: &JByteArray,
     optimizations: jlong,
     lifecycle_state: jint,
+    view_model_store: jlong,
 ) -> jlong {
     if WAKE.get().is_none() {
         let class_ref = env.new_global_ref(class).expect("compose-android: a global ref");
@@ -593,6 +596,10 @@ fn create(
     ui.set_optimizations(optimizations);
     // Before the content: its effects hear no resume the owner hasn't had.
     ui.set_lifecycle_state(crate::lifecycle_state(lifecycle_state));
+    // Kept by the view tree's `ViewModelStoreOwner` across a configuration change, if it has one.
+    if let Some(store) = crate::retained_view_model_store(view_model_store) {
+        ui.set_retained_view_model_store(store);
+    }
     crate::services::install(env, view, &view_ref, &ui);
     if rtl {
         ui.set_layout_direction(LayoutDirection::Rtl);
@@ -764,6 +771,26 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setLifecycleState
 ) {
     // SAFETY: a live host, on the main thread.
     unsafe { self::host(host) }.ui.set_lifecycle_state(crate::lifecycle_state(state));
+}
+
+/// `ComposeRsNative.newViewModelStore()`: a store for a holder in a view tree's
+/// `ViewModelStoreOwner` (`AndroidXViewModels.kt`), by its token.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_newViewModelStore(
+    _env: EnvUnowned,
+    _class: JClass,
+) -> jlong {
+    crate::new_retained_view_model_store()
+}
+
+/// `ComposeRsNative.clearViewModelStore(token)`: that holder's cleared for good.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_clearViewModelStore(
+    _env: EnvUnowned,
+    _class: JClass,
+    token: jlong,
+) {
+    crate::clear_retained_view_model_store(token);
 }
 
 /// `ComposeRsNative.setAnimatorDurationScale(scale)`: the setting's value (`ComposeRsRuntime.kt`

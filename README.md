@@ -14,7 +14,7 @@ compose-rs is Jetpack Compose's programming model in Rust: write UIs as composab
 | `crates/compose-ui` | layout nodes, modifiers, drawing, input, focus, semantics, `UiHost` |
 | `crates/compose-foundation` | layouts, text, images, scrolling, lazy lists and grids |
 | `crates/compose-material3` | Material 3 components and theme |
-| `crates/compose-lifecycle` | lifecycles and their effects |
+| `crates/compose-lifecycle` | lifecycles and their effects, view models |
 | `crates/compose-animation` | animations and transitions |
 | `crates/compose-navigation` | `NavController` and `NavHost` |
 | `crates/compose-test` | `ComposeTestRule` and event scripts |

@@ -53,6 +53,44 @@ pub fn set_animator_duration_scale(scale: f32) {
     compose_ui::set_motion_duration_scale(if scale < 0.0 { 0.0 } else { scale });
 }
 
+thread_local! {
+    /// The stores `AndroidXViewModels.kt` holds across configuration changes, by token.
+    static RETAINED_VIEW_MODELS: std::cell::RefCell<RetainedViewModels> = Default::default();
+}
+
+#[derive(Default)]
+struct RetainedViewModels {
+    last_token: i64,
+    stores: std::collections::HashMap<i64, compose_lifecycle::ViewModelStore>,
+}
+
+/// A view model store outliving the hosts given it, for the holder Kotlin keeps in a view tree's
+/// `ViewModelStoreOwner`: its token, never 0 (D838).
+#[doc(hidden)]
+pub fn new_retained_view_model_store() -> i64 {
+    RETAINED_VIEW_MODELS.with_borrow_mut(|retained| {
+        retained.last_token += 1;
+        retained.stores.insert(retained.last_token, compose_lifecycle::ViewModelStore::new());
+        retained.last_token
+    })
+}
+
+/// The store of `token`, if it's not been cleared.
+#[doc(hidden)]
+pub fn retained_view_model_store(token: i64) -> Option<compose_lifecycle::ViewModelStore> {
+    RETAINED_VIEW_MODELS.with_borrow(|retained| retained.stores.get(&token).cloned())
+}
+
+/// Forgets `token`'s store and clears it: its holder is cleared for good.
+#[doc(hidden)]
+pub fn clear_retained_view_model_store(token: i64) {
+    // Out of the borrow: a view model's `on_cleared` runs any code.
+    let store = RETAINED_VIEW_MODELS.with_borrow_mut(|retained| retained.stores.remove(&token));
+    if let Some(store) = store {
+        store.clear();
+    }
+}
+
 use std::sync::OnceLock;
 
 /// A root composable an app's library offers, and its name.

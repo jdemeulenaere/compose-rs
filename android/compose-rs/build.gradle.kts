@@ -24,4 +24,6 @@ dependencies {
     compileOnly("androidx.lifecycle:lifecycle-common-jvm:2.9.4") { isTransitive = false }
     // The same for a view's lifecycle (AndroidXLifecycle.kt).
     compileOnly("androidx.lifecycle:lifecycle-runtime-android:2.9.4") { isTransitive = false }
+    // The same for its view models (AndroidXViewModels.kt).
+    compileOnly("androidx.lifecycle:lifecycle-viewmodel-android:2.9.4") { isTransitive = false }
 }

@@ -11,10 +11,13 @@ use compose_lifecycle::*;
 type Events = Rc<RefCell<Vec<(u32, LifecycleEvent)>>>;
 
 /// An observer recording its events, then running what's set for one.
+/// What an observer does at an event.
+type Action = (LifecycleEvent, Rc<dyn Fn()>);
+
 struct TestObserver {
     number: u32,
     events: Events,
-    actions: RefCell<Vec<(LifecycleEvent, Rc<dyn Fn()>)>>,
+    actions: RefCell<Vec<Action>>,
     counts: Cell<[u32; 6]>,
 }
 
