@@ -353,10 +353,9 @@ type CellLookup = fn(StateId, &'static Location<'static>) -> Result<(StateRc, bo
 fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc, Stale> {
     loop {
         match with_runtime(|runtime| read_cell_in(runtime, id, at)) {
-            Read::Cell(cell, observed) => {
-                if observed {
-                    crate::snapshots::notify_read(id);
-                }
+            Read::Cell(cell) => return Ok(cell),
+            Read::Observed(cell) => {
+                crate::snapshots::notify_read(id);
                 return Ok(cell);
             }
             Read::Stale(stale) => return Err(stale),
@@ -369,10 +368,9 @@ fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc, Sta
 fn try_read_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc, Stale> {
     loop {
         match try_with_runtime(|runtime| read_cell_in(runtime, id, at)) {
-            Some(Read::Cell(cell, observed)) => {
-                if observed {
-                    crate::snapshots::notify_read(id);
-                }
+            Some(Read::Cell(cell)) => return Ok(cell),
+            Some(Read::Observed(cell)) => {
+                crate::snapshots::notify_read(id);
                 return Ok(cell);
             }
             Some(Read::Stale(stale)) => return Err(stale),
@@ -384,10 +382,12 @@ fn try_read_cell(id: StateId, at: &'static Location<'static>) -> Result<StateRc,
 
 /// What a read found.
 enum Read {
-    /// The cell, and whether read observers ([`Snapshot::observe`]) must hear the read.
+    /// The cell.
+    Cell(StateRc),
+    /// The cell, and read observers ([`Snapshot::observe`]) must hear the read.
     ///
     /// [`Snapshot::observe`]: crate::snapshots::Snapshot::observe
-    Cell(StateRc, bool),
+    Observed(StateRc),
     Stale(Stale),
     /// A dirty derived state's result: refresh it, then read again.
     Refresh(Rc<dyn crate::derived::Refresh>),
@@ -516,7 +516,8 @@ fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'stat
         }
         _ => {}
     }
-    Read::Cell(entry.cell.as_ref().expect("a live cell").state(), snapshots.reads_observed())
+    let cell = entry.cell.as_ref().expect("a live cell").state();
+    if snapshots.reads_observed() { Read::Observed(cell) } else { Read::Cell(cell) }
 }
 
 /// Looks a cell up for writing.

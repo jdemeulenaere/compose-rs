@@ -46,6 +46,8 @@ pub(crate) struct Snapshots {
     /// The number of barriers in `frames`, and the position just above the latest one.
     barriers: u32,
     barrier_top: u32,
+    /// Whether a frame above the latest barrier has a read observer: what each read checks.
+    reads_observed: bool,
     /// Apply notifications being sent (nested sends count).
     sending: u32,
     /// Turns in progress, which send at their end: a write in one doesn't wake the host.
@@ -75,6 +77,7 @@ impl Snapshots {
             frames: Vec::new(),
             barriers: 0,
             barrier_top: 0,
+            reads_observed: false,
             sending: 0,
             turns: 0,
         }
@@ -106,8 +109,12 @@ impl Snapshots {
     /// Whether a read must call read observers.
     #[inline]
     pub(crate) fn reads_observed(&self) -> bool {
-        (self.frames.len() as u32) > self.barrier_top
-            && self.frames[self.barrier_top as usize..].iter().any(|frame| frame.read.is_some())
+        self.reads_observed
+    }
+
+    fn update_reads_observed(&mut self) {
+        self.reads_observed =
+            self.frames[self.barrier_top as usize..].iter().any(|frame| frame.read.is_some());
     }
 
     fn update_writes_observed(&self) {
@@ -319,6 +326,7 @@ impl FrameGuard {
                 snapshots.barriers += 1;
                 snapshots.barrier_top = snapshots.frames.len() as u32;
             }
+            snapshots.update_reads_observed();
             if writes {
                 WRITES_OBSERVED.with(|flag| flag.set(true));
             }
@@ -340,6 +348,7 @@ impl Drop for FrameGuard {
                     .rposition(|frame| frame.barrier)
                     .map_or(0, |position| position as u32 + 1);
             }
+            snapshots.update_reads_observed();
             snapshots.update_writes_observed();
             Some(frame)
         })

@@ -90,6 +90,27 @@ fn state_reads(c: &mut Criterion) {
     c.bench_function("state get outside composition", |b| b.iter(|| black_box(state.get())));
 }
 
+/// A write outside composition, nothing reading the state: in the same snapshot as the last
+/// (docs/parity/design/snapshots.md §3.16); and each write followed by the send a turn ends with,
+/// which makes it a new record in a new snapshot and invalidates what read it (nothing here).
+fn state_writes(c: &mut Criterion) {
+    let state = mutable_state_of(0u64);
+    let mut value = 0;
+    c.bench_function("state set outside composition", |b| {
+        b.iter(|| {
+            value += 1;
+            state.set(black_box(value));
+        })
+    });
+    c.bench_function("state set, then the turn's send", |b| {
+        b.iter(|| {
+            value += 1;
+            state.set(black_box(value));
+            compose::runtime::snapshots::Snapshot::send_apply_notifications();
+        })
+    });
+}
+
 /// What composing a big screen does a lot of (docs/14, #5): reading a composition local whose
 /// provider is dozens of groups up, and reading one state from thousands of scopes (every layout
 /// node reads the layout direction).
@@ -136,6 +157,7 @@ criterion_group!(
     initial_composition,
     keyed_reorders,
     state_reads,
+    state_writes,
     many_readers
 );
 criterion_main!(benches);
