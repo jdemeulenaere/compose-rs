@@ -7,8 +7,12 @@ Timing on a loaded machine swings up to 4x; retired instructions move by a fract
     benchmarks/compare_instructions.py main                     # this checkout against a revision
     benchmarks/compare_instructions.py ../other --rounds 5      # ... or another checkout
     benchmarks/compare_instructions.py main grid_step:500       # scenario:iterations
+
+The base is built with this checkout's example, so both have the same scenarios; each base has its
+own target directory under --scratch, which can be reused.
 """
 import argparse
+import hashlib
 import os
 import pathlib
 import re
@@ -54,10 +58,11 @@ SCENARIOS = {
 
 
 def build(checkout, target):
-    """Builds the example in `checkout`, an older one being lent this one's source."""
+    """Builds the example in `checkout`, lent this checkout's source so that both sides have the
+    same scenarios: an older copy of the example lacks the new ones. It must compile there."""
     example = checkout / "benchmarks/examples" / f"{EXAMPLE}.rs"
-    lent = not example.exists()
-    if lent:
+    theirs = example.read_bytes() if example.exists() else None
+    if checkout != HERE.parent:
         example.parent.mkdir(exist_ok=True)
         shutil.copy(HERE / "examples" / f"{EXAMPLE}.rs", example)
     try:
@@ -68,8 +73,11 @@ def build(checkout, target):
             check=True,
         )
     finally:
-        if lent:
-            example.unlink()
+        if checkout != HERE.parent:
+            if theirs is None:
+                example.unlink()
+            else:
+                example.write_bytes(theirs)
     return target / "release/examples" / EXAMPLE
 
 
@@ -93,17 +101,29 @@ def main():
     scratch = pathlib.Path(args.scratch or tempfile.mkdtemp(prefix="compare-instructions-"))
     scratch.mkdir(parents=True, exist_ok=True)
     base = pathlib.Path(args.base)
+    commit = None
     if not base.is_dir():
-        source = scratch / "base-src"
+        commit = subprocess.run(
+            ["git", "rev-parse", "--verify", args.base + "^{commit}"],
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        source = scratch / f"base-src-{commit[:12]}"
         shutil.rmtree(source, ignore_errors=True)
         source.mkdir()
         archive = subprocess.run(
-            ["git", "archive", args.base], cwd=repo, stdout=subprocess.PIPE, check=True
+            ["git", "archive", commit], cwd=repo, stdout=subprocess.PIPE, check=True
         )
         subprocess.run(["tar", "-x", "-C", source], input=archive.stdout, check=True)
         base = source
+    base = base.resolve()
+    # A base of its own, or another's binary stays: Cargo finds nothing newer than what it built, the
+    # package's hash leaving out where the checkout is.
+    key = hashlib.sha1((commit or str(base)).encode()).hexdigest()[:12]
     binaries = {
-        "base": build(base.resolve(), scratch / "base-target"),
+        "base": build(base, scratch / f"base-target-{key}"),
         "this": build(repo, scratch / "this-target"),
     }
     wanted = [
