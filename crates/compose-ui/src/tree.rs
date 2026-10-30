@@ -367,6 +367,8 @@ pub struct UiTree {
     /// them for the traversals of their nodes' `on_detach`, as Compose's `LayoutNode.detach` runs
     /// before it unlinks a node from its parent.
     pub(crate) removed_parents: Vec<(NodeId, NodeId)>,
+    /// What changed of modifier locals in the pass under way, looked at when it ends.
+    pub(crate) modifier_local_changes: Vec<crate::modifier_local::LocalChange>,
     /// What the last layout node composed resolved of its locals: its siblings mostly share them.
     pub(crate) resolved_locals: Option<ResolvedLocals>,
     /// The view configurations provided (index 0, unused: the host's), `LayoutNode`s naming theirs.
@@ -447,6 +449,7 @@ impl UiTree {
             remeasure_allowed: false,
             remeasure_after: Vec::new(),
             removed_parents: Vec::new(),
+            modifier_local_changes: Vec::new(),
             resolved_locals: None,
             view_configurations: SmallVec::new(),
             delegates_noted: Vec::new(),
@@ -940,6 +943,8 @@ impl UiTree {
         // The entries whose updates delegated or undelegated, and whether a layer came or went.
         let mut delegated: SmallVec<[EntryId; 1]> = SmallVec::new();
         let mut layers_changed = false;
+        // The entries with modifier locals updated.
+        let mut locals_updated: SmallVec<[u16; 1]> = SmallVec::new();
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
@@ -952,8 +957,15 @@ impl UiTree {
                     }
                     layers_changed |= updated.layers;
                     invalidated |= entry.updated_kinds();
+                    if entry.kinds.any(NodeKinds::LOCALS) {
+                        locals_updated.push(index as u16);
+                    }
                 }
             }
+            for &index in &locals_updated {
+                self.note_local_changes(node, index as usize, true);
+            }
+            let value = self.node_mut(node);
             let previous = std::mem::replace(&mut value.modifier, modifier);
             if layers_changed {
                 value.chain_version = value.chain_version.wrapping_add(1);
@@ -985,6 +997,7 @@ impl UiTree {
         let mut inserted = false;
         // The inserted and removed nodes' kinds.
         let mut structural = NodeKinds::NONE;
+        let mut locals_inserted: SmallVec<[u16; 1]> = SmallVec::new();
         for (index, element) in new.iter().enumerate() {
             match matched[index] {
                 Some(old_index) => {
@@ -997,6 +1010,9 @@ impl UiTree {
                         }
                         layers_changed |= updated.layers;
                         invalidated |= entry.updated_kinds();
+                        if entry.kinds.any(NodeKinds::LOCALS) {
+                            locals_updated.push(index as u16);
+                        }
                     }
                     chain.push(entry);
                     reused += 1;
@@ -1014,6 +1030,9 @@ impl UiTree {
                     }
                     invalidated |= entry.kinds;
                     structural |= entry.kinds;
+                    if entry.kinds.any(NodeKinds::LOCALS) {
+                        locals_inserted.push(index as u16);
+                    }
                     chain.push(entry);
                 }
             }
@@ -1033,6 +1052,12 @@ impl UiTree {
         // A node attached in this pass attaches its whole subtree when it ends.
         let attaching = value.attaching;
         self.next_entry = next_entry;
+        for &index in &locals_updated {
+            self.note_local_changes(node, index as usize, true);
+        }
+        for &index in &locals_inserted {
+            self.note_local_changes(node, index as usize, false);
+        }
         for &entry in &delegated {
             self.queue_lifecycle(crate::lifecycle::Lifecycle::SyncDelegates(node, entry));
         }
@@ -1052,6 +1077,9 @@ impl UiTree {
         let mut detaching: SmallVec<[(ChainEntry, usize); 2]> = SmallVec::new();
         for (old_index, removed) in old_nodes.into_iter().enumerate() {
             let Some(mut removed) = removed else { continue };
+            if removed.kinds.any(NodeKinds::LOCALS) {
+                self.note_removed_locals(node, &mut removed);
+            }
             if removed.state & entry_state::ATTACH_RAN != 0 {
                 // Its place: before the first node kept that was after it, for what it
                 // traverses in its `on_detach`.

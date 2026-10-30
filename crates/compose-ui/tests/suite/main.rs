@@ -8,6 +8,7 @@ mod annotated_string_builder;
 mod delegating_nodes;
 mod dp_offset;
 mod intrinsics;
+mod modifier_locals;
 mod modifier_nodes;
 mod mutable_paths;
 mod node_invalidation;

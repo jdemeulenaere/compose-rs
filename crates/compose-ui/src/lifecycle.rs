@@ -488,6 +488,8 @@ impl UiTree {
     /// Runs the lifecycle steps queued, in order: at the end of a composition pass
     /// (`on_end_changes`), and wherever the tree applies its nodes' requests.
     pub(crate) fn run_lifecycle(&mut self) {
+        // The consumers that have read something first: those attaching now read what's there.
+        self.run_modifier_local_changes();
         self.run_lifecycle_steps();
         self.removed_parents.clear();
     }

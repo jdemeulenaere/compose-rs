@@ -1098,6 +1098,12 @@ pub trait ModifierNode: Any {
     fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {
         None
     }
+    /// Reads or provides modifier locals, as `ModifierLocalModifierNode`.
+    fn as_modifier_local(
+        &mut self,
+    ) -> Option<&mut dyn crate::modifier_local::ModifierLocalModifierNode> {
+        None
+    }
     /// What traversals find it by, as `TraversableNode`.
     fn as_traversable(&mut self) -> Option<&mut dyn crate::traversal::TraversableNode> {
         None

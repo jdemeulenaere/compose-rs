@@ -100,7 +100,7 @@ type Visitor<'f> = dyn FnMut(&mut dyn ModifierNode, &mut NodeContext<'_>) -> Con
 
 /// The branches of a walk down the tree: a layout node and the chain index to start at, the next
 /// to visit last.
-type Branches = SmallVec<[(NodeId, usize); 8]>;
+pub(crate) type Branches = SmallVec<[(NodeId, usize); 8]>;
 
 /// `node`'s children as branches from their chains' heads, the first visited on top: in draw
 /// order (`z_order`), else in child order. Not its overlays: a popup is a root of its own, as
@@ -284,46 +284,8 @@ impl NodeContext<'_> {
         z_order: bool,
         f: &mut dyn FnMut(&mut dyn ModifierNode, &mut NodeContext<'_>) -> TraverseDescendantsAction,
     ) {
-        let mut branches = self.first_branches(z_order);
-        'branches: while let Some((node, start)) = branches.pop() {
-            let Some(value) = self.tree.get(node) else { continue };
-            if value.deactivated {
-                continue;
-            }
-            if value.chain.get(start).is_some_and(|entry| entry.aggregate.any(kinds)) {
-                let mut index = start;
-                while let Some(entry) = self.tree.get(node).and_then(|value| value.chain.get(index))
-                {
-                    if entry.state & entry_state::ATTACHED == 0 {
-                        break;
-                    }
-                    if entry.kinds.any(kinds) {
-                        let mut action = TraverseDescendantsAction::ContinueTraversal;
-                        let _ =
-                            self.visit_entry(node, index, kinds, false, &mut |visited, context| {
-                                action = f(visited, context);
-                                match action {
-                                    TraverseDescendantsAction::ContinueTraversal => {
-                                        ControlFlow::Continue(())
-                                    }
-                                    _ => ControlFlow::Break(()),
-                                }
-                            });
-                        match action {
-                            TraverseDescendantsAction::ContinueTraversal => {}
-                            TraverseDescendantsAction::SkipSubtreeAndContinueTraversal => {
-                                continue 'branches;
-                            }
-                            TraverseDescendantsAction::CancelTraversal => return,
-                        }
-                    }
-                    index += 1;
-                }
-            }
-            if self.tree.get(node).is_some() {
-                push_children(self.tree, node, z_order, &mut branches);
-            }
-        }
+        let branches = self.first_branches(z_order);
+        self.tree.walk_subtree_if(branches, kinds, z_order, f);
     }
 
     /// Finds the nearest traversable node above this one with `key`, as
@@ -508,4 +470,63 @@ fn matching<'a, T: TraversableNode>(
         return None;
     }
     node.downcast_mut::<T>()
+}
+
+impl UiTree {
+    /// What `NodeContext::visit_subtree_if` does, from `branches`.
+    pub(crate) fn walk_subtree_if(
+        &mut self,
+        mut branches: Branches,
+        kinds: NodeKinds,
+        z_order: bool,
+        f: &mut dyn FnMut(&mut dyn ModifierNode, &mut NodeContext<'_>) -> TraverseDescendantsAction,
+    ) {
+        'branches: while let Some((node, start)) = branches.pop() {
+            let Some(value) = self.get(node) else { continue };
+            if value.deactivated {
+                continue;
+            }
+            if value.chain.get(start).is_some_and(|entry| entry.aggregate.any(kinds)) {
+                let mut index = start;
+                while let Some(entry) = self.get(node).and_then(|value| value.chain.get(index)) {
+                    if entry.state & entry_state::ATTACHED == 0 {
+                        break;
+                    }
+                    if entry.kinds.any(kinds) {
+                        let own = entry.own;
+                        let mut action = TraverseDescendantsAction::ContinueTraversal;
+                        let _ = self.with_entry(node, index, |modifier_node, context| {
+                            dispatch_with_context(
+                                modifier_node,
+                                own,
+                                kinds,
+                                false,
+                                context,
+                                &mut |visited, context| {
+                                    action = f(visited, context);
+                                    match action {
+                                        TraverseDescendantsAction::ContinueTraversal => {
+                                            ControlFlow::Continue(())
+                                        }
+                                        _ => ControlFlow::Break(()),
+                                    }
+                                },
+                            )
+                        });
+                        match action {
+                            TraverseDescendantsAction::ContinueTraversal => {}
+                            TraverseDescendantsAction::SkipSubtreeAndContinueTraversal => {
+                                continue 'branches;
+                            }
+                            TraverseDescendantsAction::CancelTraversal => return,
+                        }
+                    }
+                    index += 1;
+                }
+            }
+            if self.get(node).is_some() {
+                push_children(self, node, z_order, &mut branches);
+            }
+        }
+    }
 }

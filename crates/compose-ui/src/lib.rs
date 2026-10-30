@@ -47,6 +47,7 @@ mod lifecycle;
 mod logging;
 mod measure;
 mod modifier;
+mod modifier_local;
 mod motion;
 mod nested_scroll;
 mod node_chain;
@@ -204,6 +205,10 @@ pub use modifier::{
     ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
     PointerInputModifierNode, ReleaseContext, RowScope, SemanticsModifierNode, SizeSpec,
     WeightScope,
+};
+pub use modifier_local::{
+    ModifierLocal, ModifierLocalMap, ModifierLocalModifierNode, ModifierLocalReadScope,
+    modifier_local_map_of, modifier_local_of,
 };
 pub use motion::{
     await_positive_motion_duration_scale, motion_duration_scale, set_motion_duration_scale,

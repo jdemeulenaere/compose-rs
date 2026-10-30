@@ -71,7 +71,8 @@ impl NodeKinds {
             | NodeKinds::FOCUS_TARGET.0
             | NodeKinds::KEY_INPUT.0
             | NodeKinds::TRAVERSABLE.0
-            | NodeKinds::COMPOSITION_LOCAL_CONSUMER.0,
+            | NodeKinds::COMPOSITION_LOCAL_CONSUMER.0
+            | NodeKinds::LOCALS.0,
     );
 
     /// Whether it has any of `other`'s kinds.
@@ -149,6 +150,7 @@ impl NodeKinds {
         if observed_or_lifecycle {
             add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
             add(node.is_composition_local_consumer(), NodeKinds::COMPOSITION_LOCAL_CONSUMER);
+            add(node.as_modifier_local().is_some(), NodeKinds::LOCALS);
         }
         kinds
     }
