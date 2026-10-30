@@ -873,17 +873,33 @@ impl UiHost {
     /// that nothing focused takes goes back (`on_back_pressed`), as a dialog window takes it
     /// on desktop.
     pub fn send_key(&mut self, event: KeyEvent) -> bool {
+        self.send_key_reporting(event).0
+    }
+
+    /// A key and the text it commits, as the hosts have both from the platform: the text goes to
+    /// what has the focus unless a preview consumed the key, whatever consumed it after that,
+    /// as a text field takes the key it's about to type. Returns whether either was taken.
+    pub fn send_key_and_text(&mut self, event: KeyEvent, text: Option<&str>) -> bool {
+        let (consumed, previewed) = self.send_key_reporting(event);
+        match text {
+            Some(text) if !previewed => self.send_text(text) || consumed,
+            _ => consumed,
+        }
+    }
+
+    /// Whether the key was consumed, and whether by a preview.
+    fn send_key_reporting(&mut self, event: KeyEvent) -> (bool, bool) {
         let _turn = compose_runtime::platform::Turn::begin();
-        let (consumed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
+        let (consumed, previewed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
         Self::run(actions);
         if !consumed
             && event.key == crate::input::Key::Escape
             && event.kind == crate::input::KeyEventType::KeyDown
         {
-            return self.on_back_pressed();
+            return (self.on_back_pressed(), false);
         }
         self.wake_if_dirty();
-        consumed
+        (consumed, previewed)
     }
 
     /// Dispatches committed text to the focused node; returns whether it was taken.

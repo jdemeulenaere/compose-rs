@@ -574,7 +574,7 @@ impl UiTree {
 
     /// Sends a key event to the focused node and its ancestors until one consumes it; an
     /// unconsumed Tab moves focus. Returns whether it was consumed, and the queued actions.
-    pub fn dispatch_key(&mut self, event: KeyEvent) -> (bool, Vec<Action>) {
+    pub fn dispatch_key(&mut self, event: KeyEvent) -> (bool, bool, Vec<Action>) {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         let mut consumed = false;
@@ -601,6 +601,7 @@ impl UiTree {
                 break;
             }
         }
+        let previewed = consumed;
         for (node, index, delegate) in path {
             if consumed {
                 break;
@@ -640,7 +641,7 @@ impl UiTree {
             // dispatch (`?: return true`, `if (!clearedFocusSuccessfully) return true`).
             consumed = moved || waiting || self.focus.move_stopped;
         }
-        (consumed, actions)
+        (consumed, previewed, actions)
     }
 
     /// Sends committed text to the focused node and its ancestors until one takes it.

@@ -1337,16 +1337,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         meta: meta & 0x10000 != 0,
     };
     let kind = if down { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
-    let consumed = host.ui.send_key(KeyEvent { key, kind, modifiers });
     // A typed character's text, unless it's a shortcut, as the desktop host does.
-    if down
-        && !modifiers.ctrl
-        && !modifiers.meta
-        && let Some(c) = character.filter(|c| !c.is_control())
-    {
-        return host.ui.send_text(&c.to_string()) || consumed;
-    }
-    consumed
+    let text = character
+        .filter(|c| down && !modifiers.ctrl && !modifiers.meta && !c.is_control())
+        .map(|c| c.to_string());
+    host.ui.send_key_and_text(KeyEvent { key, kind, modifiers }, text.as_deref())
 }
 
 /// `ComposeRsNative.text(host, text)`: text an input method committed.

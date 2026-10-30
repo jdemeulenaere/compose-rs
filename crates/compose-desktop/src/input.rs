@@ -162,18 +162,18 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             }
             let Some(key) = key_of(&event.logical_key) else { return Outcome::Ignored };
             let kind = if pressed { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
-            let consumed = host.send_key(KeyEvent { key, kind, modifiers: state.modifiers });
             // The key's committed text, unless it's a shortcut: the focused node takes it (a
             // text field takes the typed key too, so its ancestors don't act on it).
-            let _ = consumed;
-            if pressed
-                && !state.modifiers.ctrl
-                && !state.modifiers.meta
-                && let Some(text) = &event.text
-                && text.chars().all(|c| !c.is_control())
-            {
-                host.send_text(text);
-            }
+            let text = event.text.as_ref().filter(|text| {
+                pressed
+                    && !state.modifiers.ctrl
+                    && !state.modifiers.meta
+                    && text.chars().all(|c| !c.is_control())
+            });
+            host.send_key_and_text(
+                KeyEvent { key, kind, modifiers: state.modifiers },
+                text.map(|text| text.as_str()),
+            );
         }
         WindowEvent::Ime(Ime::Commit(text)) => {
             // The composition ends with the commit.

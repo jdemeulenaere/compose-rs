@@ -219,3 +219,42 @@ fn shift_page_down_extends_the_selection() {
     ui.type_text("x");
     assert_eq!(*value.borrow(), "xD\nE");
 }
+
+/// A key a preview took isn't typed: the host doesn't send its text. A key the field took itself,
+/// as it takes what's typed, is.
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/ProcessKeyInputTest.kt, onKeyEventNotTriggered_ifOnPreviewKeyEventConsumesEvent
+#[test]
+fn a_key_a_preview_consumed_types_nothing() {
+    let value = Rc::new(RefCell::new(String::new()));
+    let typed = value.clone();
+    let mut ui = compose_test(move || {
+        let typed = typed.clone();
+        let text = remember(|| mutable_state_of(String::new()));
+        BasicTextField!(
+            text.get(),
+            move |new: String| {
+                *typed.borrow_mut() = new.clone();
+                text.set(new);
+            },
+            modifier = compose_ui::Modifier
+                .on_preview_key_event(|event: KeyEvent| event.key == Key::Character('x'))
+                .test_tag("field")
+                .size(100.dp())
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    let down = |c| KeyEvent {
+        key: Key::Character(c),
+        kind: KeyEventType::KeyDown,
+        modifiers: KeyModifiers::default(),
+    };
+    assert!(ui.host().send_key_and_text(down('y'), Some("y")));
+    ui.wait_for_idle();
+    assert_eq!(*value.borrow(), "y");
+    assert!(ui.host().send_key_and_text(down('x'), Some("x")));
+    ui.wait_for_idle();
+    assert_eq!(*value.borrow(), "y");
+    assert!(ui.host().send_key_and_text(down('y'), Some("y")));
+    ui.wait_for_idle();
+    assert_eq!(*value.borrow(), "yy");
+}

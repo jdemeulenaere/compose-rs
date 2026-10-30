@@ -112,7 +112,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/TwoDimensionalFocusTraversalTwoItemsTest.kt` | 134 | Whether one candidate is valid in each direction: overlapping, adjacent, common boundaries | ported (`compose-ui/tests/suite/focus_tests/candidates.rs`) | |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/WrapAroundFocusTest.kt` | 10 | `Next`/`Previous` wrap around rows, or not (the owner's internal wrap flag), in touch and keyboard modes | ported (`compose-ui/tests/suite/focus_tests/ordered.rs`) | Touch and keyboard modes, wrapping and not, as the class's parameters. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/InputModeTest.kt` | 1 | Switching to touch mode programmatically | ported (`compose-foundation/tests/suite/focus_model.rs`) | Keyboard-mode host: the request is granted (D1272). |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/focus/FocusAwareEventPropagationTest.kt` | 13 | Focus-aware events (keys, rotary, soft-keyboard interception) go from the focused node up, preview pass first | `partial` | Key bubbling exists (`ui/ui.rs` `key_events_bubble_from_the_focused_node_until_consumed`, `ui/review_d.rs` `on_key_event_after_focusable_receives_keys`); preview pass and interception need key-input-api, rotary needs rotary-input. Parameterized over 3 node types. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/focus/FocusAwareEventPropagationTest.kt` | 13 | Focus-aware events (keys, rotary, soft-keyboard interception) go from the focused node up, preview pass first | `partial` | Key bubbling exists (`ui/ui.rs` `key_events_bubble_from_the_focused_node_until_consumed`, `ui/review_d.rs` `on_key_event_after_focusable_receives_keys`); the preview pass exists (`ui/ui.rs` `a_preview_hears_a_key_first_from_the_root_down`, D1044), and interception needs key-input-api, rotary needs rotary-input. Parameterized over 3 node types. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/focus/FocusChangedModifierTest.kt` | 1 | Inspector value of `onFocusChanged` | n/a: `InspectorInfo` (tooling) has no analogue |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/focus/FocusEventModifierTest.kt` | 1 | Inspector value of `onFocusEvent` | n/a: `InspectorInfo` (tooling) has no analogue |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/focus/FocusRequesterModifierTest.kt` | 1 | Inspector value of `focusRequester` | n/a: `InspectorInfo` (tooling) has no analogue |  |
@@ -122,10 +122,10 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | Path | `@Test` | Covers | Status | Detail |
 |---|---|---|---|---|
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/AndroidProcessKeyInputTest.kt` | 1 | An Android `KeyEvent` reaches `onKeyEvent` | `port` | `ComposeRsNative.key` → `UiHost::send_key` (`crates/compose-android/src/bridge.rs`); no test of that path yet. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/HardwareKeyInputTest.kt` | 6 | Preview and soft-keyboard interception order for hardware keys | `feature:key-input-api` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/HardwareKeyInputTest.kt` | 6 | Preview and soft-keyboard interception order for hardware keys | `feature:key-input-api` | The preview exists (`Modifier::on_preview_key_event`, D1044); the soft keyboard's interception doesn't. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/KeyTest.kt` | 2 | Android key codes ↔ Compose `Key` | `partial` | The bridge maps 14 keys and characters (`bridge.rs` `Java_rs_compose_android_ComposeRsNative_key`); Compose's full `Key` set and `nativeKeyCode` need key-input-api. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/MetaKeyTest.kt` | 8 | `isAltPressed`/`isCtrlPressed`/`isMetaPressed`/`isShiftPressed` from the meta state | `port` | `KeyModifiers` and the bridge's meta mapping exist; untested. |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/ProcessKeyInputTest.kt` | 17 | `onKeyEvent`/`onPreviewKeyEvent` order, parents and children, updates, up without down ignored, unknown type | `partial` | `on_key_event` bubbling and updates are tested (`ui/ui.rs`, `ui/review_d.rs`, `fnd/review_f.rs`); preview, up-without-down filtering and `KeyEventType::Unknown` need key-input-api. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/ProcessKeyInputTest.kt` | 17 | `onKeyEvent`/`onPreviewKeyEvent` order, parents and children, updates, up without down ignored, unknown type | `partial` | `on_key_event` bubbling and updates are tested (`ui/ui.rs`, `ui/review_d.rs`, `fnd/review_f.rs`); the preview too (`ui/ui.rs`, `fnd/text_input.rs`, D1044, D1046); up-without-down filtering and `KeyEventType::Unknown` need key-input-api. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/key/KeyInputModifierTest.kt` | 2 | Inspector values of `onKeyEvent`/`onPreviewKeyEvent` | n/a: `InspectorInfo` (tooling) has no analogue |  |
 
 ### Pointer input and hit testing (33 files, 718 methods)
@@ -375,7 +375,7 @@ From `compose/ui/ui/api/current.txt` (deprecated entries left out; `restricted_c
 
 ### `androidx.compose.ui.input.key`
 
-- **key-input-api:** `Modifier.onPreviewKeyEvent`, `KeyInputModifierNode.onPreKeyEvent` (compose-rs's `KeyInputModifierNode` has `on_key_event` and text/IME hooks), `Key`'s full set of about 300 keys with `keyCode`, `Key(nativeKeyCode)` and `nativeKeyCode` (compose-rs has 15 named keys plus `Character(char)` and `Other(u32)`), `KeyEventType.Unknown`, `KeyEvent.utf16CodePoint`, `isAltPressed`/`isCtrlPressed`/`isMetaPressed`/`isShiftPressed` (compose-rs: `KeyModifiers` fields), `KeyEvent.nativeKeyEvent`, `SoftKeyboardInterceptionModifierNode`, `Modifier.onInterceptKeyBeforeSoftKeyboard`, `Modifier.onPreInterceptKeyBeforeSoftKeyboard`.
+- **key-input-api:** (`Modifier.onPreviewKeyEvent` and `KeyInputModifierNode.onPreKeyEvent` exist, D1044) `Key`'s full set of about 300 keys with `keyCode`, `Key(nativeKeyCode)` and `nativeKeyCode` (compose-rs has 15 named keys plus `Character(char)` and `Other(u32)`), `KeyEventType.Unknown`, `KeyEvent.utf16CodePoint`, `isAltPressed`/`isCtrlPressed`/`isMetaPressed`/`isShiftPressed` (compose-rs: `KeyModifiers` fields), `KeyEvent.nativeKeyEvent`, `SoftKeyboardInterceptionModifierNode`, `Modifier.onInterceptKeyBeforeSoftKeyboard`, `Modifier.onPreInterceptKeyBeforeSoftKeyboard`.
 
 ### `androidx.compose.ui.input.rotary`, `androidx.compose.ui.input.indirect`, `androidx.compose.ui.input`
 
@@ -465,8 +465,8 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** no.
 
 ### key-input-api (M)
-- **Compose API:** `onPreviewKeyEvent`, `KeyInputModifierNode.onPreKeyEvent`, the full `Key` set with `keyCode`/`nativeKeyCode`, `KeyEventType.Unknown`, `utf16CodePoint`, `nativeKeyEvent`, soft-keyboard interception modifiers and node.
-- **What:** a preview pass from the root down to the focused node before the bubbling pass; key identity separate from the typed character (compose-rs's `Key::Character('A')` with Shift is not `Key.A`); key-ups without their down dropped; both hosts mapping every key.
+- **Compose API:** the full `Key` set with `keyCode`/`nativeKeyCode`, `KeyEventType.Unknown`, `utf16CodePoint`, `nativeKeyEvent`, soft-keyboard interception modifiers and node.
+- **What:** (the preview pass exists, D1044) key identity separate from the typed character (compose-rs's `Key::Character('A')` with Shift is not `Key.A`); key-ups without their down dropped; both hosts mapping every key.
 - **Tests:** HardwareKeyInputTest; parts of ProcessKeyInputTest, KeyTest, FocusAwareEventPropagationTest.
 - **Depends on:** none. Foundation's text field and shortcuts would move to `Key` constants (text area).
 - **Experimental:** no.
@@ -676,7 +676,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 ### Suggested order
 
 1. **view-configuration** (S), **input-mode** (S), **window-info** (S): small, unblock others.
-2. **key-input-api** (M): preview pass and real `Key`s fix two behaviour differences (up without down, Shift changing the key) and unblock rotary and soft-keyboard interception.
+2. **key-input-api** (M): real `Key`s fix two behaviour differences (up without down, Shift changing the key) and, with the preview pass there (D1044), unblock rotary and soft-keyboard interception.
 3. **focus-hierarchy** (L), then **focus-properties** (L), **focus-requester-api** (M), **focus-search-tree** (M), **key-focus-navigation** (S): the largest block of Compose tests (41 files, 682 methods, about 1,600 cases once parameterized) becomes portable; the 2D geometry tests can be ported first, now.
 4. **pointer-event-model** (L), **hit-test-extensions** (M), **velocity-tracker** (M), **pointer-icon-api** (S): coordinate with the foundation agent, whose detectors and scrollables move onto them.
 5. **nested-scroll-dispatcher** (M), **bring-into-view-api** (M): also coordinated with foundation.
