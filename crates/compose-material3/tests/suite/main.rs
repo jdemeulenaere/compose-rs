@@ -13,6 +13,7 @@ mod checkbox_screenshots;
 mod components;
 mod content_description;
 mod divider;
+mod drag_handle;
 mod drawer;
 mod fab_elevation;
 mod icon_toggle_button;

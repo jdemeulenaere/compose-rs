@@ -500,8 +500,16 @@ pub struct DpSize {
 }
 
 impl DpSize {
+    /// As `DpSize.Unspecified`.
+    pub const UNSPECIFIED: DpSize = DpSize::new(Dp::UNSPECIFIED, Dp::UNSPECIFIED);
+
     pub const fn new(width: Dp, height: Dp) -> DpSize {
         DpSize { width, height }
+    }
+
+    /// Whether it's not [`UNSPECIFIED`](Self::UNSPECIFIED), as `DpSize.isSpecified`.
+    pub fn is_specified(self) -> bool {
+        self.width.is_specified() || self.height.is_specified()
     }
 }
 

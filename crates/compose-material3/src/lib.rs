@@ -20,6 +20,7 @@ mod checkbox;
 mod chips;
 mod components;
 mod dialog;
+mod drag_handle;
 mod drawer;
 mod fab;
 mod icon;
@@ -64,6 +65,10 @@ pub use components::{
 pub use dialog::{
     AlertDialog, AlertDialogDefaults, BasicAlertDialog, DropdownMenu, DropdownMenuItem,
     MenuDefaults, MenuItemColors,
+};
+pub use drag_handle::{
+    DragHandleColors, DragHandleShapes, DragHandleSizes, VerticalDragHandle,
+    VerticalDragHandleDefaults,
 };
 pub use drawer::{
     DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,

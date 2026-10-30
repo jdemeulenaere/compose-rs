@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1031): 28 source files (17,602 lines), 75 modules with 837 `#[test]`s; the statuses below are the current ones.
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 2's ripple, semantics and standard sheets (D1000-D1032): 29 source files (17,907 lines), 76 modules with 852 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -18,11 +18,11 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `ported` | 20 | 238 |
+| `ported` | 21 | 249 |
 | `covered` | 1 | 7 |
 | `port` | 15 | 182 |
 | `partial` | 41 | 1,206 |
-| `feature:<name>` | 80 | 1,103 |
+| `feature:<name>` | 79 | 1,092 |
 | `n/a` | 4 | 34 |
 | **Total** | **161** | **2,770** |
 
@@ -90,7 +90,7 @@ Screenshot tests (`*ScreenshotTest.kt`) compare against Android goldens, which c
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DismissibleNavigationDrawerTest.kt` | 19 | DismissibleNavigationDrawer offsets and widths, pane title, open/close/animateTo/snapTo, clicks, swipes (LTR/RTL), confirmStateChange, dismiss action, focus on open | `feature:dismissible-permanent-drawers` | Pane title and dismiss action need feature:semantics-gaps. |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerScreenshotTest.kt` | 4 | horizontal and vertical dividers, hairline thickness | `ported` | `suite/divider.rs` (all 4: the line, its color, its place, the hairline's no-width stroke; D1015). |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerTest.kt` | 6 | divider default and custom sizes, indents keep the size, hairline thickness | `ported` | `suite/divider.rs` (all 6; D1015). |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt` | 11 | VerticalDragHandle accessibility size, visuals when pressed, custom sizes/shapes/colors | `feature:vertical-drag-handle` |  |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt` | 11 | VerticalDragHandle accessibility size, visuals when pressed, custom sizes/shapes/colors | `ported` | `suite/drag_handle.rs` (all 11, what's drawn read from the display list and the layer, D1032). |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt` | 31 | ExposedDropdownMenuBox expanding and collapsing (click, back, Escape, Enter, Space), editable and read-only anchors, focus, IME, scroll, width matching the field, positioning, semantics | `feature:exposed-dropdown-menu` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/FloatingActionButtonMenuScreenshotTest.kt` | 12 | FAB menu collapsed/expanded, colors, item variants | `feature:fab-menu` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/FloatingActionButtonMenuTest.kt` | 3 | FAB menu children count, keyboard navigation from the FAB | `feature:fab-menu` |  |
@@ -271,7 +271,6 @@ From `compose/material3/material3/api/current.txt` (`restricted_current.txt` is 
 
 - **Dialogs**: `DatePickerDialog`, `TimePickerDialog`, `VibrantTimePickerDialog` (with their pickers). `BasicAlertDialog`, `AlertDialog`'s styling parameters and `AlertDialogDefaults` are there (D1011).
 - **`ModalBottomSheet`** [exp]: `ModalBottomSheetProperties.secure_policy` (Android); the drag handle's tooltip; `BottomSheetDefaults.HiddenShape`; the sheet's vertical scale while a spring overshoots its expanded anchor (`verticalScaleUp`, `verticalScaleDown`), which `BottomSheetScaffold`'s and `BottomSheet`'s lack too. The tip's state API is done (D1017).
-- **`VerticalDragHandle`**, `VerticalDragHandleDefaults`, `DragHandleColors`, `DragHandleShapes`, `DragHandleSizes`.
 
 ### Navigation
 
@@ -366,7 +365,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `predictive-back` (component side) | predictive back in `ModalNavigationDrawer`, `ModalBottomSheet`, `SearchBar`, `MaterialTransitions` | Scale and offset the surfaces with the back gesture's progress | ModalBottomSheetScreenshotTest, ModalNavigationDrawerScreenshotTest (18), parts of SearchBarScreenshotTest | dep:predictive-back | M | no |
 | `fab-menu` | `FloatingActionButtonMenu`, `FloatingActionButtonMenuItem`, `ToggleFloatingActionButton`, their scopes and defaults | A FAB that opens into a menu of items, its icon morphing | FloatingActionButtonMenuScreenshotTest, FloatingActionButtonMenuTest (15) | fab-expressive; button-shapes | M | no |
 | `non-interactive-scrollbar` | `Modifier.nonInteractiveScrollbar`, `NonInteractiveScrollbarDefaults` | A thin scroll indicator that fades in while scrolling | ScrollbarScreenshotTest, ScrollbarTest (14) | foundation's scroll-indicator-state (`ScrollIndicatorState` on `ScrollState` and the lazy states: missing) | S | no |
-| `vertical-drag-handle` | `VerticalDragHandle`, `VerticalDragHandleDefaults`, `DragHandleColors/Shapes/Sizes` | A pane-resizing handle that grows when pressed | DragHandleTest (11) | the interaction stream's dragged state | S | no |
+| `vertical-drag-handle` (done, D1032) | `VerticalDragHandle`, `VerticalDragHandleDefaults`, `DragHandleColors/Shapes/Sizes` | A pane-resizing handle that grows when pressed | DragHandleTest (11) | the interaction stream's dragged state | S | no |
 | `text-field-label-position` | `TextFieldLabelPosition` (`Inside`, `Cutout`, `Above`), `TextFieldLabelScope`, `label_position` on the fields | The label inside, cut into the outline, or above the field; alignments; always minimized | TextFieldLabelPositionTest (9), ~40 tests across the text field files | none | M | no |
 | `scrim` (done, D1018) | `Scrim`, `ScrimDefaults` | A public dimming layer that dismisses on click | ScrimTest (7) | semantics-gaps (traversal index) | S | no |
 | `text-selection-colors` (done) | `LocalTextSelectionColors` themed by `MaterialTheme`, `TextFieldColors.text_selection_colors` | Selection handles and highlight in the theme's primary color | TextSelectionColorsScreenshotTest (7), selection-color tests in the text field files | dep:text-selection-colors-local (foundation) | S | no |
