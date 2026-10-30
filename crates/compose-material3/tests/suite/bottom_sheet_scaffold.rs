@@ -2,8 +2,8 @@
 //! offsets, its actions by value, swipes, the top bar, body and snackbar's places, the max width,
 //! nested scroll with gestures off, a peek height of 0, and the standalone sheet.
 //!
-//! Not ported: `*_bottomSheetOffsetTaggedAsMotionFrameOfReference` (Compose's frame-of-reference
-//! tags); `bottomSheetScaffold_testNestedScrollConnection` (`@Ignore`d in Compose);
+//! Not ported: the two `*_bottomSheetOffsetTaggedAsMotionFrameOfReference` (Compose's
+//! frame-of-reference tags); the two `bottomSheetScaffold_landscape_*` (`@Ignore`d in Compose);
 //! `*_respectsMaterialThemeMotionScheme` (feature:motion-scheme); from `BottomSheetTest`, the
 //! `@Ignore`d wide-screen tests and the window-insets ones (feature:material-window-insets);
 //! `semanticsMatcher_hasActionLabel_findsNodeForAction` is a test of its own test helper
@@ -327,6 +327,134 @@ fn the_body_is_given_the_peek_height_as_padding() {
     assert_eq!(BOTTOM.with(Cell::get), PEEK);
 }
 
+/// Whether the display list fills something with `color`.
+fn fills_with(ui: &mut ComposeTestRule, color: compose_ui::Color) -> bool {
+    ui.host().display_list().ops.iter().any(|op| match op {
+        compose_ui::platform::DrawOp::DrawRect(_, paint)
+        | compose_ui::platform::DrawOp::DrawRoundRect(_, _, paint)
+        | compose_ui::platform::DrawOp::DrawPath { paint, .. } => paint.color == color,
+        _ => false,
+    })
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetScaffoldTest.kt, bottomSheetScaffold_testNestedScrollConnection
+/// A scroll in the sheet moves the sheet before its content and stays out of the top app bar's
+/// scrolled color; a scroll in the body goes to the bar and leaves the sheet where it is. The
+/// bar's color read from the display list, Compose's `assertContainsColor`.
+#[test]
+fn the_sheet_body_and_top_bar_each_get_their_own_scrolls() {
+    thread_local! {
+        static SHEET_SCROLL: Cell<Option<compose_foundation::ScrollState>> = const { Cell::new(None) };
+        static BODY_SCROLL: Cell<Option<compose_foundation::ScrollState>> = const { Cell::new(None) };
+        static COLORS: Cell<(compose_ui::Color, compose_ui::Color)> = const {
+            Cell::new((compose_ui::Color::UNSPECIFIED, compose_ui::Color::UNSPECIFIED))
+        };
+    }
+    let state = new_state(&STANDARD, SheetValue::PartiallyExpanded);
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            let behavior = TopAppBarDefaults::pinned_scroll_behavior();
+            let colors = TopAppBarDefaults::top_app_bar_colors();
+            COLORS
+                .with(|cell| cell.set((colors.container_color(0.0), colors.container_color(1.0))));
+            BottomSheetScaffold!(
+                |_| {
+                    let scroll = remember_scroll_state!();
+                    SHEET_SCROLL.with(|cell| cell.set(Some(scroll)));
+                    Column!(modifier = Modifier.vertical_scroll(scroll).test_tag(SHEET_TAG), {
+                        for index in 0..100 {
+                            Text!("{}", index, modifier = Modifier.height(50.dp()));
+                        }
+                    });
+                },
+                modifier = Modifier.nested_scroll(behavior.nested_scroll_connection()),
+                scaffold_state = remember_bottom_sheet_scaffold_state!(Some(handle)),
+                sheet_peek_height = PEEK.dp(),
+                top_bar = Some({
+                    let behavior = behavior.clone();
+                    move || {
+                        TopAppBar!(
+                            { Text!("Title") },
+                            modifier = Modifier.test_tag("bar"),
+                            scroll_behavior = Some(behavior.clone())
+                        );
+                    }
+                }),
+                {
+                    let scroll = remember_scroll_state!();
+                    BODY_SCROLL.with(|cell| cell.set(Some(scroll)));
+                    Column!(modifier = Modifier.vertical_scroll(scroll).test_tag("body"), {
+                        for index in 0..100 {
+                            Text!("{}", index, modifier = Modifier.height(50.dp()));
+                        }
+                    });
+                }
+            );
+        });
+    });
+    let sheet_scroll = || SHEET_SCROLL.with(Cell::get).expect("composed").value();
+    let body_scroll = || BODY_SCROLL.with(Cell::get).expect("composed").value();
+    let (before, after) = COLORS.with(Cell::get);
+    assert_ne!(before, after);
+    assert_eq!(sheet_scroll(), 0);
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+    assert!(fills_with(&mut ui, before));
+
+    // A partial scroll in the sheet expands it, its content not moving.
+    ui.on_node_unmerged(has_test_tag(SHEET_TAG)).perform_touch_input(|touch| {
+        let bottom = touch.bottom();
+        touch.swipe_up_with(bottom, bottom / 2.0, 200);
+    });
+    ui.wait_for_idle();
+    assert_eq!(sheet_scroll(), 0);
+    assert_eq!(state.current_value(), SheetValue::Expanded);
+    assert!(fills_with(&mut ui, before), "the bar hasn't changed");
+
+    ui.on_node_unmerged(has_test_tag(SHEET_TAG)).perform_touch_input(|touch| {
+        let (top, bottom) = (touch.top(), touch.bottom());
+        touch.swipe_down_with(top, bottom, 200);
+    });
+    ui.wait_for_idle();
+    assert_eq!(sheet_scroll(), 0);
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+
+    // A scroll in the body: the bar's color, the sheet still.
+    ui.on_node_unmerged(has_test_tag("body")).perform_touch_input(|touch| {
+        let (top, bottom) = (touch.top(), touch.bottom());
+        touch.swipe_up_with(bottom / 2.0, top, 200);
+    });
+    ui.wait_for_idle();
+    assert_eq!(sheet_scroll(), 0);
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+    assert!(body_scroll() > 0);
+    assert!(fills_with(&mut ui, after), "the bar shows it's scrolled");
+}
+
+/// `rememberBottomSheetScaffoldState`'s default sheet can't hide: its `skipHiddenState`.
+#[test]
+#[should_panic(expected = "Attempted to animate to hidden when skipHiddenState was enabled")]
+fn a_default_scaffold_states_sheet_cant_hide() {
+    thread_local! { static SHEET: Cell<Option<SheetState>> = const { Cell::new(None) }; }
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            let state = remember_bottom_sheet_scaffold_state!();
+            SHEET.with(|cell| cell.set(Some(state.bottom_sheet_state)));
+            BottomSheetScaffold!(
+                |_| {
+                    Box!(modifier = Modifier.size(300.dp()));
+                },
+                scaffold_state = state,
+                { Text!("Content") }
+            );
+        });
+    });
+    let sheet = SHEET.with(Cell::get).expect("composed");
+    assert_eq!(sheet.current_value(), SheetValue::PartiallyExpanded);
+    compose_runtime::platform::launch(async move { sheet.hide().await });
+    ui.wait_for_idle();
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetScaffoldTest.kt, bottomSheetScaffold_gesturesDisabled_doesNotParticipateInNestedScroll
 #[test]
 fn with_swiping_off_the_sheet_isnt_in_its_contents_scrolls() {
@@ -446,7 +574,7 @@ fn a_peek_as_high_as_the_sheet_has_the_expanded_anchor() {
     assert!(!state.has_partially_expanded_state());
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetScaffoldTest.kt, bottomSheetScaffold_withDragHandle_confirmValueChange_invokedForSemanticsActions
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/BottomSheetScaffoldTest.kt, bottomSheetScaffold_withDragHandle_confirmValueChange_invokedForSemanticsAction
 #[test]
 fn the_actions_ask_confirm_value_change() {
     let asked: Rc<RefCell<Vec<SheetValue>>> = Rc::default();
@@ -691,4 +819,26 @@ fn a_tiny_sheet_still_dismisses_on_a_swipe() {
     assert!(state.is_visible());
     swipe_down(&mut ui, SHEET_TAG);
     assert!(!state.is_visible());
+}
+
+/// `BottomSheet`'s default tonal elevation, `BottomSheetDefaults.Elevation`: on the surface, its
+/// tint.
+#[test]
+fn a_standalone_sheets_default_tonal_elevation_tints_the_surface() {
+    let state = new_state(&STANDARD, SheetValue::Expanded);
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            BottomSheet!(
+                state = handle,
+                container_color = MaterialTheme::color_scheme().surface,
+                |_| {
+                    Box!(modifier = Modifier.size(100.dp()));
+                }
+            );
+        });
+    });
+    let tinted = light_color_scheme().surface_color_at_elevation(BottomSheetDefaults::ELEVATION);
+    assert_ne!(tinted, light_color_scheme().surface);
+    assert!(fills_with(&mut ui, tinted), "{:?}", ui.host().display_list().ops);
 }

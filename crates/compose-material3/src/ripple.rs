@@ -1,8 +1,9 @@
 //! Material's ripple, as Compose's `ripple`, `LocalRippleConfiguration`,
 //! `LocalRippleThemeConfiguration` and its `material3-ripple` module: a press grows a circle from
 //! where it went down, hovers, focuses and drags show a state layer, or a focus an inset ring,
-//! through an `IndicationNodeFactory` (D1025). compose-rs has one node everywhere, Compose's
-//! `CommonRippleNode`; Android's draws through a `RippleDrawable`.
+//! through an `IndicationNodeFactory` (D1025). This is Compose's `CommonRippleNode`, on every
+//! platform for now; Compose's on Android draws through a `RippleDrawable`, which looks different
+//! (D1030).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -199,11 +200,6 @@ pub(crate) fn shaped_ripple(shape: Shape) -> Indication {
     ripple_with(RippleOptions { focus_ring_shape: Some(shape), ..RippleOptions::default() })
 }
 
-/// An unbounded ripple of `radius`, as `ripple(bounded = false, radius = radius)`.
-pub(crate) fn unbounded_ripple(radius: Dp) -> Indication {
-    ripple(false, radius, Color::UNSPECIFIED)
-}
-
 /// `source`'s interactions with its presses moved by `delta` into another node's coordinates, as
 /// `MappedInteractionSource`: only a pill in an item shows the item's ripple. For as long as it's
 /// held.
@@ -363,6 +359,32 @@ impl RippleAnimation {
         self.finish_requested = true;
         if let Some(waker) = self.waker.take() {
             waker.wake();
+        }
+    }
+}
+
+/// An animation's time, as an `Animatable`'s under the `MotionDurationScale`: from its first
+/// frame, divided by the scale read before each wait, a scale of 0 ending it at once.
+#[derive(Default)]
+struct PlayClock {
+    start: Option<u64>,
+}
+
+impl PlayClock {
+    /// The next frame's play time in milliseconds of an animation of `duration`; `None` for the
+    /// first frame of a running one, at time 0, which changes nothing.
+    async fn next_frame(&mut self, duration: f32) -> Option<f32> {
+        let scale = compose_ui::motion_duration_scale();
+        let time = compose_runtime::with_frame_nanos(|time| time).await;
+        if scale == 0.0 {
+            return Some(duration);
+        }
+        match self.start {
+            None => {
+                self.start = Some(time);
+                None
+            }
+            Some(start) => Some((time - start) as f32 / 1_000_000.0 / scale),
         }
     }
 }
@@ -618,10 +640,9 @@ impl Shared {
     /// `RippleAnimation.animate`: the fade in and growth, waits to be finished, fades out, and
     /// goes.
     async fn animate_ripple(self: Rc<Self>, ripple: Rc<RefCell<RippleAnimation>>) {
-        let start = compose_runtime::with_frame_nanos(|time| time).await;
+        let mut clock = PlayClock::default();
         loop {
-            let time = compose_runtime::with_frame_nanos(|time| time).await;
-            let millis = (time - start) as f32 / 1_000_000.0;
+            let Some(millis) = clock.next_frame(RADIUS_MILLIS).await else { continue };
             {
                 let mut ripple = ripple.borrow_mut();
                 ripple.alpha = (millis / FADE_IN_MILLIS).min(1.0);
@@ -646,10 +667,9 @@ impl Shared {
             }
         })
         .await;
-        let start = compose_runtime::with_frame_nanos(|time| time).await;
+        let mut clock = PlayClock::default();
         loop {
-            let time = compose_runtime::with_frame_nanos(|time| time).await;
-            let millis = (time - start) as f32 / 1_000_000.0;
+            let Some(millis) = clock.next_frame(FADE_OUT_MILLIS).await else { continue };
             ripple.borrow_mut().alpha = (1.0 - millis / FADE_OUT_MILLIS).max(0.0);
             self.invalidate();
             if millis >= FADE_OUT_MILLIS {
@@ -669,13 +689,14 @@ impl Shared {
         let shared = self.clone();
         scope.launch(async move {
             let from = shared.state_layer_alpha.get();
-            let start = compose_runtime::with_frame_nanos(|time| time).await;
+            let mut clock = PlayClock::default();
             loop {
-                let time = compose_runtime::with_frame_nanos(|time| time).await;
+                let frame = clock.next_frame(millis).await;
                 if shared.state_layer_generation.get() != generation {
                     return;
                 }
-                let fraction = ((time - start) as f32 / 1_000_000.0 / millis).min(1.0);
+                let Some(played) = frame else { continue };
+                let fraction = (played / millis).min(1.0);
                 shared.state_layer_alpha.set(from + (target - from) * fraction);
                 shared.invalidate();
                 if fraction >= 1.0 {

@@ -87,9 +87,11 @@ fn a_dialog_is_a_modal_dialog_node() {
 #[test]
 fn a_panes_title_is_its_label() {
     let host = host(|| {
-        Box!(modifier = Modifier.size(10.dp()).semantics(|config| {
-            config.set_pane_title("Navigation menu");
-        }));
+        Box!(
+            modifier = Modifier.size(10.dp()).semantics(|config| {
+                config.set_pane_title("Navigation menu");
+            })
+        );
     });
     let update = accessibility::tree_update(&host, "App");
     let pane = nodes(&update)

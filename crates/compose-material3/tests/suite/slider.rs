@@ -1624,3 +1624,113 @@ fn a_consumed_release_cancels_the_press() {
     assert_eq!(state.value(), 0.0);
     assert_eq!(finished.get(), 0);
 }
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderTest.kt, slider_thumbPosition_staysSameWhenFocused_insetRing
+/// The thumb's padded for the inset ring while focused: its core stays where it was, the track as
+/// wide.
+#[test]
+fn the_thumb_and_track_stay_where_they_are_when_an_inset_ring_shows() {
+    let state = SliderState::new(0.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            CompositionLocalProvider(
+                LOCAL_RIPPLE_THEME_CONFIGURATION
+                    .provides(RippleDefaults::INSET_FOCUS_RING_THEME_CONFIGURATION),
+                move || {
+                    Column!({
+                        Box!(modifier = Modifier.test_tag("other").size(10.dp()).focusable());
+                        Box!(modifier = Modifier.required_width(200.dp()), {
+                            Slider!(
+                                handle,
+                                move |new| handle.set_value(new),
+                                modifier = Modifier.test_tag("slider"),
+                                thumb = Some(|_| {
+                                    Box!(
+                                        modifier =
+                                            Modifier.size((4.dp(), 44.dp())).test_tag("thumb")
+                                    );
+                                }),
+                                track = Some(move |state: SliderState| {
+                                    SliderDefaults::track(
+                                        state,
+                                        Modifier.test_tag("track"),
+                                        true,
+                                        SliderDefaults::colors(),
+                                    );
+                                })
+                            );
+                        });
+                    });
+                },
+            );
+        });
+    });
+    let bounds = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    };
+    for value in [0.0, 0.3, 0.5, 1.0] {
+        handle.set_value(value);
+        ui.on_node_with_tag("other").request_focus();
+        ui.wait_for_idle();
+        let (thumb, track) = (bounds(&mut ui, "thumb"), bounds(&mut ui, "track"));
+        ui.on_node_with_tag("slider").request_focus();
+        ui.wait_for_idle();
+        assert_eq!(bounds(&mut ui, "thumb"), thumb, "the thumb at {value}");
+        assert_eq!(bounds(&mut ui, "track"), track, "the track at {value}");
+    }
+}
+
+/// The ring's padding adds to the track's gaps by the thumb, as `Track`'s `focusPadding`: 6 dp
+/// after half the thumb, then 10 dp.
+#[test]
+fn the_tracks_gap_grows_by_the_rings_padding_when_focused() {
+    let state = SliderState::new(0.5, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            CompositionLocalProvider(
+                LOCAL_RIPPLE_THEME_CONFIGURATION
+                    .provides(RippleDefaults::INSET_FOCUS_RING_THEME_CONFIGURATION),
+                move || {
+                    Box!(modifier = Modifier.required_width(204.dp()), {
+                        Slider!(
+                            handle,
+                            move |new| handle.set_value(new),
+                            modifier = Modifier.test_tag("slider")
+                        );
+                    });
+                },
+            );
+        });
+    });
+    let active_color = light_color_scheme().primary;
+    let parts = |ui: &mut ComposeTestRule, color: Color| -> Vec<Rect> {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                compose_ui::platform::DrawOp::DrawPath { path, paint, .. }
+                    if paint.color == color =>
+                {
+                    Some(path.bounds())
+                }
+                compose_ui::platform::DrawOp::DrawRoundRect(rect, _, paint)
+                | compose_ui::platform::DrawOp::DrawRect(rect, paint)
+                    if paint.color == color =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let active = |ui: &mut ComposeTestRule| {
+        parts(ui, active_color).iter().fold(0.0f32, |it, rect| it.max(rect.right))
+    };
+    let unfocused = active(&mut ui);
+    ui.on_node_with_tag("slider").request_focus();
+    ui.wait_for_idle();
+    assert_eq!(active(&mut ui), unfocused - 4.0);
+}

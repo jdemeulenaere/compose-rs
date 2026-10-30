@@ -32,7 +32,9 @@ pub trait IndicationNodeFactory: Any {
     /// While composing, where the clickable's layout node takes its modifier: a factory whose
     /// nodes read composition locals where they are (Compose's
     /// `CompositionLocalConsumerModifierNode`: Material's ripple) returns one holding `locals()`,
-    /// the map there. With node-level locals (MN-8) the node reads them itself. (D1025)
+    /// the map there. With node-level locals (MN-8) the node reads them itself and this goes.
+    /// (D1025)
+    #[doc(hidden)]
     fn at_node(
         &self,
         _locals: &mut dyn FnMut() -> compose_runtime::CompositionLocalMap,
@@ -564,7 +566,9 @@ impl Modifier {
         match indication.resolve() {
             Some(factory) => {
                 // The locals where the modifier is made, a factory reading them being given them
-                // while composing (a clickable's are its layout node's, D1025).
+                // while composing (a clickable's are its layout node's, D1025): made above a
+                // provider and used below it, it doesn't see that provider, where Compose's does.
+                // MN-8 removes the difference.
                 let factory = if compose_runtime::is_composing() {
                     factory
                         .at_node(&mut compose_runtime::current_composition_local_map)

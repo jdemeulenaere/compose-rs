@@ -466,12 +466,7 @@ impl MeasurePolicy for DrawerPaneLayout {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let loose = Constraints::new(
-            0,
-            constraints.max_width,
-            0,
-            constraints.max_height,
-        );
+        let loose = Constraints::new(0, constraints.max_width, 0, constraints.max_height);
         let placeables: Vec<_> = measurables.iter().map(|it| scope.measure(*it, loose)).collect();
         let width = placeables.iter().map(|it| it.width).max().unwrap_or(0);
         let height = placeables.iter().map(|it| it.height).max().unwrap_or(0);

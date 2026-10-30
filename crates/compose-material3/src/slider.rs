@@ -28,7 +28,10 @@ struct SliderInner {
     track_range: (f32, f32),
     should_auto_snap: Cell<bool>,
     is_dragging: OwnedState<bool>,
-    /// The thumb's size and the slider's width, as the last layout measured them.
+    /// Whether it holds the focus, as `isFocused`: what's padded for an inset focus ring.
+    is_focused: OwnedState<bool>,
+    /// The thumb's size, its focus padding apart, and the slider's width, as the last layout
+    /// measured them.
     thumb_size: Cell<IntSize>,
     total_width: Cell<i32>,
     /// The track's corner, as its `CornerSizeAlignmentLine` (the default track sets it).
@@ -62,6 +65,7 @@ impl SliderState {
             track_range,
             should_auto_snap: Cell::new(true),
             is_dragging: mutable_state_of(false),
+            is_focused: mutable_state_of(false),
             thumb_size: Cell::new(IntSize::ZERO),
             total_width: Cell::new(0),
             track_corner: Cell::new(0),
@@ -246,6 +250,9 @@ pub struct SliderDefaults;
 
 /// The track's height, as `TrackHeight` (`SliderTokens.InactiveTrackHeight`).
 const TRACK_HEIGHT: Dp = Dp(16.0);
+/// Around the handle and added to its gaps while an inset focus ring shows, as
+/// `insetFocusRingPadding`.
+const INSET_FOCUS_RING_PADDING: Dp = Dp(4.0);
 /// The handle's width and height, as `ThumbWidth` and `ThumbHeight`.
 const THUMB_WIDTH: Dp = Dp(4.0);
 const THUMB_HEIGHT: Dp = Dp(44.0);
@@ -378,10 +385,17 @@ impl SliderDefaults {
                 scope.layout(placeable.width, placeable.height)
             },
         );
+        let focus_padding = if uses_inset_focus_ring()
+            && slider_state.inner().is_some_and(|inner| inner.is_focused.get())
+        {
+            INSET_FOCUS_RING_PADDING
+        } else {
+            Dp(0.0)
+        };
         let style = TrackStyle {
             draw_stop_indicator,
             draw_tick,
-            thumb_track_gap_size,
+            thumb_track_gap_size: thumb_track_gap_size + focus_padding,
             track_inside_corner_size,
             track_corner_size: corner_size,
             corner_shrinking: track_corner_size.is_some(),
@@ -455,6 +469,14 @@ impl DrawSliderTick {
     pub fn draw(&self, scope: &mut DrawScope<'_>, offset: Offset, color: Color) {
         (self.0)(scope, offset, color);
     }
+}
+
+/// Whether the theme shows a focus as an inset ring.
+fn uses_inset_focus_ring() -> bool {
+    matches!(
+        crate::ripple::LOCAL_RIPPLE_THEME_CONFIGURATION.current().focus,
+        crate::ripple::RippleThemeFocus::InsetRing { .. }
+    )
 }
 
 /// What `SliderDefaults::track_with` draws with, past the colors.
@@ -599,27 +621,34 @@ pub fn Slider(
         ..SizeSpec::bounds(THUMB_WIDTH, TRACK_HEIGHT, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
     });
     let modifier = crate::components::increase_semantics_bounds(modifier, true).then_custom(input);
-    // The focus as a ring around the slider, where the theme shows it so, as Compose's.
-    let modifier = if matches!(
-        crate::ripple::LOCAL_RIPPLE_THEME_CONFIGURATION.current().focus,
-        crate::ripple::RippleThemeFocus::InsetRing { .. }
-    ) {
-        modifier.indication(
-            interaction_source.clone(),
-            crate::ripple::ripple_with(crate::ripple::RippleOptions {
-                focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
-                enable_press_indication: false,
-                enable_focus_indication: true,
-                enable_drag_indication: false,
-                enable_hover_indication: false,
-                ..crate::ripple::RippleOptions::default()
-            }),
-        )
+    let is_focused = interaction_source.is_focused();
+    if let Some(inner) = state.inner() {
+        inner.is_focused.set(is_focused);
+    }
+    // The focus as a ring around the thumb, where the theme shows it so, as Compose's: the thumb
+    // padded while it shows, the track and the value as if it weren't.
+    let inset_ring = uses_inset_focus_ring();
+    let focus_padding = if inset_ring && is_focused { INSET_FOCUS_RING_PADDING } else { Dp(0.0) };
+    let thumb_modifier = Modifier.wrap_content_width();
+    let thumb_modifier = if inset_ring {
+        thumb_modifier
+            .indication(
+                interaction_source.clone(),
+                crate::ripple::ripple_with(crate::ripple::RippleOptions {
+                    focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
+                    enable_press_indication: false,
+                    enable_focus_indication: true,
+                    enable_drag_indication: false,
+                    enable_hover_indication: false,
+                    ..crate::ripple::RippleOptions::default()
+                }),
+            )
+            .padding(focus_padding)
     } else {
-        modifier
+        thumb_modifier
     };
-    let policy = compose_runtime::remember_keyed(state, move || {
-        Rc::new(SliderLayout { state }) as Rc<dyn MeasurePolicy>
+    let policy = compose_runtime::remember_keyed((state, focus_padding), move || {
+        Rc::new(SliderLayout { state, focus_padding }) as Rc<dyn MeasurePolicy>
     });
     let thumb = thumb.unwrap_or_else(|| {
         let source = interaction_source.clone();
@@ -644,7 +673,7 @@ pub fn Slider(
         compose_runtime::callback(move || {
             let (thumb, track) = (thumb.clone(), track.clone());
             Box(
-                Modifier.wrap_content_width(),
+                thumb_modifier.clone(),
                 Alignment::TOP_START,
                 false,
                 compose_runtime::callback(move |_| thumb(state)),
@@ -664,6 +693,8 @@ pub fn Slider(
 /// corners), both centered vertically.
 struct SliderLayout {
     state: SliderState,
+    /// What the thumb's padded by for an inset focus ring: laid out as if it weren't.
+    focus_padding: Dp,
 }
 
 impl MeasurePolicy for SliderLayout {
@@ -676,25 +707,27 @@ impl MeasurePolicy for SliderLayout {
         let [thumb, track] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
+        let padding = scope.density().round_to_px(self.focus_padding);
         // With the slider's constraints, as Compose's (its minimum 4 by 16 dp).
         let thumb = scope.measure(*thumb, constraints);
+        let (thumb_width, thumb_height) = (thumb.width - 2 * padding, thumb.height - 2 * padding);
         let track = scope.measure(
             *track,
             Constraints::new(
-                (constraints.min_width - thumb.width).max(0),
+                (constraints.min_width - thumb_width).max(0),
                 if constraints.max_width == Constraints::INFINITY {
                     Constraints::INFINITY
                 } else {
-                    (constraints.max_width - thumb.width).max(0)
+                    (constraints.max_width - thumb_width).max(0)
                 },
                 0,
                 constraints.max_height,
             ),
         );
-        let width = thumb.width + track.width;
-        let height = track.height.max(thumb.height);
+        let width = thumb_width + track.width;
+        let height = track.height.max(thumb_height);
         let Some(inner) = self.state.inner() else { return scope.layout(width, height) };
-        inner.thumb_size.set(IntSize::new(thumb.width, thumb.height));
+        inner.thumb_size.set(IntSize::new(thumb_width, thumb_height));
         inner.total_width.set(width);
         let corner = inner.track_corner.get();
         // Read while measuring: a new value places the thumb again.
@@ -706,7 +739,7 @@ impl MeasurePolicy for SliderLayout {
         } else {
             (track.width as f32 * value).round() as i32
         };
-        let track_x = thumb.width / 2;
+        let track_x = thumb_width / 2;
         scope.place_relative(&track, track_x, (height - track.height) / 2);
         scope.place_relative(
             &thumb,

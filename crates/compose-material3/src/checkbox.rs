@@ -217,6 +217,7 @@ fn checkbox(
     checkmark_stroke: Option<Stroke>,
     outline_stroke: Option<Stroke>,
 ) {
+    let source = crate::components::remembered_interaction_source(interaction_source);
     let modifier = match on_click {
         Some(on_click) => {
             // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`, in the
@@ -232,16 +233,18 @@ fn checkbox(
             let options = ClickableOptions {
                 enabled,
                 role: Some(Role::Checkbox),
-                indication,
-                interaction_source,
+                indication: compose_ui::Indication::NONE,
+                interaction_source: Some(source.clone()),
                 ..ClickableOptions::DEFAULT
             };
             // The toggle around the touch target, so all 48 dp take a press: compose-ui hit
             // tests a node's bounds only, where Compose's toggle (inside the touch target)
-            // takes the target's presses by extending its hit test (D1009).
+            // takes the target's presses by extending its hit test (D1009). Its ripple inside,
+            // on the box, as Compose's: what a focus ring goes around.
             minimum_interactive_component_size(
                 modifier.tri_state_toggleable_with(state, options, on_click),
             )
+            .indication(source, indication)
         }
         None => modifier,
     };

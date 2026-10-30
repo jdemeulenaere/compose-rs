@@ -402,9 +402,11 @@ fn the_kotlin_is_the_model() {
 #[test]
 fn a_panes_title_is_in_its_record() {
     let host = kept_host(|| {
-        Box!(modifier = Modifier.size(10.dp()).semantics(|config| {
-            config.set_pane_title("Navigation menu");
-        }));
+        Box!(
+            modifier = Modifier.size(10.dp()).semantics(|config| {
+                config.set_pane_title("Navigation menu");
+            })
+        );
         BasicText!("Beside it");
     });
     let root = host.semantics_tree(true);

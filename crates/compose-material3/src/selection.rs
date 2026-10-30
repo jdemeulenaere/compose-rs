@@ -422,14 +422,27 @@ pub fn RadioButton(
 ) {
     let modifier = match on_click {
         Some(on_click) => {
-            // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
+            let source = crate::components::remembered_interaction_source(None);
             let options = ClickableOptions {
                 enabled,
                 role: Some(Role::RadioButton),
-                indication: crate::ripple::unbounded_ripple(20.dp()),
+                indication: compose_ui::Indication::NONE,
+                interaction_source: Some(source.clone()),
                 ..ClickableOptions::DEFAULT
             };
+            // The click around the touch target, as the checkbox's (D1009); its ripple inside,
+            // on the button, a circle as Compose's
+            // `ripple(bounded = false, 20.dp, focusRingShape = CircleShape)`.
             minimum_interactive_component_size(modifier.clickable_with(options, on_click))
+                .indication(
+                    source,
+                    crate::ripple::ripple_with(crate::ripple::RippleOptions {
+                        bounded: false,
+                        radius: 20.dp(),
+                        focus_ring_shape: Some(compose_foundation::CIRCLE_SHAPE),
+                        ..crate::ripple::RippleOptions::default()
+                    }),
+                )
         }
         None => modifier,
     };

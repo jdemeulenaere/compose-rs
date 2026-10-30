@@ -770,7 +770,7 @@ pub fn BottomSheet(
     #[default(crate::BottomSheetDefaults::expanded_shape())] shape: Shape,
     #[default(crate::BottomSheetDefaults::container_color())] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
-    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::BottomSheetDefaults::ELEVATION)] tonal_elevation: Dp,
     #[default(crate::Dp(0.0))] shadow_elevation: Dp,
     content: impl Fn(ColumnScope) + 'static,
 ) {

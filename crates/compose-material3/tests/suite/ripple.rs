@@ -438,6 +438,97 @@ fn a_ripple_grows_from_the_press_to_the_center_and_fades_on_release() {
     assert!(!ui.host().needs_frame());
 }
 
+/// `RippleAnimation`'s curves, at an exact time: at 48 ms of its 75 ms fade in and 112 ms of its
+/// 225 ms growth, on `FastOutSlowIn`, and its center on a straight line (`LinearEasing`).
+#[test]
+fn a_ripple_is_where_its_curves_say_at_each_time() {
+    let source = MutableInteractionSource::new();
+    let mut ui = plain(&source, default_ripple());
+    let press = press_at(&source, Offset::new(10.0, 10.0));
+    let (start, end) = (12.0, BOUNDED_RADIUS);
+    let eased = |millis: f32| compose_animation::FAST_OUT_SLOW_IN_EASING.transform(millis / 225.0);
+    // The first frame is its time 0.
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(48));
+    let fading_in = one_circle(&mut ui);
+    assert_near(fading_in.radius, start + (end - start) * eased(48.0));
+    assert_near(fading_in.center.0, 10.0 + 10.0 * 48.0 / 225.0);
+    assert_eq!(fading_in.color, Color::BLACK.with_alpha(0.1 * 48.0 / 75.0));
+    ui.advance_time_by(Duration::from_millis(64));
+    let growing = one_circle(&mut ui);
+    assert_near(growing.radius, start + (end - start) * eased(112.0));
+    assert_near(growing.center.0, 10.0 + 10.0 * 112.0 / 225.0);
+    assert_near(growing.center.1, 10.0 + 10.0 * 112.0 / 225.0);
+    assert_eq!(growing.color, Color::BLACK.with_alpha(0.1));
+    // Just short of its 225 ms it hasn't arrived.
+    ui.advance_time_by(Duration::from_millis(112));
+    let almost = one_circle(&mut ui);
+    assert!(almost.center.0 < 20.0, "{almost:?}");
+    ui.advance_time_by_frame();
+    let arrived = one_circle(&mut ui);
+    assert_near(arrived.radius, end);
+    assert_near(arrived.center.0, 20.0);
+    // Its 150 ms fade out, linear.
+    source.try_emit(PressInteraction::Release(press));
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(80));
+    let fading_out = one_circle(&mut ui);
+    assert_eq!(fading_out.color, Color::BLACK.with_alpha(0.1 * (1.0 - 80.0 / 150.0)));
+}
+
+/// A `MotionDurationScale` of 0 ("Remove animations") ends a ripple's animations at once, as the
+/// `Animatable`s of Compose's: the growth on the press's first frame, the fade on the release's.
+#[test]
+fn a_ripple_ends_at_once_with_animations_off() {
+    let source = MutableInteractionSource::new();
+    let mut ui = plain(&source, default_ripple());
+    ui.set_motion_duration_scale(0.0);
+    let press = press_at(&source, Offset::new(10.0, 10.0));
+    ui.advance_time_by_frame();
+    assert_circle(&mut ui, BOUNDED_RADIUS, Color::BLACK.with_alpha(0.1), true);
+    source.try_emit(PressInteraction::Release(press));
+    ui.advance_time_by_frame();
+    assert!(circles(&mut ui).is_empty());
+    assert!(!ui.host().needs_frame());
+}
+
+/// As a press, a state layer: at once in and out.
+#[test]
+fn a_state_layer_ends_at_once_with_animations_off() {
+    let source = MutableInteractionSource::new();
+    let mut ui = plain(&source, default_ripple());
+    ui.set_motion_duration_scale(0.0);
+    let start = DragStart::new();
+    source.try_emit(DragInteraction::Start(start));
+    ui.advance_time_by_frame();
+    assert_circle(&mut ui, BOUNDED_RADIUS, Color::BLACK.with_alpha(0.16), true);
+    source.try_emit(DragInteraction::Stop(start));
+    ui.advance_time_by_frame();
+    assert!(circles(&mut ui).is_empty());
+    assert!(!ui.host().needs_frame());
+}
+
+/// A scale of 2 takes twice as long, each animation's time divided by it.
+#[test]
+fn a_ripple_follows_the_duration_scale() {
+    let source = MutableInteractionSource::new();
+    let mut ui = plain(&source, default_ripple());
+    ui.set_motion_duration_scale(2.0);
+    let press = press_at(&source, Offset::new(10.0, 10.0));
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(224));
+    let growing = one_circle(&mut ui);
+    let eased = compose_animation::FAST_OUT_SLOW_IN_EASING.transform(112.0 / 225.0);
+    assert_near(growing.radius, 12.0 + (BOUNDED_RADIUS - 12.0) * eased);
+    settle(&mut ui);
+    assert_near(one_circle(&mut ui).radius, BOUNDED_RADIUS);
+    source.try_emit(PressInteraction::Release(press));
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(160));
+    let fading = one_circle(&mut ui);
+    assert_eq!(fading.color, Color::BLACK.with_alpha(0.1 * (1.0 - 80.0 / 150.0)));
+}
+
 /// Released while fading in, it shows whole at once, and finishes growing before it fades.
 #[test]
 fn a_ripple_released_while_fading_in_shows_whole() {
@@ -773,9 +864,95 @@ fn a_clickable_in_the_theme_shows_a_ripple_in_the_content_color_where_it_is() {
     assert_eq!(one_circle(&mut ui).color, Color::MAGENTA.with_alpha(0.1));
 }
 
+/// A press on a navigation item shows on its pill from the same place, moved into the pill's
+/// coordinates: `MappedInteractionSource`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationBar.kt, offsetInteractionSource
+#[test]
+fn a_navigation_items_ripple_starts_under_the_press() {
+    let source = MutableInteractionSource::new();
+    let item_source = source.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let item_source = item_source.clone();
+        MaterialTheme!({
+            let item_source = item_source.clone();
+            NavigationBar!(|row: RowScope| {
+                NavigationBarItem!(
+                    row,
+                    false,
+                    || {},
+                    {},
+                    modifier = Modifier.test_tag(TAG),
+                    interaction_source = Some(item_source.clone())
+                );
+            });
+        });
+    });
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    // The 64 by 32 dp pill is centered in the item, as `NavigationBarItemLayout` places it.
+    let pill_left = (bounds.width() - 64.0) / 2.0;
+    let pill_top = (bounds.height() - 32.0) / 2.0;
+    let at = Offset::new(pill_left + 7.0, pill_top + 5.0);
+    press_at(&source, at);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(16));
+    let early = one_circle(&mut ui);
+    let moved = 16.0 / 225.0;
+    assert_near(early.center.0, 7.0 + (32.0 - 7.0) * moved);
+    assert_near(early.center.1, 5.0 + (16.0 - 5.0) * moved);
+}
+
+/// A radio button's press: an unclipped circle of 20 dp, `RadioButtonTokens.StateLayerSize / 2`.
+#[test]
+fn a_radio_buttons_ripple_is_its_state_layers_size() {
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            RadioButton!(false, Some(|| {}), modifier = Modifier.test_tag(TAG));
+        });
+    });
+    let center = ui.on_node_with_tag(TAG).fetch_semantics_node().center();
+    let touch = compose_ui::PointerEvent::press(center)
+        .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch);
+    ui.host().send_pointer(touch);
+    settle(&mut ui);
+    let circle = one_circle(&mut ui);
+    assert_near(circle.radius, 20.0);
+    assert!(!circle.clipped, "{circle:?}");
+    // The center of the button, itself centered in its 48 dp touch target.
+    assert_near(circle.center.0, 24.0);
+    assert_near(circle.center.1, 24.0);
+}
+
+/// What an inset ring is drawn around: the node's size and the outline's corner radius.
+#[derive(Clone, Copy, Debug)]
+struct RingOutline {
+    width: f32,
+    height: f32,
+    corner: f32,
+}
+
+const fn outline(width: f32, height: f32, corner: f32) -> RingOutline {
+    RingOutline { width, height, corner }
+}
+
+/// The outer stroke's rectangle and corner, in its node's coordinates: its band's center line, 1
+/// inside the outline (`INSET_FOCUS_RING_THEME_CONFIGURATION`'s 2 wide at the edge).
+fn outer_stroke(ui: &mut ComposeTestRule, color: Color) -> (compose_ui::Rect, f32) {
+    let ops = ui.host().display_list().ops;
+    ops.iter()
+        .rev()
+        .find_map(|op| match op {
+            DrawOp::DrawRect(rect, paint) if paint.color == color => Some((*rect, 0.0)),
+            DrawOp::DrawRoundRect(rect, radii, paint) if paint.color == color => {
+                Some((*rect, radii[0]))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no outer stroke in {ops:#?}"))
+}
+
 /// `content` in the inset ring's theme, focused by the node tagged `tag`: what it draws of the
-/// ring, the scheme's two colors in that order.
-fn assert_rings_when_focused(tag: &str, content: impl Fn() + 'static) {
+/// ring, the scheme's two colors in that order, around `expected`, as Compose's goldens show it.
+fn assert_rings_when_focused(tag: &str, expected: RingOutline, content: impl Fn() + 'static) {
     let content = Rc::new(content);
     let mut ui = compose_test(move || {
         let content = content.clone();
@@ -814,28 +991,42 @@ fn assert_rings_when_focused(tag: &str, content: impl Fn() + 'static) {
     );
     // And a ring is all that shows of the focus: no state layer.
     assert_eq!(circles(&mut ui).len(), circles_before, "{tag}");
+    let (rect, corner) = outer_stroke(&mut ui, scheme.secondary);
+    let actual =
+        (rect.width() + 2.0, rect.height() + 2.0, if corner > 0.0 { corner + 1.0 } else { 0.0 });
+    assert_eq!(
+        actual,
+        (expected.width, expected.height, expected.corner),
+        "{tag}: {rect:?}, {corner}"
+    );
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ButtonScreenshotTest.kt, default_Button_lightTheme_focused_insetFocusRings
 #[test]
 fn a_focused_button_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
-        Button!(on_click = || {}, modifier = Modifier.test_tag("it"), { Text!("Button") });
+    assert_rings_when_focused("it", outline(100.0, 40.0, 20.0), || {
+        Button!(on_click = || {}, modifier = Modifier.test_tag("it").size((100.dp(), 40.dp())), {
+            Text!("Button")
+        });
     });
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ButtonScreenshotTest.kt, outlinedButton_lightTheme_focused_insetFocusRings
 #[test]
 fn a_focused_outlined_button_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
-        OutlinedButton!(on_click = || {}, modifier = Modifier.test_tag("it"), { Text!("Button") });
+    assert_rings_when_focused("it", outline(100.0, 40.0, 20.0), || {
+        OutlinedButton!(
+            on_click = || {},
+            modifier = Modifier.test_tag("it").size((100.dp(), 40.dp())),
+            { Text!("Button") }
+        );
     });
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/CheckboxScreenshotTest.kt, checkBox_focus_insetFocusRings
 #[test]
 fn a_focused_checkbox_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(24.0, 24.0, 6.0), || {
         Checkbox!(true, Some(|_| {}), modifier = Modifier.test_tag("it"));
     });
 }
@@ -845,13 +1036,13 @@ fn a_focused_checkbox_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/CardScreenshotTest.kt, outlinedCard_focused_insetFocusRings
 #[test]
 fn a_focused_card_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(40.0, 40.0, 12.0), || {
         Card!(on_click = Some(|| {}), modifier = Modifier.test_tag("it").size(40.dp()), {});
     });
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(40.0, 40.0, 12.0), || {
         ElevatedCard!(on_click = Some(|| {}), modifier = Modifier.test_tag("it").size(40.dp()), {});
     });
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(40.0, 40.0, 12.0), || {
         OutlinedCard!(on_click = Some(|| {}), modifier = Modifier.test_tag("it").size(40.dp()), {});
     });
 }
@@ -859,7 +1050,7 @@ fn a_focused_card_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/FloatingActionButtonScreenshotTest.kt, fab_focused_insetFocusRings
 #[test]
 fn a_focused_fab_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(56.0, 56.0, 16.0), || {
         FloatingActionButton!(|| {}, modifier = Modifier.test_tag("it"), {});
     });
 }
@@ -867,7 +1058,7 @@ fn a_focused_fab_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/IconButtonScreenshotTest.kt, iconButton_lightTheme_focused_insetFocusRings
 #[test]
 fn a_focused_icon_button_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(40.0, 40.0, 20.0), || {
         IconButton!(|| {}, modifier = Modifier.test_tag("it"), {});
     });
 }
@@ -875,15 +1066,15 @@ fn a_focused_icon_button_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/RadioButtonScreenshotTest.kt, radioButton_lightTheme_focused_insetFocusRings
 #[test]
 fn a_focused_radio_button_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
-        RadioButton!(true, Some(|| {}), modifier = Modifier.test_tag("it"));
+    assert_rings_when_focused("it", outline(24.0, 24.0, 12.0), || {
+        RadioButton!(false, Some(|| {}), modifier = Modifier.test_tag("it"));
     });
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationBarScreenshotTest.kt, navigationBar_firstItem_focused_insetFocusRings
 #[test]
 fn a_focused_navigation_bar_item_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(64.0, 32.0, 16.0), || {
         NavigationBar!(|row: RowScope| {
             NavigationBarItem!(row, false, || {}, {}, modifier = Modifier.test_tag("it"));
         });
@@ -893,7 +1084,8 @@ fn a_focused_navigation_bar_item_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/NavigationRailScreenshotTest.kt, navigationRail_firstItem_focused_insetFocusRings
 #[test]
 fn a_focused_navigation_rail_item_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    // Without a label, a circle: `NavigationRailItem`'s `indicatorShape`.
+    assert_rings_when_focused("it", outline(56.0, 56.0, 28.0), || {
         NavigationRail!({
             NavigationRailItem!(false, || {}, {}, modifier = Modifier.test_tag("it"));
         });
@@ -903,9 +1095,48 @@ fn a_focused_navigation_rail_item_shows_the_inset_ring() {
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SwitchScreenshotTest.kt, switchTest_focus_insetFocusRings
 #[test]
 fn a_focused_switch_shows_the_inset_ring_on_its_track() {
-    assert_rings_when_focused("it", || {
+    assert_rings_when_focused("it", outline(52.0, 32.0, 16.0), || {
         Switch!(true, Some(|_| {}), modifier = Modifier.test_tag("it"));
     });
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SwitchScreenshotTest.kt, switchTest_focus_customInsetFocusRings
+/// The theme's strokes and the configuration's colors, on the track.
+#[test]
+fn a_focused_switch_shows_a_custom_inset_ring() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            CompositionLocalProvider(
+                (
+                    LOCAL_RIPPLE_THEME_CONFIGURATION.provides(RippleThemeConfiguration {
+                        focus: RippleThemeFocus::InsetRing {
+                            outer_stroke_inset: 0.dp(),
+                            outer_stroke_width: 2.dp(),
+                            inner_stroke_inset: 1.dp(),
+                            inner_stroke_width: 4.dp(),
+                        },
+                    }),
+                    LOCAL_RIPPLE_CONFIGURATION.provides(Some(RippleConfiguration {
+                        color: Color::UNSPECIFIED,
+                        focus: Some(RippleConfigurationFocus::InsetRing {
+                            outer_stroke_color: Color::GREEN,
+                            inner_stroke_color: Color::RED,
+                        }),
+                    })),
+                ),
+                || {
+                    Switch!(true, Some(|_| {}), modifier = Modifier.test_tag("it"));
+                },
+            );
+        });
+    });
+    ui.on_node_with_tag("it").request_focus();
+    ui.wait_for_idle();
+    let (outer, corner) = outer_stroke(&mut ui, Color::GREEN);
+    assert_eq!((outer.width(), outer.height(), corner), (50.0, 30.0, 15.0));
+    // Inset 1 and 4 wide: its center line 3 in, 1 further than the outer stroke's 2 of inset.
+    let (inner, _) = outer_stroke(&mut ui, Color::RED);
+    assert_eq!((inner.width(), inner.height()), (46.0, 26.0));
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SliderScreenshotTest.kt, slider_focused_insetFocusRings
@@ -913,15 +1144,32 @@ fn a_focused_switch_shows_the_inset_ring_on_its_track() {
 fn a_focused_slider_shows_the_inset_ring() {
     let state = SliderState::new(0.5, 0, (0.0, 1.0));
     let handle = *state;
-    assert_rings_when_focused("it", move || {
+    // On the thumb, padded for it (`SliderDefaults.ThumbSize`, 4 by 44 dp, and 4 dp around).
+    assert_rings_when_focused("it", outline(12.0, 52.0, 6.0), move || {
         Slider!(handle, move |new| handle.set_value(new), modifier = Modifier.test_tag("it"));
+    });
+}
+
+/// A drawer item's ripple is its pill's, Compose's `Surface(shape = shape)`.
+#[test]
+fn a_focused_drawer_item_shows_the_inset_ring_on_its_pill() {
+    assert_rings_when_focused("it", outline(300.0, 56.0, 28.0), || {
+        Box!(modifier = Modifier.width(300.dp()), {
+            NavigationDrawerItem!(
+                || { Text!("Item") },
+                false,
+                || {},
+                modifier = Modifier.test_tag("it")
+            );
+        });
     });
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ListItemScreenshotTest.kt, listItem_focused_insetFocusRings
 #[test]
 fn a_focused_list_item_shows_the_inset_ring() {
-    assert_rings_when_focused("it", || {
+    // `ListItemDefaults.shapes()`'s focused shape, `CornerLarge`.
+    assert_rings_when_focused("it", outline(400.0, 56.0, 16.0), || {
         ClickableListItem!(|| {}, modifier = Modifier.test_tag("it"), { Text!("Item") });
     });
 }

@@ -328,3 +328,63 @@ fn a_sheets_pane_has_its_title_and_gestures_off_no_actions() {
     ui.on_node(expect_value(&compose_ui::SemanticsProperties::PANE_TITLE, "Bottom Sheet".into()))
         .assert(expect_value(&compose_ui::SemanticsProperties::TRAVERSAL_INDEX, 0.0));
 }
+
+/// A modal sheet's scrim and sheet are read as one group, the sheet first, as Compose's
+/// `ModalBottomSheetContent`'s `isTraversalGroup`: its `traversalIndex`es count within it.
+#[test]
+fn a_modal_sheets_pane_is_in_a_traversal_group() {
+    let state = SheetState::new(
+        &[SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden],
+        || 56.0,
+        || 125.0,
+        SheetValue::Expanded,
+        |_| true,
+    );
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            ModalBottomSheet!(|| {}, sheet_state = handle, |_| {
+                compose_foundation::layout::Spacer(Modifier.size(100.dp()));
+            });
+        });
+    });
+    ui.on_node_unmerged(expect_value(
+        &compose_ui::SemanticsProperties::PANE_TITLE,
+        "Bottom Sheet".into(),
+    ))
+    .on_parent()
+    .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
+}
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ModalBottomSheet.kt, Scrim(onClick = if (properties.shouldDismissOnClickOutside) animateToDismiss else null)
+/// A scrim's semantics come with its click: a sheet not dismissed by one has none.
+#[test]
+fn a_scrim_that_doesnt_dismiss_has_no_semantics() {
+    let sheet = |dismisses: bool| {
+        let state = SheetState::new(
+            &[SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden],
+            || 56.0,
+            || 125.0,
+            SheetValue::Expanded,
+            |_| true,
+        );
+        compose_test(move || {
+            let handle = *state;
+            MaterialTheme!({
+                ModalBottomSheet!(
+                    || {},
+                    sheet_state = handle,
+                    properties = ModalBottomSheetProperties {
+                        should_dismiss_on_click_outside: dismisses,
+                        ..ModalBottomSheetProperties::default()
+                    },
+                    |_| {
+                        compose_foundation::layout::Spacer(Modifier.size(100.dp()));
+                    }
+                );
+            });
+        })
+    };
+    sheet(true).on_node_with_content_description("Close sheet").assert_exists();
+    sheet(false).on_node_with_content_description("Close sheet").assert_does_not_exist();
+}
