@@ -29,7 +29,7 @@ fn screen(host: SnackbarHostState, scope: Rc<RefCell<Option<CoroutineScope>>>) -
         let coroutines = remember_coroutine_scope();
         *scope.borrow_mut() = Some(coroutines);
         MaterialTheme!({
-            SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
+            SCHEME.with(|cell| cell.set(Some(*MaterialTheme::color_scheme())));
             Scaffold!(
                 snackbar_host = move || SnackbarHost!(
                     host,

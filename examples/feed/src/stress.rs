@@ -237,6 +237,7 @@ fn RichPost(index: u32) {
     let author = AUTHORS[i % AUTHORS.len()];
     let scheme = MaterialTheme::color_scheme();
     let typography = MaterialTheme::typography();
+    let (primary, tertiary) = (scheme.primary, scheme.tertiary);
     let body = remember_keyed(index, move || {
         let first_name = author.split(' ').next().unwrap_or(author);
         AnnotatedString::build(|text| {
@@ -251,7 +252,7 @@ fn RichPost(index: u32) {
             });
             text.append(" ");
             let tag = SpanStyle {
-                color: scheme.primary,
+                color: primary,
                 font_weight: Some(FontWeight::MEDIUM),
                 ..SpanStyle::DEFAULT
             };
@@ -261,7 +262,7 @@ fn RichPost(index: u32) {
             });
             text.append(" ");
             let link = SpanStyle {
-                color: scheme.tertiary,
+                color: tertiary,
                 text_decoration: Some(TextDecoration::UNDERLINE),
                 ..SpanStyle::DEFAULT
             };

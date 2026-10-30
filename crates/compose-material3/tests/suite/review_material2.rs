@@ -17,7 +17,7 @@ thread_local! {
 }
 
 fn remember_scheme() {
-    SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
+    SCHEME.with(|cell| cell.set(Some(*MaterialTheme::color_scheme())));
 }
 
 fn scheme() -> ColorScheme {

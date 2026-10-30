@@ -83,7 +83,7 @@ fn the_buttons_and_tracks_colors_are_material_3_1_4s() {
     let sink = seen.clone();
     let _ui = compose_test(move || {
         sink.set(Some((
-            MaterialTheme::color_scheme(),
+            *MaterialTheme::color_scheme(),
             [
                 ButtonDefaults::button_colors(),
                 ButtonDefaults::elevated_button_colors(),

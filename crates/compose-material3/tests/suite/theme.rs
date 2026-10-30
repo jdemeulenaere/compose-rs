@@ -4,6 +4,7 @@
 //! on a card, checked as the card's corners), and `MaterialExpressiveTheme`'s defaults.
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use compose_foundation::layout::*;
 use compose_material3::*;
@@ -110,7 +111,7 @@ fn switching_schemes_gives_the_new_one_and_leaves_the_baselines_as_they_were() {
     let handle = scheme.handle();
     let mut ui = compose_test(move || {
         MaterialTheme!(color_scheme = handle.get(), {
-            READ.with(|read| read.set(Some(MaterialTheme::color_scheme())));
+            READ.with(|read| read.set(Some(*MaterialTheme::color_scheme())));
         });
     });
     let read = || READ.with(Cell::get).expect("composed");
@@ -202,7 +203,7 @@ fn the_fixed_roles_are_the_same_tones_light_and_dark() {
         thread_local! { static READ: Cell<Option<ColorScheme>> = const { Cell::new(None) }; }
         let _ui = compose_test(move || {
             MaterialTheme!(color_scheme = scheme, {
-                READ.with(|read| read.set(Some(MaterialTheme::color_scheme())));
+                READ.with(|read| read.set(Some(*MaterialTheme::color_scheme())));
             });
         });
         let s = READ.with(Cell::get).expect("composed");
@@ -322,14 +323,114 @@ fn an_expressive_theme_defaults_to_the_expressive_scheme_and_then_inherits() {
     }
     let _ui = compose_test(|| {
         MaterialExpressiveTheme!({
-            OUTER.with(|read| read.set(Some(MaterialTheme::color_scheme())));
+            OUTER.with(|read| read.set(Some(*MaterialTheme::color_scheme())));
             MaterialTheme!(color_scheme = dark_color_scheme(), {
                 MaterialExpressiveTheme!({
-                    INNER.with(|read| read.set(Some(MaterialTheme::color_scheme())));
+                    INNER.with(|read| read.set(Some(*MaterialTheme::color_scheme())));
                 });
             });
         });
     });
     assert_eq!(OUTER.with(Cell::get), Some(expressive_light_color_scheme()));
     assert_eq!(INNER.with(Cell::get), Some(dark_color_scheme()));
+}
+
+/// Reading the theme copies nothing: every read of the color scheme and the shapes hands out
+/// the same shared value (an `Rc`), as Compose's reads hand out the same object (D1021).
+#[test]
+fn theme_reads_share_the_theme() {
+    thread_local! { static SHARED: Cell<bool> = const { Cell::new(false) }; }
+    let _ui = compose_test(|| {
+        MaterialTheme!(color_scheme = dark_color_scheme(), {
+            let scheme = Rc::ptr_eq(&MaterialTheme::color_scheme(), &MaterialTheme::color_scheme());
+            let shapes = Rc::ptr_eq(&MaterialTheme::shapes(), &MaterialTheme::shapes());
+            SHARED.with(|cell| cell.set(scheme && shapes));
+        });
+    });
+    assert!(SHARED.with(Cell::get));
+}
+
+/// A theme given an equal scheme and shapes again (new values, as an application's theme builds
+/// them each pass) recomposes no reader: its locals compare the values, not the shared handles
+/// (D1021). The content captures the pass, so the theme itself runs again.
+#[test]
+fn an_equal_scheme_and_shapes_given_again_recompose_no_reader() {
+    thread_local! {
+        static SCHEME_READS: Cell<u32> = const { Cell::new(0) };
+        static SHAPES_READS: Cell<u32> = const { Cell::new(0) };
+    }
+    #[composable]
+    fn SchemeReader() {
+        let _ = MaterialTheme::color_scheme().primary;
+        SCHEME_READS.with(|reads| reads.set(reads.get() + 1));
+    }
+    #[composable]
+    fn ShapesReader() {
+        let _ = MaterialTheme::shapes().medium;
+        SHAPES_READS.with(|reads| reads.set(reads.get() + 1));
+    }
+    let tick = mutable_state_of(0);
+    let handle = tick.handle();
+    let mut ui = compose_test(move || {
+        let pass = handle.get();
+        MaterialTheme!(
+            color_scheme = dark_color_scheme(),
+            shapes = Shapes::default(),
+            content = move || {
+                let _ = pass;
+                SchemeReader();
+                ShapesReader();
+            }
+        );
+    });
+    assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (1, 1));
+    tick.set(1);
+    ui.wait_for_idle();
+    assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (1, 1));
+}
+
+/// A different scheme or different shapes recompose exactly the readers of what changed.
+#[test]
+fn a_changed_scheme_or_shapes_recompose_their_readers_only() {
+    thread_local! {
+        static SCHEME_READS: Cell<u32> = const { Cell::new(0) };
+        static SHAPES_READS: Cell<u32> = const { Cell::new(0) };
+    }
+    #[composable]
+    fn SchemeReader() {
+        let _ = MaterialTheme::color_scheme().primary;
+        SCHEME_READS.with(|reads| reads.set(reads.get() + 1));
+    }
+    #[composable]
+    fn ShapesReader() {
+        let _ = MaterialTheme::shapes().medium;
+        SHAPES_READS.with(|reads| reads.set(reads.get() + 1));
+    }
+    let dark = mutable_state_of(false);
+    let handle = dark.handle();
+    let round = mutable_state_of(false);
+    let round_handle = round.handle();
+    let mut ui = compose_test(move || {
+        let color_scheme = if handle.get() { dark_color_scheme() } else { light_color_scheme() };
+        let shapes = if round_handle.get() {
+            Shapes { medium: Shape::Rounded([CornerSize::Dp(40.dp()); 4]), ..Shapes::default() }
+        } else {
+            Shapes::default()
+        };
+        MaterialTheme!(
+            color_scheme = color_scheme,
+            shapes = shapes,
+            content = || {
+                SchemeReader();
+                ShapesReader();
+            }
+        );
+    });
+    assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (1, 1));
+    dark.set(true);
+    ui.wait_for_idle();
+    assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (2, 1));
+    round.set(true);
+    ui.wait_for_idle();
+    assert_eq!((SCHEME_READS.with(Cell::get), SHAPES_READS.with(Cell::get)), (2, 2));
 }

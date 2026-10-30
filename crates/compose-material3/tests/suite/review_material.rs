@@ -369,7 +369,7 @@ fn a_disabled_checked_switch_has_materials_disabled_colors() {
     thread_local! { static SCHEME: Cell<Option<ColorScheme>> = const { Cell::new(None) }; }
     let mut ui = compose_test(|| {
         MaterialTheme!({
-            SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
+            SCHEME.with(|cell| cell.set(Some(*MaterialTheme::color_scheme())));
             Switch!(true, Some(|_| {}), enabled = false);
         });
     });

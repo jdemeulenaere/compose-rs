@@ -354,7 +354,7 @@ fn tonal_elevation_tints_the_surface_color_and_adds_up() {
             let scheme = MaterialTheme::color_scheme();
             COLORS.with(|cell| {
                 cell.set(Some((
-                    scheme,
+                    *scheme,
                     scheme.surface_color_at_elevation(3.dp()),
                     scheme.surface_color_at_elevation(6.dp()),
                 )))
@@ -677,7 +677,7 @@ fn button_and_card_variants_have_their_colors_and_shadows() {
     thread_local! { static SCHEME: std::cell::Cell<Option<ColorScheme>> = const { std::cell::Cell::new(None) }; }
     let mut ui = compose_test(|| {
         MaterialTheme!({
-            SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
+            SCHEME.with(|cell| cell.set(Some(*MaterialTheme::color_scheme())));
             Column!({
                 FilledTonalButton!(|| {}, { Text!("Tonal") });
                 ElevatedButton!(|| {}, { Text!("Elevated") });

@@ -530,8 +530,14 @@ macro_rules! compose_arg_by_eq {
 
 compose_arg_by_eq!(ColorScheme, Typography, Shapes);
 
-pub static LOCAL_COLOR_SCHEME: CompositionLocal<ColorScheme> =
-    CompositionLocal::new("LocalColorScheme", light_color_scheme);
+/// The theme's colors, shared: a read hands out the same scheme (an `Rc`), as Compose's reads
+/// hand out the same object, so it copies none of its roles; compared by value, as Compose's, so
+/// a scheme made anew but equal recomposes no reader (D1021).
+pub static LOCAL_COLOR_SCHEME: CompositionLocal<Rc<ColorScheme>> = CompositionLocal::with_policy(
+    "LocalColorScheme",
+    compose_runtime::SharedValueEqualityPolicy,
+    default_color_scheme,
+);
 /// The theme's text styles, shared: a read hands out the same styles (an `Rc`), as Compose's
 /// reads hand out the same object, so it copies none of them (D1106).
 pub static LOCAL_TYPOGRAPHY: CompositionLocal<Rc<Typography>> = CompositionLocal::with_policy(
@@ -539,6 +545,20 @@ pub static LOCAL_TYPOGRAPHY: CompositionLocal<Rc<Typography>> = CompositionLocal
     compose_runtime::SharedValueEqualityPolicy,
     default_typography,
 );
+/// The theme's shapes, shared and compared by value, as [`LOCAL_COLOR_SCHEME`] (D1021).
+pub static LOCAL_SHAPES: CompositionLocal<Rc<Shapes>> = CompositionLocal::with_policy(
+    "LocalShapes",
+    compose_runtime::SharedValueEqualityPolicy,
+    default_shapes,
+);
+
+/// The baseline light scheme, made once per thread.
+fn default_color_scheme() -> Rc<ColorScheme> {
+    thread_local! {
+        static DEFAULT: Rc<ColorScheme> = Rc::new(light_color_scheme());
+    }
+    DEFAULT.with(Rc::clone)
+}
 
 /// Material's default type scale, made once per thread.
 fn default_typography() -> Rc<Typography> {
@@ -547,8 +567,15 @@ fn default_typography() -> Rc<Typography> {
     }
     DEFAULT.with(Rc::clone)
 }
-pub static LOCAL_SHAPES: CompositionLocal<Shapes> =
-    CompositionLocal::new("LocalShapes", Shapes::default);
+
+/// Material's default shapes, made once per thread.
+fn default_shapes() -> Rc<Shapes> {
+    thread_local! {
+        static DEFAULT: Rc<Shapes> = Rc::new(Shapes::default());
+    }
+    DEFAULT.with(Rc::clone)
+}
+
 /// The color content draws with, as Compose's `LocalContentColor`.
 pub static LOCAL_CONTENT_COLOR: CompositionLocal<Color> =
     CompositionLocal::new("LocalContentColor", || Color::BLACK);
@@ -568,21 +595,20 @@ pub const DEFAULT_TEXT_STYLE: TextStyle =
 /// reads the current theme, as Kotlin's `MaterialTheme.colorScheme`.
 #[composable]
 pub fn MaterialTheme(
-    #[default(crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
-    #[default(crate::MaterialTheme::shapes())] shapes: Shapes,
+    #[default(*crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
+    #[default(*crate::MaterialTheme::shapes())] shapes: Shapes,
     #[default(Typography::clone(&crate::MaterialTheme::typography()))] typography: Typography,
     content: impl Fn() + 'static,
 ) {
-    // Compared by value, as Compose's: a typography made anew but equal skips the theme, and
-    // the local's policy recomposes no reader for it (D1107).
+    // Compared by value, as Compose's: a scheme, shapes or typography made anew but equal skip the
+    // theme, and the locals' policy recomposes no reader for them (D1021, D1107).
     let selection_colors = text_selection_colors(&color_scheme);
     let body_large = typography.body_large.clone();
-    let typography = Rc::new(typography);
     CompositionLocalProvider(
         (
-            LOCAL_COLOR_SCHEME.provides(color_scheme),
-            LOCAL_SHAPES.provides(shapes),
-            LOCAL_TYPOGRAPHY.provides(typography),
+            LOCAL_COLOR_SCHEME.provides(Rc::new(color_scheme)),
+            LOCAL_SHAPES.provides(Rc::new(shapes)),
+            LOCAL_TYPOGRAPHY.provides(Rc::new(typography)),
             LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
         ),
         || {
@@ -613,8 +639,8 @@ pub fn MaterialExpressiveTheme(
 ) {
     if LOCAL_USING_EXPRESSIVE_THEME.current() {
         MaterialTheme(
-            color_scheme.unwrap_or_else(MaterialTheme::color_scheme),
-            shapes.unwrap_or_else(MaterialTheme::shapes),
+            color_scheme.unwrap_or_else(|| *MaterialTheme::color_scheme()),
+            shapes.unwrap_or_else(|| *MaterialTheme::shapes()),
             typography.unwrap_or_else(MaterialTheme::typography),
             content,
         );
@@ -652,19 +678,19 @@ pub struct MaterialTheme {}
 
 /// The current theme's values, as Compose's `MaterialTheme.Values` (what
 /// `MaterialTheme.LocalMaterialTheme` holds; compose-rs keeps the theme in a local each).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct MaterialThemeValues {
-    pub color_scheme: ColorScheme,
-    pub typography: Typography,
-    pub shapes: Shapes,
+    pub color_scheme: Rc<ColorScheme>,
+    pub typography: Rc<Typography>,
+    pub shapes: Rc<Shapes>,
 }
 
 impl Default for MaterialThemeValues {
     fn default() -> Self {
         MaterialThemeValues {
-            color_scheme: light_color_scheme(),
-            typography: Typography::default(),
-            shapes: Shapes::default(),
+            color_scheme: default_color_scheme(),
+            typography: default_typography(),
+            shapes: default_shapes(),
         }
     }
 }
@@ -679,7 +705,9 @@ impl MaterialTheme {
         }
     }
 
-    pub fn color_scheme() -> ColorScheme {
+    /// The theme's colors, shared (D1021): `MaterialTheme::color_scheme().primary` reads one
+    /// without copying the others.
+    pub fn color_scheme() -> Rc<ColorScheme> {
         LOCAL_COLOR_SCHEME.current()
     }
 
@@ -689,7 +717,8 @@ impl MaterialTheme {
         LOCAL_TYPOGRAPHY.current()
     }
 
-    pub fn shapes() -> Shapes {
+    /// The theme's shapes, shared (D1021).
+    pub fn shapes() -> Rc<Shapes> {
         LOCAL_SHAPES.current()
     }
 }
