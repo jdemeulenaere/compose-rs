@@ -12,7 +12,7 @@ use compose_runtime::{Callback, CompositionLocalProvider, composable};
 use compose_ui::{
     Alignment, ClickableOptions, Color, Constraints, CornerSize, Dp, Layout, Measurable,
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, MutableInteractionSource, PaddingValues,
-    Placeable, Role, Shape, Sp, ToggleableState, UnitExt, VerticalAlignment,
+    Placeable, Role, Shape, ToggleableState, UnitExt, VerticalAlignment,
 };
 
 use crate::components::{
@@ -636,7 +636,7 @@ fn interactive_list_item(
                         (0.dp(), 0.dp(), ITEM_BETWEEN_SPACE, 0.dp()),
                         leading_start + ITEM_BETWEEN_SPACE,
                         leading_color,
-                        typography.title_medium,
+                        typography.title_medium.clone(),
                         leading,
                     );
                 }
@@ -645,16 +645,16 @@ fn interactive_list_item(
                         (ITEM_BETWEEN_SPACE, 0.dp(), 0.dp(), 0.dp()),
                         trailing_end + ITEM_BETWEEN_SPACE,
                         trailing_color,
-                        typography.label_small,
+                        typography.label_small.clone(),
                         trailing,
                     );
                 }
                 if let Some(overline) = overline_content.clone() {
-                    decorator(overline_color, typography.label_small, overline);
+                    decorator(overline_color, typography.label_small.clone(), overline);
                 }
-                decorator(content_color, typography.body_large, content.clone());
+                decorator(content_color, typography.body_large.clone(), content.clone());
                 if let Some(supporting) = supporting_content.clone() {
-                    decorator(supporting_color, typography.body_medium, supporting);
+                    decorator(supporting_color, typography.body_medium.clone(), supporting);
                 }
             }),
         );
@@ -732,7 +732,7 @@ struct ListItemLayout {
 /// A supporting text taller than this is taken for two lines (Compose compares its first and
 /// last baselines; compose-rs has no alignment lines, so it uses Compose's intrinsic
 /// heuristic, `isSupportingMultilineHeuristic`).
-const MULTILINE_SUPPORTING_HEIGHT: Sp = Sp(30.0);
+const MULTILINE_SUPPORTING_HEIGHT: compose_ui::TextUnit = compose_ui::TextUnit::sp(30.0);
 
 impl MeasurePolicy for ListItemLayout {
     fn measure(

@@ -563,6 +563,21 @@ The log is split by area into the files below, one table each, rows in number or
 | D1020 | [benchmarks](decisions/benchmarks.md#d1020) | current |
 | D1021 | [ui-and-layout](decisions/ui-and-layout.md#d1021) | current |
 | D1022 | [api-and-tooling](decisions/api-and-tooling.md#d1022) | current |
+| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
+| D1101 | [text](decisions/text.md#d1101) | current |
+| D1102 | [text](decisions/text.md#d1102) | current |
+| D1103 | [text](decisions/text.md#d1103) | current |
+| D1104 | [text](decisions/text.md#d1104) | current |
+| D1105 | [text](decisions/text.md#d1105) | revised by [D1108](decisions/text.md#d1108), [D1109](decisions/text.md#d1109), [D1110](decisions/text.md#d1110), [D1111](decisions/text.md#d1111) |
+| D1106 | [text](decisions/text.md#d1106) | revised by [D1107](decisions/text.md#d1107) |
+| D1107 | [text](decisions/text.md#d1107) | current |
+| D1108 | [text](decisions/text.md#d1108) | revised by [D1114](decisions/text.md#d1114) |
+| D1109 | [text](decisions/text.md#d1109) | current |
+| D1110 | [text](decisions/text.md#d1110) | current |
+| D1111 | [text](decisions/text.md#d1111) | current |
+| D1112 | [text](decisions/text.md#d1112) | current |
+| D1113 | [text](decisions/text.md#d1113) | reverted, to be redone in the IME step |
+| D1114 | [text](decisions/text.md#d1114) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

@@ -440,7 +440,7 @@ fn checkboxes_take_every_color_given() {
 
 /// Compose's custom stroke: `width` wide, round ends (its round join is the renderer's miter).
 fn round_stroke(width: f32) -> Stroke {
-    Stroke { width, cap: StrokeCap::Round }
+    Stroke { cap: StrokeCap::Round, ..Stroke::new(width) }
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/CheckboxScreenshotTest.kt, checkBox_customStroke_checked

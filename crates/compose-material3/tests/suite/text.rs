@@ -29,7 +29,7 @@ struct Recording {
 
 impl Recording {
     fn record(&self, text: &str, style: &TextStyle) {
-        self.styles.borrow_mut().insert(text.to_string(), *style);
+        self.styles.borrow_mut().insert(text.to_string(), style.clone());
     }
 }
 
@@ -137,7 +137,7 @@ fn laid_out_style(content: impl Fn() + 'static) -> TextStyle {
     let measurer = Recording { inner: FixedTextMeasurer::new(), styles: styles.clone() };
     let _ui =
         compose_test_with(IntSize::new(400, 400), Density::default(), Box::new(measurer), content);
-    styles.borrow().get(TEST_TEXT).copied().expect("laid out")
+    styles.borrow().get(TEST_TEXT).cloned().expect("laid out")
 }
 
 const TEST_TEXT: &str = "TestText";
@@ -168,7 +168,13 @@ fn test_style() -> TextStyle {
 
 /// The properties the tests compare.
 fn compared(style: TextStyle) -> (Color, Option<TextAlign>, f32, Option<FontStyle>, f32) {
-    (style.color, style.text_align, style.font_size.0, style.font_style, style.letter_spacing.0)
+    (
+        style.color,
+        style.text_align,
+        style.font_size.value(),
+        style.font_style,
+        style.letter_spacing.value(),
+    )
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TextTest.kt, inheritsThemeTextStyle

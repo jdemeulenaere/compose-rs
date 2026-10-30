@@ -215,7 +215,7 @@ fn alert_dialog_content(parts: &AlertDialogParts) {
                         };
                         provide_content_color_text_style(
                             parts.title_content_color,
-                            typography.headline_small,
+                            typography.headline_small.clone(),
                             || {
                                 Box(
                                     Modifier
@@ -231,7 +231,7 @@ fn alert_dialog_content(parts: &AlertDialogParts) {
                     if let Some(text) = parts.text.clone() {
                         provide_content_color_text_style(
                             parts.text_content_color,
-                            typography.body_medium,
+                            typography.body_medium.clone(),
                             || {
                                 // What's left once the title and buttons have their room.
                                 Box(
@@ -257,7 +257,7 @@ fn alert_dialog_content(parts: &AlertDialogParts) {
                             // Note: a text button takes its own colors, not this one.
                             provide_content_color_text_style(
                                 MaterialTheme::color_scheme().primary,
-                                MaterialTheme::typography().label_large,
+                                MaterialTheme::typography().label_large.clone(),
                                 || alert_dialog_buttons(confirm, dismiss),
                             );
                         }),
@@ -747,7 +747,7 @@ pub fn DropdownMenuItem(
             Dp::UNSPECIFIED,
         ))
         .padding(content_padding);
-    let label = MaterialTheme::typography().label_large;
+    let label = MaterialTheme::typography().label_large.clone();
     crate::ProvideTextStyle(
         label,
         compose_runtime::callback(move || {

@@ -287,10 +287,9 @@ fn checkbox(
         (colors.box_color(enabled, state), colors.border_color(enabled, state));
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let default_width = (scope.density().to_px(CheckboxDefaults::STROKE_WIDTH)).floor();
-        let outline =
-            outline_stroke.unwrap_or(Stroke { width: default_width, cap: StrokeCap::Butt });
-        let checkmark =
-            checkmark_stroke.unwrap_or(Stroke { width: default_width, cap: StrokeCap::Square });
+        let outline = outline_stroke.unwrap_or(Stroke::new(default_width));
+        let checkmark = checkmark_stroke
+            .unwrap_or(Stroke { cap: StrokeCap::Square, ..Stroke::new(default_width) });
         let radius = scope.density().to_px(RADIUS_SIZE);
         draw_box(
             scope,

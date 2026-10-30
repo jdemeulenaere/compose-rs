@@ -7,7 +7,7 @@ use compose_foundation::{LOCAL_TEXT_SELECTION_COLORS, TextSelectionColors};
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
 use compose_ui::{
     Color, CornerSize, Dp, FontFamily, FontWeight, LineHeightAlignment, LineHeightStyle,
-    LineHeightTrim, Shape, TextStyle, TextUnit, UnitExt,
+    LineHeightTrim, Shape, TextStyle, TextUnit,
 };
 
 /// The theme's colors, as Compose's `ColorScheme` (the roles components use).
@@ -641,7 +641,7 @@ pub fn MaterialExpressiveTheme(
         MaterialTheme(
             color_scheme.unwrap_or_else(|| *MaterialTheme::color_scheme()),
             shapes.unwrap_or_else(|| *MaterialTheme::shapes()),
-            typography.unwrap_or_else(MaterialTheme::typography),
+            typography.unwrap_or_else(|| Typography::clone(&MaterialTheme::typography())),
             content,
         );
     } else {

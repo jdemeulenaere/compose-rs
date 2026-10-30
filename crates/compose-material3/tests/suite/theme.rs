@@ -19,36 +19,36 @@ use compose_ui::{Color, CornerSize, FontFamily, FontWeight, Modifier, Shape, Tex
 fn styles(typography: &Typography) -> [TextStyle; 30] {
     let t = typography;
     [
-        t.display_large,
-        t.display_medium,
-        t.display_small,
-        t.headline_large,
-        t.headline_medium,
-        t.headline_small,
-        t.title_large,
-        t.title_medium,
-        t.title_small,
-        t.body_large,
-        t.body_medium,
-        t.body_small,
-        t.label_large,
-        t.label_medium,
-        t.label_small,
-        t.display_large_emphasized,
-        t.display_medium_emphasized,
-        t.display_small_emphasized,
-        t.headline_large_emphasized,
-        t.headline_medium_emphasized,
-        t.headline_small_emphasized,
-        t.title_large_emphasized,
-        t.title_medium_emphasized,
-        t.title_small_emphasized,
-        t.body_large_emphasized,
-        t.body_medium_emphasized,
-        t.body_small_emphasized,
-        t.label_large_emphasized,
-        t.label_medium_emphasized,
-        t.label_small_emphasized,
+        t.display_large.clone(),
+        t.display_medium.clone(),
+        t.display_small.clone(),
+        t.headline_large.clone(),
+        t.headline_medium.clone(),
+        t.headline_small.clone(),
+        t.title_large.clone(),
+        t.title_medium.clone(),
+        t.title_small.clone(),
+        t.body_large.clone(),
+        t.body_medium.clone(),
+        t.body_small.clone(),
+        t.label_large.clone(),
+        t.label_medium.clone(),
+        t.label_small.clone(),
+        t.display_large_emphasized.clone(),
+        t.display_medium_emphasized.clone(),
+        t.display_small_emphasized.clone(),
+        t.headline_large_emphasized.clone(),
+        t.headline_medium_emphasized.clone(),
+        t.headline_small_emphasized.clone(),
+        t.title_large_emphasized.clone(),
+        t.title_medium_emphasized.clone(),
+        t.title_small_emphasized.clone(),
+        t.body_large_emphasized.clone(),
+        t.body_medium_emphasized.clone(),
+        t.body_small_emphasized.clone(),
+        t.label_large_emphasized.clone(),
+        t.label_medium_emphasized.clone(),
+        t.label_small_emphasized.clone(),
     ]
 }
 
@@ -335,16 +335,18 @@ fn an_expressive_theme_defaults_to_the_expressive_scheme_and_then_inherits() {
     assert_eq!(INNER.with(Cell::get), Some(dark_color_scheme()));
 }
 
-/// Reading the theme copies nothing: every read of the color scheme and the shapes hands out
-/// the same shared value (an `Rc`), as Compose's reads hand out the same object (D1021).
+/// Reading the theme copies nothing: every read of the color scheme, the typography and the
+/// shapes hands out the same shared value (an `Rc`), as Compose's reads hand out the same object
+/// (D1021, D1106).
 #[test]
 fn theme_reads_share_the_theme() {
     thread_local! { static SHARED: Cell<bool> = const { Cell::new(false) }; }
     let _ui = compose_test(|| {
         MaterialTheme!(color_scheme = dark_color_scheme(), {
             let scheme = Rc::ptr_eq(&MaterialTheme::color_scheme(), &MaterialTheme::color_scheme());
+            let typography = Rc::ptr_eq(&MaterialTheme::typography(), &MaterialTheme::typography());
             let shapes = Rc::ptr_eq(&MaterialTheme::shapes(), &MaterialTheme::shapes());
-            SHARED.with(|cell| cell.set(scheme && shapes));
+            SHARED.with(|cell| cell.set(scheme && typography && shapes));
         });
     });
     assert!(SHARED.with(Cell::get));

@@ -482,55 +482,60 @@ pub fn ContentSnackbar(
         compose_runtime::callback(move || {
             let (action, dismiss, content, policy) =
                 (action.clone(), dismiss_action.clone(), content.clone(), policy.clone());
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_medium), || {
-                let (action, dismiss, content) = (action.clone(), dismiss.clone(), content.clone());
-                compose_ui::Layout(
-                    Modifier,
-                    policy.clone(),
-                    compose_runtime::callback(move || {
-                        let content = content.clone();
-                        Box(
-                            Modifier,
-                            Alignment::CENTER_START,
-                            false,
-                            compose_runtime::callback(move |_| content()),
-                        );
-                        if let Some(action) = action.clone() {
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(action_content_color),
-                                || {
-                                    CompositionLocalProvider(
-                                        LOCAL_TEXT_STYLE.provides(typography.label_large),
-                                        || {
-                                            let action = action.clone();
-                                            Box(
-                                                Modifier,
-                                                Alignment::TOP_START,
-                                                false,
-                                                compose_runtime::callback(move |_| action()),
-                                            );
-                                        },
-                                    );
-                                },
+            CompositionLocalProvider(
+                LOCAL_TEXT_STYLE.provides(typography.body_medium.clone()),
+                || {
+                    let (action, dismiss, content) =
+                        (action.clone(), dismiss.clone(), content.clone());
+                    compose_ui::Layout(
+                        Modifier,
+                        policy.clone(),
+                        compose_runtime::callback(move || {
+                            let content = content.clone();
+                            Box(
+                                Modifier,
+                                Alignment::CENTER_START,
+                                false,
+                                compose_runtime::callback(move |_| content()),
                             );
-                        }
-                        if let Some(dismiss) = dismiss.clone() {
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(dismiss_action_content_color),
-                                || {
-                                    let dismiss = dismiss.clone();
-                                    Box(
-                                        Modifier,
-                                        Alignment::TOP_START,
-                                        false,
-                                        compose_runtime::callback(move |_| dismiss()),
-                                    );
-                                },
-                            );
-                        }
-                    }),
-                );
-            });
+                            if let Some(action) = action.clone() {
+                                CompositionLocalProvider(
+                                    LOCAL_CONTENT_COLOR.provides(action_content_color),
+                                    || {
+                                        CompositionLocalProvider(
+                                            LOCAL_TEXT_STYLE
+                                                .provides(typography.label_large.clone()),
+                                            || {
+                                                let action = action.clone();
+                                                Box(
+                                                    Modifier,
+                                                    Alignment::TOP_START,
+                                                    false,
+                                                    compose_runtime::callback(move |_| action()),
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            if let Some(dismiss) = dismiss.clone() {
+                                CompositionLocalProvider(
+                                    LOCAL_CONTENT_COLOR.provides(dismiss_action_content_color),
+                                    || {
+                                        let dismiss = dismiss.clone();
+                                        Box(
+                                            Modifier,
+                                            Alignment::TOP_START,
+                                            false,
+                                            compose_runtime::callback(move |_| dismiss()),
+                                        );
+                                    },
+                                );
+                            }
+                        }),
+                    );
+                },
+            );
         }),
     );
 }

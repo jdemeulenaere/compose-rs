@@ -854,7 +854,7 @@ pub fn Tab(
     #[default(crate::Color::UNSPECIFIED)] unselected_content_color: Color,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
-    let style = centered(MaterialTheme::typography().title_small);
+    let style = centered(MaterialTheme::typography().title_small.clone());
     let height = if text.is_some() && icon.is_some() { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
     let content = compose_runtime::callback(move |_: ColumnScope| {
         let (text, icon) = (text.clone(), icon.clone());
@@ -956,7 +956,7 @@ pub fn LeadingIconTab(
 ) {
     let unselected = unselected_content_color.or(selected_content_color);
     let color = tab_color(selected, selected_content_color, unselected);
-    let style = centered(MaterialTheme::typography().title_small);
+    let style = centered(MaterialTheme::typography().title_small.clone());
     let modifier = tab_modifier(
         modifier.height(SMALL_TAB_HEIGHT),
         selected,

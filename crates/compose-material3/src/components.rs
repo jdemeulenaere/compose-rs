@@ -8,7 +8,7 @@ use compose_ui::ClickableOptions;
 use compose_ui::DEFAULT_SHADOW_COLOR;
 use compose_ui::{
     Alignment, Color, Dp, FontWeight, Modifier, ModifierNode, ModifierNodeElement,
-    MutableInteractionSource, Role, Shape, SharedString, Sp, TextStyle,
+    MutableInteractionSource, Role, Shape, SharedString, TextStyle, TextUnit,
 };
 
 use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};

@@ -556,7 +556,7 @@ fn a_tab_grows_with_a_large_font_scale() {
                     Tab!(
                         true,
                         || {},
-                        text = Some(|| Text!("Text", font_size = compose_ui::Sp(10.0))),
+                        text = Some(|| Text!("Text", font_size = compose_ui::TextUnit::sp(10.0))),
                         icon = Some(|| Icon!(icons::filled::favorite(), None))
                     );
                 });

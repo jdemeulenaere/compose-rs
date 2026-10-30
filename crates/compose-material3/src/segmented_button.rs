@@ -398,7 +398,7 @@ fn segmented_button(
         .count() as f32;
     let z_index = interactions + if active { CHECKED_Z_INDEX_FACTOR } else { 0.0 };
     let mut click = Some(click);
-    let label_style = MaterialTheme::typography().label_large;
+    let label_style = MaterialTheme::typography().label_large.clone();
     let coroutines = compose_runtime::remember_coroutine_scope();
     let policy = remember(move || {
         Rc::new(IconLabelLayout { scope: coroutines, offset: Default::default() })
