@@ -453,6 +453,7 @@ struct Host {
     semantics: Writer,
     /// The merged semantics tree, for the record, the actions and the input method's options.
     semantics_tree: crate::accessibility::KeptSemanticsTree,
+    semantics_changes: crate::accessibility::KeptForChanges,
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
@@ -695,6 +696,7 @@ fn create(
         drawing_given: (0, 0),
         semantics: Writer::default(),
         semantics_tree: Default::default(),
+        semantics_changes: Default::default(),
         first: true,
         ime_options: None,
         hint: false,
@@ -1415,10 +1417,34 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics<'local>
     })
 }
 
+/// `ComposeRsNative.semanticsChanges(host)`: what changed since a service was last told
+/// (`accessibility::KeptForChanges`), for `Accessibility.kt` to tell it; `forget` first when a
+/// service just turned on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsChanges<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    forget: jboolean,
+) -> JByteBuffer<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    if forget {
+        host.semantics_changes.forget();
+    }
+    let changes = host.semantics_changes.changes(host.semantics_tree.get(&host.ui));
+    crate::accessibility::write_changes(&changes, &mut host.semantics);
+    host.semantics.bytes.reserve(1);
+    let bytes = &mut host.semantics.bytes;
+    with_env(&mut env, |env| {
+        // SAFETY: as `semantics`' buffer: read before the next call.
+        unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.len()) }.unwrap_or_default()
+    })
+}
+
 /// `ComposeRsNative.performAction(host, id, action, value)`: an accessibility service's action
-/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`, 3 to 8 scroll a page
-/// (the viewport as shown) forward, backward, up, down, left or right, as Compose's
-/// accessibility delegate (`accessibility::scroll_amount`, D491, D496).
+/// on virtual view `id`, one of `accessibility::action`'s: a scroll a page (the viewport as
+/// shown), as Compose's accessibility delegate (`accessibility::scroll_amount`, D491, D496).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     _env: EnvUnowned,
@@ -1433,20 +1459,51 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     let tree = host.semantics_tree.get(&host.ui);
     let Some((found, shown)) = crate::accessibility::find_shown(tree, id) else { return false };
     let node = found.id;
+    use crate::accessibility::action as code;
     use compose_ui::SemanticsActions as A;
+    let Ok(action) = u8::try_from(action) else { return false };
     match action {
-        0 => host.ui.perform_semantics_action(node, &A::ON_CLICK),
-        1 => {
+        code::CLICK => host.ui.perform_semantics_action(node, &A::ON_CLICK),
+        code::FOCUS => {
             // The view has left touch mode by then (`performSemanticsAction`).
             host.ui.perform_semantics_action(node, &A::REQUEST_FOCUS)
         }
-        2 => host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value)),
-        3..=8 => {
-            let direction = 1u8 << (action - 3);
+        code::SET_PROGRESS => {
+            host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(value))
+        }
+        code::SCROLL_FIRST..=8 => {
+            let direction = 1u8 << (action - code::SCROLL_FIRST);
             let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, shown) else {
                 return false;
             };
             host.ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
+        }
+        code::LONG_CLICK => host.ui.perform_semantics_action(node, &A::ON_LONG_CLICK),
+        code::EXPAND => host.ui.perform_semantics_action(node, &A::EXPAND),
+        code::COLLAPSE => host.ui.perform_semantics_action(node, &A::COLLAPSE),
+        code::DISMISS => host.ui.perform_semantics_action(node, &A::DISMISS),
+        code::PAGE_UP => host.ui.perform_semantics_action(node, &A::PAGE_UP),
+        code::PAGE_DOWN => host.ui.perform_semantics_action(node, &A::PAGE_DOWN),
+        code::PAGE_LEFT => host.ui.perform_semantics_action(node, &A::PAGE_LEFT),
+        code::PAGE_RIGHT => host.ui.perform_semantics_action(node, &A::PAGE_RIGHT),
+        code::STEP_FORWARD | code::STEP_BACKWARD => {
+            let Some(&range) =
+                found.config.get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
+            else {
+                return false;
+            };
+            let step = crate::accessibility::progress_step(range);
+            let moved = if action == code::STEP_FORWARD { step } else { -step };
+            let to = (range.current + moved).clamp(range.range.0, range.range.1);
+            host.ui.perform_semantics_action_with(node, &A::SET_PROGRESS, |set| set(to))
+        }
+        code::CUSTOM_FIRST.. => {
+            let custom = found.unmerged_config().get(&A::CUSTOM_ACTIONS);
+            let index = (action - code::CUSTOM_FIRST) as usize;
+            let Some(custom) = custom.and_then(|all| all.get(index)).cloned() else {
+                return false;
+            };
+            (custom.action)()
         }
         _ => false,
     }

@@ -407,7 +407,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D621 | [api-and-tooling](decisions/api-and-tooling.md#d621) | current |
 | D622 | [api-and-tooling](decisions/api-and-tooling.md#d622) | current |
 | D623 | [api-and-tooling](decisions/api-and-tooling.md#d623) | current |
-| D630 | [ui-and-layout](decisions/ui-and-layout.md#d630) | current |
+| D630 | [ui-and-layout](decisions/ui-and-layout.md#d630) | revised by [D1291](decisions/ui-and-layout.md#d1291) |
 | D640 | [benchmarks](decisions/benchmarks.md#d640) | current |
 | D641 | [benchmarks](decisions/benchmarks.md#d641) | current |
 | D642 | [benchmarks](decisions/benchmarks.md#d642) | current |
@@ -770,6 +770,10 @@ The log is split by area into the files below, one table each, rows in number or
 | D1286 | [ui-and-layout](decisions/ui-and-layout.md#d1286) | current |
 | D1287 | [ui-and-layout](decisions/ui-and-layout.md#d1287) | current |
 | D1288 | [ui-and-layout](decisions/ui-and-layout.md#d1288) | current |
+| D1289 | [ui-and-layout](decisions/ui-and-layout.md#d1289) | current |
+| D1290 | [ui-and-layout](decisions/ui-and-layout.md#d1290) | current |
+| D1291 | [ui-and-layout](decisions/ui-and-layout.md#d1291) | current |
+| D1292 | [ui-and-layout](decisions/ui-and-layout.md#d1292) | current |
 | D1350 | [ui-and-layout](decisions/ui-and-layout.md#d1350) | current |
 | D1351 | [ui-and-layout](decisions/ui-and-layout.md#d1351) | current |
 | D1352 | [ui-and-layout](decisions/ui-and-layout.md#d1352) | current |

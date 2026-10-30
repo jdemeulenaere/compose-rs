@@ -1,9 +1,11 @@
 //! The window's accessibility tree, for screen readers: AccessKit nodes built from the merged
 //! semantics tree (docs/07-platforms.md), and their actions sent back as semantics actions.
 
+use std::collections::HashMap;
+
 use accesskit::{Action, ActionRequest, Node, NodeId as AccessNodeId, Rect, Toggled, TreeUpdate};
 use compose_ui::{
-    Role, SemanticsActions as A, SemanticsProperties as P, ToggleableState,
+    LiveRegionMode, Role, SemanticsActions as A, SemanticsProperties as P, ToggleableState,
     platform::{SemanticsSnapshot, UiHost},
 };
 
@@ -11,8 +13,9 @@ use compose_ui::{
 /// focus on the one holding the focused node.
 pub(crate) fn tree_update(host: &UiHost, title: &str) -> TreeUpdate {
     host.with_tree(|tree| {
-        let root = tree.semantics_tree(true);
+        let root = tree.accessibility_tree();
         let focused = tree.focused();
+        let order = reading_order(&root);
         let mut update = TreeUpdate {
             nodes: Vec::new(),
             tree: Some(accesskit::TreeInfo::new(id(&root))),
@@ -21,10 +24,10 @@ pub(crate) fn tree_update(host: &UiHost, title: &str) -> TreeUpdate {
         };
         let mut window = Node::new(accesskit::Role::Window);
         window.set_label(title);
-        window.set_children(root.children.iter().map(id).collect::<Vec<_>>());
+        window.set_children(children_in_order(&root, &order));
         let mut focus = None;
         for child in &root.children {
-            add(child, &mut update.nodes, &mut |node| {
+            add(child, &order, &mut update.nodes, &mut |node| {
                 // The innermost semantics node at or above the focused one.
                 if focused.is_some_and(|focused| tree.is_at_or_below(focused, node.id)) {
                     focus = Some(id(node));
@@ -44,9 +47,33 @@ fn id(node: &SemanticsSnapshot) -> AccessNodeId {
     AccessNodeId(node.semantics_id as u64)
 }
 
+/// Each node's place in the order it's read in (`sorted_for_accessibility`).
+fn reading_order(root: &SemanticsSnapshot) -> HashMap<i32, usize> {
+    let sorted = compose_ui::sorted_for_accessibility(root);
+    sorted.iter().enumerate().map(|(index, node)| (node.semantics_id, index)).collect()
+}
+
+/// When `node` is first read: its own place, or the earliest of what's below it.
+fn first_read(node: &SemanticsSnapshot, order: &HashMap<i32, usize>) -> usize {
+    let below = node.children.iter().map(|child| first_read(child, order)).min();
+    order.get(&node.semantics_id).copied().into_iter().chain(below).min().unwrap_or(usize::MAX)
+}
+
+/// `node`'s children as they're read: AccessKit has no traversal order but its children's.
+fn children_in_order(node: &SemanticsSnapshot, order: &HashMap<i32, usize>) -> Vec<AccessNodeId> {
+    let mut children: Vec<_> = node.children.iter().collect();
+    children.sort_by_key(|child| first_read(child, order));
+    children.into_iter().map(id).collect()
+}
+
+/// The id of a node's dismiss action among its custom actions: AccessKit has no action of its own
+/// for it, and Compose's custom actions count up from 0.
+const DISMISS_CUSTOM_ACTION: i32 = -1;
+
 /// Adds `node` and its descendants to `nodes`, telling `visit` each id (parents first).
 fn add(
     node: &SemanticsSnapshot,
+    order: &HashMap<i32, usize>,
     nodes: &mut Vec<(AccessNodeId, Node)>,
     visit: &mut dyn FnMut(&SemanticsSnapshot),
 ) {
@@ -142,6 +169,14 @@ fn add(
             access.add_action(Action::SetValue);
         }
     }
+    if node.hidden {
+        access.set_hidden();
+    }
+    match own.get(&P::LIVE_REGION) {
+        Some(LiveRegionMode::Polite) => access.set_live(accesskit::Live::Polite),
+        Some(LiveRegionMode::Assertive) => access.set_live(accesskit::Live::Assertive),
+        None => {}
+    }
     if disabled {
         access.set_disabled();
     } else {
@@ -151,11 +186,37 @@ fn add(
         if own.contains(&P::FOCUSED) {
             access.add_action(Action::Focus);
         }
+        if own.contains(&A::EXPAND) {
+            access.add_action(Action::Expand);
+        }
+        if own.contains(&A::COLLAPSE) {
+            access.add_action(Action::Collapse);
+        }
+        let mut custom = Vec::new();
+        if let Some(dismiss) = own.get(&A::DISMISS) {
+            let label = dismiss.label.as_ref().map_or("Dismiss", |label| label.as_str());
+            custom.push(accesskit::CustomAction {
+                id: DISMISS_CUSTOM_ACTION,
+                description: label.into(),
+            });
+        }
+        if let Some(actions) = own.get(&A::CUSTOM_ACTIONS) {
+            for (index, action) in actions.iter().enumerate() {
+                custom.push(accesskit::CustomAction {
+                    id: index as i32,
+                    description: action.label.as_str().into(),
+                });
+            }
+        }
+        if !custom.is_empty() {
+            access.set_custom_actions(custom);
+            access.add_action(Action::CustomAction);
+        }
     }
-    access.set_children(node.children.iter().map(id).collect::<Vec<_>>());
+    access.set_children(children_in_order(node, order));
     nodes.push((id(node), access));
     for child in &node.children {
-        add(child, nodes, visit);
+        add(child, order, nodes, visit);
     }
 }
 
@@ -170,8 +231,8 @@ fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
 /// value) as a semantics action. Returns whether a node did it. A disabled node's are refused,
 /// as Compose's delegate refuses them (`if (!node.enabled()) return false`, D1255).
 pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
-    let (node, disabled, range) = host.with_tree(|tree| {
-        let root = tree.semantics_tree(true);
+    let (node, disabled, range, custom) = host.with_tree(|tree| {
+        let root = tree.accessibility_tree();
         fn find(node: &SemanticsSnapshot, target: AccessNodeId) -> Option<&SemanticsSnapshot> {
             if id(node) == target {
                 return Some(node);
@@ -185,6 +246,7 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
             found.and_then(|found| {
                 found.unmerged_config().get(&P::PROGRESS_BAR_RANGE_INFO).copied()
             }),
+            found.and_then(|found| found.unmerged_config().get(&A::CUSTOM_ACTIONS).cloned()),
         )
     });
     let (Some(node), false) = (node, disabled) else { return false };
@@ -192,6 +254,20 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
     let progress_to = match request.action {
         Action::Click => return host.perform_semantics_action(node, &A::ON_CLICK),
         Action::Focus => return host.perform_semantics_action(node, &A::REQUEST_FOCUS),
+        Action::Expand => return host.perform_semantics_action(node, &A::EXPAND),
+        Action::Collapse => return host.perform_semantics_action(node, &A::COLLAPSE),
+        Action::CustomAction => {
+            let Some(accesskit::ActionData::CustomAction(action)) = request.data else {
+                return false;
+            };
+            if action == DISMISS_CUSTOM_ACTION {
+                return host.perform_semantics_action(node, &A::DISMISS);
+            }
+            let found = usize::try_from(action)
+                .ok()
+                .and_then(|index| custom.as_ref().and_then(|all| all.get(index)));
+            return found.is_some_and(|custom| (custom.action)());
+        }
         Action::Increment | Action::Decrement => {
             let Some(info) = progress() else { return false };
             let step = progress_step(info);

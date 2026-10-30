@@ -697,3 +697,53 @@ fn a_handle_of_content_gone_or_reused_answers_as_a_node_with_nothing() {
     assert_eq!(gone.bounds_in_root(), Rect::new(0.0, 0.0, 0.0, 0.0));
     assert_eq!(gone.parent(), None);
 }
+
+#[test]
+fn a_handle_of_a_node_reused_for_other_content_answers_as_a_node_with_nothing() {
+    let content = Box::leak(Box::new(mutable_state_of(0))).handle();
+    let mut ui = compose_test(move || {
+        ReusableContent(content.get(), move || {
+            Box!(modifier = Modifier.test_tag(format!("content {}", content.get())), {});
+        });
+    });
+    let old = node(&mut ui, "content 0");
+    content.set(1);
+    ui.wait_for_idle();
+    let new = node(&mut ui, "content 1");
+    assert_ne!(old.id(), new.id());
+    assert!(old.unmerged_config().is_empty(), "not the new content's");
+    assert!(!old.layout_info().is_attached());
+}
+
+#[test]
+fn a_hit_stops_what_is_under_it_and_a_clearing_node_what_is_below_it() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {
+        Box!({
+            Box!(modifier = sized(10).test_tag("under"), {});
+            Box!(modifier = sized(10).test_tag("over"), {});
+        });
+        Box!(modifier = Modifier.offset(50.dp(), 0.dp()), {
+            let clearing = sized(10).test_tag("clearing").clear_and_set_semantics(|_| {});
+            Box!(modifier = clearing, {
+                Box!(modifier = sized(10).test_tag("below"), {});
+            });
+        });
+    });
+    let (under, over) = (node(&mut ui, "under"), node(&mut ui, "over"));
+    let (clearing, below) = (node(&mut ui, "clearing"), node(&mut ui, "below"));
+    let owner = ui.host().semantics_owner();
+    let hits_at = |x: f32| {
+        let mut hits = Vec::new();
+        owner.hit_test(Offset::new(x, 5.0), |info| {
+            hits.push(info.semantics_id());
+            false
+        });
+        hits
+    };
+    let on_siblings = hits_at(5.0);
+    assert!(on_siblings.contains(&over.id()));
+    assert!(!on_siblings.contains(&under.id()));
+    let on_clearing = hits_at(55.0);
+    assert!(on_clearing.contains(&clearing.id()));
+    assert!(!on_clearing.contains(&below.id()));
+}

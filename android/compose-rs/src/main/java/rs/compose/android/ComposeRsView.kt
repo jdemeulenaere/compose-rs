@@ -850,6 +850,9 @@ class ComposeRsView @JvmOverloads constructor(
 
     internal fun semantics() = if (host != 0L) ComposeRsNative.semantics(host) else null
 
+    internal fun semanticsChanges(forget: Boolean) =
+        if (host != 0L) ComposeRsNative.semanticsChanges(host, forget) else null
+
     internal fun performSemanticsAction(id: Int, action: Int, value: Float): Boolean {
         if (host == 0L) return false
         // An accessibility service moving the focus leaves touch mode, as Compose's

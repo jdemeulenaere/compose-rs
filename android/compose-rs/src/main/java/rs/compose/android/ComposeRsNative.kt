@@ -147,6 +147,9 @@ internal object ComposeRsNative {
     /** The merged semantics tree, for accessibility (`accessibility.rs`). */
     @JvmStatic external fun semantics(host: Long): ByteBuffer?
 
+    /** What changed since a service was last told; [forget]: it just turned on, none is told. */
+    @JvmStatic external fun semanticsChanges(host: Long, forget: Boolean): ByteBuffer
+
     /** An accessibility action on virtual view [id]: 0 click, 1 focus, 2 set progress. */
     @JvmStatic external fun performAction(host: Long, id: Int, action: Int, value: Float): Boolean
 

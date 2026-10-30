@@ -706,12 +706,14 @@ fn a_node_out_of_the_tree_offers_no_action() {
     placed.set(true);
     host.settle(10);
     assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_some());
+    // Cleared, it's out of the merged tree a service reads; the unmerged one shows it (D1292).
     cleared.set(true);
     host.settle(10);
-    assert!(find_by_tag(&host.semantics_tree(false), "inner").is_none());
-    assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_none(), "cleared");
+    assert!(find_by_tag(&host.semantics_tree(true), "inner").is_none());
+    assert!(find_by_tag(&host.semantics_tree(false), "inner").is_some());
     cleared.set(false);
     host.settle(10);
+    assert!(find_by_tag(&host.semantics_tree(true), "inner").is_some());
     assert!(host.semantics_action(inner, &SemanticsActions::ON_CLICK).is_some());
     present.set(false);
     host.settle(10);

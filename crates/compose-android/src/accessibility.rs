@@ -11,6 +11,8 @@ use compose_ui::{
     platform::{FrameStats, SemanticsSnapshot, UiHost},
 };
 
+use std::collections::HashMap;
+
 use crate::serialize::Writer;
 
 /// The flags of a node's record.
@@ -37,6 +39,36 @@ pub mod flag {
     pub const HIDDEN: u32 = 1 << 14;
     /// Laid out right to left: a horizontal scroll's left and right go the other way (D484).
     pub const RTL: u32 = 1 << 15;
+    /// A heading, as `heading()`.
+    pub const HEADING: u32 = 1 << 16;
+    /// A service focuses on it, as `isScreenReaderFocusable`.
+    pub const SCREEN_READER_FOCUSABLE: u32 = 1 << 17;
+    /// A live region, as `liveRegion`: a service says a change to it on its own.
+    pub const LIVE_POLITE: u32 = 1 << 18;
+    pub const LIVE_ASSERTIVE: u32 = 1 << 19;
+}
+
+/// The actions of a node's record, what `ComposeRsNative.performAction` takes: `Accessibility.kt`
+/// says which of Android's each is (D1289).
+pub mod action {
+    pub const CLICK: u8 = 0;
+    pub const FOCUS: u8 = 1;
+    pub const SET_PROGRESS: u8 = 2;
+    /// 3 to 8, `scroll_action`'s bits in order.
+    pub const SCROLL_FIRST: u8 = 3;
+    pub const LONG_CLICK: u8 = 9;
+    pub const EXPAND: u8 = 10;
+    pub const COLLAPSE: u8 = 11;
+    pub const DISMISS: u8 = 12;
+    pub const PAGE_UP: u8 = 13;
+    pub const PAGE_DOWN: u8 = 14;
+    pub const PAGE_LEFT: u8 = 15;
+    pub const PAGE_RIGHT: u8 = 16;
+    /// A step of a value, forward and backward.
+    pub const STEP_FORWARD: u8 = 17;
+    pub const STEP_BACKWARD: u8 = 18;
+    /// `CUSTOM_FIRST + i`: its `i`th custom action.
+    pub const CUSTOM_FIRST: u8 = 100;
 }
 
 /// Whether a frame that did `stats` may have changed the semantics (`frame`'s `SEMANTICS`): it
@@ -70,7 +102,7 @@ impl KeptSemanticsTree {
         if ui.semantics_changed_since_frame() {
             self.0 = None;
         }
-        self.0.get_or_insert_with(|| ui.semantics_tree(true))
+        self.0.get_or_insert_with(|| ui.accessibility_tree())
     }
 }
 
@@ -82,21 +114,23 @@ pub fn virtual_id(node: &SemanticsSnapshot) -> i32 {
 /// Writes the merged tree `root` (its children: the root itself is the view).
 pub fn write_tree(root: &SemanticsSnapshot, out: &mut Writer) {
     out.bytes.clear();
-    for child in &root.children {
-        write_node(child, -1, root.bounds, out);
+    let before = compose_ui::traversal_before(root);
+    for child in sorted_children(root) {
+        write_node(child, -1, root.bounds, &before, out);
     }
 }
 
-/// `bounds` within `clip`, if they overlap.
-fn clipped(bounds: Rect, clip: Rect) -> Option<Rect> {
-    let rect = Rect::new(
-        bounds.left.max(clip.left),
-        bounds.top.max(clip.top),
-        bounds.right.min(clip.right),
-        bounds.bottom.min(clip.bottom),
-    );
-    (rect.left < rect.right && rect.top < rect.bottom).then_some(rect)
+/// Children in `traversal_index` order, as Compose's `getSortedChildren`.
+fn sorted_children(node: &SemanticsSnapshot) -> Vec<&SemanticsSnapshot> {
+    let index = |child: &SemanticsSnapshot| {
+        child.unmerged_config().get(&P::TRAVERSAL_INDEX).copied().unwrap_or(0.0)
+    };
+    let mut children: Vec<_> = node.children.iter().collect();
+    children.sort_by(|a, b| index(a).total_cmp(&index(b)));
+    children
 }
+
+use compose_ui::clipped_by as clipped;
 
 fn write_string(out: &mut Writer, text: &str) {
     out.u32(text.len() as u32);
@@ -130,6 +164,13 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
     set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
     set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
     set(&mut flags, config.contains(&P::PROGRESS_BAR_RANGE_INFO), flag::RANGE);
+    set(&mut flags, config.contains(&P::HEADING), flag::HEADING);
+    set(&mut flags, compose_ui::is_screen_reader_focusable(node), flag::SCREEN_READER_FOCUSABLE);
+    match node.unmerged_config().get(&P::LIVE_REGION) {
+        Some(compose_ui::LiveRegionMode::Polite) => flags |= flag::LIVE_POLITE,
+        Some(compose_ui::LiveRegionMode::Assertive) => flags |= flag::LIVE_ASSERTIVE,
+        None => {}
+    }
     if let Some(&state) = config.get(&P::TOGGLEABLE_STATE) {
         flags |= flag::CHECKABLE;
         set(&mut flags, state == ToggleableState::On, flag::CHECKED);
@@ -151,15 +192,23 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
 /// 5 tab, 6 image, 7 dropdown list), text, content description, editable text, state
 /// description, error, pane title (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
 /// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
-/// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is.
-fn write_node(node: &SemanticsSnapshot, parent: i32, clip: Rect, out: &mut Writer) {
+/// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is; then
+/// who a service reads it before (i32, -1 for none), its class name and role description (each a
+/// length and UTF-8 bytes), and its actions (a count: u8; each `action`'s u8 and a label).
+fn write_node(
+    node: &SemanticsSnapshot,
+    parent: i32,
+    clip: Rect,
+    before: &HashMap<i32, i32>,
+    out: &mut Writer,
+) {
     let config = &node.config;
     let id = virtual_id(node);
     let visible = clipped(node.bounds, clip);
     let bounds = visible.unwrap_or(node.bounds);
     let scroll = scroll_range(node);
     let mut flags = flags(node);
-    if visible.is_none() {
+    if visible.is_none() || node.hidden {
         flags |= flag::HIDDEN;
     }
     if node.rtl {
@@ -213,11 +262,340 @@ fn write_node(node: &SemanticsSnapshot, parent: i32, clip: Rect, out: &mut Write
         out.f32(if horizontal { bounds.width() } else { bounds.height() });
         out.u8(scroll_actions(node));
     }
+    out.u32(before.get(&id).copied().unwrap_or(-1) as u32);
+    let (class_name, role_description) = class_and_role(node);
+    write_string(out, class_name);
+    write_string(out, role_description);
+    let actions = actions_of(node);
+    out.u8(actions.len() as u8);
+    for (action, label) in &actions {
+        out.u8(*action);
+        write_string(out, label.as_ref().map_or("", |label| label.as_str()));
+    }
     // A scrolling container clips what's in it.
     let inner =
         if scroll.is_some() { visible.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
+    for child in sorted_children(node) {
+        write_node(child, id, inner, before, out);
+    }
+}
+
+/// The class name and role description a service reads, from the node's own configuration, as
+/// Compose's delegate: a field's or a text's, a role's where nothing's below it (an image's only
+/// if it's what's focused on), a scrolling container's so a service scrolls it.
+pub fn class_and_role(node: &SemanticsSnapshot) -> (&'static str, &'static str) {
+    let own = node.unmerged_config();
+    let mut class = "android.view.View";
+    let mut role_description = "";
+    if own.contains(&P::EDITABLE_TEXT) {
+        class = "android.widget.EditText";
+    }
+    if own.contains(&P::TEXT) {
+        class = "android.widget.TextView";
+    }
+    if let Some(role) = own.get(&P::ROLE).filter(|_| node.children.is_empty()) {
+        match role {
+            Role::Tab => role_description = "Tab",
+            Role::Switch => role_description = "Switch",
+            Role::Button => class = "android.widget.Button",
+            Role::Checkbox => class = "android.widget.CheckBox",
+            Role::RadioButton => class = "android.widget.RadioButton",
+            Role::Image => class = "android.widget.ImageView",
+            Role::DropdownList => class = "android.widget.Spinner",
+            Role::ValuePicker => class = "android.widget.NumberPicker",
+            // A role added later: none the platform knows.
+            _ => {}
+        }
+    }
+    if own.contains(&P::PROGRESS_BAR_RANGE_INFO) && own.contains(&A::SET_PROGRESS) {
+        class = "android.widget.SeekBar";
+    }
+    let has_collection = own.contains(&P::COLLECTION_INFO);
+    if own.contains(&A::SCROLL_BY) && !has_collection {
+        if own.contains(&P::HORIZONTAL_SCROLL_AXIS_RANGE) {
+            class = "android.widget.HorizontalScrollView";
+        }
+        if own.contains(&P::VERTICAL_SCROLL_AXIS_RANGE) {
+            class = "android.widget.ScrollView";
+        }
+    }
+    (class, role_description)
+}
+
+/// What a service may ask of `node`, from its own configuration, as Compose's delegate: nothing
+/// but the accessibility focus (which `Accessibility.kt` keeps) when it's disabled.
+pub fn actions_of(node: &SemanticsSnapshot) -> Vec<(u8, Option<SharedString>)> {
+    let own = node.unmerged_config();
+    let mut actions = Vec::new();
+    if node.config.contains(&P::DISABLED) {
+        return actions;
+    }
+    let mut labelled = |key, action: u8| {
+        let found: Option<&compose_ui::AccessibilityAction<compose_ui::ActionFn>> = own.get(key);
+        if let Some(found) = found {
+            actions.push((action, found.label.clone()));
+        }
+    };
+    labelled(&A::ON_CLICK, action::CLICK);
+    labelled(&A::ON_LONG_CLICK, action::LONG_CLICK);
+    labelled(&A::PAGE_UP, action::PAGE_UP);
+    labelled(&A::PAGE_DOWN, action::PAGE_DOWN);
+    labelled(&A::PAGE_LEFT, action::PAGE_LEFT);
+    labelled(&A::PAGE_RIGHT, action::PAGE_RIGHT);
+    labelled(&A::EXPAND, action::EXPAND);
+    labelled(&A::COLLAPSE, action::COLLAPSE);
+    labelled(&A::DISMISS, action::DISMISS);
+    let focusable = own.contains(&P::FOCUSED);
+    if focusable && node.config.get(&P::FOCUSED) != Some(&true) {
+        actions.push((action::FOCUS, None));
+    }
+    if let Some(range) = node.config.get(&P::PROGRESS_BAR_RANGE_INFO) {
+        if own.contains(&A::SET_PROGRESS) {
+            let label = own.get(&A::SET_PROGRESS).and_then(|it| it.label.clone());
+            actions.push((action::SET_PROGRESS, label));
+            if range.current < range.range.1 {
+                actions.push((action::STEP_FORWARD, None));
+            }
+            if range.current > range.range.0 {
+                actions.push((action::STEP_BACKWARD, None));
+            }
+        }
+    } else {
+        let scroll = scroll_actions(node);
+        for bit in 0..6 {
+            if scroll & (1 << bit) != 0 {
+                actions.push((action::SCROLL_FIRST + bit, None));
+            }
+        }
+    }
+    if let Some(custom) = own.get(&A::CUSTOM_ACTIONS) {
+        for (index, custom) in custom.iter().enumerate().take(32) {
+            actions.push((action::CUSTOM_FIRST + index as u8, Some(custom.label.clone())));
+        }
+    }
+    actions
+}
+
+/// What a step of a value moves it by: a step, or a twentieth of the range when continuous, as
+/// Compose's delegate.
+pub fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
+    let length = info.range.1 - info.range.0;
+    if info.steps > 0 { length / (info.steps + 1) as f32 } else { length / 20.0 }
+}
+
+// ---- What changed -------------------------------------------------------------------------------
+
+/// A change a service hears, as `Accessibility.kt` sends it (`CONTENT_CHANGE_TYPE`s, D1291).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ChangeKind {
+    /// `TYPE_WINDOW_CONTENT_CHANGED`, `CONTENT_CHANGE_TYPE_UNDEFINED`.
+    Undefined = 0,
+    /// `CONTENT_CHANGE_TYPE_SUBTREE`, from the view: what's in the tree or where it is changed.
+    Subtree = 1,
+    Text = 2,
+    ContentDescription = 3,
+    StateDescription = 4,
+    Error = 5,
+    Checked = 6,
+    /// `TYPE_WINDOW_STATE_CHANGED`, `CONTENT_CHANGE_TYPE_PANE_APPEARED`, with its title.
+    PaneAppeared = 7,
+    PaneDisappeared = 8,
+    PaneTitle = 9,
+    /// `TYPE_VIEW_SELECTED` of a tab selected, with its merged text.
+    TabSelected = 10,
+}
+
+/// One change: the node's id (-1: the view), its kind, a text for some.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Change {
+    pub id: i32,
+    pub kind: ChangeKind,
+    pub text: String,
+}
+
+/// What a change is looked for in, as Compose's `SemanticsNodeCopy`.
+#[derive(Clone, PartialEq)]
+struct KeptNode {
+    bounds: Rect,
+    children: Vec<i32>,
+    pane_title: Option<SharedString>,
+    text: String,
+    description: String,
+    state: Option<SharedString>,
+    toggle: Option<ToggleableState>,
+    selected: Option<bool>,
+    error: Option<SharedString>,
+    editable: Option<SharedString>,
+    range: Option<(u32, u32, u32)>,
+    role: Option<Role>,
+    hidden: bool,
+    flags: u32,
+    actions: Vec<(u8, Option<SharedString>)>,
+}
+
+/// The tree when a service was last told, to tell it what changed since (D1291).
+#[derive(Default)]
+pub struct KeptForChanges(Option<HashMap<i32, KeptNode>>);
+
+fn kept_of(node: &SemanticsSnapshot, out: &mut HashMap<i32, KeptNode>) {
+    let (config, own) = (&node.config, node.unmerged_config());
+    out.insert(
+        virtual_id(node),
+        KeptNode {
+            bounds: node.bounds,
+            children: node.children.iter().map(virtual_id).collect(),
+            pane_title: own.get(&P::PANE_TITLE).cloned(),
+            text: join(config.get(&P::TEXT)),
+            description: join(config.get(&P::CONTENT_DESCRIPTION)),
+            state: config.get(&P::STATE_DESCRIPTION).cloned(),
+            toggle: config.get(&P::TOGGLEABLE_STATE).copied(),
+            selected: config.get(&P::SELECTED).copied(),
+            error: config.get(&P::ERROR).cloned(),
+            editable: config.get(&P::EDITABLE_TEXT).cloned(),
+            range: config
+                .get(&P::PROGRESS_BAR_RANGE_INFO)
+                .map(|it| (it.current.to_bits(), it.range.0.to_bits(), it.range.1.to_bits())),
+            role: config.get(&P::ROLE).copied(),
+            hidden: node.hidden,
+            flags: flags(node),
+            actions: actions_of(node),
+        },
+    );
     for child in &node.children {
-        write_node(child, id, inner, out);
+        kept_of(child, out);
+    }
+}
+
+impl KeptForChanges {
+    /// A service turned on: it reads the tree anew, hearing no change from before.
+    pub fn forget(&mut self) {
+        self.0 = None;
+    }
+
+    /// What changed between the tree kept and `root`, as Compose's `checkForSemanticsChanges`:
+    /// one for each property said apart, one with no type for the rest; a subtree for what's in
+    /// the tree, or where, changing; panes coming and going. Nothing the first time.
+    pub fn changes(&mut self, root: &SemanticsSnapshot) -> Vec<Change> {
+        let mut now = HashMap::new();
+        for child in &root.children {
+            kept_of(child, &mut now);
+        }
+        let roots: Vec<i32> = root.children.iter().map(virtual_id).collect();
+        now.insert(
+            ROOT_KEPT,
+            KeptNode {
+                bounds: root.bounds,
+                children: roots,
+                pane_title: None,
+                text: String::new(),
+                description: String::new(),
+                state: None,
+                toggle: None,
+                selected: None,
+                error: None,
+                editable: None,
+                range: None,
+                role: None,
+                hidden: false,
+                flags: 0,
+                actions: Vec::new(),
+            },
+        );
+        let Some(before) = self.0.replace(now) else { return Vec::new() };
+        let now = self.0.as_ref().expect("just kept");
+        let mut changes = Vec::new();
+        let mut change = |id, kind, text: &str| {
+            changes.push(Change { id, kind, text: text.to_string() });
+        };
+        fn title_of(node: &KeptNode) -> &str {
+            node.pane_title.as_ref().map_or("", |it| it.as_str())
+        }
+        let mut subtree = false;
+        // By id, so that what's told doesn't depend on a map's order.
+        let mut ids: Vec<i32> = before.keys().chain(now.keys()).copied().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            match (before.get(&id), now.get(&id)) {
+                (Some(old), None) => {
+                    subtree = true;
+                    if old.pane_title.is_some() {
+                        change(id, ChangeKind::PaneDisappeared, title_of(old));
+                    }
+                }
+                (None, Some(new)) => {
+                    subtree = true;
+                    if new.pane_title.is_some() {
+                        change(id, ChangeKind::PaneAppeared, title_of(new));
+                    }
+                }
+                (Some(old), Some(new)) if old != new => {
+                    subtree |= old.bounds != new.bounds || old.children != new.children;
+                    match (&old.pane_title, &new.pane_title) {
+                        (None, Some(_)) => change(id, ChangeKind::PaneAppeared, title_of(new)),
+                        (Some(_), None) => change(id, ChangeKind::PaneDisappeared, title_of(old)),
+                        (Some(a), Some(b)) if a != b => {
+                            change(id, ChangeKind::PaneTitle, title_of(new));
+                        }
+                        _ => {}
+                    }
+                    if old.state != new.state || old.range != new.range {
+                        change(id, ChangeKind::StateDescription, "");
+                        change(id, ChangeKind::Undefined, "");
+                    }
+                    if old.toggle != new.toggle {
+                        change(id, ChangeKind::Checked, "");
+                        change(id, ChangeKind::Undefined, "");
+                    }
+                    if old.error != new.error {
+                        change(id, ChangeKind::Error, "");
+                    }
+                    if old.selected != new.selected {
+                        if new.role == Some(Role::Tab) && new.selected == Some(true) {
+                            change(id, ChangeKind::TabSelected, &new.text);
+                        } else if new.role == Some(Role::Tab) {
+                            change(id, ChangeKind::Undefined, "");
+                        } else {
+                            change(id, ChangeKind::StateDescription, "");
+                            change(id, ChangeKind::Undefined, "");
+                        }
+                    }
+                    if old.description != new.description {
+                        change(id, ChangeKind::ContentDescription, &new.description);
+                    }
+                    if old.text != new.text || old.editable != new.editable {
+                        change(id, ChangeKind::Text, "");
+                    }
+                    if (old.flags != new.flags || old.actions != new.actions)
+                        && old.state == new.state
+                        && old.toggle == new.toggle
+                        && old.selected == new.selected
+                        && old.range == new.range
+                    {
+                        change(id, ChangeKind::Undefined, "");
+                    }
+                }
+                _ => {}
+            }
+        }
+        if subtree {
+            change(-1, ChangeKind::Subtree, "");
+        }
+        changes
+    }
+}
+
+/// The root's place among the kept, an id no layout node has.
+const ROOT_KEPT: i32 = i32::MIN;
+
+/// Writes `changes`: each its id (i32), its kind (u8), its text (a length and UTF-8 bytes).
+pub fn write_changes(changes: &[Change], out: &mut Writer) {
+    out.bytes.clear();
+    for change in changes {
+        out.u32(change.id as u32);
+        out.u8(change.kind as u8);
+        write_string(out, &change.text);
     }
 }
 

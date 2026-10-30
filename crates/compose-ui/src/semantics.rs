@@ -94,6 +94,12 @@ pub struct SemanticsSnapshot {
     /// what Compose's accessibility reads actions and scrolls from (`unmergedConfig`, D491).
     pub own_config: Option<Box<SemanticsConfiguration>>,
     pub children: Vec<SemanticsSnapshot>,
+    /// Its `z_index`, among what the traversal order compares (`SemanticsSort`).
+    pub z_index: f32,
+    /// When it was placed, among what the traversal order compares.
+    pub place_order: u64,
+    /// Accessibility leaves it out, as `isHidden`: under a layer with no alpha, or hiding.
+    pub hidden: bool,
 }
 
 impl SemanticsSnapshot {
@@ -376,15 +382,12 @@ impl UiTree {
         if own.config.is_empty() || own.config.contains(&PART_OF_PARENT) {
             return None;
         }
-        // Out of the tree under a parent not placed or clearing what's below it. An overlay is
-        // a root of its own.
+        // Out of the tree under a parent not placed. An overlay is a root of its own.
         let mut at = node;
         while !self.node(at).overlay
             && let Some(parent) = self.node(at).parent
         {
-            if self.left_out(parent)
-                || self.own_semantics(parent).is_some_and(|own| own.config.is_clearing_semantics)
-            {
+            if self.left_out(parent) {
                 return None;
             }
             at = parent;
@@ -501,7 +504,26 @@ impl UiTree {
             config,
             own_config: None,
             children,
+            z_index: 0.0,
+            place_order: 0,
+            hidden: false,
         }
+    }
+
+    /// The merged tree an accessibility service reads: the top window that takes the keys and what's
+    /// over it (D1290). What's behind a dialog is another window's, which a service doesn't read
+    /// while the dialog's is active, as Compose's `Dialog` in a window of its own.
+    pub fn accessibility_tree(&mut self) -> SemanticsSnapshot {
+        let Some(top) = self.focus.window else { return self.semantics_tree(true) };
+        let mut root = self.semantics_tree(true);
+        let first = self.overlays.iter().position(|&overlay| overlay == top);
+        let shown: SmallVec<[NodeId; 4]> = match first {
+            Some(first) => self.overlays[first..].iter().copied().collect(),
+            None => SmallVec::new(),
+        };
+        root.children
+            .retain(|child| shown.iter().any(|&overlay| self.is_at_or_below(child.id, overlay)));
+        root
     }
 
     /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are
@@ -561,8 +583,9 @@ impl UiTree {
                 let (mut config, layer) = (own.config.clone(), own.layer);
                 let mut children = Vec::new();
                 let mut own_config = None;
-                if config.is_clearing_semantics {
-                    // Nothing inside reads.
+                if config.is_clearing_semantics && merged {
+                    // Nothing inside reads; the unmerged tree shows it, for tests and debugging,
+                    // as Compose's `includeReplacedSemantics`.
                 } else if merged && config.is_merging_semantics_of_descendants {
                     let mut own = config.clone();
                     for child in children_of(self) {
@@ -580,14 +603,20 @@ impl UiTree {
                 let size = self.node(node).layers[layer].measured;
                 let rtl =
                     self.node(node).layout_direction == crate::alignment::LayoutDirection::Rtl;
+                let hidden = config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+                    || self.semantics_is_transparent(node);
+                let value = self.node(node);
                 out.push(SemanticsSnapshot {
                     id: node,
-                    semantics_id: self.node(node).semantics_id,
+                    semantics_id: value.semantics_id,
                     bounds: Rect::from_offset_size(origin, size.into()),
                     rtl,
                     config,
                     own_config,
                     children,
+                    z_index: value.z_index,
+                    place_order: value.place_order,
+                    hidden,
                 });
             }
         }

@@ -1101,6 +1101,11 @@ impl UiHost {
         crate::semantics_node::SemanticsOwner::new(key)
     }
 
+    /// The merged tree an accessibility service reads: the top window and what's over it.
+    pub fn accessibility_tree(&self) -> SemanticsSnapshot {
+        self.with_tree(|tree| tree.accessibility_tree())
+    }
+
     pub fn semantics_tree(&self, merged: bool) -> SemanticsSnapshot {
         self.with_tree(|tree| tree.semantics_tree(merged))
     }

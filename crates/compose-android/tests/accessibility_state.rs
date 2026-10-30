@@ -18,7 +18,8 @@ extern crate compose_runtime as compose;
 use std::collections::HashMap;
 
 use compose_android::accessibility::{
-    KeptSemanticsTree, find_shown, flag, semantics_may_have_changed, virtual_id, write_tree,
+    KeptForChanges, KeptSemanticsTree, find_shown, flag, semantics_may_have_changed, virtual_id,
+    write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -66,6 +67,19 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 9;
             value
         });
+        // Who it's read before, its class and role description, its actions.
+        at += 4;
+        for _ in 0..2 {
+            let length = u32_at(&mut at) as usize;
+            at += length;
+        }
+        let actions = bytes[at] as usize;
+        at += 1;
+        for _ in 0..actions {
+            at += 1;
+            let length = u32_at(&mut at) as usize;
+            at += length;
+        }
         let pane_title = strings.swap_remove(5);
         out.push(Record { id, text: strings.swap_remove(0), pane_title, scroll });
     }
@@ -96,6 +110,8 @@ struct Kotlin {
     events: Vec<Event>,
     /// `ComposeRsNative.semantics` calls: the tree written and read.
     reads: usize,
+    /// `ComposeRsNative.semanticsChanges`' tree.
+    kept: KeptForChanges,
 }
 
 impl Kotlin {
@@ -111,6 +127,7 @@ impl Kotlin {
             change_posted: false,
             events: Vec::new(),
             reads: 0,
+            kept: KeptForChanges::default(),
         };
         kotlin.frames();
         kotlin
@@ -169,7 +186,9 @@ impl Kotlin {
     fn turned_on(&mut self) {
         self.stale = true;
         self.scrolled_to.clear();
+        self.kept.forget();
         self.tell();
+        self.events.push(Event::ContentChanged);
     }
 
     /// `Accessibility.tell`.
@@ -188,7 +207,10 @@ impl Kotlin {
             }
         }
         self.scrolled_to = offsets;
-        self.events.push(Event::ContentChanged);
+        // What changed: told once here, each with its own type there.
+        if !self.kept.changes(&self.host.accessibility_tree()).is_empty() {
+            self.events.push(Event::ContentChanged);
+        }
     }
 
     /// `Accessibility.refresh`.
@@ -199,7 +221,7 @@ impl Kotlin {
         self.stale = false;
         self.reads += 1;
         let mut writer = Writer::default();
-        write_tree(&self.host.semantics_tree(true), &mut writer);
+        write_tree(&self.host.accessibility_tree(), &mut writer);
         self.nodes = records(&writer.bytes);
     }
 
@@ -378,9 +400,9 @@ fn the_kotlin_is_the_model() {
         "manager.addAccessibilityStateChangeListener(this)",
         "manager.addTouchExplorationStateChangeListener(this)",
         "    override fun onAccessibilityStateChanged(enabled: Boolean) {\n        if (enabled) turnedOn()",
-        "    private fun turnedOn() {\n        stale = true\n        scrolledTo = SparseArray()\n        tell()",
+        "    private fun turnedOn() {\n        stale = true\n        scrolledTo = SparseArray()\n        forgetChanges = true\n        tell()",
         "    private fun tell() {\n        if (!manager.isEnabled) return",
-        "event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE",
+        "CHANGE_SUBTREE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE",
         // The record's strings in its order, the pane title last, and where it goes.
         "val error = buffer.readString()\n            val paneTitle = buffer.readString()",
         "info.paneTitle = node.paneTitle",

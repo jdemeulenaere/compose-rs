@@ -63,7 +63,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::OnKeyEvent(callback) => Box::new(OnKeyEventNode(callback.clone())),
         Element::TestTag(tag) => Box::new(TestTagNode(tag.clone())),
         Element::Semantics(merge, properties) => {
-            Box::new(SemanticsSnapshot(*merge, properties.clone()))
+            Box::new(SemanticsNode(*merge, properties.clone()))
         }
         Element::Custom(element) => element.create_boxed(),
     }
@@ -127,7 +127,7 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::OnKeyEvent(callback) => set!(OnKeyEventNode, OnKeyEventNode(callback.clone())),
         Element::TestTag(tag) => set!(TestTagNode, TestTagNode(tag.clone())),
         Element::Semantics(merge, properties) => {
-            set!(SemanticsSnapshot, SemanticsSnapshot(*merge, properties.clone()))
+            set!(SemanticsNode, SemanticsNode(*merge, properties.clone()))
         }
         Element::Custom(element) => element.update_dyn(node),
     }
@@ -707,15 +707,15 @@ impl SemanticsModifierNode for TestTagNode {
     }
 }
 
-struct SemanticsSnapshot(bool, Rc<SemanticsConfiguration>);
+struct SemanticsNode(bool, Rc<SemanticsConfiguration>);
 
-impl ModifierNode for SemanticsSnapshot {
+impl ModifierNode for SemanticsNode {
     fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
         Some(self)
     }
 }
 
-impl SemanticsModifierNode for SemanticsSnapshot {
+impl SemanticsModifierNode for SemanticsNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.is_merging_semantics_of_descendants |= self.0;
         config.apply(&self.1);

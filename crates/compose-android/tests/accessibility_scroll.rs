@@ -55,6 +55,19 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             at += 1;
             (value, max, page)
         });
+        // Who it's read before, its class and role description, its actions.
+        at += 4;
+        for _ in 0..2 {
+            let length = u32_at(&mut at) as usize;
+            at += length;
+        }
+        let actions = bytes[at] as usize;
+        at += 1;
+        for _ in 0..actions {
+            at += 1;
+            let length = u32_at(&mut at) as usize;
+            at += length;
+        }
         out.push(Record { bounds, flags, text: strings.swap_remove(0), scroll });
     }
     out

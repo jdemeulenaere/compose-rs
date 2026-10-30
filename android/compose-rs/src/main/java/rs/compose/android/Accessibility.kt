@@ -42,8 +42,14 @@ internal class Accessibility(private val view: ComposeRsView) :
         val range: FloatArray?,
         /** A scrolling container's offset, the largest, and its viewport's length. */
         val scroll: FloatArray?,
-        /** The scroll actions it offers (`accessibility::scroll_action`'s bits). */
-        val scrollActions: Int,
+        /** Who a service reads it before, -1 for none. */
+        val before: Int,
+        /** Chosen in Rust, as Compose's delegate does (`accessibility::class_and_role`). */
+        val className: String,
+        val roleDescription: String,
+        /** What a service may ask (`accessibility::action`'s codes), with their labels. */
+        val actionCodes: IntArray,
+        val actionLabels: Array<String>,
     ) {
         val children = ArrayList<Int>()
     }
@@ -52,6 +58,9 @@ internal class Accessibility(private val view: ComposeRsView) :
     private val roots = ArrayList<Int>()
     private var stale = true
     private var accessibilityFocused = View.NO_ID
+
+    /** A service just turned on: nothing it hears comes from a tree before it. */
+    private var forgetChanges = false
 
     /** The scrolling containers' offsets as last read, for their `TYPE_VIEW_SCROLLED`. */
     private var scrolledTo = SparseArray<Float>()
@@ -104,7 +113,11 @@ internal class Accessibility(private val view: ComposeRsView) :
     private fun turnedOn() {
         stale = true
         scrolledTo = SparseArray()
+        forgetChanges = true
         tell()
+        // The content as it is, to read from.
+        val parent = view.parent ?: return
+        tellChange(parent, -1, CHANGE_SUBTREE, "")
     }
 
     /** Tells the services on that the content changed, and each scroll since last told. */
@@ -137,9 +150,47 @@ internal class Accessibility(private val view: ComposeRsView) :
             parent.requestSendAccessibilityEvent(view, scrolled)
         }
         scrolledTo = offsets
-        val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
-        event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
-        event.setSource(view)
+        val buffer = view.semanticsChanges(forgetChanges) ?: return
+        forgetChanges = false
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        buffer.position(0)
+        while (buffer.hasRemaining()) {
+            val id = buffer.getInt()
+            val kind = buffer.get().toInt()
+            val text = buffer.readString()
+            tellChange(parent, id, kind, text)
+        }
+    }
+
+    /** One of `accessibility::ChangeKind`'s, with what Compose's delegate sends for it. */
+    @android.annotation.SuppressLint("InlinedApi")
+    private fun tellChange(parent: android.view.ViewParent, id: Int, kind: Int, text: String) {
+        val type = when (kind) {
+            CHANGE_PANE_APPEARED, CHANGE_PANE_DISAPPEARED, CHANGE_PANE_TITLE ->
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            CHANGE_TAB_SELECTED -> AccessibilityEvent.TYPE_VIEW_SELECTED
+            else -> AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        }
+        val event = AccessibilityEvent.obtain(type)
+        event.packageName = view.context.packageName
+        if (id == -1) event.setSource(view) else event.setSource(view, id)
+        event.contentChangeTypes = when (kind) {
+            CHANGE_SUBTREE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
+            CHANGE_TEXT -> AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
+            CHANGE_CONTENT_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
+            CHANGE_STATE_DESCRIPTION -> AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION
+            CHANGE_ERROR ->
+                AccessibilityEvent.CONTENT_CHANGE_TYPE_ERROR or
+                    AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_INVALID
+            CHANGE_CHECKED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_CHECKED
+            CHANGE_PANE_APPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED
+            CHANGE_PANE_DISAPPEARED -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED
+            CHANGE_PANE_TITLE -> AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_TITLE
+            else -> AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED
+        }
+        if (text.isNotEmpty()) {
+            if (kind == CHANGE_CONTENT_DESCRIPTION) event.contentDescription = text else event.text.add(text)
+        }
         parent.requestSendAccessibilityEvent(view, event)
     }
 
@@ -182,10 +233,20 @@ internal class Accessibility(private val view: ComposeRsView) :
             } else {
                 null
             }
-            val scrollActions = if (flags and SCROLL != 0) buffer.get().toInt() and 0xFF else 0
+            if (flags and SCROLL != 0) buffer.get()
+            val before = buffer.getInt()
+            val className = buffer.readString()
+            val roleDescription = buffer.readString()
+            val actionCount = buffer.get().toInt() and 0xFF
+            val actionCodes = IntArray(actionCount)
+            val actionLabels = Array(actionCount) {
+                actionCodes[it] = buffer.get().toInt() and 0xFF
+                buffer.readString()
+            }
             val node = Node(
                 id, parent, bounds, flags, role, text, description, editableText, state, error,
-                paneTitle, range, scroll, scrollActions,
+                paneTitle, range, scroll, before, className, roleDescription, actionCodes,
+                actionLabels,
             )
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
@@ -220,20 +281,20 @@ internal class Accessibility(private val view: ComposeRsView) :
         info.setBoundsInParent(node.bounds)
         // Clipped away by a scrolling container around it: TalkBack scrolls that instead.
         info.isVisibleToUser = node.flags and HIDDEN == 0
-        info.className = when {
-            node.flags and EDITABLE != 0 -> "android.widget.EditText"
-            node.role == 1 -> "android.widget.Button"
-            node.role == 2 -> "android.widget.CheckBox"
-            node.role == 3 -> "android.widget.Switch"
-            node.role == 4 -> "android.widget.RadioButton"
-            node.role == 6 -> "android.widget.ImageView"
-            node.role == 7 -> "android.widget.Spinner"
-            node.range != null -> "android.widget.SeekBar"
-            node.scroll != null && node.flags and SCROLL_HORIZONTAL != 0 -> "android.widget.HorizontalScrollView"
-            node.scroll != null -> "android.widget.ScrollView"
-            else -> "android.view.View"
+        info.className = node.className
+        if (node.roleDescription.isNotEmpty()) {
+            info.extras.putCharSequence("AccessibilityNodeInfo.roleDescription", node.roleDescription)
         }
-        if (node.role == 5) info.extras.putCharSequence("AccessibilityNodeInfo.roleDescription", "Tab")
+        if (Build.VERSION.SDK_INT >= 28) {
+            info.isScreenReaderFocusable = node.flags and SCREEN_READER_FOCUSABLE != 0
+            info.isHeading = node.flags and HEADING != 0
+        }
+        info.liveRegion = when {
+            node.flags and LIVE_ASSERTIVE != 0 -> View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE
+            node.flags and LIVE_POLITE != 0 -> View.ACCESSIBILITY_LIVE_REGION_POLITE
+            else -> View.ACCESSIBILITY_LIVE_REGION_NONE
+        }
+        if (node.before != -1) info.setTraversalBefore(view, node.before)
         if (node.flags and EDITABLE != 0) {
             info.text = node.editableText
             info.isEditable = true
@@ -272,28 +333,13 @@ internal class Accessibility(private val view: ComposeRsView) :
                 AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS
             },
         )
-        if (info.isEnabled) {
-            if (info.isClickable) info.addAction(AccessibilityAction.ACTION_CLICK)
-            if (info.isFocusable && !info.isFocused) info.addAction(AccessibilityAction.ACTION_FOCUS)
-            node.range?.let { range ->
-                info.rangeInfo = newRangeInfo(range[1], range[2], range[0])
-                info.addAction(AccessibilityAction.ACTION_SET_PROGRESS)
-                info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
-                info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
-            }
-            // A scrolling container (a lazy list, a scrolling column), as Compose's
-            // `ScrollAxisRange` and `ScrollBy`, its actions those Rust works out as Compose's
-            // delegate does (`accessibility::scroll_actions`, D491).
-            if (node.range == null) node.scroll?.let { scroll ->
-                if (scroll[1] > 0f) info.isScrollable = true
-                val actions = node.scrollActions
-                if (actions and SCROLL_FORWARD != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
-                if (actions and SCROLL_BACKWARD != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
-                if (actions and SCROLL_UP != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_UP)
-                if (actions and SCROLL_DOWN != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_DOWN)
-                if (actions and SCROLL_LEFT != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_LEFT)
-                if (actions and SCROLL_RIGHT != 0) info.addAction(AccessibilityAction.ACTION_SCROLL_RIGHT)
-            }
+        node.range?.let { range -> info.rangeInfo = newRangeInfo(range[1], range[2], range[0]) }
+        // A scrolling container (a lazy list, a scrolling column), as Compose's `ScrollAxisRange`.
+        if (node.range == null) node.scroll?.let { scroll -> if (scroll[1] > 0f) info.isScrollable = true }
+        // Worked out in Rust, as Compose's delegate does (`accessibility::actions_of`, D1289).
+        for (index in node.actionCodes.indices) {
+            val label = node.actionLabels[index].ifEmpty { null }
+            info.addAction(AccessibilityAction(androidAction(node.actionCodes[index]), label))
         }
         if (node.paneTitle.isNotEmpty()) {
             info.paneTitle = node.paneTitle
@@ -333,58 +379,46 @@ internal class Accessibility(private val view: ComposeRsView) :
                 send(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                 true
             }
-            AccessibilityNodeInfo.ACTION_CLICK -> {
-                val done = view.performSemanticsAction(virtualViewId, 0, 0f)
-                if (done) send(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
+            else -> {
+                val index = node.actionCodes.indexOfFirst { androidAction(it) == action }
+                if (index < 0) return false
+                val code = node.actionCodes[index]
+                val value = if (code == CODE_SET_PROGRESS) {
+                    arguments?.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)
+                        ?: return false
+                } else {
+                    0f
+                }
+                val done = view.performSemanticsAction(virtualViewId, code, value)
+                if (done && code == CODE_CLICK) send(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
                 done
             }
-            AccessibilityNodeInfo.ACTION_FOCUS -> view.performSemanticsAction(virtualViewId, 1, 0f)
-            android.R.id.accessibilityActionSetProgress -> {
-                val value = arguments?.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)
-                    ?: return false
-                view.performSemanticsAction(virtualViewId, 2, value)
-            }
-            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
-            android.R.id.accessibilityActionScrollDown, android.R.id.accessibilityActionScrollUp,
-            android.R.id.accessibilityActionScrollRight, android.R.id.accessibilityActionScrollLeft,
-            -> {
-                if (node.range == null && node.scroll != null) return scrollPage(node, action)
-                if (action != AccessibilityNodeInfo.ACTION_SCROLL_FORWARD &&
-                    action != AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                ) {
-                    return false
-                }
-                val range = node.range ?: return false
-                val step = (range[2] - range[1]) / 20f
-                val delta = if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) step else -step
-                view.performSemanticsAction(virtualViewId, 2, (range[0] + delta).coerceIn(range[1], range[2]))
-            }
-            else -> false
         }
     }
 
     /**
-     * Scrolls a scrolling container by its length along its axis (less nothing: Compose's
-     * accessibility scrolls a whole viewport), forward (towards its end) or back; a reversed
-     * one's up and down are the other way.
+     * The Android action of one of `accessibility::action`'s codes. A custom action's id is any
+     * this view's nodes don't otherwise use: a service only hands it back.
      */
-    /**
-     * Scrolls a scrolling container a page (its viewport as shown) that way, as Compose's
-     * accessibility delegate: Rust works the amount out (`accessibility::scroll_amount`, D491).
-     * The services hear it once laid out (`tell`).
-     */
-    private fun scrollPage(node: Node, action: Int): Boolean {
-        if (node.scroll == null) return false
-        val direction = when (action) {
-            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> 3
-            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> 4
-            android.R.id.accessibilityActionScrollUp -> 5
-            android.R.id.accessibilityActionScrollDown -> 6
-            android.R.id.accessibilityActionScrollLeft -> 7
-            android.R.id.accessibilityActionScrollRight -> 8
-            else -> return false
-        }
-        return view.performSemanticsAction(node.id, direction, 0f)
+    private fun androidAction(code: Int): Int = when (code) {
+        CODE_CLICK -> AccessibilityNodeInfo.ACTION_CLICK
+        CODE_FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
+        CODE_SET_PROGRESS -> android.R.id.accessibilityActionSetProgress
+        3, 17 -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        4, 18 -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        5 -> android.R.id.accessibilityActionScrollUp
+        6 -> android.R.id.accessibilityActionScrollDown
+        7 -> android.R.id.accessibilityActionScrollLeft
+        8 -> android.R.id.accessibilityActionScrollRight
+        9 -> AccessibilityNodeInfo.ACTION_LONG_CLICK
+        10 -> AccessibilityNodeInfo.ACTION_EXPAND
+        11 -> AccessibilityNodeInfo.ACTION_COLLAPSE
+        12 -> AccessibilityNodeInfo.ACTION_DISMISS
+        13 -> android.R.id.accessibilityActionPageUp
+        14 -> android.R.id.accessibilityActionPageDown
+        15 -> android.R.id.accessibilityActionPageLeft
+        16 -> android.R.id.accessibilityActionPageRight
+        else -> CUSTOM_ACTION_BASE + code
     }
 
     private fun send(virtualViewId: Int, type: Int) {
@@ -402,7 +436,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         fun visit(ids: List<Int>) {
             for (id in ids) {
                 val node = nodes.get(id) ?: continue
-                if (node.bounds.contains(x.toInt(), y.toInt())) {
+                if (node.flags and HIDDEN == 0 && node.bounds.contains(x.toInt(), y.toInt())) {
                     found = id
                     visit(node.children)
                 }
@@ -447,13 +481,31 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val SCROLL_REVERSED = 1 shl 13
         const val HIDDEN = 1 shl 14
         const val RTL = 1 shl 15
-        const val SCROLL_FORWARD = 1
-        const val SCROLL_BACKWARD = 1 shl 1
-        const val SCROLL_UP = 1 shl 2
-        const val SCROLL_DOWN = 1 shl 3
-        const val SCROLL_LEFT = 1 shl 4
-        const val SCROLL_RIGHT = 1 shl 5
+        const val HEADING = 1 shl 16
+        const val SCREEN_READER_FOCUSABLE = 1 shl 17
+        const val LIVE_POLITE = 1 shl 18
+        const val LIVE_ASSERTIVE = 1 shl 19
         const val CLICKABLE = 1
+
+        // `accessibility::action`'s, those treated apart here.
+        const val CODE_CLICK = 0
+        const val CODE_FOCUS = 1
+        const val CODE_SET_PROGRESS = 2
+
+        /** Custom actions' ids: in no package's resources (`0x7f` an application's own). */
+        const val CUSTOM_ACTION_BASE = 0x7fff0000
+
+        // `accessibility::ChangeKind`'s.
+        const val CHANGE_SUBTREE = 1
+        const val CHANGE_TEXT = 2
+        const val CHANGE_CONTENT_DESCRIPTION = 3
+        const val CHANGE_STATE_DESCRIPTION = 4
+        const val CHANGE_ERROR = 5
+        const val CHANGE_CHECKED = 6
+        const val CHANGE_PANE_APPEARED = 7
+        const val CHANGE_PANE_DISAPPEARED = 8
+        const val CHANGE_PANE_TITLE = 9
+        const val CHANGE_TAB_SELECTED = 10
     }
 }
 

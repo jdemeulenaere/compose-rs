@@ -75,6 +75,7 @@ mod render;
 mod semantics;
 mod semantics_node;
 mod semantics_properties;
+mod semantics_sort;
 mod span_style;
 mod text;
 mod text_attributes;
@@ -272,6 +273,9 @@ pub use semantics::{
 pub use semantics_node::{
     CONTENT_DESCRIPTION_FAKE_NODE_ID_OFFSET, LayoutInfo, ROLE_FAKE_NODE_ID_OFFSET, SemanticsNode,
     SemanticsOwner,
+};
+pub use semantics_sort::{
+    clipped_by, is_screen_reader_focusable, sorted_for_accessibility, traversal_before,
 };
 pub use span_style::SpanStyle;
 pub use text::{SharedString, TextLayoutResult};
