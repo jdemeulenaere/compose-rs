@@ -309,6 +309,29 @@ fn selections(content: fn(), count: usize, n: usize) {
     }
 }
 
+/// The display list of `content`'s first frame, then after `n` frames 16 ms apart and a wheel's
+/// turn, for comparing two checkouts' drawing: `compare_instructions.py --dumps`.
+fn dump(content: fn(), n: usize) {
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = phone(content);
+    host.frame();
+    print!("{}", host.display_list().dump());
+    for _ in 0..n {
+        platform::advance_clock(Duration::from_millis(16));
+        host.frame();
+    }
+    println!("---");
+    print!("{}", host.display_list().dump());
+    let at = Offset::new(540.0, 1200.0);
+    host.send_pointer(PointerEvent::scroll(at, Offset::new(0.0, 200.0)));
+    for _ in 0..n {
+        platform::advance_clock(Duration::from_millis(16));
+        host.frame();
+    }
+    println!("---");
+    print!("{}", host.display_list().dump());
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(scenario), Some(n)) = (args.next(), args.next()) else {
@@ -418,6 +441,13 @@ fn main() {
                 }
             }
         }
+        "dump_feed" => dump(compose_rs_feed::Feed, n),
+        "dump_big" => dump(compose_rs_feed::BigScreen, n),
+        "dump_feed_animated" => dump(compose_rs_feed::FeedAnimated, n),
+        "dump_stress" => dump(compose_rs_feed::stress::StressScroll, n),
+        "dump_stress_animation" => dump(compose_rs_feed::stress::StressAnimation, n),
+        "dump_grid" => dump(Gallery, n),
+        "dump_cells" => dump(AnimatedCells, n),
         other => panic!("no scenario {other}"),
     }
 }

@@ -32,11 +32,17 @@ impl UiTree {
         if value.constraints == Some(constraints)
             && !value.needs_measure
             && !value.subtree_needs_measure
+            && !value.needs_placement
+            && !value.subtree_needs_placement
         {
             return false;
         }
         self.measure_node(root, constraints);
         self.place(root, 0, IntOffset::ZERO);
+        let value = self.node(root);
+        if value.needs_placement || value.subtree_needs_placement {
+            self.place_pass(root);
+        }
         self.position_overlays();
         self.needs_draw = true;
         self.laid_out_since_callbacks = true;
@@ -281,8 +287,13 @@ impl UiTree {
             }
             let Some(constraints) = value.constraints else { return true };
             let before = value.layers[0].size;
+            let in_block = value.measured_in_block;
             if self.measure_node(child, constraints) != before {
-                return true;
+                // Its parent's measurement didn't see it, its placement block did.
+                if !in_block {
+                    return true;
+                }
+                self.invalidate_placement_of(node);
             }
         }
         false
@@ -393,6 +404,12 @@ impl UiTree {
         constraints: Constraints,
     ) -> IntSize {
         let value = self.node_mut(node);
+        // Its last measurement's block is over, whatever this one does.
+        if let Some(placements) = &mut value.placements
+            && let Some(block) = placements.blocks.get_mut(layer)
+        {
+            *block = None;
+        }
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
@@ -405,6 +422,7 @@ impl UiTree {
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope::new(&mut *self, node, run);
+                scope.layer = layer;
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let mut measure = || {
                     first_of_kind(&mut *modifier_node, own, NodeKinds::LAYOUT)
@@ -459,6 +477,7 @@ impl UiTree {
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope::new(&mut *self, node, run);
+                scope.layer = layer;
                 let result = match &observer {
                     Some(observer) => observer
                         .observe(observation_key(node, Observation::Measure), || {
@@ -610,7 +629,7 @@ impl UiTree {
         }
     }
 
-    fn next_measure_run(&mut self) -> u64 {
+    pub(crate) fn next_measure_run(&mut self) -> u64 {
         self.measure_runs += 1;
         self.measure_runs
     }
@@ -619,9 +638,27 @@ impl UiTree {
     /// content). A layer measured outside its constraints is centered in the size its parent
     /// sees, as Compose does.
     pub(crate) fn place(&mut self, node: NodeId, layer: usize, position: IntOffset) {
+        self.place_in_run(node, layer, position, 0);
+    }
+
+    /// `place` by the measurement or placement block `run` (0: by none, as the root is), which
+    /// may place a layer once, as Compose's.
+    pub(crate) fn place_in_run(
+        &mut self,
+        node: NodeId,
+        layer: usize,
+        position: IntOffset,
+        run: u64,
+    ) {
         let value = self.node_mut(node);
         let told = value.kinds.any(NodeKinds::ON_PLACED);
+        // Placed at last: what its blocks wait for was passed over while it wasn't.
+        let waiting = (value.needs_placement || value.subtree_needs_placement)
+            .then_some(value.parent)
+            .flatten();
         let entry = &mut value.layers[layer];
+        assert!(run == 0 || entry.placed_in != run, "compose-ui: a child was placed twice");
+        entry.placed_in = run;
         entry.position = position;
         let offset = position + centering(entry);
         let moved = entry.offset != offset;
@@ -637,6 +674,9 @@ impl UiTree {
         }
         if told {
             self.placed_layers.push((node, layer as u32));
+        }
+        if waiting.is_some() {
+            self.note_placement_below(waiting);
         }
     }
 }

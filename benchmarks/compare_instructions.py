@@ -7,6 +7,7 @@ Timing on a loaded machine swings up to 4x; retired instructions move by a fract
     benchmarks/compare_instructions.py main                     # this checkout against a revision
     benchmarks/compare_instructions.py ../other --rounds 5      # ... or another checkout
     benchmarks/compare_instructions.py main grid_step:500       # scenario:iterations
+    benchmarks/compare_instructions.py main --dumps             # the same display lists?
 """
 import argparse
 import os
@@ -51,13 +52,15 @@ SCENARIOS = {
     "field_focus": 300,
     "field_keystroke": 3000,
 }
+DUMPS = ["feed", "big", "feed_animated", "stress", "stress_animation", "grid", "cells"]
 
 
 def build(checkout, target):
-    """Builds the example in `checkout`, an older one being lent this one's source."""
+    """Builds this checkout's example in `checkout`, its own put back after: both sides run the
+    same scenarios."""
     example = checkout / "benchmarks/examples" / f"{EXAMPLE}.rs"
-    lent = not example.exists()
-    if lent:
+    own = example.read_bytes() if example.exists() else None
+    if checkout != HERE.parent:
         example.parent.mkdir(exist_ok=True)
         shutil.copy(HERE / "examples" / f"{EXAMPLE}.rs", example)
     try:
@@ -68,8 +71,11 @@ def build(checkout, target):
             check=True,
         )
     finally:
-        if lent:
-            example.unlink()
+        if checkout != HERE.parent:
+            if own is None:
+                example.unlink()
+            else:
+                example.write_bytes(own)
     return target / "release/examples" / EXAMPLE
 
 
@@ -87,6 +93,7 @@ def main():
     parser.add_argument("base", help="a checkout's path, or a revision of this repository")
     parser.add_argument("scenarios", nargs="*", help="scenario:iterations (default: all)")
     parser.add_argument("--rounds", type=int, default=3, help="runs of each side, alternating")
+    parser.add_argument("--dumps", action="store_true", help="compare display lists instead")
     parser.add_argument("--scratch", help="where the builds go (default: a temporary directory)")
     args = parser.parse_args()
     repo = HERE.parent
@@ -106,6 +113,20 @@ def main():
         "base": build(base.resolve(), scratch / "base-target"),
         "this": build(repo, scratch / "this-target"),
     }
+    if args.dumps:
+        same = True
+        for screen in DUMPS:
+            out = {}
+            for side, binary in binaries.items():
+                run = subprocess.run(
+                    [binary, f"dump_{screen}", "30"], stdout=subprocess.PIPE, check=True
+                )
+                out[side] = run.stdout
+            equal = out["base"] == out["this"]
+            same &= equal
+            print(f'{screen:20} {"same" if equal else "DIFFERENT":10} {len(out["this"])} bytes')
+        print(f"Builds in {scratch}: delete them when done.")
+        sys.exit(0 if same else 1)
     wanted = [
         (name, int(count)) for name, count in (one.split(":") for one in args.scenarios)
     ] or list(SCENARIOS.items())
