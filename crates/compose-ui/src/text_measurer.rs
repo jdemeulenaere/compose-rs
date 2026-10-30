@@ -16,7 +16,7 @@ use crate::alignment::LayoutDirection;
 use crate::annotated::AnnotatedString;
 use crate::constraints::Constraints;
 use crate::draw::DrawScope;
-use crate::font::{FontFamilyResolver, LOCAL_FONT_FAMILY_RESOLVER};
+use crate::font::{FontFamilyResolver, LOCAL_FONT_FAMILY_RESOLVER, LOCAL_TREE_TEXT_MEASURER};
 use crate::graphics::{Color, DrawStyle, Shadow};
 use crate::intl::LocaleList;
 use crate::paragraph::{Paragraph, TextLayoutInput};
@@ -94,7 +94,8 @@ struct MeasurerInner {
 
 impl TextMeasurer {
     /// A measurer with these defaults, keeping `cache_size` layouts (none with 0), as Compose's
-    /// constructor.
+    /// constructor. The cache is searched, not hashed: a hit costs about 0.18 µs at 8 layouts and
+    /// 2.4 µs at 1024, so a large one is for layouts dearer than that.
     pub fn new(
         default_font_family_resolver: FontFamilyResolver,
         default_locale_list: LocaleList,
@@ -253,9 +254,13 @@ struct LaidOutInner {
     did_exceed_max_lines: bool,
     /// The paint it's drawn in.
     paint: TextPaint,
-    /// The same layout in the last other paint it was asked to draw in.
-    repainted: RefCell<Option<LaidOutParagraph>>,
+    /// The same layout in the last other paints it was asked to draw in, the most recent last.
+    repainted: RefCell<Vec<LaidOutParagraph>>,
 }
+
+/// The other paints a layout keeps a copy for: a text drawn in a few colors, its own each frame,
+/// asks nothing new; an animated color replaces them one by one.
+const REPAINTED_COPIES: usize = 4;
 
 impl fmt::Debug for LaidOutParagraph {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -317,10 +322,13 @@ impl LaidOutParagraph {
         if self.0.paint == *paint {
             return self.clone();
         }
-        if let Some(repainted) = &*self.0.repainted.borrow()
-            && repainted.0.paint == *paint
         {
-            return repainted.clone();
+            let mut repainted = self.0.repainted.borrow_mut();
+            if let Some(found) = repainted.iter().position(|copy| copy.0.paint == *paint) {
+                let copy = repainted.remove(found);
+                repainted.push(copy.clone());
+                return copy;
+            }
         }
         let platform = &self.0.platform;
         let style = paint.over(&input.style);
@@ -330,10 +338,13 @@ impl LaidOutParagraph {
                 LaidOutParagraph::of_handle(platform, &mut *measurer, handle, paint.clone())
             })
         };
-        let repainted =
-            painted.unwrap_or_else(|| LaidOutParagraph::lay_out(platform, input, &style));
-        *self.0.repainted.borrow_mut() = Some(repainted.clone());
-        repainted
+        let copy = painted.unwrap_or_else(|| LaidOutParagraph::lay_out(platform, input, &style));
+        let mut repainted = self.0.repainted.borrow_mut();
+        if repainted.len() == REPAINTED_COPIES {
+            repainted.remove(0);
+        }
+        repainted.push(copy.clone());
+        copy
     }
 }
 
@@ -519,7 +530,8 @@ fn same_layout(first: &TextLayoutInput, second: &TextLayoutInput) -> bool {
 }
 
 /// The layouts kept, as Compose's `TextLayoutCache`: the last `capacity` used. A cache is small
-/// (8 by default): it's searched from the most recent, without a hash of each style and text.
+/// (8 by default): it's searched from the most recent, without a hash of each style and text. A
+/// large one pays for that: a hit costs about 0.18 µs at 8 and 2.4 µs at 1024.
 pub struct TextLayoutCache {
     capacity: usize,
     /// The least recently used first.
@@ -735,11 +747,11 @@ impl DrawScope<'_> {
     }
 
     /// The paragraph of `result` this drawing's renderer can draw: what the measurement laid
-    /// out, on this host's text stack; else laid out now, once (a text's own result, or a
-    /// measurer on another host's).
+    /// out, on the tree's text stack; else laid out on it now, once (a text's own result, or a
+    /// measurer on another stack: another host's, or a resolver the content provides).
     fn drawable_of(&self, result: &TextLayoutResult) -> LaidOutParagraph {
-        let resolver = self.current_value_of(&LOCAL_FONT_FAMILY_RESOLVER);
-        let platform = resolver.platform();
+        let tree = self.current_value_of(&LOCAL_TREE_TEXT_MEASURER);
+        let platform = &tree;
         if let Some(measured) = &result.drawable.measured
             && measured.0.platform.ptr_eq(platform)
         {

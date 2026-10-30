@@ -784,11 +784,11 @@ impl compose_ui::Selectable for TextNode {
     fn offset_at(
         &self,
         position: Offset,
-        measurer: &mut dyn compose_ui::platform::TextMeasurer,
+        measurer: &compose_ui::platform::SharedTextMeasurer,
     ) -> Option<usize> {
         let paragraph = self.paragraph?;
         let text = self.text.as_str();
-        let mut offset = measurer.hit_test(paragraph, position).offset.min(text.len());
+        let mut offset = measurer.borrow().hit_test(paragraph, position).offset.min(text.len());
         while !text.is_char_boundary(offset) {
             offset -= 1;
         }
@@ -803,14 +803,16 @@ impl compose_ui::Selectable for TextNode {
     fn set_selection(
         &mut self,
         range: Option<std::ops::Range<usize>>,
-        measurer: &mut dyn compose_ui::platform::TextMeasurer,
+        measurer: &compose_ui::platform::SharedTextMeasurer,
     ) -> bool {
         let range = range.filter(|range| !range.is_empty());
         if range == self.selection {
             return false;
         }
         self.selection_rects = match (&range, self.paragraph) {
-            (Some(range), Some(paragraph)) => measurer.selection_rects(paragraph, range.clone()),
+            (Some(range), Some(paragraph)) => {
+                measurer.borrow().selection_rects(paragraph, range.clone())
+            }
             _ => Vec::new(),
         };
         self.selection = range;

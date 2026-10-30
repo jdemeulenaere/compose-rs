@@ -49,8 +49,14 @@ fn lay_out(text: impl Into<AnnotatedString>, setup: Setup) -> Rc<dyn Paragraph> 
         overflow: setup.overflow,
         ..TextLayoutOptions::default()
     };
+    // Compose's `Paragraph` with no direction goes by its first strong character (its
+    // heuristics); `resolveDefaults` is what makes that the layout's, and it doesn't call it.
+    let style = TextStyle {
+        text_direction: setup.style.text_direction.or(Some(TextDirection::Content)),
+        ..setup.style
+    };
     let handle =
-        measurer.layout_annotated(&text.into(), &setup.style, options, constraints, &setup.density);
+        measurer.layout_annotated(&text.into(), &style, options, constraints, &setup.density);
     measurer.paragraph(handle)
 }
 

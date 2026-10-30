@@ -307,6 +307,9 @@ impl IntrinsicMeasureScope<'_> {
         self.tree.visible_window()
     }
 
+    /// The platform's measurer, borrowed until the guard goes: don't hold it through a
+    /// [`TextMeasurer::measure`](crate::TextMeasurer) or a result's query, which borrow it too
+    /// and panic.
     pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn TextMeasurer> {
         self.tree.text_measurer.borrow_mut()
     }

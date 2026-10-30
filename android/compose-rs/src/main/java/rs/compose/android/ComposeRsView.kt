@@ -63,8 +63,12 @@ class ComposeRsView @JvmOverloads constructor(
     private val app: String,
     optimizations: Long = ComposeRsOptimizations.DEFAULT,
 ) : View(context) {
-    private val measurer =
-        TextMeasurer(checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
+    /**
+     * The host's paragraphs by handle, a new one for each host: a `TextMeasurer` or a result its
+     * content kept outlives it, still laying out and releasing, and each host numbers from 0
+     * (D1118).
+     */
+    private var measurer = newMeasurer()
     private val replayer = Replayer(measurer)
     /** Over the Rust host's drawing (see [ComposeRsNative.takeDrawing]). */
     private var drawing: java.nio.ByteBuffer? = null
@@ -129,6 +133,9 @@ class ComposeRsView @JvmOverloads constructor(
     init {
         applyOptimizations(optimizations)
     }
+
+    private fun newMeasurer() =
+        TextMeasurer(checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
 
     /** What the Kotlin side does by [optimizations]: paragraphs' render nodes, the flush layer. */
     private fun applyOptimizations(value: Long) {
@@ -358,7 +365,12 @@ class ComposeRsView @JvmOverloads constructor(
         // Its nodes are gone (a host composed again has others).
         accessibility.semanticsChanged(false)
         drawing = null
-        measurer.clear()
+        // What it drew goes; its layouts stay with it, for what its content kept (D1118).
+        measurer.clearDrawing()
+        val paragraphNodes = measurer.paragraphNodes
+        measurer = newMeasurer()
+        measurer.paragraphNodes = paragraphNodes
+        replayer.text = measurer
         replayer.clear()
         if (textInput) {
             textInput = false

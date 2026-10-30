@@ -172,6 +172,15 @@ pub static LOCAL_FONT_FAMILY_RESOLVER: compose_runtime::CompositionLocal<FontFam
         panic!("CompositionLocal LocalFontFamilyResolver not present: a host provides it")
     });
 
+/// The tree's text stack, where a node is composed: what its draw scope's renderer draws, whatever
+/// [`LOCAL_FONT_FAMILY_RESOLVER`] the content provides. Crate-private so nothing can provide
+/// another, and a local so a draw scope pays for it only in `draw_text`.
+pub(crate) static LOCAL_TREE_TEXT_MEASURER: compose_runtime::CompositionLocal<
+    crate::text::SharedTextMeasurer,
+> = compose_runtime::CompositionLocal::new_static("LocalTreeTextMeasurer", || {
+    panic!("CompositionLocal LocalTreeTextMeasurer not present: a host provides it")
+});
+
 macro_rules! compose_arg_by_eq {
     ($($type:ty),*) => {
         $(impl ComposeArg for $type {

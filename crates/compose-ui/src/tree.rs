@@ -58,7 +58,7 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
 pub(crate) type HandlerServices<'a> =
-    (std::cell::RefMut<'a, dyn TextMeasurer>, &'a dyn crate::clipboard::ClipboardManager);
+    (&'a crate::text::SharedTextMeasurer, &'a dyn crate::clipboard::ClipboardManager);
 
 /// A node of the UI tree: a generational index, so a stale id never reaches a new node.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -744,7 +744,7 @@ impl UiTree {
         if slot.generation != node.generation {
             return None;
         }
-        Some((slot.node.as_mut()?, (self.text_measurer.borrow_mut(), &*self.clipboard)))
+        Some((slot.node.as_mut()?, (&self.text_measurer, &*self.clipboard)))
     }
 
     /// Replaces the clipboard (the host gives the system's): what text fields use, and

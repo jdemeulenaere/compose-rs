@@ -775,7 +775,7 @@ mod tests {
     use std::ops::Range;
 
     use super::*;
-    use crate::text::{SharedString, TextMeasurer};
+    use crate::text::{SharedString, SharedTextMeasurer};
     use crate::text_selection::Selectable;
     use crate::unit::Offset;
 
@@ -785,13 +785,13 @@ mod tests {
         fn text(&self) -> SharedString {
             SharedString::from(self.0)
         }
-        fn offset_at(&self, _: Offset, _: &mut dyn TextMeasurer) -> Option<usize> {
+        fn offset_at(&self, _: Offset, _: &SharedTextMeasurer) -> Option<usize> {
             None
         }
         fn word_at(&self, _: usize) -> Range<usize> {
             0..0
         }
-        fn set_selection(&mut self, _: Option<Range<usize>>, _: &mut dyn TextMeasurer) -> bool {
+        fn set_selection(&mut self, _: Option<Range<usize>>, _: &SharedTextMeasurer) -> bool {
             false
         }
     }

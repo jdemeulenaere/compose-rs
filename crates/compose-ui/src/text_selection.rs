@@ -17,7 +17,7 @@ use crate::modifier::{
     PointerInputModifierNode,
 };
 use crate::node_chain::NodeKinds;
-use crate::text::{SharedString, TextMeasurer};
+use crate::text::{SharedString, SharedTextMeasurer};
 use crate::tree::{NodeId, UiTree};
 use crate::unit::{IntSize, Offset};
 
@@ -28,7 +28,7 @@ pub trait Selectable {
     /// Its text: what's selected and copied.
     fn text(&self) -> SharedString;
     /// The offset nearest to `position`, from the measurer (`None` before it's laid out).
-    fn offset_at(&self, position: Offset, measurer: &mut dyn TextMeasurer) -> Option<usize>;
+    fn offset_at(&self, position: Offset, measurer: &SharedTextMeasurer) -> Option<usize>;
     /// The word at `offset`, as `getWordBoundary` (`platform::word_boundary`): what a
     /// double-click selects.
     fn word_at(&self, offset: usize) -> Range<usize>;
@@ -37,11 +37,8 @@ pub trait Selectable {
         0
     }
     /// Shows `range` selected (highlighted), or nothing. Returns whether that changed.
-    fn set_selection(
-        &mut self,
-        range: Option<Range<usize>>,
-        measurer: &mut dyn TextMeasurer,
-    ) -> bool;
+    fn set_selection(&mut self, range: Option<Range<usize>>, measurer: &SharedTextMeasurer)
+    -> bool;
 }
 
 /// What a press selects, and a drag after it extends.
@@ -178,8 +175,8 @@ impl UiTree {
     fn offset_in(&mut self, entry: &Entry, position: Offset) -> usize {
         let local = position - entry.origin;
         self.node_and_measurer(entry.node)
-            .and_then(|(value, (mut measurer, _))| {
-                value.chain[entry.index].selectable()?.offset_at(local, &mut *measurer)
+            .and_then(|(value, (measurer, _))| {
+                value.chain[entry.index].selectable()?.offset_at(local, measurer)
             })
             .unwrap_or(0)
     }
@@ -364,10 +361,10 @@ impl UiTree {
             let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
             let changed =
-                self.node_and_measurer(entry.node).is_some_and(|(value, (mut measurer, _))| {
+                self.node_and_measurer(entry.node).is_some_and(|(value, (measurer, _))| {
                     value.chain[entry.index]
                         .selectable()
-                        .is_some_and(|text| text.set_selection(range, &mut *measurer))
+                        .is_some_and(|text| text.set_selection(range, measurer))
                 });
             if changed {
                 self.invalidate_draw_of(entry.node);

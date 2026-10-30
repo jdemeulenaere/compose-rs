@@ -237,6 +237,34 @@ fn other_minimum_constraints_are_another_key() {
     assert!(first != second);
 }
 
+#[test]
+fn another_default_locale_list_is_another_key() {
+    assert_key_differs(|input| input.default_locale_list = LocaleList::from_language_tags("he"));
+}
+
+/// A text with a span of `size` over its first letters.
+fn with_a_span(size: f32) -> AnnotatedString {
+    AnnotatedString::build(|builder| {
+        builder.with_style(
+            compose_ui::SpanStyle { font_size: size.sp(), ..compose_ui::SpanStyle::DEFAULT },
+            |builder| {
+                builder.append("Hel");
+            },
+        );
+        builder.append("lo");
+    })
+}
+
+#[test]
+fn another_span_that_affects_the_layout_is_another_key() {
+    assert_key_differs(|input| input.text = with_a_span(30.0));
+    let inputs = Inputs::new();
+    assert!(
+        cache_key(&inputs, |input| input.text = with_a_span(30.0))
+            != cache_key(&inputs, |input| input.text = with_a_span(40.0))
+    );
+}
+
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/CacheTextLayoutInputTest.kt, color_should_not_differ
 #[test]
 fn another_color_is_the_same_key() {
@@ -621,7 +649,9 @@ fn the_layout_direction_gives_a_text_without_a_direction_its_direction() {
             ..TextMeasureOptions::default()
         },
     );
-    // Compose compares pictures; here, where each line is.
+    // Compose compares pictures; here, where each line is. This vouches for the fixed measurer
+    // only: SkParagraph's and Android's go by the first strong character, whatever the direction
+    // (the ledger's text-direction), and would lay this Latin text out left to right both ways.
     for line in 0..by_layout.line_count as usize {
         assert_eq!(by_layout.get_line_left(line), by_style.get_line_left(line));
         assert_eq!(by_layout.get_line_right(line), by_style.get_line_right(line));
@@ -720,6 +750,29 @@ fn a_cached_result_is_copied_with_its_own_input_and_size() {
     assert_eq!(second.size, compose_ui::IntSize::new(5 * 14, 14));
     assert_eq!(second.first_baseline, first.first_baseline);
     assert_eq!(second.line_count, 1);
+}
+
+#[test]
+fn another_span_misses_a_measurers_cache() {
+    let measurer = text_measurer(8);
+    let plain = measurer.measure("Hello", TextMeasureOptions::default());
+    let styled = measurer.measure(with_a_span(30.0), TextMeasureOptions::default());
+    assert!(!Rc::ptr_eq(&plain.multi_paragraph, &styled.multi_paragraph));
+    assert!(styled.size.width > plain.size.width);
+}
+
+#[test]
+fn a_cached_result_under_minimum_constraints_keeps_its_constrained_size() {
+    let measurer = text_measurer(8);
+    let options = || TextMeasureOptions {
+        constraints: Constraints::new(400, 400, 300, 300),
+        ..TextMeasureOptions::default()
+    };
+    let first = measurer.measure("Hello", options());
+    let second = measurer.measure("Hello", options());
+    assert!(Rc::ptr_eq(&first.multi_paragraph, &second.multi_paragraph));
+    assert_eq!(second.size, compose_ui::IntSize::new(400, 300));
+    assert_eq!(second.size, first.size);
 }
 
 #[test]

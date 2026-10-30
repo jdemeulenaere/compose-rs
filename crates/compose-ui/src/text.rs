@@ -6,6 +6,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use compose_runtime::ComposeArg;
@@ -477,8 +478,11 @@ pub trait TextMeasurer: std::any::Any {
 /// The platform's text measurer, shared by the tree that lays its nodes' texts out and draws them
 /// and by the [`TextMeasurer`](crate::TextMeasurer)s made over it, which measure from anywhere
 /// (composition, layout, a draw scope, an event), as Compose's text stack is reached from
-/// anywhere. Cloning shares it. Each use borrows it: what's borrowed is given back before
-/// another node, a callback or a measurement can run (D1115).
+/// anywhere. Cloning shares it. Each use borrows it: the toolkit gives what it borrowed back
+/// before another node, a callback or a measurement can run (D1115). A node holding
+/// `scope.text_measurer()`'s guard while it calls [`TextMeasurer::measure`](crate::TextMeasurer)
+/// or a result's queries panics, as a `RefCell` borrowed twice: ask, let the guard go, then
+/// measure.
 #[derive(Clone)]
 pub struct SharedTextMeasurer(Rc<SharedMeasurer>);
 
@@ -486,7 +490,15 @@ struct SharedMeasurer {
     measurer: RefCell<Box<dyn TextMeasurer>>,
     /// Paragraphs nothing keeps any more: a [`ParagraphKeeper`] can be dropped while the measurer
     /// is borrowed, or by a recording being replaced.
-    dropped: Arc<Mutex<Vec<ParagraphHandle>>>,
+    dropped: Arc<DroppedParagraphs>,
+}
+
+/// The paragraphs let go of, and a flag for the draw that has none to give back (nearly all of
+/// them): a lock each draw shows in a frame's instructions.
+#[derive(Default)]
+struct DroppedParagraphs {
+    any: AtomicBool,
+    handles: Mutex<Vec<ParagraphHandle>>,
 }
 
 /// Keeps a paragraph of the platform's measurer: the last one dropped gives it back, at the next
@@ -498,7 +510,7 @@ pub(crate) struct ParagraphKeeper(Arc<KeeperInner>);
 
 struct KeeperInner {
     handle: ParagraphHandle,
-    dropped: Arc<Mutex<Vec<ParagraphHandle>>>,
+    dropped: Arc<DroppedParagraphs>,
 }
 
 impl ParagraphKeeper {
@@ -509,7 +521,8 @@ impl ParagraphKeeper {
 
 impl Drop for KeeperInner {
     fn drop(&mut self) {
-        self.dropped.lock().unwrap_or_else(PoisonError::into_inner).push(self.handle);
+        self.dropped.handles.lock().unwrap_or_else(PoisonError::into_inner).push(self.handle);
+        self.dropped.any.store(true, Ordering::Release);
     }
 }
 
@@ -555,21 +568,26 @@ impl SharedTextMeasurer {
         }))
     }
 
-    /// Gives back the paragraphs nothing keeps any more, each draw pass and before a measurer's
-    /// layout. They're out of every recording, so a frame drawn after this names none of them
-    /// (D1116).
+    /// Gives back the paragraphs nothing keeps any more, at the end of each draw pass and before
+    /// a measurer's layout. They're out of every recording, so a frame drawn after this names none
+    /// of them (D1116).
     pub fn release_dropped(&self) {
-        let dropped = {
-            let mut dropped = self.0.dropped.lock().unwrap_or_else(PoisonError::into_inner);
-            if dropped.is_empty() {
-                return;
-            }
-            std::mem::take(&mut *dropped)
-        };
+        if !self.0.dropped.any.swap(false, Ordering::Acquire) {
+            return;
+        }
+        let dropped = std::mem::take(
+            &mut *self.0.dropped.handles.lock().unwrap_or_else(PoisonError::into_inner),
+        );
         let mut measurer = self.borrow_mut();
         for paragraph in dropped {
             measurer.release(paragraph);
         }
+    }
+}
+
+impl ComposeArg for SharedTextMeasurer {
+    fn same(&self, other: &Self) -> bool {
+        self.ptr_eq(other)
     }
 }
 

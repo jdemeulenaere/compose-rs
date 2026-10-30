@@ -88,7 +88,7 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * node at alpha 0, which the render thread skips: the frame placing one again finds its version
  * recorded, and records nothing.
  */
-internal class Replayer(private val text: TextMeasurer) {
+internal class Replayer(var text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     /**
      * Gradients by their bytes (kind to stops) and local transform (x, y, scale x, scale y

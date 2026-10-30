@@ -13,8 +13,11 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::{FixedTextMeasurer, UiHost};
 use compose_ui::{
-    Constraints, Density, IntSize, TextAlign, TextOverflow, TextStyle, remember_text_measurer,
+    Constraints, Density, IntSize, TextAlign, TextOverflow, TextStyle, UnitExt,
+    remember_text_measurer,
 };
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 pub(crate) const SHORT: &str = "Short label";
 pub(crate) const CENTERED: &str = "Centered";
@@ -382,4 +385,164 @@ fn a_solid_brush_is_the_same_paint_again_the_next_time() {
     }
     let counts = counter.of("Hello");
     assert_eq!((counts.fresh, counts.restyled), (1, 1), "{counts:?}");
+}
+
+#[test]
+fn a_few_colors_drawn_in_turn_paint_each_once() {
+    let owner = compose_runtime::mutable_state_of(0u32);
+    let tick = owner.handle();
+    let (mut host, counter) = counted_drawing(tick, |scope, measurer, step| {
+        let result = measurer.measure("Hello", compose_ui::TextMeasureOptions::default());
+        scope.draw_text_layout(&result, colored(step % 3 + 1), Default::default());
+    });
+    for step in 1..30 {
+        tick.set(step);
+        host.frame();
+    }
+    let counts = counter.of("Hello");
+    assert_eq!((counts.fresh, counts.restyled), (1, 3), "{counts:?}");
+}
+
+#[test]
+fn more_colors_than_it_keeps_evict_the_least_recently_used() {
+    let owner = compose_runtime::mutable_state_of(1u32);
+    let tick = owner.handle();
+    let (mut host, counter) = counted_drawing(tick, |scope, measurer, step| {
+        let result = measurer.measure("Hello", compose_ui::TextMeasureOptions::default());
+        scope.draw_text_layout(&result, colored(step), Default::default());
+    });
+    let drawn = [2, 3, 4, 1, 5, 1, 2];
+    for step in drawn {
+        tick.set(step);
+        host.frame();
+    }
+    // 1 to 4; 1 is found and is the most recent; 5 takes 2's place; 1 is found; 2 is made again.
+    let counts = counter.of("Hello");
+    assert_eq!((counts.fresh, counts.restyled), (1, 6), "{counts:?}");
+}
+
+/// A text keeping a measurer's result, which `offset_at` and `set_selection` ask.
+struct QueryingSelectable {
+    result: compose_ui::TextLayoutResult,
+    measurer: compose_ui::TextMeasurer,
+    asked: Rc<Cell<u32>>,
+}
+
+impl compose_ui::Selectable for QueryingSelectable {
+    fn text(&self) -> compose_ui::SharedString {
+        compose_ui::SharedString::from("Hello")
+    }
+    fn offset_at(
+        &self,
+        position: compose_ui::Offset,
+        _: &compose_ui::platform::SharedTextMeasurer,
+    ) -> Option<usize> {
+        self.asked.set(self.asked.get() + 1);
+        // Both reach the measurer the tree shares.
+        let _ = self.measurer.measure("Again", Default::default());
+        Some(self.result.get_offset_for_position(position))
+    }
+    fn word_at(&self, _: usize) -> std::ops::Range<usize> {
+        0..5
+    }
+    fn set_selection(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        measurer: &compose_ui::platform::SharedTextMeasurer,
+    ) -> bool {
+        self.asked.set(self.asked.get() + 1);
+        let _ = self.result.get_line_end(0, false);
+        let _ = measurer.ptr_eq(measurer);
+        false
+    }
+}
+
+impl compose_ui::ModifierNode for QueryingSelectable {
+    fn as_selectable(&mut self) -> Option<&mut dyn compose_ui::Selectable> {
+        Some(self)
+    }
+}
+
+struct QueryingElement {
+    measurer: compose_ui::TextMeasurer,
+    asked: Rc<Cell<u32>>,
+}
+
+impl compose_ui::ModifierNodeElement for QueryingElement {
+    type Node = QueryingSelectable;
+    fn create(&self) -> QueryingSelectable {
+        QueryingSelectable {
+            result: self.measurer.measure("Hello", Default::default()),
+            measurer: self.measurer.clone(),
+            asked: self.asked.clone(),
+        }
+    }
+    fn update(&self, _: &mut QueryingSelectable) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+    fn name(&self) -> &'static str {
+        "QueryingSelectable"
+    }
+}
+
+#[test]
+fn a_selectable_may_measure_and_query_a_result_when_asked() {
+    let asked = Rc::new(Cell::new(0));
+    let given = asked.clone();
+    let mut host = UiHost::headless(200, 100);
+    host.set_content(move || {
+        let measurer = remember_text_measurer!();
+        let given = given.clone();
+        SelectionContainer!({
+            let element = QueryingElement { measurer: measurer.clone(), asked: given.clone() };
+            Box!(modifier = Modifier.size((200.0.dp(), 100.0.dp())).then_custom(element));
+        });
+    });
+    host.frame();
+    let at = compose_ui::Offset::new(10.0, 10.0);
+    host.send_pointer(compose_ui::PointerEvent::press(at));
+    host.send_pointer(compose_ui::PointerEvent::release(at));
+    host.frame();
+    assert!(asked.get() > 0, "the selection asked it nothing");
+}
+
+// ---- A direction left unspecified is the layout's, for all text ------------------------------
+
+/// The paragraph direction `text` is laid out in under `direction`, through `BasicText` and
+/// through a measurer: the two paths lay out the same.
+fn directions_of(
+    text: &'static str,
+    direction: compose_ui::LayoutDirection,
+) -> (compose_ui::ResolvedTextDirection, compose_ui::ResolvedTextDirection) {
+    let heard: Rc<RefCell<Option<compose_ui::TextLayoutResult>>> = Rc::default();
+    let measured: Rc<RefCell<Option<compose_ui::TextLayoutResult>>> = Rc::default();
+    let (keep, keep_measured) = (heard.clone(), measured.clone());
+    let mut host = UiHost::headless(400, 400);
+    host.set_content(move || {
+        let (keep, keep_measured) = (keep.clone(), keep_measured.clone());
+        CompositionLocalProvider(compose_ui::LOCAL_LAYOUT_DIRECTION.provides(direction), || {
+            let keep = keep.clone();
+            let measurer = remember_text_measurer!();
+            *keep_measured.borrow_mut() = Some(measurer.measure(text, Default::default()));
+            BasicText!(
+                text,
+                on_text_layout =
+                    move |result: compose_ui::TextLayoutResult| *keep.borrow_mut() = Some(result)
+            );
+        });
+    });
+    host.frame();
+    let heard = heard.borrow().clone().expect("laid out").get_paragraph_direction(0);
+    let measured = measured.borrow().clone().expect("measured").get_paragraph_direction(0);
+    (heard, measured)
+}
+
+#[test]
+fn an_unspecified_direction_is_the_layouts_through_basic_text_and_a_measurer() {
+    use compose_ui::{LayoutDirection as Layout, ResolvedTextDirection as Resolved};
+    assert_eq!(directions_of("Latin", Layout::Rtl), (Resolved::Rtl, Resolved::Rtl));
+    assert_eq!(directions_of("Latin", Layout::Ltr), (Resolved::Ltr, Resolved::Ltr));
+    assert_eq!(directions_of("\u{5E9}\u{5DC}", Layout::Ltr), (Resolved::Ltr, Resolved::Ltr));
+    assert_eq!(directions_of("\u{5E9}\u{5DC}", Layout::Rtl), (Resolved::Rtl, Resolved::Rtl));
 }

@@ -231,7 +231,9 @@ impl NodeContext<'_> {
         self.tree.node(self.node).layout_direction
     }
 
-    /// The text measurer, for a node that lays text out or gives paragraphs back.
+    /// The text measurer, for a node that lays text out or gives paragraphs back. Borrowed until
+    /// the guard goes: don't hold it through a [`TextMeasurer::measure`](crate::TextMeasurer) or a
+    /// result's query, which borrow it too and panic.
     pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn crate::text::TextMeasurer> {
         self.tree.text_measurer()
     }

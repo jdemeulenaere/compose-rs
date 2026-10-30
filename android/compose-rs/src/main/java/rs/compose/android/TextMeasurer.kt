@@ -762,11 +762,12 @@ internal class TextMeasurer(
         pool.recycle(node)
     }
 
-    fun clear() {
+    /**
+     * Its host is gone: nothing draws its paragraphs again. Their layouts stay, for a measurer or
+     * a result the host's content kept (D1118): they go with this object when those do.
+     */
+    fun clearDrawing() {
         laidOut.clear()
-        layouts.clear()
-        lastLines.clear()
-        intrinsics.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()
         pool.clear()

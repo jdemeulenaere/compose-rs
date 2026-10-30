@@ -418,16 +418,8 @@ impl FixedTextMeasurer {
         } else {
             max_intrinsic.ceil().max(constraints.min_width as f32).min(max_width)
         };
-        let direction = match style.text_direction {
-            None => {
-                if options.direction == crate::alignment::LayoutDirection::Rtl {
-                    TextDirection::ContentOrRtl
-                } else {
-                    TextDirection::ContentOrLtr
-                }
-            }
-            direction => TextDirection::resolve(direction, options.direction),
-        };
+        // As Compose's `resolveTextDirection`: unspecified is the layout's, for all text.
+        let direction = TextDirection::resolve(style.text_direction, options.direction);
         // The leading margins of a paragraph's first line and of its others.
         let indent = style.text_indent.map_or((0.0, 0.0), |indent| {
             let px = |unit| resolve_text_unit_px(unit, base_px, density).unwrap_or(0.0);

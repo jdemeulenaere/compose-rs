@@ -9,12 +9,13 @@ use std::rc::Rc;
 use compose::foundation::layout::*;
 use compose::foundation::*;
 use compose::runtime::*;
-use compose::ui::platform::{Renderer, UiHost};
+use compose::ui::platform::{Renderer, SharedTextMeasurer, UiHost};
 use compose::ui::{
     AnnotatedString, Color, Constraints, Density, DrawScope, DrawTextLayoutOptions,
-    DrawTextOptions, FontFamilyResolver, IntSize, LOCAL_FONT_FAMILY_RESOLVER, Modifier, Offset,
-    Size, TextDecoration, TextLayoutResult, TextMeasureOptions, TextMeasurer, TextOverflow,
-    TextPainter, TextStyle, UnitExt, remember_text_measurer,
+    DrawTextOptions, FontFamilyResolver, IntSize, LOCAL_FONT_FAMILY_RESOLVER, LayoutDirection,
+    LocaleList, Modifier, Offset, Size, TextDecoration, TextLayoutResult, TextMeasureOptions,
+    TextMeasurer, TextOverflow, TextPainter, TextStyle, UnitExt, create_font_family_resolver,
+    remember_text_measurer,
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
@@ -624,15 +625,139 @@ fn a_recording_keeps_what_it_draws_until_it_is_drawn_again() {
     // It's drawn as often as the renderer likes, with nothing but the recording holding it.
     assert!(render(&mut host, (200, 100)).contains(Color::RED));
     assert!(render(&mut host, (200, 100)).contains(Color::RED));
+    // The frame replacing it gives it back, its own being the only one left.
     text.set("World");
     host.frame();
     assert!(render(&mut host, (200, 100)).contains(Color::RED));
-    // The next frame gives the first back, and leaves the second.
-    text.set("Again");
-    host.frame();
-    assert!(live(&mut host) <= 2, "{}", live(&mut host));
-    host.frame();
     assert_eq!(live(&mut host), 1);
+}
+
+/// `host`'s measurer's paragraphs.
+fn live_on(host: &UiHost) -> usize {
+    host.with_tree(|tree| {
+        let measurer = tree.text_measurer_ref();
+        (&*measurer as &dyn std::any::Any)
+            .downcast_ref::<SkiaTextMeasurer>()
+            .expect("the skia measurer")
+            .live()
+    })
+}
+
+#[test]
+fn what_a_removed_drawing_kept_goes_with_the_frame_removing_it_on_a_screen_gone_idle() {
+    let mut host =
+        UiHost::new(IntSize::new(200, 100), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    let shown_owner = mutable_state_of(true);
+    let shown = shown_owner.handle();
+    host.set_content(move || {
+        let measurer = remember_text_measurer!(0);
+        if shown.get() {
+            for index in 0..20 {
+                let measurer = measurer.clone();
+                Box!(
+                    modifier = Modifier.size(10.dp()).draw_behind(move |scope| {
+                        scope.draw_text(&measurer, format!("{index}"), DrawTextOptions::default());
+                    })
+                );
+            }
+        }
+    });
+    host.frame();
+    assert_eq!(live_on(&host), 20);
+    shown.set(false);
+    host.frame();
+    assert_eq!(live_on(&host), 0);
+}
+
+/// The stack of a resolver a test provides, with paragraphs of its own, so that its handles
+/// name something else in the host's measurer if they end up there.
+fn another_stack() -> SharedTextMeasurer {
+    let stack = SharedTextMeasurer::new(Box::new(SkiaTextMeasurer::new()));
+    for text in ["one", "two", "three"] {
+        let handle = stack.borrow_mut().layout(
+            text,
+            &TextStyle::DEFAULT,
+            Default::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        // Kept: the handles the measurer gives next are others'.
+        let _ = handle;
+    }
+    stack
+}
+
+#[test]
+fn a_resolver_over_another_stack_draws_on_the_trees() {
+    let stack = another_stack();
+    let provided = create_font_family_resolver(&stack);
+    let mut host =
+        UiHost::new(IntSize::new(300, 100), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(move || {
+        CompositionLocalProvider(LOCAL_FONT_FAMILY_RESOLVER.provides(provided.clone()), || {
+            let measurer = remember_text_measurer!(0);
+            Box!(
+                modifier = Modifier.fill_max_size().draw_behind(move |scope| {
+                    scope.draw_text(
+                        &measurer,
+                        "Hello",
+                        DrawTextOptions {
+                            style: TextStyle { color: Color::RED, ..style_of(40.0) },
+                            ..DrawTextOptions::default()
+                        },
+                    );
+                })
+            );
+        });
+    });
+    host.frame();
+    assert!(render(&mut host, (300, 100)).contains(Color::RED));
+    // Measured on the other stack, drawn from a paragraph of the tree's.
+    assert_eq!(live_on(&host), 1);
+}
+
+#[test]
+fn a_result_drawn_by_two_hosts_alternately_is_drawn_by_each() {
+    let stack = another_stack();
+    let result = TextMeasurer::new(
+        create_font_family_resolver(&stack),
+        LocaleList::empty(),
+        Density::new(1.0),
+        LayoutDirection::Ltr,
+        0,
+    )
+    .measure(
+        "Hello",
+        TextMeasureOptions { style: style_of(40.0), ..TextMeasureOptions::default() },
+    );
+    let tick_owner = mutable_state_of(0u32);
+    let tick = tick_owner.handle();
+    let host_of = |result: TextLayoutResult| {
+        let host = UiHost::new(
+            IntSize::new(300, 100),
+            Density::new(1.0),
+            Box::new(SkiaTextMeasurer::new()),
+        );
+        host.set_content(move || {
+            let result = result.clone();
+            Box!(
+                modifier = Modifier.fill_max_size().draw_behind(move |scope| {
+                    let _ = tick.get();
+                    scope.draw_text_layout(&result, Color::RED, no_overrides());
+                })
+            );
+        });
+        host
+    };
+    let (mut first, mut second) = (host_of(result.clone()), host_of(result));
+    for step in 1..5 {
+        first.frame();
+        assert!(render(&mut first, (300, 100)).contains(Color::RED), "step {step}");
+        tick.set(step * 2);
+        second.frame();
+        assert!(render(&mut second, (300, 100)).contains(Color::RED), "step {step}");
+        tick.set(step * 2 + 1);
+    }
 }
 
 #[test]

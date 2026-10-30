@@ -126,8 +126,6 @@ impl UiTree {
             return false;
         }
         self.held_paragraphs.sweep(&self.text_measurer);
-        // What the last frame's drawing let go of: its frame names none of them (D1116).
-        self.text_measurer.release_dropped();
         let observer = self.observer.clone();
         let mut recording = mem::take(&mut self.display_list);
         // The boundaries the last frame drew that this one won't, still composed: kept drawn
@@ -161,6 +159,9 @@ impl UiTree {
         }
         self.display_list = recording;
         self.needs_draw = false;
+        // What this draw let go of, out of the recordings by now: this frame names none of them,
+        // and they don't wait for the next one on a screen gone idle (D1116).
+        self.text_measurer.release_dropped();
         true
     }
 

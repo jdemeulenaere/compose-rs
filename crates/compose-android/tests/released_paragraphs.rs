@@ -399,8 +399,40 @@ fn a_kept_layout_repainted_each_frame_draws_only_live_paragraphs() {
         checked.frame();
     }
     checked.assert_exercised();
-    // The layout, the paint drawn, and at most the paint it replaced.
-    assert!(checked.live.0.borrow().len() <= live_at_start + 2);
+    // The layout and the copies it keeps, the first of them the one live at the start.
+    assert!(checked.live.0.borrow().len() <= live_at_start + 4);
+}
+
+/// One layout in two colors in the same frame: a paragraph for each, both live, the layout's own
+/// staying (Kotlin's `painted` keeps `previous`).
+#[test]
+fn one_layout_in_two_colors_in_a_frame_draws_only_live_paragraphs() {
+    let count = mutable_state_of(0u32);
+    let given = count.handle();
+    let mut checked = Checked::new(move || {
+        let measurer = remember_text_measurer!();
+        Box!(
+            modifier = Modifier.size(50.dp()).repaint_boundary().draw_behind(move |scope| {
+                let _ = given.get();
+                let result =
+                    measurer.measure("the same layout", compose_ui::TextMeasureOptions::default());
+                scope.draw_text_layout(&result, Color::RED, Default::default());
+                scope.draw_text_layout(&result, Color::BLUE, Default::default());
+                // The layout's own paint, the first handle, after the others were made from it.
+                scope.draw_text_layout(&result, Color::UNSPECIFIED, Default::default());
+            })
+        );
+    });
+    let live_at_start = checked.live.0.borrow().clone();
+    assert_eq!(live_at_start.len(), 3, "the layout and its two copies");
+    for step in 1..5 {
+        count.set(step);
+        checked.frame();
+        checked.frame();
+    }
+    // Drawn again in the same paints: nothing new, nothing lost.
+    assert_eq!(*checked.live.0.borrow(), live_at_start);
+    assert!(checked.kept > 0, "no group was kept");
 }
 
 /// A lazy list's items drawing with a shared measurer, scrolled with prefetching between frames:
