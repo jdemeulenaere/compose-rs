@@ -4,7 +4,6 @@
 //! when it ends the animation takes up from there, at the velocity the content had (D828).
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -275,44 +274,32 @@ pub(crate) enum MutationPhase {
     Handoff,
 }
 
-/// A pointer's speed along an axis in units a second, from its last 100 ms: a least-squares line,
-/// as compose-foundation's fling's, until ui has Compose's `VelocityTracker` (ledger:
-/// velocity-tracker; D828).
+/// The velocity of a manual value, as Compose's `VelocityTracker` fed by `trackScaleVelocity` and
+/// `trackSlideVelocity`. compose-rs's layer block can run several times a frame (a coordinates'
+/// mapping evaluates it too), so a sample like the last isn't added again: copies would fill the
+/// tracker's history of 20 and lose the gesture (D833).
 #[derive(Default)]
-struct VelocityTracker {
-    samples: VecDeque<(u64, f32)>,
+struct ManualVelocity {
+    tracker: compose_ui::VelocityTracker,
+    last: Option<(i64, Offset)>,
 }
 
-impl VelocityTracker {
-    const HORIZON_NANOS: u64 = 100_000_000;
-
-    fn add(&mut self, time_nanos: u64, position: f32) {
-        self.samples.push_back((time_nanos, position));
-        while self
-            .samples
-            .front()
-            .is_some_and(|(at, _)| time_nanos.saturating_sub(*at) > Self::HORIZON_NANOS)
-        {
-            self.samples.pop_front();
+impl ManualVelocity {
+    fn add(&mut self, position: Offset) {
+        let millis = (compose_runtime::platform::now_nanos() / 1_000_000) as i64;
+        if self.last != Some((millis, position)) {
+            self.last = Some((millis, position));
+            self.tracker.add_position(millis, position);
         }
     }
 
-    fn velocity(&self) -> f32 {
-        let Some((first, _)) = self.samples.front() else { return 0.0 };
-        let count = self.samples.len() as f32;
-        let time = |at: u64| at.saturating_sub(*first) as f32 / 1e9;
-        let mean_time = self.samples.iter().map(|(at, _)| time(*at)).sum::<f32>() / count;
-        let mean_position = self.samples.iter().map(|(_, at)| at).sum::<f32>() / count;
-        let (mut covariance, mut variance) = (0.0, 0.0);
-        for (at, position) in &self.samples {
-            covariance += (time(*at) - mean_time) * (position - mean_position);
-            variance += (time(*at) - mean_time) * (time(*at) - mean_time);
-        }
-        if variance <= f32::EPSILON { 0.0 } else { covariance / variance }
+    fn velocity(&self) -> compose_ui::Velocity {
+        self.tracker.calculate_velocity()
     }
 
     fn reset(&mut self) {
-        self.samples.clear();
+        self.tracker.reset_tracking();
+        self.last = None;
     }
 }
 
@@ -345,8 +332,8 @@ pub(crate) struct SharedMutableTransformState {
 
     catch_up: OnceCell<CatchUp>,
 
-    scale_velocity_tracker: RefCell<VelocityTracker>,
-    offset_velocity_tracker: RefCell<(VelocityTracker, VelocityTracker)>,
+    scale_velocity_tracker: RefCell<ManualVelocity>,
+    offset_velocity_tracker: RefCell<ManualVelocity>,
     scale_handoff_velocity: Cell<Option<AnimationVector>>,
     slide_handoff_velocity: Cell<Option<AnimationVector>>,
 }
@@ -425,9 +412,7 @@ impl SharedMutableTransformState {
                     MutationPhase::MutatingPendingCatchUp
                 });
                 self.scale_velocity_tracker.borrow_mut().reset();
-                let mut offsets = self.offset_velocity_tracker.borrow_mut();
-                offsets.0.reset();
-                offsets.1.reset();
+                self.offset_velocity_tracker.borrow_mut().reset();
                 self.scale_handoff_velocity.set(None);
                 self.slide_handoff_velocity.set(None);
             }
@@ -598,7 +583,7 @@ impl SharedMutableTransformState {
 
     fn calculate_handoff_velocities(&self) {
         let not_nan = |velocity: f32| if velocity.is_nan() { 0.0 } else { velocity };
-        let scale = not_nan(self.scale_velocity_tracker.borrow().velocity());
+        let scale = not_nan(self.scale_velocity_tracker.borrow().velocity().x);
         self.scale_handoff_velocity.set(Some(AnimationVector::from([scale])));
         let last = self.last_mutable_data.borrow();
         let provided = last
@@ -608,8 +593,8 @@ impl SharedMutableTransformState {
         let slide = match provided {
             Some(velocity) if velocity.is_specified() => [velocity.x, velocity.y],
             _ => {
-                let offsets = self.offset_velocity_tracker.borrow();
-                [not_nan(offsets.0.velocity()), not_nan(offsets.1.velocity())]
+                let velocity = self.offset_velocity_tracker.borrow().velocity();
+                [not_nan(velocity.x), not_nan(velocity.y)]
             }
         };
         self.slide_handoff_velocity.set(Some(AnimationVector::from(slide)));
@@ -669,8 +654,7 @@ impl SharedMutableTransformState {
         if is_mutating {
             self.last_scale.set(combined);
             if is_mutated {
-                let now = compose_runtime::platform::now_nanos();
-                self.scale_velocity_tracker.borrow_mut().add(now, combined);
+                self.scale_velocity_tracker.borrow_mut().add(Offset::new(combined, 0.0));
             }
         }
         combined
@@ -729,10 +713,8 @@ impl SharedMutableTransformState {
         if is_mutating {
             self.last_slide.set(combined);
             if is_mutated {
-                let now = compose_runtime::platform::now_nanos();
-                let mut offsets = self.offset_velocity_tracker.borrow_mut();
-                offsets.0.add(now, combined.x as f32);
-                offsets.1.add(now, combined.y as f32);
+                let position = Offset::new(combined.x as f32, combined.y as f32);
+                self.offset_velocity_tracker.borrow_mut().add(position);
             }
         }
         combined
@@ -769,9 +751,7 @@ impl SharedMutableTransformState {
         self.scale_velocity_tracker.borrow_mut().reset();
         self.last_transform_origin.set(TransformOrigin::CENTER);
         self.last_slide.set(IntOffset::ZERO);
-        let mut offsets = self.offset_velocity_tracker.borrow_mut();
-        offsets.0.reset();
-        offsets.1.reset();
+        self.offset_velocity_tracker.borrow_mut().reset();
         self.scale_handoff_velocity.set(None);
         self.slide_handoff_velocity.set(None);
         *self.last_mutable_data.borrow_mut() = None;
@@ -911,5 +891,29 @@ mod tests {
         let content = MutableContentTransform::of(initial.clone(), target.clone());
         assert!(content.initial_transform().same(&initial));
         assert!(content.target_transform().same(&target));
+    }
+
+    // Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/DeferredEnterExitTransition.kt, calculateHandoffVelocities (no test of Compose's: its layer block runs once a frame, this one several times)
+    #[test]
+    fn the_hand_off_velocity_is_compose_s_velocity_tracker_s_of_one_sample_a_frame() {
+        compose_runtime::platform::set_manual_clock(1_000_000_000);
+        let state = SharedMutableTransformState::new();
+        state.update_mutation_state(true, true);
+        // A curved gesture, as a finger slowing down, read several times a frame.
+        let values = [1.0f32, 0.8, 0.65, 0.55, 0.5];
+        let mut expected = compose_ui::VelocityTracker::new();
+        for value in values {
+            compose_runtime::platform::advance_clock(std::time::Duration::from_millis(16));
+            state.transform_scope.set_scale(value);
+            for _ in 0..7 {
+                state.combined_scale(1.0);
+            }
+            let millis = (compose_runtime::platform::now_nanos() / 1_000_000) as i64;
+            expected.add_position(millis, Offset::new(value, 0.0));
+        }
+        state.update_mutation_state(false, false);
+        let expected = expected.calculate_velocity().x;
+        assert!(expected < -1.0, "it's moving: {expected}");
+        assert_eq!(state.scale_handoff_velocity().unwrap()[0], expected);
     }
 }

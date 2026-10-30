@@ -520,7 +520,7 @@ One entry per feature. Sizes:
 
 #### deferred-transition (XL, not exp., new at this tip): done (D828)
 
-- **Done:** all of it but what shared elements take from it (`SharedMutableTransformState`'s modifier local, `parentLayoutCoordinates`), which comes with shared-transition. The hand-off's velocities come from a least-squares line, not Compose's `VelocityTracker` (velocity-tracker in ui).
+- **Done:** all of it but what shared elements take from it (`SharedMutableTransformState`'s modifier local, `parentLayoutCoordinates`), which comes with shared-transition.
 
 - **API:**
   - the states: `DeferredTransitionState` (`defer`, `animate_to`, `pending_target_state`), `DeferredTransition`, `remember_deferred_transition`;
