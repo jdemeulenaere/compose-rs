@@ -131,7 +131,7 @@ pub struct TextLayoutInput {
 /// Whether a line's visible end leaves `c` out, as Compose's `LayoutHelper.isLineEndSpace`:
 /// the space, the line feed, the ogham space mark, the en to hair spaces but the figure space,
 /// the medium mathematical space and the ideographic space (a tab stays visible).
-pub(crate) fn is_line_end_space(c: char) -> bool {
+pub fn is_line_end_space(c: char) -> bool {
     matches!(c, ' ' | '\n' | '\u{1680}' | '\u{205F}' | '\u{3000}')
         || (('\u{2000}'..='\u{200A}').contains(&c) && c != '\u{2007}')
 }

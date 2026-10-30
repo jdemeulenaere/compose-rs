@@ -99,7 +99,7 @@ pub mod platform {
     pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::paragraph::{
         CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,
-        sampled_paragraph,
+        is_line_end_space, sampled_paragraph,
     };
     pub use crate::path::{PathOperator, set_path_operator};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};

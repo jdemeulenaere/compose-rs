@@ -69,10 +69,21 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
     bytes.push(text.len());
     let byte_at = |index: usize| bytes[index.min(bytes.len() - 1)];
     let mut lines = Vec::new();
-    for line in paragraph.get_line_metrics() {
+    let metrics = paragraph.get_line_metrics();
+    let count = metrics.len();
+    for (number, line) in metrics.into_iter().enumerate() {
         let start = byte_at(line.start_index);
         let end = byte_at(line.end_including_newline);
-        let visible_end = byte_at(line.end_excluding_whitespaces).max(start);
+        // As Compose's `lineEndToVisibleEnd` (SkParagraph's own takes a tab for whitespace too),
+        // but an ellipsized line, which ends where its ellipsis starts.
+        let visible_end = if entry.ellipsized && number + 1 == count {
+            byte_at(line.end_excluding_whitespaces).max(start)
+        } else {
+            start
+                + text[start..end]
+                    .trim_end_matches(compose_ui::platform::is_line_end_space)
+                    .len()
+        };
         let mut glyphs = Vec::new();
         // A running UTF-16 index through the line.
         let mut unit = line.start_index;

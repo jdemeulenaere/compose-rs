@@ -943,8 +943,8 @@ private fun minIntrinsicWidth(text: CharSequence, paint: TextPaint): Float {
 
 /** A space a line's visible end leaves out, as Compose's `LayoutHelper.isLineEndSpace`. */
 internal fun isLineEndSpace(c: Char): Boolean =
-    c == ' ' || c == '\n' || c == ' ' || (c in ' '..' ' && c != ' ') ||
-        c == ' ' || c == '　'
+    c == ' ' || c == '\n' || c == '\u1680' || (c in '\u2000'..'\u200A' && c != '\u2007') ||
+        c == '\u205F' || c == '\u3000'
 
 /** How many of the longest segments [minIntrinsicWidth] measures, as Compose's heap. */
 private const val MIN_WIDTH_CANDIDATES = 10

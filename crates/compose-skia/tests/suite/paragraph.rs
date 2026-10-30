@@ -140,3 +140,20 @@ fn skia_an_ellipsized_last_line_ends_at_the_texts_end() {
     assert_eq!(paragraph.get_line_end(1, false), 11);
     assert_eq!(paragraph.get_line_for_offset(9), 1);
 }
+
+/// A line's visible end leaves out what Compose's `LayoutHelper.isLineEndSpace` names, not what
+/// SkParagraph takes for whitespace: a tab or a figure space stays visible (D1109).
+#[test]
+fn skia_a_lines_visible_end_leaves_out_compose_s_line_end_spaces() {
+    let visible = |text: &str| paragraph(text).get_line_end(0, true);
+    assert_eq!(visible("abc   "), 3);
+    assert_eq!(visible("abc\u{3000}\u{2003} "), 3);
+    assert_eq!(visible("abc\t"), 4);
+    assert_eq!(visible("abc\u{2007}"), "abc\u{2007}".len());
+    // On a wrapped line too, and before a line feed.
+    let wrapped = paragraph_with("aaaa bbbb", TextLayoutOptions::default(), Some(40));
+    assert!(wrapped.line_count() > 1);
+    let end = wrapped.get_line_end(0, false);
+    assert_eq!(wrapped.get_line_end(0, true), end - "aaaa bbbb"[..end].ends_with(' ') as usize);
+    assert_eq!(paragraph("ab\t\ncd").get_line_end(0, true), 3);
+}
