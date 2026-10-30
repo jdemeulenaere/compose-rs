@@ -38,7 +38,7 @@
 //!   asks for it to be completed before the next pass (`request_completion`), as Compose's
 //!   measurement completes a precomposed item; dropped unapplied, it's cancelled.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -112,6 +112,10 @@ pub(crate) enum RecordedOp {
     Reuse {
         node: NodeRef,
     },
+    /// `Applier::deactivate`: in order with what's reused, as content goes and comes while paused.
+    Deactivate {
+        node: NodeRef,
+    },
 }
 
 /// A remember observer, a side effect or a forgotten value waiting for `apply`, or the place of
@@ -183,6 +187,19 @@ impl Paused {
             target,
             segments: vec![Vec::new()],
         }
+    }
+
+    /// What a deactivation just deferred for `region` goes to its record, in order with its reuses.
+    pub fn record_deactivations(&mut self, region: u32) {
+        let region = &mut self.regions[region as usize];
+        for node in region.deferred.deactivated_nodes.drain(..) {
+            region.ops.push(RecordedOp::Deactivate { node });
+        }
+    }
+
+    /// Neither applied nor cancelled.
+    pub fn in_progress(&self) -> bool {
+        !matches!(self.state.get(), PausedState::Applied | PausedState::Cancelled)
     }
 
     /// Its regions wait for `apply` (or a resume): their content isn't the composition's yet.
@@ -560,6 +577,8 @@ impl Runtime {
 pub struct PausedComposition {
     composition: CompositionId,
     state: Rc<Cell<PausedState>>,
+    /// The content its first pass sets, a pausable composition's.
+    content: RefCell<Option<Rc<dyn Fn()>>>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -615,7 +634,24 @@ impl Composition {
             }
             data.paused = Some(Box::new(Paused::new(state.clone(), target)));
         });
-        PausedComposition { composition: id, state, _not_send: PhantomData }
+        PausedComposition {
+            composition: id,
+            state,
+            content: RefCell::new(None),
+            _not_send: PhantomData,
+        }
+    }
+
+    /// A paused composition setting `content`: a [`PausableComposition`]'s.
+    pub(crate) fn paused_content(&self, content: Rc<dyn Fn()>) -> PausedComposition {
+        with_runtime(|runtime| {
+            if runtime.compositions.get(self.id).is_some_and(|data| data.disposed) {
+                misuse(ComposeError::Disposed)
+            }
+        });
+        let paused = self.recompose_pausable_with(None);
+        *paused.content.borrow_mut() = Some(content);
+        paused
     }
 }
 
@@ -651,6 +687,11 @@ impl PausedWatch {
 }
 
 impl PausedComposition {
+    /// What its state is held by: what a pausable composition keeps of its last.
+    pub(crate) fn state(&self) -> Rc<Cell<PausedState>> {
+        self.state.clone()
+    }
+
     /// A watch of its content (`PausedWatch`), which outlives it.
     pub fn watch(&self) -> PausedWatch {
         PausedWatch { composition: self.composition, state: self.state.clone() }
@@ -696,10 +737,14 @@ impl PausedComposition {
                 if finishing {
                     return false;
                 }
-                match Pass::begin_as(self.composition, Mode::Walk, PassKind::Pausable, should_pause)
-                {
+                let content = self.content.borrow_mut().take();
+                let mode = if content.is_some() { Mode::Normal } else { Mode::Walk };
+                match Pass::begin_as(self.composition, mode, PassKind::Pausable, should_pause) {
                     Some(pass) => {
-                        run_walk(0);
+                        match content {
+                            Some(content) => crate::composition::compose_root(content),
+                            None => run_walk(0),
+                        }
                         pass.finish();
                     }
                     // A disposed or closed composition, or nothing to compose: nothing to apply.
@@ -867,6 +912,7 @@ fn resume_state(
     should_pause: Option<Rc<dyn ShouldPauseCallback>>,
 ) -> bool {
     let paused = std::mem::ManuallyDrop::new(PausedComposition {
+        content: RefCell::new(None),
         composition: id,
         state: state.clone(),
         _not_send: PhantomData,
@@ -950,14 +996,21 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
     let mut flat = Flat::default();
     flat.forgotten.append(&mut deferred.removed_values);
     flatten(&mut paused.segments, 0, &mut flat);
-    dispatch_forgotten(&flat.forgotten);
-    drop(std::mem::take(&mut flat.forgotten));
+    // What was never remembered is abandoned last, as Compose's dispatcher.
+    let (abandoned, forgotten): (Vec<SlotValue>, Vec<SlotValue>) =
+        std::mem::take(&mut flat.forgotten).into_iter().partition(
+            |value| matches!(value, SlotValue::Observer(observer) if observer.abandon_later()),
+        );
+    dispatch_forgotten(&forgotten);
+    drop(forgotten);
     for observer in flat.observers {
         observer.dispatch_remembered();
     }
     for effect in flat.effects {
         effect.run();
     }
+    dispatch_forgotten(&abandoned);
+    drop(abandoned);
     drop(paused);
     drop(finishing);
     request_frames();
@@ -1012,6 +1065,7 @@ fn replay_ops(
                 applier.remove(parent, at(parent, index), count as usize)
             }
             RecordedOp::Reuse { node } => applier.reuse(node),
+            RecordedOp::Deactivate { node } => applier.deactivate(node),
         }
     }
 }

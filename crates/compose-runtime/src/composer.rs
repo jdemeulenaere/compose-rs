@@ -668,6 +668,11 @@ impl Runtime {
                 stack[start..].reverse();
             }
         }
+        if frame.region != NO_REGION
+            && let Some(paused) = paused.as_mut()
+        {
+            paused.record_deactivations(frame.region);
+        }
         // Its nodes stay where they are: all its children's (nothing composed in it).
         if !frame.inserting {
             frame.node_index += table[frame.group].node_count;

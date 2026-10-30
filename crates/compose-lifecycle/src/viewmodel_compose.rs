@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::rc::Rc;
 
 use compose_runtime::{
-    CompositionLocal, DisposableEffect, composable, current_composite_key_hash, remember_keyed,
+    CompositionLocal, DisposableEffect, composable, current_composite_key_hash_code, remember_keyed,
 };
 
 use crate::composition::LOCAL_LIFECYCLE_OWNER;
@@ -376,7 +376,7 @@ pub fn remember_view_model_store_provider(
     #[default(None)] default_creation_extras: Option<CreationExtras>,
     #[default(None)] default_factory: Option<Rc<dyn ViewModelProviderFactory>>,
 ) -> ViewModelStoreProvider {
-    let key = key.unwrap_or_else(current_composite_key_hash);
+    let key = key.unwrap_or_else(current_composite_key_hash_code);
     let provider = {
         let held = parent.clone();
         remember_keyed((parent, key), move || {
@@ -410,7 +410,7 @@ pub fn remember_view_model_store_owner(
     #[default(None)] default_creation_extras: Option<CreationExtras>,
     #[default(None)] default_factory: Option<Rc<dyn ViewModelProviderFactory>>,
 ) -> ViewModelStoreOwnerRef {
-    let key = current_composite_key_hash();
+    let key = current_composite_key_hash_code();
     let provider = remember_view_model_store_provider!(
         parent = parent,
         key = Some(key),
@@ -428,7 +428,7 @@ pub fn remember_view_model_store_owner_in(
     provider: ViewModelStoreProvider,
     #[default(None)] key: Option<u64>,
 ) -> ViewModelStoreOwnerRef {
-    let key = key.unwrap_or_else(current_composite_key_hash);
+    let key = key.unwrap_or_else(current_composite_key_hash_code);
     let owner = {
         let held = provider.clone();
         remember_keyed((provider.clone(), key), move || held.get_or_create_owner(key))

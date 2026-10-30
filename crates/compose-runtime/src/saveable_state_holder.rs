@@ -5,10 +5,10 @@
 //! Each provider's content registers its values with a [`SaveableStateRegistry`] of its own;
 //! when the content leaves, the holder keeps what that registry saves, and gives it to the
 //! registry of the content that next comes with the key. Values in a provider are found again
-//! by their place within it (its group stops [`current_composite_key_hash`]'s walk), so a
+//! by their place within it (its group stops [`current_composite_key_hash_code`]'s walk), so a
 //! provider moved elsewhere (from one animated container's slot to another's) finds them too.
 //!
-//! [`current_composite_key_hash`]: crate::current_composite_key_hash
+//! [`current_composite_key_hash_code`]: crate::current_composite_key_hash_code
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ use crate::saveable::{
 use crate::state::{ObjectHandle, Owned};
 
 /// The group key of [`SaveableStateHolder::SaveableStateProvider`]'s reusable groups, whose data
-/// key is the hash of the provider's key. `current_composite_key_hash` stops there (D290).
+/// key is the hash of the provider's key. `current_composite_key_hash_code` stops there (D290).
 pub(crate) const PROVIDER_GROUP: u64 = key_of("compose_runtime::SaveableStateProvider");
 
 /// The group of a provider's [`ProviderEntry`], after its content's.

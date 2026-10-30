@@ -196,6 +196,8 @@ pub trait RememberObserver: 'static {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ObserverState {
     New,
+    /// Dropped before it was remembered; its `on_abandoned` comes last.
+    Abandoning,
     Remembered,
     Done,
 }
@@ -210,6 +212,9 @@ pub(crate) trait ErasedObserver: Any {
     fn as_any(&self) -> &dyn Any;
     fn into_any(self: Rc<Self>) -> Rc<dyn Any>;
     fn dispatch_remembered(&self);
+    /// If it was never remembered, it won't be, and its `dispatch_forgotten` abandons it. Returns
+    /// whether that's so.
+    fn abandon_later(&self) -> bool;
     fn dispatch_forgotten(&self);
 }
 
@@ -222,6 +227,14 @@ impl<T: RememberObserver> ErasedObserver for ObserverBox<T> {
         self
     }
 
+    fn abandon_later(&self) -> bool {
+        let new = self.state.get() == ObserverState::New;
+        if new {
+            self.state.set(ObserverState::Abandoning);
+        }
+        new
+    }
+
     fn dispatch_remembered(&self) {
         if self.state.get() == ObserverState::New {
             self.state.set(ObserverState::Remembered);
@@ -231,7 +244,7 @@ impl<T: RememberObserver> ErasedObserver for ObserverBox<T> {
 
     fn dispatch_forgotten(&self) {
         match self.state.replace(ObserverState::Done) {
-            ObserverState::New => self.value.on_abandoned(),
+            ObserverState::New | ObserverState::Abandoning => self.value.on_abandoned(),
             ObserverState::Remembered => self.value.on_forgotten(),
             ObserverState::Done => {}
         }

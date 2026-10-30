@@ -62,7 +62,7 @@ pub use compose_node::{
     Updater,
 };
 pub use composer::current_recompose_scope;
-pub use composition::{ApplierRef, Composition};
+pub use composition::{ApplierRef, Composition, PausableComposition, ReusableComposition};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, KeyedSideEffect,
@@ -97,7 +97,7 @@ pub use reusable::{ReusableContent, ReusableContentHost};
 pub use saveable::{
     AutoSaver, CompositeKeyToken, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable,
     Saveable, SaveableStateRegistry, SavedState, SavedValue, Saver, composite_key_hash_of,
-    current_composite_key_hash, current_composite_key_token, list_saver, map_saver,
+    current_composite_key_hash_code, current_composite_key_token, list_saver, map_saver,
     remember_saveable, remember_saveable_with, saver,
 };
 pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};

@@ -1,4 +1,4 @@
-//! Compose's `CompoundHashKeyTests`, adapted: `current_composite_key_hash` is unique for
+//! Compose's `CompoundHashKeyTests`, adapted: `current_composite_key_hash_code` is unique for
 //! adjacent, repeated and conditional calls, stable across recompositions and recreation, and
 //! moves with keys. Its values differ from Compose's by design (D290). The subcomposition tests
 //! wait for composition contexts.
@@ -58,7 +58,7 @@ impl Trace {
 #[composable]
 fn A(trace: Trace, marker: i32) {
     trace.0.recompose.get();
-    let hash = current_composite_key_hash();
+    let hash = current_composite_key_hash_code();
     trace.0.hashes.borrow_mut().push(hash);
     trace.0.markers.borrow_mut().insert(marker, hash);
 }
@@ -254,7 +254,7 @@ fn a_composable_under_an_enum_key_keeps_its_hash() {
     #[composable]
     fn Child(scope: ScopeHolder, current_key: Rc<Cell<u64>>) {
         scope.capture();
-        current_key.set(current_composite_key_hash());
+        current_key.set(current_composite_key_hash_code());
     }
     let mut test = composition_test();
     let (scope, current_key) = (ScopeHolder::new(), Rc::new(Cell::new(0)));
@@ -273,9 +273,9 @@ fn the_hash_is_the_same_on_both_sides_of_reused_content() {
     fn Content(content_key: MutableState<i32>, keys: Rc<Cell<(u64, u64)>>) {
         let current = content_key.get();
         ReusableContent(current, || {
-            let on_enter = current_composite_key_hash();
+            let on_enter = current_composite_key_hash_code();
             NonReusableText(current.to_string());
-            keys.set((on_enter, current_composite_key_hash()));
+            keys.set((on_enter, current_composite_key_hash_code()));
         });
     }
     let mut test = composition_test();
@@ -303,7 +303,7 @@ fn a_nested_hash_stays_the_same_when_its_scope_recomposes_alone() {
             let (scope, last) = (scope.clone(), last.clone());
             RestartGroup!({
                 scope.capture();
-                last.set(current_composite_key_hash());
+                last.set(current_composite_key_hash_code());
             });
         });
     }

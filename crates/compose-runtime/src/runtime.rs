@@ -492,6 +492,8 @@ pub(crate) struct CompositionData {
     pub finishing: bool,
     /// Emptied at thread exit while its handle still owns it: passes compose nothing.
     pub closed: bool,
+    /// [`Composition::dispose`](crate::Composition::dispose) was called: it's closed for good.
+    pub disposed: bool,
     pub frame_requester: Option<Rc<dyn Fn()>>,
     pub deferred: Deferred,
     /// The paused composition in progress, if any (Compose's `pendingPausedComposition`).
@@ -508,6 +510,7 @@ impl CompositionData {
             poisoned: false,
             finishing: false,
             closed: false,
+            disposed: false,
             frame_requester: None,
             deferred: Deferred::default(),
             paused: None,
@@ -523,6 +526,11 @@ impl CompositionData {
 
     pub fn has_invalidations(&self) -> bool {
         self.table[SENTINEL].dirty
+    }
+
+    /// Whether a paused composition of it is neither applied nor cancelled.
+    pub fn has_paused_in_progress(&self) -> bool {
+        self.paused.as_ref().is_some_and(|paused| paused.in_progress())
     }
 }
 

@@ -281,7 +281,7 @@ fn HashedContent(key: MutableState<i32>, local_value: MutableState<i32>, last_ha
     ReusableContent(current, || {
         Linear!({
             Text(&format!("Key = {current}: {}", local_value.get()));
-            last_hash.set(current_composite_key_hash());
+            last_hash.set(current_composite_key_hash_code());
         });
     });
 }

@@ -32,6 +32,8 @@ pub struct View {
     pub active: bool,
     /// What the node's lifecycle callbacks call, as `Linear(onReuse, onDeactivate, onRelease)`.
     pub callbacks: Option<Rc<ViewCallbacks>>,
+    /// Being reused in paused content, not applied yet (D591).
+    reusing_paused: bool,
 }
 
 /// A view's lifecycle callbacks.
@@ -49,13 +51,23 @@ thread_local! {
 impl View {
     pub fn new(name: &'static str) -> View {
         let id = NEXT_VIEW_ID.with(|next| next.replace(next.get() + 1));
-        View { id, name, attributes: BTreeMap::new(), active: true, callbacks: None }
+        View {
+            id,
+            name,
+            attributes: BTreeMap::new(),
+            active: true,
+            reusing_paused: false,
+            callbacks: None,
+        }
     }
 
     /// Sets an attribute, as `View.attribute(name, value)`. A node is modified only while it's
     /// active, as Compose's mock checks.
     pub fn set_attribute(&mut self, name: &'static str, value: impl Into<String>) {
-        assert!(self.active, "node {self:?} modified while it wasn't active");
+        assert!(
+            self.active || self.reusing_paused,
+            "node {self:?} modified while it wasn't active"
+        );
         self.attributes.insert(name, value.into());
     }
 
@@ -157,9 +169,17 @@ impl Applier for ViewApplier {
         let view = self.tree.get_mut(node).expect("a live view");
         // A node can be reused without being deactivated: active from here on.
         view.active = true;
+        view.reusing_paused = false;
         if let Some(on_reuse) = view.callbacks.clone().as_ref().and_then(|c| c.on_reuse.as_ref()) {
             on_reuse();
         }
+    }
+
+    /// Left to `apply`, as by default; paused content updates a node before that (D591), which
+    /// the check of `set_attribute` lets it.
+    fn reuse_paused(&mut self, node: NodeRef) -> bool {
+        self.tree.get_mut(node).expect("a live view").reusing_paused = true;
+        false
     }
 
     fn deactivate(&mut self, node: NodeRef) {

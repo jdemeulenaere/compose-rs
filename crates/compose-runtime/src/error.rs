@@ -13,6 +13,8 @@ pub enum ComposeError {
     RememberedCell(&'static str),
     /// The composer was used while no composition pass was running on this thread.
     NotComposing,
+    /// The content of a disposed composition was set.
+    Disposed,
     /// A pass was started while another one was running on this thread.
     PassInProgress,
     /// `end_group` or `end_restart_group` had no matching start, or closed the wrong kind of group.
@@ -54,6 +56,7 @@ impl fmt::Display for ComposeError {
                      {type_name} are lost: remember an Rc of it"
                 );
             }
+            ComposeError::Disposed => "the composition is disposed",
             ComposeError::NotComposing => "the composer was used outside a composition pass",
             ComposeError::PassInProgress => {
                 "a composition pass is already running on this thread (one pass at a time)"

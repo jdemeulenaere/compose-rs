@@ -28,7 +28,7 @@ use compose_navigation_event::{
 };
 use compose_runtime::{
     Callback, CompositionLocal, DisposableEffect, Job, SideEffect, composable,
-    current_composite_key_hash, remember_keyed,
+    current_composite_key_hash_code, remember_keyed,
 };
 
 /// What `PredictiveBackHandler` gets of a gesture, as AndroidX's `BackEventCompat`.
@@ -153,7 +153,7 @@ impl NavigationEventCallbacks for BackCallbacks {
 #[allow(non_snake_case)]
 pub fn BackHandler(#[default(true)] enabled: bool, on_back: impl Fn() + 'static) {
     let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
-    let key = current_composite_key_hash();
+    let key = current_composite_key_hash_code();
     let (handler, current) = {
         let on_back = on_back.clone();
         remember_keyed((dispatcher.clone(), key), move || {
@@ -400,7 +400,7 @@ pub fn PredictiveBackHandler<F: Future<Output = ()> + 'static>(
 ) {
     let Some(dispatcher) = LOCAL_NAVIGATION_EVENT_DISPATCHER_OWNER.current() else { return };
     let on_back: OnBack = Rc::new(move |progress| Box::pin(on_back(progress)));
-    let key = current_composite_key_hash();
+    let key = current_composite_key_hash_code();
     let (handler, state) = {
         let on_back = on_back.clone();
         remember_keyed((dispatcher.clone(), key), move || {

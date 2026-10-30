@@ -1,7 +1,7 @@
 //! `Composition`: owns a slot table and an applier, and runs passes.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -43,10 +43,93 @@ impl Composition {
         Composition { id, _not_send: PhantomData }
     }
 
+    /// A composition whose content can be reused and deactivated, as
+    /// `ReusableComposition(applier, parent)`.
+    pub fn reusable<A: Applier>(applier: A) -> ReusableComposition {
+        ReusableComposition {
+            composition: Composition::new(applier),
+            root: Rc::new(ReusableRoot::new(false)),
+        }
+    }
+
+    /// A composition whose content can be composed in pauses, as
+    /// `PausableComposition(applier, parent)`.
+    pub fn pausable<A: Applier>(applier: A) -> PausableComposition {
+        PausableComposition {
+            reusable: ReusableComposition {
+                composition: Composition::new(applier),
+                root: Rc::new(ReusableRoot::new(true)),
+            },
+            last: RefCell::new(None),
+        }
+    }
+
+    /// Disposes it now, as `dispose`: what it holds goes in rule R1's order (nodes and their
+    /// handlers, then remembered values and state), and it composes nothing again: setting its
+    /// content panics. Its `Drop` is this, if it wasn't. Disposing it again does nothing.
+    pub fn dispose(&self) {
+        // Paused content is discarded first, its nodes released and its observers abandoned.
+        crate::pausable::cancel_for_disposal(self.id);
+        let disposal = with_runtime(|runtime| {
+            if runtime.active.is_some_and(|active| active.composition == self.id) {
+                misuse(ComposeError::DisposedDuringPass)
+            }
+            let disposal = Disposal::close(runtime, self.id);
+            if let Some(data) = runtime.compositions.get_mut(self.id) {
+                data.disposed = true;
+            }
+            disposal
+        });
+        if let Some(disposal) = disposal {
+            disposal.run();
+        }
+    }
+
+    /// Whether [`dispose`](Composition::dispose) was called, as `isDisposed`.
+    pub fn is_disposed(&self) -> bool {
+        with_runtime(|runtime| runtime.compositions.get(self.id).is_none_or(|data| data.disposed))
+    }
+
+    /// Every scope of it invalid, so its next pass composes it all, as `invalidateAll`.
+    pub fn invalidate_all(&self) {
+        with_runtime(|runtime| {
+            let scopes = {
+                let table = &self.data(runtime).table;
+                let mut scopes = Vec::new();
+                let mut stack = vec![table[SENTINEL].first_child];
+                while let Some(group) = stack.pop() {
+                    let mut group = group;
+                    while group != NONE {
+                        if table[group].kind == GroupKind::Restart && !table[group].scope.is_none()
+                        {
+                            scopes.push(table[group].scope);
+                        }
+                        stack.push(table[group].first_child);
+                        group = table[group].next_sibling;
+                    }
+                }
+                scopes
+            };
+            for scope in scopes {
+                crate::runtime::invalidate_scope(runtime, scope);
+            }
+        });
+        request_frames();
+    }
+
     /// Sets the content and composes it at once. Content set before is recomposed against the
     /// new one: groups with the same keys keep their state.
+    ///
+    /// # Panics
+    ///
+    /// Once it's disposed, as Compose's.
     pub fn set_content(&self, content: impl Fn() + 'static) {
         let content: Rc<dyn Fn()> = Rc::new(content);
+        with_runtime(|runtime| {
+            if runtime.compositions.get(self.id).is_some_and(|data| data.disposed) {
+                misuse(ComposeError::Disposed)
+            }
+        });
         // The changes of the turn so far invalidate their readers first (D751), as `recompose`.
         crate::snapshots::Snapshot::send_apply_notifications();
         // What was asked of the paused composition, if any, first.
@@ -240,9 +323,173 @@ impl Drop for ExitGuard {
     }
 }
 
+/// What a [`ReusableComposition`]'s content is under: the groups that reuse and deactivate it, as
+/// `ReusableContent` and `ReusableContentHost` do for content in a composition, a pausable
+/// composition's content being paused content inside them.
+struct ReusableRoot {
+    /// A new one reuses the content.
+    reuse_key: Cell<u64>,
+    active: Cell<bool>,
+    pausable: bool,
+    content: RefCell<Rc<dyn Fn()>>,
+}
+
+impl ReusableRoot {
+    fn new(pausable: bool) -> ReusableRoot {
+        ReusableRoot {
+            reuse_key: Cell::new(0),
+            active: Cell::new(true),
+            pausable,
+            content: RefCell::new(Rc::new(|| {})),
+        }
+    }
+
+    /// A root content under this: new each time, so a pass composes it.
+    fn content(self: &Rc<Self>) -> Rc<dyn Fn()> {
+        let root = self.clone();
+        Rc::new(move || {
+            let content = root.content.borrow().clone();
+            crate::reusable::ReusableContentHost(root.active.get(), || {
+                crate::reusable::ReusableContent(root.reuse_key.get(), || {
+                    // In a scope of its own, inside what pauses, as Compose's content lambda.
+                    if root.pausable {
+                        crate::pausable::PausableContent(|| compose_root(content.clone()));
+                    } else {
+                        compose_root(content.clone());
+                    }
+                });
+            });
+        })
+    }
+
+    fn set(&self, content: impl Fn() + 'static, reuse: bool) {
+        *self.content.borrow_mut() = Rc::new(content);
+        self.active.set(true);
+        if reuse {
+            self.reuse_key.set(self.reuse_key.get() + 1);
+        }
+    }
+}
+
+/// A composition whose content can be reused and deactivated, as `ReusableComposition`: what a
+/// lazy item's composition is in Compose, an item's content going to the next item.
+pub struct ReusableComposition {
+    composition: Composition,
+    root: Rc<ReusableRoot>,
+}
+
+impl std::ops::Deref for ReusableComposition {
+    type Target = Composition;
+
+    fn deref(&self) -> &Composition {
+        &self.composition
+    }
+}
+
+impl ReusableComposition {
+    /// Sets the content, as [`Composition::set_content`]: deactivated, it comes back reusing what
+    /// was there.
+    pub fn set_content(&self, content: impl Fn() + 'static) {
+        self.root.set(content, false);
+        let root = self.root.content();
+        self.composition.set_content(move || root());
+    }
+
+    /// Sets the content and composes it reusing what's there, as `setContentWithReuse`: slots read
+    /// as empty, so values are remembered anew and the old ones forgotten, reusable nodes are kept
+    /// and updated, others replaced.
+    pub fn set_content_with_reuse(&self, content: impl Fn() + 'static) {
+        self.root.set(content, true);
+        let root = self.root.content();
+        self.composition.set_content(move || root());
+    }
+
+    /// Deactivates the content, as `deactivate`: its nodes are deactivated and its observers
+    /// forgotten, its groups kept for what's set next to reuse.
+    ///
+    /// # Panics
+    ///
+    /// While a paused composition of it is in progress, as Compose's.
+    pub fn deactivate(&self) {
+        let id = self.composition.id;
+        crate::pausable::run_requests(id);
+        with_runtime(|runtime| {
+            if runtime.compositions.get(id).is_some_and(|data| data.has_paused_in_progress()) {
+                misuse(ComposeError::PausedCompositionState)
+            }
+        });
+        self.root.active.set(false);
+        let root = self.root.content();
+        self.composition.set_content(move || root());
+    }
+}
+
+/// A composition whose content can be composed in pauses, as `PausableComposition`.
+pub struct PausableComposition {
+    reusable: ReusableComposition,
+    /// The last paused composition's state: one cancelled leaves the composition with nothing to
+    /// go on from, as Compose's refuses then.
+    last: RefCell<Option<Rc<Cell<crate::pausable::PausedState>>>>,
+}
+
+impl std::ops::Deref for PausableComposition {
+    type Target = ReusableComposition;
+
+    fn deref(&self) -> &ReusableComposition {
+        &self.reusable
+    }
+}
+
+impl PausableComposition {
+    /// Sets the content, to compose in the paused composition this returns, as
+    /// `setPausableContent`: deactivated, it comes back reusing what was there.
+    ///
+    /// # Panics
+    ///
+    /// If the last one was cancelled, or another one is in progress, as Compose's.
+    pub fn set_pausable_content(
+        &self,
+        content: impl Fn() + 'static,
+    ) -> crate::pausable::PausedComposition {
+        self.paused(content, false)
+    }
+
+    /// Sets the content, to compose in the paused composition this returns reusing what's there,
+    /// as `setPausableContentWithReuse`.
+    ///
+    /// # Panics
+    ///
+    /// If the last one was cancelled, or another one is in progress, as Compose's.
+    pub fn set_pausable_content_with_reuse(
+        &self,
+        content: impl Fn() + 'static,
+    ) -> crate::pausable::PausedComposition {
+        self.paused(content, true)
+    }
+
+    fn paused(
+        &self,
+        content: impl Fn() + 'static,
+        reuse: bool,
+    ) -> crate::pausable::PausedComposition {
+        let cancelled = self
+            .last
+            .borrow()
+            .as_ref()
+            .is_some_and(|last| last.get() == crate::pausable::PausedState::Cancelled);
+        if cancelled {
+            misuse(ComposeError::PausedCompositionState)
+        }
+        self.reusable.root.set(content, reuse);
+        let paused = self.reusable.composition.paused_content(self.reusable.root.content());
+        *self.last.borrow_mut() = Some(paused.state());
+        paused
+    }
+}
+
 /// The content of a composition, as a hand-expanded restartable composable whose one argument
 /// is the content lambda.
-fn compose_root(content: Rc<dyn Fn()>) {
+pub(crate) fn compose_root(content: Rc<dyn Fn()>) {
     let composer = current();
     composer.start_restart_group(ROOT_KEY);
     let changed =

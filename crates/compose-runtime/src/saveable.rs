@@ -11,7 +11,7 @@
 //! Android `Bundle` holds), converted by a [`Saver`]: the [`Saveable`] types (primitives,
 //! `String`, `Option`, `Vec`, tuples) convert themselves ([`AutoSaver`], Compose's `autoSaver`);
 //! others give a saver ([`saver`]). Values are found again by the composite key hash of their
-//! place in the composition ([`current_composite_key_hash`]), as in Compose; values at the same
+//! place in the composition ([`current_composite_key_hash_code`]), as in Compose; values at the same
 //! place (two calls in one composable) are told apart by their order.
 //!
 //! [`perform_save`]: SaveableStateRegistry::perform_save
@@ -568,7 +568,7 @@ pub static LOCAL_SAVEABLE_STATE_REGISTRY: CompositionLocal<Option<SaveableStateR
 /// # Panics
 ///
 /// Outside composition.
-pub fn current_composite_key_hash() -> u64 {
+pub fn current_composite_key_hash_code() -> u64 {
     with_runtime(|runtime| {
         let composition = runtime.check_composing();
         let group = runtime.frames.last().map_or(NONE, |frame| frame.group);
@@ -576,7 +576,7 @@ pub fn current_composite_key_hash() -> u64 {
     })
 }
 
-/// Where `current_composite_key_hash` would be read: cheap to keep at each node, its hash
+/// Where `current_composite_key_hash_code` would be read: cheap to keep at each node, its hash
 /// computed only if it's asked for (`composite_key_hash_of`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompositeKeyToken {
@@ -601,7 +601,7 @@ pub fn current_composite_key_token() -> CompositeKeyToken {
     })
 }
 
-/// `current_composite_key_hash` at a place kept by `current_composite_key_token`, while what's
+/// `current_composite_key_hash_code` at a place kept by `current_composite_key_token`, while what's
 /// composed there lives, its groups walked now, as `LayoutNode.compositeKeyHash`: a lazy list's
 /// items differ by their providers' keys, and their registries are their own.
 pub fn composite_key_hash_of(token: CompositeKeyToken) -> u64 {
@@ -764,7 +764,7 @@ pub fn remember_saveable_with<T: RememberSaveable>(
 ) -> T::Output {
     let holder = remember_observer(move || {
         let registry = LOCAL_SAVEABLE_STATE_REGISTRY.current();
-        let key = current_composite_key_hash();
+        let key = current_composite_key_hash_code();
         let restored = registry
             .as_ref()
             .and_then(|registry| registry.consume_restored(key))

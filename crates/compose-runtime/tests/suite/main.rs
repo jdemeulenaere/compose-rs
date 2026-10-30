@@ -6,6 +6,7 @@ extern crate compose_runtime as compose;
 
 mod composition;
 mod composition_and_derived_state;
+mod composition_api;
 mod composition_fuzz;
 mod composition_local;
 mod composition_reusing;

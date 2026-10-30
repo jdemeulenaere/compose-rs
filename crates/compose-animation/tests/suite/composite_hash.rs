@@ -20,7 +20,7 @@ fn Content(use_first_modifier: MutableState<bool>, checks: std::rc::Rc<std::cell
     AnimatedVisibility!(true, modifier = modifier, {
         // Recomposes with the change.
         use_first_modifier.get();
-        let hash = current_composite_key_hash();
+        let hash = current_composite_key_hash_code();
         let original = remember(|| hash);
         assert_eq!(original, hash);
         checks.set(checks.get() + 1);

@@ -1969,18 +1969,18 @@ fn the_composite_key_hash_stays_the_same_across_recompositions() {
     #[composable]
     fn Test(outer_keys: Log, inner_keys: Log, outer: ScopeHolder, inner: ScopeHolder) {
         outer.capture();
-        outer_keys.push(current_composite_key_hash().to_string());
+        outer_keys.push(current_composite_key_hash_code().to_string());
         let (inner_keys, inner) = (inner_keys.clone(), inner.clone());
         Container!({
             let (inner_keys, inner) = (inner_keys.clone(), inner.clone());
             Linear!({
                 inner.capture();
-                inner_keys.push(current_composite_key_hash().to_string());
+                inner_keys.push(current_composite_key_hash_code().to_string());
             });
         });
         assert_eq!(
             outer_keys.entries().last().cloned(),
-            Some(current_composite_key_hash().to_string()),
+            Some(current_composite_key_hash_code().to_string()),
             "the key is rolled back after the content"
         );
     }
