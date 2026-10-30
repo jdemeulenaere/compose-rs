@@ -414,9 +414,10 @@ impl UiTree {
         self.draw_chain(node, 0, 0, &origins, list, observer);
     }
 
-    /// Each layer's origin in `node`.
-    fn layer_origins(&self, node: NodeId) -> SmallVec<[Offset; 4]> {
-        let mut origins: SmallVec<[Offset; 4]> = SmallVec::new();
+    /// Each layer's origin in `node`, on the stack for the chains components have (a checkbox's
+    /// node has 5 layers): every node drawn asks for them.
+    fn layer_origins(&self, node: NodeId) -> SmallVec<[Offset; 8]> {
+        let mut origins: SmallVec<[Offset; 8]> = SmallVec::new();
         let mut origin = Offset::ZERO;
         for (index, layer) in self.node(node).layers.iter().enumerate() {
             if index > 0 {

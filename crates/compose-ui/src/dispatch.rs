@@ -1,8 +1,6 @@
 //! Input dispatch on the tree: pointer hit testing and passes, focus, and key and text events
 //! to the focused node (docs/06-ui.md, "Input, focus and semantics").
 
-use smallvec::SmallVec;
-
 use crate::input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass,
     PointerEventType, Requests,
@@ -72,15 +70,15 @@ impl UiTree {
         let local = point - Offset::new(offset.x as f32, offset.y as f32);
         let density = self.density;
         let start = path.len();
+        // The node's layers are offset from each other: the hit test visits every node of a tree
+        // (only clips stop it), so it adds them up as it goes, keeping nothing.
+        let layer_offset = |layer: usize| {
+            value.layers.get(layer).map_or(Offset::ZERO, |entry| {
+                Offset::new(entry.offset.x as f32, entry.offset.y as f32)
+            })
+        };
         let mut origin = Offset::ZERO;
         let mut layer = 0usize;
-        let mut origins: SmallVec<[Offset; 4]> = SmallVec::new();
-        for (index, entry) in value.layers.iter().enumerate() {
-            if index > 0 {
-                origin = origin + Offset::new(entry.offset.x as f32, entry.offset.y as f32);
-            }
-            origins.push(origin);
-        }
         if value.kinds.any(NodeKinds::POINTER_INPUT | NodeKinds::DRAW) {
             for index in 0..value.chain.len() {
                 let bits = value.chain[index].kinds;
@@ -89,13 +87,13 @@ impl UiTree {
                     && let Some(clip) = value.chain[index].node.hit_clip_at(size, density)
                     && !clip
                         .outline_in(size, &density, value.layout_direction)
-                        .contains(local - origins[layer])
+                        .contains(local - origin)
                 {
                     // Outside the clip: nothing after it, nor the children, is hit.
                     return hit_since(path, start);
                 }
                 if bits.any(NodeKinds::POINTER_INPUT)
-                    && contains(value.layers[layer].measured, local - origins[layer])
+                    && contains(value.layers[layer].measured, local - origin)
                 {
                     path.push(HitEntry {
                         node,
@@ -107,10 +105,15 @@ impl UiTree {
                 }
                 if bits.any(NodeKinds::LAYOUT) {
                     layer += 1;
+                    origin = origin + layer_offset(layer);
                 }
             }
         }
-        let content = local - *origins.last().expect("a layer");
+        // The chain's walk stops at the content's layer; without it, the layers are added here.
+        for next in layer + 1..value.layers.len() {
+            origin = origin + layer_offset(next);
+        }
+        let content = local - origin;
         // The last placed (drawn on top) first.
         let order = self.placement_order(node);
         let count = order.as_ref().map_or(value.children.len(), |order| order.len());
