@@ -33,7 +33,18 @@ impl std::error::Error for DeepLinkDecoderError {}
 /// for a struct, whose fields are read from the same flat map at any depth, and for an enum of unit
 /// variants, by name. A map, a collection of what's not primitive and open polymorphism don't
 /// implement it, which Kotlin's decoder finds out when it runs.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` can't be decoded from a deep link's arguments",
+    label = "not a primitive, a collection of primitives or a `#[derive(DeepLinkKey)]` type",
+    note = "a deep link's arguments are a flat map of strings: a map, a collection of keys and an \
+            abstract type have no form in it, and a type of its own form reads with \
+            `#[deep_link(with = serializer)]`"
+)]
 pub trait DeepLinkKey: Sized {
+    /// Whether it's a key of fields, read from the same flat map: nullable, it's there by an
+    /// argument of its own name, as the decoder's `decodeNotNullMark`.
+    const IS_NESTED: bool = false;
+
     /// The value of the field `name` of what's being decoded: `None` if it has no value, which
     /// is its default if it has one, and otherwise no match. An error if it has one of the wrong
     /// type.
@@ -102,7 +113,46 @@ macro_rules! parsed_primitives {
     )*};
 }
 
-parsed_primitives!(bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
+parsed_primitives!(bool, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+
+/// `value` as Java's `parseFloat` and `parseDouble` read it, what Kotlin's `toFloat` and `toDouble`
+/// are: blanks around it, a type's suffix, `NaN` and `Infinity` spelled so and no other way. Hex
+/// floats aren't read (D1415).
+fn java_float_text(value: &str) -> Result<&str, DeepLinkDecoderError> {
+    let wrong = || DeepLinkDecoderError(format!("For input string: \"{value}\""));
+    let trimmed = value.trim_matches(|character: char| character <= ' ');
+    let unsigned = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if unsigned == "NaN" || unsigned == "Infinity" {
+        return Ok(trimmed);
+    }
+    if !unsigned.starts_with(|first: char| first.is_ascii_digit() || first == '.') {
+        return Err(wrong());
+    }
+    Ok(trimmed.strip_suffix(['f', 'F', 'd', 'D']).unwrap_or(trimmed))
+}
+
+macro_rules! float_primitives {
+    ($($ty:ty),*) => {$(
+        impl DeepLinkPrimitive for $ty {
+            fn parse(value: &str) -> Result<Self, DeepLinkDecoderError> {
+                java_float_text(value)?
+                    .parse()
+                    .map_err(|error| DeepLinkDecoderError(format!("{value}: {error}")))
+            }
+        }
+
+        impl DeepLinkKey for $ty {
+            fn decode_field(
+                arguments: &DeepLinkArguments,
+                name: &str,
+            ) -> Result<Option<Self>, DeepLinkDecoderError> {
+                primitive_field(arguments, name)
+            }
+        }
+    )*};
+}
+
+float_primitives!(f32, f64);
 
 impl DeepLinkPrimitive for char {
     fn parse(value: &str) -> Result<Self, DeepLinkDecoderError> {
@@ -139,12 +189,15 @@ impl DeepLinkKey for String {
     }
 }
 
-/// A nullable field is required as any other, unless it's given a default.
+/// A nullable field is required as any other, unless it's given a default; but for a nested key.
 impl<T: DeepLinkKey> DeepLinkKey for Option<T> {
     fn decode_field(
         arguments: &DeepLinkArguments,
         name: &str,
     ) -> Result<Option<Self>, DeepLinkDecoderError> {
+        if T::IS_NESTED && !arguments.contains_key(name) {
+            return Ok(Some(None));
+        }
         T::decode_field(arguments, name).map(|value| value.map(Some))
     }
 }

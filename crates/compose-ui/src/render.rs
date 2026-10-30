@@ -542,18 +542,23 @@ impl UiTree {
         let group = &mut groups[index];
         group.descendants = descendants;
         group.empty = !draws;
-        if changed && self.node(node).kinds.any(NodeKinds::CONTENT_CAPTURE) {
-            self.capture_content(node, groups[index..].to_vec());
+        if self.node(node).kinds.any(NodeKinds::DRAW_CAPTURE) {
+            self.update_capture(node, &groups[index..], changed);
         }
         (changed, draws)
     }
 
-    /// What `node` drew, with the groups nested in it, goes to its `Modifier.capture_content`'s.
-    fn capture_content(&mut self, node: NodeId, groups: Vec<DrawGroup>) {
+    /// What `node` drew, with the groups nested in it, goes to its `Modifier.capture_content`'s. A
+    /// layer changing alone gives no group a new version, so its properties are taken each frame.
+    fn update_capture(&mut self, node: NodeId, groups: &[DrawGroup], changed: bool) {
         let value = self.node(node);
-        let capture = value.chain.iter().find_map(|entry| entry.node.content_capture()).cloned();
+        let capture = value.chain.iter().find_map(|entry| entry.node.draw_capture()).cloned();
         if let Some(capture) = capture {
-            self.held_paragraphs.store(&capture, groups, &mut *self.text_measurer);
+            if changed {
+                self.held_paragraphs.store(&capture, groups.to_vec(), &mut *self.text_measurer);
+            } else {
+                capture.refresh_layers(groups);
+            }
         }
     }
 

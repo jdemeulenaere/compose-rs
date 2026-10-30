@@ -224,7 +224,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/autofill/PerformAndroidAutofillManagerTest.kt` | 43 | `ViewStructure` population from semantics (content type, roles, visibility, focus…) and filling | `feature:autofill` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/autofill/TextFieldStateSemanticAutofillTest.kt` | 2 | Credentials autofilled into `BasicTextField(TextFieldState)` | `feature:autofill` | Also needs foundation's `TextFieldState` field (text area). |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/autofill/TextFieldsSemanticAutofillTest.kt` | 6 | Credentials autofilled into foundation and Material fields, with highlight | `feature:autofill` |  |
-| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/contentcapture/ContentCaptureTest.kt` | 22 | Content capture session events as semantics nodes appear, disappear and scroll | `feature:content-capture` | Experimental (`ContentCaptureManager`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/contentcapture/DrawCaptureTest.kt` | 22 | Content capture session events as semantics nodes appear, disappear and scroll | `feature:content-capture` | Experimental (`DrawCaptureManager`). |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/autofill/AndroidAutofillTypeTest.kt` | 36 | `AutofillType` to Android hints | n/a: deprecated API (`AutofillType`) |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/autofill/AndroidContentDataTypeTest.kt` | 5 | `ContentDataType` to Android autofill types | `feature:autofill` |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/autofill/AndroidContentTypeTest.kt` | 36 | `ContentType` to Android autofill hints | `feature:autofill` |  |
@@ -402,7 +402,7 @@ From `compose/ui/ui/api/current.txt` (deprecated entries left out; `restricted_c
 ### `androidx.compose.ui.autofill`, `androidx.compose.ui.contentcapture`, `androidx.compose.ui.draganddrop`
 
 - **autofill:** `ContentType` (all 36 constants, `plus`, `ContentType(hint)`), `Modifier.contentType`, `ContentDataType` (`Text`, `List`, `Date`, `Toggle`, `None`, `ContentDataType(int)`, `dataType`), `FillableData` (typed values, `createFromText`/`Boolean`/`ListIndex`/`DateMillis`/`AutofillValue`, `toAutofillValue`), `AutofillManager` (`commit`, `cancel`), `LocalAutofillManager`, `SemanticsProperties.ContentType`/`ContentDataType`/`FillableData`, `SemanticsActions.OnFillData`, `CredentialRequestData`.
-- **content-capture:** `ContentCaptureManager.isEnabled` (`@ExperimentalComposeUiApi`).
+- **content-capture:** `DrawCaptureManager.isEnabled` (`@ExperimentalComposeUiApi`).
 - **drag-and-drop:** `DragAndDropSourceModifierNode(onStartTransfer)` (`requestDragAndDropTransfer`, `isRequestDragAndDropTransferRequired`), `DragAndDropStartTransferScope.startDragAndDropTransfer`, `DragAndDropTargetModifierNode(shouldStartDragAndDrop, target)`, `DragAndDropTarget` (`onStarted`, `onEntered`, `onMoved`, `onExited`, `onChanged`, `onDrop`, `onEnded`), `DragAndDropEvent` (`mimeTypes`, `toAndroidDragEvent`), `DragAndDropTransferData` (`clipData`, `localState`, `flags`).
 
 ### `androidx.compose.ui.platform`, `androidx.compose.ui.relocation`, `androidx.compose.ui` (host-facing parts)
@@ -576,9 +576,9 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 - **Experimental:** no.
 
 ### content-capture (M)
-- **Compose API:** `ContentCaptureManager.isEnabled`.
+- **Compose API:** `DrawCaptureManager.isEnabled`.
 - **What:** Android content capture sessions told of semantics nodes appearing, disappearing and scrolling.
-- **Tests:** ContentCaptureTest.
+- **Tests:** DrawCaptureTest.
 - **Depends on:** semantics-tree-api.
 - **Experimental:** yes (`ExperimentalComposeUiApi`).
 

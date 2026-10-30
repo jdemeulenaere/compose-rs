@@ -25,17 +25,28 @@ struct Captured {
 
 /// What a node's content last drew: a handle, its clones sharing it, kept as long as what
 /// remembers it. Written by a node with [`Modifier::capture_content`], drawn by
-/// [`DrawScope::draw_captured`].
+/// [`DrawScope::draw_captured`]. Not a parity API: `CapturedAnimatedVisibility` moves to
+/// `GraphicsLayer` when that lands, and this goes.
+#[doc(hidden)]
 #[derive(Clone, Default)]
-pub struct ContentCapture(Rc<RefCell<Captured>>);
+pub struct DrawCapture(Rc<RefCell<Captured>>);
 
-impl ContentCapture {
-    pub fn new() -> ContentCapture {
-        ContentCapture::default()
+impl DrawCapture {
+    pub fn new() -> DrawCapture {
+        DrawCapture::default()
     }
 
     fn store(&self, groups: Vec<DrawGroup>) {
         *self.0.borrow_mut() = Captured { groups, flat: None };
+    }
+
+    /// The same groups, with the layers they have now.
+    pub(crate) fn refresh_layers(&self, groups: &[DrawGroup]) {
+        let mut captured = self.0.borrow_mut();
+        for (kept, group) in captured.groups.iter_mut().zip(groups) {
+            kept.layer.clone_from(&group.layer);
+        }
+        captured.flat = None;
     }
 
     /// Whether nothing has been captured.
@@ -44,7 +55,7 @@ impl ContentCapture {
     }
 }
 
-impl ComposeArg for ContentCapture {
+impl ComposeArg for DrawCapture {
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
@@ -53,7 +64,8 @@ impl ComposeArg for ContentCapture {
 impl DrawScope<'_> {
     /// Draws what `capture` kept, at this scope's origin, as `drawLayer`: nothing if it kept
     /// nothing.
-    pub fn draw_captured(&mut self, capture: &ContentCapture) {
+    #[doc(hidden)]
+    pub fn draw_captured(&mut self, capture: &DrawCapture) {
         let mut captured = capture.0.borrow_mut();
         let Captured { groups, flat } = &mut *captured;
         if groups.is_empty() {
@@ -79,9 +91,9 @@ impl DrawScope<'_> {
     }
 }
 
-struct CaptureElement(ContentCapture);
+struct CaptureElement(DrawCapture);
 
-pub(crate) struct CaptureNode(ContentCapture);
+pub(crate) struct CaptureNode(DrawCapture);
 
 impl ModifierNodeElement for CaptureElement {
     type Node = CaptureNode;
@@ -103,7 +115,7 @@ impl ModifierNode for CaptureNode {
     fn is_repaint_boundary(&self) -> bool {
         true
     }
-    fn content_capture(&self) -> Option<&ContentCapture> {
+    fn draw_capture(&self) -> Option<&DrawCapture> {
         Some(&self.0)
     }
 }
@@ -111,7 +123,8 @@ impl ModifierNode for CaptureNode {
 impl Modifier {
     /// Keeps in `capture` what this node and its children last drew, as a `placeWithLayer` of the
     /// content, so it can be drawn once they're gone.
-    pub fn capture_content(self, capture: ContentCapture) -> Modifier {
+    #[doc(hidden)]
+    pub fn capture_content(self, capture: DrawCapture) -> Modifier {
         self.then_custom(CaptureElement(capture))
     }
 }
@@ -156,7 +169,7 @@ impl HeldParagraphs {
     /// `capture` now holds what `groups` draw, instead of what it held.
     pub(crate) fn store(
         &mut self,
-        capture: &ContentCapture,
+        capture: &DrawCapture,
         groups: Vec<DrawGroup>,
         measurer: &mut dyn TextMeasurer,
     ) {

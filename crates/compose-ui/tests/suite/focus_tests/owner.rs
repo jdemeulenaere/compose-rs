@@ -176,7 +176,7 @@ fn the_view_asking_from_a_rectangle_finds_the_target_nearest_it() {
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/OwnerFocusTest.kt, whenOwnerLosesFocus_focusModifiersAreUpdated
 #[test]
-fn the_view_losing_the_focus_takes_it_from_the_content_captured_and_with_exits_cancelling() {
+fn the_view_losing_the_focus_takes_it_from_the_draw_captured_and_with_exits_cancelling() {
     let scene = scene(|scene| {
         let cancels = properties(|p| p.set_on_exit(|scope| scope.cancel_focus_change()));
         Stack!(modifier = cancels.then(scene.target("parent")), {

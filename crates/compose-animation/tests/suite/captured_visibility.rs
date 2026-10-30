@@ -116,7 +116,7 @@ fn what_fades_out_is_the_last_frame_drawn() {
     ui.advance_time_by(Duration::from_millis(96));
     assert_eq!(red_rects(&mut ui), 1, "the last frame is drawn, though its node is gone");
     let alpha = alpha_of_layer(&mut ui).expect("a fade");
-    assert!((alpha - 0.5).abs() <= 0.1, "{alpha}");
+    assert_eq!(alpha, 0.5);
     ui.advance_time_by(Duration::from_millis(100));
     ui.wait_for_idle();
     assert_eq!(red_rects(&mut ui), 0);
@@ -250,7 +250,7 @@ fn an_exit_interrupted_by_a_new_size_grows_to_it() {
     ui.advance_time_by_frame();
     assert!(!present.get());
     ui.advance_time_by(Duration::from_millis(80));
-    assert!((height_of(&mut ui) - 50.0).abs() <= 10.0, "{}", height_of(&mut ui));
+    assert_eq!(height_of(&mut ui), 50.0);
     visible.set(true);
     height.set(200.dp());
     ui.advance_time_by_frame();
@@ -379,4 +379,178 @@ fn a_second_exit_draws_what_was_there_before_it() {
         "{}",
         flat.dump()
     );
+}
+
+/// The kept frame is of the layers' last values, though only they changed: no content did.
+fn layer_under_exit(
+    block: impl Fn(&mut GraphicsLayerScope, f32) + Copy + 'static,
+) -> ComposeTestRule {
+    let visible = mutable_state_of(true);
+    let value = mutable_state_of(1.0f32);
+    let (handle, read) = (visible.handle(), value.handle());
+    let mut ui = compose_test(move || {
+        CapturedAnimatedVisibility!(
+            handle.get(),
+            exit = slide_out_horizontally_with(tween(160), |width| width),
+            {
+                Box!(
+                    modifier = Modifier
+                        .size(10.dp())
+                        .graphics_layer(move |layer| block(layer, read.get()))
+                        .background(Color::RED)
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    value.set(2.0);
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    ui
+}
+
+/// A layer's alpha changing alone, as what fades in by a layer does.
+#[test]
+fn a_captured_frame_has_a_nested_layer_s_last_alpha() {
+    let mut ui = layer_under_exit(|layer, value| layer.alpha = value * 0.25);
+    let flat = ui.host().display_list();
+    assert_eq!(alpha_of_layer(&mut ui), Some(0.5), "{}", flat.dump());
+}
+
+#[test]
+fn a_captured_frame_has_a_nested_layer_s_last_translation() {
+    let mut ui = layer_under_exit(|layer, value| layer.translation_x = value * 3.0);
+    let flat = ui.host().display_list();
+    let last = flat.ops.iter().find_map(|op| match op {
+        DrawOp::Transform { translation, .. } if translation.x == 6.0 => Some(*translation),
+        _ => None,
+    });
+    assert!(last.is_some(), "{}", flat.dump());
+}
+
+thread_local! {
+    static OUTER: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
+    static ASKED: Cell<i32> = const { Cell::new(0) };
+}
+
+/// Its parent measures it, and then asks it its intrinsics, which a kept size mustn't take.
+#[composable]
+fn AsksIntrinsics(content: impl Fn() + 'static) {
+    Layout!(
+        measure_policy = measure_policy(|scope, measurables, constraints| {
+            let child = measurables[0];
+            let placeable = scope.measure(child, constraints);
+            ASKED.set(scope.max_intrinsic_width(child, 50));
+            OUTER.set((placeable.width, placeable.height));
+            scope.place(&placeable, 0, 0);
+            scope.layout(placeable.width, placeable.height)
+        }),
+        { content() }
+    );
+}
+
+#[test]
+fn an_intrinsic_query_leaves_the_size_kept_for_the_exit() {
+    let visible = mutable_state_of(true);
+    let handle = visible.handle();
+    let mut ui = compose_test(move || {
+        AsksIntrinsics!({
+            CapturedAnimatedVisibility!(
+                handle.get(),
+                exit = slide_out_horizontally_with(tween(160), |width| width),
+                {
+                    Box!(modifier = Modifier.size((200.dp(), 4.dp())));
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(OUTER.get(), (200, 4));
+    assert_eq!(ASKED.get(), 200);
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(OUTER.get(), (200, 4), "the exit keeps the shown size");
+    assert_eq!(ASKED.get(), 200, "and answers with it");
+}
+
+fn rect_origin(ui: &mut ComposeTestRule, color: Color) -> Offset {
+    let flat = ui.host().display_list();
+    let mut origin = Offset::ZERO;
+    for op in &flat.ops {
+        match op {
+            DrawOp::Translate(by) => origin = origin + *by,
+            DrawOp::DrawRect(rect, paint) if paint.color == color => {
+                return Offset::new(origin.x + rect.left, origin.y + rect.top);
+            }
+            _ => {}
+        }
+    }
+    panic!("no rect of {color:?}: {}", flat.dump());
+}
+
+/// What's kept is drawn where the content was, in a node that's moved within itself.
+#[test]
+fn a_captured_frame_is_drawn_at_the_scope_s_origin() {
+    let visible = mutable_state_of(true);
+    let handle = visible.handle();
+    let mut ui = compose_test(move || {
+        CapturedAnimatedVisibility!(
+            handle.get(),
+            modifier = Modifier.padding(10.dp()),
+            exit = fade_out_with(tween(160), 0.0),
+            {
+                Box!(modifier = Modifier.size(10.dp()).background(Color::RED));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(rect_origin(&mut ui, Color::RED), Offset::new(10.0, 10.0));
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(rect_origin(&mut ui, Color::RED), Offset::new(10.0, 10.0));
+}
+
+/// The kept frame's shaders come after those its node has drawn already, in one recording: a slide
+/// has no layer to make a group of its own.
+#[test]
+fn a_captured_frame_keeps_its_shaders() {
+    let visible = mutable_state_of(true);
+    let handle = visible.handle();
+    let mut ui = compose_test(move || {
+        CapturedAnimatedVisibility!(
+            handle.get(),
+            modifier = Modifier.background(Brush::horizontal_gradient([Color::GREEN, Color::BLUE])),
+            exit = slide_out_horizontally_with(tween(160), |width| width),
+            {
+                Box!(
+                    modifier = Modifier
+                        .size(10.dp())
+                        .background(Brush::horizontal_gradient([Color::RED, Color::WHITE]))
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    // Each rect drawn, with what the dump resolves its shader's index to.
+    let shaders = |ui: &mut ComposeTestRule| {
+        let dump = ui.host().display_list().dump();
+        dump.lines()
+            .filter(|line| line.contains("rect"))
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>()
+    };
+    let shown = shaders(&mut ui);
+    assert_eq!(shown.len(), 2);
+    ui.set_auto_advance(false);
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(shaders(&mut ui), shown);
 }

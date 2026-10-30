@@ -1,7 +1,7 @@
 //! A path as an easing curve, against Compose's `PathEasingTest`.
 
 use compose_animation::*;
-use compose_ui::{Path, Rect};
+use compose_ui::{Path, PathOperation, Rect};
 
 fn assert_close(expected: f32, actual: f32, within: f32) {
     assert!((expected - actual).abs() <= within, "{actual}, not {expected}");
@@ -154,4 +154,48 @@ fn a_curve_bulging_along_x_covers_its_bulge() {
     }));
     let eased = easing.transform(0.5);
     assert!(eased > 0.0 && eased < 0.4, "{eased}");
+}
+
+/// A line's y is between its ends'.
+#[test]
+fn a_line_eases_along_its_ys() {
+    let easing = Easing::path(&path(|path| {
+        path.move_to(0.0, 0.2);
+        path.line_to(1.0, 0.6);
+    }));
+    assert_close(0.4, easing.transform(0.5), 1e-6);
+    assert_close(0.3, easing.transform(0.25), 1e-6);
+}
+
+/// Where only one curve starts, or only one ends, it's that one's.
+#[test]
+fn a_segment_covers_its_ends() {
+    let easing = Easing::path(&path(|path| {
+        path.line_to(0.25, 0.1);
+        path.move_to(0.5, 0.7);
+        path.line_to(1.0, 1.0);
+    }));
+    assert_close(0.1, easing.transform(0.25), 1e-6);
+    assert_close(0.7, easing.transform(0.5), 1e-6);
+}
+
+/// Of curves overlapping, the first drawn: Compose's tree says nothing of which, and a list does.
+#[test]
+fn of_overlapping_curves_the_first_is_taken() {
+    let easing = Easing::path(&path(|path| {
+        path.line_to(0.5, 0.1);
+        path.move_to(0.25, 0.9);
+        path.line_to(1.0, 0.9);
+    }));
+    assert_close(0.08, easing.transform(0.4), 1e-6);
+}
+
+/// A result of `Path::op` has no segments here, which only a platform's operator computes: refused
+/// where it's written rather than in the middle of an animation.
+#[test]
+#[should_panic(expected = "result of a path operation")]
+fn a_combined_path_is_refused_when_it_s_made_an_easing() {
+    let (first, second) =
+        (path(|path| path.line_to(1.0, 1.0)), path(|path| path.line_to(1.0, 0.5)));
+    Easing::path(&Path::combine(PathOperation::Union, &first, &second));
 }

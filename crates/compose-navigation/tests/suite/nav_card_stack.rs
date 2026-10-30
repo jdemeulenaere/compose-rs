@@ -293,15 +293,15 @@ fn a_card_goes_on_from_where_its_gesture_left_it() {
     let at_the_end_of_the_gesture = origin(&mut ui, THIRD);
     ui.set_auto_advance(false);
     ui.host().on_back_pressed();
-    // Upstream's 25 ms, and a few more frames for it to be on its way.
-    ui.advance_time_by(Duration::from_millis(100));
+    assert_eq!(at_the_end_of_the_gesture.0.round(), moved(0.5).0.round());
+    // Upstream's 25 ms, and a few more frames for it to be on its way: the first two frames take
+    // the pop and start the animation.
+    let t = 96.0;
+    ui.advance_time_by(Duration::from_millis(t as u64));
     // Not a blank screen, nor back at the start.
     assert_under_in_place(&mut ui, 3);
-    let now = origin(&mut ui, THIRD);
-    assert!(now.0 >= at_the_end_of_the_gesture.0, "{now:?} from {at_the_end_of_the_gesture:?}");
-    assert!(now.0 < WIDTH as f32, "{now:?}: it's still leaving");
-    assert!(now.1 <= at_the_end_of_the_gesture.1);
-    assert!(now.1 > top.1 - HEIGHT as f32 / 8.0);
+    let (x, y) = moved(0.5 + (t - 32.0) / 500.0);
+    assert_near(origin(&mut ui, THIRD), (top.0 + x, top.1 + y), "going on");
 }
 
 // Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt, testNestedPredictiveBackAnimationCompleted

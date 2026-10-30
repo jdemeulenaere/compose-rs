@@ -338,7 +338,23 @@ fn deep_link_attributes(attributes: &[syn::Attribute]) -> syn::Result<DeepLinkAt
 }
 
 fn derive_deep_link_key(input: TokenStream) -> syn::Result<TokenStream> {
-    let input: DeriveInput = syn::parse2(input)?;
+    let mut input: DeriveInput = syn::parse2(input)?;
+    // Bounds on the fields that use a type parameter, as `Saveable`'s; not those read by a
+    // serializer, which says what it reads.
+    let parameters: Vec<String> =
+        input.generics.type_params().map(|param| param.ident.to_string()).collect();
+    if let Data::Struct(data) = &input.data {
+        let mut predicates: Vec<syn::WherePredicate> = Vec::new();
+        for field in &data.fields {
+            let ty = &field.ty;
+            if deep_link_attributes(&field.attrs)?.with.is_none()
+                && mentions(quote!(#ty), &parameters)
+            {
+                predicates.push(parse_quote!(#ty: ::compose::__private::DeepLinkKey));
+            }
+        }
+        input.generics.make_where_clause().predicates.extend(predicates);
+    }
     let name = &input.ident;
     let error = quote!(::compose::__private::DeepLinkDecoderError);
     let body = match &input.data {
@@ -423,10 +439,13 @@ fn derive_deep_link_key(input: TokenStream) -> syn::Result<TokenStream> {
             return Err(Error::new(data.union_token.span(), "a union can't derive `DeepLinkKey`"));
         }
     };
+    let is_nested = matches!(input.data, Data::Struct(_));
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics ::compose::__private::DeepLinkKey for #name #ty_generics #where_clause {
+            const IS_NESTED: bool = #is_nested;
+
             #[allow(unused_variables)]
             fn decode_field(
                 __arguments: &::compose::__private::DeepLinkArguments,

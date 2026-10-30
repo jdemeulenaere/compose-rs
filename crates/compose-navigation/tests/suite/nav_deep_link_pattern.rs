@@ -579,3 +579,52 @@ fn empty_braces_are_a_literal() {
 fn a_fragment_s_argument_is_decoded_again() {
     assert_eq!(fragment_args("/a#{id}", "/a#x%2520y"), args([("id", &["x y"])]));
 }
+
+/// A query's literal is matched as it is, unlike a path's.
+#[test]
+fn a_query_s_literal_keeps_its_case() {
+    assert_eq!(query_args("?type=User_{id}", "?type=user_1"), args([]));
+    assert_eq!(query_args("?type=User_{id}", "?type=User_1"), args([("id", &["1"])]));
+}
+
+/// A path's placeholder is as short as it can be.
+#[test]
+fn a_placeholder_of_a_path_takes_what_it_must() {
+    assert_eq!(path_args("/{a}-{b}", "/x-y-z"), Some(args([("a", &["x"]), ("b", &["y-z"])])));
+}
+
+/// `.` is Java's: it stops at a line terminator, in a wildcard and after `?` and `#`.
+#[test]
+fn a_line_terminator_stops_what_goes_to_the_end() {
+    for terminator in ["\n", "\r", "\u{85}", "\u{2028}", "\u{2029}"] {
+        assert_eq!(path_args("/a", &format!("/a?x{terminator}y")), None, "{terminator:?}");
+        assert_eq!(path_args("/a", &format!("/a#x{terminator}y")), None, "{terminator:?}");
+        assert_eq!(query_args("?t=.*", &format!("?t=a{terminator}b")), args([]), "{terminator:?}");
+        assert_eq!(path_args("/a/.*", &format!("/a/b{terminator}c")), None, "{terminator:?}");
+    }
+    assert_eq!(path_args("/a", "/a?xy"), Some(args([])));
+    // A placeholder's `[^/]` takes one.
+    assert_eq!(path_args("/{a}", "/x\ny"), Some(args([("a", &["x\ny"])])));
+}
+
+/// As `android.net.Uri`'s `getQueryParameters`, which looks for `URLEncoder.encode(key)`.
+#[test]
+fn a_parameter_s_name_is_looked_for_as_a_form_encodes_it() {
+    let uri = DeepLinkUri::new("https://a.com?a+b=1&c%20d=2&x%7E=3&y~=4&z*=5");
+    assert_eq!(uri.query_parameters("a b"), ["1"]);
+    assert!(uri.query_parameters("c d").is_empty());
+    assert_eq!(uri.query_parameters("x~"), ["3"]);
+    assert!(uri.query_parameters("y~").is_empty());
+    assert_eq!(uri.query_parameters("z*"), ["5"]);
+}
+
+/// Linear in a URI's length: a placeholder's every candidate end copied nothing.
+#[test]
+fn a_long_uri_takes_no_longer_than_its_length() {
+    let long = format!("/{}", "x".repeat(1 << 20));
+    let parsed = parse_path(&uri("/{id}"), &mut HashSet::new());
+    let start = std::time::Instant::now();
+    let found = extract_path_args(&parsed, &uri(&long)).unwrap();
+    assert_eq!(found["id"][0].len(), 1 << 20);
+    assert!(start.elapsed().as_secs() < 2, "{:?}", start.elapsed());
+}

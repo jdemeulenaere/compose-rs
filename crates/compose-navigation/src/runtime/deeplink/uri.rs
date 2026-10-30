@@ -112,7 +112,7 @@ impl DeepLinkUri {
 
     /// The decoded values of the parameter `key`, in order: an empty one for a name with no `=`.
     pub fn query_parameters(&self, key: &str) -> Vec<String> {
-        let encoded = encode(key);
+        let encoded = form_encode(key);
         self.query_parts()
             .into_iter()
             .filter(|(name, _)| *name == encoded)
@@ -138,13 +138,17 @@ impl fmt::Display for DeepLinkUri {
     }
 }
 
-/// `s` with what isn't a letter, a number or one of `_-!.~'()*` as `%`-escaped UTF-8.
-pub(crate) fn encode(s: &str) -> String {
+/// `s` as `URLEncoder.encode(s, UTF_8)`, what Android's `getQueryParameters` looks for: what isn't
+/// a letter, a number or one of `.-*_` as `%`-escaped UTF-8, a space as `+`. A name written with
+/// `%20` isn't found by its space, there too.
+fn form_encode(s: &str) -> String {
     let mut encoded = String::with_capacity(s.len());
     let mut buffer = [0; 4];
     for character in s.chars() {
-        if character.is_ascii_alphanumeric() || "_-!.~'()*".contains(character) {
+        if character.is_ascii_alphanumeric() || ".-*_".contains(character) {
             encoded.push(character);
+        } else if character == ' ' {
+            encoded.push('+');
         } else {
             for byte in character.encode_utf8(&mut buffer).bytes() {
                 encoded.push_str(&format!("%{byte:02X}"));

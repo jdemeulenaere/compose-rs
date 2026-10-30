@@ -5,10 +5,10 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use compose_runtime::{
-    DeepLinkArguments, DeepLinkDecoderError, DeepLinkKey, DeepLinkSerializer, SavedValue, Saver,
-    saver,
+use compose_runtime::__private::{
+    DeepLinkArguments, DeepLinkDecoderError, DeepLinkKey, DeepLinkSerializer,
 };
+use compose_runtime::{SavedValue, Saver, saver};
 
 use super::matcher::{DeepLinkFilter, DeepLinkMatchResult, DeepLinkMatcher};
 use super::pattern::{
@@ -61,6 +61,53 @@ fn has_scheme(text: &str) -> bool {
 ///
 /// Kotlin's is an open class with `matchUri` and `matchArguments` to override: a matcher of an
 /// app's holds this one and calls them.
+///
+/// A key is what's decoded: a struct of fields, with `#[derive(DeepLinkKey)]`.
+///
+/// ```
+/// # extern crate compose_runtime as compose;
+/// use compose_navigation::{DeepLinkKey, DeepLinkRequest, DeepLinkUri, DeepLinkMatcher, UriDeepLinkMatcher};
+///
+/// #[derive(DeepLinkKey)]
+/// struct User {
+///     id: u32,
+/// }
+///
+/// let matcher = UriDeepLinkMatcher::<User>::new(DeepLinkUri::new("example.com/users/{id}"));
+/// let request = DeepLinkRequest::of("https://example.com/users/7");
+/// assert!(matcher.try_match(&request).is_some());
+/// ```
+///
+/// What Kotlin's decoder refuses when it runs doesn't compile: a map,
+///
+/// ```compile_fail,E0277
+/// # extern crate compose_runtime as compose;
+/// use std::collections::HashMap;
+///
+/// use compose_navigation::DeepLinkKey;
+///
+/// #[derive(DeepLinkKey)]
+/// struct OfMap {
+///     map: HashMap<i32, String>,
+/// }
+/// ```
+///
+/// and a collection of keys.
+///
+/// ```compile_fail,E0277
+/// # extern crate compose_runtime as compose;
+/// use compose_navigation::DeepLinkKey;
+///
+/// #[derive(DeepLinkKey)]
+/// struct User {
+///     id: u32,
+/// }
+///
+/// #[derive(DeepLinkKey)]
+/// struct OfKeys {
+///     users: Vec<User>,
+/// }
+/// ```
 pub struct UriDeepLinkMatcher<T> {
     normalized_uri_pattern: DeepLinkUri,
     decode: KeyDecoder<T>,

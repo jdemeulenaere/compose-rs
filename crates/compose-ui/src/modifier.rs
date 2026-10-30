@@ -1127,7 +1127,7 @@ pub trait ModifierNode: Any {
         false
     }
     /// Where a boundary keeps what it draws, `Modifier.capture_content`'s.
-    fn content_capture(&self) -> Option<&crate::content_capture::ContentCapture> {
+    fn draw_capture(&self) -> Option<&crate::draw_capture::DrawCapture> {
         None
     }
     /// Told where it is after each layout that moved or resized it, as
@@ -1342,7 +1342,7 @@ impl dyn ModifierNode {
 /// What a node reaches when released (`ModifierNode::on_release`).
 pub struct ReleaseContext<'a> {
     pub text_measurer: &'a mut dyn crate::text::TextMeasurer,
-    pub(crate) held_paragraphs: &'a mut crate::content_capture::HeldParagraphs,
+    pub(crate) held_paragraphs: &'a mut crate::draw_capture::HeldParagraphs,
 }
 
 impl ReleaseContext<'_> {

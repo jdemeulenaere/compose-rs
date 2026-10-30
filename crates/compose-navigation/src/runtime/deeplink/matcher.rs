@@ -142,9 +142,10 @@ pub trait DeepLinkMatcher<T> {
     /// The result of `request`, which has passed the filters, or `None`.
     fn match_request(&self, request: &DeepLinkRequest) -> Option<Self::Result>;
 
-    /// The result of `request`, if it matches, as `match`: filters first, so that no key is made
-    /// and thrown away.
-    fn r#match(&self, request: &DeepLinkRequest) -> Option<Self::Result> {
+    /// The result of `request`, if it matches, as `match`, a keyword here: filters first, so that
+    /// no key is made and thrown away.
+    #[doc(alias = "match")]
+    fn try_match(&self, request: &DeepLinkRequest) -> Option<Self::Result> {
         if self.filters().iter().all(|filter| filter.filter_request(request)) {
             self.match_request(request)
         } else {

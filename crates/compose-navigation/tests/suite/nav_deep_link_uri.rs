@@ -11,7 +11,7 @@ fn matcher<T: DeepLinkKey + 'static>(pattern: &str) -> UriDeepLinkMatcher<T> {
 }
 
 fn result<T: DeepLinkKey + 'static>(pattern: &str, request: &str) -> Option<UriMatchResult<T>> {
-    matcher::<T>(pattern).r#match(&DeepLinkRequest::of(request))
+    matcher::<T>(pattern).try_match(&DeepLinkRequest::of(request))
 }
 
 fn key<T: DeepLinkKey + Clone + 'static>(pattern: &str, request: &str) -> Option<T> {
@@ -510,7 +510,7 @@ fn matchers_of_each_key_map_to_one_type() {
     let matchers = [of(TestInterface::ImplA), of(TestInterface::ImplB)];
     let request = DeepLinkRequest::of("https://www.testuri.com");
     let keys: Vec<TestInterface> =
-        matchers.iter().map(|matcher| *matcher.r#match(&request).unwrap().key()).collect();
+        matchers.iter().map(|matcher| *matcher.try_match(&request).unwrap().key()).collect();
     assert_eq!(keys, [TestInterface::ImplA, TestInterface::ImplB]);
 }
 
@@ -533,7 +533,8 @@ fn a_uri_s_match_builds_a_back_stack_of_its_key() {
     let matcher = matcher::<SimpleKey>(USER_QUERY)
         .map_key(Stacked::Simple)
         .with_back_stack(|result| vec![Stacked::Test, result.key().clone()]);
-    let result = matcher.r#match(&DeepLinkRequest::of("https://example.com/user?name=john&age=30"));
+    let result =
+        matcher.try_match(&DeepLinkRequest::of("https://example.com/user?name=john&age=30"));
     assert_eq!(
         result.unwrap().back_stack(),
         [Stacked::Test, Stacked::Simple(SimpleKey { name: "john".into(), age: 30 })]
@@ -546,7 +547,7 @@ fn a_uri_s_match_builds_a_back_stack_of_other_keys() {
     let matcher = matcher::<TestKey>("https://example.com/any/")
         .map_key(|_| TestInterface::ImplB)
         .with_back_stack(|_| vec![TestInterface::ImplA, TestInterface::ImplB]);
-    let result = matcher.r#match(&DeepLinkRequest::of("https://example.com/any/")).unwrap();
+    let result = matcher.try_match(&DeepLinkRequest::of("https://example.com/any/")).unwrap();
     assert_eq!(result.back_stack(), [TestInterface::ImplA, TestInterface::ImplB]);
     assert_eq!(*result.key(), TestInterface::ImplB);
 }
@@ -647,10 +648,10 @@ fn a_uri_matcher_has_its_filters_and_gives_its_steps() {
     let matcher = matcher::<TestKey>("https://example.com/path")
         .with_filters(vec![mime_type_filter("image/test")]);
     let uri = DeepLinkUri::new("https://example.com/path");
-    assert!(matcher.r#match(&DeepLinkRequest::of("https://example.com/path")).is_none());
+    assert!(matcher.try_match(&DeepLinkRequest::of("https://example.com/path")).is_none());
     assert!(
         matcher
-            .r#match(&DeepLinkRequest::new(Some(uri.clone()), mime_type_extra("image/test")))
+            .try_match(&DeepLinkRequest::new(Some(uri.clone()), mime_type_extra("image/test")))
             .is_some()
     );
     // The steps go without the filters.
@@ -661,7 +662,7 @@ fn a_uri_matcher_has_its_filters_and_gives_its_steps() {
     assert!(by_arguments.unwrap().is_exact_path());
     // A request of extras alone has no URI to match.
     let extras = DeepLinkRequest::new(None, mime_type_extra("image/test"));
-    assert!(matcher.r#match(&extras).is_none());
+    assert!(matcher.try_match(&extras).is_none());
 }
 
 /// A result made by hand is the worst of a match.
@@ -679,7 +680,7 @@ fn a_decoder_can_make_any_key() {
         DeepLinkUri::new("https://example.com/{id}"),
         |arguments| Ok(arguments["id"][0].len()),
     );
-    let result = matcher.r#match(&DeepLinkRequest::of("https://example.com/abc")).unwrap();
+    let result = matcher.try_match(&DeepLinkRequest::of("https://example.com/abc")).unwrap();
     assert_eq!(*result.key(), 3);
 }
 
@@ -695,7 +696,7 @@ fn a_uri_s_match_builds_a_back_stack_of_an_enum() {
     let matcher = matcher::<TestKey>("https://example.com/any/")
         .map_key(|_| Sealed::Key2)
         .with_back_stack(|_| vec![Sealed::Key1, Sealed::Key2]);
-    let result = matcher.r#match(&DeepLinkRequest::of("https://example.com/any/")).unwrap();
+    let result = matcher.try_match(&DeepLinkRequest::of("https://example.com/any/")).unwrap();
     assert_eq!(result.back_stack(), [Sealed::Key1, Sealed::Key2]);
     assert_eq!(*result.key(), Sealed::Key2);
 }

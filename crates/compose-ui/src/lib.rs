@@ -21,12 +21,12 @@ mod clickable;
 mod clipboard;
 mod configuration;
 mod constraints;
-mod content_capture;
 mod content_scale;
 mod delegation;
 mod dispatch;
 mod display_list;
 mod draw;
+mod draw_capture;
 mod draw_modifiers;
 mod fixed_text;
 mod focus;
@@ -169,10 +169,11 @@ pub use configuration::{
     PropValue, ScreenOrientation,
 };
 pub use constraints::Constraints;
-pub use content_capture::ContentCapture;
 pub use content_scale::ContentScale;
 pub use delegation::{Delegate, Delegates};
 pub use draw::{DrawScope, SharedPath};
+#[doc(hidden)]
+pub use draw_capture::DrawCapture;
 pub use draw_modifiers::{CacheDrawScope, ContentDrawScope, DrawResult};
 pub use focus::{FocusState, FocusTargetNode, Focusability, focus_target_modifier_node};
 pub use focus_manager::{

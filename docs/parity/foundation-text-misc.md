@@ -299,10 +299,10 @@ Paths are relative to `frameworks/support`. A status cites the compose-rs tests 
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/NodeInvalidationTestParent.kt` | 11 | (abstract) which `BasicText` parameter changes invalidate layout, draw or semantics | partial — the style rules are checked (`text_reuse.rs`); the `color` lambda and brush cases need `basic-text-drawing` |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/ParagraphLayoutCacheTest.kt` | 20 | string text's layout cache: intrinsics, relayout for height, density, font scale, ellipsis, max lines, constraints | port — the rules exist (D550); `text_reuse.rs` and `review_d550.rs` cover part of them |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/SelectionControllerTest.kt` | 2 | selectable text's highlight is clipped unless `TextOverflow.Visible` | covered — partly: `review_round14.rs` `the_highlight_of_a_clipped_text_is_clipped_too`; the `Visible` case is left |
-| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextAnnotatedStringContentCaptureInvalidationTest.kt` | 4 | content capture and translation invalidated only by text changes | feature:ui-text-substitution |
+| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextAnnotatedStringDrawCaptureInvalidationTest.kt` | 4 | content capture and translation invalidated only by text changes | feature:ui-text-substitution |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextAnnotatedStringNodeTest.kt` | 7 | annotated text node: bullet/draw annotations invalidation, draw while detached, huge constraints, movable content, text substitution | partial — the crash-safety and movable-content cases port now; bullets (ui-text) and text substitution are other areas |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextLayoutResultIntegrationTest.kt` | 11 | `TextLayoutResult` from `BasicText`: size, positions for offsets, overflow by lines or height, visual overflow | partial — the snapshot's size and overflow flags exist (`review_forms.rs`); queries (`getCursorRect`, `getBoundingBox`, …) are ui-text's |
-| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextStringContentCaptureTest.kt` | 2 | content capture/translation for string text, with inline content | feature:ui-text-substitution |
+| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextStringDrawCaptureTest.kt` | 2 | content capture/translation for string text, with inline content | feature:ui-text-substitution |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNodeTest.kt` | 6 | string text node: draw while detached, huge constraints, movable content, async text resolution, text substitution | partial — as `TextAnnotatedStringNodeTest` |
 
 ### text/selection: 17 files, 241 tests
@@ -843,7 +843,7 @@ Sizes: S under a day, M a few days, L a week or two, XL multi-week. "Other area"
 
 ### Other areas' features named in statuses
 
-- **ui-text-substitution** (ui semantics/Android translation): `SetTextSubstitution`/`ShowTextSubstitution` and content capture, for `TextStringContentCaptureTest` and `TextAnnotatedStringContentCaptureInvalidationTest`.
+- **ui-text-substitution** (ui semantics/Android translation): `SetTextSubstitution`/`ShowTextSubstitution` and content capture, for `TextStringDrawCaptureTest` and `TextAnnotatedStringDrawCaptureInvalidationTest`.
 - **ui-text-async-fonts** (ui-text): font families resolved asynchronously (downloadable fonts), for `IntrinsicTextAsyncFontTest` and the async-font cases of the field size tests.
 
 ### Suggested order

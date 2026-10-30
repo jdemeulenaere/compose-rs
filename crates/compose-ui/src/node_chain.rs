@@ -49,7 +49,7 @@ impl NodeKinds {
     /// itself.
     pub const DELEGATING: NodeKinds = NodeKinds(1 << 22);
     /// `Modifier.capture_content`: what it draws is kept.
-    pub const CONTENT_CAPTURE: NodeKinds = NodeKinds(1 << 23);
+    pub const DRAW_CAPTURE: NodeKinds = NodeKinds(1 << 23);
     /// A user-defined element's node: its measuring and drawing are observed for state reads.
     pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
     /// A graphics layer (`graphics_layer`, `clip`, `alpha`, …).
@@ -150,7 +150,7 @@ impl NodeKinds {
         // Not `SELECTABLE`: a text answers `as_selectable` by its element's `selectable`, which
         // an update changes, so the selection walks ask each node.
         add(node.is_repaint_boundary(), NodeKinds::REPAINT_BOUNDARY);
-        add(node.content_capture().is_some(), NodeKinds::CONTENT_CAPTURE);
+        add(node.draw_capture().is_some(), NodeKinds::DRAW_CAPTURE);
         add(node.is_beyond_bounds_layout(), NodeKinds::BEYOND_BOUNDS_LAYOUT);
         add(
             node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some(),

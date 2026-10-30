@@ -41,7 +41,7 @@ where
     type Result = BackStackMatchResult<T, K>;
 
     fn match_request(&self, request: &DeepLinkRequest) -> Option<BackStackMatchResult<T, K>> {
-        let result = self.matcher.r#match(request)?;
+        let result = self.matcher.try_match(request)?;
         Some(BackStackMatchResult {
             match_result: Rc::new(result),
             back_stack_builder: self.back_stack_builder.clone(),

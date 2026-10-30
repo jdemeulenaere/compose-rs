@@ -1966,7 +1966,7 @@ pub fn back_stack_of_link(uri: &str) -> Option<Vec<Screen>> {
         UriDeepLinkMatcher::<MessageLink>::new(DeepLinkUri::new("example.com/messages/{id}"))
             .map_key(|link| Screen::Message(link.id))
             .with_back_stack(|result| vec![Screen::Inbox, *result.key()]);
-    let result = matcher.r#match(&DeepLinkRequest::of(uri))?;
+    let result = matcher.try_match(&DeepLinkRequest::of(uri))?;
     Some(result.back_stack().to_vec())
 }
 ```

@@ -445,33 +445,33 @@ fn matcher(filters: Vec<DeepLinkFilter>) -> StaticKeyDeepLinkMatcher<TestKey> {
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_emptyFilters
 #[test]
 fn no_filters_match_anything() {
-    assert_eq!(*matcher(vec![]).r#match(&request()).unwrap().key(), TestKey);
+    assert_eq!(*matcher(vec![]).try_match(&request()).unwrap().key(), TestKey);
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_filterPasses
 #[test]
 fn a_filter_passing_matches() {
-    assert!(matcher(vec![filter(FILTER_VALUE)]).r#match(&request()).is_some());
+    assert!(matcher(vec![filter(FILTER_VALUE)]).try_match(&request()).is_some());
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_filterFails
 #[test]
 fn a_filter_failing_doesn_t_match() {
-    assert!(matcher(vec![filter("wrongFilter")]).r#match(&request()).is_none());
+    assert!(matcher(vec![filter("wrongFilter")]).try_match(&request()).is_none());
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_allFiltersPass
 #[test]
 fn all_filters_passing_match() {
     let filters = vec![filter(FILTER_VALUE), filter(FILTER_VALUE)];
-    assert!(matcher(filters).r#match(&request()).is_some());
+    assert!(matcher(filters).try_match(&request()).is_some());
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_someFiltersFail
 #[test]
 fn one_filter_failing_doesn_t_match() {
     let filters = vec![filter(FILTER_VALUE), filter("wrongFilter")];
-    assert!(matcher(filters).r#match(&request()).is_none());
+    assert!(matcher(filters).try_match(&request()).is_none());
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, match_defaultComparator
@@ -489,8 +489,8 @@ fn a_mime_type_filter_ignores_case() {
     let of = |mime: &str| {
         DeepLinkRequest::new(Some(DeepLinkUri::new("https://example.com")), mime_type_extra(mime))
     };
-    assert!(matcher.r#match(&of("image/TEST")).is_some());
-    assert!(matcher.r#match(&of("image/wrongMimeType")).is_none());
+    assert!(matcher.try_match(&of("image/TEST")).is_some());
+    assert!(matcher.try_match(&of("image/wrongMimeType")).is_none());
 }
 
 /// The keys of an app, Kotlin's `TestInterface` and its objects.
@@ -525,7 +525,7 @@ type ListedMatcher = Box<dyn DeepLinkMatcher<TestInterface, Result = MatchResult
 
 fn keys_of(matchers: Vec<ListedMatcher>) -> Vec<TestInterface> {
     let request = DeepLinkRequest::of("https://www.testuri.com");
-    matchers.iter().map(|matcher| *matcher.r#match(&request).unwrap().key()).collect()
+    matchers.iter().map(|matcher| *matcher.try_match(&request).unwrap().key()).collect()
 }
 
 // Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt, compare_matcherClassesTypedOnDerivedKeys
@@ -828,7 +828,7 @@ enum Stacked {
 fn a_match_builds_its_back_stack() {
     let matcher = StaticKeyDeepLinkMatcher::new(Stacked::Key, vec![])
         .with_back_stack(|result| vec![Stacked::Parent, *result.key()]);
-    let result = matcher.r#match(&request()).unwrap();
+    let result = matcher.try_match(&request()).unwrap();
     assert_eq!(*result.key(), Stacked::Key);
     assert_eq!(result.back_stack(), [Stacked::Parent, Stacked::Key]);
 }
@@ -842,7 +842,7 @@ fn a_nested_filter_failing_builds_nothing() {
         seen.set(true);
         vec![*result.key()]
     });
-    assert!(matcher.r#match(&request()).is_none());
+    assert!(matcher.try_match(&request()).is_none());
     assert!(!called.get());
 }
 
@@ -850,7 +850,7 @@ fn a_nested_filter_failing_builds_nothing() {
 #[test]
 fn a_back_stack_can_be_empty() {
     let matcher = matcher(vec![]).with_back_stack(|_| Vec::<TestKey>::new());
-    let result = matcher.r#match(&request()).unwrap();
+    let result = matcher.try_match(&request()).unwrap();
     assert_eq!(*result.key(), TestKey);
     assert!(result.back_stack().is_empty());
 }
@@ -864,7 +864,7 @@ fn back_stack_matchers_of_one_key_go_in_a_list() {
     };
     let matchers = [of(TestInterface::ImplA), of(TestInterface::ImplB)];
     let request = DeepLinkRequest::of("https://www.test.com");
-    let first = matchers[0].r#match(&request).unwrap();
+    let first = matchers[0].try_match(&request).unwrap();
     assert_eq!(*first.key(), TestInterface::ImplA);
     assert_eq!(first.back_stack(), [TestInterface::ImplC, TestInterface::ImplA]);
 }
@@ -887,7 +887,7 @@ fn a_back_stack_is_built_once_and_when_asked() {
         counted.set(counted.get() + 1);
         vec![*result.key()]
     });
-    let result = matcher.r#match(&request()).unwrap();
+    let result = matcher.try_match(&request()).unwrap();
     assert_eq!(builds.get(), 0);
     let _ = result.back_stack();
     let _ = result.back_stack();
@@ -923,4 +923,89 @@ fn wrappers_compare_what_s_inside_each_other() {
     let stacked = |score| BackStackMatchResult::new(Plain(score), |_| vec![0u8]);
     assert_eq!(stacked(5).compare_to(&stacked(3)), Ordering::Greater);
     assert_eq!(stacked(5).compare_to(&wrapped(7)), Ordering::Less);
+}
+
+#[derive(DeepLinkKey, Clone, PartialEq, Debug)]
+struct NullableNestedKey {
+    user: Option<SimpleKey>,
+    flag: bool,
+}
+
+/// A nullable nested key is there by an argument of its name: without it, it's null, whatever its
+/// fields' arguments, as the decoder's `decodeNotNullMark`.
+#[test]
+fn a_nullable_nested_key_is_null_without_its_name() {
+    let key: NullableNestedKey =
+        decode(arguments([("name", &["john"]), ("age", &["30"]), ("flag", &["true"])])).unwrap();
+    assert_eq!(key, NullableNestedKey { user: None, flag: true });
+    let key: NullableNestedKey = decode(arguments([
+        ("user", &["any"]),
+        ("name", &["john"]),
+        ("age", &["30"]),
+        ("flag", &["true"]),
+    ]))
+    .unwrap();
+    assert_eq!(key.user, Some(SimpleKey { name: "john".into(), age: 30 }));
+}
+
+/// As Kotlin's `toFloat` and `toDouble`, Java's: a type's suffix and its own spellings.
+#[test]
+fn floats_are_read_as_kotlin_reads_them() {
+    let float = |value: &str| decode::<FloatKey>(arguments([("float", &[value])])).map(|k| k.float);
+    let double =
+        |value: &str| decode::<DoubleKey>(arguments([("double", &[value])])).map(|k| k.double);
+    assert_eq!(float("1.5f"), Ok(1.5));
+    assert_eq!(float("1.5F"), Ok(1.5));
+    assert_eq!(float("2d"), Ok(2.0));
+    assert_eq!(double("2.5D"), Ok(2.5));
+    assert_eq!(double("2.5f"), Ok(2.5));
+    assert_eq!(float(" 1.5 "), Ok(1.5));
+    assert_eq!(float("-Infinity"), Ok(f32::NEG_INFINITY));
+    assert_eq!(double("+Infinity"), Ok(f64::INFINITY));
+    assert!(float("NaN").unwrap().is_nan());
+    for wrong in ["inf", "Inf", "-inf", "nan", "infinity", "INFINITY", "Infinityf", "NaNf", "f", ""]
+    {
+        if !wrong.is_empty() {
+            assert!(float(wrong).is_err(), "{wrong}");
+            assert!(double(wrong).is_err(), "{wrong}");
+        }
+    }
+}
+
+key_of_one! {
+    UsizeKey { value: usize }
+    IsizeKey { value: isize }
+    U128Key { value: u128 }
+    I128Key { value: i128 }
+}
+
+/// Every integer of Rust's is a primitive.
+#[test]
+fn every_integer_is_a_primitive() {
+    let of = |value: &'static [&'static str]| arguments([("value", value)]);
+    assert_eq!(decode::<UsizeKey>(of(&["7"])).unwrap().value, 7);
+    assert_eq!(decode::<IsizeKey>(of(&["-7"])).unwrap().value, -7);
+    assert_eq!(
+        decode::<U128Key>(of(&["340282366920938463463374607431768211455"])).unwrap().value,
+        u128::MAX
+    );
+    assert_eq!(decode::<I128Key>(of(&["-7"])).unwrap().value, -7);
+    assert!(decode::<UsizeKey>(of(&["-7"])).is_err());
+}
+
+#[derive(DeepLinkKey, Clone, PartialEq, Debug)]
+struct OfAny<T> {
+    value: T,
+    #[deep_link(default)]
+    others: Vec<i32>,
+}
+
+/// A key's type parameters are bound by what it needs of them.
+#[test]
+fn a_generic_key_is_decoded() {
+    let key: OfAny<i32> = decode(arguments([("value", &["7"])])).unwrap();
+    assert_eq!(key, OfAny { value: 7, others: vec![] });
+    let key: OfAny<String> =
+        decode(arguments([("value", &["a"]), ("others", &["1", "2"])])).unwrap();
+    assert_eq!(key, OfAny { value: "a".to_string(), others: vec![1, 2] });
 }

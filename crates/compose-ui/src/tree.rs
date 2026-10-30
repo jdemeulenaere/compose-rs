@@ -309,7 +309,7 @@ pub struct UiTree {
     root: NodeId,
     pub(crate) text_measurer: Box<dyn TextMeasurer>,
     /// The paragraphs `Modifier.capture_content`'s captures still draw.
-    pub(crate) held_paragraphs: crate::content_capture::HeldParagraphs,
+    pub(crate) held_paragraphs: crate::draw_capture::HeldParagraphs,
     pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
     /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
     /// `LOCAL_HAPTIC_FEEDBACK`.

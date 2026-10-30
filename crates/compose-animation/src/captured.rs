@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use compose_runtime::{Callback, composable, remember};
 use compose_ui::{
-    Constraints, ContentCapture, IntSize, Layout, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier,
+    Constraints, DrawCapture, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope, Layout,
+    Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
 };
 
 use crate::transition::Transition;
@@ -66,7 +66,7 @@ fn CapturedEnterExit(
     let (active_enter, active_exit, _) =
         update_enter_exit_modifier_state(&child, enter, exit, None);
     let is_exiting = child.target_state() == EnterExitState::PostExit;
-    let capture = remember(ContentCapture::new);
+    let capture = remember(DrawCapture::new);
     let policy = remember(|| {
         Rc::new(CapturedMeasurePolicy { exiting: Cell::new(false), size: Cell::new(IntSize::ZERO) })
     });
@@ -102,6 +102,22 @@ struct CapturedMeasurePolicy {
     size: Cell<IntSize>,
 }
 
+impl CapturedMeasurePolicy {
+    /// The kept size's while exiting, else the largest of the children's: not by measuring, which
+    /// would take the kept size away.
+    fn intrinsic(
+        &self,
+        kept: i32,
+        measurables: &[IntrinsicMeasurable],
+        mut of: impl FnMut(IntrinsicMeasurable) -> i32,
+    ) -> i32 {
+        if self.exiting.get() {
+            return kept;
+        }
+        measurables.iter().map(|&measurable| of(measurable)).max().unwrap_or(0)
+    }
+}
+
 impl MeasurePolicy for CapturedMeasurePolicy {
     fn measure(
         &self,
@@ -116,6 +132,50 @@ impl MeasurePolicy for CapturedMeasurePolicy {
         let size = measure_stacked(scope, measurables, constraints);
         self.size.set(size);
         scope.layout(size.width, size.height)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(self.size.get().width, measurables, |measurable| {
+            scope.min_intrinsic_width(measurable, height)
+        })
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(self.size.get().height, measurables, |measurable| {
+            scope.min_intrinsic_height(measurable, width)
+        })
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(self.size.get().width, measurables, |measurable| {
+            scope.max_intrinsic_width(measurable, height)
+        })
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(self.size.get().height, measurables, |measurable| {
+            scope.max_intrinsic_height(measurable, width)
+        })
     }
 
     fn debug_name(&self) -> &'static str {

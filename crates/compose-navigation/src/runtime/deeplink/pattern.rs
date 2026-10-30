@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use compose_runtime::DeepLinkArguments;
+use compose_runtime::__private::DeepLinkArguments;
 
 use super::uri::{DeepLinkUri, decode};
 
@@ -30,11 +30,28 @@ enum Token {
     EndOfPath,
 }
 
+/// Java's line terminators, which `.` doesn't match.
+fn is_line_terminator(character: char) -> bool {
+    matches!(character, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// A capture: the byte range of the text it took, or nothing if it wasn't taken. Strings are made
+/// on a match, as every end of a placeholder is a candidate.
+type Capture = Option<(usize, usize)>;
+
 /// The captures of `tokens` matching all of `text`: `None` if they don't, and an absent capture
 /// where one wasn't taken.
 fn match_entire(tokens: &[Token], text: &str, ignore_case: bool) -> Option<Vec<Option<String>>> {
     let mut captures = Vec::new();
-    match_from(tokens, text, ignore_case, &mut captures).then_some(captures)
+    if !match_from(tokens, text, 0, ignore_case, &mut captures) {
+        return None;
+    }
+    Some(
+        captures
+            .into_iter()
+            .map(|capture| capture.map(|(start, end)| text[start..end].to_string()))
+            .collect(),
+    )
 }
 
 fn literal_length(literal: &str, text: &str, ignore_case: bool) -> Option<usize> {
@@ -53,81 +70,87 @@ fn literal_length(literal: &str, text: &str, ignore_case: bool) -> Option<usize>
     Some(length)
 }
 
-/// `rest` from `after`, with `value` as the next capture.
+/// `rest` from `end`, with what's from `start` to it as the next capture.
 fn with_capture(
     rest: &[Token],
-    value: Option<&str>,
-    after: &str,
+    text: &str,
+    capture: Capture,
+    end: usize,
     ignore_case: bool,
-    captures: &mut Vec<Option<String>>,
+    captures: &mut Vec<Capture>,
 ) -> bool {
-    let count = captures.len();
-    captures.push(value.map(str::to_string));
-    if match_from(rest, after, ignore_case, captures) {
+    captures.push(capture);
+    if match_from(rest, text, end, ignore_case, captures) {
         return true;
     }
-    captures.truncate(count);
+    captures.pop();
     false
 }
 
 fn match_from(
     tokens: &[Token],
     text: &str,
+    at: usize,
     ignore_case: bool,
-    captures: &mut Vec<Option<String>>,
+    captures: &mut Vec<Capture>,
 ) -> bool {
-    let Some((token, rest)) = tokens.split_first() else { return text.is_empty() };
+    let Some((token, rest)) = tokens.split_first() else { return at == text.len() };
+    let from = &text[at..];
     match token {
-        Token::Literal(literal) => match literal_length(literal, text, ignore_case) {
-            Some(length) => match_from(rest, &text[length..], ignore_case, captures),
+        Token::Literal(literal) => match literal_length(literal, from, ignore_case) {
+            Some(length) => match_from(rest, text, at + length, ignore_case, captures),
             None => false,
         },
-        Token::CapturedLiteral(literal) => match literal_length(literal, text, ignore_case) {
+        Token::CapturedLiteral(literal) => match literal_length(literal, from, ignore_case) {
             Some(length) => {
-                with_capture(rest, Some(&text[..length]), &text[length..], ignore_case, captures)
+                let end = at + length;
+                with_capture(rest, text, Some((at, end)), end, ignore_case, captures)
             }
             None => false,
         },
         Token::HttpOrHttps => {
-            let Some(length) = literal_length("http", text, ignore_case) else { return false };
-            let after = &text[length..];
-            if let Some(extra) = literal_length("s", after, ignore_case)
-                && match_from(rest, &after[extra..], ignore_case, captures)
+            let Some(length) = literal_length("http", from, ignore_case) else { return false };
+            let after = at + length;
+            if let Some(extra) = literal_length("s", &text[after..], ignore_case)
+                && match_from(rest, text, after + extra, ignore_case, captures)
             {
                 return true;
             }
-            match_from(rest, after, ignore_case, captures)
+            match_from(rest, text, after, ignore_case, captures)
         }
         Token::Placeholder => {
-            for (end, character) in text.char_indices() {
-                if with_capture(rest, Some(&text[..end]), &text[end..], ignore_case, captures) {
+            for (offset, character) in from.char_indices() {
+                let end = at + offset;
+                if with_capture(rest, text, Some((at, end)), end, ignore_case, captures) {
                     return true;
                 }
                 if character == '/' {
                     return false;
                 }
             }
-            with_capture(rest, Some(text), "", ignore_case, captures)
+            with_capture(rest, text, Some((at, text.len())), text.len(), ignore_case, captures)
         }
         Token::QueryPlaceholder => {
-            for end in text.char_indices().map(|(at, _)| at).skip(1).chain([text.len()]) {
-                if !text.is_empty()
-                    && with_capture(rest, Some(&text[..end]), &text[end..], ignore_case, captures)
-                {
-                    return true;
+            let ends = from.char_indices().map(|(offset, _)| at + offset).skip(1);
+            if !from.is_empty() {
+                for end in ends.chain([text.len()]) {
+                    if with_capture(rest, text, Some((at, end)), end, ignore_case, captures) {
+                        return true;
+                    }
                 }
             }
-            with_capture(rest, None, text, ignore_case, captures)
+            with_capture(rest, text, None, at, ignore_case, captures)
         }
         Token::Wildcard | Token::CapturedWildcard => {
-            let line = text.find('\n').unwrap_or(text.len());
+            let line = from.find(is_line_terminator).unwrap_or(from.len());
             let ends =
-                std::iter::once(line).chain(text[..line].char_indices().rev().map(|(at, _)| at));
-            for end in ends {
+                std::iter::once(line).chain(from[..line].char_indices().rev().map(|(at, _)| at));
+            for offset in ends {
+                let end = at + offset;
                 let matched = if *token == Token::CapturedWildcard {
-                    with_capture(rest, Some(&text[..end]), &text[end..], ignore_case, captures)
+                    with_capture(rest, text, Some((at, end)), end, ignore_case, captures)
                 } else {
-                    match_from(rest, &text[end..], ignore_case, captures)
+                    match_from(rest, text, end, ignore_case, captures)
                 };
                 if matched {
                     return true;
@@ -136,7 +159,9 @@ fn match_from(
             false
         }
         Token::EndOfPath => {
-            let goes_on = text.is_empty() || text.starts_with('?') || text.starts_with('#');
+            let goes_on = from.is_empty()
+                || ((from.starts_with('?') || from.starts_with('#'))
+                    && !from.contains(is_line_terminator));
             goes_on && rest.is_empty()
         }
     }
@@ -149,9 +174,11 @@ fn find_placeholder(text: &str, from: usize) -> Option<(usize, usize, &str)> {
     while let Some(open) = text.get(search..)?.find('{').map(|at| search + at) {
         let name_start = open + 1;
         let first = text[name_start..].chars().next();
-        if let Some(first) = first.filter(|first| *first != '\n') {
+        if let Some(first) = first.filter(|first| !is_line_terminator(*first)) {
             let after_first = name_start + first.len_utf8();
-            let line_end = text[name_start..].find('\n').map_or(text.len(), |at| name_start + at);
+            let line_end = text[name_start..]
+                .find(is_line_terminator)
+                .map_or(text.len(), |at| name_start + at);
             if let Some(close) = text[after_first..line_end].find('}').map(|at| after_first + at) {
                 return Some((open, close + 1, &text[name_start..close]));
             }
@@ -163,7 +190,10 @@ fn find_placeholder(text: &str, from: usize) -> Option<(usize, usize, &str)> {
 
 /// Whether all of `text` is a placeholder, as `FILL_IN_PATTERN.matches`: its name may hold braces.
 fn is_placeholder(text: &str) -> bool {
-    text.len() >= 3 && text.starts_with('{') && text.ends_with('}') && !text.contains('\n')
+    text.len() >= 3
+        && text.starts_with('{')
+        && text.ends_with('}')
+        && !text.contains(is_line_terminator)
 }
 
 /// `literal`, its `.*`s as wildcards, as `saveWildcardInRegex`.

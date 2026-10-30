@@ -52,9 +52,10 @@ impl Easing {
     /// The curve of `path`, as `PathEasing(path)`: its x is the fraction and its y what comes out,
     /// so it goes from (0, 0) to (1, 1), covering all the x between, with no `close`. An invalid
     /// path panics at the first fraction that isn't an end, as there. A path of
-    /// [`Path::op`](Path::op)'s result has no segments to read until a platform makes them, so it's
-    /// refused too (D1412).
+    /// [`Path::op`](Path::op)'s result, on Android and headless where it has no segments to read
+    /// until a platform makes them, is refused here, where it's written (D1415).
     pub fn path(path: &Path) -> Easing {
+        assert_has_segments(path);
         let path = path.clone();
         let segments = OnceCell::new();
         Easing::Custom(Rc::new(move |fraction| {
@@ -79,6 +80,14 @@ impl Easing {
             segment.y(t)
         }))
     }
+}
+
+/// Refuses a path of steps a platform would compute.
+fn assert_has_segments(path: &Path) {
+    assert!(
+        path.data().steps().is_empty(),
+        "The easing path can't be the result of a path operation."
+    );
 }
 
 /// A line, a quadratic or a cubic of a path easing, its points as they are in a `PathSegment`, with
@@ -106,11 +115,8 @@ impl EasingSegment {
 
     /// What `path` has, as `initializeEasing`.
     fn of_path(path: &Path) -> Vec<EasingSegment> {
+        assert_has_segments(path);
         let data = path.data();
-        assert!(
-            data.steps().is_empty(),
-            "The easing path can't be the result of a path operation."
-        );
         let mut segments = Vec::new();
         let mut current = Offset::new(0.0, 0.0);
         for command in data.commands() {

@@ -580,7 +580,7 @@ One entry per feature. Sizes:
 - **What it does:** disposes the content at once and animates a recorded layer of its last frame.
 - **Tests:** `CapturedAnimatedVisibilityTest`.
 - **Dependencies:**
-  - recording a subtree and drawing it later: `ContentCapture`, the part of `GraphicsLayer` it needs, the object itself being ui-core's graphics-layer-object;
+  - recording a subtree and drawing it later: `DrawCapture`, the part of `GraphicsLayer` it needs, the object itself being ui-core's graphics-layer-object;
   - enter-exit-params and transition-state; ui lookahead for 2 tests.
 
 #### shared-transition (XL, not exp.)

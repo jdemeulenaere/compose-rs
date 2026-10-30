@@ -594,6 +594,7 @@ One entry per feature, in the suggested order (below, after the entries). Sizes:
 - *Does:* a recording not tied to a layout node, drawn where code asks, any number of times. compose-rs's retained groups (D155, D270) are per node; a free-standing layer is a group with its own key and version that a drawing refers to.
 - *Tests:* AndroidGraphicsLayerTest, RobolectricGraphicsLayerTest, DrawingPrebuiltGraphicsLayerTest; completes draw/DrawModifierTest.
 - *Depends on:* 3.36 for `toImageBitmap`; 3.4 (release on detach). Animation: shared elements' overlay; foundation and apps: capturing content to a bitmap.
+- `CapturedAnimatedVisibility` moves to `GraphicsLayer` when this lands, and `DrawCapture` (D1413, not a parity API) goes.
 
 **3.35 `layer-3d-and-effects`** — M to L.
 - *API:* `GraphicsLayerScope.rotationX`, `rotationY`, `cameraDistance`, `renderEffect`, `colorFilter`, `blendMode`, `outsets`; `RenderEffect`, `BlurEffect`, `OffsetEffect`, `LayerOutsets`.
