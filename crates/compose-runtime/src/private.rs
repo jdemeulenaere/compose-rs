@@ -173,3 +173,5 @@ macro_rules! __compose_marked {
 }
 
 pub use crate::__compose_marked as marked;
+
+pub use crate::deep_link_key::{DeepLinkArguments, DeepLinkDecoderError, DeepLinkKey, decode_with};

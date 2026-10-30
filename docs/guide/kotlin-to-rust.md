@@ -1950,10 +1950,33 @@ pub fn Redirect(back_stack: NavBackStack<Screen>, to: Screen) {
 ```
 
 
+Deep links are matched against URIs, by matchers of a pattern: `UriDeepLinkMatcher` takes the key's fields from `{placeholders}` in the path, query parameters and the fragment, `.*` being a wildcard. When several match, `compare_to` says which is best. The key derives `DeepLinkKey` where Kotlin's is `@Serializable`, with `#[deep_link(default)]` for a field that may be absent, and an enum of the app's keys comes from `map_key`:
+
+<!-- snippet: src/navigation.rs#deep_link -->
+```rust
+/// What a link to a message holds: decoded from the URI's arguments, by name.
+#[derive(DeepLinkKey)]
+pub struct MessageLink {
+    pub id: u32,
+}
+
+/// The back stack a link opens, if it's one of the app's: the message, over the inbox.
+pub fn back_stack_of_link(uri: &str) -> Option<Vec<Screen>> {
+    let matcher =
+        UriDeepLinkMatcher::<MessageLink>::new(DeepLinkUri::new("example.com/messages/{id}"))
+            .map_key(|link| Screen::Message(link.id))
+            .with_back_stack(|result| vec![Screen::Inbox, *result.key()]);
+    let result = matcher.r#match(&DeepLinkRequest::of(uri))?;
+    Some(result.back_stack().to_vec())
+}
+```
+
+A platform's link reaches it as a string: on Android, the URI of Kotlin's `Intent`, passed to the Rust UI as any event.
+
 What's different from Navigation 3:
 
 - Keys are one type, usually an enum: open polymorphism has nothing to register, and `rememberNavBackStack(configuration, …)` has no analogue.
-- No shared elements yet (`sharedTransitionScope`), and no deep links yet.
+- No shared elements yet (`sharedTransitionScope`).
 
 Without a `NavDisplay`, a back stack is a `remember_nav_back_stack`, a `match` on its last key and a `BackHandler` that pops; but then a screen under the top loses its state. `remember_saveable_state_holder()` (`compose::runtime`, Compose's `rememberSaveableStateHolder`) keeps it for content of your own: `holder.SaveableStateProvider(key, || …)` around each screen or tab, and `holder.remove_state(key)` when one is gone for good.
 

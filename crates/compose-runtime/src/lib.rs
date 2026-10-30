@@ -28,6 +28,7 @@ mod compose_arg;
 mod compose_node;
 mod composer;
 mod composition;
+mod deep_link_key;
 mod derived;
 mod effects;
 mod error;
@@ -54,7 +55,7 @@ mod state;
 pub use background::{Background, spawn_background};
 pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
-pub use compose_macros::{ComposeArg, Saveable, composable};
+pub use compose_macros::{ComposeArg, DeepLinkKey, Saveable, composable};
 pub use compose_node::{
     ComposeNode, ComposeNodeWithContent, ComposeNodeWithSkippableUpdate, ReusableComposeNode,
     ReusableComposeNodeWithContent, ReusableComposeNodeWithSkippableUpdate, SkippableUpdater,
@@ -62,6 +63,10 @@ pub use compose_node::{
 };
 pub use composer::current_recompose_scope;
 pub use composition::{ApplierRef, Composition};
+pub use deep_link_key::{
+    DeepLinkArguments, DeepLinkDecoderError, DeepLinkElement, DeepLinkKey, DeepLinkPrimitive,
+    DeepLinkSerializer,
+};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, KeyedSideEffect,

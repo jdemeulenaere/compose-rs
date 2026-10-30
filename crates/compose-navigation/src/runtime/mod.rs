@@ -5,6 +5,7 @@ mod back_stack;
 mod content_key;
 mod decorated;
 mod decorator;
+mod deeplink;
 mod entry;
 mod metadata;
 mod provider;
@@ -20,6 +21,7 @@ pub use decorator::{
     NavEntryDecorator, SaveableStateHolderNavEntryDecorator,
     remember_saveable_state_holder_nav_entry_decorator,
 };
+pub use deeplink::*;
 pub use entry::NavEntry;
 pub use metadata::{MetadataScope, NavMetadata, NavMetadataKey, metadata};
 pub use provider::{

@@ -612,3 +612,14 @@ fn the_card_expands() {
     let mut ui = compose_test(|| animation::Loading(false));
     ui.on_node_with_text("Loaded").assert_exists();
 }
+
+#[test]
+fn a_link_opens_a_message_over_the_inbox() {
+    use guide::navigation::{Screen, back_stack_of_link};
+    assert_eq!(
+        back_stack_of_link("https://example.com/messages/7"),
+        Some(vec![Screen::Inbox, Screen::Message(7)])
+    );
+    assert_eq!(back_stack_of_link("https://example.com/messages/seven"), None);
+    assert_eq!(back_stack_of_link("https://example.org/messages/7"), None);
+}

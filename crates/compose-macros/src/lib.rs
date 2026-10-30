@@ -88,6 +88,16 @@ pub fn derive_saveable(input: TokenStream) -> TokenStream {
     derive::expand_saveable(input.into()).into()
 }
 
+/// `DeepLinkKey`, as the serializer Kotlin generates for what a deep link decodes: a struct field by
+/// field from the flat map of arguments, each by its name or `#[deep_link(rename = "name")]`, with
+/// `#[deep_link(default)]` or `#[deep_link(default = value)]` for what may be absent and
+/// `#[deep_link(with = serializer)]` to read it with a `DeepLinkSerializer`; an enum of unit
+/// variants by the variant's name.
+#[proc_macro_derive(DeepLinkKey, attributes(deep_link))]
+pub fn derive_deep_link_key(input: TokenStream) -> TokenStream {
+    derive::expand_deep_link_key(input.into()).into()
+}
+
 #[proc_macro_derive(ComposeArg, attributes(compose_arg))]
 pub fn derive_compose_arg(input: TokenStream) -> TokenStream {
     derive::expand(input.into()).into()

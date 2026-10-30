@@ -297,3 +297,143 @@ fn derive_saveable(input: TokenStream) -> syn::Result<TokenStream> {
         }
     })
 }
+
+pub(crate) fn expand_deep_link_key(input: TokenStream) -> TokenStream {
+    match derive_deep_link_key(input) {
+        Ok(tokens) => tokens,
+        Err(error) => error.to_compile_error(),
+    }
+}
+
+/// What `#[deep_link(...)]` says of a field or a variant.
+#[derive(Default)]
+struct DeepLinkAttributes {
+    rename: Option<syn::LitStr>,
+    /// `Some(None)`: its type's default.
+    default: Option<Option<syn::Expr>>,
+    with: Option<syn::Expr>,
+}
+
+fn deep_link_attributes(attributes: &[syn::Attribute]) -> syn::Result<DeepLinkAttributes> {
+    let mut parsed = DeepLinkAttributes::default();
+    for attribute in attributes.iter().filter(|attribute| attribute.path().is_ident("deep_link")) {
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                parsed.rename = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("default") {
+                parsed.default = Some(if meta.input.peek(syn::Token![=]) {
+                    Some(meta.value()?.parse()?)
+                } else {
+                    None
+                });
+            } else if meta.path.is_ident("with") {
+                parsed.with = Some(meta.value()?.parse()?);
+            } else {
+                return Err(meta.error("expected `rename`, `default` or `with`"));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(parsed)
+}
+
+fn derive_deep_link_key(input: TokenStream) -> syn::Result<TokenStream> {
+    let input: DeriveInput = syn::parse2(input)?;
+    let name = &input.ident;
+    let error = quote!(::compose::__private::DeepLinkDecoderError);
+    let body = match &input.data {
+        Data::Struct(data) => {
+            let mut parts = Vec::new();
+            for field in &data.fields {
+                let Some(ident) = &field.ident else {
+                    return Err(Error::new_spanned(
+                        field,
+                        "a deep link's arguments go by name: a tuple struct can't derive `DeepLinkKey`",
+                    ));
+                };
+                let attributes = deep_link_attributes(&field.attrs)?;
+                let text = match &attributes.rename {
+                    Some(rename) => rename.value(),
+                    None => ident.to_string().trim_start_matches("r#").to_string(),
+                };
+                let ty = &field.ty;
+                let value = match &attributes.with {
+                    Some(serializer) => quote! {
+                        ::compose::__private::decode_with(&#serializer, __arguments, #text)
+                    },
+                    None => quote! {
+                        <#ty as ::compose::__private::DeepLinkKey>::decode_field(__arguments, #text)?
+                    },
+                };
+                let absent = match &attributes.default {
+                    Some(Some(default)) => quote!(#default),
+                    Some(None) => quote!(::core::default::Default::default()),
+                    None => quote! {
+                        return ::core::result::Result::Err(#error::missing(#text))
+                    },
+                };
+                parts.push(quote! {
+                    #ident: match #value {
+                        ::core::option::Option::Some(__value) => __value,
+                        ::core::option::Option::None => #absent,
+                    }
+                });
+            }
+            let made = shaped(&data.fields, quote!(#name), &parts);
+            quote! { ::core::result::Result::Ok(::core::option::Option::Some(#made)) }
+        }
+        Data::Enum(data) => {
+            let mut arms = Vec::new();
+            for variant in &data.variants {
+                if !matches!(variant.fields, Fields::Unit) {
+                    return Err(Error::new_spanned(
+                        variant,
+                        "an enum deriving `DeepLinkKey` is of unit variants: a variant of data is \
+                         decoded from its own struct, mapped into the enum",
+                    ));
+                }
+                let attributes = deep_link_attributes(&variant.attrs)?;
+                let variant_name = &variant.ident;
+                let text = match &attributes.rename {
+                    Some(rename) => rename.value(),
+                    None => variant_name.to_string(),
+                };
+                arms.push(quote! { #text => #name::#variant_name, });
+            }
+            quote! {
+                let ::core::option::Option::Some(__value) =
+                    __arguments.get(__name).and_then(|__values| __values.first())
+                else {
+                    return ::core::result::Result::Ok(::core::option::Option::None);
+                };
+                if __value.is_empty() {
+                    return ::core::result::Result::Ok(::core::option::Option::None);
+                }
+                ::core::result::Result::Ok(::core::option::Option::Some(match __value.as_str() {
+                    #(#arms)*
+                    __other => {
+                        return ::core::result::Result::Err(#error(
+                            ::std::format!("Unknown ENUM value: {__other}"),
+                        ));
+                    }
+                }))
+            }
+        }
+        Data::Union(data) => {
+            return Err(Error::new(data.union_token.span(), "a union can't derive `DeepLinkKey`"));
+        }
+    };
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        #[automatically_derived]
+        impl #impl_generics ::compose::__private::DeepLinkKey for #name #ty_generics #where_clause {
+            #[allow(unused_variables)]
+            fn decode_field(
+                __arguments: &::compose::__private::DeepLinkArguments,
+                __name: &str,
+            ) -> ::core::result::Result<::core::option::Option<Self>, #error> {
+                #body
+            }
+        }
+    })
+}

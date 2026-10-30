@@ -54,6 +54,24 @@ pub fn Redirect(back_stack: NavBackStack<Screen>, to: Screen) {
 }
 // ANCHOR_END: redirect
 
+// ANCHOR: deep_link
+/// What a link to a message holds: decoded from the URI's arguments, by name.
+#[derive(DeepLinkKey)]
+pub struct MessageLink {
+    pub id: u32,
+}
+
+/// The back stack a link opens, if it's one of the app's: the message, over the inbox.
+pub fn back_stack_of_link(uri: &str) -> Option<Vec<Screen>> {
+    let matcher =
+        UriDeepLinkMatcher::<MessageLink>::new(DeepLinkUri::new("example.com/messages/{id}"))
+            .map_key(|link| Screen::Message(link.id))
+            .with_back_stack(|result| vec![Screen::Inbox, *result.key()]);
+    let result = matcher.r#match(&DeepLinkRequest::of(uri))?;
+    Some(result.back_stack().to_vec())
+}
+// ANCHOR_END: deep_link
+
 #[composable]
 pub fn Inbox(on_open: impl Fn(u32) + 'static, on_settings: impl Fn() + 'static) {
     Column!({

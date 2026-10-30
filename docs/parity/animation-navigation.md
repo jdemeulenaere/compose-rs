@@ -33,10 +33,10 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 64 | 588 |
+| `ported` | 72 | 799 |
 | `port` | 0 | 0 |
 | `partial` | 9 | 114 |
-| `feature:<name>` | 21 | 363 |
+| `feature:<name>` | 13 | 152 |
 | `n/a` | 14 | 154 |
 
 By module:
@@ -47,7 +47,7 @@ By module:
 | animation | 15 | 238 | 0 | 7 / 79 | 0 | 4 / 49 | 4 / 110 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
-| navigation3-runtime | 21 | 307 | 0 | 12 / 89 | 0 | 0 | 8 / 211 | 1 / 7 |
+| navigation3-runtime | 21 | 307 | 0 | 20 / 300 | 0 | 0 | 0 | 1 / 7 |
 | navigation3-ui | 15 | 121 | 0 | 9 / 53 | 0 | 2 / 48 | 4 / 20 | 0 |
 | navigationevent, activity-compose's back | 13 | 198 | 0 | 8 / 163 | 0 | 1 / 9 | 0 | 4 / 26 |
 
@@ -55,7 +55,6 @@ By module:
 
 | Feature | Files | @Test |
 |---|---|---|
-| nav3-deep-links | 8 | 211 |
 | shared-transition | 3 | 87 |
 | movable-content | 3 | 19 |
 | animated-image-vector | 5 | 22 |
@@ -65,7 +64,7 @@ By module:
 Four parts:
 
 - **Animation** (50 files, 472 tests): 35 files `ported` (283 tests), 6 `partial` (57), 9 waiting on features (132), of which what's left needs lookahead (shared-transition, animate-bounds, lookahead-visual-debug) or a full `ImageVector` (animated-image-vector).
-- **Navigation 3** (36 files, 428 tests): 21 files `ported` (142 tests), 2 `partial` (48), 12 waiting on features (231: deep links, movable content, shared elements), 1 `n/a` (7). It's what compose-rs is to model (D704), a step of the order below, after S3.
+- **Navigation 3** (36 files, 428 tests): 29 files `ported` (353 tests), 2 `partial` (48), 4 waiting on features (20: movable content, shared elements), 1 `n/a` (7). It's what compose-rs models (D704).
 - **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
@@ -149,18 +148,18 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 64 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/SaveableStateHolderNavEntryDecoratorTest.kt` | 1 | equal data-class keys don't duplicate saveable state | ported | `nav_entry.rs` |
 | 65 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusAndroidTest.kt` | 2 | `ResultEventBus.conflateAsState` | ported | `nav_results.rs` |
 | 66 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt` | 5 | results between entries and dialogs through the decorator | ported | `nav_results.rs` |
-| 67 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkDecoderTest.kt` | 40 | decoding URI arguments into keys (all primitive types, enums, nesting, errors) | `feature:nav3-deep-links` | optional: kotlinx.serialization decoding; a Rust port would use its own decoding trait |
-| 68 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt` | 11 | matcher filters and ordering of match results | `feature:nav3-deep-links` |  |
+| 67 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkDecoderTest.kt` | 40 | decoding URI arguments into keys (all primitive types, enums, nesting, errors) | ported | `nav_deep_link.rs`; `testDecodeMapThrows` and `testDecodeNonPrimitiveListThrows` don't compile here (D1414) |
+| 68 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkMatcherTest.kt` | 11 | matcher filters and ordering of match results | ported | `nav_deep_link.rs`; `match_actionFilter` is of Android's `Intent`s |
 | 69 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkRequestTest.android.kt` | 7 | `DeepLinkRequest` from an Android `Intent` (uri, mime type, action, extras) | n/a: Android `Intent`s |  |
-| 70 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkSerializerTest.kt` | 4 | `DeepLinkSerializer` custom string encodings | `feature:nav3-deep-links` |  |
-| 71 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/UriDeepLinkMatcherTest.kt` | 69 | URI pattern matching: paths, queries, fragments, wildcards, exactness, ranking | `feature:nav3-deep-links` |  |
-| 72 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/UriDeepLinkParserTest.kt` | 70 | URI pattern parsing into path/query/fragment arguments | `feature:nav3-deep-links` |  |
-| 73 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/WithBackStackTest.kt` | 5 | `withBackStack` builds a synthetic back stack for a deep link | `feature:nav3-deep-links` |  |
-| 74 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/WrappedMatchResultTest.kt` | 4 | wrapped match results compare like the wrapped one | `feature:nav3-deep-links` |  |
+| 70 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkSerializerTest.kt` | 4 | `DeepLinkSerializer` custom string encodings | ported | `nav_deep_link.rs`, `remember_saveable_with(serializer_saver(…))` for `rememberSerializable` |
+| 71 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/UriDeepLinkMatcherTest.kt` | 69 | URI pattern matching: paths, queries, fragments, wildcards, exactness, ranking | ported | `nav_deep_link_uri.rs`; a map, a list of keys and an abstract field (3) don't compile here (D1414), and a serializer's field over an abstract or open class (2) is the interface's: a struct |
+| 72 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/UriDeepLinkParserTest.kt` | 70 | URI pattern parsing into path/query/fragment arguments | ported | `nav_deep_link_pattern.rs`, with what a `DeepLinkUri` says of itself |
+| 73 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/WithBackStackTest.kt` | 5 | `withBackStack` builds a synthetic back stack for a deep link | ported | `nav_deep_link.rs` |
+| 74 | `navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/deeplink/WrappedMatchResultTest.kt` | 4 | wrapped match results compare like the wrapped one | ported | `nav_deep_link.rs` |
 | 75 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/EntryProviderTest.kt` | 9 | `entryProvider` DSL: entries by key/class, metadata, duplicates, fallback | ported | `nav_entry.rs`; `Debug` prints a key, so a string in a message has its quotes |
 | 76 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/EntryTest.kt` | 2 | `NavEntry` key and metadata | ported | `nav_entry.rs` |
 | 77 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/NavMetadataTest.kt` | 8 | typed `NavMetadataKey`s: object/class keys, lambdas, override, plus, contains | ported | `nav_entry.rs` |
-| 78 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkRequestTest.kt` | 8 | `DeepLinkRequest` URIs and `RequestExtras` | `feature:nav3-deep-links` |  |
+| 78 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/deeplink/DeepLinkRequestTest.kt` | 8 | `DeepLinkRequest` URIs and `RequestExtras` | ported | `nav_deep_link.rs` |
 | 79 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/result/ResultEffectTest.kt` | 1 | `ResultEffect` sees the latest callback | ported | `nav_results.rs` |
 | 80 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusTest.kt` | 2 | `ResultEventBus` results flow and removal | ported | `nav_results.rs`, by what's heard: `channelMap` isn't public |
 | 81 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/NavDisplayInfoTest.kt` | 1 | a predictive back swipe fills `SceneInfo` for the navigation event | ported | `nav_scene.rs` |
@@ -342,7 +341,7 @@ What compose-rs is to model (D704): a list of typed keys the app owns, mapped to
 | `rememberNavBackStack(configuration, vararg)` | no analogue: nothing's registered, an enum holding its kinds of key (D1400) |
 | `NavMetadataKey`, `metadata { put(key, value) }`, `MetadataScope`, `Map.get/contains(NavMetadataKey)` | present: `NavMetadata` for the map (D1400) |
 | `ResultEventBus` (`sendResult`, `conflateAsState`, `removeResult`), `rememberResultEventBus`, `LocalResultEventBus`, `ResultEffect`, `ResultEventBusNavEntryDecorator`, `rememberResultEventBusNavEntryDecorator` | present (D1401) |
-| `deeplink`: `DeepLinkMatcher` (+`Filter`, `MatchResult`, `mimeTypeFilter`), `DeepLinkRequest` (uri, `RequestExtras`, `mimeTypeExtra`), `UriDeepLinkMatcher`, `UriMatchResult`, `StaticKeyDeepLinkMatcher`, `BackStackMatcher`/`withBackStack`, `WrappedMatchResult`, `DeepLinkSerializer`, `RequestExtras`/`requestExtras {}`/`RequestExtrasKey`, `DeepLinkUri` | nav3-deep-links (optional) |
+| `deeplink`: `DeepLinkMatcher` (+`Filter`, `MatchResult`, `mimeTypeFilter`), `DeepLinkRequest` (uri, `RequestExtras`, `mimeTypeExtra`), `UriDeepLinkMatcher`, `UriMatchResult`, `StaticKeyDeepLinkMatcher`, `BackStackMatcher`/`withBackStack`, `WrappedMatchResult`, `DeepLinkSerializer`, `RequestExtras`/`requestExtras {}`/`RequestExtrasKey`, `DeepLinkUri` | present, `#[derive(DeepLinkKey)]` for a serializer (D1414) |
 | `DeepLinkRequest(Intent)`, `actionExtra`, `actionFilter`, `IntentExtrasKey`, `ActionExtrasKey` | n/a: Android `Intent`s |
 
 **navigation3-ui** (`androidx.navigation3.ui`, `androidx.navigation3.scene`):
@@ -647,9 +646,9 @@ nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and 
   - Without movable content (D1404): single-pane scenes, dialogs and overlays ship first, the decorator keeping its shape. An entry moving between panes waits for it, from the composition context work, with the tests of `ListDetailSceneTest`, `HierarchicalSceneTest`, `BottomNavSceneDecoratorTest`'s list-detail, and the two-pane cases of `SceneStateTest`, `NavDisplayTest`, `NavDisplayLifecycleTest` and `NavDisplayScreenshotTest`.
 - **nav3-results (S): done but its decorator's tests (D1401).** `ResultEventBus`, `ResultEffect` and the decorator.
   - Tests: 3 files (5 tests) `ported`; `ResultEventBusNavEntryDecoratorTest` (5) needs `NavDisplay`, under nav3-ui.
-- **nav3-deep-links (L), last of Navigation 3 (D1404):** URI patterns, matchers, argument decoding and synthetic back stacks.
+- **nav3-deep-links (L), last of Navigation 3 (D1404): done (D1414).** URI patterns, matchers, argument decoding and synthetic back stacks.
   - Tests: 8 files (211 tests).
-  - Dependencies: a URI type and a decoding trait (the analogue of kotlinx.serialization), and a platform path delivering links: on Android an `Intent`, which is n/a, or a desktop URL handler.
+  - A platform's link reaches it as a string: on Android, what Kotlin takes from its `Intent`.
 
 Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavController` and `NavHost` are gone, and its users, the gallery and the guide, are on `NavDisplay`.
 
@@ -671,7 +670,7 @@ Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavControlle
 9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, done), arc-animation (M, experimental, done).
 10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work: the host's side done (D845), `NavDisplay`'s with nav3-ui.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
-12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last or never. It replaces `compose-navigation`.
+12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last: all done but what waits for movable content and shared elements.
 13. **After ui lookahead (and movable content) lands in its own area:**
     - lookahead in animations (S–M);
     - animate-bounds (L);

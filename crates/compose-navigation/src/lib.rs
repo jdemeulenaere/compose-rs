@@ -13,6 +13,10 @@ extern crate compose_runtime as compose;
 mod runtime;
 mod ui;
 
+pub use compose_runtime::{
+    DeepLinkArguments, DeepLinkDecoderError, DeepLinkElement, DeepLinkKey, DeepLinkPrimitive,
+    DeepLinkSerializer,
+};
 pub use runtime::*;
 pub use ui::*;
 
