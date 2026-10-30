@@ -108,8 +108,9 @@ pub use icon::{
     OutlinedIconButton, OutlinedIconToggleButton, icons,
 };
 pub use list_item::{
-    ClickableListItem, ListItem, ListItemColors, ListItemDefaults, ListItemElevation,
-    ListItemShapes, SelectableListItem, ToggleableListItem,
+    ClickableListItem, ClickableSegmentedListItem, ListItem, ListItemColors, ListItemDefaults,
+    ListItemElevation, ListItemShapes, SegmentedListItem, SelectableListItem,
+    SelectableSegmentedListItem, ToggleableListItem, ToggleableSegmentedListItem,
 };
 pub use motion::{LOCAL_MOTION_SCHEME, MotionScheme};
 pub use navigation::{

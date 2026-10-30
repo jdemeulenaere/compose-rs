@@ -3,7 +3,7 @@
 //! supporting text below, on a shape and color that follow its state (selected, pressed,
 //! focused, hovered, disabled). Compose's overloads are named apart, Rust having none (D181):
 //! `ListItem` (not interactive), `ClickableListItem`, `SelectableListItem` and
-//! `ToggleableListItem`.
+//! `ToggleableListItem`, and the `SegmentedListItem`s likewise.
 
 use std::rc::Rc;
 
@@ -505,6 +505,162 @@ pub fn ToggleableListItem(
     #[default(None)] on_long_click: Option<impl Fn() + 'static>,
     #[default(crate::ListItemDefaults::shapes())] shapes: ListItemShapes,
     #[default(crate::ListItemDefaults::colors())] colors: ListItemColors,
+    #[default(crate::ListItemDefaults::elevation())] elevation: ListItemElevation,
+    #[default(crate::ListItemDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let slots =
+        Slots { leading_content, trailing_content, overline_content, supporting_content, content };
+    let on_click = compose_runtime::callback(move || on_checked_change(!checked));
+    interactive_list_item(
+        modifier,
+        slots,
+        vertical_alignment,
+        enabled,
+        checked,
+        ItemSemantics::Toggleable(checked),
+        Some(ItemClick { on_click, on_long_click, interaction_source }),
+        colors,
+        shapes,
+        elevation,
+        content_padding,
+    );
+}
+
+/// A segmented list's item, as Compose's `SegmentedListItem(shapes, …)`: not interactive, on
+/// `ListItemDefaults::segmented_colors()`, in `shapes` for its place in the list (see
+/// [`ListItemDefaults::segmented_shapes`]); `ListItemDefaults::SEGMENTED_GAP` goes between items.
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn SegmentedListItem(
+    shapes: ListItemShapes,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] leading_content: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_content: Option<impl Fn() + 'static>,
+    #[default(None)] overline_content: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_content: Option<impl Fn() + 'static>,
+    #[default(None)] vertical_alignment: Option<VerticalAlignment>,
+    #[default(crate::ListItemDefaults::segmented_colors())] colors: ListItemColors,
+    #[default(crate::ListItemDefaults::elevation())] elevation: ListItemElevation,
+    #[default(crate::ListItemDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    content: impl Fn() + 'static,
+) {
+    let slots =
+        Slots { leading_content, trailing_content, overline_content, supporting_content, content };
+    interactive_list_item(
+        modifier,
+        slots,
+        vertical_alignment,
+        enabled,
+        false,
+        ItemSemantics::None,
+        None,
+        colors,
+        shapes,
+        elevation,
+        content_padding,
+    );
+}
+
+/// A clickable segmented item, as Compose's `SegmentedListItem(onClick, shapes, …)`: see
+/// [`ClickableListItem`].
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn ClickableSegmentedListItem(
+    on_click: impl Fn() + 'static,
+    shapes: ListItemShapes,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] leading_content: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_content: Option<impl Fn() + 'static>,
+    #[default(None)] overline_content: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_content: Option<impl Fn() + 'static>,
+    #[default(None)] vertical_alignment: Option<VerticalAlignment>,
+    #[default(None)] on_long_click: Option<impl Fn() + 'static>,
+    #[default(crate::ListItemDefaults::segmented_colors())] colors: ListItemColors,
+    #[default(crate::ListItemDefaults::elevation())] elevation: ListItemElevation,
+    #[default(crate::ListItemDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let slots =
+        Slots { leading_content, trailing_content, overline_content, supporting_content, content };
+    interactive_list_item(
+        modifier,
+        slots,
+        vertical_alignment,
+        enabled,
+        false,
+        ItemSemantics::None,
+        Some(ItemClick { on_click, on_long_click, interaction_source }),
+        colors,
+        shapes,
+        elevation,
+        content_padding,
+    );
+}
+
+/// A selectable segmented item, as Compose's `SegmentedListItem(selected, onClick, shapes, …)`: see
+/// [`SelectableListItem`].
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn SelectableSegmentedListItem(
+    selected: bool,
+    on_click: impl Fn() + 'static,
+    shapes: ListItemShapes,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] leading_content: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_content: Option<impl Fn() + 'static>,
+    #[default(None)] overline_content: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_content: Option<impl Fn() + 'static>,
+    #[default(None)] vertical_alignment: Option<VerticalAlignment>,
+    #[default(None)] on_long_click: Option<impl Fn() + 'static>,
+    #[default(crate::ListItemDefaults::segmented_colors())] colors: ListItemColors,
+    #[default(crate::ListItemDefaults::elevation())] elevation: ListItemElevation,
+    #[default(crate::ListItemDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let slots =
+        Slots { leading_content, trailing_content, overline_content, supporting_content, content };
+    interactive_list_item(
+        modifier,
+        slots,
+        vertical_alignment,
+        enabled,
+        selected,
+        ItemSemantics::Selectable(selected),
+        Some(ItemClick { on_click, on_long_click, interaction_source }),
+        colors,
+        shapes,
+        elevation,
+        content_padding,
+    );
+}
+
+/// A toggleable segmented item, as Compose's `SegmentedListItem(checked, onCheckedChange, shapes,
+/// …)`: see [`ToggleableListItem`].
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub fn ToggleableSegmentedListItem(
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    shapes: ListItemShapes,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] leading_content: Option<impl Fn() + 'static>,
+    #[default(None)] trailing_content: Option<impl Fn() + 'static>,
+    #[default(None)] overline_content: Option<impl Fn() + 'static>,
+    #[default(None)] supporting_content: Option<impl Fn() + 'static>,
+    #[default(None)] vertical_alignment: Option<VerticalAlignment>,
+    #[default(None)] on_long_click: Option<impl Fn() + 'static>,
+    #[default(crate::ListItemDefaults::segmented_colors())] colors: ListItemColors,
     #[default(crate::ListItemDefaults::elevation())] elevation: ListItemElevation,
     #[default(crate::ListItemDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,

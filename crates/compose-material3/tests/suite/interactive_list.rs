@@ -1,8 +1,8 @@
 //! Compose's `InteractiveListTest.kt`, adapted: the tip's `ListItem` overloads (here
 //! `ListItem`, `ClickableListItem`, `SelectableListItem`, `ToggleableListItem`): sizes,
 //! the parts' positions under each vertical alignment (left to right and right to left),
-//! semantics and long clicks, the default content padding. `SegmentedListItem` and the
-//! precision-pointer padding aren't in compose-rs yet.
+//! semantics and long clicks, the default content padding, and the `SegmentedListItem`s. The
+//! precision-pointer padding isn't in compose-rs yet.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -366,4 +366,247 @@ fn a_selected_item_takes_the_selected_colors_and_a_disabled_one_says_so() {
             .config
             .contains(&compose_ui::SemanticsProperties::DISABLED)
     );
+}
+
+fn one_of_one() -> ListItemShapes {
+    ListItemDefaults::segmented_shapes(0, 1, ListItemDefaults::shapes())
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, segmentedListItem_oneLine_size
+#[test]
+fn a_one_line_segmented_item_is_56_dp_high() {
+    let size = item_size(|| {
+        ClickableSegmentedListItem!(|| {}, one_of_one(), {
+            Text!("Content");
+        });
+    });
+    assert_eq!(size, (ROOT_WIDTH, 56.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, segmentedListItem_twoLine_size
+#[test]
+fn a_two_line_segmented_item_is_72_dp_high() {
+    let size = item_size(|| {
+        ClickableSegmentedListItem!(
+            || {},
+            one_of_one(),
+            supporting_content = Some(|| Text!("Supporting")),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 72.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, segmentedListItem_threeLineOverlineAndSupporting_size
+#[test]
+fn a_segmented_item_with_an_overline_and_supporting_text_is_88_dp_high() {
+    let size = item_size(|| {
+        ClickableSegmentedListItem!(
+            || {},
+            one_of_one(),
+            overline_content = Some(|| Text!("Overline")),
+            supporting_content = Some(|| Text!("Supporting")),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 88.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListTest.kt, segmentedListItem_threeLineSupportingMultiline_size
+#[test]
+fn a_segmented_item_with_two_lines_of_supporting_text_is_88_dp_high() {
+    let size = item_size(|| {
+        ClickableSegmentedListItem!(
+            || {},
+            one_of_one(),
+            supporting_content = Some(|| Text!("Supporting\nLine 2")),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 88.0));
+}
+
+/// The round rectangles drawn, in order: their colors and top and bottom radii.
+fn backgrounds(ui: &mut ComposeTestRule) -> Vec<(compose_ui::Color, f32, f32)> {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawRoundRect(_, radii, paint) => {
+                Some((paint.color, radii[0], radii[2]))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListScreenshotTest.kt, nonInteractiveSegmentedListItems
+#[test]
+fn a_segmented_lists_ends_are_large_and_its_gap_between() {
+    let count = 3;
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Column!(
+                vertical_arrangement = Arrangement::spaced_by(ListItemDefaults::SEGMENTED_GAP),
+                {
+                    for index in 0..count {
+                        key(index, || {
+                            SegmentedListItem!(
+                                ListItemDefaults::segmented_shapes(
+                                    index,
+                                    count,
+                                    ListItemDefaults::shapes(),
+                                ),
+                                modifier = Modifier.test_tag(format!("item{index}")),
+                                {
+                                    Text!("Content");
+                                }
+                            );
+                        });
+                    }
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(bounds(&mut ui, "item1").top - bounds(&mut ui, "item0").bottom, 2.0);
+    let surface = light_color_scheme().surface;
+    // Large is 16 dp, extra small 4: the first's top, the last's bottom.
+    assert_eq!(
+        backgrounds(&mut ui),
+        vec![(surface, 16.0, 4.0), (surface, 4.0, 4.0), (surface, 4.0, 16.0)]
+    );
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListScreenshotTest.kt, segmentedListItem_secondSelected
+#[test]
+fn a_selected_segmented_item_is_in_the_selected_colors_and_shape() {
+    let clicks = Rc::new(Cell::new(0));
+    let on_click = clicks.clone();
+    let count = 3;
+    let mut ui = compose_test(move || {
+        let on_click = on_click.clone();
+        MaterialTheme!({
+            let on_click = on_click.clone();
+            Column!({
+                for index in 0..count {
+                    let on_click = on_click.clone();
+                    key(index, move || {
+                        let on_click = on_click.clone();
+                        SelectableSegmentedListItem!(
+                            index == 1,
+                            move || on_click.set(on_click.get() + 1),
+                            ListItemDefaults::segmented_shapes(
+                                index,
+                                count,
+                                ListItemDefaults::shapes(),
+                            ),
+                            modifier = Modifier.test_tag(format!("item{index}")),
+                            {
+                                Text!("Content");
+                            }
+                        );
+                    });
+                }
+            });
+        });
+    });
+    ui.wait_for_idle();
+    let scheme = light_color_scheme();
+    let drawn = backgrounds(&mut ui);
+    assert_eq!(drawn[1], (scheme.secondary_container, 16.0, 16.0), "{drawn:?}");
+    assert_eq!(drawn[0].0, scheme.surface);
+    let node = ui.on_node_with_tag("item1").fetch_semantics_snapshot();
+    assert_eq!(node.config.get(&compose_ui::SemanticsProperties::SELECTED), Some(&true));
+    ui.on_node_with_tag("item0").perform_click();
+    ui.wait_for_idle();
+    assert_eq!(clicks.get(), 1);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/InteractiveListScreenshotTest.kt, segmentedListItem_allChecked
+#[test]
+fn a_toggled_segmented_item_is_a_checkbox_that_tells_the_opposite() {
+    let checked = Rc::new(Cell::new(None));
+    let told = checked.clone();
+    let mut ui = compose_test(move || {
+        let told = told.clone();
+        MaterialTheme!({
+            let told = told.clone();
+            ToggleableSegmentedListItem!(
+                true,
+                move |now: bool| told.set(Some(now)),
+                one_of_one(),
+                modifier = Modifier.test_tag("item"),
+                {
+                    Text!("Content");
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let scheme = light_color_scheme();
+    assert_eq!(backgrounds(&mut ui)[0], (scheme.secondary_container, 16.0, 16.0));
+    let node = ui.on_node_with_tag("item").fetch_semantics_snapshot();
+    assert_eq!(
+        node.config.get(&compose_ui::SemanticsProperties::TOGGLEABLE_STATE),
+        Some(&ToggleableState::On)
+    );
+    ui.on_node_with_tag("item").perform_click();
+    ui.wait_for_idle();
+    assert_eq!(checked.get(), Some(false));
+}
+
+/// Not interactive, disabled says so, and a click finds nothing.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, SegmentedListItem
+#[test]
+fn a_disabled_segmented_item_says_so() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            SegmentedListItem!(
+                one_of_one(),
+                modifier = Modifier.test_tag("item"),
+                enabled = false,
+                {
+                    Text!("Content");
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let node = ui.on_node_with_tag("item").fetch_semantics_snapshot();
+    assert!(node.config.contains(&compose_ui::SemanticsProperties::DISABLED));
+    assert!(!node.config.contains(&compose_ui::SemanticsActions::ON_CLICK));
+}
+
+/// A long click on a clickable segmented item.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, SegmentedListItem
+#[test]
+fn a_segmented_item_takes_long_clicks() {
+    let long = Rc::new(Cell::new(0));
+    let on_long = long.clone();
+    let mut ui = compose_test(move || {
+        let on_long = on_long.clone();
+        MaterialTheme!({
+            let on_long = on_long.clone();
+            ClickableSegmentedListItem!(
+                || {},
+                one_of_one(),
+                modifier = Modifier.test_tag("item"),
+                on_long_click = Some(move || on_long.set(on_long.get() + 1)),
+                {
+                    Text!("Content");
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    long_click(&mut ui, "item");
+    assert_eq!(long.get(), 1);
 }
