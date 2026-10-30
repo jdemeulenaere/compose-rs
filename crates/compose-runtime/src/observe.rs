@@ -101,21 +101,6 @@ pub struct ReadObserver {
     _not_send: PhantomData<*const ()>,
 }
 
-/// Runs `f` without recording what it reads for the observation under way, as Compose's
-/// `Snapshot.withoutReadObservation`.
-pub fn without_read_observation<R>(f: impl FnOnce() -> R) -> R {
-    let previous = with_runtime(|runtime| runtime.observing.take());
-    struct Restore(Option<Observing>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            let previous = self.0;
-            let _ = try_with_runtime(|runtime| runtime.observing = previous);
-        }
-    }
-    let _restore = Restore(previous);
-    f()
-}
-
 impl ReadObserver {
     /// An observer calling `notify` (once until drained) when a write invalidates a read it
     /// observed.

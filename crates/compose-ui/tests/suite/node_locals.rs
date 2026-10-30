@@ -354,6 +354,83 @@ fn with_density(density: MutableState<Density>, content: impl Fn() + 'static) ->
     })
 }
 
+/// A provider group's id comes back for another provider: what the last node resolved under the
+/// first isn't the second's.
+#[test]
+fn a_new_provider_in_a_recycled_group_gives_its_own_density() {
+    let which = mutable_state_of(0);
+    let seen = Rc::new(Cell::new(Density::default()));
+    let (w, s) = (which.handle(), seen.clone());
+    let policy = measure_policy(move |scope, _, _| {
+        s.set(scope.density());
+        scope.layout(0, 0)
+    });
+    let first = Density { density: 2.0, font_scale: 1.0 };
+    let second = Density { density: 3.0, font_scale: 1.0 };
+    let mut host = host(move || {
+        let p = policy.clone();
+        match w.get() {
+            0 => CompositionLocalProvider(LOCAL_DENSITY.provides(first), move || {
+                Layout(Modifier, p.clone(), callback(|| {}));
+            }),
+            1 => {}
+            _ => CompositionLocalProvider(LOCAL_DENSITY.provides(second), move || {
+                Layout(Modifier, p.clone(), callback(|| {}));
+            }),
+        }
+    });
+    assert_eq!(seen.get(), first);
+    which.set(1);
+    host.frame();
+    which.set(2);
+    host.frame();
+    assert_eq!(seen.get(), second, "by way of nothing");
+    which.set(0);
+    host.frame();
+    assert_eq!(seen.get(), first, "at once");
+}
+
+/// What a node resolved is shared with the next only where a provider between them gives none
+/// of it.
+#[test]
+fn nodes_under_providers_next_to_each_other_get_their_own_density() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let policy = measure_policy(move |scope, _, _| {
+        s.borrow_mut().push(scope.density().density);
+        scope.layout(0, 0)
+    });
+    let density = |density| Density { density, font_scale: 1.0 };
+    let _host = host(move || {
+        let leaf = {
+            let policy = policy.clone();
+            Rc::new(move || Layout(Modifier, policy.clone(), callback(|| {})))
+        };
+        let around = density(2.0);
+        let (l1, l2, l3, l4, l5, l6) =
+            (leaf.clone(), leaf.clone(), leaf.clone(), leaf.clone(), leaf.clone(), leaf.clone());
+        CompositionLocalProvider(LOCAL_DENSITY.provides(around), move || {
+            // Under it; next to it, giving something else; next to that, giving a density.
+            (l1)();
+            let l2 = l2.clone();
+            CompositionLocalProvider(LOCAL_INT.provides(1), move || (l2)());
+            let l3 = l3.clone();
+            CompositionLocalProvider(LOCAL_DENSITY.provides(density(3.0)), move || (l3)());
+            // Next to one that gave a density, giving something else; then back around them.
+            let l4 = l4.clone();
+            CompositionLocalProvider(LOCAL_INT.provides(2), move || (l4)());
+            (l5)();
+            // Inside one giving something else, one giving a density.
+            let l6 = l6.clone();
+            CompositionLocalProvider(LOCAL_INT.provides(3), move || {
+                let l6 = l6.clone();
+                CompositionLocalProvider(LOCAL_DENSITY.provides(density(4.0)), move || (l6)());
+            });
+        });
+    });
+    assert_eq!(*seen.borrow(), [2.0, 2.0, 3.0, 2.0, 2.0, 4.0]);
+}
+
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutNodeDensityTest.kt, compositionLocalDensityChangeTriggersRemeasure
 #[test]
 fn a_new_local_density_measures_with_it() {

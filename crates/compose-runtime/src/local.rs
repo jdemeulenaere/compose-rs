@@ -264,7 +264,8 @@ impl<T: 'static> CompositionLocal<T> {
 
     /// Its identity: its name and its type (an address isn't one: a `const` has a new one at
     /// each use).
-    fn id(&self) -> u64 {
+    #[doc(hidden)]
+    pub fn id(&self) -> u64 {
         key_of(self.name) ^ key_of(std::any::type_name::<T>()).rotate_left(29)
     }
 
@@ -377,20 +378,24 @@ fn visible_entries() -> Vec<Entry> {
         let composition = runtime.check_composing();
         let table = &runtime.compositions.data(composition).table;
         let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-        let mut group = table.provider_at_or_above(composing);
-        let mut visible: Vec<Entry> = Vec::new();
-        while group != NONE {
-            if let Some(entries) = entries_of(table, group) {
-                for entry in entries.entries.borrow().iter() {
-                    if !visible.iter().any(|seen| seen.local == entry.local) {
-                        visible.push(Entry { owned: false, given: false, ..entry.clone() });
-                    }
+        entries_visible_from(table, table.provider_at_or_above(composing))
+    })
+}
+
+/// What `group`, a provider, and those above it provide, nearest first, a local once.
+fn entries_visible_from(table: &crate::slot_table::SlotTable, mut group: u32) -> Vec<Entry> {
+    let mut visible: Vec<Entry> = Vec::new();
+    while group != NONE {
+        if let Some(entries) = entries_of(table, group) {
+            for entry in entries.entries.borrow().iter() {
+                if !visible.iter().any(|seen| seen.local == entry.local) {
+                    visible.push(Entry { owned: false, given: false, ..entry.clone() });
                 }
             }
-            group = table[group].enclosing_provider;
         }
-        visible
-    })
+        group = table[group].enclosing_provider;
+    }
+    visible
 }
 
 /// Whether a provider above the provider group starting now provides `local`.
@@ -471,7 +476,8 @@ pub fn current_composition_local_map() -> CompositionLocalMap {
 /// node, so it's the nearest provider group and nothing else: no map is built, and
 /// [`get`](CompositionLocalAnchor::get) walks the providers when asked, outside composition too.
 /// Two anchors are equal while what they read can only have changed through a dynamic local's
-/// state: a provider's static value or its set of locals changing moves the epoch.
+/// state: a provider's static value or its set of locals changing moves the epoch, as a provider
+/// group's id being used again does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CompositionLocalAnchor {
     composition: u32,
@@ -503,6 +509,60 @@ impl CompositionLocalAnchor {
                 .read(&scope),
             None => local.default_value(&scope),
         }
+    }
+
+    /// What's provided here, as a map: for a node reading locals often, each read then a look
+    /// through what's provided rather than a walk up the providers.
+    pub fn map(&self) -> CompositionLocalMap {
+        if self.provider == NONE {
+            return CompositionLocalMap::empty();
+        }
+        let entries = with_runtime(|runtime| {
+            let data = runtime.compositions.try_data(self.composition);
+            data.map_or_else(Vec::new, |data| entries_visible_from(&data.table, self.provider))
+        });
+        CompositionLocalMap { entries: entries.into() }
+    }
+
+    /// Whether a static `local` reads here what it reads at `other`, known with a look at two
+    /// provider groups: `other`'s nearest, or the one around it, or a sibling of it, none of those
+    /// that differ providing it. Saves the walk up to the providers of a layout node's density
+    /// when a list's item is a provider of its own (`false` only says it isn't known).
+    #[doc(hidden)]
+    pub fn reads_same_statics_as(&self, other: &CompositionLocalAnchor, locals: &[u64]) -> bool {
+        if self.composition != other.composition || self.epoch != other.epoch {
+            return false;
+        }
+        if self.provider == other.provider {
+            return true;
+        }
+        if self.provider == NONE || other.provider == NONE {
+            return false;
+        }
+        with_runtime(|runtime| {
+            let Some(data) = runtime.compositions.try_data(self.composition) else { return false };
+            let table = &data.table;
+            let (mine, theirs) = (self.provider, other.provider);
+            // Gone, it provides nothing any more: what it gave `other` isn't known.
+            if table[theirs].kind == crate::slot_table::GroupKind::Free {
+                return false;
+            }
+            let (around_mine, around_theirs) =
+                (table[mine].enclosing_provider, table[theirs].enclosing_provider);
+            let provides = |group: u32| {
+                entries_of(table, group).is_some_and(|entries| {
+                    let entries = entries.entries.borrow();
+                    entries.iter().any(|entry| locals.contains(&entry.local))
+                })
+            };
+            if around_mine == theirs {
+                !provides(mine)
+            } else if around_theirs == mine {
+                !provides(theirs)
+            } else {
+                around_mine == around_theirs && !provides(mine) && !provides(theirs)
+            }
+        })
     }
 
     fn find(&self, local: u64) -> Option<Rc<dyn Any>> {
@@ -539,7 +599,7 @@ pub fn current_composition_local_anchor() -> CompositionLocalAnchor {
         CompositionLocalAnchor {
             composition,
             provider: table.provider_at_or_above(composing),
-            epoch: runtime.providers_epoch,
+            epoch: runtime.providers_epoch.wrapping_add(table.provider_reuses),
         }
     })
 }

@@ -350,8 +350,10 @@ impl UiTree {
         false
     }
 
-    /// Tells the nodes of the layers placed, each once, the outer ones first as a placement
-    /// goes: those whose node is placed, a layer measured but not placed being told when it is.
+    /// Tells the nodes of the layers placed and of those inside them in their layout nodes
+    /// (`LayoutModifierNodeCoordinator`'s placing places what it wraps), each once, the outer
+    /// ones first as a placement goes: those whose node is placed, a layer measured but not
+    /// placed being told when it is.
     fn notify_placed(&mut self) {
         let mut placed: SmallVec<[(u32, u64, u32, NodeId); 4]> = SmallVec::new();
         for (node, layer) in mem::take(&mut self.placed_layers) {
@@ -366,7 +368,7 @@ impl UiTree {
             placed.push((depth, order, layer, node));
         }
         placed.sort_unstable_by_key(|&(depth, order, layer, _)| (depth, order, layer));
-        placed.dedup();
+        placed.dedup_by_key(|&mut (.., node)| node);
         let waited = mem::replace(&mut self.delegates_wait, true);
         for (_, _, layer, node) in placed {
             let layer = layer as usize;
@@ -376,7 +378,8 @@ impl UiTree {
             {
                 continue;
             }
-            for index in self.node(node).entries_of_layer(layer) {
+            let first = self.node(node).entries_of_layer(layer).start;
+            for index in first..self.node(node).chain.len() {
                 let Some(entry) = self.node(node).chain.get(index) else { break };
                 if !entry.kinds.any(NodeKinds::ON_PLACED)
                     || entry.state & entry_state::ATTACHED == 0
@@ -384,6 +387,7 @@ impl UiTree {
                     continue;
                 }
                 let own = entry.own;
+                let layer = self.node(node).layer_of(index);
                 let coordinates = self.coordinates(node, layer, index);
                 self.with_entry(node, index, |modifier_node, context| {
                     let _ = dispatch_with_context(

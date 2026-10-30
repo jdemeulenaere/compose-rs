@@ -591,7 +591,7 @@ impl ClickableOptions {
             role: self.role,
             on_click_label: self.on_click_label.map(std::rc::Rc::new),
             use_local_indication: self.indication.is_local(),
-            // `LOCAL`'s is set where the node is (`resolve_local_indications`, D1056).
+            // `LOCAL`'s is read where the node is (`read_local_indication`, D1184).
             indication: if self.indication.is_local() { None } else { self.indication.resolve() },
             interaction_source: self.interaction_source,
             action,

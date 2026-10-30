@@ -559,14 +559,6 @@ impl UiTree {
         }
     }
 
-    /// What was resolved at `anchor`, if the last layout node composed resolved it.
-    pub(crate) fn resolved_locals_at(
-        &self,
-        anchor: compose_runtime::CompositionLocalAnchor,
-    ) -> Option<ResolvedLocals> {
-        self.resolved_locals.filter(|resolved| resolved.anchor == anchor)
-    }
-
     /// `node` is composed where `resolved` says, as `LayoutNode.compositionLocalMap`'s setter: a
     /// new place, or a provider's new values, gives it its density, layout direction and view
     /// configuration, and invalidates its consumers (`is_composition_local_consumer`) by their
@@ -1452,6 +1444,12 @@ impl UiTree {
     /// reset, detached and attached again (`ModifierNode::on_reset`, `on_detach`, `on_attach`)
     /// after the pass (D1153).
     fn reset_modifier_state(&mut self, node: NodeId) {
+        let value = self.node_mut(node);
+        // New content where it's placed, its layer measured or not: as a node that was unplaced
+        // (`markSubtreeAsPlaced`), though `placed` here is only its parent's last measurement.
+        if value.kinds.any(NodeKinds::ON_PLACED) {
+            self.placed_layers.push((node, 0));
+        }
         let value = self.node_mut(node);
         if let Some(retained) = &mut value.retained {
             retained.dirty = true;

@@ -586,19 +586,38 @@ pub fn emit_layout_node(
         crate::tree::LayoutNode::new(measure_policy.clone())
     });
     // Where its modifier nodes read locals (`compositionLocalMap`). Nothing's read unless it's
-    // another place from the last node's: density and the rest are static locals, so this is
-    // the same anchor while they are the same.
+    // another place from where the node was (a recomposition's nodes are where they were), and
+    // from the last node's, or from a provider next to it that doesn't give them: density and
+    // the rest are static locals, so this is the same anchor while they are the same.
     let anchor = compose_runtime::current_composition_local_anchor();
-    let cached = composer.with_applier(|tree: &mut UiTree| tree.resolved_locals_at(anchor));
-    let resolved = cached.unwrap_or_else(|| crate::tree::ResolvedLocals {
-        anchor,
-        density: anchor.get(&crate::host::LOCAL_DENSITY),
-        layout_direction: anchor.get(&crate::alignment::LOCAL_LAYOUT_DIRECTION),
-        view_configuration: anchor.get(&crate::view_configuration::LOCAL_VIEW_CONFIGURATION),
+    let cached = composer.with_applier(|tree: &mut UiTree| {
+        let id = tree.id_of(node);
+        (tree.node(id).locals != anchor).then_some(tree.resolved_locals)
+    });
+    let resolved = cached.map(|last| {
+        let locals = [
+            crate::host::LOCAL_DENSITY.id(),
+            crate::alignment::LOCAL_LAYOUT_DIRECTION.id(),
+            crate::view_configuration::LOCAL_VIEW_CONFIGURATION.id(),
+        ];
+        match last {
+            Some(last) if anchor.reads_same_statics_as(&last.anchor, &locals) => {
+                crate::tree::ResolvedLocals { anchor, ..last }
+            }
+            _ => crate::tree::ResolvedLocals {
+                anchor,
+                density: anchor.get(&crate::host::LOCAL_DENSITY),
+                layout_direction: anchor.get(&crate::alignment::LOCAL_LAYOUT_DIRECTION),
+                view_configuration: anchor
+                    .get(&crate::view_configuration::LOCAL_VIEW_CONFIGURATION),
+            },
+        }
     });
     composer.with_applier(|tree: &mut UiTree| {
         let id = tree.id_of(node);
-        tree.set_locals(id, resolved);
+        if let Some(resolved) = resolved {
+            tree.set_locals(id, resolved);
+        }
         tree.set_measure_policy(id, measure_policy);
         tree.set_modifier(id, modifier);
     });

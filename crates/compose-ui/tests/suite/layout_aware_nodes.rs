@@ -449,6 +449,35 @@ fn a_node_before_a_layout_modifier_is_told_of_its_layer() {
     assert_eq!(after.placed(), [Offset::new(10.0, 10.0)]);
 }
 
+#[test]
+fn a_node_only_placed_again_tells_the_layers_inside_it() {
+    let at = mutable_state_of(1);
+    let (outer, inner) = (Told::default(), Told::default());
+    let (a, o, i) = (at.handle(), outer.clone(), inner.clone());
+    let policy = measure_policy(move |scope, measurables, constraints| {
+        let placeable = scope.measure(measurables[0], constraints);
+        scope.place(&placeable, a.get(), 0);
+        scope.layout(placeable.width, placeable.height)
+    });
+    let mut host = host(move || {
+        let (o, i) = (o.clone(), i.clone());
+        Layout(
+            Modifier,
+            policy.clone(),
+            callback(move || Leaf(aware(&o).padding(px(10)).then(aware(&i)).size(px(5)))),
+        );
+    });
+    assert_eq!(outer.placed(), [Offset::new(1.0, 0.0)]);
+    assert_eq!(inner.placed(), [Offset::new(11.0, 10.0)]);
+    let remeasured = (outer.remeasured().len(), inner.remeasured().len());
+    at.set(2);
+    host.frame();
+    assert_eq!(outer.placed(), [Offset::new(2.0, 0.0)]);
+    assert_eq!(inner.placed(), [Offset::new(12.0, 10.0)]);
+    assert_eq!(remeasured, (1, 1));
+    assert!(outer.remeasured().is_empty() && inner.remeasured().is_empty());
+}
+
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacedChildTest.kt, onPlacedIsNotCalledOnNotPlacedChildUsedByAlignmentLinesCalculation
 #[test]
 fn a_child_measured_but_not_placed_is_told_nothing() {

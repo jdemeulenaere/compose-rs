@@ -143,11 +143,14 @@ impl Group {
 pub(crate) struct SlotTable {
     pub groups: Vec<Group>,
     free: Vec<u32>,
+    /// How many provider groups' ids have been used again: what a `CompositionLocalAnchor` kept
+    /// no longer means that provider.
+    pub provider_reuses: u32,
 }
 
 impl SlotTable {
     pub fn new() -> SlotTable {
-        let mut table = SlotTable { groups: Vec::new(), free: Vec::new() };
+        let mut table = SlotTable { groups: Vec::new(), free: Vec::new(), provider_reuses: 0 };
         let sentinel = table.alloc(GroupKind::Root, 0, 0, NONE);
         debug_assert_eq!(sentinel, SENTINEL);
         table
@@ -158,6 +161,9 @@ impl SlotTable {
         if let Some(index) = self.free.pop() {
             let group = &mut self.groups[index as usize];
             debug_assert!(group.kind == GroupKind::Free && group.slots.is_empty());
+            if group.is_provider() {
+                self.provider_reuses = self.provider_reuses.wrapping_add(1);
+            }
             group.key = key;
             group.data_key = data_key;
             group.kind = kind;

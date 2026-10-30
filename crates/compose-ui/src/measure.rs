@@ -509,7 +509,7 @@ impl UiTree {
             let own = entry.own;
             let waited = mem::replace(&mut self.delegates_wait, true);
             self.with_entry(node, index, |modifier_node, context| {
-                compose_runtime::platform::without_read_observation(|| {
+                compose_runtime::snapshots::Snapshot::without_read_observation(|| {
                     let _ = dispatch_with_context(
                         modifier_node,
                         own,
