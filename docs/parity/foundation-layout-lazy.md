@@ -622,7 +622,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 - **Gestures.**
   - `performTouchInput { down/moveBy/up }` has no DSL. Build `PointerEvent::press/moved/release(…).at_time(ns).with_pointer(PointerId, PointerType::Touch)` and send them with `host().send_pointer` (see `fling.rs::swipe_up`).
   - Compose's `swipeUp()`/`swipeWithVelocity` interpolate moves over a duration: write the same number of samples, at the same times, or the velocity differs.
-  - `performMouseInput { scroll(d) }` is `PointerEvent::scroll(position, Offset)`. Check the sign and scale against compose-rs's wheel handling (`scroll.rs`, `lazy.rs`): Compose Android multiplies by the view's scroll factor.
+  - `performMouseInput { scroll(d) }` is `PointerEvent::scroll(position, Offset)`. compose-test's are pixels (`WheelStep::Pixels`, the default): the units a port's `scroll(d)` means times the factor it asserts (D1450).
 - **Touch slop.** Compose tests read `LocalViewConfiguration.current.touchSlop`. compose-rs's is 8 dp (`PointerInputScope::touch_slop`, `review_lazy2.rs::the_touch_slop_is_in_dp`): add the slop to drag distances as Compose's tests do.
 - **Keys.** `performKeyInput { pressKey(Key.PageDown) }` is `press_key(Key::PageDown)` or `perform_key_press`.
 - **Accessibility.** `performSemanticsAction(SemanticsActions.ScrollBy)` is `perform_semantics_action_with(&SemanticsActions::SCROLL_BY, |scroll| { scroll(x, y); })`. Android's `AccessibilityNodeInfo` checks go in `compose-android/tests` (see `accessibility_scroll.rs`).
@@ -647,7 +647,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 
 ### compose-rs behaviour that likely differs from Compose
 
-- **The wheel's step, per platform.** A turn's size comes from each host, not from Compose's `ScrollConfig`: the desktop's line is a flat 40 px, where Compose Desktop has 10 dp on macOS, the height / 20 on Windows and sqrt(height) on Linux, each times `scrollAmount`; Android's is a fixed 64 dp, not `scaledVerticalScrollFactor`. To do with the remaining port rows.
+- **A focus search's jump.** Tab past rows it has to lay out lands on the row found in one frame (D485), where Compose's bring-into-view animates to it over frames. So the window's bound before the scroll can't apply there: a search's end reads the bounds as they are (`Prefetch::search_ended`, D896), which would hold 56 items in `review_d475.rs`'s Tab past 50 rows otherwise. For the focus workstream to close, by animating the bring-into-view; `search_ended` goes with it.
 - **`ScrollState::scroll_to`** clamps at once, as Compose's (D853), and is `async`; a jump outside a task is `dispatch_raw_delta`. The lazy states' synchronous jump is `request_scroll_to_item`, `scroll_to_item` being `async`. Tests port `runBlocking { state.scrollTo(…) }` with `scroll_support::run`.
 - **Velocity tracking** is Compose's `VelocityTracker1D` (Lsq2, 20 samples, the 40 ms cut-off; D862) since this workstream. Left: tip's draggable tracking per pointer and counting the first still events (Tip differences 7).
 

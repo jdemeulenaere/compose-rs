@@ -3301,7 +3301,7 @@ impl PointerInputModifierNode for LazyScrollNode {
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
-        _bounds: IntSize,
+        bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
         if !self.enabled {
@@ -3324,6 +3324,7 @@ impl PointerInputModifierNode for LazyScrollNode {
         self.drag.on_pointer_event(
             event,
             pass,
+            bounds,
             self.vertical,
             reverse,
             context,

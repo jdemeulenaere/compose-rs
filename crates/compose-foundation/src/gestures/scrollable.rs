@@ -777,7 +777,7 @@ impl PointerInputModifierNode for ScrollableNode {
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
-        _bounds: IntSize,
+        bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
         if !self.enabled {
@@ -795,6 +795,7 @@ impl PointerInputModifierNode for ScrollableNode {
         self.drag.on_pointer_event(
             event,
             pass,
+            bounds,
             self.vertical,
             // A drag's deltas are the pointer's (a drag down gives positive ones), negated if
             // `reverse_direction`, as Compose's `scrollable`; the scroller's are the content's.

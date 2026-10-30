@@ -185,7 +185,7 @@ pub use image::{ImageBitmap, decode_image_bytes, remember_image_resource};
 pub use indication::{Indication, IndicationNodeFactory, LOCAL_INDICATION};
 pub use input::{
     EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent, PointerEventPass,
-    PointerEventType, PointerIcon, PointerId, PointerType,
+    PointerEventType, PointerIcon, PointerId, PointerType, WheelStep,
 };
 pub use interaction::{
     DragInteraction, DragStart, Focus, FocusInteraction, HoverEnter, HoverInteraction, Interaction,

@@ -4,7 +4,7 @@
 use compose_runtime::Callback;
 
 use crate::tree::NodeId;
-use crate::unit::Offset;
+use crate::unit::{IntSize, Offset};
 
 /// A pointer: the mouse, or a finger.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -53,6 +53,34 @@ impl compose_runtime::ComposeArg for PointerIcon {
     }
 }
 
+/// What a unit of a `Scroll` event's delta is worth in the scrollable it reaches, as Compose's
+/// `ScrollConfig`: a host's wheel has its platform's step (D1450).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum WheelStep {
+    /// The delta is in pixels: a trackpad's, or a platform that scaled it (Android's view).
+    #[default]
+    Pixels,
+    /// A number of dp a unit: Compose Desktop's macOS, 10 dp.
+    Dp(f32),
+    /// The scrollable's height over 20, times the system's lines per notch: its Windows.
+    HeightOverTwenty { scroll_amount: f32 },
+    /// The square root of the scrollable's height, times the system's lines per notch: its Linux.
+    SquareRootOfHeight { scroll_amount: f32 },
+}
+
+impl WheelStep {
+    /// Pixels a unit, for a scrollable of size `bounds`.
+    pub fn pixels_per_unit(self, density: f32, bounds: IntSize) -> f32 {
+        let height = bounds.height as f32;
+        match self {
+            WheelStep::Pixels => 1.0,
+            WheelStep::Dp(dp) => dp * density,
+            WheelStep::HeightOverTwenty { scroll_amount } => height / 20.0 * scroll_amount,
+            WheelStep::SquareRootOfHeight { scroll_amount } => height.sqrt() * scroll_amount,
+        }
+    }
+}
+
 /// One pointer event, in the receiving node's coordinates, as Compose's `PointerEvent` with a
 /// single `PointerInputChange`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -64,8 +92,10 @@ pub struct PointerEvent {
     pub position: Offset,
     /// Whether the pointer is down after this event (a button held, a finger touching).
     pub pressed: bool,
-    /// The scroll amount of a `Scroll` event, in pixels.
+    /// The scroll amount of a `Scroll` event: pixels, or the wheel's own units as `wheel_step` says.
     pub scroll_delta: Offset,
+    /// What a unit of `scroll_delta` is worth in the scrollable it reaches (D1450).
+    pub wheel_step: WheelStep,
     /// A `Scroll` event from a high-resolution wheel or a trackpad, following the fingers: it
     /// applies at once, not animated, as Compose's `isPreciseWheelScroll`.
     pub precise_wheel: bool,
@@ -86,6 +116,7 @@ impl PointerEvent {
             position,
             pressed,
             scroll_delta: Offset::ZERO,
+            wheel_step: WheelStep::Pixels,
             precise_wheel: false,
             consumed: false,
             time_nanos: 0,
@@ -111,6 +142,18 @@ impl PointerEvent {
             scroll_delta: delta,
             ..PointerEvent::new(PointerEventType::Scroll, position, false)
         }
+    }
+
+    /// The same `Scroll` event, its delta in the units of `step`.
+    pub fn with_wheel_step(self, step: WheelStep) -> PointerEvent {
+        PointerEvent { wheel_step: step, ..self }
+    }
+
+    /// The pixels a `Scroll` event is worth to a scrollable of size `bounds`, as Compose's
+    /// `ScrollConfig.calculateMouseWheelScroll`.
+    pub fn wheel_pixels(&self, density: f32, bounds: IntSize) -> Offset {
+        let scale = self.wheel_step.pixels_per_unit(density, bounds);
+        Offset::new(self.scroll_delta.x * scale, self.scroll_delta.y * scale)
     }
 
     /// The same `Scroll` event from a high-resolution wheel or a trackpad, if `precise`.
@@ -390,5 +433,28 @@ impl EventContext<'_> {
     /// The layout node the handler belongs to.
     pub fn node(&self) -> NodeId {
         self.context.node
+    }
+}
+
+#[cfg(test)]
+mod wheel_step_tests {
+    use super::*;
+
+    #[test]
+    fn a_turns_pixels_scale_by_density_for_dp_and_by_height_otherwise() {
+        let bounds = IntSize::new(50, 400);
+        let event =
+            |step| PointerEvent::scroll(Offset::ZERO, Offset::new(1.0, -2.0)).with_wheel_step(step);
+        let pixels = |step| event(step).wheel_pixels(3.0, bounds);
+        assert_eq!(pixels(WheelStep::Pixels), Offset::new(1.0, -2.0));
+        assert_eq!(pixels(WheelStep::Dp(10.0)), Offset::new(30.0, -60.0));
+        assert_eq!(
+            pixels(WheelStep::HeightOverTwenty { scroll_amount: 3.0 }),
+            Offset::new(60.0, -120.0)
+        );
+        assert_eq!(
+            pixels(WheelStep::SquareRootOfHeight { scroll_amount: 2.0 }),
+            Offset::new(40.0, -80.0)
+        );
     }
 }
