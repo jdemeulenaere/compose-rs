@@ -81,8 +81,9 @@ pub trait ScrollableState {
 
     /// Runs `block` in place in a scroll of `priority` that ends with it (a wheel turn's, D879),
     /// with the state's scroll scope: `Some(whether it ran)`, or `None` where the state has no
-    /// such scroll (then a scroll held in a task polled at once runs it). compose-rs's states
-    /// have one.
+    /// such scroll (then a scroll in a task polled at once runs it). compose-rs's states have
+    /// one. Temporary: it goes with `MutatorMutex::mutate_now` when `MouseWheelScrollingLogic` is
+    /// ported, whose one task per gesture removes the cost per turn that justifies it.
     #[doc(hidden)]
     fn scroll_now(
         &self,
@@ -322,16 +323,7 @@ impl Drop for ScrollingFlag<'_> {
         if self.core.generation.get() != self.generation {
             return;
         }
-        let scrolling = self.core.scrolling.handle();
-        // A scroll's task cancelled while composing (its node left) clears the flag right
-        // after, as a write during composition isn't allowed (D15).
-        if compose_runtime::is_composing() {
-            CoroutineScope::new().launch(async move {
-                let _ = scrolling.try_set(false);
-            });
-        } else {
-            let _ = scrolling.try_set(false);
-        }
+        let _ = self.core.scrolling.try_set(false);
     }
 }
 
@@ -585,22 +577,6 @@ impl DragSession {
         self.shared.scope.borrow().clone()
     }
 
-    /// Runs `block` in a scroll of `priority` on `state` that ends with it: in place if the
-    /// state can (`ScrollableState::scroll_now`), else held in a session's task.
-    pub(crate) fn scroll_now(
-        state: &Rc<dyn ScrollableState>,
-        priority: MutatePriority,
-        block: &mut dyn FnMut(&ScrollScope),
-    ) -> bool {
-        if let Some(ran) = state.scroll_now(priority, block) {
-            return ran;
-        }
-        let session = DragSession::start(state.clone());
-        let ran = session.scope().map(|scope| block(&scope)).is_some();
-        session.end();
-        ran
-    }
-
     /// The drag ended: the scroll ends now (its task polled at once), so what follows (a
     /// fling's scroll) doesn't depend on the order the executor runs tasks in.
     pub(crate) fn end(self) {
@@ -644,12 +620,12 @@ impl Future for UntilDone<'_> {
 
 /// `Modifier.scrollable`, on `Modifier`.
 pub trait ScrollableModifier {
-    /// Drags and the wheel along `orientation` scroll `state`, and a touch let go while moving
+    /// Drags and the wheel along `orientation` scroll `state`, and a finger or a stylus let go
     /// flings it, as `Modifier.scrollable(state, orientation)`: the content isn't moved (the
-    /// state's consumer does what it wants with the deltas). A drag up gives positive deltas
-    /// (content follows the finger, as `ScrollableDefaults.reverseDirection` is applied by
-    /// `vertical_scroll`; here a drag's deltas are the pointer's own, as Compose's
-    /// `scrollable`).
+    /// state's consumer does what it wants with the deltas). A mouse doesn't drag it, its wheel
+    /// scrolls it. The deltas are the pointer's: a drag down or to the right gives positive ones,
+    /// as Compose's `scrollable` (`vertical_scroll` negates them, as
+    /// `ScrollableDefaults.reverseDirection`, so that the content follows the finger).
     fn scrollable<S>(self, state: S, orientation: Orientation) -> Modifier
     where
         S: ScrollableState + ComposeArg + Clone + 'static;

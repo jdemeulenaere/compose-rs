@@ -416,7 +416,8 @@ pub(crate) fn dispatch_scroll(
     let along = |offset: Offset| if vertical { offset.y } else { offset.x };
     let before = along(chain.pre_scroll(axis(-delta), source));
     let left = delta + before;
-    let used = if left == 0.0 { 0.0 } else { scroll_by(left) };
+    // With nothing left too, as Compose's `performScroll`: the direction noted is none.
+    let used = scroll_by(left);
     let after = along(chain.post_scroll(axis(-used), axis(-(left - used)), source));
     used - before - after
 }
@@ -702,8 +703,16 @@ impl PointerInputModifierNode for ScrollNode {
             reverse,
             context,
             &driver,
+            // As the nested-scroll parent of the scrollables inside: what they leave scrolls it,
+            // unless a scroll of its own goes on, as Compose's `performRawScroll`.
             move |_: &NestedScrollChain, _: NestedScrollSource| {
-                Rc::new(move |delta| state.dispatch_raw_delta(delta))
+                Rc::new(move |delta| {
+                    if state.is_scroll_in_progress() {
+                        0.0
+                    } else {
+                        state.dispatch_raw_delta(delta)
+                    }
+                })
             },
         );
     }
@@ -749,6 +758,25 @@ fn scope_scroll(
         }
         None => scope.scroll_by(delta),
     }
+}
+
+/// A pointer's `delta`, as Compose's `performScroll`: through the connections around, then `scope`
+/// (the parents named to `set_outer`). A horizontal scroll in a right-to-left layout goes the
+/// other way, as Compose's `reverseDirection`.
+fn scroll_through(
+    scope: &ScrollScope,
+    set_outer: Option<&OuterSetter>,
+    chain: &NestedScrollChain,
+    vertical: bool,
+    reverse: bool,
+    delta: f32,
+) {
+    let mut own = |delta: f32| {
+        let delta = if reverse { -delta } else { delta };
+        let used = scope_scroll(scope, set_outer, chain, NestedScrollSource::UserInput, delta);
+        if reverse { -used } else { used }
+    };
+    dispatch_scroll(chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
 }
 
 /// The wheel and drags of a scrollable node, as Compose's `scrollable`: `scroll_by` gets the
@@ -839,25 +867,14 @@ impl DragScroller {
                 reverse,
             }));
         }
-        // A drag's deltas, and a wheel turn's: through the connections around, then the scroll
-        // scope of a scroll of the user-input priority (a drag's, held while it lasts; a wheel
-        // turn's, as Compose's `NonTouchScrollingLogic.userScroll`), so either stops a fling or
-        // an animation and the state says it's scrolling (D879). A horizontal scroll in a
-        // right-to-left layout goes the other way, as Compose's `reverseDirection`.
+        // A drag's deltas, and a wheel turn's: through the scroll scope of a scroll of the
+        // user-input priority (a drag's, held while it lasts; a wheel turn's, D879), so either
+        // stops a fling or an animation and the state says it's scrolling.
         let chain = &self.chain;
         let set_outer = driver.set_outer;
-        let scope_by = |scope: &ScrollScope, delta: f32| {
-            let mut own = |delta: f32| {
-                let delta = if reverse { -delta } else { delta };
-                let used =
-                    scope_scroll(scope, set_outer, chain, NestedScrollSource::UserInput, delta);
-                if reverse { -used } else { used }
-            };
-            dispatch_scroll(chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
-        };
         let drag_by = |session: &Option<DragSession>, delta: f32| {
             if let Some(scope) = session.as_ref().and_then(DragSession::scope) {
-                scope_by(&scope, delta);
+                scroll_through(&scope, set_outer, chain, vertical, reverse, delta);
             }
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
@@ -866,39 +883,53 @@ impl DragScroller {
         let position = context.pointer_position().unwrap_or(event.position);
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
-                let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };
+                // The axis the turn mostly goes along, if it's this one, as Compose's
+                // `toScrollValue`: the other's scrollables have it, the whole of it.
+                let turn = event.scroll_delta;
+                let delta = match (turn.y.abs() >= turn.x.abs(), vertical) {
+                    (true, true) => turn.y,
+                    (false, false) => turn.x,
+                    _ => 0.0,
+                };
                 if delta == 0.0 {
                     return;
                 }
-                // The scrollables and connections around had what's left along the axis.
-                DragSession::scroll_now(driver.state, MutatePriority::UserInput, &mut |scope| {
-                    scope_by(scope, delta)
-                });
-                if vertical {
-                    event.scroll_delta.y = 0.0;
-                } else {
-                    event.scroll_delta.x = 0.0;
+                // The scrollables and connections around have what it leaves.
+                let by_scope = &mut |scope: &ScrollScope| {
+                    scroll_through(scope, set_outer, chain, vertical, reverse, delta)
+                };
+                if driver.state.scroll_now(MutatePriority::UserInput, by_scope).is_none() {
+                    Self::scroll_in_task(driver, chain, vertical, reverse, delta);
                 }
-                if event.scroll_delta.x.abs() < 0.01 && event.scroll_delta.y.abs() < 0.01 {
-                    event.consume();
-                }
+                event.scroll_delta = Offset::ZERO;
+                event.consume();
             }
             (PointerEventType::Press, PointerEventPass::Initial) => {
-                // A press during a fling stops it, and is taken: the item under it isn't
-                // clicked, as Compose's.
-                if let Some(fling) = self.fling.take()
-                    && fling.is_active()
-                {
-                    fling.cancel();
-                    event.consume();
+                // A mouse doesn't drag a scrollable, as Compose's `CanDragCalculation` (`type !=
+                // PointerType.Mouse`, D874): its press stops nothing, and it never takes over a
+                // drag. Its wheel scrolls it.
+                if event.pointer_type == compose_ui::PointerType::Mouse {
+                    return;
                 }
                 self.pressed.retain(|(pointer, _)| *pointer != event.pointer);
                 self.pressed.push((event.pointer, position));
-                // Another finger joining a drag leaves it to the first. A mouse doesn't drag a
-                // scrollable, as Compose's `CanDragCalculation` (`type != PointerType.Mouse`,
-                // D874): its wheel scrolls it.
-                if self.drag.is_none() && event.pointer_type != compose_ui::PointerType::Mouse {
-                    self.drag = Some(Drag::new(event, position, along_axis(position)));
+                let flinging = self.fling.take().is_some_and(|fling| {
+                    let active = fling.is_active();
+                    fling.cancel();
+                    active
+                });
+                // Another finger joining a drag leaves it to the first.
+                if self.drag.is_none() {
+                    let mut drag = Drag::new(event, position, along_axis(position));
+                    // A press during a scroll (a fling, an animated scroll, an app's own) stops
+                    // it and drags at once, as Compose's `startDragImmediately`, and is taken:
+                    // the item under it isn't clicked (D883).
+                    if flinging || driver.state.is_scroll_in_progress() {
+                        event.consume();
+                        drag.scrolling = true;
+                        Self::begin_scroll(&mut self.session, &mut self.dragged, driver);
+                    }
+                    self.drag = Some(drag);
                 }
             }
             (PointerEventType::Move, PointerEventPass::Initial) => {
@@ -937,17 +968,7 @@ impl DragScroller {
                 if along.abs() > slop {
                     drag.scrolling = true;
                     event.consume();
-                    // The drag holds the state's scroll (a fling or an animated scroll stops),
-                    // and says so to the interaction source.
-                    self.session = Some(DragSession::start(driver.state.clone()));
-                    let source = driver.interaction_source.cloned().or_else(|| {
-                        driver.state_source.then(|| driver.state.internal_interaction_source())?
-                    });
-                    self.dragged = source.map(|source| {
-                        let start = DragStart::new();
-                        source.try_emit(DragInteraction::Start(start));
-                        (source, start)
-                    });
+                    Self::begin_scroll(&mut self.session, &mut self.dragged, driver);
                     // What moved past the slop scrolls.
                     drag_by(&self.session, -(along - slop.copysign(along)));
                 }
@@ -986,6 +1007,47 @@ impl DragScroller {
             }
             _ => {}
         }
+    }
+
+    /// The drag holds the state's scroll (a fling or an animated scroll stops), and says so to the
+    /// interaction source.
+    fn begin_scroll(
+        session: &mut Option<DragSession>,
+        dragged: &mut Option<(MutableInteractionSource, DragStart)>,
+        driver: &ScrollDriver<'_>,
+    ) {
+        *session = Some(DragSession::start(driver.state.clone()));
+        let source = driver
+            .interaction_source
+            .cloned()
+            .or_else(|| driver.state_source.then(|| driver.state.internal_interaction_source())?);
+        *dragged = source.map(|source| {
+            let start = DragStart::new();
+            source.try_emit(DragInteraction::Start(start));
+            (source, start)
+        });
+    }
+
+    /// A wheel turn on a state with no scroll in place (an app's own): a scroll of its own in a
+    /// task, polled at once, that gets the delta whenever the state runs its block, and lets go
+    /// of the state's mutex with the task however it ends.
+    fn scroll_in_task(
+        driver: &ScrollDriver<'_>,
+        chain: &NestedScrollChain,
+        vertical: bool,
+        reverse: bool,
+        delta: f32,
+    ) {
+        let (state, chain, set_outer) =
+            (driver.state.clone(), chain.clone(), driver.set_outer.cloned());
+        let job = CoroutineScope::new().launch(async move {
+            let _ = state
+                .scroll(MutatePriority::UserInput, move |scope| async move {
+                    scroll_through(&scope, set_outer.as_ref(), &chain, vertical, reverse, delta);
+                })
+                .await;
+        });
+        compose_runtime::platform::poll_now(job);
     }
 
     /// The drag's hold on the state's scroll ends, and the interaction source hears it.

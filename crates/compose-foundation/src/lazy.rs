@@ -106,6 +106,8 @@ struct LazyListInner {
     rtl: Cell<bool>,
     /// Bumped by scrolls: the layout reads it, so a scroll measures the list again.
     remeasure: OwnedState<u64>,
+    /// What `remeasure` holds, to bump it without reading it.
+    remeasure_written: Cell<u64>,
     /// The items to compose: what the layout asks for, read by the items' composition only.
     composed: OwnedState<(usize, usize)>,
     /// What the items' composition last read of `composed` (it may compose another range: the
@@ -154,6 +156,12 @@ struct LazyListInner {
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
     room_estimated: Cell<(bool, bool)>,
+    /// Whether the list can scroll towards its end and its start, as `canScrollForward` and
+    /// `canScrollBackward`: false until it's laid out, written when a measurement changes them.
+    can_scroll_forward: OwnedState<bool>,
+    can_scroll_backward: OwnedState<bool>,
+    /// What those hold (forward, backward), to compare without reading state.
+    can_scroll_written: Cell<(bool, bool)>,
     /// The items the last measurement lacking items asked for (0: it lacked none): the next
     /// round asks for up to twice as many (D492).
     asked: Cell<usize>,
@@ -197,6 +205,27 @@ struct LazyListInner {
 type Outer = (compose_ui::platform::NestedScrollChain, bool, bool, compose_ui::NestedScrollSource);
 
 impl LazyListInner {
+    /// `can_scroll_*` after a measurement found how far it can scroll: their readers hear when they
+    /// change, and only then.
+    fn publish_can_scroll(&self) {
+        let (forward, backward) = (self.room_forward.get() > 0.0, self.room_backward.get() > 0.0);
+        let (old_forward, old_backward) = self.can_scroll_written.replace((forward, backward));
+        if forward != old_forward {
+            self.can_scroll_forward.set(forward);
+        }
+        if backward != old_backward {
+            self.can_scroll_backward.set(backward);
+        }
+    }
+
+    /// Measures the list again, with no read of the state (what asks while composing isn't told
+    /// of each later scroll).
+    fn request_remeasure(&self) {
+        let count = self.remeasure_written.get().wrapping_add(1);
+        self.remeasure_written.set(count);
+        self.remeasure.set(count);
+    }
+
     /// Notes `items` as those laid out; returns whether they're others than last time.
     fn note_laid_items(&self, items: &Rc<Items>) -> bool {
         let mut laid = self.laid_items.borrow_mut();
@@ -226,6 +255,7 @@ impl LazyListInner {
             pending: Cell::new(0.0),
             rtl: Cell::new(false),
             remeasure: mutable_state_of(0),
+            remeasure_written: Cell::new(0),
             composed: mutable_state_of((first_visible_item_index, first_visible_item_index + 1)),
             composed_read: Cell::new((first_visible_item_index, first_visible_item_index + 1)),
             compose_again: mutable_state_of(0),
@@ -250,6 +280,9 @@ impl LazyListInner {
             }),
             room_forward: Cell::new(f32::INFINITY),
             room_estimated: Cell::new((false, false)),
+            can_scroll_forward: mutable_state_of(false),
+            can_scroll_backward: mutable_state_of(false),
+            can_scroll_written: Cell::new((false, false)),
             asked: Cell::new(0),
             overshoot: RefCell::new(None),
             prefetch: Prefetch::new(),
@@ -374,22 +407,12 @@ impl LazyListState {
         inner.pending.set(0.0);
         inner.room_backward.set(f32::INFINITY);
         inner.room_forward.set(f32::INFINITY);
-        if compose_runtime::is_composing() {
-            // Asked while composing (a list's content asking, as Compose's tests do): no state
-            // write then; the list's node is measured again, the position read then.
-            if let Some(list) = inner.prefetch.node.get() {
-                compose_runtime::platform::current().with_applier(
-                    |tree: &mut compose_ui::platform::UiTree| tree.invalidate_measure(list),
-                );
-            }
-            return;
-        }
         // The position is the state's at once, as Compose's `requestPositionAndForgetLastKnownKey`;
         // the layout coerces it into the items.
         inner.published.set((index, scroll_offset));
         inner.first_index.set(index);
         inner.first_offset.set(scroll_offset);
-        inner.remeasure.update(|count| count.wrapping_add(1));
+        inner.request_remeasure();
     }
 
     /// Scrolls to `index` (and `scroll_offset` pixels into it), without animation, in a scroll
@@ -493,14 +516,11 @@ impl LazyListState {
             // as Compose's strategy hears of each scroll's delta (negative towards the end).
             inner.prefetch.forward.set(used > 0.0);
             inner.prefetch.delta.set(inner.prefetch.delta.get() - used);
-            inner.remeasure.update(|count| count.wrapping_add(1));
+            inner.request_remeasure();
         }
         used
     }
 
-    /// The item count, the average item size (with its spacing), the spacing, the viewport's
-    /// length and the content padding along the axis, as last laid out: a scrollbar's
-    /// estimates (a state read).
     /// What the list laid out last, as `layoutInfo`: the items in view, the viewport and the
     /// padding (a state read: a layout that changes them tells the reader).
     pub fn layout_info(&self) -> LazyListLayoutInfo {
@@ -582,14 +602,15 @@ impl ScrollableState for LazyListState {
         self.inner().is_some_and(|inner| inner.core.is_scroll_in_progress())
     }
 
-    /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
+    /// Whether the list can scroll towards its end, as `canScrollForward` (a state read, as last
+    /// laid out).
     fn can_scroll_forward(&self) -> bool {
-        self.inner().is_some_and(|inner| inner.room_forward.get() > 0.0)
+        self.inner().is_some_and(|inner| inner.can_scroll_forward.get())
     }
 
-    /// Whether the list can scroll towards its start, as `canScrollBackward`.
+    /// Whether the list can scroll towards its start, as `canScrollBackward` (a state read).
     fn can_scroll_backward(&self) -> bool {
-        self.inner().is_some_and(|inner| inner.room_backward.get() > 0.0)
+        self.inner().is_some_and(|inner| inner.can_scroll_backward.get())
     }
 
     fn last_scrolled_forward(&self) -> bool {
@@ -1293,14 +1314,16 @@ struct Items {
     headers: Vec<usize>,
     /// Some items have spans (a grid's): its lines are found by walking the items.
     has_custom_spans: bool,
-    /// The keys asked for, by index modulo its length: a key function runs once per item while
-    /// the items stay, as Compose's key-index map calls it (the composition, the layout and
-    /// the layout info ask for a key several times a frame); one that read state isn't kept.
-    keys: [Cell<(usize, u64)>; KEY_CACHE],
+    /// The keys of keyed intervals asked for, by index modulo its length: a key function runs
+    /// once per item while the items stay, as Compose's key-index map calls it (the composition,
+    /// the layout and the layout info ask for a key several times a frame); one that read state
+    /// isn't kept. Empty with no key function: a default key is a hash of its index.
+    keys: Box<[Cell<(usize, u64)>]>,
 }
 
-/// How many keys `Items` keeps: more than the items in view of most lists.
-const KEY_CACHE: usize = 64;
+/// How many keys `Items` keeps at most: more than the items in view of most lists; made per run of
+/// the content lambda, as few as the list has (D886).
+const KEY_CACHE: usize = 32;
 
 impl Items {
     fn new(intervals: Vec<Interval>) -> Items {
@@ -1315,7 +1338,9 @@ impl Items {
             }
             count += interval.count;
         }
-        let keys = std::array::from_fn(|_| Cell::new((usize::MAX, 0)));
+        let keyed = intervals.iter().any(|interval| interval.key.is_some());
+        let cached = if keyed { count.min(KEY_CACHE) } else { 0 };
+        let keys = (0..cached).map(|_| Cell::new((usize::MAX, 0))).collect();
         Items { intervals, starts, count, headers, has_custom_spans, keys }
     }
 
@@ -1343,30 +1368,27 @@ impl Items {
     }
 
     fn key(&self, index: usize) -> u64 {
-        let cached = &self.keys[index % KEY_CACHE];
+        let default = || hash_key(&DefaultKey(index));
+        let Some(cached) = self.keys.get(index.checked_rem(self.keys.len()).unwrap_or(0)) else {
+            return default();
+        };
         if let (at, key) = cached.get()
             && at == index
         {
             return key;
         }
-        let key = match self
-            .find(index)
-            .and_then(|(interval, local)| Some((interval.key.as_ref()?, local)))
-        {
-            Some((key, local)) => {
-                // A key function reading state isn't kept: its keys follow the state, read
-                // each time (observed by whoever asks), as Compose's key map is a derived state
-                // of what they read.
-                let reads = compose_runtime::platform::state_reads();
-                let key = key(local);
-                if compose_runtime::platform::state_reads() != reads {
-                    return key;
-                }
-                key
-            }
-            None => hash_key(&DefaultKey(index)),
+        let Some((key, local)) =
+            self.find(index).and_then(|(interval, local)| Some((interval.key.as_ref()?, local)))
+        else {
+            return default();
         };
-        cached.set((index, key));
+        // A key function reading state isn't kept: its keys follow the state, read each time
+        // (observed by whoever asks), as Compose's key map is a derived state of what they read.
+        let reads = compose_runtime::platform::state_reads();
+        let key = key(local);
+        if compose_runtime::platform::state_reads() == reads {
+            cached.set((index, key));
+        }
         key
     }
 
@@ -2267,6 +2289,7 @@ impl MeasurePolicy for LazyListLayout {
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
             state.room_forward.set(0.0);
+            state.publish_can_scroll();
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
             // As large as its padding, as Compose's (its measurement's size excludes it).
@@ -2746,6 +2769,7 @@ impl MeasurePolicy for LazyListLayout {
             let after_composed = count.saturating_sub(placed_end.max(end_index)) as f32 * average;
             (after_composed + (extent_end.max(content_end) - main_max) as f32 - pending).max(1.0)
         });
+        state.publish_can_scroll();
         // The sticky header over the first item laid out (under the start padding, if any, as
         // Compose's `applyStickyItems`), kept composed: at the list's start, or where it is if
         // lower, pushed out by the next header, its size and the spacing after it ending where
@@ -3112,7 +3136,7 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
             if delta != 0.0 {
                 state.dispatch(delta, None);
             }
-            delta != 0.0
+            true
         });
     }
 }
@@ -3241,7 +3265,14 @@ impl PointerInputModifierNode for LazyScrollNode {
             move |chain: &compose_ui::platform::NestedScrollChain,
                   source: compose_ui::NestedScrollSource| {
                 let outer = (!chain.is_empty()).then(|| (chain.clone(), vertical, reverse, source));
-                Rc::new(move |delta| flung.dispatch(delta, outer.clone()))
+                // Unless a scroll of its own goes on, as Compose's `performRawScroll`.
+                Rc::new(move |delta| {
+                    if flung.is_scroll_in_progress() {
+                        0.0
+                    } else {
+                        flung.dispatch(delta, outer.clone())
+                    }
+                })
             },
         );
     }

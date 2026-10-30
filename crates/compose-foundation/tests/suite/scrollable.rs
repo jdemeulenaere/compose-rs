@@ -671,10 +671,12 @@ fn a_wheel_turn_refuses_a_lower_scroll_started_from_its_deltas() {
     assert!(!state.is_scroll_in_progress());
 }
 
-// D879: nothing observes a wheel turn's in-progress flag, which never reaches a state: what reads
-// `is_scroll_in_progress` isn't composed again by the wheel (a task per turn wrote it twice).
+// A known difference, pinned as such (D879): a wheel turn's in-progress flag never reaches a state,
+// so what reads `is_scroll_in_progress` isn't composed again by the wheel. Compose's is: its
+// `userScroll` holds the scroll for at least 50 ms. Porting `MouseWheelScrollingLogic` turns this
+// test around.
 #[test]
-fn a_wheel_turn_does_not_recompose_what_reads_is_scroll_in_progress() {
+fn known_difference_a_wheel_turn_does_not_recompose_what_reads_is_scroll_in_progress() {
     let (state, _) = total_state();
     let compositions = Rc::new(Cell::new(0));
     let (scrolled, counted) = (state.clone(), compositions.clone());

@@ -135,7 +135,7 @@ impl MutatorMutex {
     /// [`mutate`](Self::mutate) does; one of a higher priority, or `try_mutate` holding the
     /// lock, leaves `f` unrun (`None`). While `f` runs the mutex is held at `priority`, but `f`
     /// can't be interrupted: a mutation of the same or a higher priority it starts runs beside
-    /// the rest of it.
+    /// the rest of it. Temporary, as `ScrollableState::scroll_now` it serves.
     pub(crate) fn mutate_now<R>(
         &self,
         priority: MutatePriority,

@@ -1506,6 +1506,7 @@ impl MeasurePolicy for LazyGridLayout {
             // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
             state.room_forward.set(0.0);
+            state.publish_can_scroll();
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
             drop(measurer);
@@ -1938,6 +1939,7 @@ impl MeasurePolicy for LazyGridLayout {
             (lines_after * average + (extent_end.max(content_end) - main_max) as f32 - pending)
                 .max(1.0)
         });
+        state.publish_can_scroll();
         // A focused item composed out of the composed lines (pinned), placed out of view.
         let mut pinned: Vec<(Placeable, i32, i32)> = Vec::new();
         for &item in &children {
