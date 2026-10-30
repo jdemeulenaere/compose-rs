@@ -646,9 +646,9 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 
 > Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
 
-- **Position and size assertions.** Missing: `assertTopPositionInRootIsEqualTo`, `assertLeftPositionInRootIsEqualTo`, `assertPositionInRootIsEqualTo`, `assertWidthIsEqualTo`, `assertHeightIsEqualTo`, `getUnclippedBoundsInRoot`, and the lazy base classes' orientation-aware `assertMainAxisStartPositionInRootIsEqualTo` / `assertCrossAxisStartPositionInRootIsEqualTo` / `assertMainAxisSizeIsEqualTo`. `SemanticsNode::bounds` holds what they need. LazyGridTest alone makes about 110 such assertions, LazyListsContentPaddingTest 78.
-- **Display assertions.** `assertIsDisplayed`/`assertIsNotDisplayed` (bounds clipped by the scroll viewports around the node, non-empty) and `assertIsNotPlaced`.
-- **Touch input.** A touch-injection DSL (`swipe`, `swipeWithVelocity`, `down`/`moveBy`/`up`, multi-touch `pinch`) with Compose's event spacing, and a mouse DSL (`scroll`, `moveTo`, `press`). Multi-touch needs ui's multi-change pointer events first.
+- **Position and size assertions.** compose-test has them (`assert_top_position_in_root_is_equal_to`, `get_unclipped_bounds_in_root`, …). The lazy base classes' orientation-aware forms are `Lazy::main_start`, `cross_start`, `main_size` and `cross_size` in `tests/suite/lazy_support.rs`, on `get_unclipped_bounds_in_root`, returning the value to compare.
+- **Display assertions.** compose-test's `is_displayed`, `assert_is_displayed` and `assert_is_not_displayed`; `assertIsNotPlaced` is still to add.
+- **Touch input.** compose-test's `perform_touch_input` and `perform_mouse_input`; `scroll_support::{Touch, swipe}` are those in the root's coordinates, for a finger across calls.
 - **Semantic scroll actions.** `performScrollToIndex`, `performScrollToKey` and `performScrollTo` (they need feature:lazy-semantics).
 - **Tree navigation.** `onChildren()`, `onParent()`, `onChildAt`.
 - **Screenshots.** `captureToImage`: compose-rs can render to PNG through Skia (`draw_snapshot`, docs/06), which is enough for the stretch screenshots once overscroll exists.
@@ -656,9 +656,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 
 ### compose-rs behaviour that likely differs from Compose
 
-- **The reversed default arrangement** of `LazyColumn`/`LazyRow` stays `TOP`/`START`. Compose's becomes `Bottom`/`End` (D171, documented). Caught by `LazyArrangementsTest` and `LazyListsReverseLayoutTest`'s short-list cases, and by `LazyRowTest` in RTL with `reverseLayout`. A port should pass the arrangement explicitly, or the decision should be revisited: Rust can default a parameter from another through an `Option`, as D180 does for material3.
 - **`ScrollState::scroll_to`** clamps at once, as Compose's (D853), and is `async`; a jump outside a task is `dispatch_raw_delta`. The lazy states' synchronous jump is `request_scroll_to_item`, `scroll_to_item` being `async`. Tests port `runBlocking { state.scrollTo(…) }` with `scroll_support::run`.
-- **Mouse drags scroll** compose-rs's scrollables, where Compose's ignore them (D856, for the user to confirm): the `scrollable_mouse*DragDoesNotScroll` tests aren't ported.
 - **Velocity tracking** is Compose's `VelocityTracker1D` (Lsq2, 20 samples, the 40 ms cut-off; D862) since this workstream. Left: tip's draggable tracking per pointer and counting the first still events (Tip differences 7).
 
   Caught by `DraggableTest`'s velocity tests (`draggable_velocityProxy`…), `ScrollableTest`'s fling tests, `Scrollable2DInputTest`, `TouchScrollable2DTest.scrollable_assertVelocityCalculationIsSimilarInsideOutsideVelocityTracker`, and the anchored-drag velocity-threshold tests.

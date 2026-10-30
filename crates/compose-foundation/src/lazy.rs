@@ -3123,6 +3123,7 @@ impl ModifierNode for LazyScrollNode {
     }
 
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
+        self.drag.cancel();
         self.drag.stop_fling();
     }
 

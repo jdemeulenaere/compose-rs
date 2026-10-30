@@ -119,7 +119,8 @@ pub fn px(n: i32) -> Dp {
 /// The bounds in the root of the node tagged `tag` (unclipped), as Compose's
 /// `getUnclippedBoundsInRoot`.
 pub fn bounds(ui: &mut compose_test::ComposeTestRule, tag: &str) -> compose_ui::Rect {
-    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+    let bounds = ui.on_node_with_tag(tag).get_unclipped_bounds_in_root();
+    compose_ui::Rect::new(bounds.left.0, bounds.top.0, bounds.right.0, bounds.bottom.0)
 }
 
 impl Lazy {
@@ -191,7 +192,7 @@ impl Lazy {
         let mut finger = crate::scroll_support::Touch::down(ui, center);
         finger.move_by(ui, along(-slop));
         finger.move_by(ui, along(-distance));
-        finger.advance_event_time(100);
+        finger.advance_event_time(ui, 100);
         finger.up(ui);
         ui.wait_for_idle();
     }
@@ -219,19 +220,6 @@ impl Lazy {
             Modifier.fill_parent_max_height(scope)
         }
     }
-}
-
-/// Whether the node tagged `tag` shows inside the node tagged `container`: it exists and some of
-/// it is within the container's bounds, as Compose's `assertIsDisplayed` (its bounds clipped by
-/// the scrolling container around it, non-empty).
-pub fn is_displayed(ui: &mut compose_test::ComposeTestRule, tag: &str, container: &str) -> bool {
-    if ui.count_nodes(&compose_test::has_test_tag(tag)) == 0 {
-        return false;
-    }
-    let (item, around) = (bounds(ui, tag), bounds(ui, container));
-    let width = item.right.min(around.right) - item.left.max(around.left);
-    let height = item.bottom.min(around.bottom) - item.top.max(around.top);
-    width > 0.0 && height > 0.0
 }
 
 impl Lazy {

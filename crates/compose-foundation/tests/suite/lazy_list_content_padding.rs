@@ -12,7 +12,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{Dp, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, PaddingValues, UnitExt};
 
-use crate::lazy_support::{Lazy, LazyColumnOrRow, bounds, is_displayed};
+use crate::lazy_support::{Lazy, LazyColumnOrRow, bounds};
 use crate::scroll_support::run;
 
 const LIST: &str = "LazyList";
@@ -359,7 +359,10 @@ fn a_reversed_list_pads_its_ends() {
         // To the top.
         scroll_by(&mut ui, *state, ITEM_SIZE * 2.5);
         assert_eq!(lazy.main_start(&mut ui, "2"), top, "{lazy:?}");
-        assert!(!is_displayed(&mut ui, "1", LIST) && !is_displayed(&mut ui, "0", LIST), "{lazy:?}");
+        assert!(
+            !ui.on_node_with_tag("1").is_displayed() && !ui.on_node_with_tag("0").is_displayed(),
+            "{lazy:?}"
+        );
     }
 }
 
@@ -375,7 +378,10 @@ fn a_reversed_list_with_large_padding_shows_little() {
         // To the top.
         scroll_by(&mut ui, *state, ITEM_SIZE * 5.0);
         assert_eq!(lazy.main_start(&mut ui, "2"), top, "{lazy:?}");
-        assert!(!is_displayed(&mut ui, "1", LIST) && !is_displayed(&mut ui, "0", LIST), "{lazy:?}");
+        assert!(
+            !ui.on_node_with_tag("1").is_displayed() && !ui.on_node_with_tag("0").is_displayed(),
+            "{lazy:?}"
+        );
     }
 }
 
@@ -446,7 +452,7 @@ fn padding_larger_in_all_than_the_list_scrolled_by_the_padding() {
         scroll_by(&mut ui, *state, ITEM_SIZE);
         assert_eq!(lazy.main_start(&mut ui, "0"), 0.0, "{lazy:?}");
         assert_eq!(lazy.main_start(&mut ui, "1"), ITEM_SIZE, "{lazy:?}");
-        assert!(!is_displayed(&mut ui, "2", CONTAINER), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("2").is_displayed(), "{lazy:?}");
         assert_position(lazy, *state, 1, 0.0);
         assert_visible(lazy, *state, &[(0, -ITEM_SIZE), (1, 0.0)]);
     }
@@ -462,7 +468,7 @@ fn padding_larger_in_all_than_the_list_at_the_last_item() {
             let mut ui = in_a_small_box(lazy, *state, ITEM_SIZE);
             if by_delta {
                 scroll_by(&mut ui, *state, ITEM_SIZE * 3.0);
-                assert!(!is_displayed(&mut ui, "1", CONTAINER), "{lazy:?}");
+                assert!(!ui.on_node_with_tag("1").is_displayed(), "{lazy:?}");
             } else {
                 scroll_to(&mut ui, *state, 3);
                 ui.on_node_with_tag("1").assert_does_not_exist();
@@ -483,7 +489,7 @@ fn padding_larger_in_all_than_the_list_at_the_end() {
         let mut ui = in_a_small_box(lazy, *state, ITEM_SIZE);
         // The whole end padding in view.
         scroll_by(&mut ui, *state, ITEM_SIZE * 4.5);
-        assert!(!is_displayed(&mut ui, "2", CONTAINER), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("2").is_displayed(), "{lazy:?}");
         assert_eq!(lazy.main_start(&mut ui, "3"), -ITEM_SIZE * 0.5, "{lazy:?}");
         assert_position(lazy, *state, 3, ITEM_SIZE * 1.5);
         assert_visible(lazy, *state, &[(3, -ITEM_SIZE * 1.5)]);
@@ -496,7 +502,7 @@ fn each_padding_larger_than_the_list_at_first() {
     for lazy in orientations() {
         let state = LazyListState::new(0, 0);
         let mut ui = in_a_small_box(lazy, *state, ITEM_SIZE * 2.0);
-        assert!(!is_displayed(&mut ui, "0", CONTAINER), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("0").is_displayed(), "{lazy:?}");
         assert_position(lazy, *state, 0, 0.0);
         assert_visible(lazy, *state, &[(0, 0.0)]);
         assert_offset_range(lazy, *state, -ITEM_SIZE * 2.0, -ITEM_SIZE * 0.5);
@@ -512,7 +518,7 @@ fn each_padding_larger_than_the_list_scrolled_by_the_padding() {
         scroll_by(&mut ui, *state, ITEM_SIZE * 2.0);
         assert_eq!(lazy.main_start(&mut ui, "0"), 0.0, "{lazy:?}");
         assert_eq!(lazy.main_start(&mut ui, "1"), ITEM_SIZE, "{lazy:?}");
-        assert!(!is_displayed(&mut ui, "2", CONTAINER), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("2").is_displayed(), "{lazy:?}");
         assert_position(lazy, *state, 2, 0.0);
         assert_visible(lazy, *state, &[(0, -ITEM_SIZE * 2.0), (1, -ITEM_SIZE), (2, 0.0)]);
     }
@@ -531,10 +537,10 @@ fn each_padding_larger_than_the_list_at_the_last_item() {
             } else {
                 scroll_to(&mut ui, *state, 3);
             }
-            assert!(!is_displayed(&mut ui, "0", CONTAINER), "{lazy:?}");
+            assert!(!ui.on_node_with_tag("0").is_displayed(), "{lazy:?}");
             assert_eq!(lazy.main_start(&mut ui, "1"), 0.0, "{lazy:?}");
             assert_eq!(lazy.main_start(&mut ui, "2"), ITEM_SIZE, "{lazy:?}");
-            assert!(!is_displayed(&mut ui, "3", CONTAINER), "{lazy:?}");
+            assert!(!ui.on_node_with_tag("3").is_displayed(), "{lazy:?}");
             assert_position(lazy, *state, 3, 0.0);
             assert_visible(lazy, *state, &[(1, -ITEM_SIZE * 2.0), (2, -ITEM_SIZE), (3, 0.0)]);
         }
@@ -549,7 +555,7 @@ fn each_padding_larger_than_the_list_at_the_end() {
         let mut ui = in_a_small_box(lazy, *state, ITEM_SIZE * 2.0);
         // The box, the start padding and all the items: only the end padding in view.
         scroll_by(&mut ui, *state, ITEM_SIZE * 1.5 + ITEM_SIZE * 2.0 + ITEM_SIZE * 3.0);
-        assert!(!is_displayed(&mut ui, "3", CONTAINER), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("3").is_displayed(), "{lazy:?}");
         assert_position(lazy, *state, 3, ITEM_SIZE * 3.5);
         assert_visible(lazy, *state, &[(3, -ITEM_SIZE * 3.5)]);
     }

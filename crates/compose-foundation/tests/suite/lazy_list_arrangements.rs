@@ -12,7 +12,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{Density, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, UnitExt};
 
-use crate::lazy_support::{Lazy, bounds, is_displayed};
+use crate::lazy_support::{Lazy, bounds};
 use crate::scroll_support::run;
 
 const CONTAINER: &str = "ContainerTag";
@@ -242,7 +242,7 @@ fn the_first_item_changes_once_past_its_spacing() {
             let handle = *state;
             let mut ui = spaced(lazy, 90.0, 4.0, 5, 30.0, handle);
             let _ = run(&mut ui, async move { handle.scroll_by(distance).await });
-            assert!(!is_displayed(&mut ui, "0", CONTAINER), "{lazy:?}");
+            assert!(!ui.on_node_with_tag("0").is_displayed(), "{lazy:?}");
             let position =
                 (state.first_visible_item_index(), state.first_visible_item_scroll_offset());
             assert_eq!(position, expected, "{lazy:?} by {distance}");

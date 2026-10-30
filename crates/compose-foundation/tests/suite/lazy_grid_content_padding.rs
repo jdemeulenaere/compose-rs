@@ -12,7 +12,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, PaddingValues, UnitExt};
 
-use crate::lazy_support::{bounds, is_displayed};
+use crate::lazy_support::bounds;
 use crate::scroll_support::run;
 
 const LIST: &str = "LazyList";
@@ -349,7 +349,7 @@ fn padding_larger_in_all_than_the_grid() {
     let mut ui = in_a_small_box(*state, ITEM_SIZE);
     scroll_by(&mut ui, *state, ITEM_SIZE);
     assert_eq!((top(&mut ui, "0"), top(&mut ui, "1")), (0.0, ITEM_SIZE));
-    assert!(!is_displayed(&mut ui, "2", CONTAINER));
+    assert!(!ui.on_node_with_tag("2").is_displayed());
     assert_position(*state, 1, 0.0);
     assert_visible(*state, &[(0, -ITEM_SIZE), (1, 0.0)]);
 
@@ -359,7 +359,7 @@ fn padding_larger_in_all_than_the_grid() {
         let mut ui = in_a_small_box(handle, ITEM_SIZE);
         if by_delta {
             scroll_by(&mut ui, handle, ITEM_SIZE * 3.0);
-            assert!(!is_displayed(&mut ui, "1", CONTAINER));
+            assert!(!ui.on_node_with_tag("1").is_displayed());
         } else {
             let _ = run(&mut ui, async move { handle.scroll_to_item(3, 0).await });
             ui.on_node_with_tag("1").assert_does_not_exist();
@@ -376,7 +376,7 @@ fn padding_larger_in_all_than_the_grid() {
     let state = LazyGridState::new(0, 0);
     let mut ui = in_a_small_box(*state, ITEM_SIZE);
     scroll_by(&mut ui, *state, ITEM_SIZE * 4.5);
-    assert!(!is_displayed(&mut ui, "2", CONTAINER));
+    assert!(!ui.on_node_with_tag("2").is_displayed());
     assert_eq!(top(&mut ui, "3"), -ITEM_SIZE * 0.5);
     assert_position(*state, 3, ITEM_SIZE * 1.5);
     assert_visible(*state, &[(3, -ITEM_SIZE * 1.5)]);
@@ -391,7 +391,7 @@ fn padding_larger_in_all_than_the_grid() {
 fn each_padding_larger_than_the_grid() {
     let state = LazyGridState::new(0, 0);
     let mut ui = in_a_small_box(*state, ITEM_SIZE * 2.0);
-    assert!(!is_displayed(&mut ui, "0", CONTAINER));
+    assert!(!ui.on_node_with_tag("0").is_displayed());
     assert_position(*state, 0, 0.0);
     assert_visible(*state, &[(0, 0.0)]);
     let info = state.layout_info();
@@ -401,7 +401,7 @@ fn each_padding_larger_than_the_grid() {
     let mut ui = in_a_small_box(*state, ITEM_SIZE * 2.0);
     scroll_by(&mut ui, *state, ITEM_SIZE * 2.0);
     assert_eq!((top(&mut ui, "0"), top(&mut ui, "1")), (0.0, ITEM_SIZE));
-    assert!(!is_displayed(&mut ui, "2", CONTAINER));
+    assert!(!ui.on_node_with_tag("2").is_displayed());
     assert_position(*state, 2, 0.0);
     assert_visible(*state, &[(0, -ITEM_SIZE * 2.0), (1, -ITEM_SIZE), (2, 0.0)]);
 
@@ -414,13 +414,13 @@ fn each_padding_larger_than_the_grid() {
         } else {
             let _ = run(&mut ui, async move { handle.scroll_to_item(3, 0).await });
         }
-        assert!(!is_displayed(&mut ui, "0", CONTAINER), "by delta: {by_delta}");
+        assert!(!ui.on_node_with_tag("0").is_displayed(), "by delta: {by_delta}");
         assert_eq!(
             (top(&mut ui, "1"), top(&mut ui, "2")),
             (0.0, ITEM_SIZE),
             "by delta: {by_delta}"
         );
-        assert!(!is_displayed(&mut ui, "3", CONTAINER), "by delta: {by_delta}");
+        assert!(!ui.on_node_with_tag("3").is_displayed(), "by delta: {by_delta}");
         assert_position(handle, 3, 0.0);
         assert_visible(handle, &[(1, -ITEM_SIZE * 2.0), (2, -ITEM_SIZE), (3, 0.0)]);
     }
@@ -428,7 +428,7 @@ fn each_padding_larger_than_the_grid() {
     let state = LazyGridState::new(0, 0);
     let mut ui = in_a_small_box(*state, ITEM_SIZE * 2.0);
     scroll_by(&mut ui, *state, ITEM_SIZE * 1.5 + ITEM_SIZE * 2.0 + ITEM_SIZE * 3.0);
-    assert!(!is_displayed(&mut ui, "3", CONTAINER));
+    assert!(!ui.on_node_with_tag("3").is_displayed());
     assert_position(*state, 3, ITEM_SIZE * 3.5);
     assert_visible(*state, &[(3, -ITEM_SIZE * 3.5)]);
 }

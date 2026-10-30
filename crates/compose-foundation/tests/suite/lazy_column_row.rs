@@ -16,7 +16,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Offset, UnitExt};
 
-use crate::lazy_support::{Lazy, bounds, is_displayed};
+use crate::lazy_support::{Lazy, bounds};
 use crate::scroll_support::{Touch, run, swipe};
 
 const LIST: &str = "LazyListTag";
@@ -24,6 +24,34 @@ const LIST: &str = "LazyListTag";
 fn rule(content: impl Fn() + 'static) -> ComposeTestRule {
     compose_test::use_optimizations(Optimizations::NONE);
     ComposeTestRule::sized(IntSize::new(1000, 1000), content)
+}
+
+// Review of D880: a list leaving under a finger ends the drag's scroll, as `vertical_scroll`'s and
+// `Modifier.scrollable`'s nodes do; the state, kept by its owner, doesn't stay scrolling.
+#[test]
+fn a_drag_ends_when_its_list_leaves() {
+    let owner = LazyListState::new(0, 0);
+    let state = *owner;
+    let shown = mutable_state_of(true);
+    let handle = shown.handle();
+    let mut ui = rule(move || {
+        if handle.get() {
+            LazyColumn!(
+                modifier = Modifier.test_tag(LIST).size(300.dp()),
+                state = state,
+                |scope: LazyListScope| {
+                    scope.items(100, |_| Spacer(Modifier.height(50.dp())));
+                }
+            );
+        }
+    });
+    let mut finger = Touch::down(&mut ui, Offset::new(100.0, 200.0));
+    finger.move_by(&mut ui, Offset::new(0.0, -50.0));
+    assert!(state.is_scroll_in_progress(), "dragging");
+    shown.set(false);
+    ui.wait_for_idle();
+    assert!(!state.is_scroll_in_progress());
+    finger.up(&mut ui);
 }
 
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTest.kt, compositionsAreDisposed_whenDataIsChanged
@@ -410,6 +438,6 @@ fn a_list_and_a_grid_fling_with_the_behavior_given() {
         let velocity = fling.velocity.get().expect("the fling behavior given wasn't asked");
         // Towards the content's end (the finger up): a positive velocity in the state's terms.
         assert!(velocity > 0.0, "grid: {grid}, {velocity}");
-        assert!(is_displayed(&mut ui, LIST, LIST));
+        assert!(ui.on_node_with_tag(LIST).is_displayed());
     }
 }

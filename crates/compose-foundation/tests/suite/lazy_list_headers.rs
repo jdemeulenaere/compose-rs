@@ -10,7 +10,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, UnitExt};
 
-use crate::lazy_support::{Lazy, LazyColumnOrRow, is_displayed, no_padding};
+use crate::lazy_support::{Lazy, LazyColumnOrRow, no_padding};
 use crate::scroll_support::run;
 
 const LIST: &str = "LazyList";
@@ -65,7 +65,7 @@ fn a_header_shows_and_one_out_of_view_is_not_composed() {
         let state = LazyListState::new(0, 0);
         let mut ui = headers_and_two_items(lazy, *state, false);
         for tag in [FIRST_HEADER, "1", "2"] {
-            assert!(is_displayed(&mut ui, tag, LIST), "{lazy:?}: {tag}");
+            assert!(ui.on_node_with_tag(tag).is_displayed(), "{lazy:?}: {tag}");
         }
         ui.on_node_with_tag(SECOND_HEADER).assert_does_not_exist();
     }
@@ -79,12 +79,13 @@ fn a_scrolled_header_sticks_at_the_start() {
         let state = LazyListState::new(0, 0);
         let mut ui = headers_and_two_items(lazy, *state, false);
         lazy.drag_main_axis_by(&mut ui, LIST, 102.0);
-        assert!(is_displayed(&mut ui, FIRST_HEADER, LIST), "{lazy:?}");
+        assert!(ui.on_node_with_tag(FIRST_HEADER).is_displayed(), "{lazy:?}");
         assert_eq!(lazy.main_start(&mut ui, FIRST_HEADER), 0.0, "{lazy:?}");
         let first = state.layout_info().visible_items_info[0];
         assert_eq!((first.index, first.offset), (0, 0), "{lazy:?}");
         assert!(
-            is_displayed(&mut ui, "2", LIST) && is_displayed(&mut ui, SECOND_HEADER, LIST),
+            ui.on_node_with_tag("2").is_displayed()
+                && ui.on_node_with_tag(SECOND_HEADER).is_displayed(),
             "{lazy:?}"
         );
     }
@@ -98,9 +99,9 @@ fn the_next_header_replaces_the_sticking_one() {
         let state = LazyListState::new(0, 0);
         let mut ui = headers_and_two_items(lazy, *state, true);
         lazy.drag_main_axis_by(&mut ui, LIST, 105.0);
-        assert!(!is_displayed(&mut ui, FIRST_HEADER, LIST), "{lazy:?}");
+        assert!(!ui.on_node_with_tag(FIRST_HEADER).is_displayed(), "{lazy:?}");
         for tag in [SECOND_HEADER, "1", "2"] {
-            assert!(is_displayed(&mut ui, tag, LIST), "{lazy:?}: {tag}");
+            assert!(ui.on_node_with_tag(tag).is_displayed(), "{lazy:?}: {tag}");
         }
     }
 }
@@ -205,7 +206,7 @@ fn empty_headers_do_not_unstick_the_real_one() {
         );
     });
     lazy.drag_main_axis_by(&mut ui, LIST, 10.0);
-    assert!(is_displayed(&mut ui, "headerTag", LIST));
+    assert!(ui.on_node_with_tag("headerTag").is_displayed());
     assert_eq!(lazy.main_start(&mut ui, "headerTag"), 0.0);
     let first = state.layout_info().visible_items_info[0];
     assert_eq!((first.index, first.offset), (0, 0));

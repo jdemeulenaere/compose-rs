@@ -281,7 +281,7 @@ fn the_fling_behavior_is_called_with_no_velocity_after_a_pause() {
     });
     let mut finger = Touch::down(&mut ui, CENTER);
     finger.move_by(&mut ui, Offset::new(115.0, 0.0));
-    finger.advance_event_time(3000);
+    finger.advance_event_time(&mut ui, 3000);
     finger.up(&mut ui);
     ui.wait_for_idle();
     assert_eq!(fling.calls.get(), 1);
@@ -531,7 +531,7 @@ fn what_an_inner_scrollable_leaves_of_a_drag_goes_to_the_outer_one() {
     for _ in 0..20 {
         finger.move_by(&mut ui, Offset::new(10.0, 0.0));
     }
-    finger.advance_event_time(1000);
+    finger.advance_event_time(&mut ui, 1000);
     finger.up(&mut ui);
     ui.wait_for_idle();
     assert!(inner_total.get() > 0.0 && outer_total.get() > 0.0);
@@ -548,7 +548,7 @@ fn a_drag_without_momentum_scrolls_by_its_distance_less_the_slop() {
     for _ in 0..30 {
         finger.move_by(&mut ui, Offset::new(0.0, 10.0));
     }
-    finger.advance_event_time(3000);
+    finger.advance_event_time(&mut ui, 3000);
     finger.up(&mut ui);
     ui.wait_for_idle();
     // 300 px less the touch slop (8 dp at density 1).

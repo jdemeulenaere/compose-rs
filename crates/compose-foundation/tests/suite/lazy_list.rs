@@ -15,7 +15,7 @@ use compose_test::*;
 use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, UnitExt};
 
-use crate::lazy_support::{Lazy, LazyColumnOrRow, is_displayed, no_padding};
+use crate::lazy_support::{Lazy, LazyColumnOrRow, no_padding};
 use crate::scroll_support::{Touch, run};
 
 const LIST: &str = "LazyListTag";
@@ -70,7 +70,7 @@ fn single_list_and_indexed_items_show_together() {
             );
         });
         for tag in ["itemTestTag", "1", "2", "0-3", "1-4"] {
-            assert!(is_displayed(&mut ui, tag, LIST), "{lazy:?}: {tag} shows");
+            assert!(ui.on_node_with_tag(tag).is_displayed(), "{lazy:?}: {tag} shows");
         }
         ui.on_node_with_tag("2-5").assert_does_not_exist();
     }
@@ -93,7 +93,7 @@ fn empty_lists_and_absent_items_are_items_too() {
                 },
             );
         });
-        assert!(is_displayed(&mut ui, "itemTag", LIST));
+        assert!(ui.on_node_with_tag("itemTag").is_displayed());
         let mut ui = rule(move || {
             LazyColumnOrRow(
                 lazy,
@@ -112,8 +112,8 @@ fn empty_lists_and_absent_items_are_items_too() {
                 },
             );
         });
-        assert!(is_displayed(&mut ui, "1", LIST));
-        assert!(is_displayed(&mut ui, "nullTestTag", LIST));
+        assert!(ui.on_node_with_tag("1").is_displayed());
+        assert!(ui.on_node_with_tag("nullTestTag").is_displayed());
         ui.on_node_with_tag("3").assert_does_not_exist();
     }
 }
@@ -147,7 +147,7 @@ fn four_items(lazy: Lazy) -> ComposeTestRule {
 fn only_the_items_in_view_are_composed() {
     for lazy in orientations() {
         let mut ui = four_items(lazy);
-        assert!(is_displayed(&mut ui, "1", LIST) && is_displayed(&mut ui, "2", LIST));
+        assert!(ui.on_node_with_tag("1").is_displayed() && ui.on_node_with_tag("2").is_displayed());
         ui.on_node_with_tag("3").assert_does_not_exist();
         ui.on_node_with_tag("4").assert_does_not_exist();
     }
@@ -167,10 +167,16 @@ fn scrolling_shows_the_items_coming_in_and_hides_those_going_out() {
             let mut ui = four_items(lazy);
             lazy.scroll_main_axis_by(&mut ui, LIST, distance);
             for tag in shown {
-                assert!(is_displayed(&mut ui, tag, LIST), "{lazy:?} +{distance}: {tag} shows");
+                assert!(
+                    ui.on_node_with_tag(tag).is_displayed(),
+                    "{lazy:?} +{distance}: {tag} shows"
+                );
             }
             for tag in hidden {
-                assert!(!is_displayed(&mut ui, tag, LIST), "{lazy:?} +{distance}: {tag} hidden");
+                assert!(
+                    !ui.on_node_with_tag(tag).is_displayed(),
+                    "{lazy:?} +{distance}: {tag} hidden"
+                );
             }
         }
     }
@@ -213,7 +219,7 @@ fn a_list_wraps_its_content() {
                 if lazy.vertical { (list.bottom, list.right) } else { (list.right, list.bottom) };
             assert_eq!((list.left, list.top, main_end, cross_end), (0.0, 0.0, main, cross));
         };
-        assert!(is_displayed(&mut ui, "outside", "outside"));
+        assert!(ui.on_node_with_tag("outside").is_displayed());
         check(&mut ui, 100.0, 50.0);
         same.set(false);
         ui.wait_for_idle();
@@ -294,11 +300,11 @@ fn an_item_growing_from_nothing_can_be_scrolled_to() {
         });
         lazy.scroll_main_axis_by(&mut ui, LIST, 21.0);
         ui.on_node_with_tag("third").assert_exists();
-        assert!(!is_displayed(&mut ui, "third", LIST));
+        assert!(!ui.on_node_with_tag("third").is_displayed());
         has_size.set(true);
         ui.wait_for_idle();
         lazy.scroll_main_axis_by(&mut ui, LIST, 10.0);
-        assert!(is_displayed(&mut ui, "third", LIST), "{lazy:?}");
+        assert!(ui.on_node_with_tag("third").is_displayed(), "{lazy:?}");
     }
 }
 
@@ -524,7 +530,7 @@ fn a_scroll_after_the_list_shrank_works() {
         items.set((1..=11).collect());
         ui.wait_for_idle();
         lazy.scroll_main_axis_by(&mut ui, LIST, -10.0);
-        assert!(is_displayed(&mut ui, "1", LIST), "{lazy:?}");
+        assert!(ui.on_node_with_tag("1").is_displayed(), "{lazy:?}");
     }
 }
 
@@ -979,7 +985,7 @@ fn scrolling_by_exactly_an_item_makes_the_next_one_first() {
         let state = LazyListState::new(0, 0);
         let mut ui = five_thirty_px_items(lazy, *state);
         scroll_state_by(&mut ui, *state, 30.0);
-        assert!(!is_displayed(&mut ui, "0", LIST), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("0").is_displayed(), "{lazy:?}");
         assert_eq!(
             (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
             (1, 0)
@@ -1061,10 +1067,16 @@ fn an_item_emitting_nothing_takes_no_room() {
                 },
             );
         });
-        assert!(is_displayed(&mut ui, "0", LIST) && is_displayed(&mut ui, "2", LIST), "{lazy:?}");
+        assert!(
+            ui.on_node_with_tag("0").is_displayed() && ui.on_node_with_tag("2").is_displayed(),
+            "{lazy:?}"
+        );
         let _ = run(&mut ui, async move { handle.scroll_to_item(1, 0).await });
-        assert!(!is_displayed(&mut ui, "0", LIST), "{lazy:?}");
-        assert!(is_displayed(&mut ui, "2", LIST) && is_displayed(&mut ui, "3", LIST), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("0").is_displayed(), "{lazy:?}");
+        assert!(
+            ui.on_node_with_tag("2").is_displayed() && ui.on_node_with_tag("3").is_displayed(),
+            "{lazy:?}"
+        );
     }
 }
 
@@ -1134,10 +1146,10 @@ fn a_zero_sized_first_item_shows_when_it_grows() {
                 },
             );
         });
-        assert!(!is_displayed(&mut ui, "firstItem", "mainList"), "{lazy:?}");
+        assert!(!ui.on_node_with_tag("firstItem").is_displayed(), "{lazy:?}");
         size.set(20.dp());
         ui.wait_for_idle();
-        assert!(is_displayed(&mut ui, "firstItem", "mainList"), "{lazy:?}");
+        assert!(ui.on_node_with_tag("firstItem").is_displayed(), "{lazy:?}");
     }
 }
 
@@ -1547,10 +1559,10 @@ fn a_reused_inner_list_flings_its_own_state() {
         for main in 5..=7 {
             let (list, first) = (format!("main={main}"), format!("main={main} item=0"));
             swipe_along(&mut ui, &list, inner.vertical, true);
-            assert!(!is_displayed(&mut ui, &first, &list), "{lazy:?}: {list}");
+            assert!(!ui.on_node_with_tag(&first).is_displayed(), "{lazy:?}: {list}");
             // And back to the start, the fling going the whole way.
             swipe_along(&mut ui, &list, inner.vertical, false);
-            assert!(is_displayed(&mut ui, &first, &list), "{lazy:?}: {list}");
+            assert!(ui.on_node_with_tag(&first).is_displayed(), "{lazy:?}: {list}");
         }
     }
 }
