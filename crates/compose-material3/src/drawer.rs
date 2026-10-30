@@ -1214,6 +1214,7 @@ pub fn NavigationDrawerItem(
             },
             on_click,
         )
+        .then_custom(crate::parent_semantics::ChildSemantics)
         .semantics(move |config| config.set_selected(selected))
         .padding((16.dp(), 0.dp(), 24.dp(), 0.dp()));
     let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());

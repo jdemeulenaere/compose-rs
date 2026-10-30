@@ -675,11 +675,10 @@ fn the_default_indicator_is_at_the_top_center() {
     assert_eq!((node.bounds.left + node.bounds.right) / 2.0, 200.0);
 }
 
-/// Refreshing, a fling down's the list's whatever's been pulled; idle with a pull showing, it's
-/// taken, the content's left with none.
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/pulltorefresh/PullToRefreshBoxTest.kt, box_fling_isConsumed
+/// Refreshing, a fling down's the list's, whatever's been pulled. (Idle with a pull showing, it's
+/// taken: `the_fling_of_a_pull_is_taken`.)
 #[test]
-fn a_fling_is_taken_only_with_a_pull_showing() {
+fn refreshing_a_fling_is_the_lists() {
     let (_flag_owned, flag) = refreshing_state(false);
     let threshold_owned = mutable_state_of(Dp(80.0));
     let (mut ui, _state, scroll) = scrolling_box(flag, threshold_owned.handle());
@@ -697,4 +696,160 @@ fn a_fling_is_taken_only_with_a_pull_showing() {
     });
     ui.wait_for_idle();
     assert!(before - scroll.value() > 100, "it flung on: {before}, {}", scroll.value());
+}
+
+/// A list that flings by telling, and a state that records, with `enabled` to change.
+fn recording_fling_box(
+    enabled: MutableState<bool>,
+) -> (ComposeTestRule, compose_foundation::ScrollState, Rc<Cell<f32>>) {
+    let state = Rc::new(Recording::default());
+    let remaining = Rc::new(Cell::new(f32::NAN));
+    let velocity = remaining.clone();
+    let out = Rc::new(Cell::new(None));
+    let kept = out.clone();
+    let mut ui =
+        ComposeTestRule::sized(IntSize::new(400, 800), move || {
+            let (state, velocity, kept) = (state.clone(), velocity.clone(), kept.clone());
+            MaterialTheme!({
+                let (state, velocity, kept) = (state.clone(), velocity.clone(), kept.clone());
+                PullToRefreshBox!(
+                    false,
+                    || {},
+                    state = Some(state as Rc<dyn PullToRefreshState>),
+                    enabled = enabled.get(),
+                    |_: BoxScope| {
+                        let scroll = remember_scroll_state(0);
+                        kept.set(Some(scroll));
+                        let fling = Rc::new(RecordingFling { velocity: velocity.clone() });
+                        Box!(
+                            modifier = Modifier
+                                .fill_max_size()
+                                .test_tag(LAZY)
+                                .vertical_scroll_with(scroll, true, Some(fling), false),
+                            {
+                                Box!(modifier = Modifier.fill_max_width().height(2000.dp()));
+                            }
+                        );
+                    }
+                );
+            });
+        });
+    ui.wait_for_idle();
+    let scroll = out.get().unwrap();
+    (ui, scroll, remaining)
+}
+
+/// Disabled in the middle of a pull, what's pulled isn't taken back: an upward move is the list's.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/pulltorefresh/PullToRefresh.kt, onPreScroll
+#[test]
+fn disabled_mid_pull_an_upward_move_is_the_lists() {
+    let owned = mutable_state_of(true);
+    let enabled = owned.handle();
+    let (mut ui, scroll, _) = recording_fling_box(enabled);
+    ui.on_node_with_tag(LAZY).perform_touch_input(|touch| {
+        touch.down(Offset::new(100.0, 100.0));
+        for _ in 0..10 {
+            touch.move_by(Offset::new(0.0, 10.0));
+        }
+    });
+    enabled.set(false);
+    ui.wait_for_idle();
+    ui.on_node_with_tag(LAZY).perform_touch_input(|touch| {
+        for _ in 0..3 {
+            touch.move_by(Offset::new(0.0, -10.0));
+        }
+    });
+    ui.wait_for_idle();
+    assert_eq!(scroll.value(), 30);
+    ui.on_node_with_tag(LAZY).perform_touch_input(|touch| touch.up());
+}
+
+/// With a pull showing, an upward fling's the list's: only a downward one is taken.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/pulltorefresh/PullToRefresh.kt, onRelease
+#[test]
+fn an_upward_fling_with_a_pull_showing_is_the_lists() {
+    let owned = mutable_state_of(true);
+    let (mut ui, _scroll, remaining) = recording_fling_box(owned.handle());
+    ui.on_node_with_tag(LAZY).perform_touch_input(|touch| {
+        touch.down(Offset::new(100.0, 100.0));
+        for _ in 0..10 {
+            touch.move_by(Offset::new(0.0, 20.0));
+        }
+        // Fast up, not all the way back.
+        touch.move_by(Offset::new(0.0, -20.0));
+        touch.move_by(Offset::new(0.0, -20.0));
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert!(remaining.get().abs() > 100.0, "{}", remaining.get());
+}
+
+/// What records the hide's start.
+struct HideTime {
+    fraction: OwnedState<f32>,
+    hidden: Cell<bool>,
+}
+
+impl PullToRefreshState for HideTime {
+    fn distance_fraction(&self) -> f32 {
+        self.fraction.get()
+    }
+    fn is_animating(&self) -> bool {
+        false
+    }
+    fn animate_to_threshold(&self) -> LocalBoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn animate_to_hidden(&self) -> LocalBoxFuture<'_, ()> {
+        self.hidden.set(true);
+        Box::pin(async {})
+    }
+    fn snap_to(&self, target_value: f32) -> LocalBoxFuture<'_, ()> {
+        self.fraction.set(target_value);
+        Box::pin(async {})
+    }
+}
+
+/// With `on_refresh` setting nothing, the hide starts two frames on: one more than Compose's, for
+/// the recomposition (D1552), no more.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/pulltorefresh/PullToRefresh.kt, onRelease
+#[test]
+fn the_hide_after_a_refresh_waits_two_frames() {
+    let state = Rc::new(HideTime { fraction: mutable_state_of(0.0), hidden: Cell::new(false) });
+    let (_owned, flag) = refreshing_state(false);
+    let refreshed = Rc::new(Cell::new(false));
+    let refreshing = refreshed.clone();
+    let mut ui = pull_box(state.clone(), flag, move || refreshing.set(true));
+    ui.set_auto_advance(false);
+    ui.on_node_with_tag(LAZY).perform_touch_input(|touch| {
+        touch.down(Offset::new(100.0, 10.0));
+        for _ in 0..20 {
+            touch.move_by(Offset::new(0.0, 20.0));
+        }
+        touch.up();
+    });
+    assert!(refreshed.get(), "the release calls it");
+    assert!(!state.hidden.get());
+    let mut frames = 0;
+    while !state.hidden.get() {
+        ui.advance_time_by_frame();
+        frames += 1;
+        assert!(frames <= 2, "{frames} frames");
+    }
+    assert_eq!(frames, 2);
+}
+
+/// A new density counts: the threshold's in dp.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/pulltorefresh/PullToRefresh.kt, thresholdPx
+#[test]
+fn the_threshold_follows_the_density() {
+    let owned = mutable_state_of(Dp(80.0));
+    let (_flag_owned, flag) = refreshing_state(false);
+    let (mut ui, state, _scroll) = scrolling_box(flag, owned.handle());
+    ui.host().set_density(compose_ui::Density { density: 2.0, font_scale: 1.0 });
+    ui.wait_for_idle();
+    // Twice the threshold, at twice the pixels, the slop twice too: the threshold's 80 dp.
+    let slop = ui.run_on_idle(|ui| ui.host().with_tree(|tree| tree.density()).density) * SLOP;
+    pull(&mut ui, 2.0 * 160.0 / 2.0 + slop);
+    assert_eq!(state.distance_fraction(), 0.5);
 }

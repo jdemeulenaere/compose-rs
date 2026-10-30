@@ -26,6 +26,7 @@ impl UiTree {
             }
         }
         self.window = size;
+        self.focus_requests.container_size.set(size);
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);

@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use compose_foundation::MutatorMutex;
 use compose_foundation::layout::*;
+use compose_foundation::{MutatorMutex, ScrollModifiers as _, remember_scroll_state};
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
@@ -1118,7 +1118,7 @@ fn the_popup_has_a_pane_title_and_a_live_region() {
     });
     advance(&mut ui, FADE);
     let node = ui
-        .on_node(expect_value(&SemanticsProperties::PANE_TITLE, "Tooltip".into()))
+        .on_node(expect_value(&SemanticsProperties::PANE_TITLE, "tooltip".into()))
         .fetch_semantics_node();
     assert_eq!(
         node.config.get(&SemanticsProperties::LIVE_REGION),
@@ -1237,4 +1237,374 @@ fn a_persistent_label_is_always_there() {
     ui.on_node_with_tag(CONTAINER).assert_exists();
     advance(&mut ui, DURATION * 2);
     ui.on_node_with_tag(CONTAINER).assert_exists();
+}
+
+/// A second `show` while one runs keeps it, for its full time: the first's end doesn't hide it.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tooltip.kt, TooltipStateImpl
+#[test]
+fn a_second_show_keeps_it_for_its_own_time() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || {
+        PlainBox!(state, tooltip_content = || {});
+    });
+    show(state);
+    advance(&mut ui, 500);
+    assert!(state.is_visible());
+    show(state);
+    advance(&mut ui, 500);
+    assert!(state.is_visible(), "the first's end hid it");
+    // Past the first's 1.5 s, not the second's.
+    advance(&mut ui, 900);
+    assert!(state.is_visible(), "the first's time counted");
+    advance(&mut ui, 600 + FADE);
+    assert!(!state.is_visible());
+}
+
+/// In, out and in: the second hover shows it.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/BasicTooltip.kt, handleGestures
+#[test]
+fn a_second_hover_shows_it() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || {
+        TooltipBox!(above(), |_: TooltipScope| {}, state, {
+            Box!(modifier = Modifier.size(30.dp()).test_tag(ANCHOR));
+        });
+    });
+    advance(&mut ui, 16);
+    for _ in 0..2 {
+        ui.on_node_with_tag_unmerged(ANCHOR).perform_mouse_input(|mouse| {
+            let center = mouse.center();
+            mouse.move_to(center);
+        });
+        advance(&mut ui, FADE);
+        assert!(state.is_visible());
+        ui.on_node_with_tag_unmerged(ANCHOR)
+            .perform_mouse_input(|mouse| mouse.move_to(Offset::new(-1.0, -1.0)));
+        advance(&mut ui, FADE);
+        assert!(!state.is_visible());
+    }
+    // In while it fades out, too.
+    ui.on_node_with_tag_unmerged(ANCHOR).perform_mouse_input(|mouse| {
+        let center = mouse.center();
+        mouse.move_to(center);
+    });
+    advance(&mut ui, FADE);
+    ui.on_node_with_tag_unmerged(ANCHOR)
+        .perform_mouse_input(|mouse| mouse.move_to(Offset::new(-1.0, -1.0)));
+    advance(&mut ui, 16);
+    ui.on_node_with_tag_unmerged(ANCHOR).perform_mouse_input(|mouse| {
+        let center = mouse.center();
+        mouse.move_to(center);
+    });
+    advance(&mut ui, FADE);
+    assert!(state.is_visible());
+}
+
+/// A label pressed twice shows both times.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Label.kt, HandleInteractions
+#[test]
+fn a_label_pressed_twice_shows_twice() {
+    let source = compose_ui::MutableInteractionSource::new();
+    let given = source.clone();
+    let mut ui = rule(move || Labelled!(given.clone(), false));
+    advance(&mut ui, 16);
+    for _ in 0..2 {
+        ui.on_node_with_tag(ANCHOR).perform_touch_input(|touch| {
+            let center = touch.center();
+            touch.down(center);
+        });
+        advance(&mut ui, 200);
+        ui.on_node_with_tag(CONTAINER).assert_exists();
+        ui.on_node_with_tag(ANCHOR).perform_touch_input(|touch| touch.up());
+        advance(&mut ui, 32);
+        ui.on_node_with_tag(CONTAINER).assert_does_not_exist();
+    }
+}
+
+/// A long press that then leaves the anchor ends as one lifted: gone with its time.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/BasicTooltip.kt, handleGestures
+#[test]
+fn a_long_press_leaving_the_anchor_ends_with_its_time() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || Tagged!(state));
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+    });
+    advance(&mut ui, 500);
+    assert!(state.is_visible());
+    ui.on_node_with_tag("tooltip")
+        .perform_touch_input(|touch| touch.move_by(Offset::new(0.0, 200.0)));
+    advance(&mut ui, 100);
+    assert!(state.is_visible(), "its time isn't over");
+    advance(&mut ui, DURATION + FADE);
+    assert!(!state.is_visible());
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+}
+
+/// The same when a scroll took the moves after the long press.
+#[test]
+fn a_long_press_then_a_scroll_ends_with_its_time() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || {
+        Column!(modifier = Modifier.height(100.dp()).vertical_scroll(remember_scroll_state(0)), {
+            Tagged!(state);
+            Spacer!(Modifier.height(1000.dp()));
+        });
+    });
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+        let center = touch.center();
+        touch.down(center);
+    });
+    advance(&mut ui, 500);
+    assert!(state.is_visible());
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+        for _ in 0..4 {
+            touch.move_by(Offset::new(0.0, -5.0));
+        }
+    });
+    advance(&mut ui, DURATION + FADE);
+    assert!(!state.is_visible());
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+}
+
+/// A slow drag a scroll takes is no long press, however long it's held.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt, waitForUpOrCancellation
+#[test]
+fn a_slow_drag_a_scroll_took_shows_nothing() {
+    let (_owned, state) = kept(false);
+    let scroll = Rc::new(Cell::new(None));
+    let out = scroll.clone();
+    let mut ui = rule(move || {
+        let page = remember_scroll_state(0);
+        out.set(Some(page));
+        Column!(modifier = Modifier.height(100.dp()).vertical_scroll(page), {
+            Box!(modifier = Modifier.test_tag("tooltip"), {
+                TooltipBox!(above(), |_: TooltipScope| {}, state, {
+                    Box!(modifier = Modifier.size((200.dp(), 200.dp())));
+                });
+            });
+            Spacer!(Modifier.height(1000.dp()));
+        });
+    });
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+        touch.down(Offset::new(100.0, 50.0));
+    });
+    advance(&mut ui, 100);
+    // One move past the slop, so that the scroll takes it in the main pass: only the final pass
+    // tells the anchor.
+    ui.on_node_with_tag("tooltip")
+        .perform_touch_input(|touch| touch.move_by(Offset::new(0.0, -25.0)));
+    advance(&mut ui, 600);
+    assert!(scroll.get().unwrap().value() > 0, "a scroll");
+    assert!(!state.is_visible());
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+}
+
+/// Near the bottom, it's at its anchor: the whole window counts, as `windowContainerSize`, as the
+/// anchor does from the very top. Bars of 60 and 50 in 800, an anchor at 720 to 750.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tooltip.kt, TooltipPositionProviderImpl
+#[test]
+fn near_the_bottom_it_stays_at_its_anchor_with_bars() {
+    use compose_ui::platform::{Insets, PlatformWindowInsets};
+    let owned = TooltipState::new(true, true, MutatorMutex::default());
+    let state = *owned;
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+        MaterialTheme!({
+            Box!(modifier = Modifier.offset(100.dp(), 720.dp()).size(30.dp()), {
+                TooltipBox!(
+                    above(),
+                    |_: TooltipScope| {
+                        PlainTooltip!(modifier = Modifier.test_tag(CONTAINER), content = || {});
+                    },
+                    state,
+                    {
+                        Box!(modifier = Modifier.size(30.dp()));
+                    }
+                );
+            });
+        });
+    });
+    ui.host().set_window_insets(PlatformWindowInsets {
+        status_bars: Insets { top: 60, ..Default::default() },
+        navigation_bars: Insets { bottom: 50, ..Default::default() },
+        ..Default::default()
+    });
+    ui.wait_for_idle();
+    let tooltip = bounds(&mut ui, CONTAINER);
+    assert_eq!(tooltip.bottom, 716.0, "{tooltip:?}");
+}
+
+/// Shift+Tab isn't a Tab to the tooltip: it leaves as it would.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/internal/KeyboardUtil.kt, isTab
+#[test]
+fn shift_tab_does_not_go_to_the_tooltip() {
+    let (_owned, state) = kept(true);
+    let focus = FocusRequester::new();
+    let keys = Rc::new(Cell::new(0));
+    let heard = keys.clone();
+    let mut ui = rule(move || {
+        let heard = heard.clone();
+        TooltipBox!(
+            above(),
+            |_: TooltipScope| {
+                RichTooltip!(
+                    action = Some(|| {
+                        Text!("Action");
+                    }),
+                    text = || {}
+                );
+            },
+            state,
+            has_action = true,
+            {
+                let heard = heard.clone();
+                Box!(
+                    modifier = Modifier
+                        .size(30.dp())
+                        .on_key_event(move |_: compose_ui::KeyEvent| {
+                            heard.set(heard.get() + 1);
+                            false
+                        })
+                        .focus_requester(focus)
+                        .focus_target()
+                );
+            }
+        );
+    });
+    focus.request_focus();
+    advance(&mut ui, FADE);
+    let before = keys.get();
+    let down = compose_ui::KeyEvent {
+        key: Key::Tab,
+        kind: compose_ui::KeyEventType::KeyDown,
+        modifiers: compose_ui::KeyModifiers { shift: true, ..Default::default() },
+    };
+    ui.host().send_key(down);
+    advance(&mut ui, 16);
+    assert_eq!(keys.get() - before, 1, "the preview took it");
+}
+
+/// Still there at 1.4 s, gone after its 1.5 s and the fade.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TooltipTest.kt, plainTooltip_behavior
+#[test]
+fn it_shows_for_its_whole_duration() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || {
+        PlainBox!(state, tooltip_content = || {});
+    });
+    show(state);
+    advance(&mut ui, 1400);
+    assert!(state.is_visible());
+}
+
+/// A long press's own state: the time of a press before it doesn't end the next.
+#[test]
+fn each_press_has_its_own_time() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || Tagged!(state));
+    let press = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+            let center = touch.center();
+            touch.down(center);
+        });
+    };
+    press(&mut ui);
+    advance(&mut ui, 500);
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+    advance(&mut ui, 100);
+    // Pressed again before the first's time is over, and held past it.
+    press(&mut ui);
+    advance(&mut ui, 500 + 1600);
+    assert!(state.is_visible(), "held");
+    ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+    advance(&mut ui, FADE);
+    assert!(!state.is_visible());
+}
+
+/// A drawer item's a clickable as a `Surface` is: the long click of a tooltip around it goes on it.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationDrawer.kt, NavigationDrawerItem
+#[test]
+fn a_drawer_item_takes_the_long_click_too() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || {
+        TooltipBox!(above(), |_: TooltipScope| {}, state, {
+            NavigationDrawerItem!(
+                { Text!("Inbox") },
+                false,
+                || {},
+                modifier = Modifier.test_tag(ANCHOR)
+            );
+        });
+    });
+    advance(&mut ui, 16);
+    let node = ui.on_node_with_tag(ANCHOR).fetch_semantics_node();
+    assert!(node.config.contains(&SemanticsActions::ON_LONG_CLICK));
+}
+
+/// A new `interaction_source` for a label: the new one's what it follows.
+#[test]
+fn a_label_follows_a_new_source() {
+    let first = compose_ui::MutableInteractionSource::new();
+    let second = compose_ui::MutableInteractionSource::new();
+    let owned = mutable_state_of(first.clone());
+    let source = owned.handle();
+    let mut ui = rule(move || Labelled!(source.get(), false));
+    advance(&mut ui, 16);
+    source.set(second.clone());
+    advance(&mut ui, 16);
+    let enter = compose_ui::HoverEnter::new();
+    second.try_emit(compose_ui::Interaction::Hover(compose_ui::HoverInteraction::Enter(enter)));
+    advance(&mut ui, 100);
+    ui.on_node_with_tag(CONTAINER).assert_exists();
+}
+
+/// What a press before knew of its `show` doesn't end the next's early.
+#[test]
+fn the_next_long_press_lasts_its_own_time() {
+    let (_owned, state) = kept(false);
+    let mut ui = rule(move || Tagged!(state));
+    let down = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag("tooltip").perform_touch_input(|touch| {
+            let center = touch.center();
+            touch.down(center);
+        });
+    };
+    let up = |ui: &mut ComposeTestRule| {
+        ui.on_node_with_tag("tooltip").perform_touch_input(|touch| touch.up());
+    };
+    // Held past its time, lifted, gone.
+    down(&mut ui);
+    advance(&mut ui, 400 + DURATION + 100);
+    up(&mut ui);
+    advance(&mut ui, FADE);
+    assert!(!state.is_visible());
+    // Lifted well before its time: it stays for that.
+    down(&mut ui);
+    advance(&mut ui, 500);
+    assert!(state.is_visible());
+    up(&mut ui);
+    advance(&mut ui, FADE);
+    assert!(state.is_visible());
+}
+
+/// The action's at least 36 dp high, whatever's left for it, as `requiredHeightIn`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tooltip.kt, RichTooltip
+#[test]
+fn the_action_has_its_height_in_a_short_tooltip() {
+    let (_owned, state) = kept(true);
+    let mut ui = rule(move || {
+        RichBox!(
+            state,
+            modifier = Modifier.height(30.dp()),
+            action = Some(|| {
+                Box!(modifier = Modifier.width(10.dp()).fill_max_height().test_tag(ACTION));
+            }),
+            text = || {}
+        );
+    });
+    show(state);
+    advance(&mut ui, FADE);
+    // Less the 8 dp below it.
+    assert_eq!(bounds(&mut ui, ACTION).height(), 28.0);
 }

@@ -71,11 +71,14 @@ impl ComposeArg for TooltipAnchorPosition {
 pub struct TooltipPositionProvider {
     positioning: TooltipAnchorPosition,
     spacing: i32,
+    /// Where the window's whole size comes from.
+    window_info: Option<compose_ui::WindowInfo>,
 }
 
 impl TooltipPositionProvider {
+    /// One that goes by the window it's given.
     pub fn new(positioning: TooltipAnchorPosition, spacing: i32) -> TooltipPositionProvider {
-        TooltipPositionProvider { positioning, spacing }
+        TooltipPositionProvider { positioning, spacing, window_info: None }
     }
 
     fn beside(&self, anchor: Rect, popup: IntSize, window: IntSize, left_first: bool) -> IntOffset {
@@ -123,6 +126,9 @@ impl PopupPositionProvider for TooltipPositionProvider {
         layout_direction: LayoutDirection,
         popup: IntSize,
     ) -> IntOffset {
+        // The window's whole, as Compose's `windowContainerSize`, the rule for what compares with
+        // an anchor: see `PopupPositionProvider`.
+        let window = self.window_info.as_ref().map_or(window, |info| info.container_size());
         let ltr = layout_direction == LayoutDirection::Ltr;
         match self.positioning {
             TooltipAnchorPosition::Left => self.beside(anchor, popup, window, true),
@@ -206,8 +212,11 @@ impl TooltipDefaults {
         let density = compose_ui::LOCAL_DENSITY.current();
         let spacing = density.round_to_px(spacing_between_tooltip_and_anchor);
         compose_runtime::remember_keyed((positioning, spacing), || {
-            Rc::new(TooltipPositionProvider::new(positioning, spacing))
-                as Rc<dyn PopupPositionProvider>
+            Rc::new(TooltipPositionProvider {
+                positioning,
+                spacing,
+                window_info: Some(compose_ui::LOCAL_WINDOW_INFO.current()),
+            }) as Rc<dyn PopupPositionProvider>
         })
     }
 }
@@ -351,15 +360,8 @@ fn with_caret(
     let (Some(scope), Some(caret_shape)) = (scope, caret_shape) else {
         return (modifier, shape);
     };
-    let window_width = Rc::new(Cell::new(0));
-    let measured = window_width.clone();
+    let window_info = compose_ui::LOCAL_WINDOW_INFO.current();
     let positioned = Modifier
-        .layout(move |measure, content, constraints| {
-            measured.set(measure.window_size().width);
-            let placeable = measure.measure(content, constraints);
-            measure.place(&placeable, 0, 0);
-            measure.layout(placeable.width, placeable.height)
-        })
         .on_globally_positioned(move |coordinates: LayoutCoordinates| {
             if let Some(anchor) = scope.obtain_anchor_bounds() {
                 let bounds = |of: LayoutCoordinates| {
@@ -374,7 +376,7 @@ fn with_caret(
                     bounds(coordinates),
                     bounds(anchor),
                     positioning,
-                    window_width.get(),
+                    window_info.container_size().width,
                 ));
             }
         })
@@ -478,11 +480,19 @@ impl TooltipInner {
 /// `show`'s `finally`, which a dropped task runs too.
 struct ShowFinally {
     inner: Rc<TooltipInner>,
+    job: Rc<ShowJob>,
     priority: MutatePriority,
 }
 
 impl Drop for ShowFinally {
     fn drop(&mut self) {
+        // An interrupted mutation's block drops after the next has started (D850): that show's
+        // is the state now, and a finally of this one mustn't hide what it showed.
+        let current =
+            self.inner.job.borrow().as_ref().is_some_and(|job| Rc::ptr_eq(job, &self.job));
+        if !current {
+            return;
+        }
         match self.inner.visibility {
             Visibility::Animated(_) => {
                 if self.priority != MutatePriority::PreventUserInput {
@@ -572,17 +582,23 @@ impl TooltipState {
     /// Shows it, returning when it's gone or interrupted, as `show(mutatePriority)`: for 1.5 s,
     /// unless it's persistent or the user's (a hover).
     pub async fn show_with(&self, priority: MutatePriority) {
-        let Some(inner) = self.inner() else { return };
+        self.show_tracked(priority).await;
+    }
+
+    /// `show_with`, saying if it's still this show at its end: not if a later one took over.
+    async fn show_tracked(&self, priority: MutatePriority) -> bool {
+        let Some(inner) = self.inner() else { return false };
         if matches!(inner.visibility, Visibility::Always) {
-            return;
+            return false;
         }
         let mutex = inner.mutator_mutex.clone();
+        let started = Rc::new(ShowJob::default());
+        let (job, kept) = (started.clone(), inner.clone());
         let block = async move {
-            let job = Rc::new(ShowJob::default());
             *inner.job.borrow_mut() = Some(job.clone());
             inner.set_visible(true);
             let waits_for_it = inner.persistent || priority == MutatePriority::UserInput;
-            let _finally = ShowFinally { inner, priority };
+            let _finally = ShowFinally { inner, job: job.clone(), priority };
             if waits_for_it {
                 std::future::poll_fn(|context| job.poll(context)).await;
             } else {
@@ -597,6 +613,8 @@ impl TooltipState {
             }
         };
         let _ = mutex.mutate(priority, block).await;
+        let job = kept.job.borrow();
+        job.as_ref().is_some_and(|job| Rc::ptr_eq(job, &started))
     }
 
     /// Hides it, as `dismiss()`.
@@ -651,8 +669,11 @@ struct AnchorGesturesNode {
 }
 
 impl AnchorGesturesNode {
+    /// The press ended, whichever way. The `show` of one held long enough goes on to its time,
+    /// as Compose's: only a wait for the timeout is cancelled.
     fn end_press(&mut self) {
-        if let Some(job) = self.waiting.take() {
+        let waiting = self.waiting.take();
+        if let Some(job) = waiting.filter(|_| !self.press.held.get()) {
             job.cancel();
         }
         self.fingers = 0;
@@ -706,24 +727,38 @@ impl PointerInputModifierNode for AnchorGesturesNode {
             }
             return;
         }
-        if pass != PointerEventPass::Initial || mouse {
+        if mouse {
+            return;
+        }
+        // A move something inside took (a scroll) ends the press, as `waitForUpOrCancellation`.
+        if pass == PointerEventPass::Final {
+            if event.kind == PointerEventType::Move && self.fingers > 0 && event.consumed {
+                self.end_press();
+            }
+            return;
+        }
+        if pass != PointerEventPass::Initial {
             return;
         }
         match event.kind {
             PointerEventType::Press if self.fingers > 0 => self.fingers += 1,
             PointerEventType::Press if !event.consumed => {
                 self.fingers = 1;
+                // Its own: the `show` of the last may be running yet.
+                self.press = Rc::default();
                 let press = self.press.clone();
-                press.show_done.set(false);
                 let timeout = context.view_configuration().long_press_timeout_millis;
                 self.waiting = Some(context.coroutine_scope().launch(async move {
                     compose_runtime::delay(Duration::from_millis(timeout)).await;
                     press.held.set(true);
-                    state.show_with(MutatePriority::PreventUserInput).await;
-                    if press.held.get() {
-                        press.show_done.set(true);
-                    } else if state.is_visible() {
-                        state.dismiss();
+                    let latest = state.show_tracked(MutatePriority::PreventUserInput).await;
+                    // Another press's or a hover's show took over: it's theirs to end.
+                    if latest {
+                        if press.held.get() {
+                            press.show_done.set(true);
+                        } else if state.is_visible() {
+                            state.dismiss();
+                        }
                     }
                 }));
             }
@@ -789,7 +824,11 @@ fn keyboard_behavior(
                 force_focusable.set(false);
                 return false;
             }
-            if has_action && event.key == Key::Tab && event.kind == KeyEventType::KeyDown {
+            if has_action
+                && event.key == Key::Tab
+                && event.kind == KeyEventType::KeyDown
+                && !event.modifiers.shift
+            {
                 force_focusable.set(true);
                 return true;
             }
@@ -847,7 +886,7 @@ fn basic_tooltip_box(
                         Box(
                             Modifier.semantics(|config| {
                                 config.set_live_region(LiveRegionMode::Assertive);
-                                config.set_pane_title("Tooltip");
+                                config.set_pane_title("tooltip");
                             }),
                             Alignment::TOP_START,
                             false,
@@ -887,7 +926,7 @@ fn remember_keyed_long_click(
 ) -> crate::parent_semantics::Properties {
     compose_runtime::remember_keyed(state, move || {
         Rc::new(move |config: &mut compose_ui::SemanticsConfiguration| {
-            config.on_long_click(Some("Show tooltip".into()), move || {
+            config.on_long_click(Some("show tooltip".into()), move || {
                 scope.launch(async move { state.show().await });
                 true
             });
@@ -1146,12 +1185,21 @@ pub fn RichTooltip(
                     );
                     if let Some(action) = action.clone() {
                         slot(
-                            Modifier.height_in(ACTION_LABEL_MIN_HEIGHT, Dp::UNSPECIFIED).padding(
-                                PaddingValues {
+                            Modifier
+                                .size_in(SizeSpec {
+                                    min_height: ACTION_LABEL_MIN_HEIGHT,
+                                    enforce_incoming: false,
+                                    ..SizeSpec::bounds(
+                                        Dp::UNSPECIFIED,
+                                        Dp::UNSPECIFIED,
+                                        Dp::UNSPECIFIED,
+                                        Dp::UNSPECIFIED,
+                                    )
+                                })
+                                .padding(PaddingValues {
                                     bottom: ACTION_LABEL_BOTTOM_PADDING,
                                     ..PaddingValues::ZERO
-                                },
-                            ),
+                                }),
                             colors.action_content_color,
                             label,
                             action,
@@ -1193,7 +1241,9 @@ pub fn Label(
     #[default(false)] is_persistent: bool,
     content: impl Fn() + 'static,
 ) {
-    let source = remember(|| interaction_source.unwrap_or_default());
+    let source = compose_runtime::remember_keyed(interaction_source.clone(), move || {
+        interaction_source.unwrap_or_default()
+    });
     let provider =
         TooltipDefaults::remember_tooltip_position_provider(TooltipAnchorPosition::Above);
     let state = compose_runtime::remember_keyed(is_persistent, move || {

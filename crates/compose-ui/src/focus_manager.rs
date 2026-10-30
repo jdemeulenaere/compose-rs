@@ -75,6 +75,14 @@ impl WindowInfo {
         WindowInfo { requests, window: None }
     }
 
+    /// The whole window's size, bars and keyboard's place included, as `containerSize` (not a
+    /// state: what's measured or placed reads the latest).
+    pub fn container_size(&self) -> crate::unit::IntSize {
+        self.requests
+            .upgrade()
+            .map_or(crate::unit::IntSize::new(0, 0), |it| it.container_size.get())
+    }
+
     /// Whether this window takes the keys now, as `isWindowFocused`: a state. Only another
     /// window of this host over it says no here: the platform's window isn't asked yet.
     pub fn is_window_focused(&self) -> bool {

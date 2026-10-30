@@ -295,6 +295,9 @@ impl ModifierNode for PullToRefreshNode {
     fn should_auto_invalidate(&self) -> bool {
         false
     }
+    fn on_density_change(&mut self, context: &mut NodeContext<'_>) {
+        self.connection.density.set(context.require_density());
+    }
     fn on_attach(&mut self, context: &mut NodeContext<'_>) {
         let connection = &self.connection;
         connection.density.set(context.require_density());
