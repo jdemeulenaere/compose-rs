@@ -993,6 +993,36 @@ fn a_new_local_indication_after_the_node_is_made_replaces_it_at_once() {
     assert_eq!(seen_kinds(&first_seen), ["Press", "Release"], "the old node collects no more");
 }
 
+/// A new provider of it the node's observation can't see, a function `provides_computed` gives:
+/// the content composes again, the node stays and keeps what it read, as Compose's, whose
+/// `onObservedReadsChanged` only an observed state calls and whose `compositionLocalMap` setter
+/// only auto-invalidates (D1184). The local's new value through a state reaches it, above.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, onObservedReadsChanged
+#[test]
+fn a_new_computed_local_indication_doesn_t_reach_a_kept_clickable() {
+    let (first_seen, first) = test_indication();
+    let (second_seen, second) = test_indication();
+    let which = mutable_state_of(false);
+    let handle = which.handle();
+    let mut ui = compose_test(move || {
+        let chosen = if handle.get() { second.clone() } else { first.clone() };
+        // A new function each time: the provider's content composes again.
+        let provided = LOCAL_INDICATION.provides_computed(move |_| chosen.clone());
+        CompositionLocalProvider(provided, || {
+            Box!(modifier = Modifier.size(20.dp()).clickable(|| {}).test_tag(TAG));
+        });
+    });
+    let at = center(&mut ui, TAG);
+    touch_down(&mut ui, at);
+    touch_up(&mut ui, at);
+    assert_eq!((first_seen.created(), second_seen.created()), (1, 0));
+    which.set(true);
+    ui.wait_for_idle();
+    touch_down(&mut ui, at);
+    assert_eq!((first_seen.created(), second_seen.created()), (1, 0));
+    assert_eq!(seen_kinds(&first_seen), ["Press", "Release", "Press"]);
+}
+
 /// A clickable modifier made outside the provider (outside composition, or before the
 /// provider in it) and used inside it shows the provider's indication: the local is read where
 /// the clickable's node is, as Compose's node reads `LocalIndication` (`useLocalIndication`,

@@ -755,6 +755,49 @@ fn a_view_configuration_animated_in_a_subtree_stays_right() {
     assert_eq!(timeout(&host, &steady), 7, "one a node holds stays");
 }
 
+/// An anchor kept from a provider that's gone isn't that id's next provider's.
+#[test]
+fn an_anchor_of_a_provider_gone_doesn_t_read_the_one_with_its_id() {
+    let v = mutable_state_of(0);
+    let kept = Rc::new(Cell::new(CompositionLocalAnchor::NONE));
+    let (w, k) = (v.handle(), kept.clone());
+    let mut host = host(move || {
+        let k = k.clone();
+        match w.get() {
+            0 => CompositionLocalProvider(LOCAL_INT.provides(1), move || {
+                k.set(current_composition_local_anchor());
+            }),
+            1 => {}
+            _ => CompositionLocalProvider(LOCAL_INT.provides(2), || Leaf(Modifier)),
+        }
+    });
+    assert_eq!(kept.get().get(&LOCAL_INT), 1);
+    v.set(1);
+    host.frame();
+    assert_eq!(kept.get().get(&LOCAL_INT), 0);
+    v.set(2);
+    host.frame();
+    assert_eq!(kept.get().get(&LOCAL_INT), 0, "its id is another's now");
+}
+
+/// A provider's own change gives its nodes a new anchor: a consumer's told once.
+#[test]
+fn a_provider_s_own_change_tells_a_consumer_under_it() {
+    let v = mutable_state_of(0);
+    let consumed = Consumed::default();
+    let (w, c) = (v.handle(), consumed.clone());
+    let mut host = host(move || {
+        let c = c.clone();
+        CompositionLocalProvider(LOCAL_STATIC_INT.provides(w.get()), move || {
+            Leaf(Modifier.then_custom(ConsumerElement(c.clone())));
+        });
+    });
+    assert_eq!(consumed.told.get(), 0);
+    v.set(1);
+    host.frame();
+    assert_eq!(consumed.told.get(), 1);
+}
+
 /// A `Box`: a stack of `content`.
 fn stack(modifier: Modifier, content: impl Fn() + 'static) {
     Stack(modifier, callback(content));
