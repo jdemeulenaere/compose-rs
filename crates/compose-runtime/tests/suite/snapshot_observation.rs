@@ -111,6 +111,64 @@ fn a_state_displays_its_value() {
     assert_ne!(id, "");
 }
 
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, toStringOfDerivedStateDoesNotTriggerReadObservers
+#[test]
+fn formatting_a_derived_state_reads_nothing() {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() + 1);
+    assert_eq!(reads_of(|| drop(format!("{}", derived.as_state()))), 0);
+    assert_eq!(derived.as_state().get(), 1);
+    assert_eq!(reads_of(|| drop(format!("{}", derived.as_state()))), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, toStringValueOfDerivedState
+#[test]
+fn a_derived_state_displays_its_value_once_calculated() {
+    let state = mutable_state_of(10);
+    let handle = state.handle();
+    let derived = derived_state_of(move || handle.get() + 10);
+    let shown = || format!("{}", derived.as_state());
+    assert!(shown().starts_with("DerivedState(value=<Not calculated>)@"), "{}", shown());
+    assert_eq!(derived.as_state().get(), 20);
+    assert!(shown().starts_with("DerivedState(value=20)@"), "{}", shown());
+    state.set(20);
+    assert!(shown().starts_with("DerivedState(value=<Not calculated>)@"), "{}", shown());
+    assert_eq!(derived.as_state().get(), 30);
+    assert!(shown().starts_with("DerivedState(value=30)@"), "{}", shown());
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, stateReadsCanBeObserved
+// On `Snapshot::observe`: taking a snapshot with its read observer comes with step S5.
+#[test]
+fn a_read_observer_hears_the_state_read() {
+    let state = mutable_state_of(0);
+    let read: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = read.clone();
+    let observer: compose_runtime::snapshots::StateObserverFn =
+        Rc::new(move |id| log.borrow_mut().push(id));
+    let result = Snapshot::observe(Some(observer), None, || state.get());
+    assert_eq!(result, 0);
+    assert_eq!(*read.borrow(), [state.state_object_id()]);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt, stateWritesCanBeObserved
+// On `Snapshot::observe`: taking a mutable snapshot with its write observer comes with step S5.
+#[test]
+fn a_write_observer_hears_the_write_at_once() {
+    let state = mutable_state_of(0);
+    let written: Rc<RefCell<Vec<StateObjectId>>> = Rc::default();
+    let log = written.clone();
+    let observer: compose_runtime::snapshots::StateObserverFn =
+        Rc::new(move |id| log.borrow_mut().push(id));
+    Snapshot::observe(None, Some(observer), || {
+        assert!(written.borrow().is_empty());
+        state.set(2);
+        assert_eq!(written.borrow().len(), 1);
+    });
+    assert_eq!(*written.borrow(), [state.state_object_id()]);
+}
+
 /// A write observer of `Snapshot::observe` hears the write at once; a global write observer
 /// hears global writes at once too, before any send.
 #[test]
@@ -490,4 +548,80 @@ fn a_state_written_where_it_was_made_is_not_a_change() {
     state.set(2);
     Snapshot::send_apply_notifications();
     assert_eq!(changes.get(), 1);
+}
+
+/// What a pass's effects made is initialized when the pass ends, as `Recomposer`'s
+/// `notifyObjectsInitialized` closes a frame after applying changes: an observation reading
+/// such a state hears its next write, with nothing else having changed in between.
+// Compose: compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/Recomposer.kt, the frame's Snapshot.notifyObjectsInitialized
+#[test]
+fn a_state_made_by_a_passs_effect_is_initialized_when_the_pass_ends() {
+    let made: Rc<RefCell<Option<OwnedState<i32>>>> = Rc::default();
+    let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let slot = made.clone();
+    composition.set_content(move || {
+        let slot = slot.clone();
+        SideEffect(move || *slot.borrow_mut() = Some(mutable_state_of(0)));
+    });
+    let state = made.borrow().as_ref().expect("the effect ran").handle();
+    assert_eq!(changes_of_observed(state, || state.set(1)), 1);
+}
+
+/// What a turn made is initialized when it ends: a state a task made and an observation read is
+/// changed by a later turn's write, however quiet the turns between (an animation a task
+/// started, read only by drawing, stepping on frames that change nothing else).
+#[test]
+fn a_state_made_in_a_turn_is_initialized_when_the_turn_ends() {
+    let made: Rc<RefCell<Option<OwnedState<i32>>>> = Rc::default();
+    let slot = made.clone();
+    let scope = CoroutineScope::new();
+    scope.launch(async move { *slot.borrow_mut() = Some(mutable_state_of(0)) });
+    compose_runtime::platform::run_ready();
+    let state = made.borrow().as_ref().expect("the task ran").handle();
+    let changes = changes_of_observed(state, || {
+        scope.launch(async move { state.set(1) });
+        compose_runtime::platform::run_ready();
+    });
+    assert_eq!(changes, 1);
+}
+
+/// How many times a started `SnapshotStateObserver` that read `state` is called back for what
+/// `block` does, sent.
+fn changes_of_observed(state: MutableState<i32>, block: impl FnOnce()) -> u32 {
+    let observer = SnapshotStateObserver::new(|run| run());
+    observer.start();
+    let changes = Rc::new(Cell::new(0));
+    let callback = counting(&changes);
+    observer.observe_reads("scope", &callback, || state.get());
+    block();
+    Snapshot::send_apply_notifications();
+    observer.stop();
+    changes.get()
+}
+
+/// A write outside any turn has no end of turn to send it: its first asks the host for one (its
+/// wake handler). A write in a turn doesn't: the turn sends (D751).
+#[test]
+fn a_write_outside_a_turn_wakes_the_host_and_one_in_a_turn_does_not() {
+    let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = wakes.clone();
+    compose_runtime::platform::set_wake_handler(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let woken = || wakes.swap(0, std::sync::atomic::Ordering::SeqCst);
+    let (first, second) = (mutable_state_of(0), mutable_state_of(0));
+    Snapshot::notify_objects_initialized();
+    first.set(1);
+    second.set(1);
+    assert_eq!(woken(), 1, "the first change since a send asks for a turn");
+    Snapshot::send_apply_notifications();
+    {
+        let _turn = compose_runtime::platform::Turn::begin();
+        first.set(2);
+        assert_eq!(woken(), 0, "a turn sends at its end");
+    }
+    assert_eq!(woken(), 0);
+    second.set(2);
+    assert_eq!(woken(), 1);
+    Snapshot::send_apply_notifications();
 }

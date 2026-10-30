@@ -663,3 +663,92 @@ fn state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recompo
     assert!(host.display_list().dump().contains("#FF000022"), "{}", host.display_list().dump());
     assert_eq!(compose_runtime::platform::bodies_run(), bodies, "no recomposition");
 }
+
+/// An animation a task made the state of, read only by drawing, shows on the frames it steps on,
+/// though nothing else changes and no pass runs (D754): each of its writes is a change.
+#[test]
+fn a_state_a_task_made_and_drawing_reads_shows_its_writes() {
+    let made: Rc<Cell<Option<MutableState<i32>>>> = Rc::default();
+    let drawn = Rc::new(Cell::new(-1));
+    let mut host = UiHost::headless(100, 100);
+    let (slot, seen) = (made.clone(), drawn.clone());
+    host.set_content(move || {
+        let (slot, seen) = (slot.clone(), seen.clone());
+        let task_slot = slot.clone();
+        LaunchedEffect((), async move {
+            let owner = mutable_state_of(0);
+            task_slot.set(Some(owner.handle()));
+            for step in 1..=3 {
+                with_frame_nanos(|_| ()).await;
+                owner.set(step);
+            }
+            std::future::pending::<()>().await;
+            drop(owner);
+        });
+        let draw = Modifier.draw_behind(move |_| {
+            seen.set(slot.get().map_or(-1, |state| state.get()));
+        });
+        Layout(draw, measure_policy(|scope, _, _| scope.layout(100, 100)), callback(|| {}));
+    });
+    // The first frame starts the task; the drawing then reads the state it made.
+    host.frame();
+    assert_eq!(drawn.get(), -1);
+    host.with_tree(|tree| tree.invalidate_draw());
+    host.frame();
+    assert_eq!(drawn.get(), 1);
+    host.frame();
+    assert_eq!(drawn.get(), 2);
+    host.frame();
+    assert_eq!(drawn.get(), 3);
+}
+
+/// Each of the host's event entry points ends a turn: what a handler wrote has invalidated its
+/// readers, and asked for a frame, by the time the call returns (D751).
+#[test]
+fn an_events_writes_ask_for_a_frame_by_the_time_it_returns() {
+    let count = mutable_state_of(0);
+    let handle = count.handle();
+    let mut host = host(move || {
+        handle.get();
+        BackHandler!(on_back = move || handle.update(|count| count + 1));
+        Leaf(
+            Modifier
+                .size(20.dp())
+                .on_key_event(move |_: KeyEvent| {
+                    handle.update(|count| count + 1);
+                    true
+                })
+                .clickable(move || handle.update(|count| count + 1)),
+        );
+    });
+    let wakes = Rc::new(Cell::new(0));
+    let counted = wakes.clone();
+    host.set_frame_waker(move || counted.set(counted.get() + 1));
+    let node = host.with_tree(|tree| tree.focus_order()[0]);
+    host.request_focus(node);
+    host.frame();
+    let events: [(&str, &dyn Fn(&mut UiHost)); 4] = [
+        ("a pointer's release", &|host| {
+            host.send_pointer(PointerEvent::press(Offset::new(5.0, 5.0)));
+            host.frame();
+            wakes.set(0);
+            host.send_pointer(PointerEvent::release(Offset::new(5.0, 5.0)));
+        }),
+        ("a key", &|host| {
+            host.send_key(KeyEvent::down(Key::Character('a')));
+        }),
+        ("back", &|host| {
+            host.on_back_pressed();
+        }),
+        ("a semantics action", &|host| {
+            host.perform_semantics_action(node, &SemanticsActions::ON_CLICK);
+        }),
+    ];
+    for (written, (name, event)) in (1..).zip(events) {
+        wakes.set(0);
+        event(&mut host);
+        assert_eq!(count.get(), written, "{name} wrote");
+        assert!(wakes.get() > 0, "{name} asked for a frame");
+        host.frame();
+    }
+}

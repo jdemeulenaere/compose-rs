@@ -1052,31 +1052,27 @@ impl<T: 'static> fmt::Debug for MutableState<T> {
     }
 }
 
-/// `MutableState(value=…)@…`, as Compose's `toString`: the value, read without observing it.
+/// `MutableState(value=…)@…` or `DerivedState(value=…)@…`, as Compose's `toString`: the value,
+/// read without observing it; `<Not calculated>` for a derived state that isn't up to date.
 impl<T: fmt::Debug + 'static> fmt::Display for MutableState<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cell = try_with_runtime(|runtime| {
-            runtime.cells.entry(self.id).ok().and_then(|entry| entry.cell.clone())
+        let looked_up = try_with_runtime(|runtime| {
+            let entry = runtime.cells.entry(self.id).ok()?;
+            Some((entry.cell.clone()?, entry.refresh.is_some(), entry.dirty))
         })
         .flatten();
-        let at = Location::caller();
-        match cell {
-            Some(CellValue::State(cell)) => {
-                let any: &dyn Any = &*cell;
-                match any.downcast_ref::<StateCell<T>>() {
-                    Some(value) => write!(
-                        formatter,
-                        "MutableState(value={:?})@{}v{}",
-                        *value.read(at),
-                        self.id.index,
-                        self.id.generation
-                    ),
-                    None => write!(formatter, "MutableState(value=<Not calculated>)@{:?}", self.id),
-                }
+        let (index, generation) = (self.id.index, self.id.generation);
+        let Some((CellValue::State(cell), derived, dirty)) = looked_up else {
+            return write!(formatter, "MutableState(<freed>)@{index}v{generation}");
+        };
+        let name = if derived { "DerivedState" } else { "MutableState" };
+        let any: &dyn Any = &*cell;
+        match any.downcast_ref::<StateCell<T>>().filter(|_| !dirty) {
+            Some(value) => {
+                let value = value.read(Location::caller());
+                write!(formatter, "{name}(value={:?})@{index}v{generation}", *value)
             }
-            _ => {
-                write!(formatter, "MutableState(<freed>)@{}v{}", self.id.index, self.id.generation)
-            }
+            None => write!(formatter, "{name}(value=<Not calculated>)@{index}v{generation}"),
         }
     }
 }

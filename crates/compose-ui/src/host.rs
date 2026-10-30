@@ -605,6 +605,7 @@ impl UiHost {
         if self.has_pending_work() {
             return true;
         }
+        let _turn = compose_runtime::platform::Turn::begin();
         let _prefetch = crate::trace::section(c"compose-rs: prefetch");
         // The requests' writes are composed here: they wake nothing.
         self.framing.set(true);
@@ -685,6 +686,7 @@ impl UiHost {
         if self.has_pending_work() {
             return None;
         }
+        let _turn = compose_runtime::platform::Turn::begin();
         let _section = crate::trace::section(c"compose-rs: draw ahead");
         compose_runtime::snapshots::Snapshot::send_apply_notifications();
         self.with_tree(|tree| tree.draw_ahead())

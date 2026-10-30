@@ -472,6 +472,8 @@ impl Pass {
         drop(freed);
         drop(finishing);
         with_runtime(|runtime| {
+            // What its effects made is initialized too, as the end of Compose's frame (D754).
+            crate::snapshots::pass_composed(runtime);
             // An effect may have dropped the composition.
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.deferred.restore(deferred);

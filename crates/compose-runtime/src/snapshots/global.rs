@@ -82,7 +82,7 @@ impl Snapshots {
 
     /// Whether nothing is registered: the runtime may be released at thread exit.
     pub(crate) fn is_empty(&self) -> bool {
-        self.apply_observers.is_empty() && self.global_write_observers.is_empty()
+        self.apply_observers.is_empty() && self.global_write_observers.is_empty() && self.turns == 0
     }
 
     /// Whether a read registers with composition (no barrier is up).
@@ -506,7 +506,8 @@ fn send_settled() {
 }
 
 /// A turn of a host's loop (a run of the executor's tasks, an event, a frame): writes made in it
-/// don't wake the host, and the outermost turn sends the changes when it ends.
+/// don't wake the host, and the outermost turn sends the changes when it ends and advances the
+/// global snapshot.
 pub struct Turn {
     _not_send: std::marker::PhantomData<*const ()>,
 }
@@ -527,12 +528,17 @@ impl Drop for Turn {
         });
         if outermost == Some(true) && !std::thread::panicking() {
             send_settled();
+            // What the turn made is initialized: its next write is a change, whatever read it
+            // meanwhile, as `Recomposer`'s `notifyObjectsInitialized` closes a frame (D754).
+            let _ = try_with_runtime(|runtime| runtime.snapshots.advance());
         }
     }
 }
 
 /// Advances the global snapshot after a pass composed, as applying Compose's composition
-/// snapshot does: states made in the pass are initialized, so their next writes are changes.
+/// snapshot does, and again after its end-of-pass work, as `Recomposer`'s
+/// `notifyObjectsInitialized` (D754): states made in the pass or by its effects are initialized,
+/// so their next writes are changes.
 pub(crate) fn pass_composed(runtime: &mut Runtime) {
     runtime.snapshots.advance();
 }
