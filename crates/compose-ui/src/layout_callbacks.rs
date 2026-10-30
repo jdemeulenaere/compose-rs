@@ -324,7 +324,7 @@ impl UiTree {
                     break;
                 }
                 let size = value.layers[layer_of_entry].size;
-                if entry.node.hit_clip_at(size.into(), self.density).is_some() {
+                if entry.node.hit_clip_at(size.into(), value.density).is_some() {
                     let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
                     *bounds = intersect(*bounds, clip);
                 }

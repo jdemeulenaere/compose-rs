@@ -550,7 +550,7 @@ impl UiTree {
             let clips = value
                 .chain
                 .iter()
-                .any(|entry| entry.node.hit_clip_at(size, self.density).is_some());
+                .any(|entry| entry.node.hit_clip_at(size, value.density).is_some());
             let outer = self.bounds_in_root(container);
             let outside = clips
                 && (bounds.right <= outer.left

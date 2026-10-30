@@ -1094,6 +1094,7 @@ impl Runtime {
     /// The provider group composing now changed what it provides in a way its content can't
     /// see through state: every body in its content runs, as Compose's `providersInvalid`.
     pub(crate) fn invalidate_providers(&mut self) {
+        self.providers_epoch = self.providers_epoch.wrapping_add(1);
         if self.providers_invalid == 0 {
             self.providers_invalid = self.frames.len();
         }

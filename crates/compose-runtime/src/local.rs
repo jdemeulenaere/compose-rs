@@ -57,14 +57,16 @@ enum LocalDefault<T: 'static> {
 /// where the computed value is read, or in a [`CompositionLocalMap`].
 pub struct CompositionLocalAccessorScope {
     map: Option<CompositionLocalMap>,
+    anchor: Option<CompositionLocalAnchor>,
 }
 
 impl CompositionLocalAccessorScope {
     /// The value of `local` where the computed value is read, as `currentValue`.
     pub fn current_value<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
-        match &self.map {
-            Some(map) => map.get(local),
-            None => local.current(),
+        match (&self.map, &self.anchor) {
+            (Some(map), _) => map.get(local),
+            (None, Some(anchor)) => anchor.get(local),
+            (None, None) => local.current(),
         }
     }
 }
@@ -320,7 +322,7 @@ impl<T: 'static> CompositionLocal<T> {
     where
         T: Clone,
     {
-        let here = CompositionLocalAccessorScope { map: None };
+        let here = CompositionLocalAccessorScope { map: None, anchor: None };
         match find_provided(self.id()) {
             Some(holder) => holder
                 .downcast_ref::<Holder<T>>()
@@ -427,7 +429,7 @@ impl CompositionLocalMap {
     /// The value of `local` in the map, or its default. Reading a dynamic local during
     /// composition subscribes the composing scope, as reading it through `current()`.
     pub fn get<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
-        let scope = CompositionLocalAccessorScope { map: Some(self.clone()) };
+        let scope = CompositionLocalAccessorScope { map: Some(self.clone()), anchor: None };
         let id = local.id();
         match self.entries.iter().find(|entry| entry.local == id) {
             Some(entry) => entry
@@ -462,6 +464,84 @@ impl ComposeArg for CompositionLocalMap {
 /// The locals provided where [`current_composition_local_map`] is called.
 pub fn current_composition_local_map() -> CompositionLocalMap {
     CompositionLocalMap { entries: visible_entries().into() }
+}
+
+/// Where the locals are read at a point of a composition: what a layout node keeps, as Compose's
+/// `LayoutNode.compositionLocalMap`, for its modifier nodes' `currentValueOf`. Made per layout
+/// node, so it's the nearest provider group and nothing else: no map is built, and
+/// [`get`](CompositionLocalAnchor::get) walks the providers when asked, outside composition too.
+/// Two anchors are equal while what they read can only have changed through a dynamic local's
+/// state: a provider's static value or its set of locals changing moves the epoch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CompositionLocalAnchor {
+    composition: u32,
+    provider: u32,
+    epoch: u32,
+}
+
+impl Default for CompositionLocalAnchor {
+    fn default() -> CompositionLocalAnchor {
+        CompositionLocalAnchor::NONE
+    }
+}
+
+impl CompositionLocalAnchor {
+    /// Reads no provider: every local reads its default.
+    pub const NONE: CompositionLocalAnchor =
+        CompositionLocalAnchor { composition: NONE, provider: NONE, epoch: 0 };
+
+    /// The value of `local` here, or its default, as `currentValueOf`. A dynamic local is a
+    /// state's value: reading it is observed where reads are (measuring, drawing, a composing
+    /// scope). An anchor outlives nothing: its composition gone, it reads defaults.
+    pub fn get<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
+        let scope = CompositionLocalAccessorScope { map: None, anchor: Some(*self) };
+        let id = local.id();
+        match self.find(id) {
+            Some(holder) => holder
+                .downcast_ref::<Holder<T>>()
+                .expect("a local's type is in its identity")
+                .read(&scope),
+            None => local.default_value(&scope),
+        }
+    }
+
+    fn find(&self, local: u64) -> Option<Rc<dyn Any>> {
+        if self.provider == NONE {
+            return None;
+        }
+        with_runtime(|runtime| {
+            let table = &runtime.compositions.try_data(self.composition)?.table;
+            let mut group = self.provider;
+            while group != NONE {
+                if let Some(holder) = entries_of(table, group).and_then(|entries| {
+                    let entries = entries.entries.borrow();
+                    entries
+                        .iter()
+                        .find(|entry| entry.local == local)
+                        .map(|entry| entry.holder.clone())
+                }) {
+                    return Some(holder);
+                }
+                group = table[group].enclosing_provider;
+            }
+            None
+        })
+    }
+}
+
+/// The anchor of the composable composing now. Costs a look at its group: what every layout
+/// node's emission asks.
+pub fn current_composition_local_anchor() -> CompositionLocalAnchor {
+    with_runtime(|runtime| {
+        let composition = runtime.check_composing();
+        let table = &runtime.compositions.data(composition).table;
+        let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        CompositionLocalAnchor {
+            composition,
+            provider: table.provider_at_or_above(composing),
+            epoch: runtime.providers_epoch,
+        }
+    })
 }
 
 /// Every local provided at a point, to provide elsewhere (another composition, a dialog), as

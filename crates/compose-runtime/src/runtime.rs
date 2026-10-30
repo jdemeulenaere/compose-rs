@@ -33,6 +33,9 @@ pub(crate) struct Runtime {
     pub scopes: Scopes,
     pub compositions: Compositions,
     pub active: Option<ActivePass>,
+    /// Moves on each time a provider's values change in a way that recomposes its content (a
+    /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
+    pub providers_epoch: u32,
     /// The frames of the pass in progress; kept between passes for its capacity.
     pub frames: Vec<Frame>,
     /// Scratch stack for removing subtrees; kept for its capacity.
@@ -101,6 +104,7 @@ impl Runtime {
             cells: Cells::new(),
             scopes: Scopes::new(),
             compositions: Compositions::new(),
+            providers_epoch: 0,
             active: None,
             frames: Vec::new(),
             removal_stack: Vec::new(),
@@ -572,6 +576,11 @@ impl Compositions {
     /// only while their composition is alive.
     pub fn data_mut(&mut self, index: u32) -> &mut CompositionData {
         self.entries[index as usize].data.as_mut().expect("composition of a live scope or pass")
+    }
+
+    /// The composition `index`, if it's live.
+    pub fn try_data(&self, index: u32) -> Option<&CompositionData> {
+        self.entries.get(index as usize)?.data.as_ref()
     }
 
     pub fn data(&self, index: u32) -> &CompositionData {

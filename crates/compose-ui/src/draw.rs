@@ -23,9 +23,20 @@ pub struct DrawScope<'a> {
     pub(crate) size: Size,
     pub(crate) density: Density,
     pub(crate) layout_direction: crate::alignment::LayoutDirection,
+    /// Where the layout node reads composition locals.
+    pub(crate) locals: compose_runtime::CompositionLocalAnchor,
 }
 
 impl DrawScope<'_> {
+    /// The value of `local` where the layout node is composed, as `currentValueOf`. A dynamic
+    /// local's read is observed, as any state's while drawing: a new value draws it again.
+    pub fn current_value_of<T: Clone + 'static>(
+        &self,
+        local: &compose_runtime::CompositionLocal<T>,
+    ) -> T {
+        self.locals.get(local)
+    }
+
     pub fn size(&self) -> Size {
         self.size
     }

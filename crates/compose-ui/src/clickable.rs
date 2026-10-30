@@ -81,9 +81,8 @@ pub(crate) struct Clickable {
     pub(crate) role: Option<Role>,
     /// Boxed: rare, and the element stays as small as the others (D1052).
     pub(crate) on_click_label: Option<Rc<SharedString>>,
-    /// The indication's factory: the one given, or with `use_local_indication`,
-    /// `LOCAL_INDICATION`'s where the node is (set as the layout node takes its modifier,
-    /// [`resolve_local_indications`]: none until then).
+    /// The indication's factory: the one given. With `use_local_indication`, none: the node
+    /// reads `LOCAL_INDICATION` where it is.
     pub(crate) indication: Option<Rc<dyn IndicationNodeFactory>>,
     /// The indication is `Indication::LOCAL`, as Compose's `useLocalIndication` (D1056).
     pub(crate) use_local_indication: bool,
@@ -226,74 +225,6 @@ impl Shared {
     }
 }
 
-/// Sets the indications of `modifier`'s clickables, where the composition is now (the layout node
-/// taking `modifier`, `emit_layout_node`). `LOCAL_INDICATION`'s factory on those using the local
-/// indication: Compose's node reads it where it is (`currentValueOf(LocalIndication)`), so a
-/// clickable made outside a provider and used inside it shows the provider's (D1056). And the
-/// locals here on a factory whose nodes read them (`IndicationNodeFactory::at_node`, D1025). Each
-/// read once, only if one does. (With node-level composition locals, MN-8, the nodes read them.)
-pub(crate) fn resolve_local_indications(modifier: &mut crate::modifier::Modifier) {
-    type Factory = Option<Rc<dyn IndicationNodeFactory>>;
-    let mut local: Option<Factory> = None;
-    let mut map: Option<compose_runtime::CompositionLocalMap> = None;
-    let mut bound = |factory: Factory| -> Factory {
-        let factory = factory?;
-        let mut locals =
-            || map.get_or_insert_with(compose_runtime::current_composition_local_map).clone();
-        Some(factory.at_node(&mut locals).unwrap_or(factory))
-    };
-    let mut resolved = || local.get_or_insert_with(crate::indication::local_factory).clone();
-    for element in modifier.elements_mut() {
-        match element {
-            crate::modifier::Element::Clickable(clickable) => {
-                let factory = if clickable.use_local_indication {
-                    resolved()
-                } else if clickable.indication.is_some() {
-                    clickable.indication.clone()
-                } else {
-                    continue;
-                };
-                clickable.indication = bound(factory);
-            }
-            crate::modifier::Element::Custom(custom) => {
-                let factory = match custom.downcast_ref::<CombinedClickableElement>() {
-                    Some(combined) => {
-                        let factory = if combined.clickable.use_local_indication {
-                            resolved()
-                        } else {
-                            combined.clickable.indication.clone()
-                        };
-                        let factory = bound(factory);
-                        if crate::indication::same_factory(&combined.clickable.indication, &factory)
-                        {
-                            continue;
-                        }
-                        factory
-                    }
-                    _ => continue,
-                };
-                if Rc::get_mut(custom).is_none() {
-                    // Shared (a modifier kept and used again): a copy of its own.
-                    let combined = custom
-                        .downcast_ref::<CombinedClickableElement>()
-                        .expect("a combined clickable");
-                    *custom = Rc::new(CombinedClickableElement {
-                        clickable: combined.clickable.clone(),
-                        combined: combined.combined.clone(),
-                    });
-                }
-                let element = Rc::get_mut(custom).expect("its own");
-                if let Some(combined) =
-                    (element as &mut dyn std::any::Any).downcast_mut::<CombinedClickableElement>()
-                {
-                    combined.clickable.indication = factory;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 fn cancel(job: &mut Option<Job>) {
     if let Some(job) = job.take() {
         job.cancel();
@@ -318,6 +249,8 @@ pub(crate) struct ClickableNode {
     /// attached (with a source given), as Compose's; attached with it, as Compose's delegate.
     indication: Option<Box<dyn ModifierNode>>,
     indication_draws_content: bool,
+    /// `LOCAL_INDICATION`'s factory where the node is, as `localIndicationNodeFactory`.
+    local_indication: Option<Rc<dyn IndicationNodeFactory>>,
     /// Whether `indication` is attached: one made or replaced where the node has no context
     /// (an event, an update) is attached by `run_lifecycle`, from a task.
     indication_attached: bool,
@@ -354,6 +287,7 @@ impl ClickableNode {
             shared: Rc::new(RefCell::new(shared)),
             indication: None,
             indication_draws_content: false,
+            local_indication: None,
             indication_attached: false,
             retired: Vec::new(),
             down: None,
@@ -377,6 +311,11 @@ impl ClickableNode {
             self.dispose_focus();
             self.shared.borrow_mut().source = spec.interaction_source.clone();
             indication_dirty = true;
+        }
+        // A local one stays what the node read, as `localIndicationNodeFactory`.
+        let mut spec = spec;
+        if spec.use_local_indication {
+            spec.indication = self.local_indication.clone();
         }
         if !crate::indication::same_factory(&self.spec.indication, &spec.indication) {
             indication_dirty = true;
@@ -438,6 +377,27 @@ impl ClickableNode {
         self.indication_attached = false;
         self.schedule_lifecycle();
         true
+    }
+
+    /// Reads `LOCAL_INDICATION` where the node is, if it uses it, observing it, as
+    /// `onObservedReadsChanged`; a new one makes its node again.
+    fn read_local_indication(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        if !self.spec.use_local_indication {
+            return;
+        }
+        let locals = context.composition_locals();
+        let local = context.observe_reads(|| locals.get(&crate::indication::LOCAL_INDICATION));
+        let factory = local.factory_or_default();
+        if crate::indication::same_factory(&self.local_indication, &factory) {
+            return;
+        }
+        let had = self.local_indication.is_some();
+        self.local_indication = factory.clone();
+        self.spec.indication = factory;
+        if had {
+            self.recreate_indication();
+            context.invalidate_draw();
+        }
     }
 
     /// The indication changed: its node is made again if it was made (or is made eagerly).
@@ -745,6 +705,7 @@ fn event_nanos(event: &PointerEvent) -> u64 {
 impl ModifierNode for ClickableNode {
     /// Attached, with a source given, its indication is made at once, as `onAttach`.
     fn on_attach(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        self.read_local_indication(context);
         if self.spec.interaction_source.is_some() {
             self.initialize_indication();
         }
@@ -817,6 +778,31 @@ impl ModifierNode for ClickableNode {
     /// kinds are asked once).
     fn observes_reads(&self) -> bool {
         true
+    }
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+    fn on_composition_locals_changed(
+        &mut self,
+        context: &mut crate::node_context::NodeContext<'_>,
+    ) {
+        self.read_local_indication(context);
+        self.run_lifecycle(context);
+        // What it reads where it is, as a delegate's would be told.
+        if let Some(indication) = &mut self.indication {
+            indication.on_composition_locals_changed(context);
+        }
+    }
+    fn as_observer(&mut self) -> Option<&mut dyn crate::observer_node::ObserverModifierNode> {
+        Some(self)
+    }
+}
+
+impl crate::observer_node::ObserverModifierNode for ClickableNode {
+    /// `LOCAL_INDICATION` changed where it is, as `onObservedReadsChanged`.
+    fn on_observed_reads_changed(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
+        self.read_local_indication(context);
+        self.run_lifecycle(context);
     }
 }
 

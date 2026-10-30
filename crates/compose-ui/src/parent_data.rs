@@ -155,8 +155,8 @@ impl UiTree {
     /// Folds `node`'s custom parent data again. Returns whether its parent measures again: it
     /// had or has some, as Compose's `updateParentData`, which compares nothing.
     pub(crate) fn refresh_custom_parent_data(&mut self, node: NodeId) -> bool {
-        let density = self.density;
         let Some(value) = self.get_mut(node) else { return false };
+        let density = value.density;
         if !value.kinds.any(NodeKinds::PARENT_DATA) {
             return value.custom_parent_data.take().is_some();
         }

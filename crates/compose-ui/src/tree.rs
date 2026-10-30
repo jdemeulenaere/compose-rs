@@ -172,6 +172,13 @@ pub struct LayoutNode {
     /// Its semantics id, as Compose's `LayoutNode.semanticsId`: from the tree's counter, another
     /// when the node is reused, so a service never sees one id for two contents (D1262).
     pub(crate) semantics_id: i32,
+    /// Where its modifier nodes read composition locals, as `compositionLocalMap`.
+    pub(crate) locals: compose_runtime::CompositionLocalAnchor,
+    /// Its density, where it's composed (`LOCAL_DENSITY`), as `LayoutNode.density`.
+    pub(crate) density: Density,
+    /// Its view configuration where it's composed (`LOCAL_VIEW_CONFIGURATION`): an index in
+    /// `UiTree::view_configurations`, shared by the nodes with one value, 0 for the host's.
+    pub(crate) view_configuration: u16,
 }
 
 impl LayoutNode {
@@ -208,6 +215,9 @@ impl LayoutNode {
             reattach_pending: false,
             semantics: None,
             semantics_id: 0,
+            locals: compose_runtime::CompositionLocalAnchor::NONE,
+            density: Density::default(),
+            view_configuration: 0,
         }
     }
 
@@ -225,6 +235,16 @@ impl LayoutNode {
     pub(crate) fn layer_of(&self, index: usize) -> usize {
         self.chain[..index].iter().filter(|entry| entry.kinds.any(NodeKinds::LAYOUT)).count()
     }
+}
+
+/// What a layout node takes from the composition locals where it's composed, as
+/// `LayoutNode.compositionLocalMap`'s setter does.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedLocals {
+    pub(crate) anchor: compose_runtime::CompositionLocalAnchor,
+    pub(crate) density: Density,
+    pub(crate) layout_direction: crate::alignment::LayoutDirection,
+    pub(crate) view_configuration: crate::view_configuration::ViewConfiguration,
 }
 
 struct Slot {
@@ -347,6 +367,10 @@ pub struct UiTree {
     /// them for the traversals of their nodes' `on_detach`, as Compose's `LayoutNode.detach` runs
     /// before it unlinks a node from its parent.
     pub(crate) removed_parents: Vec<(NodeId, NodeId)>,
+    /// What the last layout node composed resolved of its locals: its siblings mostly share them.
+    pub(crate) resolved_locals: Option<ResolvedLocals>,
+    /// The view configurations provided (index 0, unused: the host's), `LayoutNode`s naming theirs.
+    pub(crate) view_configurations: SmallVec<[crate::view_configuration::ViewConfiguration; 2]>,
     /// The entries whose delegates changed in a measurement, a drawing or an event's dispatch,
     /// looked at where the tree may change (`UiTree::sync_noted_delegates`).
     pub(crate) delegates_noted: Vec<(NodeId, crate::node_chain::EntryId)>,
@@ -366,6 +390,7 @@ impl Drop for UiTree {
 impl UiTree {
     pub fn new(density: Density, text_measurer: Box<dyn TextMeasurer>) -> UiTree {
         let mut root = LayoutNode::new(Rc::new(StackMeasurePolicy));
+        root.density = density;
         root.placed = true;
         root.attached = true;
         let focus_requests = Rc::new(crate::focus_requester::FocusRequests::default());
@@ -422,6 +447,8 @@ impl UiTree {
             remeasure_allowed: false,
             remeasure_after: Vec::new(),
             removed_parents: Vec::new(),
+            resolved_locals: None,
+            view_configurations: SmallVec::new(),
             delegates_noted: Vec::new(),
             delegates_wait: false,
             entries_running: 0,
@@ -473,26 +500,101 @@ impl UiTree {
         self.density
     }
 
-    /// Changes the density: everything is measured again, and the attached modifier nodes are
-    /// told (`ModifierNode::on_density_change`, where the tree next applies its nodes'
-    /// requests).
+    /// Changes the host's density, the root's. Its content's come from `LOCAL_DENSITY`, which the
+    /// host provides, each layout node taking its own when it's composed (`set_locals`).
     pub fn set_density(&mut self, density: Density) {
         if self.density != density {
             self.density = density;
-            self.queue_lifecycle(crate::lifecycle::Lifecycle::Density);
-            for index in 0..self.slots.len() {
-                let slot = &mut self.slots[index];
-                let Some(node) = &mut slot.node else { continue };
-                node.needs_measure = true;
-                node.subtree_needs_measure = true;
-                // Parent data is given at a density (`modify_parent_data`).
-                if node.kinds.any(NodeKinds::PARENT_DATA) {
-                    let id = NodeId { index: index as u32, generation: slot.generation };
-                    self.refresh_custom_parent_data(id);
-                }
-            }
-            self.invalidate_draw();
+            let root = self.root;
+            self.set_node_density(root, density);
         }
+    }
+
+    /// Its density changed, as `LayoutNode.density`'s setter: it measures and draws again, its
+    /// parent data is given again, and its attached modifier nodes are told
+    /// (`ModifierNode::on_density_change`, where the tree next applies its nodes' requests).
+    fn set_node_density(&mut self, node: NodeId, density: Density) {
+        let value = self.node_mut(node);
+        value.density = density;
+        if value.chain.iter().any(|entry| entry.state & entry_state::ATTACH_RAN != 0) {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Density(node));
+        }
+        self.invalidate_measure(node);
+        self.invalidate_drawing_of_node(node);
+        self.invalidate_draw_of(node);
+        if self.node(node).kinds.any(NodeKinds::PARENT_DATA)
+            && self.refresh_custom_parent_data(node)
+            && let Some(parent) = self.parent_of(node)
+        {
+            self.invalidate_measure(parent);
+        }
+    }
+
+    /// What was resolved at `anchor`, if the last layout node composed resolved it.
+    pub(crate) fn resolved_locals_at(
+        &self,
+        anchor: compose_runtime::CompositionLocalAnchor,
+    ) -> Option<ResolvedLocals> {
+        self.resolved_locals.filter(|resolved| resolved.anchor == anchor)
+    }
+
+    /// `node` is composed where `resolved` says, as `LayoutNode.compositionLocalMap`'s setter: a
+    /// new place, or a provider's new values, gives it its density, layout direction and view
+    /// configuration, and invalidates its consumers (`is_composition_local_consumer`) by their
+    /// kinds, whether they're attached or not (Compose's waits for an attach, whose invalidation
+    /// comes to the same in a tree that measures a reused node when it's asked to).
+    pub(crate) fn set_locals(&mut self, node: NodeId, resolved: ResolvedLocals) {
+        self.resolved_locals = Some(resolved);
+        let value = self.node_mut(node);
+        if value.locals == resolved.anchor {
+            return;
+        }
+        let fresh = value.locals == compose_runtime::CompositionLocalAnchor::NONE;
+        value.locals = resolved.anchor;
+        let view_configuration = self.view_configuration_index(resolved.view_configuration);
+        let value = self.node_mut(node);
+        if fresh {
+            // Nothing measured or attached to tell.
+            value.density = resolved.density;
+            value.layout_direction = resolved.layout_direction;
+            value.view_configuration = view_configuration;
+            return;
+        }
+        if value.view_configuration != view_configuration {
+            value.view_configuration = view_configuration;
+            if value.chain.iter().any(|entry| entry.state & entry_state::ATTACH_RAN != 0) {
+                self.queue_lifecycle(crate::lifecycle::Lifecycle::ViewConfiguration(node));
+            }
+        }
+        if self.node(node).density != resolved.density {
+            self.set_node_density(node, resolved.density);
+        }
+        self.set_layout_direction(node, resolved.layout_direction);
+        let value = self.node_mut(node);
+        if !value.kinds.any(NodeKinds::COMPOSITION_LOCAL_CONSUMER) {
+            return;
+        }
+        let mut invalidated = NodeKinds::NONE;
+        for entry in &mut value.chain {
+            if entry.kinds.any(NodeKinds::COMPOSITION_LOCAL_CONSUMER) {
+                invalidated |= entry.updated_kinds();
+            }
+        }
+        self.queue_lifecycle(crate::lifecycle::Lifecycle::CompositionLocals(node));
+        self.auto_invalidate(node, invalidated, NodeKinds::NONE, false);
+    }
+
+    /// `configuration`'s place in `view_configurations`.
+    fn view_configuration_index(
+        &mut self,
+        configuration: crate::view_configuration::ViewConfiguration,
+    ) -> u16 {
+        let found = self.view_configurations.iter().position(|known| *known == configuration);
+        let index = found.unwrap_or_else(|| {
+            self.view_configurations.push(configuration);
+            self.view_configurations.len() - 1
+        });
+        index as u16 + 1
     }
 
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {

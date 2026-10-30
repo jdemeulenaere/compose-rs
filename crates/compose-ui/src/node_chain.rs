@@ -70,7 +70,8 @@ impl NodeKinds {
             | NodeKinds::GLOBAL_POSITION_AWARE.0
             | NodeKinds::FOCUS_TARGET.0
             | NodeKinds::KEY_INPUT.0
-            | NodeKinds::TRAVERSABLE.0,
+            | NodeKinds::TRAVERSABLE.0
+            | NodeKinds::COMPOSITION_LOCAL_CONSUMER.0,
     );
 
     /// Whether it has any of `other`'s kinds.
@@ -147,6 +148,7 @@ impl NodeKinds {
         // Only a node with a lifecycle may be one.
         if observed_or_lifecycle {
             add(node.as_traversable().is_some(), NodeKinds::TRAVERSABLE);
+            add(node.is_composition_local_consumer(), NodeKinds::COMPOSITION_LOCAL_CONSUMER);
         }
         kinds
     }

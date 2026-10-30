@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 126 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 258 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 261 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 90 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
@@ -557,7 +557,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D904 | [api-and-tooling](decisions/api-and-tooling.md#d904) | current |
 | D905 | [api-and-tooling](decisions/api-and-tooling.md#d905) | current |
 | D906 | [api-and-tooling](decisions/api-and-tooling.md#d906) | current |
-| D907 | [api-and-tooling](decisions/api-and-tooling.md#d907) | current |
+| D907 | [api-and-tooling](decisions/api-and-tooling.md#d907) | revised by [D1183](decisions/ui-and-layout.md#d1183) |
 | D908 | [api-and-tooling](decisions/api-and-tooling.md#d908) | current |
 | D909 | [api-and-tooling](decisions/api-and-tooling.md#d909) | current |
 | D1000 | [text](decisions/text.md#d1000) | current |
@@ -659,6 +659,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D1179 | [ui-and-layout](decisions/ui-and-layout.md#d1179) | current |
 | D1180 | [ui-and-layout](decisions/ui-and-layout.md#d1180) | current |
 | D1181 | [ui-and-layout](decisions/ui-and-layout.md#d1181) | current |
+| D1182 | [ui-and-layout](decisions/ui-and-layout.md#d1182) | current |
+| D1183 | [ui-and-layout](decisions/ui-and-layout.md#d1183) | current |
+| D1184 | [ui-and-layout](decisions/ui-and-layout.md#d1184) | current |
 | D1200 | [ui-and-layout](decisions/ui-and-layout.md#d1200) | current |
 | D1201 | [ui-and-layout](decisions/ui-and-layout.md#d1201) | current |
 | D1202 | [ui-and-layout](decisions/ui-and-layout.md#d1202) | current |

@@ -275,10 +275,11 @@ fn passes_nested_dialogs_give_the_focus_back_in_turn() {
 
 // ---- Density -------------------------------------------------------------------------------
 
-/// `LocalDensity` changing recomposes its readers (popups included), and only them: Compose's
-/// `setContent` lambda doesn't run again, the owner providing the local around it.
+/// `LocalDensity` changing recomposes what's below it (popups included): it's a static local,
+/// as Compose's `staticCompositionLocalOf`, so its provider's content composes again whole.
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt, LocalDensity
 #[test]
-fn a_density_change_recomposes_its_readers_but_not_the_whole_content() {
+fn a_density_change_recomposes_the_content_below_it() {
     thread_local! {
         static CONTENT_RUNS: Cell<u32> = const { Cell::new(0) };
         static SEEN: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
@@ -300,5 +301,5 @@ fn a_density_change_recomposes_its_readers_but_not_the_whole_content() {
     ui.host().set_density(Density { density: 2.0, font_scale: 1.0 });
     ui.wait_for_idle();
     assert_eq!(SEEN.with(|seen| seen.borrow().last().copied()), Some(2.0));
-    assert_eq!(CONTENT_RUNS.with(Cell::get), runs, "the density change re-ran the whole content");
+    assert!(CONTENT_RUNS.with(Cell::get) > runs, "a static local's content composes again");
 }

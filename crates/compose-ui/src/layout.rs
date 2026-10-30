@@ -265,8 +265,18 @@ pub struct IntrinsicMeasureScope<'a> {
 }
 
 impl IntrinsicMeasureScope<'_> {
+    /// The density where the layout node is composed.
     pub fn density(&self) -> Density {
-        self.tree.density
+        self.tree.node(self.node).density
+    }
+
+    /// The value of `local` where the layout node is composed, as `currentValueOf`. A dynamic
+    /// local's read is observed, as any state's while measuring: a new value measures it again.
+    pub fn current_value_of<T: Clone + 'static>(
+        &self,
+        local: &compose_runtime::CompositionLocal<T>,
+    ) -> T {
+        self.tree.node(self.node).locals.get(local)
     }
 
     /// The direction of the layout, as `IntrinsicMeasureScope.layoutDirection`.
@@ -574,20 +584,28 @@ pub fn Layout(
 /// `Layout`'s body, for composables that build their node by hand. The node is reusable, as
 /// Compose's `Layout` (`ReusableComposeNode`): content reused in its place keeps it.
 pub fn emit_layout_node(
-    mut modifier: Modifier,
+    modifier: Modifier,
     measure_policy: Rc<dyn MeasurePolicy>,
     content: impl FnOnce(),
 ) {
-    // The clickables showing `LOCAL_INDICATION` show this node's (D1056).
-    crate::clickable::resolve_local_indications(&mut modifier);
     let composer = current();
     let node = composer.start_reusable_node(compose_runtime::key_of("compose_ui::Layout"), || {
         crate::tree::LayoutNode::new(measure_policy.clone())
     });
-    let direction = crate::alignment::LOCAL_LAYOUT_DIRECTION.current();
+    // Where its modifier nodes read locals (`compositionLocalMap`). Nothing's read unless it's
+    // another place from the last node's: density and the rest are static locals, so this is
+    // the same anchor while they are the same.
+    let anchor = compose_runtime::current_composition_local_anchor();
+    let cached = composer.with_applier(|tree: &mut UiTree| tree.resolved_locals_at(anchor));
+    let resolved = cached.unwrap_or_else(|| crate::tree::ResolvedLocals {
+        anchor,
+        density: anchor.get(&crate::host::LOCAL_DENSITY),
+        layout_direction: anchor.get(&crate::alignment::LOCAL_LAYOUT_DIRECTION),
+        view_configuration: anchor.get(&crate::view_configuration::LOCAL_VIEW_CONFIGURATION),
+    });
     composer.with_applier(|tree: &mut UiTree| {
         let id = tree.id_of(node);
-        tree.set_layout_direction(id, direction);
+        tree.set_locals(id, resolved);
         tree.set_measure_policy(id, measure_policy);
         tree.set_modifier(id, modifier);
     });

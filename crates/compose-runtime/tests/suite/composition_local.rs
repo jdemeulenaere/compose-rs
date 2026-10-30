@@ -871,3 +871,50 @@ fn with_composition_local_keeps_remember_order() {
     test.advance();
     assert_eq!(events.take(), ["Forget(after)", "Forget(inner)", "Forget(before)"]);
 }
+
+// Compose: compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/CompositionLocalMap.kt, CompositionLocalMap.get
+/// An anchor reads what `current()` reads where it was made, outside composition too, and doesn't
+/// change while what it reads can only change through a dynamic local's state.
+#[test]
+fn an_anchor_reads_the_locals_where_it_was_made() {
+    thread_local! {
+        static INSIDE: Cell<Option<CompositionLocalAnchor>> = const { Cell::new(None) };
+        static OUTSIDE: Cell<Option<CompositionLocalAnchor>> = const { Cell::new(None) };
+    }
+    let dynamic = mutable_state_of(12);
+    let stat = mutable_state_of(50);
+    let (d, s) = (dynamic.handle(), stat.handle());
+    let mut test = composition_test();
+    test.compose(move || {
+        OUTSIDE.with(|cell| cell.set(Some(current_composition_local_anchor())));
+        CompositionLocalProvider(
+            (LOCAL_SOME_INT.provides(d.get()), LOCAL_SOME_STATIC_INT.provides(s.get())),
+            || {
+                CompositionLocalProvider(LOCAL_SOME_TEXT.provides("Test"), || {
+                    INSIDE.with(|cell| cell.set(Some(current_composition_local_anchor())));
+                });
+            },
+        );
+    });
+    let inside = INSIDE.with(Cell::get).unwrap();
+    let outside = OUTSIDE.with(Cell::get).unwrap();
+    assert_eq!(inside.get(&LOCAL_SOME_TEXT), "Test");
+    assert_eq!(inside.get(&LOCAL_SOME_INT), 12);
+    assert_eq!(inside.get(&LOCAL_SOME_STATIC_INT), 50);
+    assert_eq!(inside.get(&LOCAL_SOME_OTHER_INT), 1, "the default");
+    assert_eq!(outside.get(&LOCAL_SOME_INT), 1, "above the provider");
+    assert_eq!(CompositionLocalAnchor::NONE.get(&LOCAL_SOME_INT), 1);
+
+    // A dynamic local's new value: the same anchor, reading it.
+    dynamic.set(13);
+    test.advance();
+    assert_eq!(INSIDE.with(Cell::get), Some(inside));
+    assert_eq!(inside.get(&LOCAL_SOME_INT), 13);
+
+    // A static local's: the content composes again, under another anchor.
+    stat.set(51);
+    test.advance();
+    let again = INSIDE.with(Cell::get).unwrap();
+    assert_ne!(again, inside);
+    assert_eq!(again.get(&LOCAL_SOME_STATIC_INT), 51);
+}

@@ -28,19 +28,6 @@ pub trait IndicationNodeFactory: Any {
     /// Whether `other` makes the same nodes, as Compose's required `equals`: a factory with no
     /// properties compares its type (`other.downcast_ref::<Self>().is_some()`).
     fn same(&self, other: &dyn IndicationNodeFactory) -> bool;
-
-    /// While composing, where the clickable's layout node takes its modifier: a factory whose
-    /// nodes read composition locals where they are (Compose's
-    /// `CompositionLocalConsumerModifierNode`: Material's ripple) returns one holding `locals()`,
-    /// the map there. With node-level locals (MN-8) the node reads them itself and this goes.
-    /// (D1025)
-    #[doc(hidden)]
-    fn at_node(
-        &self,
-        _locals: &mut dyn FnMut() -> compose_runtime::CompositionLocalMap,
-    ) -> Option<Rc<dyn IndicationNodeFactory>> {
-        None
-    }
 }
 
 impl dyn IndicationNodeFactory {
@@ -111,6 +98,15 @@ impl Indication {
         matches!(self.0, Kind::None)
     }
 
+    /// The factory of a value of [`LOCAL_INDICATION`] (`LOCAL` there means the default).
+    pub(crate) fn factory_or_default(self) -> Option<Rc<dyn IndicationNodeFactory>> {
+        match self.0 {
+            Kind::None => None,
+            Kind::Factory(factory) => Some(factory),
+            Kind::Local => Some(default_debug_indication()),
+        }
+    }
+
     /// Whether it's `LOCAL`.
     pub(crate) fn is_local(&self) -> bool {
         matches!(self.0, Kind::Local)
@@ -133,11 +129,7 @@ pub(crate) fn local_factory() -> Option<Rc<dyn IndicationNodeFactory>> {
     if !compose_runtime::is_composing() {
         return Some(default_debug_indication());
     }
-    match LOCAL_INDICATION.current().0 {
-        Kind::None => None,
-        Kind::Factory(factory) => Some(factory),
-        Kind::Local => Some(default_debug_indication()),
-    }
+    LOCAL_INDICATION.current().factory_or_default()
 }
 
 /// Whether two factories make the same nodes: the same one, or equal.
@@ -503,6 +495,14 @@ impl ModifierNode for IndicationHostNode {
     fn observes_reads(&self) -> bool {
         true
     }
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+    fn on_composition_locals_changed(&mut self, context: &mut NodeContext<'_>) {
+        if self.attached {
+            self.node.on_composition_locals_changed(context);
+        }
+    }
     fn on_attach(&mut self, context: &mut NodeContext<'_>) {
         self.handle = Some(context.handle());
         self.run_lifecycle(context);
@@ -565,17 +565,6 @@ impl Modifier {
     ) -> Modifier {
         match indication.resolve() {
             Some(factory) => {
-                // The locals where the modifier is made, a factory reading them being given them
-                // while composing (a clickable's are its layout node's, D1025): made above a
-                // provider and used below it, it doesn't see that provider, where Compose's does.
-                // MN-8 removes the difference.
-                let factory = if compose_runtime::is_composing() {
-                    factory
-                        .at_node(&mut compose_runtime::current_composition_local_map)
-                        .unwrap_or(factory)
-                } else {
-                    factory
-                };
                 self.then_custom(IndicationElement { source: interaction_source.into(), factory })
             }
             None => self,

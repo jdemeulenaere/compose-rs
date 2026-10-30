@@ -242,7 +242,6 @@ pub struct EventContext<'a> {
     pub(crate) requests: &'a mut Requests,
     /// The pointer's position in the root, while handling a pointer event.
     pub(crate) pointer_position: Option<Offset>,
-    pub(crate) view_configuration: crate::view_configuration::ViewConfiguration,
     /// Whether something around the handling node (a scrollable) waits for a gesture past a
     /// press, while handling a press, as Compose's `hasWaitingParent`.
     pub(crate) waiting_parent: bool,
@@ -264,13 +263,13 @@ impl std::ops::DerefMut for EventContext<'_> {
 impl EventContext<'_> {
     /// The density, to turn dp distances (a touch slop) into pixels.
     pub fn density(&self) -> crate::unit::Density {
-        self.context.tree.density
+        self.context.require_density()
     }
 
-    /// The host's gesture timeouts and distances, as a node's `currentValueOf(
-    /// LocalViewConfiguration)` (the host's: no subtree overrides yet).
+    /// The gesture timeouts and distances where its layout node is composed, as a node's
+    /// `currentValueOf(LocalViewConfiguration)`.
     pub fn view_configuration(&self) -> crate::view_configuration::ViewConfiguration {
-        self.view_configuration
+        self.context.tree.view_configuration_of(self.context.node)
     }
 
     /// The handling node's layout direction: a horizontal scroll goes the other way in a

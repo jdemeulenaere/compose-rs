@@ -183,9 +183,33 @@ impl NodeContext<'_> {
         self.tree.focus_requests.wake();
     }
 
-    /// The density, as `requireDensity()`.
+    /// The density where its layout node is composed, as `requireDensity()`.
     pub fn require_density(&self) -> Density {
-        self.tree.density
+        self.tree.node(self.node).density
+    }
+
+    /// The value of `local` where its layout node is composed, as
+    /// `CompositionLocalConsumerModifierNode.currentValueOf`. Reads where its node was composed,
+    /// not where its element was made. A dynamic local's read is observed as any state's (in
+    /// `observe_reads`, measuring, drawing). Any node may read: `is_composition_local_consumer`
+    /// is for being told when what it reads from changes.
+    ///
+    /// Panics if the node isn't attached, as Compose's.
+    pub fn current_value_of<T: Clone + 'static>(
+        &self,
+        local: &compose_runtime::CompositionLocal<T>,
+    ) -> T {
+        assert!(
+            self.is_attached(),
+            "compose-ui: reading a composition local while the node isn't attached"
+        );
+        self.composition_locals().get(local)
+    }
+
+    /// Where its layout node reads composition locals, for `observe_reads` (whose block has no
+    /// context): `context.observe_reads(|| locals.get(&LOCAL))`.
+    pub fn composition_locals(&self) -> compose_runtime::CompositionLocalAnchor {
+        self.tree.node(self.node).locals
     }
 
     /// The layout node's layout direction, as `requireLayoutDirection()`.

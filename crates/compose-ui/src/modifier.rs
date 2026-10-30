@@ -39,10 +39,6 @@ impl Modifier {
         &self.elements
     }
 
-    pub(crate) fn elements_mut(&mut self) -> &mut [Element] {
-        &mut self.elements
-    }
-
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
@@ -851,6 +847,7 @@ impl Element {
             Element::Clip(_) => ANY.with(NodeKinds::DRAW).with(NodeKinds::GRAPHICS_LAYER),
             Element::Clickable(_) => ANY
                 .with(NodeKinds::OBSERVED)
+                .with(NodeKinds::COMPOSITION_LOCAL_CONSUMER)
                 .with(NodeKinds::DRAW)
                 .with(NodeKinds::POINTER_INPUT)
                 .with(NodeKinds::SEMANTICS)
@@ -1192,6 +1189,32 @@ pub trait ModifierNode: Any {
     /// density is its tree's).
     fn on_density_change(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         crate::lifecycle::default_callback_ran();
+    }
+    /// The view configuration where its layout node is changed, as
+    /// `PointerInputModifierNode.onViewConfigurationChange` (for a pointer input node, whose
+    /// `on_cancel_pointer_input` the tree calls after it, as Compose's default).
+    fn on_view_configuration_change(
+        &mut self,
+        _context: &mut crate::node_context::NodeContext<'_>,
+    ) {
+        crate::lifecycle::default_callback_ran();
+    }
+    /// It reads composition locals, as `CompositionLocalConsumerModifierNode`: asked once. When
+    /// what its layout node reads them from changes (a provider's static value or the locals it
+    /// provides, or content moved), it's invalidated as an update does, by its kinds, and told
+    /// (`on_composition_locals_changed`). Reading locals doesn't need it:
+    /// `NodeContext::current_value_of`, `MeasureScope::current_value_of` and
+    /// `DrawScope::current_value_of` work for any node.
+    fn is_composition_local_consumer(&self) -> bool {
+        false
+    }
+    /// What its layout node reads composition locals from changed: a node keeping a value it
+    /// read (rather than reading it where it draws) reads it again. compose-rs's: Compose's node
+    /// reads its map where it's used. For an `is_composition_local_consumer` node.
+    fn on_composition_locals_changed(
+        &mut self,
+        _context: &mut crate::node_context::NodeContext<'_>,
+    ) {
     }
     /// Its layout node's layout direction changed, as `onLayoutDirectionChange`.
     fn on_layout_direction_change(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {

@@ -11,6 +11,7 @@ mod intrinsics;
 mod modifier_nodes;
 mod mutable_paths;
 mod node_invalidation;
+mod node_locals;
 mod node_traversal;
 mod observer_nodes;
 mod paragraph;

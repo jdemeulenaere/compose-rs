@@ -73,8 +73,8 @@ impl UiTree {
     }
 
     fn hit_node(&mut self, node: NodeId, point: Offset, path: &mut Vec<HitEntry>) -> bool {
-        let density = self.density;
         let value = self.node_mut(node);
+        let density = value.density;
         if !value.placed {
             return false;
         }
@@ -343,7 +343,6 @@ impl UiTree {
         if self.get(node).is_none_or(|value| index >= value.chain.len()) {
             return None;
         }
-        let view_configuration = self.view_configuration();
         self.with_entry(node, index, |root, context| {
             let run = |modifier_node: &mut dyn crate::modifier::ModifierNode,
                        context: &mut crate::node_context::NodeContext<'_>| {
@@ -352,7 +351,6 @@ impl UiTree {
                     actions,
                     requests,
                     pointer_position,
-                    view_configuration,
                     waiting_parent,
                 };
                 let result = f(modifier_node, &mut event_context);

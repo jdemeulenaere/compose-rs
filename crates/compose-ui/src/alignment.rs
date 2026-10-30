@@ -16,7 +16,7 @@ pub enum LayoutDirection {
 /// The layout direction of what's composed, as Compose's `LocalLayoutDirection`: each layout
 /// node takes it where it's composed; the host provides the window's.
 pub static LOCAL_LAYOUT_DIRECTION: compose_runtime::CompositionLocal<LayoutDirection> =
-    compose_runtime::CompositionLocal::new("LocalLayoutDirection", LayoutDirection::default);
+    compose_runtime::CompositionLocal::new_static("LocalLayoutDirection", LayoutDirection::default);
 
 /// A 2D alignment, as `Alignment` (a `BiasAlignment`).
 #[derive(Clone, Copy, PartialEq, Debug)]

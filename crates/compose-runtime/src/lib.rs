@@ -80,8 +80,9 @@ pub use immutable_list::ImmutableList;
 #[doc(hidden)]
 pub use local::ProviderUpdate;
 pub use local::{
-    CompositionLocal, CompositionLocalAccessorScope, CompositionLocalContext, CompositionLocalMap,
-    CompositionLocalProvider, ProvidedValue, ProvidedValues, current_composition_local_context,
+    CompositionLocal, CompositionLocalAccessorScope, CompositionLocalAnchor,
+    CompositionLocalContext, CompositionLocalMap, CompositionLocalProvider, ProvidedValue,
+    ProvidedValues, current_composition_local_anchor, current_composition_local_context,
     current_composition_local_map, with_composition_local, with_composition_locals,
 };
 pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};

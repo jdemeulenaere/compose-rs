@@ -746,6 +746,8 @@ fn a_long_click_waits_the_view_configuration_s_timeout() {
     let (long_clicks, on_long_click) = counter();
     let mut ui = combined(Some(on_long_click), None, callback(|| {}));
     ui.host().set_view_configuration(Some(timeouts(1000, 300, 40)));
+    // Nodes take it as the host's composition provides it, as `LocalViewConfiguration`.
+    ui.advance_time_by_frame();
     let at = center(&mut ui, TAG);
     touch_down(&mut ui, at);
     ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
@@ -761,6 +763,8 @@ fn a_long_click_waits_the_view_configuration_s_timeout() {
 fn a_key_held_waits_the_view_configuration_s_timeout() {
     let (mut ui, clicks, long_clicks) = focused_combined();
     ui.host().set_view_configuration(Some(timeouts(1000, 300, 40)));
+    // Nodes take it as the host's composition provides it, as `LocalViewConfiguration`.
+    ui.advance_time_by_frame();
     key(&mut ui, Key::Enter, KeyEventType::KeyDown);
     ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
     assert_eq!(long_clicks.get(), 0);
@@ -779,6 +783,8 @@ fn a_tap_waits_the_view_configuration_s_double_tap_timeout() {
     let (double_clicks, on_double_click) = counter();
     let mut ui = combined(None, Some(on_double_click), on_click);
     ui.host().set_view_configuration(Some(timeouts(400, 1000, 40)));
+    // Nodes take it as the host's composition provides it, as `LocalViewConfiguration`.
+    ui.advance_time_by_frame();
     let at = center(&mut ui, TAG);
     touch_click(&mut ui, at);
     ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
@@ -798,6 +804,8 @@ fn a_second_tap_sooner_than_the_view_configuration_s_minimum_is_ignored() {
     let (double_clicks, on_double_click) = counter();
     let mut ui = combined(None, Some(on_double_click), on_click);
     ui.host().set_view_configuration(Some(timeouts(400, 300, 200)));
+    // Nodes take it as the host's composition provides it, as `LocalViewConfiguration`.
+    ui.advance_time_by_frame();
     let at = center(&mut ui, TAG);
     touch_click(&mut ui, at);
     ui.advance_time_by(Duration::from_millis(100));
@@ -828,6 +836,8 @@ fn keys_wait_the_view_configuration_s_double_tap_times() {
     assert!(requester.request_focus());
     ui.wait_for_idle();
     ui.host().set_view_configuration(Some(timeouts(400, 1000, 200)));
+    // Nodes take it as the host's composition provides it, as `LocalViewConfiguration`.
+    ui.advance_time_by_frame();
     let press = |ui: &mut ComposeTestRule| {
         key(ui, Key::Enter, KeyEventType::KeyDown);
         key(ui, Key::Enter, KeyEventType::KeyUp);

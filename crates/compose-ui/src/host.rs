@@ -92,7 +92,7 @@ pub static LOCAL_CONSTRAINTS_HINT: compose_runtime::CompositionLocal<
 
 /// The window's density, as Compose's `LocalDensity`: what composition converts `Dp` with.
 pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
-    compose_runtime::CompositionLocal::new("LocalDensity", Density::default);
+    compose_runtime::CompositionLocal::new_static("LocalDensity", Density::default);
 
 /// The most times a frame composes and lays out again for what its layout asked (D487).
 const MOST_ROUNDS: usize = 16;

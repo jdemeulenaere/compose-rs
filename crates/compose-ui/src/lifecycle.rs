@@ -55,8 +55,14 @@ pub(crate) enum Lifecycle {
     SyncDelegates(NodeId, EntryId),
     /// A node's layout direction changed: its nodes' `on_layout_direction_change`.
     LayoutDirection(NodeId),
-    /// The density changed: every attached node's `on_density_change`.
-    Density,
+    /// A node's density changed: its nodes' `on_density_change`, then a pointer input node's
+    /// `on_cancel_pointer_input`, as `PointerInputModifierNode.onDensityChange`'s default.
+    Density(NodeId),
+    /// The view configuration where a node is changed: its nodes'
+    /// `on_view_configuration_change`, then the same.
+    ViewConfiguration(NodeId),
+    /// What a node reads composition locals from changed: its consumers are told.
+    CompositionLocals(NodeId),
 }
 
 impl UiTree {
@@ -533,15 +539,58 @@ impl UiTree {
                             |node, context| node.on_layout_direction_change(context),
                         );
                     }
-                    Lifecycle::Density => {
-                        let root = self.root_id();
-                        for node in self.subtree(root) {
-                            self.for_custom_entries(
-                                node,
-                                entry_state::ATTACH_RAN,
-                                false,
-                                |n, context| n.on_density_change(context),
-                            );
+                    Lifecycle::Density(node) => {
+                        self.for_custom_entries(
+                            node,
+                            entry_state::ATTACH_RAN,
+                            false,
+                            |modifier_node, context| {
+                                modifier_node.on_density_change(context);
+                                if let Some(pointer_input) = modifier_node.as_pointer_input() {
+                                    pointer_input.on_cancel_pointer_input();
+                                }
+                            },
+                        );
+                    }
+                    Lifecycle::ViewConfiguration(node) => {
+                        self.for_custom_entries(
+                            node,
+                            entry_state::ATTACH_RAN,
+                            false,
+                            |modifier_node, context| {
+                                modifier_node.on_view_configuration_change(context);
+                                if let Some(pointer_input) = modifier_node.as_pointer_input() {
+                                    pointer_input.on_cancel_pointer_input();
+                                }
+                            },
+                        );
+                    }
+                    Lifecycle::CompositionLocals(node) => {
+                        let count = self.get(node).map_or(0, |value| value.chain.len());
+                        for index in 0..count {
+                            let Some(entry) =
+                                self.get(node).and_then(|value| value.chain.get(index))
+                            else {
+                                break;
+                            };
+                            if entry.state & entry_state::ATTACH_RAN != 0
+                                && entry.kinds.any(NodeKinds::COMPOSITION_LOCAL_CONSUMER)
+                            {
+                                let own = entry.own;
+                                self.with_entry(node, index, |modifier_node, context| {
+                                    let _ = delegation::dispatch_with_context(
+                                        modifier_node,
+                                        own,
+                                        NodeKinds::COMPOSITION_LOCAL_CONSUMER,
+                                        false,
+                                        context,
+                                        &mut |modifier_node, context| {
+                                            modifier_node.on_composition_locals_changed(context);
+                                            std::ops::ControlFlow::Continue(())
+                                        },
+                                    );
+                                });
+                            }
                         }
                     }
                 }
@@ -662,7 +711,7 @@ impl UiTree {
     }
 
     /// Everything `node` drew itself to draw again: its retained drawing and its inner layers.
-    fn invalidate_drawing_of_node(&mut self, node: NodeId) {
+    pub(crate) fn invalidate_drawing_of_node(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         if let Some(retained) = value.retained.as_mut() {
             retained.dirty = true;

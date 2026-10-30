@@ -65,16 +65,25 @@ impl ComposeArg for ViewConfiguration {
     }
 }
 
-/// The host's view configuration, as `LocalViewConfiguration`: what the gesture detectors use
-/// (they read the host's, `UiHost::set_view_configuration`, which provides it here).
+/// The view configuration where it's read, as `LocalViewConfiguration`: what the gesture
+/// detectors use, each layout node's being the one where it's composed. The host provides its
+/// own (`UiHost::set_view_configuration`); provide another for a subtree, as Compose's tests do.
 pub static LOCAL_VIEW_CONFIGURATION: CompositionLocal<ViewConfiguration> =
-    CompositionLocal::new("LocalViewConfiguration", ViewConfiguration::default);
+    CompositionLocal::new_static("LocalViewConfiguration", ViewConfiguration::default);
 
 impl crate::tree::UiTree {
     /// The view configuration the gesture detectors use: the host's
     /// (`UiHost::set_view_configuration`), else Android's at the tree's density.
     pub fn view_configuration(&self) -> ViewConfiguration {
         self.view_configuration.unwrap_or_else(|| ViewConfiguration::at(self.density))
+    }
+
+    /// The view configuration where `node` is composed (the host's, for what isn't composed).
+    pub(crate) fn view_configuration_of(&self, node: crate::tree::NodeId) -> ViewConfiguration {
+        match self.get(node).map_or(0, |value| value.view_configuration) {
+            0 => self.view_configuration(),
+            index => self.view_configurations[index as usize - 1],
+        }
     }
 
     /// Sets the view configuration (`None`: Android's at the density).

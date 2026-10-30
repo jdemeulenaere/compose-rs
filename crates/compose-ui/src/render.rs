@@ -635,8 +635,8 @@ impl UiTree {
         list: &mut DisplayList,
         observer: Option<&compose_runtime::platform::ReadObserver>,
     ) -> bool {
-        let density = self.density;
         let value = self.node_mut(node);
+        let density = value.density;
         let Some(slot) = value.inner_layers.iter().position(|inner| inner.entry as usize == entry)
         else {
             return false;
@@ -696,7 +696,7 @@ impl UiTree {
         let origin = self.layer_origins(node)[layer];
         let size = value.layers[layer].measured.into();
         let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()?;
-        let (density, direction) = (self.density, value.layout_direction);
+        let (density, direction) = (value.density, value.layout_direction);
         let properties = || graphics.properties(density, direction, origin, size);
         Some(match observer {
             Some(observer) => {
@@ -721,7 +721,8 @@ impl UiTree {
         list: &mut DisplayList,
         observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
-        let density = self.density;
+        let density = self.node(node).density;
+        let locals = self.node(node).locals;
         let mut after: SmallVec<[(u16, u16); 4]> = SmallVec::new();
         let length = self.node(node).chain.len();
         if self.node(node).kinds.any(NodeKinds::DRAW) {
@@ -762,6 +763,7 @@ impl UiTree {
                             size,
                             density,
                             layout_direction,
+                            locals,
                         };
                         let mut content = |list: &mut DisplayList| {
                             self.draw_chain(node, index + 1, next_layer, origins, list, observer)
@@ -777,8 +779,14 @@ impl UiTree {
                         self.draw_afters(node, &after, origins, list);
                         return;
                     }
-                    let mut scope =
-                        DrawScope { list, origin: origins[layer], size, density, layout_direction };
+                    let mut scope = DrawScope {
+                        list,
+                        origin: origins[layer],
+                        size,
+                        density,
+                        layout_direction,
+                        locals,
+                    };
                     if let Some(draw) = value.chain[index].node.as_draw() {
                         draw.draw(&mut scope);
                     }
@@ -822,8 +830,8 @@ impl UiTree {
         list: &mut DisplayList,
         observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
-        let density = self.density;
         let value = self.node_mut(node);
+        let (density, locals) = (value.density, value.locals);
         let own = value.chain[index].own;
         let size = value.layers[layer].measured.into();
         let layout_direction = value.layout_direction;
@@ -842,6 +850,7 @@ impl UiTree {
                     size,
                     density,
                     layout_direction,
+                    locals,
                 };
                 let mut content = |list: &mut DisplayList| {
                     self.draw_chain(node, index + 1, next_layer, origins, list, observer)
@@ -871,8 +880,8 @@ impl UiTree {
         origins: &[Offset],
         list: &mut DisplayList,
     ) {
-        let density = self.density;
         let value = self.node_mut(node);
+        let (density, locals) = (value.density, value.locals);
         for &(index, layer) in after.iter().rev() {
             let mut scope = DrawScope {
                 list,
@@ -880,6 +889,7 @@ impl UiTree {
                 size: value.layers[layer as usize].measured.into(),
                 density,
                 layout_direction: value.layout_direction,
+                locals,
             };
             if let Some(draw) = value.chain[index as usize].node.as_draw() {
                 draw.draw_after(&mut scope);

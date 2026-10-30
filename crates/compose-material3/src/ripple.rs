@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::task::Waker;
 
 use compose_animation::Animatable;
-use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalMap, CoroutineScope};
+use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalAnchor, CoroutineScope};
 use compose_ui::{
     BorderRenderer, Brush, Color, Dp, DragInteraction, DragStart, DrawModifierNode, DrawScope,
     Focus, FocusInteraction, HoverEnter, HoverInteraction, Indication, IndicationNodeFactory,
@@ -262,7 +262,7 @@ fn default_unbounded() -> Indication {
     DEFAULT_UNBOUNDED.with(Clone::clone)
 }
 
-/// As Compose's `RippleNodeFactory`, with the locals where the clickable's node is.
+/// As Compose's `RippleNodeFactory`.
 #[derive(Clone)]
 struct RippleNodeFactory {
     bounded: bool,
@@ -274,7 +274,6 @@ struct RippleNodeFactory {
     enable_focus: bool,
     enable_hover: bool,
     enable_drag: bool,
-    locals: CompositionLocalMap,
 }
 
 impl RippleNodeFactory {
@@ -296,7 +295,6 @@ impl RippleNodeFactory {
             enable_focus: options.enable_focus_indication,
             enable_hover: options.enable_hover_indication,
             enable_drag: options.enable_drag_indication,
-            locals: CompositionLocalMap::empty(),
         }
     }
 }
@@ -326,14 +324,6 @@ impl IndicationNodeFactory for RippleNodeFactory {
             && self.enable_focus == other.enable_focus
             && self.enable_hover == other.enable_hover
             && self.enable_drag == other.enable_drag
-            && self.locals.same(&other.locals)
-    }
-
-    fn at_node(
-        &self,
-        locals: &mut dyn FnMut() -> CompositionLocalMap,
-    ) -> Option<Rc<dyn IndicationNodeFactory>> {
-        Some(Rc::new(RippleNodeFactory { locals: locals(), ..self.clone() }))
     }
 }
 
@@ -393,6 +383,9 @@ impl PlayClock {
 #[derive(Default)]
 struct Shared {
     factory: RippleNodeFactoryCell,
+    /// Where the node is, for what it reads there, as `currentValueOf`: what it reads away from
+    /// a context too (hearing its source's interactions).
+    locals: Cell<CompositionLocalAnchor>,
     handle: Cell<Option<NodeHandle>>,
     ripples: RefCell<Vec<Rc<RefCell<RippleAnimation>>>>,
     /// What was heard before the node's attachment gave it a scope.
@@ -445,7 +438,16 @@ impl ModifierNode for RippleNode {
         Some(self)
     }
 
+    fn is_composition_local_consumer(&self) -> bool {
+        true
+    }
+
+    fn on_composition_locals_changed(&mut self, context: &mut NodeContext<'_>) {
+        self.shared.locals.set(context.composition_locals());
+    }
+
     fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.shared.locals.set(context.composition_locals());
         self.start();
         self.shared.handle.set(Some(context.handle()));
         let pending = std::mem::take(&mut *self.shared.pending.borrow_mut());
@@ -490,7 +492,7 @@ impl Shared {
     }
 
     fn configuration(&self) -> Option<RippleConfiguration> {
-        self.factory().locals.get(&LOCAL_RIPPLE_CONFIGURATION)
+        self.locals.get().get(&LOCAL_RIPPLE_CONFIGURATION)
     }
 
     /// As the node's collection of its source's interactions.
@@ -539,7 +541,7 @@ impl Shared {
         if current == new {
             return;
         }
-        let theme = self.factory().locals.get(&LOCAL_RIPPLE_THEME_CONFIGURATION);
+        let theme = self.locals.get().get(&LOCAL_RIPPLE_THEME_CONFIGURATION);
         match &new {
             Some(new) => {
                 let target = self.state_layer_target(new, theme);
@@ -711,7 +713,7 @@ impl Shared {
     fn animate_focus_ring(self: &Rc<Self>, focused: bool) {
         let Some(scope) = self.scope() else { return };
         let ring = self.focus_ring.borrow_mut().get_or_insert_with(|| Animatable::new(0.0)).clone();
-        let motion = self.factory().locals.get(&crate::motion::LOCAL_MOTION_SCHEME);
+        let motion = self.locals.get().get(&crate::motion::LOCAL_MOTION_SCHEME);
         let spec = if focused { motion.fast_spatial_spec() } else { motion.fast_effects_spec() };
         let target = if focused { 1.0 } else { 0.0 };
         scope.launch(async move {
@@ -732,7 +734,7 @@ impl Shared {
         } else if configuration.color.is_specified() {
             configuration.color
         } else {
-            factory.locals.get(&LOCAL_CONTENT_COLOR)
+            self.locals.get().get(&LOCAL_CONTENT_COLOR)
         }
     }
 }
@@ -804,7 +806,7 @@ impl DrawModifierNode for RippleNode {
             draw_circle(scope, factory.bounded, bounds, center, target_radius, paint);
         }
         if ring > 0.0 {
-            let theme = factory.locals.get(&LOCAL_RIPPLE_THEME_CONFIGURATION);
+            let theme = shared.locals.get().get(&LOCAL_RIPPLE_THEME_CONFIGURATION);
             if let RippleThemeFocus::InsetRing {
                 outer_stroke_inset,
                 outer_stroke_width,
@@ -818,7 +820,7 @@ impl DrawModifierNode for RippleNode {
                         inner_stroke_color,
                     }) => (outer_stroke_color, inner_stroke_color),
                     _ => {
-                        let scheme = factory.locals.get(&LOCAL_COLOR_SCHEME);
+                        let scheme = shared.locals.get().get(&LOCAL_COLOR_SCHEME);
                         (scheme.secondary, scheme.on_secondary)
                     }
                 };
