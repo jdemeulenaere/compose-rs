@@ -26,6 +26,7 @@ mod print;
 mod restoration;
 mod rule;
 mod run;
+mod sample_font;
 mod script;
 mod selector;
 mod text_probe;
@@ -66,6 +67,7 @@ pub use run::{
     FailureContext, TestFailureHandler, TestFailurePolicy, run_compose_ui_test,
     run_compose_ui_test_with,
 };
+pub use sample_font::{basic_measure_font, basic_measure_font_bytes};
 pub use script::{check_script, run_script};
 pub use text_probe::{CountingTextMeasurer, LayoutCounts, TextLayoutCounter, draw_snapshot};
 

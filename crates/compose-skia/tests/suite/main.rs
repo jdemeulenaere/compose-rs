@@ -14,6 +14,7 @@ mod review_f3;
 mod review_rtl;
 mod review_skia;
 mod review_text;
+mod sample_font;
 mod skia;
 mod text_painter;
 mod text_reuse;

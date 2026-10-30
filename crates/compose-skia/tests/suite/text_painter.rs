@@ -784,20 +784,19 @@ fn drawing_a_layout_twice_in_another_color_keeps_one_repainted_paragraph() {
 
 // ---- Fonts on the real stack -------------------------------------------------------------------
 
-/// A monospaced font file of this system. No bundled fonts (D94; the test font is coming): a
-/// system with none of these fails here, rather than these tests passing with nothing asserted.
+/// A monospaced font file: the sample font's (D1124), in the target directory.
 fn monospaced_font_file() -> &'static str {
-    [
-        "/System/Library/Fonts/Monaco.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-    ]
-    .into_iter()
-    .find(|path| std::path::Path::new(path).exists())
-    .expect("these tests need a monospaced font file: install DejaVu Sans Mono")
+    static FILE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let path = format!("{}/sample_font.ttf", env!("CARGO_TARGET_TMPDIR"));
+        std::fs::write(&path, compose::test::basic_measure_font_bytes())
+            .expect("writing the sample font");
+        path
+    })
 }
 
-/// A variable font file of this system, with a `wght` axis.
+/// A variable font file of this system, with a `wght` axis. A system with none of these fails
+/// here, rather than these tests passing with nothing asserted.
 fn variable_font_file() -> &'static str {
     [
         "/System/Library/Fonts/SFNS.ttf",
@@ -822,6 +821,33 @@ fn width_of(text: &str, family: &FontFamily) -> i32 {
     let result =
         measurer.measure(text, TextMeasureOptions { style, ..TextMeasureOptions::default() });
     result.size.width
+}
+
+/// A picture 50 pixels square of `text` in the sample font at 50 pixels.
+fn sample_font_picture(text: &'static str) -> Picture {
+    sized(50, 50, move |scope, measurer| {
+        let style = TextStyle {
+            font_family: Some(compose::test::basic_measure_font().to_font_family()),
+            color: Color::BLACK,
+            ..style_of(50.0)
+        };
+        scope.draw_text(measurer, text, DrawTextOptions { style, ..DrawTextOptions::default() });
+    })
+}
+
+#[test]
+fn the_sample_fonts_glyphs_point_along_their_direction() {
+    let ink_at = |picture: &Picture, x: i32, y: i32| {
+        picture.pixels[(y * picture.width + x) as usize] != Color::WHITE
+    };
+    let latin = sample_font_picture("a");
+    assert!(ink_at(&latin, 2, 3), "the top of a triangle pointing right is at its left");
+    assert!(!ink_at(&latin, 47, 3));
+    assert!(ink_at(&latin, 47, 25), "and its point at its right");
+    let hebrew = sample_font_picture("\u{5D0}");
+    assert!(!ink_at(&hebrew, 2, 3));
+    assert!(ink_at(&hebrew, 47, 3), "the top of a triangle pointing left is at its right");
+    assert!(ink_at(&hebrew, 2, 25), "and its point at its left");
 }
 
 #[test]

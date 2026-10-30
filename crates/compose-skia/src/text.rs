@@ -252,6 +252,8 @@ struct Entry {
     /// The text's own width its layout width was chosen from (SkParagraph's
     /// `maxIntrinsicWidth` after the first layout).
     max_intrinsic_width: f32,
+    /// Its widest word.
+    min_intrinsic_width: f32,
     /// It ends with an ellipsis (more lines than its maximum, ellipsized).
     ellipsized: bool,
 }
@@ -336,7 +338,7 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
     let size = ParagraphSize {
         width: if width.is_finite() { width } else { entry.metrics.size.width as f32 },
         height: paragraph.height(),
-        min_intrinsic_width: paragraph.min_intrinsic_width(),
+        min_intrinsic_width: entry.min_intrinsic_width,
         max_intrinsic_width: entry.max_intrinsic_width,
         did_exceed_max_lines: paragraph.did_exceed_max_lines(),
         ellipsized: entry.ellipsized,
@@ -521,7 +523,7 @@ impl TextMeasurer for SkiaTextMeasurer {
 
     /// SkParagraph's `minIntrinsicWidth`: its widest word.
     fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
-        Some(self.entry(paragraph).paragraph.min_intrinsic_width())
+        Some(self.entry(paragraph).min_intrinsic_width)
     }
 
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
@@ -706,11 +708,20 @@ impl SkiaTextMeasurer {
             f32::INFINITY
         };
         paragraph.layout(width);
+        let mut min_intrinsic_width = paragraph.min_intrinsic_width();
+        let mut max_intrinsic_width = paragraph.max_intrinsic_width();
+        // A word broken for not fitting leaves SkParagraph's intrinsics short by what the width
+        // cut from it. Compose's don't depend on the width: they're read where nothing's cut.
+        if min_intrinsic_width > width {
+            paragraph.layout(f32::INFINITY);
+            min_intrinsic_width = paragraph.min_intrinsic_width();
+            max_intrinsic_width = paragraph.max_intrinsic_width();
+            paragraph.layout(width);
+        }
         // As Compose's `finalMaxWidth`: laid out again at the text's own width, rounded up and
         // kept in the constraints, so alignment and right-to-left text start where the text
         // is (not at an unbounded width's far edge).
         let min_width = constraints.min_width as f32;
-        let max_intrinsic_width = paragraph.max_intrinsic_width();
         let measured_width = if min_width == width {
             width
         } else {
@@ -738,6 +749,7 @@ impl SkiaTextMeasurer {
             metrics,
             right_to_left,
             max_intrinsic_width,
+            min_intrinsic_width,
             ellipsized,
         };
         match self.free.pop() {

@@ -17,4 +17,5 @@ mod restoration;
 mod review_d;
 mod rule;
 mod run;
+mod sample_font;
 mod selectors;
