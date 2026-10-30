@@ -19,6 +19,9 @@ pub enum PointerType {
     Mouse,
     Touch,
     Stylus,
+    /// An eraser, or a stylus held the other way up.
+    Eraser,
+    Unknown,
 }
 
 /// What happened, as `PointerEventType`.
@@ -33,6 +36,7 @@ pub enum PointerEventType {
     Enter,
     /// A mouse left it, or the window, as `PointerEventType.Exit`.
     Exit,
+    Unknown,
 }
 
 /// The mouse pointer's look, as Compose's `PointerIcon`.
@@ -96,6 +100,11 @@ pub struct PointerEvent {
     pub position: Offset,
     /// Whether the pointer is down after this event (a button held, a finger touching).
     pub pressed: bool,
+    /// The buttons during it.
+    pub buttons: crate::pointer_event::PointerButtons,
+    /// The modifier keys during it.
+    pub keyboard_modifiers: crate::pointer_event::PointerKeyboardModifiers,
+    pub pressure: f32,
     /// The scroll amount of a `Scroll` event: pixels, or the wheel's own units as `wheel_step` says.
     pub scroll_delta: Offset,
     /// What a unit of `scroll_delta` is worth in the scrollable it reaches (D1450).
@@ -119,6 +128,13 @@ impl PointerEvent {
             pointer_type: PointerType::Mouse,
             position,
             pressed,
+            buttons: if pressed {
+                crate::pointer_event::PointerButtons::PRIMARY
+            } else {
+                crate::pointer_event::PointerButtons::NONE
+            },
+            keyboard_modifiers: Default::default(),
+            pressure: 1.0,
             scroll_delta: Offset::ZERO,
             wheel_step: WheelStep::Pixels,
             precise_wheel: false,
@@ -170,9 +186,31 @@ impl PointerEvent {
         PointerEvent { time_nanos, ..self }
     }
 
-    /// The same event for another pointer (a finger).
+    /// The same event for another pointer (a finger): only a mouse has buttons by default.
     pub fn with_pointer(self, pointer: PointerId, pointer_type: PointerType) -> PointerEvent {
-        PointerEvent { pointer, pointer_type, ..self }
+        let buttons =
+            if pointer_type == PointerType::Mouse { self.buttons } else { Default::default() };
+        PointerEvent { pointer, pointer_type, buttons, ..self }
+    }
+
+    /// The same event with `buttons` held after it: the pointer's down as long as one is, as a mouse
+    /// is. A press or release of one of several stays a `Press` or `Release`.
+    pub fn with_buttons(self, buttons: crate::pointer_event::PointerButtons) -> PointerEvent {
+        let pressed = buttons.are_any_pressed();
+        PointerEvent { buttons, pressed, ..self }
+    }
+
+    /// The same event with the modifier keys `modifiers` held.
+    pub fn with_keyboard_modifiers(
+        self,
+        keyboard_modifiers: crate::pointer_event::PointerKeyboardModifiers,
+    ) -> PointerEvent {
+        PointerEvent { keyboard_modifiers, ..self }
+    }
+
+    /// The same event at `pressure`.
+    pub fn with_pressure(self, pressure: f32) -> PointerEvent {
+        PointerEvent { pressure, ..self }
     }
 
     pub fn consume(&mut self) {

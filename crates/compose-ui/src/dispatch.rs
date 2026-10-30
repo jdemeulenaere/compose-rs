@@ -43,6 +43,168 @@ fn hit_since(path: &mut Vec<HitEntry>, start: usize) -> bool {
     }
 }
 
+/// What a pointer's next change is told of its last, in the root.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PointerState {
+    position: Offset,
+    pressed: bool,
+    uptime_millis: u64,
+    buttons: crate::pointer_event::PointerButtons,
+    pointer_type: crate::input::PointerType,
+    pressure: f32,
+}
+
+/// One pointer's change, as a dispatch has it.
+struct LiveChange {
+    event: PointerEvent,
+    previous: Option<PointerState>,
+    /// Only there as every finger down is in an event: the host said nothing of it.
+    resting: bool,
+    uptime_millis: u64,
+    /// Whether it's consumed, what each node hearing it shares.
+    consumed: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl LiveChange {
+    fn new(event: PointerEvent, previous: Option<PointerState>, resting: bool) -> LiveChange {
+        let nanos = match event.time_nanos {
+            0 => compose_runtime::platform::now_nanos(),
+            nanos => nanos,
+        };
+        LiveChange {
+            event,
+            previous,
+            resting,
+            uptime_millis: nanos / 1_000_000,
+            consumed: std::rc::Rc::new(std::cell::Cell::new(event.consumed)),
+        }
+    }
+
+    /// The change as it is in what's at `origin` in the root.
+    fn change_at(&self, origin: Offset) -> crate::pointer_event::PointerInputChange {
+        let event = &self.event;
+        let position = event.position - origin;
+        // Coming over or leaving a node isn't its press or its release.
+        let hover = matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit);
+        // Where it was, the node where it is now: only the pointer's move counts.
+        let previous_position = match self.previous {
+            Some(previous) => position - (event.position - previous.position),
+            None => position,
+        };
+        let mut change = crate::pointer_event::PointerInputChange::new(
+            event.pointer,
+            self.uptime_millis,
+            position,
+            event.pressed && !hover,
+            self.previous.map_or(self.uptime_millis, |it| it.uptime_millis),
+            previous_position,
+            !hover && self.previous.is_some_and(|it| it.pressed),
+            false,
+        );
+        change.pressure = event.pressure;
+        change.pointer_type = event.pointer_type;
+        change.scroll_delta = event.scroll_delta;
+        change.sharing(self.consumed.clone())
+    }
+
+    /// The event for what hears a pointer one change at a time: for a mouse, its primary button
+    /// alone. What another button does isn't an event; it's down only while the primary is.
+    fn as_primary_button(&self) -> Option<PointerEvent> {
+        let event = self.event;
+        if event.pointer_type != crate::input::PointerType::Mouse {
+            return Some(event);
+        }
+        let primary = |pressed: bool, buttons: crate::pointer_event::PointerButtons| {
+            // A host that doesn't say which: its only button.
+            buttons.is_primary_pressed() || (pressed && !buttons.are_any_pressed())
+        };
+        let now = primary(event.pressed, event.buttons);
+        let before = self.previous.is_some_and(|it| primary(it.pressed, it.buttons));
+        let kind = match event.kind {
+            PointerEventType::Press | PointerEventType::Release | PointerEventType::Unknown => {
+                match (before, now) {
+                    (false, true) => PointerEventType::Press,
+                    (true, false) => PointerEventType::Release,
+                    _ => return None,
+                }
+            }
+            kind => kind,
+        };
+        Some(PointerEvent { kind, pressed: now, ..event })
+    }
+}
+
+/// The reason for one platform event, of the changes in it.
+fn event_kind(events: &[PointerEvent]) -> PointerEventType {
+    let any = |kind| events.iter().any(|event| event.kind == kind);
+    if any(PointerEventType::Release) {
+        PointerEventType::Release
+    } else if any(PointerEventType::Press) {
+        PointerEventType::Press
+    } else {
+        events.first().map_or(PointerEventType::Unknown, |event| event.kind)
+    }
+}
+
+/// The pointers' hit paths of a dispatch, a shared start one branch, as `HitPathTracker`'s tree.
+#[derive(Default)]
+struct HitBranches {
+    all: Vec<HitBranch>,
+    roots: Vec<usize>,
+}
+
+struct HitBranch {
+    entry: HitEntry,
+    /// The changes reaching it.
+    changes: smallvec::SmallVec<[usize; 2]>,
+    children: smallvec::SmallVec<[usize; 2]>,
+    /// Whether what's around it waits for a gesture past a press, in one of the paths.
+    waiting: bool,
+}
+
+impl HitBranches {
+    /// Adds the path of change `change`, with what's waiting around each of its entries.
+    fn add(&mut self, path: &[HitEntry], change: usize, waiting: &[bool]) {
+        let mut parent: Option<usize> = None;
+        for (index, entry) in path.iter().enumerate() {
+            let siblings: &[usize] = match parent {
+                Some(parent) => &self.all[parent].children,
+                None => &self.roots,
+            };
+            let found = siblings.iter().copied().find(|&at| self.all[at].entry == *entry);
+            let at = match found {
+                Some(at) => at,
+                None => {
+                    let at = self.all.len();
+                    self.all.push(HitBranch {
+                        entry: *entry,
+                        changes: smallvec::SmallVec::new(),
+                        children: smallvec::SmallVec::new(),
+                        waiting: false,
+                    });
+                    match parent {
+                        Some(parent) => self.all[parent].children.push(at),
+                        None => self.roots.push(at),
+                    }
+                    at
+                }
+            };
+            let branch = &mut self.all[at];
+            branch.changes.push(change);
+            branch.waiting |= waiting.get(index).copied().unwrap_or(false);
+            parent = Some(at);
+        }
+    }
+}
+
+/// What a dispatch's changes go out with.
+struct Delivery<'a> {
+    live: &'a [LiveChange],
+    kind: PointerEventType,
+    actions: &'a mut Vec<Action>,
+    requests: &'a mut Requests,
+}
+
 fn contains(size: IntSize, point: Offset) -> bool {
     point.x >= 0.0 && point.y >= 0.0 && point.x < size.width as f32 && point.y < size.height as f32
 }
@@ -162,103 +324,218 @@ impl UiTree {
         hit_since(path, start)
     }
 
-    /// Dispatches a pointer event at `position` in the root. A press captures its hit path:
-    /// the pointer's moves and its release go to the same nodes. Returns the actions handlers
-    /// queued, to run once the tree is free.
-    pub fn dispatch_pointer(&mut self, mut event: PointerEvent) -> Vec<Action> {
+    /// Dispatches a pointer event at `position` in the root, as `dispatch_pointers`.
+    pub fn dispatch_pointer(&mut self, event: PointerEvent) -> Vec<Action> {
+        self.dispatch_pointers(&[event])
+    }
+
+    /// Dispatches the changes of one platform event, each at its position in the root. A press
+    /// captures its hit path: the pointer's moves and its last release go to the same nodes. A node
+    /// on the paths of several hears them together (D1657), as `HitPathTracker`. Returns the actions
+    /// handlers queued, to run once the tree is free.
+    pub fn dispatch_pointers(&mut self, events: &[PointerEvent]) -> Vec<Action> {
         crate::nested_scroll::begin_pointer_event();
-        let position = event.position;
-        let captured = self.captures.iter().position(|(pointer, _)| *pointer == event.pointer);
-        let path = match (event.kind, captured) {
-            (PointerEventType::Press, captured) => {
-                if let Some(captured) = captured {
-                    self.captures.remove(captured);
-                }
-                let path = self.hit_test(position);
-                self.captures.push((event.pointer, path.clone()));
-                path
-            }
-            (PointerEventType::Release, Some(captured)) => self.captures.remove(captured).1,
-            (PointerEventType::Move, Some(captured)) => self.captures[captured].1.clone(),
-            _ => self.hit_test(position),
-        };
         let mut actions = Vec::new();
         let mut requests = Requests::default();
-        // A mouse's hover: what it left hears `Exit`, what it came over `Enter`, as Compose's
-        // (not while a button is held: a drag stays with what it pressed).
-        let hovering = event.pointer_type == crate::input::PointerType::Mouse
-            && event.kind != PointerEventType::Scroll
-            && (!event.pressed || event.kind == PointerEventType::Press);
-        if event.pointer_type == crate::input::PointerType::Mouse
-            && event.kind != PointerEventType::Scroll
-        {
-            self.mouse = (!event.pressed).then_some(position);
-        }
-        if hovering {
-            let now = if event.kind == PointerEventType::Release || captured.is_some() {
-                self.hit_test(position)
-            } else {
-                path.clone()
+        let all = self.with_resting_fingers(events);
+        let mut live = Vec::with_capacity(all.len());
+        let mut branches = HitBranches::default();
+        for &(event, resting) in &all {
+            let previous =
+                self.pointer_states.iter().find(|it| it.0 == event.pointer).map(|it| it.1);
+            // A wheel's turn leaves what's held as it was.
+            let event = match (event.kind, previous) {
+                (PointerEventType::Scroll, previous) => PointerEvent {
+                    pressed: previous.is_some_and(|it| it.pressed),
+                    buttons: previous.map_or(Default::default(), |it| it.buttons),
+                    ..event
+                },
+                _ => event,
             };
-            self.update_hover(now, event, &mut actions, &mut requests);
-        }
-        // For a press, whether something before each entry (around it) waits for a gesture past
-        // it, as Compose's `hasWaitingParent`.
-        let waiting = if event.kind == PointerEventType::Press {
-            self.waiting_before(&path, &event)
-        } else {
-            Vec::new()
-        };
-        for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
-            if pass == PointerEventPass::Main {
-                // From the inside out; but one node's delegates in delegation order, in every
-                // pass, as Compose's `dispatchForKind` in its hit path's node.
-                let mut end = path.len();
-                while end > 0 {
-                    let mut start = end - 1;
-                    while start > 0 && path[start].is_delegate_with(&path[start - 1]) {
-                        start -= 1;
-                    }
-                    for (index, entry) in path[start..end].iter().enumerate() {
-                        let waiting_parent = waiting.get(start + index).copied().unwrap_or(false);
-                        self.deliver_pointer(
-                            entry,
-                            &mut event,
-                            pass,
-                            position,
-                            waiting_parent,
-                            &mut actions,
-                            &mut requests,
-                        );
-                    }
-                    end = start;
+            let position = event.position;
+            let captured = self.captures.iter().position(|(pointer, _)| *pointer == event.pointer);
+            // Another of a mouse's buttons: it stays with what the first one pressed.
+            let already_down = event.pointer_type == crate::input::PointerType::Mouse
+                && captured.is_some()
+                && previous.is_some_and(|it| it.pressed);
+            let path = match (event.kind, captured) {
+                (PointerEventType::Press, Some(captured)) if already_down => {
+                    self.captures[captured].1.clone()
                 }
-            } else {
-                for entry in path.iter() {
-                    self.deliver_pointer(
-                        entry,
-                        &mut event,
-                        pass,
-                        position,
-                        false,
-                        &mut actions,
-                        &mut requests,
-                    );
+                (PointerEventType::Press, captured) => {
+                    if let Some(captured) = captured {
+                        self.captures.remove(captured);
+                    }
+                    let path = self.hit_test(position);
+                    self.captures.push((event.pointer, path.clone()));
+                    path
                 }
+                (PointerEventType::Release, Some(captured)) if !event.pressed => {
+                    self.captures.remove(captured).1
+                }
+                (
+                    PointerEventType::Release | PointerEventType::Move | PointerEventType::Unknown,
+                    Some(captured),
+                ) => self.captures[captured].1.clone(),
+                _ => self.hit_test(position),
+            };
+            // A mouse's hover: what it left hears `Exit`, what it came over `Enter`, as Compose's
+            // (not while a button is held: a drag stays with what it pressed).
+            let is_mouse = event.pointer_type == crate::input::PointerType::Mouse;
+            let hovering = is_mouse
+                && event.kind != PointerEventType::Scroll
+                && (!event.pressed || (event.kind == PointerEventType::Press && !already_down));
+            if is_mouse && event.kind != PointerEventType::Scroll {
+                self.mouse = (!event.pressed).then_some(position);
             }
+            if hovering {
+                let now = if event.kind == PointerEventType::Release || captured.is_some() {
+                    self.hit_test(position)
+                } else {
+                    path.clone()
+                };
+                self.update_hover(now, event, &mut actions, &mut requests);
+            }
+            // For a press, whether something before each entry (around it) waits for a gesture past
+            // it, as Compose's `hasWaitingParent`.
+            let waiting = if event.kind == PointerEventType::Press {
+                self.waiting_before(&path, &event)
+            } else {
+                Vec::new()
+            };
+            branches.all.reserve(path.len());
+            branches.add(&path, live.len(), &waiting);
+            live.push(LiveChange::new(event, previous, resting));
+        }
+        let kind = event_kind(events);
+        let mut delivery =
+            Delivery { live: &live, kind, actions: &mut actions, requests: &mut requests };
+        for &root in &branches.roots {
+            self.deliver_before_children(&branches, root, PointerEventPass::Initial, &mut delivery);
+        }
+        for &root in &branches.roots {
+            self.deliver_after_children(&branches, root, &mut delivery);
+        }
+        for &root in &branches.roots {
+            self.deliver_before_children(&branches, root, PointerEventPass::Final, &mut delivery);
+        }
+        for change in &live {
+            self.note_pointer_state(change);
         }
         self.apply_requests(requests, &mut actions);
         actions
     }
 
+    /// `events` with every other finger down, as an event tells them all (a platform's says them;
+    /// others send a finger at a time), in the order of their ids.
+    fn with_resting_fingers(
+        &self,
+        events: &[PointerEvent],
+    ) -> smallvec::SmallVec<[(PointerEvent, bool); 4]> {
+        use crate::input::PointerType;
+        let mut all: smallvec::SmallVec<[(PointerEvent, bool); 4]> =
+            events.iter().map(|event| (*event, false)).collect();
+        if let Some(first) = events.iter().find(|event| event.pointer_type != PointerType::Mouse) {
+            for &(pointer, state) in &self.pointer_states {
+                let told = events.iter().any(|event| event.pointer == pointer);
+                if state.pressed && state.pointer_type != PointerType::Mouse && !told {
+                    let resting = PointerEvent {
+                        pointer,
+                        pointer_type: state.pointer_type,
+                        pressure: state.pressure,
+                        buttons: first.buttons,
+                        keyboard_modifiers: first.keyboard_modifiers,
+                        time_nanos: first.time_nanos,
+                        ..PointerEvent::moved(state.position, true)
+                    };
+                    all.push((resting, true));
+                }
+            }
+            all.sort_by_key(|it| it.0.pointer.0);
+        }
+        all
+    }
+
+    /// Keeps what a pointer's next change will be told of this one: while it's down, or a mouse's,
+    /// which is always somewhere, as `PointerInputChangeEventProducer`.
+    fn note_pointer_state(&mut self, change: &LiveChange) {
+        let event = &change.event;
+        let kept = self.pointer_states.iter().position(|it| it.0 == event.pointer);
+        if event.pressed || event.pointer_type == crate::input::PointerType::Mouse {
+            let state = PointerState {
+                position: event.position,
+                pressed: event.pressed,
+                uptime_millis: change.uptime_millis,
+                buttons: event.buttons,
+                pointer_type: event.pointer_type,
+                pressure: event.pressure,
+            };
+            match kept {
+                Some(kept) => self.pointer_states[kept].1 = state,
+                None => self.pointer_states.push((event.pointer, state)),
+            }
+        } else if let Some(kept) = kept {
+            self.pointer_states.swap_remove(kept);
+        }
+    }
+
+    /// `at` and what's below it in the initial or final pass: from the root down.
+    fn deliver_before_children(
+        &mut self,
+        branches: &HitBranches,
+        at: usize,
+        pass: PointerEventPass,
+        delivery: &mut Delivery<'_>,
+    ) {
+        let branch = &branches.all[at];
+        self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
+        for &child in &branch.children {
+            self.deliver_before_children(branches, child, pass, delivery);
+        }
+    }
+
+    /// `at` and what's below it in the main pass: from the inside out; but one node's delegates in
+    /// delegation order, in every pass, as Compose's `dispatchForKind` in its hit path's node.
+    fn deliver_after_children(
+        &mut self,
+        branches: &HitBranches,
+        at: usize,
+        delivery: &mut Delivery<'_>,
+    ) {
+        let mut last = at;
+        while let [only] = branches.all[last].children[..]
+            && branches.all[only].entry.is_delegate_with(&branches.all[last].entry)
+        {
+            last = only;
+        }
+        for &child in &branches.all[last].children {
+            self.deliver_after_children(branches, child, delivery);
+        }
+        let mut current = at;
+        loop {
+            let branch = &branches.all[current];
+            let pass = PointerEventPass::Main;
+            self.deliver_changes(&branch.entry, &branch.changes, pass, branch.waiting, delivery);
+            if current == last {
+                break;
+            }
+            current = branch.children[0];
+        }
+    }
+
     /// Ends the gesture of `pointer`, without a release: a touch the system cancelled.
     pub fn cancel_pointer(&mut self, pointer: crate::input::PointerId) {
+        self.pointer_states.retain(|it| it.0 != pointer);
         let Some(index) = self.captures.iter().position(|(captured, _)| *captured == pointer)
         else {
             return;
         };
         let (_, path) = self.captures.remove(index);
         for entry in path {
+            // Told once: when its last pointer's gone.
+            if self.captures.iter().any(|(_, other)| other.contains(&entry)) {
+                continue;
+            }
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
                 && let Some(handler) = value.chain[entry.index as usize]
@@ -290,39 +567,79 @@ impl UiTree {
         waiting
     }
 
-    /// Sends one pointer event, in a pass, to one entry of a hit path.
-    #[allow(clippy::too_many_arguments)]
-    fn deliver_pointer(
+    /// Sends the changes of `which`, in a pass, to one entry of a hit path: together if it takes them
+    /// so (`takes_whole_events`), else one at a time.
+    fn deliver_changes(
         &mut self,
         entry: &HitEntry,
-        event: &mut PointerEvent,
+        which: &[usize],
         pass: PointerEventPass,
-        position: Offset,
         waiting_parent: bool,
-        actions: &mut Vec<Action>,
-        requests: &mut Requests,
+        delivery: &mut Delivery<'_>,
     ) {
         if self.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
             return;
         }
         let origin = self.layer_origin(entry.node, entry.layer as usize);
         let bounds = self.node(entry.node).layers[entry.layer as usize].measured;
-        event.position = position - origin;
-        self.with_event_context(
-            entry.node,
-            entry.index as usize,
-            entry.delegate,
-            actions,
-            requests,
-            Some(position),
-            waiting_parent,
-            |modifier_node, context| {
-                if let Some(handler) = modifier_node.as_pointer_input() {
-                    handler.on_pointer_event(event, pass, bounds, context);
-                }
-            },
-        );
-        event.position = position;
+        let whole = self.node_mut(entry.node).chain[entry.index as usize]
+            .resolve(entry.delegate)
+            .and_then(|node| node.as_pointer_input())
+            .is_some_and(|handler| handler.takes_whole_events());
+        let Delivery { live, kind, actions, requests } = delivery;
+        if whole {
+            let first = &live[which[0]].event;
+            let event = crate::pointer_event::PointerEvents {
+                changes: which.iter().map(|&at| live[at].change_at(origin)).collect(),
+                buttons: first.buttons,
+                keyboard_modifiers: first.keyboard_modifiers,
+                kind: *kind,
+            };
+            let position = first.position;
+            self.with_event_context(
+                entry.node,
+                entry.index as usize,
+                entry.delegate,
+                actions,
+                requests,
+                Some(position),
+                waiting_parent,
+                |modifier_node, context| {
+                    if let Some(handler) = modifier_node.as_pointer_input() {
+                        handler.on_pointer_events(&event, pass, bounds, context);
+                    }
+                },
+            );
+            return;
+        }
+        for &at in which {
+            let change = &live[at];
+            // A pointer resting while another moves, comes down or up isn't a change to hear alone.
+            if change.resting
+                || (change.event.kind == PointerEventType::Move && *kind != PointerEventType::Move)
+            {
+                continue;
+            }
+            let Some(mut event) = change.as_primary_button() else { continue };
+            let position = event.position;
+            event.position = position - origin;
+            event.consumed = change.consumed.get();
+            self.with_event_context(
+                entry.node,
+                entry.index as usize,
+                entry.delegate,
+                actions,
+                requests,
+                Some(position),
+                waiting_parent,
+                |modifier_node, context| {
+                    if let Some(handler) = modifier_node.as_pointer_input() {
+                        handler.on_pointer_event(&mut event, pass, bounds, context);
+                    }
+                },
+            );
+            change.consumed.set(event.consumed);
+        }
     }
 
     /// Runs `f` with entry `index` of `node` (or its delegate `delegate`) and an `EventContext`:
@@ -400,23 +717,21 @@ impl UiTree {
         actions: &mut Vec<Action>,
         requests: &mut Requests,
     ) {
-        let position = event.position;
-        let mut events = vec![PointerEvent { kind, consumed: false, ..event }; entries.len()];
+        let previous = self.pointer_states.iter().find(|it| it.0 == event.pointer).map(|it| it.1);
+        let live: Vec<LiveChange> = entries
+            .iter()
+            .map(|_| {
+                LiveChange::new(PointerEvent { kind, consumed: false, ..event }, previous, false)
+            })
+            .collect();
+        let mut delivery = Delivery { live: &live, kind, actions, requests };
         for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
             let mut order: Vec<usize> = (0..entries.len()).collect();
             if pass == PointerEventPass::Main {
                 order.reverse();
             }
             for index in order {
-                self.deliver_pointer(
-                    &entries[index],
-                    &mut events[index],
-                    pass,
-                    position,
-                    false,
-                    actions,
-                    requests,
-                );
+                self.deliver_changes(&entries[index], &[index], pass, false, &mut delivery);
             }
         }
     }
@@ -455,6 +770,7 @@ impl UiTree {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         self.mouse = None;
+        self.pointer_states.retain(|it| it.1.pressed);
         let mut event = PointerEvent::moved(Offset::new(-1.0, -1.0), false);
         event.kind = PointerEventType::Exit;
         self.update_hover(Vec::new(), event, &mut actions, &mut requests);
@@ -464,8 +780,15 @@ impl UiTree {
 
     /// Ends every pointer gesture in progress, as when the window loses the pointer.
     pub fn cancel_pointers(&mut self) {
+        self.pointer_states.clear();
+        let mut told: Vec<HitEntry> = Vec::new();
         for (_, path) in std::mem::take(&mut self.captures) {
             for entry in path {
+                // Told once, whichever pointers it has.
+                if told.contains(&entry) {
+                    continue;
+                }
+                told.push(entry);
                 if let Some(value) = self.get_mut(entry.node)
                     && value.chain_version == entry.version
                     && let Some(handler) = value.chain[entry.index as usize]

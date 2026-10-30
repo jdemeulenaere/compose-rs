@@ -24,6 +24,7 @@ mod paragraph_style;
 mod parent_data;
 mod placeholder;
 mod placement_pass;
+mod pointer_event;
 mod retained_drawing;
 mod review_d;
 mod review_d2;

@@ -821,9 +821,10 @@ fn a_scrollable_with_a_slop_of_zero_isnt_taken_by_a_move_across() {
                         let seen = seen.clone();
                         async move {
                             loop {
-                                let change = scope
+                                let event = scope
                                     .await_pointer_event(compose_ui::PointerEventPass::Final)
                                     .await;
+                                let change = &event.changes[0];
                                 if change.is_consumed() {
                                     seen.set(true);
                                 }

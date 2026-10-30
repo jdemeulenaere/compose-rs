@@ -99,9 +99,9 @@ fn enter_and_exit_reach_a_block_awaiting_the_initial_pass() {
                 let seen = seen.clone();
                 async move {
                     loop {
-                        let change = scope.await_pointer_event(PointerEventPass::Initial).await;
-                        if matches!(change.kind, PointerEventType::Enter | PointerEventType::Exit) {
-                            seen.borrow_mut().push(format!("{:?}", change.kind));
+                        let event = scope.await_pointer_event(PointerEventPass::Initial).await;
+                        if matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
+                            seen.borrow_mut().push(format!("{:?}", event.kind));
                         }
                     }
                 }

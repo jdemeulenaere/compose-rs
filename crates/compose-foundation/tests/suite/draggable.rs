@@ -861,9 +861,10 @@ fn a_parent_picking_up_midway_is_told_the_whole_drag() {
                                 let mut child = 0.0f32;
                                 let mut dropped = false;
                                 loop {
-                                    let change =
+                                    let event =
                                         scope.await_pointer_event(PointerEventPass::Main).await;
-                                    if change.kind != PointerEventType::Move {
+                                    let change = &event.changes[0];
+                                    if event.kind != PointerEventType::Move {
                                         continue;
                                     }
                                     if child.abs() < distance * 0.2 || dropped {
@@ -1014,8 +1015,9 @@ fn consumed_around(pass: PointerEventPass) {
                     let noted = noted.clone();
                     async move {
                         loop {
-                            let change = scope.await_pointer_event(pass).await;
-                            if change.kind == PointerEventType::Move {
+                            let event = scope.await_pointer_event(pass).await;
+                            let change = &event.changes[0];
+                            if event.kind == PointerEventType::Move {
                                 noted.set(noted.get() + change.position_change().y);
                                 change.consume();
                             }
@@ -1337,8 +1339,9 @@ fn moves_of_nothing_are_consumed_once_dragging() {
                     let noted = noted.clone();
                     async move {
                         loop {
-                            let change = scope.await_pointer_event(PointerEventPass::Final).await;
-                            if change.kind == PointerEventType::Move && !change.is_consumed() {
+                            let event = scope.await_pointer_event(PointerEventPass::Final).await;
+                            let change = &event.changes[0];
+                            if event.kind == PointerEventType::Move && !change.is_consumed() {
                                 noted.set(noted.get() + 1);
                             }
                         }
@@ -1401,8 +1404,9 @@ fn a_move_taken_by_another_stops_the_drag_without_velocity() {
                     let taking = taking.clone();
                     async move {
                         loop {
-                            let change = scope.await_pointer_event(PointerEventPass::Initial).await;
-                            if taking.get() && change.kind == PointerEventType::Move {
+                            let event = scope.await_pointer_event(PointerEventPass::Initial).await;
+                            let change = &event.changes[0];
+                            if taking.get() && event.kind == PointerEventType::Move {
                                 change.consume();
                             }
                         }

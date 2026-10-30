@@ -36,6 +36,219 @@ fn drag_to(ui: &mut ComposeTestRule, x: f32, y: f32) {
     ui.wait_for_idle();
 }
 
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt, waitForUpOrCancellation
+/// A tap of two fingers: it's over when the last comes up.
+#[test]
+fn a_tap_of_two_fingers_waits_for_both() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).pointer_input((), move |scope| {
+                let tap = seen.clone();
+                async move {
+                    scope
+                        .detect_tap_gestures(
+                            TapGestures::default()
+                                .on_tap(move |at| tap.borrow_mut().push(format!("tap {}", at.x))),
+                        )
+                        .await
+                }
+            })
+        );
+    });
+    let touch = |event: PointerEvent, id: u64| {
+        event.with_pointer(compose_ui::PointerId(id), compose_ui::PointerType::Touch)
+    };
+    let at = |x: f32| Offset::new(x, 10.0);
+    // Down together: a single event of two changes, both coming down.
+    ui.host().send_pointers(&[
+        touch(PointerEvent::press(at(10.0)), 1),
+        touch(PointerEvent::press(at(20.0)), 2),
+    ]);
+    ui.wait_for_idle();
+    ui.host().send_pointers(&[
+        touch(PointerEvent::moved(at(10.0), true), 1),
+        touch(PointerEvent::release(at(20.0)), 2),
+    ]);
+    ui.wait_for_idle();
+    assert!(log.borrow().is_empty(), "one's still down");
+    ui.host().send_pointer(touch(PointerEvent::release(at(10.0)), 1));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), vec!["tap 10"]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt, awaitFirstDown
+/// A second finger coming down isn't a first down: the next gesture starts when all were up.
+#[test]
+fn a_finger_coming_down_beside_another_starts_no_gesture() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).pointer_input((), move |scope| {
+                let seen = seen.clone();
+                async move {
+                    loop {
+                        let down = scope.await_first_down(true).await;
+                        seen.borrow_mut().push(format!("down {}", down.id.0));
+                        down.consume();
+                    }
+                }
+            })
+        );
+    });
+    finger(&mut ui, PointerEvent::press(Offset::new(10.0, 10.0)));
+    let second = PointerEvent::press(Offset::new(20.0, 10.0))
+        .with_pointer(compose_ui::PointerId(2), compose_ui::PointerType::Touch);
+    ui.host().send_pointer(second);
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), vec!["down 1"]);
+}
+
+/// A right click is no tap, and a drag of the right button no drag, as Compose's on a desktop: a
+/// detector starts at the primary button (D1657).
+#[test]
+fn the_detectors_start_at_a_mouses_primary_button() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(100.dp()).pointer_input((), move |scope| {
+                let tap = seen.clone();
+                async move {
+                    scope
+                        .detect_tap_gestures(
+                            TapGestures::default()
+                                .on_tap(move |at| tap.borrow_mut().push(format!("tap {}", at.x))),
+                        )
+                        .await
+                }
+            })
+        );
+    });
+    let at = Offset::new(10.0, 10.0);
+    let right = compose_ui::PointerButtons::SECONDARY;
+    ui.host().send_pointer(PointerEvent::press(at).with_buttons(right));
+    ui.wait_for_idle();
+    ui.host()
+        .send_pointer(PointerEvent::release(at).with_buttons(compose_ui::PointerButtons::NONE));
+    ui.wait_for_idle();
+    assert!(log.borrow().is_empty());
+    press(&mut ui, 10.0, 10.0);
+    release(&mut ui, 10.0, 10.0);
+    assert_eq!(*log.borrow(), vec!["tap 10"]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt, awaitDragOrUp
+/// The first finger coming up hands a drag to the other, which goes on.
+#[test]
+fn a_drag_goes_on_with_the_finger_left() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier.size(300.dp()).pointer_input((), move |scope| {
+                let (on_drag, on_end) = (seen.clone(), seen.clone());
+                async move {
+                    scope
+                        .detect_drag_gestures(
+                            DragGestures::default()
+                                .on_drag(move |_, amount| {
+                                    on_drag.borrow_mut().push(format!("drag {}", amount.x))
+                                })
+                                .on_drag_end(move || on_end.borrow_mut().push("end".into())),
+                        )
+                        .await
+                }
+            })
+        );
+    });
+    let touch = |event: PointerEvent, id: u64| {
+        event.with_pointer(compose_ui::PointerId(id), compose_ui::PointerType::Touch)
+    };
+    let at = |x: f32, y: f32| Offset::new(x, y);
+    ui.host().send_pointer(touch(PointerEvent::press(at(50.0, 10.0)), 1));
+    ui.wait_for_idle();
+    ui.host().send_pointer(touch(PointerEvent::press(at(100.0, 10.0)), 2));
+    ui.wait_for_idle();
+    // Past the slop: the drag's first step.
+    ui.host().send_pointers(&[
+        touch(PointerEvent::moved(at(150.0, 10.0), true), 1),
+        touch(PointerEvent::moved(at(200.0, 10.0), true), 2),
+    ]);
+    ui.wait_for_idle();
+    log.borrow_mut().clear();
+    ui.host().send_pointers(&[
+        touch(PointerEvent::release(at(150.0, 10.0)), 1),
+        touch(PointerEvent::moved(at(200.0, 10.0), true), 2),
+    ]);
+    ui.wait_for_idle();
+    ui.host().send_pointer(touch(PointerEvent::moved(at(210.0, 10.0), true), 2));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), vec!["drag 10"]);
+    ui.host().send_pointer(touch(PointerEvent::release(at(210.0, 10.0)), 2));
+    ui.wait_for_idle();
+    assert_eq!(*log.borrow(), vec!["drag 10", "end"]);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt, awaitPointerSlopOrCancellation
+/// Past a press, a parent taking another finger's move leaves this one's gesture alone.
+#[test]
+fn a_drags_slop_minds_its_own_fingers_move_alone() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let seen = seen.clone();
+        Box!(
+            modifier =
+                Modifier
+                    .size(300.dp())
+                    .pointer_input((), |scope| async move {
+                        loop {
+                            let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                            for change in &event.changes {
+                                if change.id == compose_ui::PointerId(2) {
+                                    change.consume();
+                                }
+                            }
+                        }
+                    })
+                    .pointer_input((), move |scope| {
+                        let on_drag = seen.clone();
+                        async move {
+                            scope
+                                .detect_drag_gestures(DragGestures::default().on_drag(
+                                    move |_, _| on_drag.borrow_mut().push("drag".to_string()),
+                                ))
+                                .await
+                        }
+                    })
+        );
+    });
+    let touch = |event: PointerEvent, id: u64| {
+        event.with_pointer(compose_ui::PointerId(id), compose_ui::PointerType::Touch)
+    };
+    let at = |x: f32| Offset::new(x, 10.0);
+    ui.host().send_pointer(touch(PointerEvent::press(at(50.0)), 1));
+    ui.wait_for_idle();
+    ui.host().send_pointer(touch(PointerEvent::press(at(100.0)), 2));
+    ui.wait_for_idle();
+    // Not past the slop: the outer one takes the other finger's move.
+    ui.host().send_pointers(&[
+        touch(PointerEvent::moved(at(52.0), true), 1),
+        touch(PointerEvent::moved(at(102.0), true), 2),
+    ]);
+    ui.wait_for_idle();
+    ui.host().send_pointer(touch(PointerEvent::moved(at(150.0), true), 1));
+    ui.wait_for_idle();
+    assert!(!log.borrow().is_empty(), "this finger's gesture went on");
+}
+
 #[test]
 fn a_block_awaits_the_events_reaching_its_node() {
     let log: Log = Rc::default();
@@ -47,10 +260,11 @@ fn a_block_awaits_the_events_reaching_its_node() {
                 let seen = seen.clone();
                 async move {
                     loop {
-                        let change = scope.await_pointer_event(PointerEventPass::Main).await;
-                        if change.kind != PointerEventType::Enter {
+                        let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                        let change = &event.changes[0];
+                        if event.kind != PointerEventType::Enter {
                             seen.borrow_mut()
-                                .push(format!("{:?} {}", change.kind, change.position.x));
+                                .push(format!("{:?} {}", event.kind, change.position.x));
                         }
                     }
                 }

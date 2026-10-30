@@ -773,8 +773,9 @@ fn a_turn_worth_nothing_here_goes_on_to_the_parents() {
                 let noted = noted.clone();
                 async move {
                     loop {
-                        let change = scope.await_pointer_event(PointerEventPass::Main).await;
-                        if change.kind == PointerEventType::Scroll {
+                        let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                        let change = &event.changes[0];
+                        if event.kind == PointerEventType::Scroll {
                             noted.set(Some(change.is_consumed()));
                         }
                     }

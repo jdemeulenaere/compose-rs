@@ -17,69 +17,15 @@ use std::time::Duration;
 
 use compose_runtime::{ComposeArg, CoroutineScope, Job};
 
-use crate::input::{EventContext, PointerEvent, PointerEventPass, PointerEventType, PointerId};
+use crate::input::{EventContext, PointerEventPass, PointerId, PointerType};
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement, PointerInputModifierNode};
-use crate::unit::{Density, IntSize, Offset};
-
-/// One pointer event as a `pointer_input` block sees it, as Compose's `PointerInputChange`:
-/// its pointer, its position in the node, when it happened, and whether a handler consumed it.
-#[derive(Clone)]
-pub struct PointerInputChange {
-    pub kind: PointerEventType,
-    pub id: PointerId,
-    /// What the pointer is, as `type`.
-    pub pointer_type: crate::PointerType,
-    pub position: Offset,
-    /// Where the pointer was at its previous event, in the node as it's laid out now (so the
-    /// node's own moves in between don't count), as `previousPosition`.
-    pub previous_position: Offset,
-    /// Whether the pointer is down after this event.
-    pub pressed: bool,
-    pub scroll_delta: Offset,
-    /// When it was delivered, by the executor's clock, as `uptimeMillis`.
-    pub uptime_millis: u64,
-    consumed: Rc<Cell<bool>>,
-}
-
-impl PointerInputChange {
-    /// How far the pointer moved since its previous event, as `positionChange()`.
-    pub fn position_change(&self) -> Offset {
-        self.position - self.previous_position
-    }
-
-    /// Marks the event used: handlers after this one see it consumed, as `consume()`.
-    pub fn consume(&self) {
-        self.consumed.set(true);
-    }
-
-    pub fn is_consumed(&self) -> bool {
-        self.consumed.get()
-    }
-
-    /// Whether it lies outside a node of `size`, as `isOutOfBounds`.
-    pub fn is_out_of_bounds(&self, size: IntSize) -> bool {
-        let position = self.position;
-        position.x < 0.0
-            || position.y < 0.0
-            || position.x >= size.width as f32
-            || position.y >= size.height as f32
-    }
-}
-
-impl std::fmt::Debug for PointerInputChange {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{:?} of {:?} at {:?}", self.kind, self.id, self.position)
-    }
-}
+use crate::pointer_event::{PointerEvents, PointerInputChange};
+use crate::unit::{Density, IntSize, Offset, Size};
 
 /// The event being delivered, while the block's task is polled.
 struct Delivery {
-    event: PointerEvent,
-    previous_position: Offset,
+    event: PointerEvents,
     pass: PointerEventPass,
-    taken: bool,
-    consumed: Rc<Cell<bool>>,
-    uptime_millis: u64,
 }
 
 #[derive(Default)]
@@ -95,8 +41,8 @@ struct ScopeInner {
     deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
     /// An event is being dispatched to the block.
     dispatching: Cell<bool>,
-    /// Each pointer's last position in the window.
-    last_positions: RefCell<Vec<(PointerId, Offset)>>,
+    /// The last event to reach the node, as `currentEvent`.
+    current_event: RefCell<Option<PointerEvents>>,
 }
 
 /// What a `pointer_input` block works with, as Compose's `PointerInputScope` and
@@ -156,43 +102,78 @@ impl PointerInputScope {
         Timeout { future: std::pin::pin!(future), delay: compose_runtime::delay(timeout) }.await
     }
 
+    /// The last event to reach the node, as `currentEvent`.
+    pub fn current_event(&self) -> Option<PointerEvents> {
+        self.inner.current_event.borrow().clone()
+    }
+
+    /// How far past a node smaller than the minimum touch target a touch still counts as on it, as
+    /// `extendedTouchPadding`.
+    pub fn extended_touch_padding(&self) -> Size {
+        let density = self.density();
+        let minimum = self.view_configuration().minimum_touch_target_size;
+        let size = self.size();
+        Size::new(
+            ((density.to_px(minimum.width) - size.width as f32) / 2.0).max(0.0),
+            ((density.to_px(minimum.height) - size.height as f32) / 2.0).max(0.0),
+        )
+    }
+
     /// Whether the event just seen in the main pass was consumed by the time it reached the
     /// final pass (a parent took it), as the detectors' checks of `PointerEventPass.Final`.
     async fn consumed_by_final(&self) -> bool {
-        self.await_pointer_event(PointerEventPass::Final).await.is_consumed()
+        let event = self.await_pointer_event(PointerEventPass::Final).await;
+        event.changes.iter().any(|change| change.is_consumed())
     }
 
-    /// The next press, as `awaitFirstDown`: unconsumed if `require_unconsumed`.
+    /// The next time every pointer of an event comes down, as `awaitFirstDown`: unconsumed if
+    /// `require_unconsumed`.
     pub async fn await_first_down(&self, require_unconsumed: bool) -> PointerInputChange {
         loop {
-            let change = self.await_pointer_event(PointerEventPass::Main).await;
-            if change.kind == PointerEventType::Press
-                && (!require_unconsumed || !change.is_consumed())
-            {
-                return change;
+            let mut event = self.await_pointer_event(PointerEventPass::Main).await;
+            let all = event.changes.iter().all(|change| {
+                if require_unconsumed {
+                    change.changed_to_down()
+                } else {
+                    change.changed_to_down_ignore_consumed()
+                }
+            });
+            if all {
+                return event.changes.swap_remove(0);
             }
         }
     }
 
-    /// The release that leaves no pointer down, or `None` if the press is cancelled (a
-    /// handler consumed its events, in the main pass or a parent's by the final pass, or it
-    /// moved out of the node), as `waitForUpOrCancellation`.
+    /// The first press to start a gesture of a detector: a mouse's only with its primary button
+    /// (D1657).
+    async fn await_gesture_down(&self, require_unconsumed: bool) -> PointerInputChange {
+        loop {
+            let down = self.await_first_down(require_unconsumed).await;
+            let primary = self.inner.current_event.borrow().as_ref().is_none_or(|event| {
+                event.buttons.is_primary_pressed() || !event.buttons.are_any_pressed()
+            });
+            if down.pointer_type != PointerType::Mouse || primary {
+                return down;
+            }
+            self.await_all_up().await;
+        }
+    }
+
+    /// The release of every pointer, or `None` if the press is cancelled (a handler consumed its
+    /// events, in the main pass or a parent's by the final pass, or one moved out of the node), as
+    /// `waitForUpOrCancellation`.
     pub async fn wait_for_up_or_cancellation(&self) -> Option<PointerInputChange> {
         loop {
-            let change = self.await_pointer_event(PointerEventPass::Main).await;
-            match change.kind {
-                PointerEventType::Release if !self.any_pressed() => {
-                    return if change.is_consumed() { None } else { Some(change) };
-                }
-                PointerEventType::Release | PointerEventType::Move => {
-                    if change.is_consumed() || change.is_out_of_bounds(self.size()) {
-                        return None;
-                    }
-                    if self.consumed_by_final().await {
-                        return None;
-                    }
-                }
-                _ => {}
+            let mut event = self.await_pointer_event(PointerEventPass::Main).await;
+            if event.changes.iter().all(|change| change.changed_to_up()) {
+                return Some(event.changes.swap_remove(0));
+            }
+            let padding = self.extended_touch_padding();
+            let out = event.changes.iter().any(|change| {
+                change.is_consumed() || change.is_out_of_bounds_with(self.size(), padding)
+            });
+            if out || self.consumed_by_final().await {
+                return None;
             }
         }
     }
@@ -200,21 +181,25 @@ impl PointerInputScope {
     /// Waits until no pointer is down, as the end of `awaitEachGesture`'s gesture.
     async fn await_all_up(&self) {
         while self.any_pressed() {
-            self.await_pointer_event(PointerEventPass::Main).await;
+            self.await_pointer_event(PointerEventPass::Final).await;
         }
     }
 
     /// Consumes events until no pointer is down.
     async fn consume_until_up(&self) {
-        while self.any_pressed() {
-            self.await_pointer_event(PointerEventPass::Main).await.consume();
+        loop {
+            let event = self.await_pointer_event(PointerEventPass::Main).await;
+            event.changes.iter().for_each(|change| change.consume());
+            if !self.any_pressed() {
+                return;
+            }
         }
     }
 
     /// A second press after `first_up`, not sooner than 40 ms after it, as `awaitSecondDown`.
     async fn await_second_down(&self, first_up: &PointerInputChange) -> PointerInputChange {
         loop {
-            let down = self.await_first_down(true).await;
+            let down = self.await_gesture_down(true).await;
             if down.uptime_millis
                 >= first_up.uptime_millis + self.view_configuration().double_tap_min_time_millis
             {
@@ -237,7 +222,7 @@ impl PointerInputScope {
     /// indication shows.
     pub(crate) async fn detect_taps(&self, gestures: TapGestures, pressed: &dyn Fn(bool)) {
         loop {
-            let down = self.await_first_down(true).await;
+            let down = self.await_gesture_down(true).await;
             down.consume();
             pressed(true);
             self.call(&gestures.on_press, down.position);
@@ -337,40 +322,43 @@ impl PointerInputScope {
         axis: Option<Axis>,
         slop: f32,
     ) -> Option<(PointerInputChange, Offset)> {
+        let mut pointer = down.id;
+        let mut moved = Offset::ZERO;
         loop {
-            let change = self.await_pointer_event(PointerEventPass::Main).await;
-            if change.id != down.id {
+            let event = self.await_pointer_event(PointerEventPass::Main).await;
+            let change = event.changes.iter().find(|change| change.id == pointer)?;
+            if change.is_consumed() {
+                return None;
+            }
+            if change.changed_to_up_ignore_consumed() {
+                // Another pointer down takes over; with none, it's over.
+                pointer = event.changes.iter().find(|change| change.pressed)?.id;
                 continue;
             }
-            match change.kind {
-                PointerEventType::Release => return None,
-                PointerEventType::Move if change.is_consumed() => return None,
-                PointerEventType::Move => {
-                    let moved = change.position - down.position;
-                    let distance = match axis {
-                        None => moved.x.hypot(moved.y),
-                        Some(Axis::X) => moved.x.abs(),
-                        Some(Axis::Y) => moved.y.abs(),
-                    };
-                    if distance > 0.0 && distance >= slop {
-                        change.consume();
-                        // What's past the slop, in the direction moved.
-                        let over = match axis {
-                            None => {
-                                let fraction = (distance - slop) / distance;
-                                Offset::new(moved.x * fraction, moved.y * fraction)
-                            }
-                            Some(Axis::X) => Offset::new(moved.x - slop * moved.x.signum(), 0.0),
-                            Some(Axis::Y) => Offset::new(0.0, moved.y - slop * moved.y.signum()),
-                        };
-                        return Some((change, over));
+            moved = moved + change.position_change_ignore_consumed();
+            let distance = match axis {
+                None => moved.x.hypot(moved.y),
+                Some(Axis::X) => moved.x.abs(),
+                Some(Axis::Y) => moved.y.abs(),
+            };
+            if distance > 0.0 && distance >= slop {
+                change.consume();
+                // What's past the slop, in the direction moved.
+                let over = match axis {
+                    None => {
+                        let fraction = (distance - slop) / distance;
+                        Offset::new(moved.x * fraction, moved.y * fraction)
                     }
-                    // A parent took the move meanwhile: not this gesture's.
-                    if self.consumed_by_final().await {
-                        return None;
-                    }
-                }
-                _ => {}
+                    Some(Axis::X) => Offset::new(moved.x - slop * moved.x.signum(), 0.0),
+                    Some(Axis::Y) => Offset::new(0.0, moved.y - slop * moved.y.signum()),
+                };
+                return Some((change.clone(), over));
+            }
+            // A parent took the move meanwhile: not this gesture's.
+            let after = self.await_pointer_event(PointerEventPass::Final).await;
+            let taken = after.changes.iter().find(|change| change.id == pointer);
+            if taken.is_none_or(|change| change.is_consumed()) {
+                return None;
             }
         }
     }
@@ -382,7 +370,7 @@ impl PointerInputScope {
     /// gesture is cancelled from outside). Never returns.
     pub async fn detect_drag_gestures(&self, gestures: DragGestures) {
         loop {
-            let down = self.await_first_down(false).await;
+            let down = self.await_gesture_down(false).await;
             let slop = self.view_configuration().pointer_slop(down.pointer_type);
             let Some((start, over)) = self.await_slop_or_cancellation(&down, None, slop).await
             else {
@@ -394,23 +382,26 @@ impl PointerInputScope {
             }
             // A cancellation from outside (the block dropped) calls `on_drag_cancel` too.
             let guard = DragGuard { on_cancel: gestures.on_drag_cancel.clone(), armed: true };
-            self.drag(&gestures, start.clone(), over);
-            let mut last = start.position;
+            let mut pointer = start.id;
+            self.drag(&gestures, start, over);
             let ended = loop {
-                let change = self.await_pointer_event(PointerEventPass::Main).await;
-                if change.id != down.id {
-                    continue;
-                }
-                match change.kind {
-                    PointerEventType::Move if !change.is_consumed() => {
-                        change.consume();
-                        let amount = change.position - last;
-                        last = change.position;
-                        self.drag(&gestures, change, amount);
+                let event = self.await_pointer_event(PointerEventPass::Main).await;
+                let Some(change) = event.changes.iter().find(|change| change.id == pointer) else {
+                    break false;
+                };
+                if change.changed_to_up_ignore_consumed() {
+                    // Another pointer down takes over; with none, the drag's over.
+                    match event.changes.iter().find(|change| change.pressed) {
+                        Some(other) => pointer = other.id,
+                        None => break !change.is_consumed(),
                     }
-                    PointerEventType::Release => break !change.is_consumed(),
-                    PointerEventType::Move => break false,
-                    _ => {}
+                } else if change.position_changed_ignore_consumed() {
+                    if change.is_consumed() {
+                        break false;
+                    }
+                    let amount = change.position_change();
+                    change.consume();
+                    self.drag(&gestures, change.clone(), amount);
                 }
             };
             guard.disarm();
@@ -533,27 +524,13 @@ pub struct AwaitPointerEvent {
 }
 
 impl Future for AwaitPointerEvent {
-    type Output = PointerInputChange;
-    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<PointerInputChange> {
+    type Output = PointerEvents;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<PointerEvents> {
         let mut delivery = self.inner.delivery.borrow_mut();
-        match delivery.as_mut() {
-            Some(delivery) if !delivery.taken && delivery.pass == self.pass => {
-                delivery.taken = true;
-                let event = delivery.event;
-                Poll::Ready(PointerInputChange {
-                    kind: event.kind,
-                    id: event.pointer,
-                    pointer_type: event.pointer_type,
-                    position: event.position,
-                    previous_position: delivery.previous_position,
-                    pressed: event.pressed,
-                    scroll_delta: event.scroll_delta,
-                    uptime_millis: delivery.uptime_millis,
-                    consumed: delivery.consumed.clone(),
-                })
-            }
+        match delivery.take_if(|delivery| delivery.pass == self.pass) {
+            Some(delivery) => Poll::Ready(delivery.event),
             // Woken by the next delivery's poll (the node polls the task itself).
-            _ => Poll::Pending,
+            None => Poll::Pending,
         }
     }
 }
@@ -614,13 +591,13 @@ impl PointerInputDriver {
             job.cancel();
         }
         self.scope.inner.pressed.borrow_mut().clear();
-        self.scope.inner.last_positions.borrow_mut().clear();
+        self.scope.inner.current_event.replace(None);
     }
 
     /// Delivers `event`, in `pass`, to the block (starting it at the first event).
-    pub fn on_pointer_event(
+    pub fn on_pointer_events(
         &mut self,
-        event: &mut PointerEvent,
+        event: &PointerEvents,
         pass: PointerEventPass,
         bounds: IntSize,
         context: &mut EventContext<'_>,
@@ -631,13 +608,13 @@ impl PointerInputDriver {
         inner.view_configuration.set(context.view_configuration());
         if pass == PointerEventPass::Initial {
             let mut pressed = inner.pressed.borrow_mut();
-            match event.kind {
-                PointerEventType::Press if !pressed.contains(&event.pointer) => {
-                    pressed.push(event.pointer)
+            for change in &event.changes {
+                pressed.retain(|pointer| *pointer != change.id);
+                if change.pressed {
+                    pressed.push(change.id);
                 }
-                PointerEventType::Release => pressed.retain(|pointer| *pointer != event.pointer),
-                _ => {}
             }
+            inner.current_event.replace(Some(event.clone()));
         }
         inner.dispatching.set(true);
         // Started at the first event, polled at once to its first wait.
@@ -650,39 +627,10 @@ impl PointerInputDriver {
                 job
             }
         };
-        let consumed = Rc::new(Cell::new(event.consumed));
-        // The previous position where the node is now: the window's positions' difference.
-        let in_window = context.pointer_position().unwrap_or(event.position);
-        let previous_position = {
-            let mut last = inner.last_positions.borrow_mut();
-            let found =
-                last.iter().find(|(pointer, _)| *pointer == event.pointer).map(|&(_, at)| at);
-            if pass == PointerEventPass::Final {
-                last.retain(|(pointer, _)| *pointer != event.pointer);
-                if event.kind != PointerEventType::Release {
-                    last.push((event.pointer, in_window));
-                }
-            }
-            event.position - (in_window - found.unwrap_or(in_window))
-        };
-        inner.delivery.replace(Some(Delivery {
-            event: *event,
-            previous_position,
-            pass,
-            taken: false,
-            consumed: consumed.clone(),
-            uptime_millis: if event.time_nanos != 0 {
-                event.time_nanos / 1_000_000
-            } else {
-                compose_runtime::platform::now_nanos() / 1_000_000
-            },
-        }));
+        inner.delivery.replace(Some(Delivery { event: event.clone(), pass }));
         compose_runtime::platform::poll_now(job);
         inner.delivery.replace(None);
         inner.dispatching.set(false);
-        if consumed.get() {
-            event.consume();
-        }
         for callback in inner.deferred.take() {
             context.run(callback);
         }
@@ -755,14 +703,18 @@ impl ModifierNode for PointerInputNode {
 }
 
 impl PointerInputModifierNode for PointerInputNode {
-    fn on_pointer_event(
+    fn takes_whole_events(&self) -> bool {
+        true
+    }
+
+    fn on_pointer_events(
         &mut self,
-        event: &mut PointerEvent,
+        event: &PointerEvents,
         pass: PointerEventPass,
         bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        self.driver.on_pointer_event(event, pass, bounds, context);
+        self.driver.on_pointer_events(event, pass, bounds, context);
     }
 
     /// The gesture is over without its events: the block starts over at the next one.

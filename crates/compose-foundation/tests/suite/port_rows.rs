@@ -94,9 +94,9 @@ fn hovered_list() -> (ComposeTestRule, Rc<RefCell<Vec<usize>>>) {
                                 let noted = noted.clone();
                                 async move {
                                     loop {
-                                        let change =
+                                        let event =
                                             scope.await_pointer_event(PointerEventPass::Main).await;
-                                        match change.kind {
+                                        match event.kind {
                                             PointerEventType::Enter => {
                                                 noted.borrow_mut().push(index)
                                             }

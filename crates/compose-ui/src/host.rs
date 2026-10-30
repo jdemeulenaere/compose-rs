@@ -860,6 +860,23 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// Dispatches the changes of one platform event together (each at its position in the root),
+    /// then runs the handlers' actions, as `send_pointer`.
+    pub fn send_pointers(&mut self, events: &[PointerEvent]) {
+        let _turn = compose_runtime::platform::Turn::begin();
+        let now = compose_runtime::platform::now_nanos();
+        let events: Vec<PointerEvent> = events
+            .iter()
+            .map(|event| PointerEvent {
+                time_nanos: if event.time_nanos == 0 { now } else { event.time_nanos },
+                ..*event
+            })
+            .collect();
+        let actions = self.with_tree(|tree| tree.dispatch_pointers(&events));
+        Self::run(actions);
+        self.wake_if_dirty();
+    }
+
     /// The mouse pointer's look where it is, as `pointerHoverIcon` set it.
     pub fn pointer_icon(&self) -> crate::input::PointerIcon {
         self.with_tree(|tree| tree.pointer_icon())

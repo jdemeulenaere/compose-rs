@@ -268,9 +268,10 @@ fn recording(events: &Events) -> Modifier {
         let events = events.clone();
         async move {
             loop {
-                let change = scope.await_pointer_event(PointerEventPass::Main).await;
-                if !matches!(change.kind, PointerEventType::Enter | PointerEventType::Exit) {
-                    events.borrow_mut().push((change.kind, change.is_consumed()));
+                let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                let change = &event.changes[0];
+                if !matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
+                    events.borrow_mut().push((event.kind, change.is_consumed()));
                 }
             }
         }
@@ -358,7 +359,8 @@ fn a_child_taking_the_release_after_a_long_click_leaves_the_next_click() {
                     let consuming = consuming.clone();
                     async move {
                         loop {
-                            let change = scope.await_pointer_event(PointerEventPass::Main).await;
+                            let event = scope.await_pointer_event(PointerEventPass::Main).await;
+                            let change = &event.changes[0];
                             if consuming.get() {
                                 change.consume();
                             }

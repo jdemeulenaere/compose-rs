@@ -1556,10 +1556,11 @@ fn pager_semantics(
 fn drag_direction_detector(state: PagerState) -> Modifier {
     Modifier.pointer_input(state, move |input| async move {
         loop {
-            let down = input.await_pointer_event(PointerEventPass::Initial).await;
-            if down.kind != PointerEventType::Press {
+            let event = input.await_pointer_event(PointerEventPass::Initial).await;
+            if event.kind != PointerEventType::Press {
                 continue;
             }
+            let down = &event.changes[0];
             /// Ends the gesture however it ends.
             struct InProgress(PagerState);
             impl Drop for InProgress {
@@ -1576,9 +1577,9 @@ fn drag_direction_detector(state: PagerState) -> Modifier {
             let _in_progress = InProgress(state);
             let start = down.position;
             let up = loop {
-                let event = input.await_pointer_event(PointerEventPass::Initial).await;
+                let mut event = input.await_pointer_event(PointerEventPass::Initial).await;
                 if event.kind == PointerEventType::Release && !input.any_pressed() {
-                    break event;
+                    break event.changes.swap_remove(0);
                 }
             };
             if let Some(inner) = state.inner() {

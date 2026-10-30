@@ -344,6 +344,8 @@ pub struct UiTree {
     /// Counts placements, for children's placement order.
     pub(crate) place_serial: u64,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
+    /// What each pointer's next change is told of its last.
+    pub(crate) pointer_states: Vec<(crate::input::PointerId, crate::dispatch::PointerState)>,
     /// What the mouse is over: its last hit path.
     pub(crate) hovered: Vec<crate::dispatch::HitEntry>,
     /// Where the mouse is, in the root, while it's in the window and no button is held.
@@ -484,6 +486,7 @@ impl UiTree {
             window: IntSize::new(0, 0),
             place_serial: 0,
             captures: Vec::new(),
+            pointer_states: Vec::new(),
             hovered: Vec::new(),
             mouse: None,
             observer: None,

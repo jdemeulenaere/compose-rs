@@ -703,11 +703,12 @@ fn a_flings_velocity_is_what_a_tracker_outside_finds() {
                     async move {
                         let mut at = Offset::ZERO;
                         loop {
-                            let change = scope
+                            let event = scope
                                 .await_pointer_event(compose_ui::PointerEventPass::Initial)
                                 .await;
-                            let down = change.kind == compose_ui::PointerEventType::Press;
-                            let up = change.kind == compose_ui::PointerEventType::Release;
+                            let change = &event.changes[0];
+                            let down = event.kind == compose_ui::PointerEventType::Press;
+                            let up = event.kind == compose_ui::PointerEventType::Release;
                             if down {
                                 at = change.position;
                             } else {

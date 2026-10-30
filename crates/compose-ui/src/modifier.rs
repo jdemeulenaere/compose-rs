@@ -1448,13 +1448,31 @@ pub trait DrawModifierNode {
 
 /// A node that receives pointer events hitting its bounds, as `PointerInputModifierNode`.
 pub trait PointerInputModifierNode {
+    /// Each change that reaches it, one at a time: a mouse's primary button alone, what its other
+    /// buttons do not telling it (D1657).
     fn on_pointer_event(
         &mut self,
-        event: &mut PointerEvent,
-        pass: PointerEventPass,
-        bounds: IntSize,
-        context: &mut EventContext<'_>,
-    );
+        _event: &mut PointerEvent,
+        _pass: PointerEventPass,
+        _bounds: IntSize,
+        _context: &mut EventContext<'_>,
+    ) {
+    }
+    /// Whether it takes each platform event's changes together, in `on_pointer_events`, and not one
+    /// at a time.
+    fn takes_whole_events(&self) -> bool {
+        false
+    }
+    /// Every change of a platform event that reaches it, as `onPointerEvent`, if
+    /// `takes_whole_events`.
+    fn on_pointer_events(
+        &mut self,
+        _event: &crate::pointer_event::PointerEvents,
+        _pass: PointerEventPass,
+        _bounds: IntSize,
+        _context: &mut EventContext<'_>,
+    ) {
+    }
     /// The gesture ended without its events (the node left, or another took the pointer).
     fn on_cancel_pointer_input(&mut self) {}
     /// Whether, enabled, it waits for a gesture past a press (a drag's slop), as a Compose

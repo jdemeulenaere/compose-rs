@@ -71,6 +71,7 @@ mod placeholder;
 mod placement;
 mod platform_services;
 mod platform_text_style;
+mod pointer_event;
 mod pointer_input;
 mod prefetch;
 mod remeasurement;
@@ -275,9 +276,10 @@ pub use platform_services::{
 pub use platform_text_style::{
     EmojiSupportMatch, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
 };
-pub use pointer_input::{
-    AwaitPointerEvent, Axis, DragGestures, PointerInputChange, PointerInputScope, TapGestures,
+pub use pointer_event::{
+    HistoricalChange, PointerButtons, PointerEvents, PointerInputChange, PointerKeyboardModifiers,
 };
+pub use pointer_input::{AwaitPointerEvent, Axis, DragGestures, PointerInputScope, TapGestures};
 pub use prefetch::{
     LOCAL_PREFETCH_SCHEDULER, PrefetchClock, PrefetchRequest, PrefetchRequestScope,
     PrefetchScheduler, prefetch_now,
