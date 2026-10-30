@@ -1563,10 +1563,14 @@ pub trait FocusRequesterModifierNode {}
 
 /// What a semantics action offered through `*_of_node` asks of a modifier node
 /// (`SemanticsModifierNode::perform_text_action`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TextAction {
     /// `OnClick`: the field takes the focus and shows its keyboard.
     Click,
+    /// `SetText`: this text, in place of all there is, the cursor at its end.
+    SetText(crate::SharedString),
+    /// `InsertTextAtCursor`: this text, in place of the selection.
+    InsertText(crate::SharedString),
     /// `SetSelection`: from `start` to `end`, byte offsets of the text as shown.
     SetSelection {
         start: i32,

@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use compose_android::accessibility::{
     Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, character_locations,
-    class_and_role, flag, perform_action, spoken, write_tree,
+    class_and_role, flag, perform_action, read_as, spoken, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -1295,9 +1295,27 @@ fn the_kotlin_says_what_rust_chose() {
         "info.isLongClickable = node.flags and LONG_CLICKABLE != 0",
         "val found = view.semanticsNodeAt(x, y)",
         "view.post(changed)",
+        // A source written after sensitivity would overwrite it with the view's.
+        "scrolled.setSource(view, node.id)\n            markSensitive(scrolled, node.id)",
+        "else event.setSource(view, id)\n        // After the source, which sets it from the host view's.\n        markSensitive(event, id)",
+        "event.setSource(view, virtualViewId)\n        event.packageName = view.context.packageName\n        markSensitive(event, virtualViewId)",
+        "event.setAccessibilityDataSensitive((nodes.get(id)?.flags ?: 0) and SENSITIVE != 0)",
+        // Only an accessibility tool is told of what's sensitive, or acts on it.
+        "node.flags and SENSITIVE != 0 && !fromTool",
+        "if (hiddenFromService(node, fromTool)) return null",
+        "if (nodes.get(child)?.let { hiddenFromService(it, fromTool) } != true) info.addChild(view, child)",
+        "if (hiddenFromService(node, isRequestFromAccessibilityTool())) return false",
+        // Paste is offered with something to paste.
+        "if (code == CODE_PASTE && !clipboardHasText()) continue",
+        "?.hasMimeType(\"text/*\") == true",
+        "info.isEditable = node.flags and CAN_EDIT != 0",
     ] {
         assert!(kotlin.contains(line), "Accessibility.kt lacks {line:?}");
     }
+    assert!(
+        !kotlin.contains("event.isEnabled = true\n        markSensitive"),
+        "before its source, sensitivity is overwritten"
+    );
 }
 
 // ---- What a node says of itself beyond its info (D1652) -----------------------------------------
@@ -1373,7 +1391,7 @@ fn sensitive_data_says_so_in_its_record() {
     assert_eq!(sensitive, [true, false, true]);
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, className_overwrittenBy_explicitaccessibilityClassNameProperty, explicitaccessibilityClassNameProperty_setsClassName
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, className_overwrittenBy_explicitaccessibilityClassNameProperty
 #[test]
 fn the_class_the_application_names_wins() {
     let host = host_of(|| {
@@ -1437,4 +1455,158 @@ fn flags_of(node: &SemanticsSnapshot) -> u32 {
     let root = SemanticsSnapshot { children: vec![wrapped], ..node.clone() };
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     records(&out.bytes)[0].1
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, explicitaccessibilityClassNameProperty_childrenNotMergeable
+#[test]
+fn a_childs_named_class_is_not_merged_up() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.size(10.dp()).test_tag("merging").semantics_with(true, |_| {}), {
+            Box!(
+                modifier =
+                    Modifier.size(10.dp()).semantics(|it| it.set_accessibility_class_name("a"))
+            );
+            Box!(
+                modifier =
+                    Modifier.size(10.dp()).semantics(|it| it.set_accessibility_class_name("b"))
+            );
+        });
+    });
+    assert_eq!(class_and_role(&tagged(&host, "merging")).0, "android.view.View");
+}
+
+#[test]
+fn characters_are_counted_in_units_a_pair_being_one() {
+    let mut host = host_of(|| {
+        BasicText!("\u{1f600}a", modifier = Modifier.test_tag("text"));
+    });
+    let node = tagged(&host, "text");
+    let at = |host: &mut UiHost, unit: i32| {
+        character_locations(host, &node, unit, 1).expect("laid out")[0].expect("shown")
+    };
+    let (face, second_half, letter) = (at(&mut host, 0), at(&mut host, 1), at(&mut host, 2));
+    assert_eq!(face, second_half, "the pair's");
+    assert!(letter.left > face.left);
+    assert!(character_locations(&mut host, &node, 3, 1).expect("laid out")[0].is_none());
+    // Nothing overflows, and there's a limit to what's made.
+    assert!(character_locations(&mut host, &node, i32::MAX, 2).expect("laid out")[1].is_none());
+    assert_eq!(character_locations(&mut host, &node, 0, i32::MAX).expect("laid out").len(), 20_000);
+}
+
+#[test]
+fn a_scrolled_fields_characters_are_where_it_shows_them() {
+    let mut host = host_of(|| {
+        BasicTextField!(
+            "a long text in a short field".to_string(),
+            |_| {},
+            modifier = Modifier.size((48.dp(), 20.dp())).test_tag("field"),
+            single_line = true,
+        );
+    });
+    let node = tagged(&host, "field");
+    assert!(character_locations(&mut host, &node, 0, 1).expect("laid out")[0].is_some());
+    host.request_focus(node.id);
+    frames(&mut host);
+    host.send_key(KeyEvent::down(Key::MoveEnd));
+    frames(&mut host);
+    let node = tagged(&host, "field");
+    let units = 28;
+    assert!(character_locations(&mut host, &node, 0, 1).expect("laid out")[0].is_none(), "gone");
+    let last = character_locations(&mut host, &node, units - 1, 1).expect("laid out")[0];
+    assert!(last.expect("in view").right <= node.bounds.right);
+}
+
+// ---- A merging node's one record, in place of Compose's fake nodes (D1653) ----------------------
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testFakeNodeCreated_forContentDescriptionSemantics, testContentDescription_withFakeNode_mergedCorrectly
+#[test]
+fn a_merging_nodes_description_does_not_hide_its_text() {
+    let host = host_of(|| {
+        Column!({
+            Row!(modifier = Modifier.test_tag("icon first").semantics_with(true, |_| {}), {
+                Box!(
+                    modifier =
+                        Modifier.size(10.dp()).semantics(|it| it.set_content_description("Star"))
+                );
+                BasicText!("Card 19");
+            });
+            Row!(modifier = Modifier.test_tag("text first").semantics_with(true, |_| {}), {
+                BasicText!("Card 20");
+                Box!(
+                    modifier =
+                        Modifier.size(10.dp()).semantics(|it| it.set_content_description("Star"))
+                );
+            });
+            Column!(
+                modifier = Modifier
+                    .test_tag("own")
+                    .semantics_with(true, |it| it.set_content_description("Test")),
+                {
+                    BasicText!("Text");
+                    Box!(
+                        modifier = Modifier
+                            .size(10.dp())
+                            .semantics(|it| it.set_content_description("Hello"))
+                    );
+                }
+            );
+            Column!(
+                modifier = Modifier
+                    .test_tag("only descriptions")
+                    .semantics_with(true, |it| it.set_content_description("Hello")),
+                {
+                    Box!(modifier = Modifier.semantics(|it| it.set_content_description("World")));
+                }
+            );
+            BasicText!("alone", modifier = Modifier.test_tag("alone"));
+        });
+    });
+    let read = |tag| read_as(&tagged(&host, tag));
+    assert_eq!(read("icon first"), ("Card 19".to_string(), "Star Card 19".to_string()));
+    assert_eq!(read("text first"), ("Card 20".to_string(), "Card 20 Star".to_string()));
+    assert_eq!(read("own"), ("Text".to_string(), "Test Text Hello".to_string()));
+    assert_eq!(read("only descriptions"), (String::new(), "Hello World".to_string()));
+    assert_eq!(read("alone"), ("alone".to_string(), String::new()));
+}
+
+#[test]
+fn a_fields_description_is_its_hint_and_leaves_it_its_value() {
+    let host = host_of(|| {
+        BasicTextField!(
+            String::from("value"),
+            |_| {},
+            modifier = Modifier.test_tag("field"),
+            decoration_box = |inner: compose_runtime::Callback| {
+                Box!(modifier = Modifier.semantics(|it| it.set_content_description("Search")));
+                BasicText!("Label");
+                inner();
+            },
+        );
+    });
+    assert_eq!(read_as(&tagged(&host, "field")), ("Search Label".to_string(), String::new()));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testFakeNode_createdForButton, testFakeNode_notCreatedForButton_whenNoChildren
+#[test]
+fn a_merging_nodes_role_is_its_class_with_or_without_what_is_beside_it() {
+    let button = || ClickableOptions { role: Some(Role::Button), ..Default::default() };
+    let host = host_of(move || {
+        Column!({
+            Box!(
+                modifier = Modifier.size(10.dp()).test_tag("empty").clickable_with(button(), || {})
+            );
+            Column!(modifier = Modifier.test_tag("with text").clickable_with(button(), || {}), {
+                BasicText!("Text");
+            });
+            Column!(
+                modifier = Modifier.test_tag("with a child").clickable_with(button(), || {}),
+                {
+                    Box!(modifier = Modifier.size(10.dp()).clickable(|| {}));
+                }
+            );
+        });
+    });
+    for tag in ["empty", "with text", "with a child"] {
+        assert_eq!(class_and_role(&tagged(&host, tag)).0, "android.widget.Button", "{tag}");
+    }
 }

@@ -849,3 +849,4 @@ The log is split by area into the files below, one table each, rows in number or
 | D1650 | [ui-and-layout](decisions/ui-and-layout.md#d1650) | current |
 | D1651 | [ui-and-layout](decisions/ui-and-layout.md#d1651) | current |
 | D1652 | [ui-and-layout](decisions/ui-and-layout.md#d1652) | current |
+| D1653 | [ui-and-layout](decisions/ui-and-layout.md#d1653) | current |

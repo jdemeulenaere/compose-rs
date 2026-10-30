@@ -168,6 +168,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             if (before == scroll[0]) continue
             val scrolled = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_SCROLLED)
             scrolled.setSource(view, node.id)
+            markSensitive(scrolled, node.id)
             scrolled.packageName = view.context.packageName
             val delta = (scroll[0] - before).toInt()
             if (node.flags and SCROLL_HORIZONTAL != 0) {
@@ -226,14 +227,16 @@ internal class Accessibility(private val view: ComposeRsView) :
         val event = AccessibilityEvent.obtain(type)
         event.packageName = view.context.packageName
         event.isEnabled = true
-        markSensitive(event, id)
         // Never read out: a service's echo of a key typed in a password goes by this.
         event.isPassword = password
-        event.className = when (kind) {
-            CHANGE_TEXT_CHANGED, CHANGE_TEXT_SELECTION -> "android.widget.EditText"
+        val isField = (nodes.get(id)?.flags ?: 0) and EDITABLE != 0
+        event.className = when {
+            kind == CHANGE_TEXT_CHANGED || (kind == CHANGE_TEXT_SELECTION && isField) -> "android.widget.EditText"
             else -> "android.view.View"
         }
         if (id == -1) event.setSource(view) else event.setSource(view, id)
+        // After the source, which sets it from the host view's.
+        markSensitive(event, id)
         when (kind) {
             CHANGE_TEXT_CHANGED -> {
                 event.fromIndex = from
@@ -438,7 +441,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         if (node.before != -1) info.setTraversalBefore(view, node.before)
         if (node.flags and EDITABLE != 0) {
             info.text = node.editableText
-            info.isEditable = true
+            info.isEditable = node.flags and CAN_EDIT != 0
             if (node.text.isNotEmpty()) info.hintText = node.text
         } else if (node.text.isNotEmpty()) {
             info.text = node.text
@@ -718,6 +721,7 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val SENSITIVE = 1 shl 22
         const val TAG_IS_RESOURCE_ID = 1 shl 23
         const val TEXT_LAID_OUT = 1 shl 24
+        const val CAN_EDIT = 1 shl 25
 
         // As Compose's delegate, which services and tests read by name.
         const val EXTRA_ID_KEY = "androidx.compose.ui.semantics.id"

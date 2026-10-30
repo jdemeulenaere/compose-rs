@@ -720,6 +720,29 @@ fn ChoicesTab() {
         }
     );
     Text!("Read after the group");
+    HorizontalDivider!();
+
+    // A text to move through by its pieces, and one only an accessibility tool is told of.
+    Text!(
+        "Move through me by character, word, line or page. The face \u{1f600} is one character.\nThis is a second paragraph.",
+        modifier = Modifier.test_tag("to move through")
+    );
+    Text!(
+        "A sensitive line",
+        modifier = Modifier.semantics(|config| config.set_is_sensitive_data(true))
+    );
+    // A card of an icon with a description and a text: read as both.
+    Card!(on_click = || {}, modifier = Modifier.fill_max_width(), {
+        Row!(
+            modifier = Modifier.padding(12.dp()),
+            horizontal_arrangement = Arrangement::spaced_by(8.dp()),
+            vertical_alignment = Alignment::CENTER_VERTICALLY,
+            {
+                Icon!(icons::filled::star(), Some("Starred"));
+                Text!("A card with an icon");
+            }
+        );
+    });
 }
 
 /// A field, and what can open over it: a bottom sheet, and a dialog with a field of its own.

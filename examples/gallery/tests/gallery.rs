@@ -293,3 +293,25 @@ fn a_dialogs_field_takes_the_focus_and_the_field_behind_gets_it_back() {
     ui.on_node_with_text("In the dialog").assert_does_not_exist();
     ui.on_node(has_text("word").and(is_focused())).assert_exists();
 }
+
+#[test]
+fn a_card_with_an_icon_says_both_when_merged() {
+    use compose::ui::SemanticsProperties as P;
+    let mut ui = more_controls("Choices");
+    let node = ui.on_node_with_text("A card with an icon").fetch_semantics_snapshot();
+    let said =
+        |key| node.config.get(key).is_some_and(|all: &compose::ui::StringList| !all.is_empty());
+    assert!(said(&P::CONTENT_DESCRIPTION) && said(&P::TEXT));
+    assert_eq!(
+        node.reading_order.as_ref().map(|it| it.as_str()),
+        Some("Starred A card with an icon")
+    );
+}
+
+#[test]
+fn a_sensitive_line_says_so() {
+    use compose::ui::SemanticsProperties as P;
+    let mut ui = more_controls("Choices");
+    let node = ui.on_node_with_text("A sensitive line").fetch_semantics_snapshot();
+    assert_eq!(node.config.get(&P::IS_SENSITIVE_DATA), Some(&true));
+}

@@ -7,8 +7,10 @@ extern crate compose_runtime as compose;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use compose_android::accessibility::find_shown;
 use compose_android::text_segments::{Granularity, TextSegments};
 
+use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_ui::platform::UiHost;
 use compose_ui::*;
@@ -141,6 +143,26 @@ fn empty_lines_are_no_paragraphs() {
 }
 
 #[test]
+fn more_than_one_separator_is_skipped_both_ways() {
+    let text = "ab ,, cd";
+    let segments = TextSegments::new(text);
+    assert_eq!(segments.following(Granularity::Word, 2), Some((at(text, 'c'), segments.len())));
+    assert_eq!(segments.preceding(Granularity::Word, at(text, 'c')), Some((0, 2)));
+}
+
+#[test]
+fn a_run_of_letters_unicode_breaks_inside_is_one_word() {
+    // Each ideograph is a word of its own by Unicode's rules.
+    let text = "\u{4f60}\u{597d} \u{4e16}";
+    let segments = TextSegments::new(text);
+    assert_eq!(segments.following(Granularity::Word, 0), Some((0, 2)));
+    assert_eq!(segments.following(Granularity::Word, 2), Some((3, 4)));
+    assert_eq!(segments.preceding(Granularity::Word, 4), Some((3, 4)));
+    assert_eq!(segments.preceding(Granularity::Word, 3), Some((0, 2)));
+    assert_eq!(segments.preceding(Granularity::Word, 2), Some((0, 2)));
+}
+
+#[test]
 fn nothing_is_moved_through_in_an_empty_text() {
     let segments = TextSegments::new("");
     assert_eq!(segments.following(Granularity::Character, 0), None);
@@ -184,6 +206,7 @@ fn lines_follow_from_the_start_of_one_or_the_next_from_inside_it() {
     let next = segments.following(Granularity::Line(&layout), first.1 + 1).expect("a line");
     assert_eq!(line(next.0), 2);
     assert_eq!(line(next.1 - 1), 2);
+    assert_eq!(line(next.1), 3);
     assert_eq!(segments.following(Granularity::Line(&layout), segments.len()), None);
 }
 
@@ -198,34 +221,48 @@ fn lines_precede_from_the_end_of_one_or_the_one_before_from_inside_it() {
     let last = segments.preceding(Granularity::Line(&layout), segments.len()).expect("a line");
     let last_line = line(last.0);
     assert_eq!(line(last.0 - 1), last_line - 1);
-    assert_eq!(last.1, segments.len());
+    assert_eq!(line(last.1), last_line);
 
     // In the middle of the last line: the one before.
     let before = segments.preceding(Granularity::Line(&layout), last.0 + 1).expect("a line");
     assert_eq!(line(before.0), last_line - 1);
+    assert_eq!(line(before.0 - 1), last_line - 2);
     assert_eq!(line(before.1 - 1), last_line - 1);
     assert_eq!(line(before.1), last_line);
     assert_eq!(segments.preceding(Granularity::Line(&layout), 0), None);
 }
 
-/// A long text's layout and how high its node is, as a page.
+/// A field of a long text in a scroller: its layout, its text, and how high it's shown, a page.
 fn long_text() -> (UiHost, TextLayoutResult, &'static str, f32) {
     let text: String = (0..500).map(|line| format!("Line: {line}")).collect::<Vec<_>>().join("\n");
     let text: &'static str = text.leak();
-    let result: Rc<RefCell<Option<TextLayoutResult>>> = Rc::default();
-    let heard = result.clone();
     let mut host = UiHost::headless(400, 800);
     host.set_content(move || {
-        let heard = heard.clone();
-        BasicText!(
-            text,
-            modifier = Modifier.height(300.dp()),
-            on_text_layout = Some(move |layout| *heard.borrow_mut() = Some(layout))
-        );
+        let scroll = compose_foundation::remember_scroll_state!();
+        Column!(modifier = Modifier.fill_max_size().vertical_scroll(scroll), {
+            BasicTextField!(String::from(text), |_| {}, modifier = Modifier.test_tag("field"));
+        });
     });
     host.settle(5);
-    let layout = result.borrow().clone().expect("laid out");
-    (host, layout, text, 300.0)
+    let root = host.accessibility_tree();
+    let node = by_tag(&root, "field").expect("tagged");
+    let (_, shown) = find_shown(&root, node.semantics_id).expect("there");
+    let mut layouts = Vec::new();
+    host.perform_semantics_action_with(node.id, &SemanticsActions::GET_TEXT_LAYOUT_RESULT, |get| {
+        get(&mut layouts)
+    });
+    let layout = layouts.remove(0);
+    (host, layout, text, shown.height())
+}
+
+fn by_tag<'a>(
+    node: &'a compose_ui::platform::SemanticsSnapshot,
+    tag: &str,
+) -> Option<&'a compose_ui::platform::SemanticsSnapshot> {
+    if node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|it| it.as_str() == tag) {
+        return Some(node);
+    }
+    node.children.iter().find_map(|child| by_tag(child, tag))
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AccessibilityIteratorsTest.kt, pageIterator_following

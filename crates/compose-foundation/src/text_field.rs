@@ -172,7 +172,7 @@ impl ModifierNodeElement for TextFieldElement {
             visual_transformation: self.visual_transformation.clone(),
             mapping: None,
             shown_text: None,
-            cursor_to_end: Default::default(),
+            before_edit: None,
         }
     }
 
@@ -180,10 +180,7 @@ impl ModifierNodeElement for TextFieldElement {
         if node.value != self.value {
             node.value = self.value.clone();
             node.awaiting_value = false;
-            if node.cursor_to_end.take() {
-                node.cursor = self.value.len();
-                node.anchor = self.value.len();
-            }
+            node.before_edit = None;
         }
         if node.text != self.value
             || node.style != self.style
@@ -331,8 +328,8 @@ pub(crate) struct TextFieldNode {
     text: String,
     /// The application's value, as composition last gave it.
     value: String,
-    /// A service set the text: when the application's value changes, the cursor's at its end.
-    cursor_to_end: Rc<std::cell::Cell<bool>>,
+    /// The selection before the edits `awaiting_value` waits on: an edit undone restores it.
+    before_edit: Option<(usize, usize)>,
     /// An edit was made: unless the application changes `value` by the next measurement, the
     /// edit is undone.
     awaiting_value: bool,
@@ -553,6 +550,9 @@ impl TextFieldNode {
         anchor: usize,
         context: &mut EventContext<'_>,
     ) {
+        if !self.awaiting_value {
+            self.before_edit = Some((self.anchor, self.cursor));
+        }
         self.text = text;
         self.cursor = cursor;
         self.anchor = anchor;
@@ -859,10 +859,12 @@ impl LayoutModifierNode for TextFieldNode {
         // An edit the application didn't take is undone.
         if std::mem::take(&mut self.awaiting_value) && self.text != self.value {
             self.text = self.value.clone();
-            self.cursor = floor_char_boundary(&self.text, self.cursor);
-            self.anchor = floor_char_boundary(&self.text, self.anchor);
+            let (anchor, cursor) = self.before_edit.unwrap_or((self.anchor, self.cursor));
+            self.cursor = floor_char_boundary(&self.text, cursor);
+            self.anchor = floor_char_boundary(&self.text, anchor);
             self.invalidate_paragraph();
         }
+        self.before_edit = None;
         for paragraph in self.stale.drain(..) {
             scope.text_measurer().release(paragraph);
         }
@@ -1672,22 +1674,25 @@ impl SemanticsModifierNode for TextFieldNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         // The field's node is its decoration's, as Compose's `CoreTextField`.
         config.part_of_parent();
-        // What's shown: a password's mask, as Compose's.
+        // What's shown, and where offsets of the text are in it: a password's mask, a
+        // transformation's own mapping, a composition in place of the selection, as Compose's.
         let text = self.display_text();
-        let shown: compose_ui::SharedString = match self.visual_transformation.filter(&text) {
-            Some(transformed) => transformed.text.into(),
-            None => text.into_owned().into(),
-        };
-        // In what's shown: a character for a character, under a mask or a composition's own.
+        let (shown, mapping): (compose_ui::SharedString, _) =
+            match self.visual_transformation.filter(&text) {
+                Some(transformed) => (transformed.text.into(), Some(transformed.offset_mapping)),
+                None => (text.into_owned().into(), None),
+            };
         let in_shown = |offset: usize| {
-            let offset = floor_char_boundary(&self.text, offset);
-            let characters = self.text[..offset].chars().count();
-            let shown = shown.as_str();
-            shown.char_indices().nth(characters).map_or(shown.len(), |(at, _)| at)
+            let offset = mapping.as_ref().map_or(offset, |it| it.original_to_transformed(offset));
+            floor_char_boundary(shown.as_str(), offset)
+        };
+        let (anchor, cursor) = match self.composition {
+            Some(_) => (self.display_cursor(), self.display_cursor()),
+            None => (self.anchor, self.cursor),
         };
         config.set_text_selection_range(compose_ui::TextRange::new(
-            in_shown(self.anchor),
-            in_shown(self.cursor),
+            in_shown(anchor),
+            in_shown(cursor),
         ));
         config.set_editable_text(shown.clone());
         if self.visual_transformation.is_password() {
@@ -1698,14 +1703,8 @@ impl SemanticsModifierNode for TextFieldNode {
         let editable = self.enabled && !self.read_only;
         config.set_is_editable(editable);
         if editable {
-            let on_value_change = self.on_value_change.clone();
-            let (current, cursor_to_end) = (self.text.clone(), self.cursor_to_end.clone());
-            config.set_text_action(None, move |text| {
-                // The cursor goes to the end of it, as a text committed over all there was.
-                cursor_to_end.set(text.as_str() != current);
-                on_value_change(text.as_str().to_string());
-                true
-            });
+            config.set_text_of_node();
+            config.insert_text_at_cursor_of_node();
         }
         if self.enabled {
             config.set_focused(self.focused);
@@ -1746,21 +1745,53 @@ impl SemanticsModifierNode for TextFieldNode {
                 }
                 true
             }
+            Action::SetText(text) => {
+                if !editable {
+                    return false;
+                }
+                // Nothing composed is left of what was there, as Compose's `DeleteAllCommand` and
+                // commit; if the application refuses the text, `awaiting_value` undoes it.
+                self.end_composition();
+                context.reset_input_method();
+                let end = text.as_str().len();
+                self.edit(text.as_str().to_string(), end, end, false, context);
+                true
+            }
+            Action::InsertText(text) => {
+                if !editable {
+                    return false;
+                }
+                self.commit_composition(context);
+                self.insert(text.as_str(), false, context);
+                true
+            }
             Action::SetSelection { start, end } => {
                 if !self.enabled {
                     return false;
                 }
+                // In what's shown, what's being composed being part of it until it's committed.
+                let display = self.display_text();
+                let transformed = self.visual_transformation.filter(&display);
                 let shown_length =
-                    self.shown_text.as_ref().map_or(self.text.len(), |shown| shown.len());
+                    transformed.as_ref().map_or(display.len(), |shown| shown.text.len());
                 let within = |offset: i32| offset >= 0 && offset as usize <= shown_length;
                 if !within(start) || !within(end) {
                     return false;
                 }
-                let at = |field: &Self, offset: i32| {
-                    floor_char_boundary(&field.text, field.original_of(offset as usize))
+                let at = |offset: i32| {
+                    let offset = offset as usize;
+                    let original = transformed
+                        .as_ref()
+                        .map_or(offset, |it| it.offset_mapping.transformed_to_original(offset));
+                    floor_char_boundary(&display, original)
                 };
-                let (anchor, cursor) = (at(self, start), at(self, end));
-                if (anchor, cursor) == (self.anchor, self.cursor) {
+                let (anchor, cursor) = (at(start), at(end));
+                let selected = if self.composition.is_some() {
+                    (self.display_cursor(), self.display_cursor())
+                } else {
+                    (self.anchor, self.cursor)
+                };
+                if (anchor, cursor) == selected {
                     return false;
                 }
                 self.commit_composition(context);

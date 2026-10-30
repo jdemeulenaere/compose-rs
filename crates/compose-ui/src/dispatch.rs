@@ -687,7 +687,7 @@ impl UiTree {
                     |modifier_node, context| {
                         modifier_node
                             .as_semantics()
-                            .is_some_and(|it| it.perform_text_action(action, context))
+                            .is_some_and(|it| it.perform_text_action(action.clone(), context))
                     },
                 )
                 .unwrap_or(false);

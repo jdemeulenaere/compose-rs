@@ -1452,6 +1452,19 @@ impl SemanticsConfiguration {
         self.set(&SemanticsActions::ON_CLICK, AccessibilityAction { label: None, action: None });
     }
 
+    /// As `on_click_of_node`, for `SetText`.
+    pub fn set_text_of_node(&mut self) {
+        self.set(&SemanticsActions::SET_TEXT, AccessibilityAction { label: None, action: None });
+    }
+
+    /// As `on_click_of_node`, for `InsertTextAtCursor`.
+    pub fn insert_text_at_cursor_of_node(&mut self) {
+        self.set(
+            &SemanticsActions::INSERT_TEXT_AT_CURSOR,
+            AccessibilityAction { label: None, action: None },
+        );
+    }
+
     /// As `on_click_of_node`, for `SetSelection`.
     pub fn set_selection_of_node(&mut self) {
         self.set(

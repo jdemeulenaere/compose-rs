@@ -504,6 +504,21 @@ fn main() {
                 }
             }
         }
+        // A key as a phone's: no semantics tree looked through to find the field.
+        "field_keystroke_direct" => {
+            let mut ui = compose_test(Fields);
+            ui.on_node_with_tag("first").request_focus();
+            ui.wait_for_idle();
+            let value = VALUE.with(|it| it.handle());
+            for turn in 0..n {
+                ui.host().send_text("x");
+                ui.wait_for_idle();
+                if turn % 20 == 19 {
+                    value.set(String::new());
+                    ui.wait_for_idle();
+                }
+            }
+        }
         "dump_feed" => dump(compose_rs_feed::Feed, n),
         "dump_big" => dump(compose_rs_feed::BigScreen, n),
         "dump_feed_animated" => dump(compose_rs_feed::FeedAnimated, n),

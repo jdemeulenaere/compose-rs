@@ -57,6 +57,8 @@ pub mod flag {
     pub const TAG_IS_RESOURCE_ID: u32 = 1 << 23;
     /// Its characters' places can be asked for (`character_locations`).
     pub const TEXT_LAID_OUT: u32 = 1 << 24;
+    /// Its text can be changed, as `IsEditable`: `EDITABLE` says it's a field.
+    pub const CAN_EDIT: u32 = 1 << 25;
 }
 
 /// What a service reads that isn't the application's words, which `Accessibility.kt` finds in the
@@ -264,6 +266,40 @@ fn tags_are_resource_ids(node: &SemanticsSnapshot, around: bool) -> bool {
     node.unmerged_config().get(&P::TEST_TAGS_AS_RESOURCE_ID).copied().unwrap_or(around)
 }
 
+/// As Compose's `ParcelSafeTextLength`: what goes in a node or an event, at most so many UTF-16 units.
+const PARCEL_SAFE_LENGTH: usize = 100_000;
+
+/// `text` cut to what's safe to send, a surrogate pair whole, as Compose's `trimToSize`.
+pub fn parcel_safe(text: &str) -> &str {
+    // Never fewer bytes than units.
+    if text.len() <= PARCEL_SAFE_LENGTH {
+        return text;
+    }
+    let mut units = 0;
+    for (at, c) in text.char_indices() {
+        units += c.len_utf16();
+        if units > PARCEL_SAFE_LENGTH {
+            return &text[..at];
+        }
+    }
+    text
+}
+
+/// The text and description `node` is read by. One record stands for a merging node and all it
+/// merged, and a service reading a description doesn't read a text beside it: with both, the
+/// description says all of it in order; a field's value being its own, all of it is its hint then
+/// (D1653).
+pub fn read_as(node: &SemanticsSnapshot) -> (String, String) {
+    let config = &node.config;
+    match &node.reading_order {
+        Some(reading) if config.contains(&P::EDITABLE_TEXT) => {
+            (reading.as_str().to_string(), String::new())
+        }
+        Some(reading) => (join(config.get(&P::TEXT)), reading.as_str().to_string()),
+        None => (join(config.get(&P::TEXT)), join(config.get(&P::CONTENT_DESCRIPTION))),
+    }
+}
+
 /// Children with their drawing order, as a node has them: by `traversal_index` for a merging
 /// traversal group, as Compose's (`isTraversalGroup && isMerging && childrenSize > 1`), a scrim's
 /// index otherwise leaving it in its place under the sheet.
@@ -360,6 +396,7 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
     set(&mut flags, node.unmerged_config().contains(&P::FOCUSED), flag::FOCUSABLE);
     set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
     set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
+    set(&mut flags, config.get(&P::IS_EDITABLE) == Some(&true), flag::CAN_EDIT);
     set(&mut flags, is_password(node), flag::PASSWORD);
     set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
     set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
@@ -527,9 +564,10 @@ fn write_node(
         // A role added later: none the platform knows.
         Some(_) => 0,
     });
-    write_string(out, &join(config.get(&P::TEXT)));
-    write_string(out, &join(config.get(&P::CONTENT_DESCRIPTION)));
-    write_string(out, text_of(config.get(&P::EDITABLE_TEXT)));
+    let (text, description) = read_as(node);
+    write_string(out, parcel_safe(&text));
+    write_string(out, parcel_safe(&description));
+    write_string(out, parcel_safe(text_of(config.get(&P::EDITABLE_TEXT))));
     write_string(out, text_of(config.get(&P::STATE_DESCRIPTION)));
     write_string(out, text_of(config.get(&P::ERROR)));
     // From its own configuration, as Compose's delegate.
@@ -578,7 +616,8 @@ fn write_node(
 /// The class name and role description a service reads, from the node's own configuration, as
 /// Compose's delegate: a field's or a text's, a role's where nothing's below it (an image's only
 /// if it's what's focused on), a scrolling container's so a service scrolls it; last, what the
-/// application says it is (`accessibility_class_name`).
+/// application says it is (`accessibility_class_name`). A merging node's stays with children left
+/// beside it, where Compose's would be in a fake node among them (D1653).
 pub fn class_and_role(node: &SemanticsSnapshot) -> (&str, u8) {
     let own = node.unmerged_config();
     let mut class = "android.view.View";
@@ -589,7 +628,8 @@ pub fn class_and_role(node: &SemanticsSnapshot) -> (&str, u8) {
     if own.contains(&P::TEXT) {
         class = "android.widget.TextView";
     }
-    if let Some(role) = own.get(&P::ROLE).filter(|_| node.children.is_empty()) {
+    let stands_for_itself = node.children.is_empty() || own.is_merging_semantics_of_descendants;
+    if let Some(role) = own.get(&P::ROLE).filter(|_| stands_for_itself) {
         match role {
             Role::Tab => role_description = spoken::TAB,
             Role::Switch => role_description = spoken::SWITCH,
@@ -796,6 +836,14 @@ impl TextMoved {
 }
 
 impl TextCursor {
+    /// For a test: as if the move a change is yet to precede was asked for `ago`.
+    #[doc(hidden)]
+    pub fn move_asked_ago(&mut self, ago: std::time::Duration) {
+        if let Some(moved) = &mut self.moved {
+            moved.at = std::time::Instant::now().checked_sub(ago).expect("after the start");
+        }
+    }
+
     fn position_in(&self, id: i32) -> i32 {
         self.at.filter(|(node, _)| *node == id).map_or(-1, |(_, position)| position)
     }
@@ -803,17 +851,29 @@ impl TextCursor {
 
 /// `node`'s selection as a service reads it, as Compose's `getAccessibilitySelectionStart` and
 /// `End`, in UTF-16 units of `iterable_text`: its own if it has one and isn't read by its
-/// description, else where the service's cursor is.
+/// description, else where the service's cursor is. A disabled field's can't be set, so a service
+/// keeps a place of its own, or it would go nowhere (D1651).
 pub fn text_selection_of(node: &SemanticsSnapshot, cursor: &TextCursor) -> (i32, i32) {
-    let own = node.unmerged_config();
-    if !own.contains(&P::CONTENT_DESCRIPTION)
-        && let Some(range) = own.get(&P::TEXT_SELECTION_RANGE)
+    if !node.config.contains(&P::DISABLED)
+        && let Some(selection) = own_selection_of(node.unmerged_config())
     {
-        let text = own.get(&P::EDITABLE_TEXT).map_or("", |text| text.as_str());
-        return (utf16_index(text, range.min()) as i32, utf16_index(text, range.max()) as i32);
+        return selection;
     }
     let position = cursor.position_in(virtual_id(node));
     (position, position)
+}
+
+/// The selection a configuration says it has, in UTF-16 units of its text.
+fn own_selection_of(own: &compose_ui::SemanticsConfiguration) -> Option<(i32, i32)> {
+    if own.contains(&P::CONTENT_DESCRIPTION) {
+        return None;
+    }
+    let range = own.get(&P::TEXT_SELECTION_RANGE)?;
+    let text = match own.get(&P::EDITABLE_TEXT) {
+        Some(text) => text.as_str(),
+        None => own.get(&P::TEXT).and_then(|all| all.iter().next()).map_or("", |it| it.as_str()),
+    };
+    Some((utf16_index(text, range.min()) as i32, utf16_index(text, range.max()) as i32))
 }
 
 /// What a step of a value moves it by: a step, or a twentieth of the range when continuous, as
@@ -973,14 +1033,15 @@ fn kept_of(node: &SemanticsSnapshot, out: &mut HashMap<i32, KeptNode>) {
         .map_or(Vec::new(), |all| all.iter().map(|it| it.label.clone()).collect());
     custom_labels.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     custom_labels.dedup();
+    let (text, description) = read_as(node);
     out.insert(
         virtual_id(node),
         KeptNode {
             bounds: node.bounds,
             children: node.children.iter().map(virtual_id).collect(),
             pane_title: own.get(&P::PANE_TITLE).cloned(),
-            text: join(config.get(&P::TEXT)),
-            description: join(config.get(&P::CONTENT_DESCRIPTION)),
+            text,
+            description,
             state: config.get(&P::STATE_DESCRIPTION).cloned(),
             toggle: config.get(&P::TOGGLEABLE_STATE).copied(),
             selected: config.get(&P::SELECTED).copied(),
@@ -1248,8 +1309,8 @@ pub fn write_changes(changes: &[Change], out: &mut Writer) {
         out.u32(change.id as u32);
         out.u8(change.kind as u8);
         out.u8(change.password as u8);
-        write_string(out, &change.text);
-        write_string(out, &change.before);
+        write_string(out, parcel_safe(&change.text));
+        write_string(out, parcel_safe(&change.before));
         out.u32(change.from as u32);
         out.u32(change.removed as u32);
         out.u32(change.added as u32);
@@ -1346,15 +1407,17 @@ pub fn perform_text_action(
         action::SET_SELECTION => set_selection(ui, node, cursor, first, second, false),
         action::NEXT_AT_GRANULARITY | action::PREVIOUS_AT_GRANULARITY => {
             let forward = code == action::NEXT_AT_GRANULARITY;
-            move_through(ui, node, cursor, first, forward, extend_selection)
+            let page = find_shown(tree, id).map_or(node.bounds, |(_, shown)| shown).height();
+            move_through(ui, node, cursor, first, forward, extend_selection, page)
         }
         _ => false,
     }
 }
 
 /// Where `node`'s characters are, as Compose's `getBoundingBoxes`: `length` of them from `start`, in
-/// UTF-16 units; in the view's pixels, each cut to what's shown of the node and `None` if none of it
-/// is or it's past the text. `None` without a layout.
+/// UTF-16 units, the second of a surrogate pair where the pair is; at most `MOST_LOCATIONS`; in the
+/// view's pixels, each cut to what's shown of the node and `None` if none of it is or it's past the
+/// text. `None` without a layout.
 pub fn character_locations(
     ui: &mut UiHost,
     node: &SemanticsSnapshot,
@@ -1366,13 +1429,13 @@ pub fn character_locations(
     let text = layout.layout_input.text.text().clone();
     let units = utf16_length(text.as_str());
     Some(
-        (0..length)
+        (0..length.clamp(0, MOST_LOCATIONS))
             .map(|at| {
-                let unit = start + at;
-                if unit >= units {
+                let unit = start.saturating_add(at);
+                if unit < 0 || unit >= units {
                     return None;
                 }
-                let bounds = layout.get_bounding_box(byte_offset(text.as_str(), unit as usize));
+                let bounds = layout.get_bounding_box(character_at(text.as_str(), unit as usize));
                 let in_root = Rect::new(
                     bounds.left + origin.x,
                     bounds.top + origin.y,
@@ -1383,6 +1446,21 @@ pub fn character_locations(
             })
             .collect(),
     )
+}
+
+/// What a service may ask the places of at once: more would be too much to send anyway.
+const MOST_LOCATIONS: i32 = 20_000;
+
+/// The byte offset of the character UTF-16 `unit` is part of.
+fn character_at(text: &str, unit: usize) -> usize {
+    let mut units = 0;
+    for (at, c) in text.char_indices() {
+        units += c.len_utf16();
+        if units > unit {
+            return at;
+        }
+    }
+    text.len()
 }
 
 /// `node`'s text's layout, if it has one.
@@ -1396,7 +1474,9 @@ fn text_layout_of(
 }
 
 /// Moves a service's place in `node`'s text, as Compose's `traverseAtGranularity`: the piece of it
-/// after or before, selected from where it was if `extend_selection` and it's a field.
+/// after or before, selected from where it was if `extend_selection` and it's a field. A page is
+/// `page` high. A move a field's mapping brings back where it was (the `-` of `12-34`) goes on to
+/// the next piece, or a service would never get past it (D1651).
 fn move_through(
     ui: &mut UiHost,
     node: &SemanticsSnapshot,
@@ -1404,6 +1484,7 @@ fn move_through(
     granularity: i32,
     forward: bool,
     extend_selection: bool,
+    page: f32,
 ) -> bool {
     let id = virtual_id(node);
     if cursor.at.is_none_or(|(there, _)| there != id) {
@@ -1422,39 +1503,56 @@ fn move_through(
         (movement::WORD, _) => Granularity::Word,
         (movement::PARAGRAPH, _) => Granularity::Paragraph,
         (movement::LINE, Some(layout)) => Granularity::Line(layout),
-        (movement::PAGE, Some(layout)) => Granularity::Page(layout, node.bounds.height()),
+        (movement::PAGE, Some(layout)) => Granularity::Page(layout, page),
         _ => return false,
     };
     let segments = TextSegments::new(&text);
     let (start, end) = text_selection_of(node, cursor);
-    let current = if end == -1 { if forward { 0 } else { segments.len() } } else { end };
-    let range = if forward {
-        segments.following(granularity_of, current)
-    } else {
-        segments.preceding(granularity_of, current)
-    };
-    let Some((from, to)) = range else { return false };
+    let was_at = if end == -1 { if forward { 0 } else { segments.len() } } else { end };
     let own = node.unmerged_config();
     let extends = extend_selection
         && !own.contains(&P::CONTENT_DESCRIPTION)
         && own.contains(&P::EDITABLE_TEXT);
-    let (selection_start, selection_end) = if extends {
-        let start = if start != -1 {
-            start
-        } else if forward {
-            from
+    let mut current = was_at;
+    let mut moved_at_all = false;
+    loop {
+        let range = if forward {
+            segments.following(granularity_of, current)
         } else {
-            to
+            segments.preceding(granularity_of, current)
         };
-        (start, if forward { to } else { from })
-    } else {
+        let Some((from, to)) = range else {
+            cursor.moved = None;
+            return moved_at_all;
+        };
+        moved_at_all = true;
         let edge = if forward { to } else { from };
-        (edge, edge)
-    };
-    cursor.moved =
-        Some(TextMoved { id, forward, granularity, from, to, at: std::time::Instant::now() });
-    set_selection(ui, node, cursor, selection_start, selection_end, true);
-    true
+        let (selection_start, selection_end) = if extends {
+            let start = if start != -1 {
+                start
+            } else if forward {
+                from
+            } else {
+                to
+            };
+            (start, edge)
+        } else {
+            (edge, edge)
+        };
+        cursor.moved =
+            Some(TextMoved { id, forward, granularity, from, to, at: std::time::Instant::now() });
+        set_selection(ui, node, cursor, selection_start, selection_end, true);
+        // Where it is now, which the field's own mapping says.
+        let now = ui
+            .with_tree(|tree| tree.unmerged_semantics_config(node.id))
+            .and_then(|own| own_selection_of(&own))
+            .filter(|_| !node.config.contains(&P::DISABLED))
+            .map_or(edge, |(_, end)| end);
+        if if forward { now > was_at } else { now < was_at } {
+            return true;
+        }
+        current = edge;
+    }
 }
 
 /// As Compose's `setAccessibilitySelection`: `node`'s own selection, by its action, if it has one
@@ -1474,6 +1572,10 @@ fn set_selection(
         let bytes = |unit: i32| {
             if unit < 0 { unit } else { byte_offset(shown, unit as usize) as i32 }
         };
+        let length = utf16_length(shown);
+        if start > length || end > length {
+            return false;
+        }
         let (start, end) = (bytes(start), bytes(end));
         let mut done = false;
         ui.perform_semantics_action_with(node.id, &A::SET_SELECTION, |set| {

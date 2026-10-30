@@ -100,6 +100,11 @@ pub struct SemanticsSnapshot {
     pub place_order: u64,
     /// Accessibility leaves it out, as `isHidden`: under a layer with no alpha, or hiding.
     pub hidden: bool,
+    /// A merging node that says both a description and a text: what's inside it read in order,
+    /// each node's description or else its text. A service reading a description doesn't read a
+    /// text beside it: what Compose's fake nodes are for, which the merged tree has no need of
+    /// (D1653).
+    pub reading_order: Option<crate::SharedString>,
 }
 
 impl SemanticsSnapshot {
@@ -502,7 +507,7 @@ impl UiTree {
             move || match requests.upgrade() {
                 Some(requests) => crate::focus_requester::perform_or_queue(
                     &requests,
-                    crate::focus_requester::FocusRequest::TextAction(node, action),
+                    crate::focus_requester::FocusRequest::TextAction(node, action.clone()),
                 ),
                 None => false,
             }
@@ -532,10 +537,21 @@ impl UiTree {
                 perform(TextAction::ImeAction),
             );
         }
+        if config.get(&A::SET_TEXT).is_some_and(|action| action.action.is_none()) {
+            let perform = perform.clone();
+            config.set_text_action(None, move |text| {
+                perform(TextAction::SetText(text.text().clone()))()
+            });
+        }
+        if config.get(&A::INSERT_TEXT_AT_CURSOR).is_some_and(|action| action.action.is_none()) {
+            let perform = perform.clone();
+            config.insert_text_at_cursor(None, move |text| {
+                perform(TextAction::InsertText(text.text().clone()))()
+            });
+        }
         if config.get(&A::SET_SELECTION).is_some_and(|action| action.action.is_none()) {
-            let requests = perform;
             config.set_selection(None, move |start, end, _traversal| {
-                requests(TextAction::SetSelection { start, end })()
+                perform(TextAction::SetSelection { start, end })()
             });
         }
     }
@@ -574,6 +590,7 @@ impl UiTree {
             z_index: 0.0,
             place_order: 0,
             hidden: false,
+            reading_order: None,
         }
     }
 
@@ -658,6 +675,7 @@ impl UiTree {
                 let (mut config, layer) = (own.config.clone(), own.layer);
                 let mut children = Vec::new();
                 let mut own_config = None;
+                let mut reading_order = None;
                 if config.is_clearing_semantics && merged {
                     // Nothing inside reads; the unmerged tree shows it, for tests and debugging,
                     // as Compose's `includeReplacedSemantics`.
@@ -668,6 +686,13 @@ impl UiTree {
                     }
                     if own != config {
                         own_config = Some(Box::new(own));
+                    }
+                    let says =
+                        |key| config.get(key).is_some_and(|all: &StringList| !all.is_empty());
+                    if says(&SemanticsProperties::CONTENT_DESCRIPTION)
+                        && says(&SemanticsProperties::TEXT)
+                    {
+                        reading_order = Some(self.reading_order_of(node));
                     }
                 } else {
                     for child in children_of(self) {
@@ -692,9 +717,45 @@ impl UiTree {
                     z_index: value.z_index,
                     place_order: value.place_order,
                     hidden,
+                    reading_order,
                 });
             }
         }
+    }
+
+    /// What's inside merging `node` read in order: each node's description or else its text, those
+    /// that merge themselves apart.
+    fn reading_order_of(&mut self, node: NodeId) -> crate::SharedString {
+        fn says(config: &SemanticsConfiguration, out: &mut Vec<crate::SharedString>) {
+            let said = config
+                .get(&SemanticsProperties::CONTENT_DESCRIPTION)
+                .filter(|all| !all.is_empty())
+                .or(config.get(&SemanticsProperties::TEXT));
+            out.extend(said.into_iter().flatten().cloned());
+        }
+        let mut pieces = Vec::new();
+        if let Some(own) = self.own_semantics(node) {
+            says(&own.config, &mut pieces);
+        }
+        let mut nodes: Vec<NodeId> = self.z_sorted_children(node).into_iter().rev().collect();
+        while let Some(node) = nodes.pop() {
+            let value = self.node(node);
+            if value.overlay || value.deactivated {
+                continue;
+            }
+            if let Some(own) = self.own_semantics(node) {
+                if own.config.is_merging_semantics_of_descendants {
+                    continue;
+                }
+                says(&own.config, &mut pieces);
+                if own.config.is_clearing_semantics {
+                    continue;
+                }
+            }
+            nodes.extend(self.z_sorted_children(node).into_iter().rev());
+        }
+        let strings: Vec<&str> = pieces.iter().map(|text| text.as_str()).collect();
+        strings.join(" ").into()
     }
 
     /// Merges `node`'s subtree into `config`, except descendants that merge themselves, which

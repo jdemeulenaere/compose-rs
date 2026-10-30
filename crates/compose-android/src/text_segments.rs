@@ -90,18 +90,24 @@ impl<'a> TextSegments<'a> {
         byte_offset(self.text, unit.max(0) as usize)
     }
 
-    fn character_boundaries(&self) -> Vec<i32> {
-        let mut all: Vec<i32> =
-            self.text.grapheme_indices(true).map(|(at, _)| self.unit_of(at)).collect();
-        all.push(self.len());
+    /// Where `pieces`, all of the text in order, start in UTF-16 units, and its end: one walk, for
+    /// a long text's move not to be quadratic.
+    fn boundaries_of<'b>(pieces: impl Iterator<Item = &'b str>) -> Vec<i32> {
+        let mut units = 0;
+        let mut all = vec![0];
+        for piece in pieces {
+            units += piece.encode_utf16().count() as i32;
+            all.push(units);
+        }
         all
     }
 
+    fn character_boundaries(&self) -> Vec<i32> {
+        Self::boundaries_of(self.text.graphemes(true))
+    }
+
     fn word_boundaries(&self) -> Vec<i32> {
-        let mut all: Vec<i32> =
-            self.text.split_word_bound_indices().map(|(at, _)| self.unit_of(at)).collect();
-        all.push(self.len());
-        all
+        Self::boundaries_of(self.text.split_word_bounds())
     }
 
     fn character_following(&self, current: i32) -> Option<(i32, i32)> {
@@ -142,8 +148,13 @@ impl<'a> TextSegments<'a> {
         while !self.is_letter_or_digit(start) {
             start = next_boundary(&all, start)?;
         }
-        let end = next_boundary(&all, start)?;
-        self.ends_word(end).then_some((start, end))
+        // A run of letters or digits is a word, where Unicode breaks inside it (each ideograph)
+        // and a locale's dictionary would have found the words in it (D1650).
+        let mut end = next_boundary(&all, start)?;
+        while !self.ends_word(end) {
+            end = next_boundary(&all, end)?;
+        }
+        Some((start, end))
     }
 
     fn word_preceding(&self, current: i32) -> Option<(i32, i32)> {
@@ -152,8 +163,11 @@ impl<'a> TextSegments<'a> {
         while end > 0 && !self.is_letter_or_digit(end - 1) && !self.ends_word(end) {
             end = previous_boundary(&all, end)?;
         }
-        let start = previous_boundary(&all, end)?;
-        self.starts_word(start).then_some((start, end))
+        let mut start = previous_boundary(&all, end)?;
+        while !self.starts_word(start) {
+            start = previous_boundary(&all, start)?;
+        }
+        Some((start, end))
     }
 
     fn starts_paragraph(&self, unit: i32) -> bool {

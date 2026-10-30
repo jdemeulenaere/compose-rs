@@ -73,7 +73,7 @@ pub(crate) struct FocusRequests {
 }
 
 /// A focus change asked for while the tree was busy.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum FocusRequest {
     /// The node's focus target, or the first below it: its semantics' `RequestFocus`.
     Node(NodeId),
@@ -118,10 +118,11 @@ impl FocusRequests {
 /// queues it for when it is. Returns what it did, or `true` if queued.
 pub(crate) fn perform_or_queue(requests: &Rc<FocusRequests>, request: FocusRequest) -> bool {
     let key = requests.tree_key.get();
+    let queued = request.clone();
     match on_free_tree(key, |tree| tree.perform_focus_request_in_transaction(request)) {
         Some(result) => result,
         None => {
-            requests.push(request);
+            requests.push(queued);
             true
         }
     }

@@ -166,3 +166,236 @@ fn a_text_and_a_field_give_their_layouts() {
     let shown = layout_of("field");
     assert_eq!(shown.layout_input.text.text().as_str(), "\u{2022}".repeat(6));
 }
+
+/// A focused field with `text`, its cursor at `cursor`.
+fn focused_at(text: &str, cursor: i32) -> (ComposeTestRule, MutableState<String>) {
+    let (mut ui, value, _) = field(text, false);
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    select(&mut ui, cursor, cursor);
+    ui.wait_for_idle();
+    (ui, value)
+}
+
+#[test]
+fn a_selection_set_while_composing_lands_on_a_character_of_what_is_shown() {
+    for offset in [3, 4] {
+        let (mut ui, value) = focused_at("abéégh", 2);
+        ui.host().send_preedit("你", None);
+        ui.wait_for_idle();
+        // Inside what's being composed.
+        assert!(select(&mut ui, offset, offset));
+        ui.wait_for_idle();
+        assert_eq!(value.get(), "ab你éégh", "committed");
+        assert_eq!(selection(&mut ui), TextRange::new(2, 2));
+        // Going on from there doesn't cut a character.
+        ui.host().send_key(compose_ui::KeyEvent::down(compose_ui::Key::Backspace));
+        ui.wait_for_idle();
+        assert_eq!(value.get(), "a你éégh");
+    }
+}
+
+#[test]
+fn a_selection_set_while_composing_can_reach_what_is_composed_and_no_further() {
+    let (mut ui, value) = focused_at("ab", 2);
+    ui.host().send_preedit("cde", None);
+    ui.wait_for_idle();
+    assert!(!select(&mut ui, 6, 6), "past what's shown");
+    assert!(!select(&mut ui, 5, 5), "the cursor is there");
+    assert!(select(&mut ui, 4, 4));
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "abcde");
+    assert_eq!(selection(&mut ui), TextRange::new(4, 4));
+}
+
+#[test]
+fn the_selection_while_composing_is_the_cursor_in_what_is_shown() {
+    let (mut ui, _) = focused_at("ab", 2);
+    ui.host().send_preedit("hello", None);
+    ui.wait_for_idle();
+    assert_eq!(selection(&mut ui), TextRange::new(7, 7));
+    ui.host().send_preedit("hello", Some((1, 1)));
+    ui.wait_for_idle();
+    assert_eq!(selection(&mut ui), TextRange::new(3, 3));
+}
+
+#[test]
+fn a_refused_set_text_leaves_the_selection_and_nothing_for_the_next_key() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+    let accepts = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut ui = compose_test(move || {
+        BasicTextField!(
+            value.get(),
+            move |new| {
+                if accepts.get() {
+                    value.set(new);
+                }
+            },
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    accepts.set(true);
+    ui.wait_for_idle();
+    select(&mut ui, 1, 1);
+    ui.wait_for_idle();
+    accepts.set(false);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").perform_semantics_action_with(&A::SET_TEXT, |set| {
+        set("refused".into());
+    });
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "hello");
+    assert_eq!(selection(&mut ui), TextRange::new(1, 1), "where it was");
+
+    accepts.set(true);
+    ui.wait_for_idle();
+    ui.host().send_text("X");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "hXello");
+    assert_eq!(selection(&mut ui), TextRange::new(2, 2));
+}
+
+#[test]
+fn set_text_with_the_text_there_still_moves_the_cursor_to_its_end() {
+    let (mut ui, value) = focused_at("hello", 1);
+    ui.on_node_with_tag("field").perform_semantics_action_with(&A::SET_TEXT, |set| {
+        set("hello".into());
+    });
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "hello");
+    assert_eq!(selection(&mut ui), TextRange::new(5, 5));
+}
+
+#[test]
+fn set_text_replaces_what_is_being_composed_and_the_keyboard_starts_over() {
+    let (mut ui, value) = focused_at("old", 3);
+    ui.host().send_preedit("你", None);
+    ui.wait_for_idle();
+    ui.host().take_input_method_reset();
+    ui.on_node_with_tag("field").perform_semantics_action_with(&A::SET_TEXT, |set| {
+        set("new".into());
+    });
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "new");
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot();
+    assert_eq!(node.config.get(&P::EDITABLE_TEXT).map(|it| it.as_str()), Some("new"));
+    assert!(ui.host().take_input_method_reset());
+}
+
+#[test]
+fn insert_text_at_cursor_commits_what_is_composed_and_goes_after_it() {
+    let (mut ui, value) = focused_at("ab", 1);
+    ui.host().send_preedit("x", None);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").perform_semantics_action_with(&A::INSERT_TEXT_AT_CURSOR, |it| {
+        it("yz".into());
+    });
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "axyzb");
+    assert_eq!(selection(&mut ui), TextRange::new(4, 4));
+}
+
+#[test]
+fn a_masks_offsets_are_those_of_the_characters_under_it() {
+    let (mut ui, value, _) = field("abc", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    // The mask is three bytes a character.
+    assert!(select(&mut ui, 3, 3));
+    ui.wait_for_idle();
+    assert_eq!(selection(&mut ui), TextRange::new(3, 3));
+    ui.host().send_text("X");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "aXbc");
+}
+
+/// `12-34` for `1234`.
+struct Grouped;
+
+impl VisualTransform for Grouped {
+    fn filter(&self, text: &str) -> TransformedText {
+        struct Mapping;
+        impl OffsetMapping for Mapping {
+            fn original_to_transformed(&self, offset: usize) -> usize {
+                if offset <= 2 { offset } else { offset + 1 }
+            }
+            fn transformed_to_original(&self, offset: usize) -> usize {
+                if offset <= 2 {
+                    offset
+                } else if offset == 3 {
+                    2
+                } else {
+                    offset - 1
+                }
+            }
+        }
+        TransformedText {
+            text: format!("{}-{}", &text[..2.min(text.len())], &text[2.min(text.len())..]),
+            offset_mapping: std::rc::Rc::new(Mapping),
+        }
+    }
+}
+
+#[test]
+fn a_transformations_selection_goes_through_its_mapping_both_ways() {
+    let mut ui = compose_test(|| {
+        BasicTextField!(
+            String::from("1234"),
+            |_| {},
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+            visual_transformation = VisualTransformation::new(Grouped),
+        );
+    });
+    assert!(select(&mut ui, 4, 4));
+    assert_eq!(selection(&mut ui), TextRange::new(4, 4), "3 of the text");
+    assert!(select(&mut ui, 3, 3));
+    assert_eq!(selection(&mut ui), TextRange::new(2, 2), "the dash is at 2 of the text");
+    assert!(!select(&mut ui, 2, 2), "there already");
+}
+
+#[test]
+fn a_stale_copy_or_cut_of_a_field_become_a_password_does_nothing() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("secret")))).handle();
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut ui = compose_test(move || {
+        BasicTextField!(
+            value.get(),
+            move |new| value.set(new),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+            visual_transformation = if masked.get() {
+                PasswordVisualTransformation::new().into()
+            } else {
+                VisualTransformation::NONE
+            },
+        );
+    });
+    select(&mut ui, 0, 3);
+    ui.wait_for_idle();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot().id;
+    let copy = ui.host().semantics_action(node, &A::COPY_TEXT).expect("offered");
+    let cut = ui.host().semantics_action(node, &A::CUT_TEXT).expect("offered");
+    masked.set(true);
+    ui.wait_for_idle();
+    assert!(!copy());
+    assert!(!cut());
+    ui.wait_for_idle();
+    let clipboard = ui.host().with_tree(|tree| tree.clipboard());
+    assert_eq!(clipboard.get_text(), None);
+    assert_eq!(value.get(), "secret");
+}
+
+#[test]
+fn a_disabled_fields_selection_stays() {
+    let mut ui = compose_test(|| {
+        BasicTextField!(
+            String::from("hello"),
+            |_| {},
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+            enabled = false,
+        );
+    });
+    assert!(!select(&mut ui, 1, 3));
+    assert_eq!(selection(&mut ui), TextRange::new(0, 0));
+}
