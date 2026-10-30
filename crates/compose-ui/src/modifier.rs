@@ -861,13 +861,16 @@ impl Element {
             Element::LazyItemBoundary => ANY.with(NodeKinds::REPAINT_BOUNDARY),
             Element::Background(..) | Element::Border(..) => ANY.with(NodeKinds::DRAW),
             Element::Clip(_) => ANY.with(NodeKinds::DRAW).with(NodeKinds::GRAPHICS_LAYER),
-            Element::Clickable(_) => ANY
-                .with(NodeKinds::OBSERVED)
-                .with(NodeKinds::COMPOSITION_LOCAL_CONSUMER)
-                .with(NodeKinds::POINTER_INPUT)
-                .with(NodeKinds::SEMANTICS)
-                .with(NodeKinds::FOCUS_TARGET)
-                .with(NodeKinds::KEY_INPUT),
+            Element::Clickable(clickable) => {
+                let kinds = ANY
+                    .with(NodeKinds::OBSERVED)
+                    .with(NodeKinds::COMPOSITION_LOCAL_CONSUMER)
+                    .with(NodeKinds::POINTER_INPUT)
+                    .with(NodeKinds::SEMANTICS)
+                    .with(NodeKinds::KEY_INPUT);
+                // Disabled, it isn't a focus target (D1274).
+                if clickable.enabled { kinds.with(NodeKinds::FOCUS_TARGET) } else { kinds }
+            }
             Element::Focusable(_) => ANY
                 .with(NodeKinds::OBSERVED)
                 .with(NodeKinds::SEMANTICS)

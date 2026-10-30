@@ -27,6 +27,28 @@ fn phone(content: fn()) -> UiHost {
     host
 }
 
+/// A column of 3,000 clickables: a first frame's cost per focus target, and its growth with them.
+#[composable]
+fn Clickables() {
+    Column!({
+        for _ in 0..3000 {
+            Box!(modifier = Modifier.size(2.dp()).clickable(|| {}));
+        }
+    });
+}
+
+/// 300 scrolling columns: a first frame's cost per scrollable, each a focus group.
+#[composable]
+fn Scrollables() {
+    Column!({
+        for _ in 0..300 {
+            Column!(modifier = Modifier.size(20.dp()).vertical_scroll(remember_scroll_state(0)), {
+                Box!(modifier = Modifier.size(2.dp()));
+            });
+        }
+    });
+}
+
 /// `n` first frames of `content`: the host's making and dropping counted.
 fn first_frames(content: fn(), n: usize) {
     platform::set_manual_clock(platform::now_nanos());
@@ -344,6 +366,8 @@ fn main() {
         }
         "first_frame_feed" => first_frames(compose_rs_feed::Feed, n),
         "first_frame_big" => first_frames(compose_rs_feed::BigScreen, n),
+        "first_frame_clickables" => first_frames(Clickables, n),
+        "first_frame_scrollables" => first_frames(Scrollables, n),
         "list_scroll" => {
             let mut ui = compose_test(BigList);
             let list = LIST.get().expect("the list composed");

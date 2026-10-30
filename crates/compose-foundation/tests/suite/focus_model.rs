@@ -977,3 +977,67 @@ fn a_move_waiting_for_a_lazy_list_answers_yes_and_arrives() {
     ui.wait_for_idle();
     ui.on_node_with_tag("i15").assert_is_focused();
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/focus/FocusRestorerConfigurationChangeTest.kt, restoreFocus_activityRecreation
+#[test]
+fn a_restorer_brings_the_child_back_across_a_state_restoration_tester() {
+    let parent = FocusRequester::new();
+    let second = FocusRequester::new();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {});
+    let mut tester = StateRestorationTester::new();
+    tester.set_content(&mut ui, move || {
+        Column!(
+            modifier = Modifier
+                .focus_requester(parent)
+                .focus_restorer(FocusRequester::DEFAULT)
+                .focus_group(),
+            {
+                Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("first"));
+                Box!(
+                    modifier = Modifier
+                        .size(10.dp())
+                        .focus_requester(second)
+                        .focusable()
+                        .test_tag("second")
+                );
+                Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("third"));
+            }
+        );
+        Box!(modifier = Modifier.size(10.dp()).focusable().test_tag("outside"));
+    });
+    ui.wait_for_idle();
+    assert!(second.request_focus());
+    ui.wait_for_idle();
+    // It saves as the focus leaves it.
+    ui.on_node_with_tag("outside").request_focus();
+    ui.wait_for_idle();
+    tester.emulate_save_and_restore(&mut ui);
+    assert!(parent.request_focus());
+    ui.wait_for_idle();
+    ui.on_node_with_tag("second").assert_is_focused();
+}
+
+#[test]
+fn a_text_field_disabled_with_the_focus_loses_it_and_a_listener_above_hears_its_child_after() {
+    let enabled = Box::leak(Box::new(mutable_state_of(true))).handle();
+    let requester = FocusRequester::new();
+    let mut ui = compose_test(move || {
+        BasicTextField!(
+            String::new(),
+            |_| {},
+            enabled = enabled.get(),
+            single_line = true,
+            modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester)
+        );
+    });
+    assert!(requester.request_focus());
+    ui.wait_for_idle();
+    assert!(ui.host().with_tree(|tree| tree.focused()).is_some());
+    enabled.set(false);
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.focused()), None);
+    assert!(!requester.request_focus());
+    enabled.set(true);
+    ui.wait_for_idle();
+    assert!(requester.request_focus());
+}
