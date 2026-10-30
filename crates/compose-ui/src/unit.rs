@@ -511,6 +511,11 @@ impl DpSize {
     pub fn is_specified(self) -> bool {
         self.width.is_specified() || self.height.is_specified()
     }
+
+    /// Whether it's [`UNSPECIFIED`](Self::UNSPECIFIED), as `DpSize.isUnspecified`.
+    pub fn is_unspecified(self) -> bool {
+        !self.is_specified()
+    }
 }
 
 /// A rectangle in `Dp`, as Compose's `DpRect`: what a test's bounds assertions read

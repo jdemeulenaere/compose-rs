@@ -15,7 +15,10 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Focus, FocusInteraction, Modifier, MutableInteractionSource, UnitExt};
+use compose_ui::{
+    Color, Focus, FocusInteraction, Modifier, MutableInteractionSource, PaintStyle, UnitExt,
+    platform::DrawOp,
+};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Token {
@@ -87,6 +90,78 @@ fn assert_animates_with(expected: &[Token], scenario: impl Fn(MotionScheme) -> u
             assert!(millis < SHORT, "{millis} ms with {token:?} long, not one of {expected:?}");
         }
     }
+}
+
+/// `scenario` gives, `LONG / 2` into an interaction, how far along each property is (0 to 1), one
+/// for each of `tokens`, the token that property animates with: with its token long it's on its way,
+/// with any other it has arrived. The time alone can't say which animation uses which token.
+#[track_caller]
+fn assert_each_property_animates_with(
+    tokens: &[Token],
+    scenario: impl Fn(MotionScheme) -> Vec<f32>,
+) {
+    for token in TOKENS {
+        let fractions = scenario(long_only(token));
+        assert_eq!(fractions.len(), tokens.len());
+        for (index, (fraction, its)) in fractions.iter().zip(tokens).enumerate() {
+            if *its == token {
+                assert!(
+                    (0.1..0.9).contains(fraction),
+                    "property {index} ({its:?}) at {fraction} with {token:?} long: {fractions:?}"
+                );
+            } else {
+                assert!(
+                    (*fraction - 1.0).abs() < 0.01,
+                    "property {index} ({its:?}) at {fraction} with {token:?} long: {fractions:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The frame that starts the animations, then half of `LONG`.
+fn to_halfway(ui: &mut ComposeTestRule) {
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(LONG / 2));
+}
+
+/// How far from `start` to `end` `value` is.
+fn along(value: f32, start: f32, end: f32) -> f32 {
+    if start == end { 1.0 } else { (value - start) / (end - start) }
+}
+
+/// How far from `start` to `end` `color` is, by the channel that differs most (animations
+/// interpolate in another space, so it isn't exact: only whether it's on its way or there).
+fn color_along(color: Color, start: Color, end: Color) -> f32 {
+    let channels = |color: Color| {
+        [color.alpha() as f32, color.red() as f32, color.green() as f32, color.blue() as f32]
+    };
+    let (value, from, to) = (channels(color), channels(start), channels(end));
+    let index = (0..4)
+        .max_by(|a, b| {
+            (to[*a] - from[*a]).abs().partial_cmp(&(to[*b] - from[*b]).abs()).expect("numbers")
+        })
+        .expect("channels");
+    along(value[index], from[index], to[index])
+}
+
+/// The scale and alpha of the layer in the frame, 1 without one: a popup's or an
+/// `AnimatedVisibility`'s.
+fn layer_scale_and_alpha(ui: &mut ComposeTestRule) -> (f32, f32) {
+    let ops = ui.host().display_list().ops.clone();
+    let scale = ops.iter().find_map(|op| match op {
+        DrawOp::Transform { scale, .. } => Some(scale.0),
+        _ => None,
+    });
+    let alpha = ops.iter().find_map(|op| match op {
+        DrawOp::SaveLayerAlpha { alpha, .. } => Some(*alpha),
+        _ => None,
+    });
+    (scale.unwrap_or(1.0), alpha.unwrap_or(1.0))
+}
+
+fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
+    ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds.top
 }
 
 fn spring(damping_ratio: f32, stiffness: f32) -> AnimationSpec {
@@ -301,25 +376,63 @@ fn a_sheet_let_go_settles_with_the_scheme() {
     });
 }
 
-/// A modal sheet: as a standalone one, and its scrim on the default effects spec.
+/// The sheet's top and its scrim's alpha (of `Color::RED`, given as its color), read where drawn.
+fn scrim_alpha(ui: &mut ComposeTestRule) -> f32 {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::DrawRect(_, paint) if paint.color.red() == 255 && paint.color.blue() == 0 => {
+                Some(paint.color.alpha() as f32 / 255.0)
+            }
+            _ => None,
+        })
+        .unwrap_or(0.0)
+}
+
+/// A modal sheet, read halfway: the sheet on its show or hide spec, its scrim on default effects.
 #[test]
 fn a_modal_sheet_and_its_scrim_animate_with_the_scheme() {
-    let run = |hide: bool, scheme: MotionScheme| {
+    let sheet_of = |handle: SheetState| {
+        ModalBottomSheet!(|| {}, sheet_state = handle, scrim_color = Color::RED, |_| {
+            Box!(modifier = Modifier.fill_max_width().height(600.dp()).test_tag("sheet"));
+        });
+    };
+    // Shown: from below the window to its place, the scrim from nothing.
+    assert_each_property_animates_with(&[DefaultSpatial, DefaultEffects], |scheme| {
         let state =
             SheetState::new(&SheetValue::ALL, || 56.0, || 125.0, SheetValue::Hidden, |_| true);
         let handle = *state;
+        let shown = mutable_state_of(false);
+        let read = shown.handle();
         let mut ui = themed(scheme, move || {
-            ModalBottomSheet!(|| {}, sheet_state = handle, |_| {
-                Box!(modifier = Modifier.fill_max_width().height(600.dp()));
-            });
+            if read.get() {
+                sheet_of(handle);
+            }
         });
-        if !hide {
-            return idle_after(&mut ui);
-        }
+        shown.set(true);
+        ui.advance_time_by_frame();
+        to_halfway(&mut ui);
+        let (top, alpha) = (top_of(&mut ui, "sheet"), scrim_alpha(&mut ui));
+        idle_after(&mut ui);
+        let (end_top, end_alpha) = (top_of(&mut ui, "sheet"), scrim_alpha(&mut ui));
+        vec![along(top, 800.0, end_top), along(alpha, 0.0, end_alpha)]
+    });
+    // Hidden: back below the window, the scrim going.
+    assert_each_property_animates_with(&[FastEffects, DefaultEffects], |scheme| {
+        let state =
+            SheetState::new(&SheetValue::ALL, || 56.0, || 125.0, SheetValue::Expanded, |_| true);
+        let handle = *state;
+        let mut ui = themed(scheme, move || sheet_of(handle));
+        let (start_top, start_alpha) = (top_of(&mut ui, "sheet"), scrim_alpha(&mut ui));
         compose_runtime::platform::launch(async move { handle.hide().await });
-        idle_after(&mut ui)
-    };
-    assert_animates_with(&[FastEffects, DefaultEffects], |scheme| run(true, scheme));
+        to_halfway(&mut ui);
+        let (top, alpha) = (top_of(&mut ui, "sheet"), scrim_alpha(&mut ui));
+        idle_after(&mut ui);
+        let end_top = top_of(&mut ui, "sheet");
+        vec![along(top, start_top, end_top), along(alpha, start_alpha, 0.0)]
+    });
 }
 
 #[test]
@@ -335,54 +448,153 @@ fn a_switch_animates_with_the_scheme() {
     });
 }
 
+/// The dot on the fast spatial spec, the color on the default effects one, as `RadioButton`.
 #[test]
-fn a_radio_button_animates_with_the_scheme() {
-    assert_animates_with(&[FastSpatial, DefaultEffects], |scheme| {
+fn a_radio_buttons_dot_and_color_animate_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial, DefaultEffects], |scheme| {
         let selected = mutable_state_of(false);
         let read = selected.handle();
+        let colors = RadioButtonColors {
+            selected_color: Color::RED,
+            unselected_color: Color::BLUE,
+            disabled_selected_color: Color::RED,
+            disabled_unselected_color: Color::BLUE,
+        };
         let mut ui = themed(scheme, move || {
-            RadioButton!(read.get(), Some(|| {}));
+            RadioButton!(read.get(), Some(|| {}), colors = colors);
         });
         selected.set(true);
-        idle_after(&mut ui)
+        to_halfway(&mut ui);
+        let ops = ui.host().display_list().ops.clone();
+        let mut ring = None;
+        let mut dot = 0.0;
+        for op in &ops {
+            if let DrawOp::DrawRoundRect(_, radii, paint) = op {
+                match paint.style {
+                    PaintStyle::Stroke(_) => ring = Some(paint.color),
+                    PaintStyle::Fill => dot = radii[0],
+                }
+            }
+        }
+        vec![along(dot, 0.0, 5.0), color_along(ring.expect("a ring"), Color::BLUE, Color::RED)]
     });
 }
 
+/// Checking: the mark's length on the default spatial spec, the box's color on default effects.
+/// Unchecking: the color on fast effects, the length gone by a snap.
 #[test]
-fn a_checkbox_animates_with_the_scheme() {
+fn a_checkboxs_mark_and_color_animate_with_the_scheme() {
+    /// The box's color (filled, its border the same) and the length of the mark.
+    fn read(ui: &mut ComposeTestRule) -> (Color, f32) {
+        let ops = ui.host().display_list().ops.clone();
+        let mut fill = None;
+        let mut length = 0.0;
+        for op in &ops {
+            match op {
+                DrawOp::DrawRoundRect(_, _, paint) => fill = Some(paint.color),
+                DrawOp::DrawLine(from, to, _) => {
+                    length += ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
+                }
+                _ => {}
+            }
+        }
+        (fill.expect("a box"), length)
+    }
     let run = |to: bool, scheme: MotionScheme| {
         let checked = mutable_state_of(!to);
-        let read = checked.handle();
+        let state = checked.handle();
         let mut ui = themed(scheme, move || {
-            Checkbox!(read.get(), Some(|_| {}));
+            let colors = CheckboxColors {
+                checked_box_color: Color::RED,
+                unchecked_box_color: Color::BLUE,
+                checked_border_color: Color::RED,
+                unchecked_border_color: Color::BLUE,
+                ..CheckboxDefaults::colors()
+            };
+            Checkbox!(state.get(), Some(|_| {}), colors = colors);
         });
+        let (start_color, start_length) = read(&mut ui);
         checked.set(to);
-        idle_after(&mut ui)
+        to_halfway(&mut ui);
+        let (color, length) = read(&mut ui);
+        idle_after(&mut ui);
+        let (end_color, end_length) = read(&mut ui);
+        vec![along(length, start_length, end_length), color_along(color, start_color, end_color)]
     };
-    assert_animates_with(&[DefaultSpatial, DefaultEffects], |scheme| run(true, scheme));
-    assert_animates_with(&[FastEffects], |scheme| run(false, scheme));
+    assert_each_property_animates_with(&[DefaultSpatial, DefaultEffects], |scheme| {
+        run(true, scheme)
+    });
+    // The mark's snap isn't the scheme's: with any token long, it's there.
+    assert_animates_with(&[FastEffects], |scheme| {
+        let checked = mutable_state_of(true);
+        let state = checked.handle();
+        let mut ui = themed(scheme, move || {
+            Checkbox!(state.get(), Some(|_| {}));
+        });
+        checked.set(false);
+        idle_after(&mut ui)
+    });
+    assert_each_property_animates_with(&[FastEffects], |scheme| {
+        let values = run(false, scheme);
+        vec![values[1]]
+    });
 }
 
+/// The indicator on the default spatial spec; a newly selected tab's color on default effects, the
+/// tab it leaves on fast effects, as `TabTransition`.
 #[test]
-fn a_tab_row_animates_with_the_scheme() {
-    assert_animates_with(&[DefaultSpatial, DefaultEffects, FastEffects], |scheme| {
+fn a_tab_rows_indicator_and_colors_animate_with_the_scheme() {
+    use std::cell::Cell;
+    thread_local! {
+        static COLORS: [Cell<Color>; 2] = const { [Cell::new(Color::UNSPECIFIED), Cell::new(Color::UNSPECIFIED)] };
+    }
+    assert_each_property_animates_with(&[DefaultSpatial, DefaultEffects, FastEffects], |scheme| {
         let selected = mutable_state_of(0usize);
         let read = selected.handle();
         let mut ui = themed(scheme, move || {
-            PrimaryTabRow!(read.get(), {
-                for index in 0..2 {
-                    Tab!(
-                        read.get() == index,
-                        || {},
-                        text = Some(move || Text!("Tab {}", index)),
-                        selected_content_color = compose_ui::Color::RED,
-                        unselected_content_color = compose_ui::Color::BLUE
+            PrimaryTabRow!(
+                read.get(),
+                indicator = Some(move |scope: TabIndicatorScope| {
+                    Box!(
+                        modifier = Modifier
+                            .tab_indicator_offset(&scope, read.get(), false)
+                            .height(3.dp())
+                            .test_tag("indicator")
                     );
+                }),
+                {
+                    for index in 0..2 {
+                        Tab!(
+                            read.get() == index,
+                            || {},
+                            text = Some(move || {
+                                COLORS.with(|colors| {
+                                    colors[index].set(LOCAL_CONTENT_COLOR.current());
+                                });
+                                Text!("Tab {}", index);
+                            }),
+                            selected_content_color = Color::RED,
+                            unselected_content_color = Color::BLUE
+                        );
+                    }
                 }
-            });
+            );
         });
+        let start_left =
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
         selected.set(1);
-        idle_after(&mut ui)
+        to_halfway(&mut ui);
+        let left =
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
+        let (leaving, coming) = COLORS.with(|colors| (colors[0].get(), colors[1].get()));
+        idle_after(&mut ui);
+        let end_left =
+            ui.on_node_unmerged(has_test_tag("indicator")).fetch_semantics_node().bounds.left;
+        vec![
+            along(left, start_left, end_left),
+            color_along(coming, Color::BLUE, Color::RED),
+            color_along(leaving, Color::RED, Color::BLUE),
+        ]
     });
 }
 
@@ -434,9 +646,11 @@ fn a_segmented_button_animates_with_the_scheme() {
     });
 }
 
+/// Its scale on the fast spatial spec and its alpha on the fast effects one, as
+/// `DropdownMenuContent`.
 #[test]
-fn a_menu_animates_with_the_scheme() {
-    assert_animates_with(&[FastSpatial, FastEffects], |scheme| {
+fn a_menus_scale_and_alpha_animate_with_the_scheme() {
+    assert_each_property_animates_with(&[FastSpatial, FastEffects], |scheme| {
         let expanded = mutable_state_of(false);
         let read = expanded.handle();
         let mut ui = themed(scheme, move || {
@@ -447,7 +661,10 @@ fn a_menu_animates_with_the_scheme() {
             });
         });
         expanded.set(true);
-        idle_after(&mut ui)
+        ui.advance_time_by_frame();
+        to_halfway(&mut ui);
+        let (scale, alpha) = layer_scale_and_alpha(&mut ui);
+        vec![along(scale, 0.8, 1.0), along(alpha, 0.0, 1.0)]
     });
 }
 
@@ -512,9 +729,10 @@ fn a_drawer_let_go_settles_with_the_scheme() {
     });
 }
 
-/// A snackbar, in and out, on the fast effects and spatial specs, as `FadeInFadeOutWithScale`.
+/// A snackbar's fade on the fast effects spec and its scale on the fast spatial one, in and out, as
+/// `FadeInFadeOutWithScale`.
 #[test]
-fn a_snackbar_animates_with_the_scheme() {
+fn a_snackbars_fade_and_scale_animate_with_the_scheme() {
     let run = |dismiss: bool, scheme: MotionScheme| {
         let host = SnackbarHostState::new();
         let handle = *host;
@@ -524,15 +742,153 @@ fn a_snackbar_animates_with_the_scheme() {
         compose_runtime::platform::launch(async move {
             handle.show_snackbar("Saved").await;
         });
-        let appearing = idle_after(&mut ui);
-        if !dismiss {
-            return appearing;
+        if dismiss {
+            idle_after(&mut ui);
+            handle.current_snackbar_data().expect("shown").dismiss();
+            to_halfway(&mut ui);
+            let (scale, alpha) = layer_scale_and_alpha(&mut ui);
+            // No layer left: it has gone, both there.
+            if (scale, alpha) == (1.0, 1.0) {
+                return vec![1.0, 1.0];
+            }
+            vec![along(alpha, 1.0, 0.0), along(scale, 1.0, 0.8)]
+        } else {
+            to_halfway(&mut ui);
+            let (scale, alpha) = layer_scale_and_alpha(&mut ui);
+            vec![along(alpha, 0.0, 1.0), along(scale, 0.8, 1.0)]
         }
-        handle.current_snackbar_data().expect("shown").dismiss();
-        idle_after(&mut ui)
     };
-    assert_animates_with(&[FastEffects, FastSpatial], |scheme| run(false, scheme));
-    assert_animates_with(&[FastEffects, FastSpatial], |scheme| run(true, scheme));
+    assert_each_property_animates_with(&[FastEffects, FastSpatial], |scheme| run(false, scheme));
+    assert_each_property_animates_with(&[FastEffects, FastSpatial], |scheme| run(true, scheme));
+}
+
+/// An extended button's text: expanding, its fade on default effects and its width on fast spatial;
+/// collapsing, on fast effects and default spatial, as `extendedFabExpandAnimation` and
+/// `extendedFabCollapseAnimation`.
+#[test]
+fn an_extended_fabs_fade_and_width_animate_with_the_scheme() {
+    let run = |expand: bool, scheme: MotionScheme| {
+        let expanded = mutable_state_of(!expand);
+        let read = expanded.handle();
+        let mut ui = themed(scheme, move || {
+            ExtendedFloatingActionButton!(
+                { Text!("A long enough label") },
+                { Box!(modifier = Modifier.size(24.dp())) },
+                || {},
+                modifier = Modifier.test_tag("fab"),
+                expanded = read.get()
+            );
+        });
+        let width = |ui: &mut ComposeTestRule| {
+            ui.on_node_with_tag("fab").fetch_semantics_node().bounds.width()
+        };
+        let start = width(&mut ui);
+        expanded.set(expand);
+        to_halfway(&mut ui);
+        let (halfway, (_, alpha)) = (width(&mut ui), layer_scale_and_alpha(&mut ui));
+        idle_after(&mut ui);
+        let end = width(&mut ui);
+        // Collapsing, no layer left is the text gone, at the fade's end.
+        let fade = if expand {
+            alpha
+        } else if alpha == 1.0 {
+            1.0
+        } else {
+            1.0 - alpha
+        };
+        vec![fade, along(halfway, start, end)]
+    };
+    assert_each_property_animates_with(&[DefaultEffects, FastSpatial], |scheme| run(true, scheme));
+    assert_each_property_animates_with(&[FastEffects, DefaultSpatial], |scheme| run(false, scheme));
+}
+
+/// Until a drawer composes it, a state has no motion: opening and closing snap, as Compose's
+/// `openDrawerMotionSpec = snap()`.
+#[test]
+fn a_drawer_state_not_yet_composed_snaps() {
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
+    let handle = *state;
+    let mut ui = ComposeTestRule::with_manual_clock(|| {});
+    compose_runtime::platform::launch(async move { handle.open().await });
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(handle.current_value(), DrawerValue::Open);
+    compose_runtime::platform::launch(async move { handle.close().await });
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    assert_eq!(handle.current_value(), DrawerValue::Closed);
+}
+
+/// `enterAlwaysScrollBehavior(snapAnimationSpec = ...)`: what's given, not the theme's; the same
+/// connection through recompositions, a new one only when the spec changes, as Compose's
+/// `remember(state, canScroll, snapAnimationSpec, ...)`.
+#[test]
+fn a_scroll_behaviors_snap_spec_is_kept_until_it_changes() {
+    use std::cell::RefCell;
+    thread_local! {
+        static BEHAVIOR: RefCell<Option<TopAppBarScrollBehavior>> = const { RefCell::new(None) };
+        static COMPOSED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let tick = mutable_state_of(0);
+    let tick_read = tick.handle();
+    let millis = mutable_state_of(LONG as u32);
+    let millis_read = millis.handle();
+    let mut ui = themed(long_only(SlowSpatial), move || {
+        let _ = tick_read.get();
+        COMPOSED.with(|it| it.set(it.get() + 1));
+        let behavior =
+            TopAppBarDefaults::enter_always_scroll_behavior_with(Some(tween_of(millis_read.get())));
+        BEHAVIOR.with(|cell| *cell.borrow_mut() = Some(behavior.clone()));
+        TopAppBar!({ Text!("Title") }, scroll_behavior = Some(behavior));
+    });
+    let current = || BEHAVIOR.with(|cell| cell.borrow().clone()).expect("composed");
+    let first = current();
+    let composed = COMPOSED.with(std::cell::Cell::get);
+    tick.set(1);
+    idle_after(&mut ui);
+    assert!(COMPOSED.with(std::cell::Cell::get) > composed, "it composed again");
+    assert!(Rc::ptr_eq(&first.nested_scroll_connection(), &current().nested_scroll_connection()));
+
+    // What's given settles it, the theme's specs being short.
+    let settle = |ui: &mut ComposeTestRule, behavior: &TopAppBarScrollBehavior| {
+        behavior.state().set_height_offset(-20.0);
+        let connection = behavior.nested_scroll_connection();
+        compose_runtime::platform::launch(async move {
+            let zero = compose_ui::Offset::ZERO;
+            connection.on_post_fling(zero, zero).await;
+        });
+        idle_after(ui)
+    };
+    assert!(settle(&mut ui, &first) >= LONG - 32);
+
+    millis.set(16);
+    idle_after(&mut ui);
+    let second = current();
+    assert!(!Rc::ptr_eq(&first.nested_scroll_connection(), &second.nested_scroll_connection()));
+    assert!(settle(&mut ui, &second) < SHORT);
+}
+
+/// `snapAnimationSpec = null`: left where a scroll leaves it.
+#[test]
+fn a_scroll_behavior_without_a_snap_spec_stays_where_it_is() {
+    use std::cell::RefCell;
+    thread_local! {
+        static BEHAVIOR: RefCell<Option<TopAppBarScrollBehavior>> = const { RefCell::new(None) };
+    }
+    let mut ui = themed(MotionScheme::standard(), move || {
+        let behavior = TopAppBarDefaults::exit_until_collapsed_scroll_behavior_with(None);
+        BEHAVIOR.with(|cell| *cell.borrow_mut() = Some(behavior.clone()));
+        TopAppBar!({ Text!("Title") }, scroll_behavior = Some(behavior));
+    });
+    let behavior = BEHAVIOR.with(|cell| cell.borrow().clone()).expect("composed");
+    behavior.state().set_height_offset(-20.0);
+    let connection = behavior.nested_scroll_connection();
+    compose_runtime::platform::launch(async move {
+        let zero = compose_ui::Offset::ZERO;
+        connection.on_post_fling(zero, zero).await;
+    });
+    idle_after(&mut ui);
+    assert_eq!(behavior.state().height_offset(), -20.0);
 }
 
 /// The container's color on the default effects spec, as `TopAppBarLayout`'s

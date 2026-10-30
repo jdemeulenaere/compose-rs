@@ -1,12 +1,14 @@
 //! Compose's `DragHandleTest.kt`, adapted: its sizes, and what it draws in each state, read from the
 //! display list (the color's rectangle and the layer's clip) instead of Compose's pixels. All 11.
 
+use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, DpSize, DragInteraction, DragStart, IntSize, Modifier, MutableInteractionSource, Offset,
-    Outline, PointerEvent, PointerId, PointerType, UnitExt, platform::DrawOp,
+    Color, DpSize, DragInteraction, DragStart, EventContext, IntSize, Modifier, ModifierNode,
+    ModifierNodeElement, MutableInteractionSource, Offset, Outline, PointerEvent, PointerEventPass,
+    PointerId, PointerInputModifierNode, PointerType, UnitExt, platform::DrawOp,
 };
 
 const TAG: &str = "handle";
@@ -74,6 +76,9 @@ fn a_drag_handle_takes_the_minimum_interactive_size() {
     });
     let bounds = bounds(&mut ui);
     assert_eq!((bounds.width(), bounds.height()), (48.0, 48.0));
+    ui.on_node_with_tag(TAG)
+        .assert_touch_width_is_equal_to(48.dp())
+        .assert_touch_height_is_equal_to(48.dp());
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt, verticalDragHandle_customAccessibilitySize
@@ -89,6 +94,9 @@ fn a_drag_handle_takes_a_custom_minimum_interactive_size() {
     });
     let bounds = bounds(&mut ui);
     assert_eq!((bounds.width(), bounds.height()), (60.0, 60.0));
+    ui.on_node_with_tag(TAG)
+        .assert_touch_width_is_equal_to(60.dp())
+        .assert_touch_height_is_equal_to(60.dp());
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt, verticalDragHandle_defaultVisual
@@ -158,6 +166,9 @@ fn a_custom_size_keeps_the_minimum_interactive_size() {
     });
     let bounds = bounds(&mut ui);
     assert_eq!((bounds.width(), bounds.height()), (48.0, 50.0));
+    ui.on_node_with_tag(TAG)
+        .assert_touch_width_is_equal_to(48.dp())
+        .assert_touch_height_is_equal_to(50.dp());
 }
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt, verticalDragHandle_customShape
@@ -331,5 +342,94 @@ fn a_drag_taking_the_gesture_ends_the_press() {
         touch.move_by(Offset::new(20.0, 0.0));
     });
     ui.wait_for_idle();
+    assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
+}
+
+/// A press taken as it goes through still shows: `waitForUpOrCancellation` starts at the next
+/// event, as a clickable on the handle shows.
+#[test]
+fn a_clickable_on_it_doesnt_end_the_press() {
+    let mut ui = handle_rule(|| {
+        VerticalDragHandle!(modifier = Modifier.test_tag(TAG).clickable(|| {}));
+    });
+    press(&mut ui);
+    assert_draws(&mut ui, (12.0, 52.0), pressed_color(), Some(6.0));
+    let center = center_of(&mut ui);
+    let touch = PointerEvent::release(center).with_pointer(PointerId(0), PointerType::Touch);
+    ui.host().send_pointer(touch);
+    ui.wait_for_idle();
+    assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
+}
+
+/// Consumes every event at `pass`.
+struct ConsumeAt(PointerEventPass);
+
+struct ConsumeAtNode(PointerEventPass);
+
+impl ModifierNodeElement for ConsumeAt {
+    type Node = ConsumeAtNode;
+    fn create(&self) -> ConsumeAtNode {
+        ConsumeAtNode(self.0)
+    }
+    fn update(&self, node: &mut ConsumeAtNode) {
+        node.0 = self.0;
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+    fn name(&self) -> &'static str {
+        "consume_at"
+    }
+}
+
+impl ModifierNode for ConsumeAtNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for ConsumeAtNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        _bounds: IntSize,
+        _context: &mut EventContext<'_>,
+    ) {
+        if pass == self.0 {
+            event.consume();
+        }
+    }
+}
+
+/// A node on the handle taking the press on the main pass: it shows, the press being past its
+/// `awaitFirstDown`; a later event it takes ends it, by the final pass.
+#[test]
+fn a_press_taken_on_the_main_pass_shows_until_the_next_taken_event() {
+    let mut ui = handle_rule(|| {
+        VerticalDragHandle!(
+            modifier = Modifier.test_tag(TAG).then_custom(ConsumeAt(PointerEventPass::Main))
+        );
+    });
+    press(&mut ui);
+    assert_draws(&mut ui, (12.0, 52.0), pressed_color(), Some(6.0));
+    let center = center_of(&mut ui);
+    let moved = PointerEvent::moved(center + Offset::new(1.0, 0.0), true)
+        .with_pointer(PointerId(0), PointerType::Touch);
+    ui.host().send_pointer(moved);
+    ui.wait_for_idle();
+    assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
+}
+
+/// A parent taking the press on the initial pass, before the handle hears it: no press, as
+/// `awaitFirstDown(requireUnconsumed = true)`.
+#[test]
+fn a_press_a_parent_takes_on_the_initial_pass_doesnt_show() {
+    let mut ui = handle_rule(|| {
+        Box!(modifier = Modifier.then_custom(ConsumeAt(PointerEventPass::Initial)), {
+            VerticalDragHandle!(modifier = Modifier.test_tag(TAG));
+        });
+    });
+    press(&mut ui);
     assert_draws(&mut ui, (4.0, 48.0), default_color(), Some(2.0));
 }

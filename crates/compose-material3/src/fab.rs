@@ -3,7 +3,8 @@
 //! with `FloatingActionButtonDefaults` and `FloatingActionButtonElevation`.
 
 use compose_animation::{
-    AnimatedVisibility, expand_horizontally, fade_in, fade_out, shrink_horizontally,
+    AnimatedVisibility, expand_horizontally_with, fade_in_with, fade_out_with,
+    shrink_horizontally_with,
 };
 use compose_foundation::layout::{Arrangement, Box, Row};
 use compose_runtime::{CompositionLocalProvider, composable};
@@ -299,11 +300,29 @@ pub fn ExtendedFloatingActionButton(
                     icon();
                     // The text 12 dp after the icon (the gap shrinking with it), not read.
                     let text = text.clone();
+                    let motion = crate::theme::MaterialTheme::motion_scheme();
                     AnimatedVisibility(
                         expanded,
                         Modifier.clear_and_set_semantics(|_| {}),
-                        Some(fade_in() + expand_horizontally()),
-                        Some(fade_out() + shrink_horizontally()),
+                        // As `extendedFabExpandAnimation` and `extendedFabCollapseAnimation`.
+                        Some(
+                            fade_in_with(motion.default_effects_spec(), 0.0)
+                                + expand_horizontally_with(
+                                    motion.fast_spatial_spec(),
+                                    Alignment::START,
+                                    true,
+                                    |_| 0,
+                                ),
+                        ),
+                        Some(
+                            fade_out_with(motion.fast_effects_spec(), 0.0)
+                                + shrink_horizontally_with(
+                                    motion.default_spatial_spec(),
+                                    Alignment::START,
+                                    true,
+                                    |_| 0,
+                                ),
+                        ),
                         "ExtendedFloatingActionButton",
                         compose_runtime::callback(move |_| {
                             let text = text.clone();

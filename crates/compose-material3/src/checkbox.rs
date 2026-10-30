@@ -261,6 +261,7 @@ fn checkbox(
         {
             let spatial = spatial.clone();
             move |segment| match (&segment.initial_state, &segment.target_state) {
+                (ToggleableState::Off, _) => spatial.clone(),
                 (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
                 _ => spatial.clone(),
             }

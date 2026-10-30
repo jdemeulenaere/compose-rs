@@ -226,15 +226,17 @@ impl TopAppBarScrollBehavior {
     }
 
     fn new(kind: ScrollKind, state: TopAppBarState, scope: CoroutineScope) -> Self {
-        // The standard scheme's, until `with_snap_animation_spec`: these aren't composables.
+        // These aren't composables: the standard scheme's, whatever the theme's
+        // (`with_snap_animation_spec` says otherwise; `TopAppBarDefaults`' read the theme).
         let snap = Some(MotionScheme::standard().default_effects_spec());
         let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
         TopAppBarScrollBehavior { state, kind, scope, connection }
     }
 
-    /// How the bar snaps to expanded or collapsed when a scroll leaves it between them, as the
-    /// behaviors' `snapAnimationSpec` (by default, `TopAppBarDefaults::snap_animation_spec()`);
-    /// `None` leaves it there.
+    /// For a behavior from a raw constructor, whose snap is the standard scheme's default effects
+    /// spec whatever the theme's: how the bar snaps to expanded or collapsed when a scroll leaves it
+    /// between them, as the behaviors' `snapAnimationSpec`; `None` leaves it there. It makes a new
+    /// connection: keep it (`remember`), or use `TopAppBarDefaults`' `_with` forms, which do.
     pub fn with_snap_animation_spec(self, snap: Option<AnimationSpec>) -> TopAppBarScrollBehavior {
         let TopAppBarScrollBehavior { state, kind, scope, .. } = self;
         let connection = Rc::new(ScrollConnection { kind, state, scope, snap });
@@ -455,20 +457,43 @@ impl TopAppBarDefaults {
         remembered_behavior(TopAppBarScrollBehavior::enter_always)
     }
 
+    /// As `enterAlwaysScrollBehavior(snapAnimationSpec = snap)`: `None` leaves the bar where a
+    /// scroll does.
+    pub fn enter_always_scroll_behavior_with(
+        snap: Option<AnimationSpec>,
+    ) -> TopAppBarScrollBehavior {
+        remembered_behavior_with(TopAppBarScrollBehavior::enter_always, snap)
+    }
+
     /// As `exitUntilCollapsedScrollBehavior()`.
     pub fn exit_until_collapsed_scroll_behavior() -> TopAppBarScrollBehavior {
         remembered_behavior(TopAppBarScrollBehavior::exit_until_collapsed)
+    }
+
+    /// As `exitUntilCollapsedScrollBehavior(snapAnimationSpec = snap)`: `None` leaves the bar where
+    /// a scroll does.
+    pub fn exit_until_collapsed_scroll_behavior_with(
+        snap: Option<AnimationSpec>,
+    ) -> TopAppBarScrollBehavior {
+        remembered_behavior_with(TopAppBarScrollBehavior::exit_until_collapsed, snap)
     }
 }
 
 fn remembered_behavior(
     make: fn(TopAppBarState, CoroutineScope) -> TopAppBarScrollBehavior,
 ) -> TopAppBarScrollBehavior {
+    remembered_behavior_with(make, Some(TopAppBarDefaults::snap_animation_spec()))
+}
+
+/// Kept until `snap` changes, as Compose's `remember(state, canScroll, snapAnimationSpec, ...)`.
+fn remembered_behavior_with(
+    make: fn(TopAppBarState, CoroutineScope) -> TopAppBarScrollBehavior,
+    snap: Option<AnimationSpec>,
+) -> TopAppBarScrollBehavior {
     let state = remember_top_app_bar_state!();
     let scope = remember_coroutine_scope();
-    let snap = TopAppBarDefaults::snap_animation_spec();
     compose_runtime::remember_keyed(snap.clone(), move || {
-        make(state, scope).with_snap_animation_spec(Some(snap))
+        make(state, scope).with_snap_animation_spec(snap)
     })
 }
 

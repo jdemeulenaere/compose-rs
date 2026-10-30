@@ -38,7 +38,7 @@ impl ComposeArg for DrawerValue {
     }
 }
 
-/// As Compose's drawer animation: a 256 ms tween.
+/// As `AnchoredDraggableDefaultAnimationSpec`: a 256 ms tween.
 const ANIMATION_MILLIS: u32 = 256;
 /// A release faster than this (towards one side) settles there, as Compose's drawer's
 /// `DrawerVelocityThreshold` (400 dp per second).
@@ -61,7 +61,8 @@ struct DrawerInner {
     confirm_state_change: Box<dyn Fn(DrawerValue) -> bool>,
     /// What it opens and closes with, and what a drag let go settles with, as
     /// `openDrawerMotionSpec`, `closeDrawerMotionSpec` and `anchoredDraggableMotionSpec`: the
-    /// drawer sets them from the theme.
+    /// drawer sets them from the theme; before it's composed, as Compose's, opening and closing
+    /// snap and a settle takes `AnchoredDraggableDefaultAnimationSpec`.
     open_spec: RefCell<AnimationSpec>,
     close_spec: RefCell<AnimationSpec>,
     settle_spec: RefCell<AnimationSpec>,
@@ -112,8 +113,8 @@ impl DrawerState {
                 animating: mutable_state_of(false),
                 width: std::cell::Cell::new(f32::NAN),
                 confirm_state_change: Box::new(confirm_state_change),
-                open_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
-                close_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
+                open_spec: RefCell::new(compose_animation::snap(0).into()),
+                close_spec: RefCell::new(compose_animation::snap(0).into()),
                 settle_spec: RefCell::new(tween(ANIMATION_MILLIS).into()),
             },
             |object| DrawerState { object },

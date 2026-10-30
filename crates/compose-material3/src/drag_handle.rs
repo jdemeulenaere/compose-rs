@@ -1,6 +1,7 @@
 //! `VerticalDragHandle`, as Compose's: a capsule a user drags to resize panes, growing when pressed
-//! or dragged (D1032). What makes it draggable is the app's `Modifier.draggable`, given the same
-//! interaction source.
+//! or dragged (D1032). It only shows the gesture: what moves anything is the app's own
+//! `Modifier.draggable` on it. That takes no interaction source yet, so a drag shows if the app
+//! emits it on the handle's `interaction_source`.
 
 use compose_foundation::layout::Box;
 use compose_runtime::{MutableState, composable, mutable_state_of, remember};
@@ -132,8 +133,9 @@ impl VerticalDragHandleDefaults {
 }
 
 /// A capsule that can be dragged to change a component's size or place, as Compose's
-/// `VerticalDragHandle`, meant for moving sideways (between panes). It only shows the gesture: give
-/// `Modifier.draggable` the same `interaction_source` for it to show a drag.
+/// `VerticalDragHandle`, meant for moving sideways (between panes). It only shows the gesture, a
+/// press on its own and a drag from `interaction_source`, where the app emits it (`Modifier.draggable`
+/// takes no interaction source yet).
 #[composable]
 #[allow(non_snake_case)]
 pub fn VerticalDragHandle(
@@ -270,7 +272,12 @@ impl PointerInputModifierNode for PressableNode {
                     self.end();
                 }
             }
-            (PointerEventPass::Final, Some(down)) if event.pointer == down && event.consumed => {
+            // From the next event on, as `waitForUpOrCancellation`: the press itself may be taken.
+            (PointerEventPass::Final, Some(down))
+                if event.pointer == down
+                    && event.consumed
+                    && event.kind != PointerEventType::Press =>
+            {
                 self.end();
             }
             _ => {}
