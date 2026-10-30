@@ -3242,8 +3242,10 @@ fn an_invalidated_scope_removed_by_its_parent_leaves_nothing_behind() {
     let (v, c) = (visible.handle(), child_state.handle());
     test.compose(move || Content(v, c));
     test.validate(|v| v.text("Child: 0"));
-    visible.set(false);
-    child_state.update(|state| state + 1);
+    compose_runtime::snapshots::Snapshot::with_mutable_snapshot(|| {
+        visible.set(false);
+        child_state.update(|state| state + 1);
+    });
     test.expect_changes();
     test.validate(|_| {});
     assert!(!test.composition().has_invalidations());

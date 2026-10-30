@@ -105,10 +105,11 @@ impl<T: 'static> StateObjectCell for DerivedCell<T> {
         false
     }
 
-    fn current_version(&self, view: Option<&View>) -> Option<u32> {
+    fn current_version(&self, _view: Option<&View>) -> Option<u32> {
         // A send a running calculation caused doesn't validate that calculation.
         if self.calculating.get() {
-            return self.records.borrow().version_in(view);
+            let view = self.view(crate::snapshots::plain_reads());
+            return self.records.borrow().version_in(view.as_ref());
         }
         Some(self.current().version)
     }
@@ -117,7 +118,7 @@ impl<T: 'static> StateObjectCell for DerivedCell<T> {
     fn valid_at(&self, mark: (SnapshotId, u32)) -> bool {
         let records = self.records.borrow();
         let record = &records.head.data;
-        record.result.is_some() && record.valid_at.get() == mark
+        records.rest.is_empty() && record.result.is_some() && record.valid_at.get() == mark
     }
 
     fn collect_dependencies(&self, into: &mut Vec<StateId>) {
@@ -149,11 +150,8 @@ impl<T: 'static> StateObjectCell for DerivedCell<T> {
         }
     }
 
-    fn reclaim(&self, reuse_limit: SnapshotId, garbage: &mut Vec<Box<dyn Any>>) -> bool {
-        match self.records.try_borrow_mut() {
-            Ok(mut records) => records.reclaim(reuse_limit, garbage),
-            Err(_) => true,
-        }
+    fn reclaim(&self, reuse_limit: SnapshotId) -> bool {
+        crate::snapshots::reclaim_cell(&self.records, reuse_limit)
     }
 }
 
@@ -169,6 +167,12 @@ impl<T: 'static> DerivedCell<T> {
     fn of(cell: &Rc<dyn StateObjectCell>) -> &DerivedCell<T> {
         let any: &dyn Any = &**cell;
         any.downcast_ref().expect("compose-runtime: state handle of the wrong type")
+    }
+
+    /// The view to read its records through: none if reads are plain and it has one record.
+    #[inline]
+    fn view(&self, plain: bool) -> Option<View> {
+        if plain && self.records.borrow().rest.is_empty() { None } else { crate::snapshots::view() }
     }
 
     /// `f` of the record a read through `view` sees.
@@ -195,8 +199,8 @@ impl<T: 'static> DerivedCell<T> {
             })
         };
         loop {
-            let (mark, isolated) = crate::snapshots::valid_mark_and_isolated();
-            let view = if isolated { crate::snapshots::view() } else { None };
+            let (mark, plain) = crate::snapshots::valid_mark_and_plain();
+            let view = self.view(plain);
             let (dependencies, checked) = {
                 let records = self.records.borrow();
                 let record = match &view {
@@ -222,7 +226,7 @@ impl<T: 'static> DerivedCell<T> {
             }
             // A send on the way may have advanced the snapshot and reclaimed records: another
             // record is looked at anew.
-            let view = if isolated { crate::snapshots::view() } else { None };
+            let view = self.view(crate::snapshots::plain_reads());
             let records = self.records.borrow();
             let record = match &view {
                 None => &records.head,
@@ -254,7 +258,7 @@ impl<T: 'static> DerivedCell<T> {
     #[cold]
     fn tell_of_another_record(&self, valid: &Validated<T>) {
         let view = crate::snapshots::view();
-        if view.as_ref().is_some_and(|view| !view.global)
+        if view.as_ref().is_some_and(|view| !view.like_global())
             || self.global_saw.replace(valid.value_since) == valid.value_since
         {
             return;
@@ -279,11 +283,12 @@ impl<T: 'static> DerivedCell<T> {
             panic!("A derived state calculation cannot read itself");
         }
         let id = self.id.get().expect("an allocated derived state");
-        let view = crate::snapshots::view();
+        let view = self.view(crate::snapshots::plain_reads());
         // What the global snapshot's calculation read stays what a send walks through, whatever
-        // another snapshot's read (S5's addition to D759).
+        // another snapshot's read (S5's addition to D759). A pass's snapshot counts as the global
+        // one, being applied as it ends (D791).
         let key = match &view {
-            Some(view) if !view.global => view.id,
+            Some(view) if !view.like_global() => view.id,
             _ => 0,
         };
         if key != 0 && !self.in_other_snapshots.replace(true) {
@@ -314,8 +319,7 @@ impl<T: 'static> DerivedCell<T> {
         self.calculations.set(self.calculations.get().wrapping_add(1));
         // As Compose's: a policy's `equivalent(new, old)` keeps the record; else a new one, and
         // readers are told if they'd see another value (`isInvalidFor`). User code: no borrow.
-        // Isolation in use before stays so; a snapshot taken by the calculation itself is gone.
-        let view = if view.is_some() { crate::snapshots::view() } else { None };
+        let view = self.view(crate::snapshots::plain_reads());
         let old = self.with_record(view.as_ref(), |record| record.result.clone());
         let kept = match (&old, self.policy) {
             (Some(old), Some(policy)) => policy(&value, old),
@@ -325,7 +329,7 @@ impl<T: 'static> DerivedCell<T> {
         let first = old.is_none();
         // Only the global snapshot's readers are registered; a snapshot's own record tells none, and
         // they're told by what they saw, not by a record of a snapshot discarded since.
-        let in_global = view.as_ref().is_none_or(|view| view.global);
+        let in_global = view.as_ref().is_none_or(|view| view.like_global());
         let told = in_global
             && if self.in_other_snapshots.get() {
                 let saw = self.global_value.borrow();
@@ -337,6 +341,7 @@ impl<T: 'static> DerivedCell<T> {
         drop(old);
         let mut replaced = None;
         let mut pushed = false;
+        let plain_in_pass = view.is_none() && crate::snapshots::in_pass();
         let validated;
         {
             let mut records = self.records.borrow_mut();
@@ -374,7 +379,11 @@ impl<T: 'static> DerivedCell<T> {
             }
             if !kept {
                 let (current, version) = crate::snapshots::next_record();
-                record.id = current;
+                // The only record, reads being plain, in a pass: it keeps its id, staying readable
+                // to whatever validates it in another snapshot (D792).
+                if !plain_in_pass {
+                    record.id = current;
+                }
                 record.version = version;
                 record.data.value_since = if differs || first { version } else { value_since };
                 // In place unless a `with` closure is looking at it.
@@ -414,7 +423,7 @@ impl<T: 'static> DerivedCell<T> {
         // The outermost calculation: as Compose's, what it made is initialized, and what's
         // written so far is sent.
         if crate::snapshots::calculation_depth() == 0 {
-            crate::snapshots::Snapshot::notify_objects_initialized();
+            crate::snapshots::calculation_ended();
         }
         // A notify_objects_initialized in a mutable snapshot gave it a new id: this view still reads
         // this record. In the global snapshot its advance may have reclaimed it, a discarded
@@ -467,7 +476,8 @@ pub(crate) fn read<T: 'static, R>(id: StateId, f: impl FnOnce(&T) -> R) -> R {
         Some(result) => f(&result),
         None => {
             // Found valid with no snapshot to look at: the head, unless observers ran since.
-            let view = if cached_observed { crate::snapshots::view() } else { None };
+            let view =
+                if cached_observed { derived.view(crate::snapshots::plain_reads()) } else { None };
             let value = derived.with_record(view.as_ref(), |record| record.result.clone());
             f(&value.expect("a calculated derived state"))
         }

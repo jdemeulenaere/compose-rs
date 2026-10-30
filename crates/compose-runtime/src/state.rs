@@ -320,21 +320,11 @@ impl Cells {
         }
     }
 
-    /// Drops what no open snapshot can read of a state: whether it stays listed as having several
-    /// records.
-    pub(crate) fn reclaim(
-        &mut self,
-        id: StateId,
-        reuse_limit: SnapshotId,
-        garbage: &mut Vec<Box<dyn Any>>,
-    ) -> bool {
-        let Ok(entry) = self.entry(id) else { return false };
-        let several = match &entry.cell {
-            Some(CellValue::State(cell)) => cell.reclaim(reuse_limit, garbage),
-            _ => false,
-        };
-        entry.in_extra = several;
-        several
+    /// The state no longer has several records, as far as anyone knows.
+    pub(crate) fn unmark_extra(&mut self, id: StateId) {
+        if let Ok(entry) = self.entry(id) {
+            entry.in_extra = false;
+        }
     }
 }
 
@@ -485,10 +475,10 @@ pub(crate) fn read_if_valid(
 ) -> Option<(StateRc, bool)> {
     let read = with_runtime(|runtime| {
         // In a snapshot, a read goes through the record it sees.
-        if runtime.snapshots.isolated() {
+        if !runtime.snapshots.plain() {
             return None;
         }
-        let mark = (runtime.snapshots.global(), runtime.snapshots.version());
+        let mark = (runtime.snapshots.current_id(), runtime.snapshots.version());
         match runtime.cells.entry(id) {
             Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) if cell.valid_at(mark) => {
                 Some(read_cell_in(runtime, id, at))
@@ -498,6 +488,7 @@ pub(crate) fn read_if_valid(
     })?;
     match read {
         Read::Cell(cell) => Some((cell, false)),
+        Read::Pass(cell) => Some((cell, false)),
         Read::Slow(cell) => {
             crate::snapshots::notify_read(id);
             Some((cell, true))
@@ -516,23 +507,23 @@ pub(crate) fn register_read_of(id: StateId, at: &'static Location<'static>) {
 /// A state object's current version: a derived state is brought up to date. `None` if it's
 /// freed, or its records are being written.
 pub(crate) fn current_version(id: StateId) -> Option<u32> {
-    let (cell, isolated) = try_with_runtime(|runtime| match runtime.cells.entry(id) {
+    let (cell, plain) = try_with_runtime(|runtime| match runtime.cells.entry(id) {
         Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) => {
-            Some((cell.clone(), runtime.snapshots.isolated()))
+            Some((cell.clone(), runtime.snapshots.plain()))
         }
         _ => None,
     })??;
-    version_of(&cell, isolated)
+    version_of(&cell, plain)
 }
 
-/// `cell`'s current version, through the view if isolation is in use.
+/// `cell`'s current version, through the view unless reads are plain.
 #[inline]
-fn version_of(cell: &StateRc, isolated: bool) -> Option<u32> {
-    if isolated {
+fn version_of(cell: &StateRc, plain: bool) -> Option<u32> {
+    if plain {
+        cell.current_version(None)
+    } else {
         let view = crate::snapshots::view();
         cell.current_version(view.as_ref())
-    } else {
-        cell.current_version(None)
     }
 }
 
@@ -540,14 +531,14 @@ fn version_of(cell: &StateRc, isolated: bool) -> Option<u32> {
 pub(crate) fn dependency_unchanged(id: StateId, seen: u32) -> bool {
     let cell = try_with_runtime(|runtime| match runtime.cells.entry(id) {
         Ok(CellEntry { cell: Some(CellValue::State(cell)), .. }) => {
-            Some((cell.clone(), runtime.snapshots.isolated()))
+            Some((cell.clone(), runtime.snapshots.plain()))
         }
         _ => None,
     })
     .flatten();
     match cell {
         // Being written (an `edit` reading this derived state): not as it was seen.
-        Some((cell, isolated)) => version_of(&cell, isolated) == Some(seen),
+        Some((cell, plain)) => version_of(&cell, plain) == Some(seen),
         None => true,
     }
 }
@@ -582,6 +573,8 @@ enum Read {
     ///
     /// [`Snapshot::observe`]: crate::snapshots::Snapshot::observe
     Slow(StateRc),
+    /// The cell, read in a pass's snapshot: its only record is the one to read.
+    Pass(StateRc),
     Stale(Stale),
 }
 
@@ -623,7 +616,11 @@ fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'stat
         None => {}
     }
     let cell = entry.state();
-    if snapshots.slow_reads() { Read::Slow(cell) } else { Read::Cell(cell) }
+    match snapshots.read_kind() {
+        crate::snapshots::ReadKind::Head => Read::Cell(cell),
+        crate::snapshots::ReadKind::InPass => Read::Pass(cell),
+        crate::snapshots::ReadKind::Look => Read::Slow(cell),
+    }
 }
 
 /// Looks a cell up for writing.
@@ -869,7 +866,12 @@ impl<T: 'static> StateObjectCell for StateCell<T> {
     }
     #[inline]
     fn current_version(&self, view: Option<&View>) -> Option<u32> {
-        self.records.try_borrow().ok()?.version_in(view)
+        let records = self.records.try_borrow().ok()?;
+        if view.is_none() && !records.rest.is_empty() {
+            let view = crate::snapshots::view();
+            return records.version_in(view.as_ref());
+        }
+        records.version_in(view)
     }
 
     fn merge_at_apply(&self, views: &ApplyViews) -> Merged {
@@ -944,11 +946,8 @@ impl<T: 'static> StateObjectCell for StateCell<T> {
         }
     }
 
-    fn reclaim(&self, reuse_limit: SnapshotId, garbage: &mut Vec<Box<dyn Any>>) -> bool {
-        match self.records.try_borrow_mut() {
-            Ok(mut records) => records.reclaim(reuse_limit, garbage),
-            Err(_) => true,
-        }
+    fn reclaim(&self, reuse_limit: SnapshotId) -> bool {
+        crate::snapshots::reclaim_cell(&self.records, reuse_limit)
     }
 
     fn touch(&self, version: u32) {
@@ -990,7 +989,15 @@ impl<T: 'static> StateCell<T> {
         any.downcast_ref::<StateCell<T>>().expect("compose-runtime: state handle of the wrong type")
     }
 
-    /// The readable record's value, no snapshot being open.
+    /// The readable record's value in a pass's snapshot: the only record, unless it wrote the state.
+    fn read_in_pass(&self, at: &'static Location<'static>) -> CellRef<'_, T> {
+        if self.records.try_borrow().is_ok_and(|records| !records.rest.is_empty()) {
+            return self.read_through_view(at);
+        }
+        self.read(at)
+    }
+
+    /// The readable record's value, no snapshot being open: its only record.
     #[inline]
     fn read(&self, at: &'static Location<'static>) -> CellRef<'_, T> {
         match self.records.try_borrow() {
@@ -1007,6 +1014,14 @@ impl<T: 'static> StateCell<T> {
             }
             Err(_) => self.conflict(at),
         }
+    }
+
+    /// A plain read of a state with several records.
+    #[cold]
+    #[inline(never)]
+    fn read_through_view(&self, at: &'static Location<'static>) -> CellRef<'_, T> {
+        let view = crate::snapshots::view().expect("several records: isolation in use");
+        self.read_in(Some(&view), at)
     }
 
     /// The readable record's value through `view`, if isolation is in use.
@@ -1434,6 +1449,10 @@ impl<T: 'static> MutableState<T> {
                 let value = StateCell::<T>::of(&cell).read(at);
                 f(&value)
             }
+            Read::Pass(cell) => {
+                let value = StateCell::<T>::of(&cell).read_in_pass(at);
+                f(&value)
+            }
             Read::Slow(cell) => with_in_view(cell, self.id, at, f),
             Read::Stale(error) => stale(error, at),
         }
@@ -1562,6 +1581,7 @@ impl<T: 'static> MutableState<T> {
         let at = Location::caller();
         match try_with_runtime(|runtime| read_cell_in(runtime, self.id, at))? {
             Read::Cell(cell) => Some(StateCell::<T>::of(&cell).read(at).clone()),
+            Read::Pass(cell) => Some(StateCell::<T>::of(&cell).read_in_pass(at).clone()),
             Read::Slow(cell) => Some(with_in_view(cell, self.id, at, T::clone)),
             Read::Stale(_) => None,
         }

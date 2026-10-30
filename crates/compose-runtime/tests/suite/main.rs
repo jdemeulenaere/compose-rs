@@ -8,6 +8,7 @@ mod composition;
 mod composition_and_derived_state;
 mod composition_local;
 mod composition_reusing;
+mod composition_snapshot;
 mod compound_hash_key;
 mod derive_saveable;
 mod derived_snapshot_state;

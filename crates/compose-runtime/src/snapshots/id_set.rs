@@ -7,35 +7,52 @@ use std::rc::Rc;
 
 use super::SnapshotId;
 
-/// Half-open ranges, sorted, never touching. `None` is empty, so the empty set needs no
-/// allocation and can be a constant.
+/// Half-open ranges, sorted, never touching. Empty and one range need no allocation: what a pass's
+/// snapshot holds, nearly always.
 #[derive(Clone, Default)]
-pub(crate) struct IdSet {
-    ranges: Option<Rc<[(SnapshotId, SnapshotId)]>>,
+pub(crate) enum IdSet {
+    #[default]
+    Empty,
+    One((SnapshotId, SnapshotId)),
+    Many(Rc<[(SnapshotId, SnapshotId)]>),
 }
 
 impl IdSet {
-    pub(crate) const EMPTY: IdSet = IdSet { ranges: None };
+    pub(crate) const EMPTY: IdSet = IdSet::Empty;
 
-    fn of(ranges: Vec<(SnapshotId, SnapshotId)>) -> IdSet {
-        if ranges.is_empty() { IdSet::EMPTY } else { IdSet { ranges: Some(Rc::from(ranges)) } }
+    fn of(mut ranges: Vec<(SnapshotId, SnapshotId)>) -> IdSet {
+        match ranges.len() {
+            0 => IdSet::Empty,
+            1 => IdSet::One(ranges.remove(0)),
+            _ => IdSet::Many(Rc::from(ranges)),
+        }
     }
 
+    #[inline]
     fn ranges(&self) -> &[(SnapshotId, SnapshotId)] {
-        self.ranges.as_deref().unwrap_or(&[])
+        match self {
+            IdSet::Empty => &[],
+            IdSet::One(range) => std::slice::from_ref(range),
+            IdSet::Many(ranges) => ranges,
+        }
     }
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.ranges.is_none()
+        matches!(self, IdSet::Empty)
     }
 
     /// Whether `id` is in the set.
     #[inline]
     pub(crate) fn get(&self, id: SnapshotId) -> bool {
-        let Some(ranges) = &self.ranges else { return false };
-        let index = ranges.partition_point(|&(_, until)| until <= id);
-        ranges.get(index).is_some_and(|&(from, _)| from <= id)
+        match self {
+            IdSet::Empty => false,
+            IdSet::One((from, until)) => *from <= id && id < *until,
+            IdSet::Many(ranges) => {
+                let index = ranges.partition_point(|&(_, until)| until <= id);
+                ranges.get(index).is_some_and(|&(from, _)| from <= id)
+            }
+        }
     }
 
     /// The set with `id`.
@@ -52,6 +69,9 @@ impl IdSet {
     pub(crate) fn add_range(&self, from: SnapshotId, until: SnapshotId) -> IdSet {
         if from >= until {
             return self.clone();
+        }
+        if self.is_empty() {
+            return IdSet::One((from, until));
         }
         let ranges = self.ranges();
         // What touches or overlaps the range: from the first ending at or after `from`, to the
@@ -80,6 +100,9 @@ impl IdSet {
         let end = ranges.partition_point(|&(begin, _)| begin < until);
         if start >= end {
             return self.clone();
+        }
+        if ranges.len() == 1 && from <= ranges[0].0 && ranges[0].1 <= until {
+            return IdSet::Empty;
         }
         let mut result = Vec::with_capacity(ranges.len() + 1);
         result.extend_from_slice(&ranges[..start]);

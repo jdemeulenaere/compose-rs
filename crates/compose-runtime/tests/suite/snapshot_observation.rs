@@ -900,9 +900,9 @@ fn a_started_observer_hears_in_registration_order() {
     assert_eq!(*order.borrow(), ["before", "observer", "after"]);
 }
 
-/// A write in composition is heard once, at the send, as Compose's composition snapshot applied.
+/// A write in composition is heard once, as its pass's snapshot applies.
 #[test]
-fn a_write_in_composition_calls_an_observer_back_once_at_the_send() {
+fn a_write_in_composition_calls_an_observer_back_once_as_its_pass_ends() {
     let state = mutable_state_of(0);
     let handle = state.handle();
     let observer = SnapshotStateObserver::new(|run| run());
@@ -913,9 +913,9 @@ fn a_write_in_composition_calls_an_observer_back_once_at_the_send() {
     observer.observe_reads("scope", &callback, || state.get());
     let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
     composition.set_content(move || handle.set(1));
-    assert_eq!(changes.get(), 0, "not before the send");
-    Snapshot::send_apply_notifications();
     assert_eq!(changes.get(), 1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(changes.get(), 1, "and not at the send");
 }
 
 /// A derived state read under a scope calls it back when its result changes (its own cases come

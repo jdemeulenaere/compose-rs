@@ -12,7 +12,6 @@
 //! composition snapshot's write observer does (D703, D712), and reach the apply observers at
 //! the next send.
 
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use super::id_set::IdSet;
@@ -48,6 +47,17 @@ pub(super) struct Entered {
     pub(super) read_only: bool,
 }
 
+/// How a read finds its record: what it checks, in one load.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadKind {
+    /// No snapshot to look at, no read observer: a state's only record.
+    Head,
+    /// In a pass's snapshot: a state's only record, or the walk if it wrote the state.
+    InPass,
+    /// Read observers to tell, or snapshots to look at.
+    Look,
+}
+
 /// The thread's snapshot world, in its runtime.
 pub(crate) struct Snapshots {
     /// The states the global snapshot modified since the last send, in write order.
@@ -62,8 +72,8 @@ pub(crate) struct Snapshots {
     barrier_top: u32,
     /// Whether a frame above the latest barrier has a read observer.
     reads_observed: bool,
-    /// `reads_observed` or `isolated`: what each read checks.
-    slow_reads: bool,
+    /// What each read checks.
+    read_kind: ReadKind,
     /// The frame from which read observers count: the latest barrier or snapshot entered.
     read_top: u32,
     /// The frame from which write observers count: the latest snapshot entered.
@@ -79,9 +89,9 @@ pub(crate) struct Snapshots {
     /// The open snapshots but the global one, as `openNonGlobalSnapshots`: the global snapshot's
     /// invalid set.
     open: IdSet,
-    /// How many open snapshots read each lowest id, as `pinningTable`: what the lowest of them
-    /// keeps of a state's records.
-    pins: BTreeMap<SnapshotId, u32>,
+    /// How many open snapshots read each lowest id, sorted, as `pinningTable`: what the lowest of
+    /// them keeps of a state's records.
+    pins: Vec<(SnapshotId, u32)>,
     /// The snapshot entered, as `threadSnapshot`: `None` is the global one.
     current: Option<SnapshotRef>,
     /// Writes are refused: a read-only snapshot is current, or `Snapshot::with_read_only` runs.
@@ -90,8 +100,24 @@ pub(crate) struct Snapshots {
     /// refused, or a state still has several records. When not, a state has one record, the head,
     /// and a write overwrites it (D752), which is nearly always.
     isolated: bool,
+    /// See [`Snapshots::plain`].
+    plain: bool,
+    /// The snapshot of the pass composing.
+    pass: Option<SnapshotRef>,
+    /// `Snapshot::global` ran in the pass: a state made there may be above the pass's snapshot.
+    pass_tainted: bool,
+    /// Another snapshot than the pass's or one nested in it was entered or applied in the pass, so
+    /// something may have written what it wrote: its apply must look.
+    pass_not_alone: bool,
+    /// States made so far, and when the pass's snapshot last advanced.
+    births: u64,
+    pass_births: u64,
+    /// The last pass's snapshot, reused: a pass allocates nothing for it.
+    spare_pass: Option<SnapshotRef>,
     /// The cells holding more than one record, as `extraStateObjects`.
     extra_records: Vec<StateId>,
+    /// Reclamations in progress, which hold that list aside.
+    reclaiming: u32,
     /// Writes in the global snapshot since it last advanced, as its `writeCount`.
     global_writes: u32,
     /// The last write's version (a new write's is the next, each write's distinct; they wrap
@@ -131,7 +157,7 @@ impl Snapshots {
             barriers: 0,
             barrier_top: 0,
             reads_observed: false,
-            slow_reads: false,
+            read_kind: ReadKind::Head,
             read_top: 0,
             write_top: 0,
             sending: 0,
@@ -139,10 +165,18 @@ impl Snapshots {
             global: super::records::FIRST_GLOBAL,
             next_id: super::records::FIRST_GLOBAL + 1,
             open: IdSet::EMPTY,
-            pins: BTreeMap::new(),
+            pins: Vec::new(),
             current: None,
             read_only: false,
             isolated: false,
+            plain: true,
+            pass: None,
+            pass_tainted: false,
+            pass_not_alone: false,
+            births: 0,
+            pass_births: 0,
+            spare_pass: None,
+            reclaiming: 0,
             extra_records: Vec::new(),
             global_writes: 0,
             version: 0,
@@ -196,10 +230,10 @@ impl Snapshots {
         self.isolated
     }
 
-    /// Whether a read must call read observers or look at snapshots.
+    /// How a read finds its record.
     #[inline]
-    pub(crate) fn slow_reads(&self) -> bool {
-        self.slow_reads
+    pub(crate) fn read_kind(&self) -> ReadKind {
+        self.read_kind
     }
 
     /// The view reads and writes go through, when isolation is in use.
@@ -217,6 +251,7 @@ impl Snapshots {
                 read_only: self.read_only,
                 global: false,
                 open_highest: 0,
+                pass: self.is_pass(snapshot),
             },
             None => View {
                 id: self.global,
@@ -224,6 +259,7 @@ impl Snapshots {
                 read_only: self.read_only,
                 global: true,
                 open_highest: self.open.highest(0),
+                pass: false,
             },
         }
     }
@@ -240,7 +276,8 @@ impl Snapshots {
     /// The id and birth snapshot of a state made now: the global snapshot's, or one every
     /// snapshot can read if another is current.
     #[inline]
-    pub(crate) fn birth(&self) -> (SnapshotId, SnapshotId) {
+    pub(crate) fn birth(&mut self) -> (SnapshotId, SnapshotId) {
+        self.births += 1;
         match &self.current {
             Some(snapshot) => (super::records::PREEXISTING, snapshot.id()),
             None => (self.global, self.global),
@@ -274,14 +311,17 @@ impl Snapshots {
 
     /// Pins `id`: what's readable at it stays.
     pub(super) fn pin(&mut self, id: SnapshotId) {
-        *self.pins.entry(id).or_insert(0) += 1;
+        match self.pins.binary_search_by_key(&id, |&(pinned, _)| pinned) {
+            Ok(index) => self.pins[index].1 += 1,
+            Err(index) => self.pins.insert(index, (id, 1)),
+        }
     }
 
     pub(super) fn unpin(&mut self, id: SnapshotId) {
-        if let Some(count) = self.pins.get_mut(&id) {
-            *count -= 1;
-            if *count == 0 {
-                self.pins.remove(&id);
+        if let Ok(index) = self.pins.binary_search_by_key(&id, |&(pinned, _)| pinned) {
+            self.pins[index].1 -= 1;
+            if self.pins[index].1 == 0 {
+                self.pins.remove(index);
             }
         }
     }
@@ -290,19 +330,111 @@ impl Snapshots {
     /// can be read. The global snapshot reads too: a snapshot that advanced past it and is gone
     /// has records it doesn't see yet (Compose reclaims only after advancing it).
     pub(super) fn reuse_limit(&self) -> SnapshotId {
-        self.pins.keys().next().copied().unwrap_or(self.next_id).min(self.global + 1)
+        self.pins.first().map_or(self.next_id, |&(id, _)| id).min(self.global + 1)
     }
 
     pub(super) fn lowest_pin(&self) -> Option<SnapshotId> {
-        self.pins.keys().next().copied()
+        self.pins.first().map(|&(id, _)| id)
     }
 
     pub(super) fn update_isolated(&mut self) {
         self.isolated = !self.open.is_empty()
             || self.current.is_some()
             || self.read_only
+            || self.reclaiming > 0
             || !self.extra_records.is_empty();
-        self.slow_reads = self.isolated || self.reads_observed;
+        self.plain = !self.isolated || self.in_own_pass();
+        self.update_read_kind();
+    }
+
+    fn update_read_kind(&mut self) {
+        self.read_kind = if !self.plain || self.reads_observed {
+            ReadKind::Look
+        } else if self.isolated {
+            ReadKind::InPass
+        } else {
+            ReadKind::Head
+        };
+    }
+
+    /// Whether code runs in a pass's snapshot, nothing else since its start having been able to
+    /// make a state it can't read.
+    fn in_own_pass(&self) -> bool {
+        !self.read_only
+            && !self.pass_tainted
+            && match (&self.pass, &self.current) {
+                (Some(pass), Some(current)) => Rc::ptr_eq(pass, current),
+                _ => false,
+            }
+    }
+
+    /// Whether a read may take a state's only record without looking at snapshots: there are none
+    /// to look at, or it's in a pass's snapshot (D791).
+    #[inline]
+    pub(crate) fn plain(&self) -> bool {
+        self.plain
+    }
+
+    /// The pass's snapshot starts, replacing the current one with no frame: what observes the pass
+    /// goes on observing, and reads go on registering with composition.
+    pub(super) fn begin_pass(&mut self, pass: SnapshotRef) -> (Option<SnapshotRef>, bool) {
+        let outer = self.current.replace(pass.clone());
+        let read_only = std::mem::replace(&mut self.read_only, false);
+        self.pass = Some(pass);
+        self.pass_tainted = false;
+        self.pass_not_alone = false;
+        self.pass_births = self.births;
+        self.update_isolated();
+        (outer, read_only)
+    }
+
+    /// Whether nothing else could have written during the pass.
+    pub(super) fn pass_alone(&self) -> bool {
+        !self.pass_not_alone
+    }
+
+    /// Something else may have written: its apply looks.
+    pub(super) fn note_not_alone(&mut self) {
+        self.pass_not_alone = true;
+    }
+
+    /// The pass's snapshot ends: what it replaced comes back.
+    pub(super) fn end_pass(&mut self, outer: Option<SnapshotRef>, read_only: bool) {
+        self.current = outer;
+        self.read_only = read_only;
+        self.pass = None;
+        self.pass_tainted = false;
+        self.update_isolated();
+    }
+
+    /// Whether the current snapshot is the pass's or nested in it: its writes are composition's.
+    fn writing_in_pass(&self) -> bool {
+        match (&self.pass, &self.current) {
+            (Some(pass), Some(current)) => current.is_or_nested_in(pass),
+            _ => false,
+        }
+    }
+
+    pub(super) fn is_pass(&self, snapshot: &SnapshotRef) -> bool {
+        self.pass.as_ref().is_some_and(|pass| Rc::ptr_eq(pass, snapshot))
+    }
+
+    /// A pass's finished snapshot, to use for the next.
+    pub(super) fn take_spare_pass(&mut self) -> Option<SnapshotRef> {
+        self.spare_pass.take()
+    }
+
+    pub(super) fn keep_spare_pass(&mut self, snapshot: SnapshotRef) {
+        self.spare_pass = Some(snapshot);
+    }
+
+    /// Whether nothing's been made in the pass since its snapshot last advanced.
+    pub(super) fn no_births_in_pass(&self) -> bool {
+        self.births == self.pass_births
+    }
+
+    pub(super) fn pass_advanced(&mut self) {
+        self.pass_births = self.births;
     }
 
     /// The state has more than one record now.
@@ -413,6 +545,11 @@ impl Snapshots {
         read_only: bool,
         mut frame: ObserverFrame,
     ) {
+        self.pass_tainted |= self.pass.is_some() && snapshot.is_none();
+        if let Some(pass) = &self.pass {
+            let family = snapshot.as_ref().is_some_and(|snapshot| snapshot.is_or_nested_in(pass));
+            self.pass_not_alone |= !family;
+        }
         let entered = Entered {
             current: std::mem::replace(&mut self.current, snapshot),
             read_only: self.read_only,
@@ -490,7 +627,7 @@ impl Snapshots {
     fn update_reads_observed(&mut self) {
         self.reads_observed =
             self.frames[self.read_top as usize..].iter().any(|frame| frame.read.is_some());
-        self.slow_reads = self.isolated || self.reads_observed;
+        self.update_read_kind();
     }
 
     fn update_writes_observed(&mut self) {
@@ -755,8 +892,16 @@ fn tell_in_view(
 ) -> Told {
     if let Some(current) = runtime.snapshots.current() {
         current.record_write(id, modified);
+        // Composition's write: what read the state is invalidated at once, as Compose's composition
+        // snapshot's write observer does (D703, D712); the rest of the world hears at the apply.
+        let composing = runtime.is_composing() && runtime.snapshots.writing_in_pass();
+        if composing {
+            runtime.snapshots.next_walk();
+            crate::state::invalidate_cell(runtime, id, false);
+        }
+        let requested = composing && frames_requested(runtime);
         let observed = runtime.snapshots.writes_observed;
-        return Told { wake: false, requested: false, observed, composing: false };
+        return Told { wake: false, requested, observed, composing };
     }
     let composing = runtime.is_composing();
     let snapshots = &mut runtime.snapshots;
@@ -818,20 +963,37 @@ pub(crate) fn note_extra_record(id: StateId) {
 /// Drops the records no open snapshot can read (§3.9); with none open, each state is back to one
 /// record and reads and writes to the fast path.
 pub(crate) fn reclaim_records() {
-    let garbage = try_with_runtime(|runtime| {
+    let taken = try_with_runtime(|runtime| {
         let Runtime { cells, snapshots, .. } = runtime;
         if snapshots.extra_records.is_empty() {
             snapshots.update_isolated();
-            return Vec::new();
+            return None;
         }
-        let limit = snapshots.reuse_limit();
-        let mut garbage = Vec::new();
-        snapshots.extra_records.retain(|&id| cells.reclaim(id, limit, &mut garbage));
+        snapshots.reclaiming += 1;
+        let ids = std::mem::take(&mut snapshots.extra_records);
+        for &id in &ids {
+            cells.unmark_extra(id);
+        }
+        Some((ids, snapshots.reuse_limit()))
+    })
+    .flatten();
+    let Some((mut ids, limit)) = taken else { return };
+    // Values drop here: user code, which may take snapshots and write, with no borrow held.
+    ids.retain(|&id| crate::state::state_object(id).is_some_and(|cell| cell.reclaim(limit)));
+    let _ = try_with_runtime(|runtime| {
+        let Runtime { cells, snapshots, .. } = runtime;
+        snapshots.reclaiming -= 1;
+        for &id in &ids {
+            if cells.mark_extra(id) {
+                snapshots.extra_records.push(id);
+            }
+        }
+        if snapshots.extra_records.is_empty() {
+            ids.clear();
+            snapshots.extra_records = ids;
+        }
         snapshots.update_isolated();
-        garbage
     });
-    // User code (the values' `Drop`): outside the borrow.
-    drop(garbage);
 }
 
 /// Calls the write observers of the frames, innermost first, and the global ones for a write
@@ -856,36 +1018,28 @@ fn notify_write(id: StateId, composing: bool) {
 }
 
 /// Ends the global snapshot's changes: advances it, invalidates the readers of what changed and
-/// calls the apply observers. With `always`, it advances even with nothing to send. It sends
-/// nothing while a pass composes (its writes invalidate at once; the next turn sends).
+/// calls the apply observers. With `always`, it advances even with nothing to send.
 pub(super) fn send(always: bool) {
     send_with(always, None);
 }
 
+/// What a snapshot applied changed.
+pub(super) struct Applied<'a> {
+    pub(super) states: Vec<StateId>,
+    pub(super) snapshot: &'a Snapshot,
+    /// Their readers were invalidated at the writes: a pass's.
+    pub(super) invalidated: bool,
+}
+
 /// [`send`], with what an applied snapshot changed: its readers are invalidated too, and the apply
 /// observers hear the global snapshot's changes first, then the snapshot's, as `apply` tells them.
-pub(super) fn send_with(always: bool, applied: Option<(Vec<StateId>, &Snapshot)>) {
-    let (own, applied_snapshot) = match applied {
-        Some((own, snapshot)) => (own, Some(snapshot)),
-        None => (Vec::new(), None),
+pub(super) fn send_with(always: bool, applied: Option<Applied<'_>>) {
+    let (own, applied_snapshot, invalidated) = match applied {
+        Some(Applied { states, snapshot, invalidated }) => (states, Some(snapshot), invalidated),
+        None => (Vec::new(), None, false),
     };
     let mut reclaim = false;
     let sent = with_runtime(|runtime| {
-        if runtime.is_composing() {
-            // As a write in composition: invalidated at once, heard at the next send.
-            if !own.is_empty() {
-                runtime.snapshots.next_walk();
-                for &id in &own {
-                    crate::state::invalidate_cell(runtime, id, false);
-                    let Runtime { cells, snapshots, .. } = runtime;
-                    cells.record_modified(id, false, &mut snapshots.modified);
-                }
-            }
-            if always {
-                runtime.snapshots.advance();
-            }
-            return None;
-        }
         if !runtime.snapshots.has_changes() && own.is_empty() {
             if always {
                 runtime.snapshots.advance();
@@ -901,8 +1055,10 @@ pub(super) fn send_with(always: bool, applied: Option<(Vec<StateId>, &Snapshot)>
         for &id in &modified {
             crate::state::invalidate_cell(runtime, id, true);
         }
-        for &id in &own {
-            crate::state::invalidate_cell(runtime, id, false);
+        if !invalidated {
+            for &id in &own {
+                crate::state::invalidate_cell(runtime, id, false);
+            }
         }
         let derived = std::mem::take(&mut runtime.snapshots.derived_queue);
         for &id in &derived {
@@ -1035,13 +1191,24 @@ pub(crate) fn valid_mark() -> (SnapshotId, u32) {
     with_runtime(|runtime| (runtime.snapshots.current_id(), runtime.snapshots.version))
 }
 
-/// [`valid_mark`], and whether isolation is in use.
+/// [`valid_mark`], and whether reads are plain.
 #[inline]
-pub(crate) fn valid_mark_and_isolated() -> ((SnapshotId, u32), bool) {
+pub(crate) fn valid_mark_and_plain() -> ((SnapshotId, u32), bool) {
     with_runtime(|runtime| {
         let snapshots = &runtime.snapshots;
-        ((snapshots.current_id(), snapshots.version), snapshots.isolated)
+        ((snapshots.current_id(), snapshots.version), snapshots.plain)
     })
+}
+
+/// Whether a pass's snapshot is what code runs in.
+pub(crate) fn in_pass() -> bool {
+    with_runtime(|runtime| runtime.snapshots.in_own_pass())
+}
+
+/// Whether reads are plain.
+#[inline]
+pub(crate) fn plain_reads() -> bool {
+    with_runtime(|runtime| runtime.snapshots.plain)
 }
 
 /// The current snapshot and a new write's version, for a record a derived state writes.
@@ -1107,11 +1274,26 @@ pub(crate) fn calculation_depth() -> usize {
     with_runtime(|runtime| runtime.snapshots.calculations.len())
 }
 
-/// Advances the global snapshot, without sending, around a pass: when it starts, as Compose's
-/// composition takes a snapshot of its own, so what it writes of what was made before is a
-/// change (D756); when it composed, as applying that snapshot does; after its end-of-pass work,
-/// as `Recomposer`'s `notifyObjectsInitialized` (D754), so what it and its effects made is
-/// initialized and their next writes are changes.
-pub(crate) fn advance_around_pass(runtime: &mut Runtime) {
+/// Advances the global snapshot, without sending, after a pass's end-of-pass work, as
+/// `Recomposer`'s `notifyObjectsInitialized` (D754): what its effects made is initialized and their
+/// next writes are changes.
+pub(crate) fn advance_after_pass(runtime: &mut Runtime) {
     runtime.snapshots.advance();
+}
+
+/// A derived state's outermost calculation ended: as Compose's, what it made is initialized, and
+/// what's written so far is sent. In a pass's snapshot, advancing for nothing made would give it an
+/// id per calculation to keep, a screen's worth (D792).
+pub(crate) fn calculation_ended() {
+    let in_pass_with_nothing_made = with_runtime(|runtime| {
+        let snapshots = &mut runtime.snapshots;
+        if snapshots.in_own_pass() && !snapshots.no_births_in_pass() {
+            snapshots.pass_advanced();
+            return false;
+        }
+        snapshots.in_own_pass()
+    });
+    if !in_pass_with_nothing_made {
+        Snapshot::notify_objects_initialized();
+    }
 }

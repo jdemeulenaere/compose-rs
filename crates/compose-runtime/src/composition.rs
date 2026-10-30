@@ -276,6 +276,8 @@ pub(crate) struct Pass {
     id: CompositionId,
     kind: PassKind,
     finished: bool,
+    /// What it composes in, as `Recomposer.composing` (§3.13).
+    snapshot: Option<crate::snapshots::PassSnapshot>,
 }
 
 impl Pass {
@@ -293,15 +295,13 @@ impl Pass {
         should_pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
     ) -> Option<Pass> {
         let resume = kind == PassKind::Resume;
-        let applier = with_runtime(|runtime| {
+        let (applier, snapshot) = with_runtime(|runtime| {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
-            // As Compose's composition takes a snapshot: what it writes of what's made before
-            // is a change, what it makes isn't (D756).
-            crate::snapshots::advance_around_pass(runtime);
             let Runtime {
                 compositions,
+                snapshots,
                 cells,
                 frames,
                 active,
@@ -337,6 +337,8 @@ impl Pass {
                 sentinel.dirty = false;
                 data.pending = false;
             }
+            // What it writes of what's made before is a change, what it makes isn't (D756).
+            let snapshot = crate::snapshots::PassSnapshot::begin(snapshots);
             *active = Some(ActivePass { composition: id, composing: true });
             *abandoned_groups = false;
             *reusing = 0;
@@ -368,9 +370,9 @@ impl Pass {
                 resuming: false,
                 paused: false,
             });
-            Some(data.applier.clone())
+            Some((data.applier.clone(), snapshot))
         })?;
-        let pass = Pass { id, kind, finished: false };
+        let pass = Pass { id, kind, finished: false, snapshot: Some(snapshot) };
         applier
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
@@ -454,10 +456,10 @@ impl Pass {
         if self.kind == PassKind::Whole {
             crate::pausable::finish_pass_regions(self.id);
         }
+        let mut snapshot = self.snapshot.take().expect("the pass's snapshot");
         let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
-            // As Compose applies the composition's snapshot: what it made is initialized.
-            crate::snapshots::advance_around_pass(runtime);
+            snapshot.leave(&mut runtime.snapshots);
             runtime.pause = None;
             runtime.pausable_pass = false;
             runtime.resume_next = None;
@@ -469,6 +471,23 @@ impl Pass {
         // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
         let mut finishing = Finishing { id: self.id, freeing };
+        // As Compose applies the composition's snapshot before the changes: what it made is
+        // initialized, what it wrote is everybody's. The pass's work runs in the global snapshot.
+        let observer_panic = match snapshot.commit() {
+            crate::snapshots::Committed::Applied => None,
+            crate::snapshots::Committed::ObserverPanicked(panic) => Some(panic),
+            crate::snapshots::Committed::Conflict => {
+                with_runtime(|runtime| {
+                    if let Some(data) = runtime.compositions.get_mut(self.id) {
+                        data.poisoned = true;
+                    }
+                });
+                panic!(
+                    "Unsupported concurrent change during composition. A state object was \
+                     modified by composition as well as being modified outside composition."
+                );
+            }
+        };
         apply_deferred(&applier, &mut deferred, true);
         // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
         let freeing = std::mem::take(&mut finishing.freeing);
@@ -478,7 +497,7 @@ impl Pass {
         drop(finishing);
         with_runtime(|runtime| {
             // What its effects made is initialized too, as the end of Compose's frame (D754).
-            crate::snapshots::advance_around_pass(runtime);
+            crate::snapshots::advance_after_pass(runtime);
             // An effect may have dropped the composition.
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.deferred.restore(deferred);
@@ -487,6 +506,9 @@ impl Pass {
         });
         request_frames();
         crate::runtime::release_if_empty();
+        if let Some(panic) = observer_panic {
+            std::panic::resume_unwind(panic);
+        }
     }
 }
 
@@ -527,7 +549,10 @@ impl Drop for Pass {
             return;
         }
         // A panic unwound through the pass. Nothing can be trusted to continue it; keep the
-        // slot table for disposal, which frees everything exactly once.
+        // slot table for disposal, which frees everything exactly once. What it wrote is gone.
+        if let Some(snapshot) = self.snapshot.take() {
+            snapshot.discard();
+        }
         try_with_runtime(|runtime| {
             if runtime.active.is_some_and(|active| active.composition == self.id) {
                 runtime.active = None;

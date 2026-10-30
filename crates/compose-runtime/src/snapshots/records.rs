@@ -31,6 +31,9 @@ pub(crate) struct View {
     /// one above `open_highest`.
     pub(crate) global: bool,
     pub(crate) open_highest: SnapshotId,
+    /// A pass's snapshot's, which applies as it ends: as good as the global one for a derived
+    /// state's readers and what it reads (D791).
+    pub(crate) pass: bool,
 }
 
 impl View {
@@ -40,9 +43,15 @@ impl View {
         id != INVALID && id <= self.id && !self.invalid.get(id)
     }
 
+    /// What a derived state's readers and dependencies go by.
+    #[inline]
+    pub(crate) fn like_global(&self) -> bool {
+        self.global || self.pass
+    }
+
     /// A view through `id` and `invalid` alone, as the apply's readable calls.
     pub(crate) fn of(id: SnapshotId, invalid: IdSet) -> View {
-        View { id, invalid, read_only: false, global: false, open_highest: 0 }
+        View { id, invalid, read_only: false, global: false, open_highest: 0, pass: false }
     }
 }
 
@@ -223,24 +232,17 @@ impl<R> Records<R> {
         }
     }
 
-    /// Drops the records no open snapshot can read, as Compose's `overwriteUnusedRecordsLocked`
-    /// with `reuse_limit`: of those below it only the newest stays. Returns whether more than one
-    /// record remains. With every record below the limit (no snapshot open), the head is then
-    /// what any read sees.
-    pub(crate) fn reclaim(
-        &mut self,
-        reuse_limit: SnapshotId,
-        garbage: &mut Vec<Box<dyn Any>>,
-    ) -> bool
-    where
-        R: 'static,
-    {
+    /// Takes out a record no open snapshot can read, as Compose's `overwriteUnusedRecordsLocked`
+    /// with `reuse_limit`: of those below it only the newest stays, and with every record below
+    /// (no snapshot open) that's one, in the head: what any read sees. `None` if there's none.
+    pub(crate) fn take_unreachable(&mut self, reuse_limit: SnapshotId) -> Option<Record<R>> {
         if self.rest.is_empty() {
-            return false;
+            return None;
         }
         // The first record stands for two of Compose's (`born`): while the one of the snapshot it
         // was born in can be read, it stays.
-        let rank = |id: SnapshotId| if id == PREEXISTING { self.born } else { id };
+        let born = self.born;
+        let rank = |id: SnapshotId| if id == PREEXISTING { born } else { id };
         let mut newest = INVALID;
         let mut newest_rank = INVALID;
         for index in 0..self.len() {
@@ -253,17 +255,30 @@ impl<R> Records<R> {
                 newest_rank = rank;
             }
         }
-        let born = self.born;
-        let mut index = self.len();
-        while index > 0 {
-            index -= 1;
+        let index = (0..self.len()).find(|&index| {
             let id = self.at(index).id;
             let kept_for_birth = id == PREEXISTING && born >= reuse_limit;
-            if id != newest && id < reuse_limit && !kept_for_birth {
-                garbage.push(Box::new(self.remove(index)));
+            id != newest && id < reuse_limit && !kept_for_birth
+        })?;
+        Some(self.remove(index))
+    }
+}
+
+/// Drops what no open snapshot can read of a state's records, each value with no borrow on them:
+/// whether it still has several (a record borrowed now counts as several: it's tried again).
+pub(crate) fn reclaim_cell<R>(
+    records: &std::cell::RefCell<Records<R>>,
+    reuse_limit: SnapshotId,
+) -> bool {
+    loop {
+        let Ok(mut borrowed) = records.try_borrow_mut() else { return true };
+        match borrowed.take_unreachable(reuse_limit) {
+            Some(record) => {
+                drop(borrowed);
+                drop(record);
             }
+            None => return !borrowed.rest.is_empty(),
         }
-        !self.rest.is_empty()
     }
 }
 
@@ -346,8 +361,9 @@ pub(crate) trait StateObjectCell: Any {
     /// Drops the records of an abandoned snapshot.
     fn abandon(&self, id: SnapshotId, previous: &IdSet, garbage: &mut Vec<Box<dyn Any>>);
     /// Drops the records no open snapshot can read: whether more than one remains (a record
-    /// borrowed now counts as more: it's tried again).
-    fn reclaim(&self, reuse_limit: SnapshotId, garbage: &mut Vec<Box<dyn Any>>) -> bool;
+    /// borrowed now counts as more: it's tried again). Outside the runtime's borrow: a value's
+    /// `Drop` is user code.
+    fn reclaim(&self, reuse_limit: SnapshotId) -> bool;
     /// An `edit`'s closure sent, advancing the global snapshot: its record goes on under the new
     /// id.
     fn relabel(&self, _from: SnapshotId, _to: SnapshotId) {}

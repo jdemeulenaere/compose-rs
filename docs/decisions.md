@@ -17,7 +17,7 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 149 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 154 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 313 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 43 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 97 |
@@ -440,7 +440,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D753 | [runtime](decisions/runtime.md#d753) | current |
 | D754 | [runtime](decisions/runtime.md#d754) | current |
 | D755 | [runtime](decisions/runtime.md#d755) | current |
-| D756 | [runtime](decisions/runtime.md#d756) | current |
+| D756 | [runtime](decisions/runtime.md#d756) | revised by [D793](decisions/runtime.md#d793) |
 | D757 | [runtime](decisions/runtime.md#d757) | revised by [D760](decisions/runtime.md#d760) |
 | D758 | [runtime](decisions/runtime.md#d758) | revised by [D759](decisions/runtime.md#d759) |
 | D759 | [runtime](decisions/runtime.md#d759) | revised by [D764](decisions/runtime.md#d764) |
@@ -461,7 +461,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D774 | [runtime](decisions/runtime.md#d774) | current |
 | D775 | [runtime](decisions/runtime.md#d775) | current |
 | D776 | [runtime](decisions/runtime.md#d776) | current |
-| D777 | [runtime](decisions/runtime.md#d777) | current |
+| D777 | [runtime](decisions/runtime.md#d777) | revised by [D793](decisions/runtime.md#d793) |
 | D778 | [runtime](decisions/runtime.md#d778) | current |
 | D779 | [runtime](decisions/runtime.md#d779) | current |
 | D780 | [runtime](decisions/runtime.md#d780) | current |
@@ -475,6 +475,11 @@ The log is split by area into the files below, one table each, rows in number or
 | D788 | [runtime](decisions/runtime.md#d788) | current |
 | D789 | [runtime](decisions/runtime.md#d789) | current |
 | D790 | [runtime](decisions/runtime.md#d790) | current |
+| D791 | [runtime](decisions/runtime.md#d791) | current |
+| D792 | [runtime](decisions/runtime.md#d792) | current |
+| D793 | [runtime](decisions/runtime.md#d793) | current |
+| D794 | [runtime](decisions/runtime.md#d794) | current |
+| D795 | [runtime](decisions/runtime.md#d795) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | revised by [D815](decisions/ui-and-layout.md#d815) |
 | D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |

@@ -309,3 +309,32 @@ fn a_read_without_observation_recomposes_nothing() {
     test.advance();
     assert_eq!(recompositions.get(), 1);
 }
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/RecomposerTests.kt, stateChangesDuringApplyChangesAreNotifiedBeforeFrameFinished
+#[test]
+fn state_changes_during_apply_changes_are_notified_before_the_frame_finished() {
+    use compose_runtime::snapshots::{Snapshot, StateObjectId};
+    let count = mutable_state_of(0);
+    let count_from_effect = mutable_state_of(0);
+    let recompositions = Rc::new(Cell::new(0));
+    let (read, written, counted) =
+        (count.handle(), count_from_effect.handle(), recompositions.clone());
+    let mut test = composition_test();
+    test.compose(move || {
+        counted.set(counted.get() + 1);
+        let value = read.get();
+        SideEffect(move || written.set(value));
+    });
+    assert_eq!(count_from_effect.get(), 0);
+    assert_eq!(recompositions.get(), 1);
+    count.set(1);
+    let applications: Rc<RefCell<Vec<Vec<StateObjectId>>>> = Rc::default();
+    let log = applications.clone();
+    let _observer = Snapshot::register_apply_observer(move |applied, _| {
+        log.borrow_mut().push(applied.iter().collect())
+    });
+    assert!(applications.borrow().is_empty());
+    assert_eq!(test.advance_count(), 1);
+    assert_eq!(recompositions.get(), 2);
+    assert_eq!(*applications.borrow(), [vec![count_from_effect.state_object_id()]]);
+}

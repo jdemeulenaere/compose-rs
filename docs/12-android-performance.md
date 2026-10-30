@@ -171,6 +171,26 @@ Animated header, `recommended`:
 
 compose-rs at parity before and after snapshots' step S1 (readers invalidated when a turn sends, not at each write), bench-rs alone (`measure.py --optimizations rs`) on the Pixel 8 Pro with dynamic clocks, no device setting changed, the two release APKs installed in turn and compiled `speed`: 47bb939 against the branch on it at f019de0, 6 rounds of the timing runs (one traced run of the feed's scroll, the stress animation and navigation's 20 navigations, plus one untraced run of them, a round; the first variant alternating) and 2 rounds of `--counters` (a discarded warm-up, then 3 counted runs a scenario: 6 runs a side). Every run started at thermal status 0, battery ≤ 34 °C and skin ≤ 35 °C (`--battery-limit 34 --skin-limit 35 --thermal-wait-limit 0`; runs at 26.5 to 31.7 °C and 28.4 to 34.2 °C), and ended at status 0. Medians over the rounds; nothing in the timings reaches p < 0.05 (exact two-sided Mann–Whitney). `results/2026-10-30-pixel-8-pro-snapshots-s1-ab.json`.
 
+compose-rs at parity before and after snapshots' step S6 (each pass composes in a mutable snapshot it applies as composing ends, D791-D795), bench-rs alone (`measure.py --optimizations rs`) on the Pixel 8 Pro, dynamic clocks, a clean release of each side installed in turn: 3 interleaved sessions of 3 counter runs each, then 3 of timing, main at f6eb3a97.
+
+| | main | S6 | |
+|---|---|---|---|
+| scroll, main thread, instructions per frame | 0.380 M | 0.379 M | -0.2 %, p=1.00 |
+| scroll, all threads | 1.344 M | 1.342 M | -0.2 %, p=0.61 |
+| stress animation, main thread | 4.383 M | 4.384 M | +0.0 %, p=0.61 |
+| stress animation, all threads | 63.84 M | 63.80 M | -0.1 %, p=0.14 |
+| a navigation, main thread | 103.59 M | 103.63 M | +0.0 %, p=1.00 |
+| a navigation, all threads | 113.90 M | 113.80 M | -0.1 %, p=0.44 |
+| scroll, main thread frame p50 / p90 / p99 | 1.41 / 2.31 / 3.41 ms | 1.41 / 2.30 / 3.57 ms | p=1.00, 1.00, 0.40 |
+| scroll, RenderThread frame p50 / p90 / p99 | 2.44 / 3.24 / 4.59 ms | 2.43 / 3.30 / 4.72 ms | p=0.70, 0.40, 0.70 |
+| scroll, janky frames (FrameTimeline) | 0 | 0 | |
+| stress animation, main thread frame p50 / p90 / p99 | 2.29 / 4.45 / 6.95 ms | 2.33 / 4.56 / 7.08 ms | p=0.40, 0.70, 0.70 |
+| stress animation, RenderThread frame p50 / p90 / p99 | 7.35 / 9.05 / 11.92 ms | 7.30 / 8.99 / 11.74 ms | p=0.70, 0.70, 0.70 |
+| navigation, input to present p50 / p90 | 87.1 / 91.9 ms | 88.1 / 93.5 ms | p=0.70, 1.00 |
+| navigation, composition phase p50 | 26.6 ms | 25.8 ms | p=1.00 |
+
+No instruction count moves, and frame durations stay within what three sessions vary by: with so few, a p-value can't go below 0.10, so a change of a few percent wouldn't show; the counts are what says there's none.
+
 | | feed scroll before | after | stress animation before | after |
 |---|---|---|---|---|
 | main p50 / p90 / p99 (ms) | 1.35 / 2.29 / 3.45 | 1.37 / 2.27 / 3.49 | 2.22 / 4.35 / 7.00 | 2.24 / 4.59 / 7.36 |

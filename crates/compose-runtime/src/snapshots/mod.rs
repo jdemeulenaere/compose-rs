@@ -13,15 +13,16 @@ mod set;
 mod snapshot;
 mod state_object;
 
+pub(crate) use global::ReadKind;
 pub use global::{ChangeSet, ObserverHandle, StateObserverFn, Turn};
 pub(crate) use global::{
-    Snapshots, advance_around_pass, notify_read, send_unsent_outside_turns, wrote, wrote_in_view,
-    wrote_in_view_unwinding, wrote_unwinding,
+    Snapshots, advance_after_pass, calculation_ended, notify_read, send_unsent_outside_turns,
+    wrote, wrote_in_view, wrote_in_view_unwinding, wrote_unwinding,
 };
 pub(crate) use global::{
-    begin_calculation, birth, calculation_depth, calculation_reads, end_calculation, next_record,
-    note_extra_record, notify_read_if_observed, observe_calculation, return_calculation_reads,
-    valid_mark, valid_mark_and_isolated, view,
+    begin_calculation, birth, calculation_depth, calculation_reads, end_calculation, in_pass,
+    next_record, note_extra_record, notify_read_if_observed, observe_calculation, plain_reads,
+    return_calculation_reads, valid_mark, valid_mark_and_plain, view,
 };
 pub(crate) use id_set::IdSet;
 pub use list::{
@@ -34,7 +35,7 @@ pub use map::{
 pub use observer::SnapshotStateObserver;
 pub(crate) use records::{
     ApplyViews, Merged, PREEXISTING, Record, Records, SnapshotId, StateObjectCell, View, WriteSlot,
-    read_error, report_read_only_write,
+    read_error, reclaim_cell, report_read_only_write,
 };
 pub use set::{
     OrderedSet, OwnedStateSet, SnapshotStateSet, mutable_state_set_from, mutable_state_set_of,
@@ -43,6 +44,7 @@ pub use state_object::{OwnedStateObject, SnapshotStateObject, StateRecord, snaps
 
 pub use crate::state::MergeResult;
 
+pub(crate) use snapshot::{Committed, PassSnapshot};
 pub use snapshot::{
     MutableSnapshot, Snapshot, SnapshotApplyConflict, SnapshotApplyResult, SnapshotFuture,
     SnapshotToken,
