@@ -365,14 +365,19 @@ fn shown(visible: bool, alignment: Alignment) -> (ComposeTestRule, OwnedState<bo
     (ui, state)
 }
 
-/// The FAB's layer: its alpha, scale and pivot in its node's pixels.
-fn layer(ui: &mut ComposeTestRule) -> Option<(f32, f32, f32, f32)> {
-    let list = ui.host().display_list();
-    list.groups
-        .iter()
-        .filter_map(|group| group.layer.as_ref())
-        .next()
-        .map(|it| (it.alpha, it.scale.0, it.pivot.x - it.bounds.left, it.pivot.y - it.bounds.top))
+/// How the FAB's drawn: its alpha, scale and pivot in its node's pixels, `(1, 1, ..)` as it is.
+fn layer(ui: &mut ComposeTestRule) -> (f32, f32, f32, f32) {
+    let mut found = (1.0, 1.0, 0.0, 0.0);
+    for op in &ui.host().display_list().ops {
+        match op {
+            DrawOp::Transform { scale, pivot, .. } => {
+                (found.1, found.2, found.3) = (scale.0, pivot.x, pivot.y);
+            }
+            DrawOp::SaveLayerAlpha { alpha, .. } => found.0 = *alpha,
+            _ => {}
+        }
+    }
+    found
 }
 
 fn near(actual: f32, expected: f32) {
@@ -392,7 +397,7 @@ fn hiding_scales_and_fades_towards_its_alignment() {
         visible.set(false);
         ui.advance_time_by_frame();
         ui.advance_time_by(Duration::from_millis(50));
-        let (alpha, scale, x, y) = layer(&mut ui).expect("a layer");
+        let (alpha, scale, x, y) = layer(&mut ui);
         near(alpha, 0.5);
         near(scale, 0.6);
         assert_eq!((x.round(), y.round()), (pivot, pivot), "{alignment:?}");
@@ -404,13 +409,21 @@ fn hiding_scales_and_fades_towards_its_alignment() {
 #[test]
 fn right_to_left_the_alignment_follows() {
     use compose_ui::{LOCAL_LAYOUT_DIRECTION, LayoutDirection};
-    let mut ui = ComposeTestRule::with_manual_clock(|| {
+    let visible = mutable_state_of(true);
+    let read = visible.handle();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
         CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl), || {
             MaterialTheme!({
                 Box!(modifier = Modifier.size(100.dp()), {
                     Box!(
                         modifier = Modifier
-                            .animate_floating_action_button(true, Alignment::BOTTOM_END)
+                            .animate_floating_action_button_with(
+                                read.get(),
+                                Alignment::BOTTOM_END,
+                                0.2,
+                                Some(linear(100)),
+                                Some(linear(100)),
+                            )
                             .fill_max_size()
                             .background(Color::BLUE)
                     );
@@ -418,8 +431,10 @@ fn right_to_left_the_alignment_follows() {
             });
         });
     });
+    visible.set(false);
     ui.advance_time_by_frame();
-    let (_, _, x, y) = layer(&mut ui).expect("a layer");
+    ui.advance_time_by(Duration::from_millis(50));
+    let (_, _, x, y) = layer(&mut ui);
     assert_eq!((x.round(), y.round()), (0.0, 99.0));
 }
 
@@ -440,7 +455,7 @@ fn showing_ends_as_it_was() {
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     ui.advance_time_by(Duration::from_millis(100));
-    let (alpha, scale, _, _) = layer(&mut ui).expect("a layer");
+    let (alpha, scale, _, _) = layer(&mut ui);
     assert_eq!((alpha, scale), (1.0, 1.0));
     assert_eq!(drawn(&mut ui), Some(100.0));
 }

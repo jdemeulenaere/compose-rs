@@ -1315,29 +1315,40 @@ fn a_sized_extended_fab_animates_with_the_scheme() {
     });
 }
 
-/// `animate_floating_action_button`: its scale on fast spatial and its alpha on fast effects.
+/// `animate_floating_action_button`: its scale on fast spatial and its alpha on fast effects, each
+/// told with the other's spec long, as nothing's drawn once its alpha's 0.
 // Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/FloatingActionButton.kt, FabVisibleNode
 #[test]
 fn a_fabs_show_and_hide_animate_with_the_scheme() {
-    assert_each_property_animates_with(&[FastSpatial, FastEffects], |scheme| {
+    let run = |scale_spec: Option<AnimationSpec>, alpha_spec: Option<AnimationSpec>, scheme| {
         let visible = mutable_state_of(true);
         let read = visible.handle();
         let mut ui = themed(scheme, move || {
             Box!(
                 modifier = Modifier
-                    .animate_floating_action_button(read.get(), compose_ui::Alignment::CENTER)
+                    .animate_floating_action_button_with(
+                        read.get(),
+                        compose_ui::Alignment::CENTER,
+                        0.2,
+                        scale_spec.clone(),
+                        alpha_spec.clone(),
+                    )
                     .size(40.dp())
                     .background(Color::RED)
             );
         });
         visible.set(false);
         to_halfway(&mut ui);
-        let list = ui.host().display_list();
-        let layer = list.groups.iter().filter_map(|group| group.layer.as_ref()).next();
-        // Gone at alpha 0: no layer drawn, so arrived for both, its alpha not having been the long
-        // one's.
-        let (scale, alpha) = layer.map_or((0.2, 0.0), |layer| (layer.scale.0, layer.alpha));
-        vec![along(scale, 1.0, 0.2), 1.0 - alpha]
+        layer_scale_and_alpha(&mut ui)
+    };
+    let long = || Some(long_only(FastSpatial).fast_spatial_spec());
+    assert_each_property_animates_with(&[FastSpatial], |scheme| {
+        vec![along(run(None, long(), scheme).0, 1.0, 0.2)]
+    });
+    assert_each_property_animates_with(&[FastEffects], |scheme| {
+        // Gone, no layer to read its alpha from: arrived.
+        let alpha = run(long(), None, scheme).1;
+        vec![if alpha == 1.0 { 1.0 } else { 1.0 - alpha }]
     });
 }
 

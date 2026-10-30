@@ -3,9 +3,6 @@
 //! extended ones, with `FloatingActionButtonDefaults`, `FloatingActionButtonElevation` and
 //! `Modifier::animate_floating_action_button`.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-
 use compose_animation::{
     Animatable, AnimatedVisibility, AnimationSpec, expand_horizontally_with, fade_in_with,
     fade_out_with, shrink_horizontally_with,
@@ -13,9 +10,10 @@ use compose_animation::{
 use compose_foundation::layout::{Arrangement, Box, Row, RowScope, Spacer};
 use compose_runtime::{Callback, CompositionLocalProvider, composable};
 use compose_ui::{
-    Alignment, Color, Constraints, Delegates, Dp, IntSize, LayoutDirection, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    MutableInteractionSource, NodeContext, Role, Shape, SizeSpec, TextStyle, UnitExt,
+    Alignment, Color, Constraints, ContentDrawScope, Delegates, Density, Dp, DrawModifierNode,
+    DrawScope, IntSize, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier,
+    ModifierNode, ModifierNodeElement, MutableInteractionSource, NodeContext, Offset, Rect, Role,
+    Shape, Size, SizeSpec, TextStyle, UnitExt,
 };
 
 use crate::components::{Elevations, SurfaceClick, remembered_interaction_source, surface};
@@ -401,107 +399,59 @@ impl FloatingActionButtonModifiers for Modifier {
         scale_animation_spec: Option<AnimationSpec>,
         alpha_animation_spec: Option<AnimationSpec>,
     ) -> Modifier {
-        // The layer is an element of its own, the tree drawing layers as chain entries, with the
-        // node's state through this slot, which the element's `create` or `update` fills.
-        let slot: Rc<RefCell<Option<Rc<FabVisibleState>>>> = Rc::new(RefCell::new(None));
-        let read = slot.clone();
         self.then_custom(FabVisible {
             visible,
             alignment,
             target_scale,
             scale_animation_spec,
             alpha_animation_spec,
-            slot,
-        })
-        .graphics_layer(move |layer| {
-            if let Some(state) = read.borrow().as_ref() {
-                layer.alpha = state.alpha.value();
-                let from = state.target_scale.get();
-                let scale = from + (1.0 - from) * state.scale.value();
-                layer.scale_x = scale;
-                layer.scale_y = scale;
-                // Towards its alignment: the pixel there, as a fraction of its size.
-                let (width, height) = (layer.size.width.max(1.0), layer.size.height.max(1.0));
-                let pivot = state.alignment.get().align(
-                    IntSize::new(1, 1),
-                    IntSize::new(width as i32, height as i32),
-                    state.direction.get(),
-                );
-                layer.transform_origin = compose_ui::TransformOrigin {
-                    pivot_fraction_x: pivot.x as f32 / width,
-                    pivot_fraction_y: pivot.y as f32 / height,
-                };
-            }
         })
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct FabVisible {
     visible: bool,
     alignment: Alignment,
     target_scale: f32,
     scale_animation_spec: Option<AnimationSpec>,
     alpha_animation_spec: Option<AnimationSpec>,
-    /// Where its layer finds the node's state.
-    slot: Rc<RefCell<Option<Rc<FabVisibleState>>>>,
 }
 
-/// What `FabVisibleNode` and its layer share.
-struct FabVisibleState {
-    scale: Animatable<f32>,
-    alpha: Animatable<f32>,
-    alignment: Cell<Alignment>,
-    target_scale: Cell<f32>,
-    /// Its place in its layout, as the layer's block doesn't know.
-    direction: Cell<LayoutDirection>,
-}
-
-/// As Compose's `FabVisibleNode`, its layer apart (compose-rs's don't clip to their node, so with no
-/// inset to keep a shadow in).
+/// As Compose's `FabVisibleNode`: a layout node and what it draws, reading its animatables as it
+/// draws; its scale and alpha around what's inside, as Compose's `drawLayer`. Hidden it doesn't
+/// measure or place what's inside and takes no room, draws nothing, and isn't hit.
 struct FabVisibleNode {
     params: FabVisible,
-    state: Rc<FabVisibleState>,
-    /// What's been animated to.
-    target: bool,
+    scale: Animatable<f32>,
+    alpha: Animatable<f32>,
     delegates: Delegates,
 }
+
+/// The room left around what's drawn for its shadow, as `layerInsetInt`.
+const SHADOW_INSET: Dp = Dp(16.0);
 
 impl ModifierNodeElement for FabVisible {
     type Node = FabVisibleNode;
 
     fn create(&self) -> FabVisibleNode {
         let at = if self.visible { 1.0 } else { 0.0 };
-        let state = Rc::new(FabVisibleState {
-            scale: Animatable::new(at),
-            alpha: Animatable::new(at),
-            alignment: Cell::new(self.alignment),
-            target_scale: Cell::new(self.target_scale),
-            direction: Cell::new(LayoutDirection::Ltr),
-        });
-        *self.slot.borrow_mut() = Some(state.clone());
         FabVisibleNode {
             params: self.clone(),
-            state,
-            target: self.visible,
+            scale: Animatable::new(at),
+            alpha: Animatable::new(at),
             delegates: Delegates::new(),
         }
     }
 
     fn update(&self, node: &mut FabVisibleNode) {
-        *self.slot.borrow_mut() = Some(node.state.clone());
-        node.state.alignment.set(self.alignment);
-        node.state.target_scale.set(self.target_scale);
         node.params = self.clone();
         // A context to launch and read the motion scheme with: `on_update_with_context`.
-        if node.target != self.visible {
-            node.delegates.ask_for_context();
-        }
+        node.delegates.ask_for_context();
     }
 
-    /// Never: each has its own slot, which `update` has to fill for the layer built with it.
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.slot, &other.slot)
+        self == other
     }
 
     fn name(&self) -> &'static str {
@@ -518,8 +468,16 @@ impl ModifierNode for FabVisibleNode {
         Some(self)
     }
 
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+
+    /// Hidden, measured at nothing: this clips everything inside out of a hit.
+    fn hit_clip_at(&self, _size: Size, _density: Density) -> Option<Shape> {
+        (self.alpha.value() == 0.0).then_some(Shape::Rectangle)
+    }
+
     fn on_update_with_context(&mut self, context: &mut NodeContext<'_>) {
-        self.target = self.params.visible;
         let motion = context.current_value_of(&crate::motion::LOCAL_MOTION_SCHEME);
         let target = if self.params.visible { 1.0 } else { 0.0 };
         let scope = context.coroutine_scope();
@@ -527,13 +485,13 @@ impl ModifierNode for FabVisibleNode {
             self.params.scale_animation_spec.clone().unwrap_or_else(|| motion.fast_spatial_spec());
         let alpha_spec =
             self.params.alpha_animation_spec.clone().unwrap_or_else(|| motion.fast_effects_spec());
-        let state = self.state.clone();
+        let scale = self.scale.clone();
         scope.launch(async move {
-            state.scale.animate_to(target, scale_spec).await;
+            scale.animate_to(target, scale_spec).await;
         });
-        let state = self.state.clone();
+        let alpha = self.alpha.clone();
         scope.launch(async move {
-            state.alpha.animate_to(target, alpha_spec).await;
+            alpha.animate_to(target, alpha_spec).await;
         });
     }
 }
@@ -545,13 +503,57 @@ impl LayoutModifierNode for FabVisibleNode {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult {
-        self.state.direction.set(scope.layout_direction());
-        // Hidden, nothing: no room, and nothing inside the chain to draw or hit.
-        let hidden = self.state.alpha.value() == 0.0;
-        let constraints = if hidden { Constraints::fixed(0, 0) } else { constraints };
+        if self.alpha.value() == 0.0 {
+            return scope.layout(0, 0);
+        }
         let placeable = scope.measure(content, constraints);
         scope.place(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
+    }
+}
+
+impl DrawModifierNode for FabVisibleNode {
+    fn draw(&mut self, _scope: &mut DrawScope<'_>) {}
+
+    fn draws_content(&self) -> bool {
+        true
+    }
+
+    fn draw_with_content(&mut self, scope: &mut ContentDrawScope<'_, '_>) {
+        let alpha = self.alpha.value();
+        if alpha == 0.0 {
+            return;
+        }
+        let from = self.params.target_scale;
+        let scale = from + (1.0 - from) * self.scale.value();
+        if alpha == 1.0 && scale == 1.0 {
+            scope.draw_content();
+            return;
+        }
+        let size = scope.size();
+        // Towards its alignment: the pixel there, as `alignment.align(IntSize(1, 1), …)`.
+        let pivot = self.params.alignment.align(
+            IntSize::new(1, 1),
+            IntSize::new(size.width as i32, size.height as i32),
+            scope.layout_direction(),
+        );
+        let inset = scope.density().to_px(SHADOW_INSET);
+        scope.save();
+        scope.transform(
+            Offset::new(pivot.x as f32, pivot.y as f32),
+            (scale, scale),
+            0.0,
+            Offset::ZERO,
+        );
+        if alpha < 1.0 {
+            let bounds = Rect::new(-inset, -inset, size.width + inset, size.height + inset);
+            scope.save_layer_alpha(bounds, alpha);
+        }
+        scope.draw_content();
+        if alpha < 1.0 {
+            scope.restore();
+        }
+        scope.restore();
     }
 }
 
