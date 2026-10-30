@@ -231,20 +231,26 @@ impl ModifierNodeElement for TextFieldElement {
     }
 }
 
+/// The words of `text`, by its word breaks: those with a letter or digit, as `start..end`.
+fn words_in(text: &str) -> impl DoubleEndedIterator<Item = std::ops::Range<usize>> {
+    let breaks = compose_ui::platform::word_breaks(text);
+    let mut words = Vec::with_capacity(breaks.len());
+    for pair in breaks.windows(2) {
+        if text[pair[0]..pair[1]].chars().any(char::is_alphanumeric) {
+            words.push(pair[0]..pair[1]);
+        }
+    }
+    words.into_iter()
+}
+
 /// The start of the word before `offset` in `text`.
 fn previous_word_in(text: &str, offset: usize) -> usize {
-    text.split_word_bound_indices()
-        .rev()
-        .find(|(start, word)| *start < offset && word.chars().any(char::is_alphanumeric))
-        .map_or(0, |(start, _)| start)
+    words_in(text).rev().find(|word| word.start < offset).map_or(0, |word| word.start)
 }
 
 /// The end of the word after `offset` in `text`.
 fn next_word_in(text: &str, offset: usize) -> usize {
-    text.split_word_bound_indices()
-        .map(|(start, word)| (start + word.len(), word))
-        .find(|(end, word)| *end > offset && word.chars().any(char::is_alphanumeric))
-        .map_or(text.len(), |(end, _)| end)
+    words_in(text).find(|word| word.end > offset).map_or(text.len(), |word| word.end)
 }
 
 /// The word at `offset` in `text`, as Compose's `getWordBoundary` (D1108).

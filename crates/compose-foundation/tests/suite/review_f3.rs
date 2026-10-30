@@ -212,3 +212,27 @@ fn a_triple_click_selects_the_line() {
     ui.type_text("X");
     assert_eq!(text_of(&mut ui, "field"), "X");
 }
+
+/// Word moves take a run of Thai, Lao, Myanmar or Khmer as one word, as a double-click (D1114).
+#[test]
+fn word_moves_take_a_run_of_a_script_without_a_dictionary_whole() {
+    let thai = "\u{E20}\u{E32}\u{E29}\u{E32}\u{E44}\u{E17}\u{E22}";
+    #[composable]
+    fn Thai() {
+        Editor("\u{E20}\u{E32}\u{E29}\u{E32}\u{E44}\u{E17}\u{E22} ab", true);
+    }
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Thai);
+    ui.on_node_with_tag("field").request_focus();
+    ui.press_key(Key::MoveEnd);
+    let word = if cfg!(target_os = "macos") {
+        KeyModifiers { alt: true, ..KeyModifiers::default() }
+    } else {
+        KeyModifiers { ctrl: true, ..KeyModifiers::default() }
+    };
+    // Back over "ab", then over the run; typing there shows where the cursor went.
+    chord(&mut ui, Key::DirectionLeft, word);
+    chord(&mut ui, Key::DirectionLeft, word);
+    ui.host().send_text("x");
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), format!("x{thai} ab"));
+}

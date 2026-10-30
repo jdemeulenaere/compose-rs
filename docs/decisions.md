@@ -9,7 +9,7 @@ The log is split by area into the files below, one table each, rows in number or
 - **Numbers** (D1, D2, …) are stable and never reused: other docs, code comments and commit messages refer to them, and every number below still has its row. Gaps (D165 to D169, …) are numbers never used: blocks were reserved per piece of work.
 - **A row** says what was decided and why, then the main alternatives rejected and why not, then the revert cost. The detail of how it works now is in the doc section the row links to.
 - **Who decided:** "(user)" or "on the user's decision" for the user's decisions, "(agent)" for decisions an agent made on the user's behalf, "the coordinator's" or "the orchestrator's decision" for those the agent coordinating the work made; "after a review" marks a fix a review asked for.
-- **Status:** *current* (the decision holds); *revised by Dxxx* (a later row changed part of it: read both, the later one wins where they differ); *superseded by Dxxx* (replaced as a whole: history only).
+- **Status:** *current* (the decision holds); *revised by Dxxx* (a later row changed part of it: read both, the later one wins where they differ); *superseded by Dxxx* (replaced as a whole: history only); *reverted* (taken out before or after merging: history only, its row saying why).
 - **Revert cost:** *low* (a local edit), *medium* (one subsystem), *high* (touches most of the code).
 - **New decisions** take the next number after the highest (D600 at this split, so D601 next; one is being added on another branch), go into the area file that fits them, in number order, with a line in the index below, and change the status of the rows they revise or supersede.
 
@@ -19,7 +19,7 @@ The log is split by area into the files below, one table each, rows in number or
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 139 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 40 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 42 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
@@ -478,11 +478,13 @@ The log is split by area into the files below, one table each, rows in number or
 | D1105 | [text](decisions/text.md#d1105) | revised by [D1108](decisions/text.md#d1108), [D1109](decisions/text.md#d1109), [D1110](decisions/text.md#d1110), [D1111](decisions/text.md#d1111) |
 | D1106 | [text](decisions/text.md#d1106) | revised by [D1107](decisions/text.md#d1107) |
 | D1107 | [text](decisions/text.md#d1107) | current |
-| D1108 | [text](decisions/text.md#d1108) | current |
+| D1108 | [text](decisions/text.md#d1108) | revised by [D1114](decisions/text.md#d1114) |
 | D1109 | [text](decisions/text.md#d1109) | current |
 | D1110 | [text](decisions/text.md#d1110) | current |
 | D1111 | [text](decisions/text.md#d1111) | current |
 | D1112 | [text](decisions/text.md#d1112) | current |
+| D1113 | [text](decisions/text.md#d1113) | reverted, to be redone in the IME step |
+| D1114 | [text](decisions/text.md#d1114) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

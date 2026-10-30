@@ -114,7 +114,7 @@ pub mod platform {
     };
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
     pub use crate::unit::round_to_int;
-    pub use crate::word_boundary::word_boundary;
+    pub use crate::word_boundary::{word_boundary, word_breaks};
 
     /// Trace sections around a frame's phases, for the platform's tracer.
     pub mod trace {
