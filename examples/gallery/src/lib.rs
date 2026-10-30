@@ -4,14 +4,17 @@
 //! snackbar; just its icon once the cards are scrolled), Material's selection controls, text
 //! fields, progress indicators, an animated panel and a lazy list of cards with a scrollbar.
 //! A card opens a screen of its own (a `NavDisplay`): back returns to the tour as it was left.
+//! The drawer opens "More controls": tabs of what the tour has no room for, to try on a phone with
+//! a keyboard and a screen reader.
 
 #![allow(non_snake_case)]
 
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::foundation::{
-    LazyColumn, LazyListScope, LazyListState, TooltipArea, VerticalScrollbar,
-    is_system_in_dark_theme, remember_lazy_list_scrollbar_adapter, remember_lazy_list_state,
+    LazyColumn, LazyListScope, LazyListState, PasswordVisualTransformation, ScrollModifiers,
+    TooltipArea, VerticalScrollbar, is_system_in_dark_theme, remember_lazy_list_scrollbar_adapter,
+    remember_lazy_list_state, remember_scroll_state,
 };
 use compose::material3::*;
 use compose::navigation::*;
@@ -29,6 +32,7 @@ pub fn Gallery() {
 pub enum Destination {
     Home,
     Card(u32),
+    MoreControls,
 }
 
 /// What each screen shows.
@@ -39,11 +43,22 @@ fn destination_entry(
 ) -> NavEntry<Destination> {
     match destination {
         Destination::Home => NavEntry::new(destination, move |_| {
-            Home!(about, on_open_card = move |card: u32| back_stack.push(Destination::Card(card)));
+            Home!(
+                about,
+                on_open_card = move |card: u32| back_stack.push(Destination::Card(card)),
+                on_open_more = move || back_stack.push(Destination::MoreControls)
+            );
         }),
         Destination::Card(card) => NavEntry::new(destination, move |_| {
             CardScreen!(
                 card,
+                on_back = move || {
+                    back_stack.remove_last_or_none();
+                }
+            );
+        }),
+        Destination::MoreControls => NavEntry::new(destination, move |_| {
+            MoreControlsScreen!(
                 on_back = move || {
                     back_stack.remove_last_or_none();
                 }
@@ -73,7 +88,7 @@ pub fn GalleryWith(about: bool) {
 
 /// The tour: a drawer, a scaffold with its bars, the controls and the cards.
 #[composable]
-fn Home(about: bool, on_open_card: impl Fn(u32) + 'static) {
+fn Home(about: bool, on_open_card: impl Fn(u32) + 'static, on_open_more: impl Fn() + 'static) {
     let cards = remember_saveable(|| mutable_state_of(FIRST_CARDS));
     let menu = remember(|| mutable_state_of(false));
     let dialog = remember_saveable(|| mutable_state_of(about));
@@ -123,6 +138,16 @@ fn Home(about: bool, on_open_card: impl Fn(u32) + 'static) {
                     },
                     modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
                     icon = Some(|| Icon!(icons::filled::info(), None))
+                );
+                NavigationDrawerItem!(
+                    { Text!("More controls") },
+                    false,
+                    move || {
+                        on_open_more();
+                        close_drawer();
+                    },
+                    modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
+                    icon = Some(|| Icon!(icons::filled::more_vert(), None))
                 );
             });
         },
@@ -193,6 +218,7 @@ fn TopBar(
 ) {
     let scope = remember_coroutine_scope();
     let search_field = remember(FocusRequester::new);
+    let keyboard = LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current();
     TopAppBar!(
         {
             if searching.get() {
@@ -202,6 +228,16 @@ fn TopBar(
                     modifier = Modifier.fill_max_width().focus_requester(search_field),
                     text_style = MaterialTheme::typography().body_large.clone(),
                     placeholder = Some(|| Text!("Search the cards")),
+                    keyboard_options = KeyboardOptions {
+                        ime_action: ImeAction::Search,
+                        ..KeyboardOptions::DEFAULT
+                    },
+                    // The cards filter as it's typed: the key just shows them.
+                    keyboard_actions = KeyboardActions::new().on_search(move || {
+                        if let Some(keyboard) = &keyboard {
+                            keyboard.hide();
+                        }
+                    }),
                     single_line = true,
                 );
             } else {
@@ -457,5 +493,290 @@ fn CardScreen(card: u32, on_back: impl Fn() + 'static) {
                 }
             );
         }
+    );
+}
+
+/// What the tour has no room for, a tab for each kind.
+#[composable]
+fn MoreControlsScreen(on_back: impl Fn() + 'static) {
+    let tab = remember_saveable(|| mutable_state_of(0));
+    let scroll = remember_scroll_state!();
+    Scaffold!(
+        top_bar = {
+            TopAppBar!(
+                {
+                    Text!("More controls");
+                },
+                navigation_icon = {
+                    IconButton!(on_click = move || on_back(), {
+                        Icon!(icons::filled::arrow_back(), Some("Back"));
+                    });
+                }
+            );
+        },
+        |padding: PaddingValues| {
+            Column!(modifier = Modifier.padding(padding).fill_max_size(), |column| {
+                PrimaryTabRow!(tab.get(), {
+                    for (index, title) in ["Fields", "Choices", "Windows"].into_iter().enumerate() {
+                        Tab!(
+                            tab.get() == index,
+                            move || tab.set(index),
+                            text = Some(move || Text!(title))
+                        );
+                    }
+                });
+                Column!(
+                    modifier = Modifier
+                        .weight(column, 1.0)
+                        .fill_max_width()
+                        .vertical_scroll(scroll)
+                        .padding(16.dp()),
+                    vertical_arrangement = Arrangement::spaced_by(12.dp()),
+                    {
+                        match tab.get() {
+                            0 => FieldsTab(),
+                            1 => ChoicesTab(),
+                            _ => WindowsTab(),
+                        }
+                    }
+                );
+            });
+        }
+    );
+}
+
+/// A field of each kind the keyboard treats differently, and a way out of them all.
+#[composable]
+fn FieldsTab() {
+    // Not saveable: a password isn't kept in the saved state.
+    let password = remember(|| mutable_state_of(String::new()));
+    let shown = remember(|| mutable_state_of(false));
+    let number = remember_saveable(|| mutable_state_of(String::new()));
+    let phone = remember_saveable(|| mutable_state_of(String::new()));
+    let notes = remember_saveable(|| mutable_state_of(String::new()));
+    let focus = LOCAL_FOCUS_MANAGER.current();
+    let options = |keyboard_type, ime_action| KeyboardOptions {
+        keyboard_type,
+        ime_action,
+        ..KeyboardOptions::DEFAULT
+    };
+    TextField!(
+        password.get(),
+        move |value| password.set(value),
+        modifier = Modifier.fill_max_width(),
+        label = Some(|| Text!("Password")),
+        trailing_icon = Some(move || {
+            IconButton!(on_click = move || shown.set(!shown.get()), {
+                let description =
+                    if shown.get() { "Hide the password" } else { "Show the password" };
+                Icon!(icons::filled::lock(), Some(description));
+            });
+        }),
+        visual_transformation = if shown.get() {
+            VisualTransformation::NONE
+        } else {
+            PasswordVisualTransformation::new().into()
+        },
+        keyboard_options = options(KeyboardType::Password, ImeAction::Next),
+        single_line = true,
+    );
+    TextField!(
+        number.get(),
+        move |value| number.set(value),
+        modifier = Modifier.fill_max_width(),
+        label = Some(|| Text!("Number")),
+        keyboard_options = options(KeyboardType::Number, ImeAction::Next),
+        single_line = true,
+    );
+    TextField!(
+        phone.get(),
+        move |value| phone.set(value),
+        modifier = Modifier.fill_max_width(),
+        label = Some(|| Text!("Phone")),
+        keyboard_options = options(KeyboardType::Phone, ImeAction::Done),
+        single_line = true,
+    );
+    TextField!(
+        notes.get(),
+        move |value| notes.set(value),
+        modifier = Modifier.fill_max_width(),
+        label = Some(|| Text!("Notes")),
+        min_lines = 3,
+    );
+    Button!(on_click = move || focus.clear_focus(false), {
+        Text!("Clear the focus");
+    });
+}
+
+/// A checkbox of three states over its two children, rows selected with no role, messages with
+/// actions of their own, and a group read in another order than it's shown.
+#[composable]
+fn ChoicesTab() {
+    let milk = remember_saveable(|| mutable_state_of(false));
+    let eggs = remember_saveable(|| mutable_state_of(false));
+    let both = match (milk.get(), eggs.get()) {
+        (true, true) => ToggleableState::On,
+        (false, false) => ToggleableState::Off,
+        _ => ToggleableState::Indeterminate,
+    };
+    Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
+        TriStateCheckbox!(
+            both,
+            Some(move || {
+                let next = both != ToggleableState::On;
+                milk.set(next);
+                eggs.set(next);
+            }),
+            modifier = Modifier.semantics(|config| config.set_content_description("Milk and eggs"))
+        );
+        Text!("Milk and eggs");
+    });
+    for (title, item) in [("Milk", milk), ("Eggs", eggs)] {
+        Row!(
+            modifier = Modifier.padding((24.dp(), 0.dp(), 0.dp(), 0.dp())),
+            vertical_alignment = Alignment::CENTER_VERTICALLY,
+            {
+                Checkbox!(
+                    checked = item.get(),
+                    on_checked_change = move |checked| item.set(checked),
+                    modifier = Modifier.semantics(|config| config.set_content_description(title))
+                );
+                Text!(title);
+            }
+        );
+    }
+    HorizontalDivider!();
+
+    let size = remember_saveable(|| mutable_state_of(0));
+    Column!(modifier = Modifier.selectable_group(), {
+        for (index, title) in ["Small", "Large"].into_iter().enumerate() {
+            let selected = size.get() == index;
+            Row!(
+                modifier = Modifier
+                    .fill_max_width()
+                    .selectable(selected, move || size.set(index))
+                    .padding(12.dp()),
+                horizontal_arrangement = Arrangement::spaced_by(8.dp()),
+                vertical_alignment = Alignment::CENTER_VERTICALLY,
+                {
+                    Box!(modifier = Modifier.size(24.dp()), {
+                        if selected {
+                            Icon!(icons::filled::check(), None);
+                        }
+                    });
+                    Text!(title);
+                }
+            );
+        }
+    });
+    HorizontalDivider!();
+
+    // Each message's number and whether it's starred, in the list's order.
+    let messages = remember(|| mutable_state_of(vec![(1, false), (2, false), (3, false)]));
+    for (message, starred) in messages.get() {
+        let star = move || {
+            let mut all = messages.get();
+            if let Some(entry) = all.iter_mut().find(|entry| entry.0 == message) {
+                entry.1 = !entry.1;
+            }
+            messages.set(all);
+            true
+        };
+        let move_to_the_end = move || {
+            let mut all = messages.get();
+            if let Some(at) = all.iter().position(|entry| entry.0 == message) {
+                let entry = all.remove(at);
+                all.push(entry);
+            }
+            messages.set(all);
+            true
+        };
+        let label = if starred { "Unstar" } else { "Star" };
+        Card!(
+            modifier = Modifier.fill_max_width().semantics_with(true, move |config| {
+                config.set_custom_actions(vec![
+                    CustomAccessibilityAction::new(label, star),
+                    CustomAccessibilityAction::new("Move to the end", move_to_the_end),
+                ]);
+            }),
+            {
+                let suffix = if starred { ", starred" } else { "" };
+                Text!("Message {}{}", message, suffix, modifier = Modifier.padding(12.dp()));
+            }
+        );
+    }
+    HorizontalDivider!();
+
+    Row!(
+        modifier = Modifier.semantics(|config| config.set_is_traversal_group(true)),
+        horizontal_arrangement = Arrangement::spaced_by(12.dp()),
+        {
+            for (text, index) in [("Read second", 2.0), ("Read third", 3.0), ("Read first", 1.0)] {
+                Text!(
+                    text,
+                    modifier = Modifier.semantics(|config| config.set_traversal_index(index))
+                );
+            }
+        }
+    );
+    Text!("Read after the group");
+}
+
+/// A field, and what can open over it: a bottom sheet, and a dialog with a field of its own.
+#[composable]
+fn WindowsTab() {
+    let behind = remember_saveable(|| mutable_state_of(String::new()));
+    let sheet = remember_saveable(|| mutable_state_of(false));
+    let dialog = remember_saveable(|| mutable_state_of(false));
+    TextField!(
+        behind.get(),
+        move |value| behind.set(value),
+        modifier = Modifier.fill_max_width(),
+        label = Some(|| Text!("Behind")),
+        single_line = true,
+    );
+    Button!(on_click = move || sheet.set(true), {
+        Text!("Open a bottom sheet");
+    });
+    Button!(on_click = move || dialog.set(true), {
+        Text!("Open a dialog with a field");
+    });
+    if sheet.get() {
+        ModalBottomSheet!(move || sheet.set(false), |_| {
+            // Tall enough to rest half way, with the handle to expand it from there.
+            for line in 1..=12 {
+                Text!("Line {}", line, modifier = Modifier.padding(16.dp()));
+            }
+        });
+    }
+    if dialog.get() {
+        FieldDialog(dialog);
+    }
+}
+
+/// A dialog with no title, whose field takes the focus as it opens.
+#[composable]
+fn FieldDialog(dialog: MutableState<bool>) {
+    let value = remember_saveable(|| mutable_state_of(String::new()));
+    let requester = remember(FocusRequester::new);
+    AlertDialog!(
+        on_dismiss_request = move || dialog.set(false),
+        confirm_button = {
+            TextButton!(on_click = move || dialog.set(false), {
+                Text!("OK");
+            });
+        },
+        text = {
+            TextField!(
+                value.get(),
+                move |new| value.set(new),
+                modifier = Modifier.focus_requester(requester),
+                label = Some(|| Text!("In the dialog")),
+                single_line = true,
+            );
+            LaunchedEffect((), async move {
+                requester.request_focus();
+            });
+        },
     );
 }
