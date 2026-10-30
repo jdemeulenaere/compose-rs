@@ -151,7 +151,7 @@ fn merging_takes_each_field_from_other_when_set() {
     );
     check_merge(
         |value| SpanStyle { font_family: value, ..empty() },
-        |style| style.font_family.unwrap(),
+        |style| style.font_family.clone().unwrap(),
         FontFamily::SansSerif,
         FontFamily::Serif,
         None,

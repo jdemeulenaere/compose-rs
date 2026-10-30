@@ -290,7 +290,7 @@ fn merging_takes_each_field_from_other_when_set() {
     );
     check_merge(
         |v| TextStyle { font_family: v, ..empty() },
-        |s| s.font_family,
+        |s| s.font_family.clone(),
         FontFamily::SansSerif,
         FontFamily::Serif,
     );
@@ -557,7 +557,7 @@ fn lerping_discrete_fields_switches_half_way() {
     );
     check_discrete_lerp(
         |v| TextStyle { font_family: v, ..empty() },
-        |s| s.font_family,
+        |s| s.font_family.clone(),
         Some(FontFamily::SansSerif),
         Some(FontFamily::Serif),
     );

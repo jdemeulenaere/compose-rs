@@ -546,3 +546,104 @@ fn an_unspecified_direction_is_the_layouts_through_basic_text_and_a_measurer() {
     assert_eq!(directions_of("\u{5E9}\u{5DC}", Layout::Ltr), (Resolved::Ltr, Resolved::Ltr));
     assert_eq!(directions_of("\u{5E9}\u{5DC}", Layout::Rtl), (Resolved::Rtl, Resolved::Rtl));
 }
+
+// ---- A font arriving ---------------------------------------------------------------------------
+
+/// A font that arrives when `answer` is given a typeface.
+struct ArrivingFont {
+    typeface: std::rc::Rc<RefCell<Option<compose_ui::Typeface>>>,
+}
+
+impl compose_ui::TypefaceLoader for ArrivingFont {
+    fn load_blocking(
+        &self,
+        _: &dyn compose_ui::platform::PlatformFontLoader,
+        _: &compose_ui::Font,
+    ) -> Result<Option<compose_ui::Typeface>, String> {
+        Err("it's async".to_string())
+    }
+
+    fn await_load(
+        self: Rc<Self>,
+        _: Rc<dyn compose_ui::platform::PlatformFontLoader>,
+        _: compose_ui::Font,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<compose_ui::Typeface>, String>>>,
+    > {
+        Box::pin(async move {
+            loop {
+                if let Some(typeface) = self.typeface.borrow_mut().take() {
+                    return Ok(Some(typeface));
+                }
+                compose_runtime::delay(std::time::Duration::from_millis(10)).await;
+            }
+        })
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/ParagraphIntrinsicsAsyncTypefaceTest.kt, hasStaleResolvedFonts_trueOnTypefaceUpdate_mainTypeface
+#[test]
+fn a_text_is_laid_out_again_when_its_font_arrives() {
+    let arriving: Rc<RefCell<Option<compose_ui::Typeface>>> = Rc::default();
+    let font = compose_ui::Font::from_loader(
+        Rc::new(ArrivingFont { typeface: arriving.clone() }),
+        compose_ui::FontOptions {
+            loading_strategy: Some(compose_ui::FontLoadingStrategy::Async),
+            ..Default::default()
+        },
+    );
+    let family = font.to_font_family();
+    let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
+    let mut host = UiHost::new(IntSize::new(400, 400), Density::new(1.0), Box::new(measurer));
+    let style = TextStyle { font_family: Some(family), ..TextStyle::DEFAULT };
+    host.set_content(move || {
+        BasicText!("Hello", style = style.clone());
+    });
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 1);
+    // Nothing yet: frames lay nothing out.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 1);
+    *arriving.borrow_mut() = Some(compose_ui::Typeface::new("arrived"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    host.frame();
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 2);
+    // It's what shows from now on: no more layouts.
+    host.frame();
+    assert_eq!(counter.of("Hello").fresh, 2);
+}
+
+#[test]
+fn a_measurers_cached_layout_is_not_found_when_its_font_arrived() {
+    let arriving: Rc<RefCell<Option<compose_ui::Typeface>>> = Rc::default();
+    let font = compose_ui::Font::from_loader(
+        Rc::new(ArrivingFont { typeface: arriving.clone() }),
+        compose_ui::FontOptions {
+            loading_strategy: Some(compose_ui::FontLoadingStrategy::Async),
+            ..Default::default()
+        },
+    );
+    let shared = compose_ui::platform::SharedTextMeasurer::new(Box::new(FixedTextMeasurer::new()));
+    let measurer = compose_ui::TextMeasurer::new(
+        compose_ui::create_font_family_resolver(&shared),
+        compose_ui::LocaleList::empty(),
+        Density::new(1.0),
+        compose_ui::LayoutDirection::Ltr,
+        8,
+    );
+    let options = || compose_ui::TextMeasureOptions {
+        style: TextStyle { font_family: Some(font.to_font_family()), ..TextStyle::DEFAULT },
+        ..Default::default()
+    };
+    let first = measurer.measure("Hello", options());
+    let second = measurer.measure("Hello", options());
+    assert!(Rc::ptr_eq(&first.multi_paragraph, &second.multi_paragraph));
+    *arriving.borrow_mut() = Some(compose_ui::Typeface::new("arrived"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    compose_runtime::platform::fire_timers();
+    while compose_runtime::platform::run_ready() {}
+    let third = measurer.measure("Hello", options());
+    assert!(!Rc::ptr_eq(&first.multi_paragraph, &third.multi_paragraph));
+}

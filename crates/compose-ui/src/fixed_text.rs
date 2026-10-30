@@ -11,6 +11,8 @@ use unicode_bidi::{BidiClass, Level, ParagraphBidiInfo, bidi_class};
 
 use crate::annotated::AnnotatedString;
 use crate::constraints::Constraints;
+use crate::font::{Font, FontStyle, FontWeight, PlatformFontLoader, Typeface};
+use crate::font_resolver::{PlatformFonts, ResolvedFonts};
 use crate::paragraph::{
     GlyphBox, LaidOutLine, LineLayout, Paragraph, ParagraphLayout, ParagraphSize,
 };
@@ -52,12 +54,39 @@ impl Default for FixedFontMetrics {
 /// A measurer with a fixed advance per character and fixed line metrics
 /// ([`FixedFontMetrics::DEFAULT`] unless given others): deterministic layout for tests,
 /// independent of fonts.
-#[derive(Default)]
 pub struct FixedTextMeasurer {
     metrics: FixedFontMetrics,
+    fonts: Rc<PlatformFonts>,
     paragraphs: Vec<Option<FixedParagraph>>,
     free: Vec<u64>,
     scratch: std::cell::RefCell<FixedScratch>,
+}
+
+impl Default for FixedTextMeasurer {
+    fn default() -> Self {
+        FixedTextMeasurer {
+            metrics: FixedFontMetrics::default(),
+            fonts: PlatformFonts::new(Rc::new(FixedFontLoader)),
+            paragraphs: Vec::new(),
+            free: Vec::new(),
+            scratch: Default::default(),
+        }
+    }
+}
+
+/// The fixed measurer's fonts: each is there and looks like all the others.
+struct FixedFontLoader;
+
+impl PlatformFontLoader for FixedFontLoader {
+    fn load_blocking(&self, font: &Font) -> Result<Option<Typeface>, String> {
+        Ok(Some(Typeface::new(font.clone())))
+    }
+    fn create_default(&self, _weight: FontWeight, _style: FontStyle) -> Typeface {
+        Typeface::new("default")
+    }
+    fn create_named(&self, _name: &str, _weight: FontWeight, _style: FontStyle) -> Typeface {
+        Typeface::new("named")
+    }
 }
 
 /// Buffers a layout works in, kept so laying text out allocates only its result.
@@ -80,6 +109,8 @@ struct FixedParagraph {
     measured: ParagraphLayout,
     input: FixedInput,
     full: std::cell::OnceCell<Rc<ParagraphLayout>>,
+    /// The fonts its styles resolved to.
+    resolved_fonts: ResolvedFonts,
 }
 
 /// What a paragraph was laid out from.
@@ -140,6 +171,11 @@ impl FixedTextMeasurer {
         FixedTextMeasurer::default()
     }
 
+    /// A measurer whose fonts `loader` loads: for tests of fonts arriving.
+    pub fn with_font_loader(loader: Rc<dyn PlatformFontLoader>) -> FixedTextMeasurer {
+        FixedTextMeasurer { fonts: PlatformFonts::new(loader), ..FixedTextMeasurer::default() }
+    }
+
     /// A measurer with the font `metrics`: [`FixedFontMetrics::SAMPLE_FONT`] for Compose's
     /// paragraph tests.
     pub fn with_metrics(metrics: FixedFontMetrics) -> FixedTextMeasurer {
@@ -191,6 +227,14 @@ impl FixedTextMeasurer {
     ) -> ParagraphHandle {
         let measured =
             self.lay_out(text.as_str(), Some(&text), style, options, constraints, density, false);
+        // Its glyphs don't depend on them, but a font arriving is a new layout on any measurer.
+        let mut resolved_fonts = ResolvedFonts::default();
+        resolved_fonts.resolve(&self.fonts, style);
+        if text.has_span_styles() {
+            for (_, run, _) in text.runs(style) {
+                resolved_fonts.resolve(&self.fonts, &run);
+            }
+        }
         let input = FixedInput {
             text,
             style: LayoutStyle::of(style),
@@ -198,7 +242,12 @@ impl FixedTextMeasurer {
             constraints,
             density: *density,
         };
-        self.store(FixedParagraph { measured, input, full: std::cell::OnceCell::new() })
+        self.store(FixedParagraph {
+            measured,
+            input,
+            full: std::cell::OnceCell::new(),
+            resolved_fonts,
+        })
     }
 
     fn store(&mut self, layout: FixedParagraph) -> ParagraphHandle {
@@ -763,8 +812,17 @@ impl TextMeasurer for FixedTextMeasurer {
                 density: kept.input.density,
             },
             full: kept.full.clone(),
+            resolved_fonts: kept.resolved_fonts.clone(),
         };
         Some(self.store(copy))
+    }
+
+    fn fonts(&self) -> Option<Rc<PlatformFonts>> {
+        Some(self.fonts.clone())
+    }
+
+    fn has_stale_resolved_fonts(&self, handle: ParagraphHandle) -> bool {
+        self.entry(handle).resolved_fonts.is_stale()
     }
 
     fn hit_test(&self, handle: ParagraphHandle, position: Offset) -> TextPosition {

@@ -424,6 +424,16 @@ pub trait TextMeasurer: std::any::Any {
     ) -> Option<ParagraphHandle> {
         None
     }
+    /// The fonts this measurer lays out in, for a resolver over it. `None` (the default): it knows
+    /// no fonts, and every family is its default.
+    fn fonts(&self) -> Option<Rc<crate::font_resolver::PlatformFonts>> {
+        None
+    }
+    /// Whether a font `paragraph` asked for arrived since it was laid out, as Compose's
+    /// `hasStaleResolvedFonts`: it's to be laid out anew.
+    fn has_stale_resolved_fonts(&self, _paragraph: ParagraphHandle) -> bool {
+        false
+    }
     /// A new paragraph with `paragraph`'s layout in `style`'s paint, as [`restyle`](Self::restyle)
     /// makes, `paragraph` staying as it is: what Compose's `Paragraph.paint(color, …)` draws of a
     /// layout kept (a result drawn in another color, D1116). `None` (the default) when the

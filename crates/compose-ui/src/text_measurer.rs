@@ -230,6 +230,13 @@ impl TextLayoutResult {
         }
     }
 
+    fn has_stale_resolved_fonts(&self) -> bool {
+        self.drawable.measured.as_ref().is_some_and(|measured| {
+            let inner = &measured.0;
+            inner.platform.borrow().has_stale_resolved_fonts(inner.keeper.handle())
+        })
+    }
+
     /// The paragraph's size rounded up, unconstrained: what a cached layout measures again.
     fn laid_out_size(&self) -> IntSize {
         match &self.drawable.measured {
@@ -550,6 +557,10 @@ impl TextLayoutCache {
     pub fn get(&mut self, key: &TextLayoutInput) -> Option<TextLayoutResult> {
         let found = self.position_of(key)?;
         let entry = self.entries.remove(found)?;
+        // A font arrived since: no longer valid to measure or draw, as Compose's.
+        if entry.1.has_stale_resolved_fonts() {
+            return None;
+        }
         let result = entry.1.clone();
         self.entries.push_back(entry);
         Some(result)

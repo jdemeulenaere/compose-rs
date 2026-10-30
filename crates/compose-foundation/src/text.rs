@@ -469,6 +469,14 @@ impl TextNode {
         // constraints can differ.
         let current =
             self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
+        // A font arrived, whose state its layout read: nothing kept of it is good, as Compose's
+        // `hasStaleResolvedFonts`. Asked only of a text with fonts of its own, for a frame's many
+        // others: the measure of a screen of text shows it.
+        let fonts_may_arrive = self.text.has_span_styles()
+            || matches!(self.style.font_family, Some(compose_ui::FontFamily::FontList(_)));
+        let current = current.filter(|&paragraph| {
+            !fonts_may_arrive || !scope.text_measurer().has_stale_resolved_fonts(paragraph)
+        });
         let relaid = match (current, self.constraints) {
             (Some(paragraph), Some(old)) => new_layout_will_be_different(
                 reuses_at_same_width(scope),

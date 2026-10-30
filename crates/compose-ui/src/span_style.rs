@@ -100,7 +100,7 @@ impl SpanStyle {
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
             font_synthesis: other.font_synthesis.or(self.font_synthesis),
-            font_family: other.font_family.or(self.font_family),
+            font_family: other.font_family.clone().or_else(|| self.font_family.clone()),
             font_feature_settings: other
                 .font_feature_settings
                 .clone()
@@ -127,7 +127,11 @@ impl SpanStyle {
     /// rest discretely (`start` below half way).
     pub fn lerp(start: &SpanStyle, stop: &SpanStyle, fraction: f32) -> SpanStyle {
         SpanStyle {
-            font_family: lerp_discrete(start.font_family, stop.font_family, fraction),
+            font_family: lerp_discrete(
+                start.font_family.clone(),
+                stop.font_family.clone(),
+                fraction,
+            ),
             font_size: lerp_text_unit_inheritable(start.font_size, stop.font_size, fraction),
             font_weight: Some(FontWeight::lerp(
                 start.font_weight.unwrap_or(FontWeight::NORMAL),

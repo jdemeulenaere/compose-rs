@@ -362,9 +362,9 @@ impl TypeScaleTokens {
 /// A type scale entry as a text style in `font_family`, as `TypographyTokens`: Material's
 /// default text style (`DefaultTextStyle`: its line height style) with the token's values. The
 /// tokens' fonts (`TypefaceTokens.Brand` and `Plain`) are both sans serif.
-const fn style(token: TypeScaleToken, font_family: FontFamily) -> TextStyle {
+fn style(token: TypeScaleToken, font_family: &FontFamily) -> TextStyle {
     TextStyle {
-        font_family: Some(font_family),
+        font_family: Some(font_family.clone()),
         font_size: TextUnit::sp(token.size),
         font_weight: Some(token.weight),
         line_height: TextUnit::sp(token.line_height),
@@ -383,7 +383,8 @@ impl Typography {
     /// The type scale in `font_family`, as `Typography(fontFamily)`. Styles given by struct
     /// update keep theirs; [`with_default_font_family`](Self::with_default_font_family) gives
     /// them this one where they have none, as Compose's constructor does.
-    pub const fn from_font_family(font_family: FontFamily) -> Typography {
+    pub fn from_font_family(font_family: FontFamily) -> Typography {
+        let font_family = &font_family;
         Typography {
             display_large: style(TypeScaleTokens::DISPLAY_LARGE, font_family),
             display_medium: style(TypeScaleTokens::DISPLAY_MEDIUM, font_family),
@@ -466,7 +467,7 @@ impl Typography {
             &mut self.label_small_emphasized,
         ] {
             if style.font_family.is_none() {
-                style.font_family = Some(font_family);
+                style.font_family = Some(font_family.clone());
             }
         }
         self

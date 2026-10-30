@@ -64,7 +64,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Semantics reach a service from the merged tree**: Android's bridge writes the top window's merged nodes, with Compose's order, classes, actions, live regions and pane events (D1289-D1291), not the unmerged tree with fake nodes Compose's does; text granularity movement, set-text and extra data aren't there yet, and on desktop AccessKit has no dismiss action of its own (a custom action says it).
 - **Content descriptions of icons and images are `&'static str`** (`Icon!(icon, Some("Search"))`): a description built at run time goes through `Modifier.semantics` ([Accessibility](kotlin-to-rust.md#accessibility-and-semantics)).
 - **Line heights** spread as Compose's `LineHeightStyle` in its `Fixed` mode only: there are no `Tight` and `Minimum` modes, and no `includeFontPadding` (a style without a line height style takes `LineHeightStyle::DEFAULT`, as Compose's without font padding, D571). On the desktop, Skia centers or scales the extra height; other alignments are proportional there.
-- **Fonts are the system's**: `FontFamily` names a system family (`SansSerif`, `Serif`, `Monospace`, `Cursive`, `Named("…")`); custom font files can't be loaded.
+- **Fonts** are Compose's (`Font`, `FontFamily::of`, `FontLoadingStrategy`, `FontVariation`), but a resource is its bytes (`Font::from_bytes(include_bytes!(…), …)`), `Font` is one struct whose constructors stand for Compose's overloads, and the desktop doesn't fake a missing bold or italic.
 
 ## Navigation and platform
 

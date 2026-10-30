@@ -1,15 +1,17 @@
 //! `SkiaTextMeasurer`: paragraphs laid out by Skia's paragraph module (SkParagraph: HarfBuzz
 //! shaping, ICU line breaking and bidi), as Compose Desktop's (docs/07-platforms.md, "Text").
 
+use compose_ui::platform::{PlatformFontLoader, PlatformFonts, ResolvedFonts};
 use compose_ui::{
     Constraints, Density, IntSize, Offset, Rect, TextStyle,
     platform::{ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition},
 };
 use skia_safe::textlayout::{
     FontCollection, Paragraph, ParagraphBuilder, ParagraphStyle, RectHeightStyle, RectWidthStyle,
-    TextStyle as SkiaTextStyle,
+    TextStyle as SkiaTextStyle, TypefaceFontProvider,
 };
-use skia_safe::{FontMgr, FontStyle, font_style};
+use skia_safe::{Data, FontArguments, FontMgr, FontStyle, Typeface, font_arguments, font_style};
+use std::rc::Rc;
 
 /// The families tried first, as Compose Desktop's default `FontFamily.SansSerif`, before the
 /// font manager's fallback.
@@ -24,24 +26,159 @@ const DEFAULT_FAMILIES: &[&str] = &[
     "sans-serif",
 ];
 
-/// The families SkParagraph tries for `family`, the default ones after a named one.
-fn families(family: Option<compose_ui::FontFamily>) -> Vec<&'static str> {
+/// The families SkParagraph tries for `family`, the default ones after a named one. A family of
+/// fonts is the typeface's alias, given first, then the defaults for the glyphs it lacks.
+fn families(family: Option<&compose_ui::FontFamily>) -> Vec<&'static str> {
     use compose_ui::FontFamily;
     let generic: &[&str] = match family {
-        None | Some(FontFamily::SansSerif) => return DEFAULT_FAMILIES.to_vec(),
+        None
+        | Some(
+            FontFamily::SansSerif
+            | FontFamily::Default
+            | FontFamily::FontList(_)
+            | FontFamily::Loaded(_),
+        ) => return DEFAULT_FAMILIES.to_vec(),
         Some(FontFamily::Serif) => &["Noto Serif", "Times New Roman", "Times", "Georgia", "serif"],
         Some(FontFamily::Monospace) => {
             &["Roboto Mono", "Menlo", "SF Mono", "Consolas", "DejaVu Sans Mono", "monospace"]
         }
         Some(FontFamily::Cursive) => &["Apple Chancery", "Comic Sans MS", "cursive"],
         Some(FontFamily::Named(name)) => {
-            return std::iter::once(name).chain(DEFAULT_FAMILIES.iter().copied()).collect();
+            return std::iter::once(*name).chain(DEFAULT_FAMILIES.iter().copied()).collect();
         }
     };
     generic.iter().chain(DEFAULT_FAMILIES).copied().collect()
 }
 
+/// The system's fonts and those given. No typeface is synthesized (D1121).
+struct SkiaFontLoader {
+    manager: FontMgr,
+}
+
+impl SkiaFontLoader {
+    fn typeface_of(
+        &self,
+        data: &[u8],
+        font: &compose_ui::Font,
+    ) -> Result<Option<Typeface>, String> {
+        let typeface = self
+            .manager
+            .new_from_data(Data::new_copy(data), None)
+            .ok_or_else(|| format!("not a font: {font:?}"))?;
+        Ok(Some(varied(typeface, font)))
+    }
+
+    fn style_of(weight: compose_ui::FontWeight, style: compose_ui::FontStyle) -> FontStyle {
+        let slant = match style {
+            compose_ui::FontStyle::Italic => font_style::Slant::Italic,
+            compose_ui::FontStyle::Normal => font_style::Slant::Upright,
+        };
+        FontStyle::new(
+            font_style::Weight::from(weight.weight() as i32),
+            font_style::Width::NORMAL,
+            slant,
+        )
+    }
+
+    /// The first of `families` on this system; else any.
+    fn typeface(&self, families: &[&str], style: FontStyle) -> compose_ui::Typeface {
+        let found = families
+            .iter()
+            .find_map(|family| self.manager.match_family_style(family, style))
+            .or_else(|| self.manager.legacy_make_typeface(None, style));
+        compose_ui::Typeface::new(found)
+    }
+}
+
+/// `typeface` at `font`'s variation settings, if it's a variable font.
+fn varied(typeface: Typeface, font: &compose_ui::Font) -> Typeface {
+    let settings = font.variation_settings().settings();
+    let variable = typeface.variation_design_parameters().is_some_and(|axes| !axes.is_empty());
+    if settings.is_empty() || !variable {
+        return typeface;
+    }
+    let density = Density::default();
+    let coordinates: Vec<font_arguments::variation_position::Coordinate> = settings
+        .iter()
+        .filter_map(|setting| {
+            let name = setting.axis_name().as_bytes();
+            let tag: [u8; 4] = name.try_into().ok()?;
+            Some(font_arguments::variation_position::Coordinate {
+                axis: skia_safe::FourByteTag::from_chars(
+                    tag[0] as char,
+                    tag[1] as char,
+                    tag[2] as char,
+                    tag[3] as char,
+                ),
+                value: setting.to_variation_value(Some(&density)),
+            })
+        })
+        .collect();
+    let arguments =
+        FontArguments::new().set_variation_design_position(font_arguments::VariationPosition {
+            coordinates: &coordinates,
+        });
+    typeface.clone_with_arguments(&arguments).unwrap_or(typeface)
+}
+
+impl PlatformFontLoader for SkiaFontLoader {
+    fn load_blocking(
+        &self,
+        font: &compose_ui::Font,
+    ) -> Result<Option<compose_ui::Typeface>, String> {
+        use compose_ui::FontSource;
+        let read = |path: &std::path::Path| {
+            std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))
+        };
+        let loaded = match font.source() {
+            FontSource::Bytes(bytes) => self.typeface_of(bytes.as_slice(), font)?,
+            FontSource::File(path) => self.typeface_of(&read(path)?, font)?,
+            // On the desktop an asset is a file.
+            FontSource::Asset(path) => {
+                self.typeface_of(&read(std::path::Path::new(path.as_str()))?, font)?
+            }
+            FontSource::DeviceFamily(name) => {
+                let mut styles = self.manager.match_family(name.name());
+                if styles.count() == 0 {
+                    return Ok(None);
+                }
+                let style = SkiaFontLoader::style_of(font.weight(), font.style());
+                styles.match_style(style).map(|typeface| varied(typeface, font))
+            }
+            FontSource::Loader(_) => return Err("a font of an application's loader".to_string()),
+        };
+        Ok(loaded.map(compose_ui::Typeface::new))
+    }
+
+    fn create_default(
+        &self,
+        weight: compose_ui::FontWeight,
+        style: compose_ui::FontStyle,
+    ) -> compose_ui::Typeface {
+        self.typeface(DEFAULT_FAMILIES, SkiaFontLoader::style_of(weight, style))
+    }
+
+    fn create_named(
+        &self,
+        name: &str,
+        weight: compose_ui::FontWeight,
+        style: compose_ui::FontStyle,
+    ) -> compose_ui::Typeface {
+        let family = match name {
+            "serif" => compose_ui::FontFamily::Serif,
+            "monospace" => compose_ui::FontFamily::Monospace,
+            "cursive" => compose_ui::FontFamily::Cursive,
+            _ => compose_ui::FontFamily::SansSerif,
+        };
+        let mut names = vec![name];
+        names.extend(families(Some(&family)));
+        self.typeface(&names, SkiaFontLoader::style_of(weight, style))
+    }
+}
+
 struct Entry {
+    /// The fonts its styles resolved to.
+    resolved_fonts: ResolvedFonts,
     paragraph: Paragraph,
     text: String,
     metrics: ParagraphMetrics,
@@ -145,6 +282,10 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
 /// the renderer draws a paragraph by handle with the same object.
 pub struct SkiaTextMeasurer {
     collection: FontCollection,
+    fonts: Rc<PlatformFonts>,
+    /// The typefaces of fonts given, under an alias each, for SkParagraph to find by family.
+    provider: TypefaceFontProvider,
+    aliases: Vec<(u32, String)>,
     paragraphs: Vec<Option<Entry>>,
     free: Vec<u64>,
 }
@@ -163,8 +304,17 @@ impl SkiaTextMeasurer {
 
     pub fn with_font_manager(font_manager: FontMgr) -> SkiaTextMeasurer {
         let mut collection = FontCollection::new();
-        collection.set_default_font_manager(font_manager, None);
-        SkiaTextMeasurer { collection, paragraphs: Vec::new(), free: Vec::new() }
+        collection.set_default_font_manager(font_manager.clone(), None);
+        let provider = TypefaceFontProvider::new();
+        collection.set_asset_font_manager(Some(FontMgr::from(provider.clone())));
+        SkiaTextMeasurer {
+            collection,
+            fonts: PlatformFonts::new(Rc::new(SkiaFontLoader { manager: font_manager })),
+            provider,
+            aliases: Vec::new(),
+            paragraphs: Vec::new(),
+            free: Vec::new(),
+        }
     }
 
     /// The SkParagraph behind `handle`, for drawing (`TextMeasurer::paragraph` gives its
@@ -176,6 +326,24 @@ impl SkiaTextMeasurer {
     /// The number of live paragraphs: for leak tests.
     pub fn live(&self) -> usize {
         self.paragraphs.iter().filter(|entry| entry.is_some()).count()
+    }
+
+    /// The family SkParagraph finds `style`'s font under, if it's a font given.
+    fn alias_of(&mut self, resolved: &mut ResolvedFonts, style: &TextStyle) -> Option<String> {
+        let resolved = resolved.resolve(&self.fonts, style)?;
+        let typeface = resolved
+            .downcast_ref::<Typeface>()
+            .or_else(|| resolved.downcast_ref::<Option<Typeface>>().and_then(Option::as_ref))?;
+        let id = typeface.unique_id();
+        if let Some((_, alias)) = self.aliases.iter().find(|(kept, _)| *kept == id) {
+            return Some(alias.clone());
+        }
+        let alias = format!("compose-rs font {id}");
+        self.provider.register_typeface(typeface.clone(), alias.as_str());
+        // What the collection knew of the provider's families.
+        self.collection.clear_caches();
+        self.aliases.push((id, alias.clone()));
+        Some(alias)
     }
 
     fn entry(&self, handle: ParagraphHandle) -> &Entry {
@@ -246,6 +414,14 @@ impl TextMeasurer for SkiaTextMeasurer {
     ) -> ParagraphHandle {
         let runs = text.runs(style);
         self.layout_runs(text.as_str(), &runs, style, options, constraints, density)
+    }
+
+    fn fonts(&self) -> Option<Rc<PlatformFonts>> {
+        Some(self.fonts.clone())
+    }
+
+    fn has_stale_resolved_fonts(&self, paragraph: ParagraphHandle) -> bool {
+        self.entry(paragraph).resolved_fonts.is_stale()
     }
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
@@ -377,7 +553,9 @@ impl SkiaTextMeasurer {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        let text_style = skia_text_style(style, density);
+        let mut resolved_fonts = ResolvedFonts::default();
+        let alias = self.alias_of(&mut resolved_fonts, style);
+        let text_style = skia_text_style(style, density, alias.as_deref());
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
         // A trimmed line height leaves the first line's top or the last line's bottom at the
@@ -430,7 +608,8 @@ impl SkiaTextMeasurer {
         } else {
             // Each run in its style, as SkParagraph's styled runs.
             for (range, run_style, background) in runs {
-                let mut run = skia_text_style(run_style, density);
+                let alias = self.alias_of(&mut resolved_fonts, run_style);
+                let mut run = skia_text_style(run_style, density, alias.as_deref());
                 if background.is_specified() {
                     let mut paint = skia_safe::Paint::default();
                     paint.set_color(skia_safe::Color::new(background.argb()));
@@ -474,6 +653,7 @@ impl SkiaTextMeasurer {
         drop(lines);
         let ellipsized = ellipsis && paragraph.did_exceed_max_lines();
         let entry = Entry {
+            resolved_fonts,
             paragraph,
             text: text.to_string(),
             metrics,
@@ -500,13 +680,17 @@ fn font_px_of(style: &TextStyle, density: &Density) -> f32 {
 }
 
 /// SkParagraph's style for `style`.
-fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
+fn skia_text_style(style: &TextStyle, density: &Density, alias: Option<&str>) -> SkiaTextStyle {
     let font_px = font_px_of(style, density);
     let mut text_style = SkiaTextStyle::new();
     let color = compose_ui::platform::resolve_text_color(style);
     text_style.set_color(skia_safe::Color::new(color.argb()));
     text_style.set_font_size(font_px);
-    text_style.set_font_families(&families(style.font_family));
+    let mut family_names = families(style.font_family.as_ref());
+    if let Some(alias) = alias {
+        family_names.insert(0, alias);
+    }
+    text_style.set_font_families(&family_names);
     let weight = style.font_weight.unwrap_or(compose_ui::FontWeight::NORMAL);
     let slant = match style.font_style {
         Some(compose_ui::FontStyle::Italic) => font_style::Slant::Italic,

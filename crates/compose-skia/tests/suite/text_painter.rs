@@ -11,11 +11,11 @@ use compose::foundation::*;
 use compose::runtime::*;
 use compose::ui::platform::{Renderer, SharedTextMeasurer, UiHost};
 use compose::ui::{
-    AnnotatedString, Color, Constraints, Density, DrawScope, DrawTextLayoutOptions,
-    DrawTextOptions, FontFamilyResolver, IntSize, LOCAL_FONT_FAMILY_RESOLVER, LayoutDirection,
-    LocaleList, Modifier, Offset, Size, TextDecoration, TextLayoutResult, TextMeasureOptions,
-    TextMeasurer, TextOverflow, TextPainter, TextStyle, UnitExt, create_font_family_resolver,
-    remember_text_measurer,
+    AnnotatedString, Color, Constraints, Density, DeviceFontFamilyName, DrawScope,
+    DrawTextLayoutOptions, DrawTextOptions, Font, FontFamily, FontFamilyResolver, FontOptions,
+    IntSize, LOCAL_FONT_FAMILY_RESOLVER, LayoutDirection, LocaleList, Modifier, Offset, Size,
+    TextDecoration, TextLayoutResult, TextMeasureOptions, TextMeasurer, TextOverflow, TextPainter,
+    TextStyle, UnitExt, create_font_family_resolver, remember_text_measurer,
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
@@ -778,4 +778,101 @@ fn drawing_a_layout_twice_in_another_color_keeps_one_repainted_paragraph() {
     // Both are drawn from the same frame's recording: the first isn't lost to the second.
     let first_rows = &picture.pixels[..100 * 1000];
     assert!(first_rows.contains(&Color::RED) && !first_rows.contains(&Color::BLUE));
+}
+
+// ---- Fonts on the real stack -------------------------------------------------------------------
+
+/// A monospaced font file of this system, if it has one we know.
+fn monospaced_font_file() -> Option<&'static str> {
+    [
+        "/System/Library/Fonts/Monaco.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())
+}
+
+fn width_of(text: &str, family: &FontFamily) -> i32 {
+    let shared = SharedTextMeasurer::new(Box::new(SkiaTextMeasurer::new()));
+    let measurer = TextMeasurer::new(
+        create_font_family_resolver(&shared),
+        LocaleList::empty(),
+        Density::new(1.0),
+        LayoutDirection::Ltr,
+        0,
+    );
+    let style = TextStyle { font_family: Some(family.clone()), ..style_of(40.0) };
+    let result =
+        measurer.measure(text, TextMeasureOptions { style, ..TextMeasureOptions::default() });
+    result.size.width
+}
+
+#[test]
+fn a_font_of_a_file_is_what_a_text_is_laid_out_in() {
+    let Some(path) = monospaced_font_file() else { return };
+    let family = Font::from_file(path, FontOptions::default()).to_font_family();
+    assert_eq!(width_of("iiiiiiii", &family), width_of("WWWWWWWW", &family));
+    // Not the default family's, which is proportional.
+    assert_ne!(
+        width_of("iiiiiiii", &FontFamily::SansSerif),
+        width_of("WWWWWWWW", &FontFamily::SansSerif)
+    );
+}
+
+#[test]
+fn a_font_of_bytes_is_what_a_text_is_laid_out_in() {
+    let Some(path) = monospaced_font_file() else { return };
+    let bytes: std::sync::Arc<[u8]> = std::fs::read(path).expect("the font").into();
+    let family = Font::from_shared_bytes(bytes, FontOptions::default()).to_font_family();
+    assert_eq!(width_of("iiiiiiii", &family), width_of("WWWWWWWW", &family));
+}
+
+#[test]
+fn a_blocking_font_that_cannot_be_read_is_the_default() {
+    let family = Font::from_file("/no/such/font.ttf", FontOptions::default()).to_font_family();
+    assert_eq!(width_of("Hello", &family), width_of("Hello", &FontFamily::SansSerif));
+}
+
+#[test]
+fn a_device_family_that_is_missing_goes_on_to_the_next_font() {
+    let Some(path) = monospaced_font_file() else { return };
+    let missing = Font::from_device_family(
+        DeviceFontFamilyName::new("No Such Family"),
+        FontOptions::default(),
+    );
+    let family = FontFamily::of([missing, Font::from_file(path, FontOptions::default())]);
+    assert_eq!(width_of("iiiiiiii", &family), width_of("WWWWWWWW", &family));
+}
+
+#[test]
+fn a_span_in_a_font_of_its_own_is_laid_out_in_it() {
+    let Some(path) = monospaced_font_file() else { return };
+    let family = Font::from_file(path, FontOptions::default()).to_font_family();
+    let in_font = |text: &'static str| {
+        AnnotatedString::build(|builder| {
+            builder.with_style(
+                compose::ui::SpanStyle {
+                    font_family: Some(family.clone()),
+                    ..compose::ui::SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.append(text);
+                },
+            );
+        })
+    };
+    let shared = SharedTextMeasurer::new(Box::new(SkiaTextMeasurer::new()));
+    let measurer = TextMeasurer::new(
+        create_font_family_resolver(&shared),
+        LocaleList::empty(),
+        Density::new(1.0),
+        LayoutDirection::Ltr,
+        0,
+    );
+    let measure = |text| {
+        let options = TextMeasureOptions { style: style_of(40.0), ..TextMeasureOptions::default() };
+        measurer.measure(in_font(text), options).size.width
+    };
+    assert_eq!(measure("iiiiiiii"), measure("WWWWWWWW"));
 }

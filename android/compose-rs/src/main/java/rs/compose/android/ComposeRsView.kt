@@ -135,7 +135,10 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     private fun newMeasurer() =
-        TextMeasurer(checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
+        TextMeasurer(
+            checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
+            assets = context.assets,
+        )
 
     /** What the Kotlin side does by [optimizations]: paragraphs' render nodes, the flush layer. */
     private fun applyOptimizations(value: Long) {

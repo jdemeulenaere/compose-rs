@@ -149,6 +149,160 @@ struct JniText {
     release: JMethodID,
 }
 
+/// The fonts of `TextMeasurer.kt`, called back with JNI: rarely, each kept by the resolver.
+struct JniFonts {
+    measurer: Global<JObject<'static>>,
+    density: compose_ui::Density,
+}
+
+impl JniFonts {
+    /// A font's variation settings, as Compose's `toAndroidString`.
+    fn settings_of(&self, font: &compose_ui::Font) -> String {
+        font.variation_settings()
+            .settings()
+            .iter()
+            .map(|setting| {
+                format!(
+                    "'{}' {}",
+                    setting.axis_name(),
+                    setting.to_variation_value(Some(&self.density))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// What `load` returned: its typeface's number, or -1.
+    fn typeface_of(number: Result<jint, jni::errors::Error>) -> Option<compose_ui::Typeface> {
+        match number {
+            Ok(number) if number >= 0 => {
+                Some(compose_ui::Typeface::new(crate::text::AndroidTypeface(number as u32)))
+            }
+            _ => None,
+        }
+    }
+
+    fn created(&self, name: Option<&str>, weight: u16, italic: bool) -> compose_ui::Typeface {
+        with_main_env(|env| {
+            let name = match name {
+                Some(name) => env.new_string(name).expect("compose-android: a string").into(),
+                None => JObject::null(),
+            };
+            let number = env
+                .call_method(
+                    &*self.measurer,
+                    jni_str!("createTypeface"),
+                    jni_sig!("(Ljava/lang/String;IZ)I"),
+                    &[(&name).into(), JValue::Int(jint::from(weight)), JValue::Bool(italic)],
+                )
+                .and_then(|value| value.i());
+            check(env, "TextMeasurer.createTypeface");
+            JniFonts::typeface_of(number).expect("the platform's families are always there")
+        })
+    }
+}
+
+impl compose_ui::platform::PlatformFontLoader for JniFonts {
+    fn load_blocking(
+        &self,
+        font: &compose_ui::Font,
+    ) -> Result<Option<compose_ui::Typeface>, String> {
+        use compose_ui::FontSource;
+        let weight = JValue::Int(jint::from(font.weight().weight()));
+        let italic = JValue::Bool(font.style() == compose_ui::FontStyle::Italic);
+        let settings = self.settings_of(font);
+        with_main_env(|env| {
+            let settings = env.new_string(&settings).expect("compose-android: a string");
+            let settings = JValue::from(&settings);
+            let by_path = |env: &mut Env, method, path: &str| {
+                let path = env.new_string(path).expect("compose-android: a string");
+                env.call_method(
+                    &*self.measurer,
+                    method,
+                    jni_sig!("(Ljava/lang/String;IZLjava/lang/String;)I"),
+                    &[(&path).into(), weight, italic, settings],
+                )
+                .and_then(|value| value.i())
+            };
+            let number = match font.source() {
+                FontSource::Bytes(bytes) => {
+                    let bytes = env
+                        .byte_array_from_slice(bytes.as_slice())
+                        .expect("compose-android: a byte array");
+                    env.call_method(
+                        &*self.measurer,
+                        jni_str!("loadFontBytes"),
+                        jni_sig!("([BIZLjava/lang/String;)I"),
+                        &[(&bytes).into(), weight, italic, settings],
+                    )
+                    .and_then(|value| value.i())
+                }
+                FontSource::File(path) => {
+                    by_path(env, jni_str!("loadFontFile"), &path.to_string_lossy())
+                }
+                FontSource::Asset(path) => by_path(env, jni_str!("loadFontAsset"), path.as_str()),
+                FontSource::DeviceFamily(name) => {
+                    let number = by_path(env, jni_str!("loadDeviceFont"), name.name());
+                    check(env, "TextMeasurer.loadDeviceFont");
+                    // Not on this device: no failure, the next font's turn.
+                    return Ok(JniFonts::typeface_of(number));
+                }
+                FontSource::Loader(_) => {
+                    return Err("a font of an application's loader".to_string());
+                }
+            };
+            check(env, "TextMeasurer.loadFont");
+            JniFonts::typeface_of(number)
+                .map(Some)
+                .ok_or_else(|| format!("Unable to load font {font:?}"))
+        })
+    }
+
+    fn create_default(
+        &self,
+        weight: compose_ui::FontWeight,
+        style: compose_ui::FontStyle,
+    ) -> compose_ui::Typeface {
+        self.created(None, weight.weight(), style == compose_ui::FontStyle::Italic)
+    }
+
+    fn create_named(
+        &self,
+        name: &str,
+        weight: compose_ui::FontWeight,
+        style: compose_ui::FontStyle,
+    ) -> compose_ui::Typeface {
+        self.created(Some(name), weight.weight(), style == compose_ui::FontStyle::Italic)
+    }
+
+    fn synthesize(
+        &self,
+        typeface: &compose_ui::Typeface,
+        weight: compose_ui::FontWeight,
+        italic: bool,
+    ) -> compose_ui::Typeface {
+        let Some(number) = typeface.downcast_ref::<crate::text::AndroidTypeface>() else {
+            return typeface.clone();
+        };
+        with_main_env(|env| {
+            let made = env
+                .call_method(
+                    &*self.measurer,
+                    jni_str!("synthesizeTypeface"),
+                    jni_sig!("(IIZ)I"),
+                    &[
+                        JValue::Int(number.0 as jint),
+                        JValue::Int(jint::from(weight.weight())),
+                        JValue::Bool(italic),
+                    ],
+                )
+                .and_then(|value| value.i());
+            check(env, "TextMeasurer.synthesizeTypeface");
+            JniFonts::typeface_of(made).unwrap_or_else(|| typeface.clone())
+        })
+    }
+}
+
 impl JniText {
     fn result(&self, index: usize) -> f32 {
         // SAFETY: the Kotlin measurer's direct buffer holds 8 floats and outlives it.
@@ -621,7 +775,12 @@ fn create(
         results: results as *const f32,
     };
     let view_ref = Rc::new(env.new_global_ref(view).expect("compose-android: a global ref"));
-    let mut ui = UiHost::new(size, density, Box::new(AndroidTextMeasurer::new(text)));
+    let fonts = JniFonts {
+        measurer: env.new_global_ref(measurer).expect("compose-android: a global ref"),
+        density,
+    };
+    let text = AndroidTextMeasurer::with_fonts(text, Rc::new(fonts));
+    let mut ui = UiHost::new(size, density, Box::new(text));
     ui.with_tree(|tree| tree.set_clipboard(Rc::new(JniClipboard { view: view_ref.clone() })));
     // Asked for keyboard mode, the view system decides and tells it (`setInputMode`).
     let keyboard_view = view_ref.clone();

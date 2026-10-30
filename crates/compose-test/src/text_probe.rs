@@ -102,6 +102,14 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
         self.inner.layout_annotated(text, style, options, constraints, density)
     }
 
+    fn fonts(&self) -> Option<std::rc::Rc<compose_ui::platform::PlatformFonts>> {
+        self.inner.fonts()
+    }
+
+    fn has_stale_resolved_fonts(&self, paragraph: ParagraphHandle) -> bool {
+        self.inner.has_stale_resolved_fonts(paragraph)
+    }
+
     /// No new layout, as `restyle`, and counted with it.
     fn painted(
         &mut self,

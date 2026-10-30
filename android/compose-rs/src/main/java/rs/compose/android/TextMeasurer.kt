@@ -1,6 +1,7 @@
 package rs.compose.android
 
 import android.annotation.TargetApi
+import android.content.res.AssetManager
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RenderNode
@@ -42,6 +43,8 @@ internal class TextMeasurer(
      * positions too (quadratic in the line's length).
      */
     private val checkBoring: Boolean = false,
+    /** Where [loadFontAsset] looks. */
+    private val assets: AssetManager? = null,
 ) {
     /** Floats Rust reads after a call: a layout's metrics and the text's own width, or a cursor's rectangle. */
     val results: ByteBuffer = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder())
@@ -54,6 +57,9 @@ internal class TextMeasurer(
     /** Released paragraphs' nodes, for the next ones (D195). */
     private val pool = RenderNodePool("paragraph", NODE_POOL_CAPACITY)
     private val typefaces = HashMap<Long, Typeface>()
+    /** The typefaces of fonts Rust resolved (`family` 5 in a request), by their number there. */
+    private val loaded = ArrayList<Typeface>()
+    private val loadedNumbers = HashMap<Typeface, Int>()
     /**
      * A paint per paragraph style, shared by the layouts of that style: a paint's native side
      * otherwise waits for the collector. A layout only reads its paint, but [drawInPaint] swaps
@@ -76,6 +82,7 @@ internal class TextMeasurer(
         val italic: Boolean,
         val family: Int,
         val familyName: String?,
+        val typeface: Int,
         val letterSpacingPx: Float,
         val decoration: Int,
     )
@@ -108,6 +115,7 @@ internal class TextMeasurer(
             request.get(bytes)
             name = String(bytes, Charsets.UTF_8)
         }
+        val typeface = if (family == 5) request.getInt() else -1
         val paint = PaintStyle(
             color = color,
             fontPx = fontPx,
@@ -115,6 +123,7 @@ internal class TextMeasurer(
             italic = italic,
             family = family,
             familyName = name,
+            typeface = typeface,
             letterSpacingPx = request.float(),
             decoration = request.get().toInt(),
         )
@@ -125,7 +134,104 @@ internal class TextMeasurer(
         return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
     }
 
+    /** [typeface]'s number, or -1 without one. */
+    private fun numberOf(typeface: Typeface?): Int {
+        if (typeface == null) return -1
+        return loadedNumbers.getOrPut(typeface) {
+            loaded.add(typeface)
+            loaded.size - 1
+        }
+    }
+
+    /** Applies a font's variation settings, as Compose's `setFontVariationSettings`. */
+    private fun varied(typeface: Typeface?, settings: String): Typeface? {
+        if (typeface == null || settings.isEmpty()) return typeface
+        val paint = Paint()
+        paint.typeface = typeface
+        paint.fontVariationSettings = settings
+        return paint.typeface
+    }
+
+    /** A font of [bytes], as Compose's fonts of a file descriptor: -1 if they aren't one. */
+    fun loadFontBytes(bytes: ByteArray, weight: Int, italic: Boolean, settings: String): Int =
+        try {
+            val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+            buffer.put(bytes)
+            buffer.rewind()
+            val slant =
+                if (italic) android.graphics.fonts.FontStyle.FONT_SLANT_ITALIC
+                else android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT
+            val font = android.graphics.fonts.Font.Builder(buffer)
+                .setWeight(weight.coerceIn(1, 1000))
+                .setSlant(slant)
+                .setFontVariationSettings(settings)
+                .build()
+            val family = android.graphics.fonts.FontFamily.Builder(font).build()
+            numberOf(Typeface.CustomFallbackBuilder(family).setStyle(font.style).build())
+        } catch (_: Exception) {
+            -1
+        }
+
+    /** A font of a file, as Compose's `Font(File)`: -1 if it can't be read. */
+    fun loadFontFile(path: String, weight: Int, italic: Boolean, settings: String): Int =
+        try {
+            numberOf(
+                Typeface.Builder(java.io.File(path)).setWeight(weight.coerceIn(1, 1000))
+                    .setItalic(italic).setFontVariationSettings(settings).build()
+            )
+        } catch (_: Exception) {
+            -1
+        }
+
+    /** A font of the package's assets, as Compose's `Font(path, assetManager)`. */
+    fun loadFontAsset(path: String, weight: Int, italic: Boolean, settings: String): Int =
+        try {
+            numberOf(
+                Typeface.Builder(assets!!, path).setWeight(weight.coerceIn(1, 1000))
+                    .setItalic(italic).setFontVariationSettings(settings).build()
+            )
+        } catch (_: Exception) {
+            -1
+        }
+
+    private fun platformTypeface(name: String?, weight: Int, italic: Boolean): Typeface {
+        if (!italic && name.isNullOrEmpty()) {
+            if (weight == 400) return Typeface.DEFAULT
+            if (weight == 700) return Typeface.DEFAULT_BOLD
+        }
+        val family = if (name == null) Typeface.DEFAULT else Typeface.create(name, Typeface.NORMAL)
+        return Typeface.create(family, weight.coerceIn(1, 1000), italic)
+    }
+
+    /** The platform's default or a generic family, as Compose's `PlatformTypefaces`. */
+    fun createTypeface(name: String?, weight: Int, italic: Boolean): Int =
+        numberOf(platformTypeface(name, weight, italic))
+
+    /**
+     * A family on the device, as Compose's `optionalOnDeviceFontFamilyByName`: -1 if it isn't
+     * there (what a missing family gives is the default's).
+     */
+    fun loadDeviceFont(name: String, weight: Int, italic: Boolean, settings: String): Int {
+        val typeface = platformTypeface(name, weight, italic)
+        val generic = name == "sans-serif" || name == "serif" || name == "monospace" || name == "cursive"
+        if (!generic) {
+            val weightOf = weight.coerceIn(1, 1000)
+            if (
+                typeface == Typeface.create(Typeface.DEFAULT, weightOf, italic) ||
+                    typeface == platformTypeface(null, weight, italic)
+            ) {
+                return -1
+            }
+        }
+        return numberOf(varied(typeface, settings))
+    }
+
+    /** A typeface faked to [weight] and [italic], as Compose's `synthesizeTypeface`. */
+    fun synthesizeTypeface(number: Int, weight: Int, italic: Boolean): Int =
+        numberOf(Typeface.create(loaded[number], weight.coerceIn(1, 1000), italic))
+
     private fun typeface(style: PaintStyle): Typeface {
+        if (style.family == 5) return loaded[style.typeface]
         val key = (style.family.toLong() shl 40) or (style.weight.toLong() shl 8) or
             (if (style.italic) 1L else 0L) or ((style.familyName?.hashCode()?.toLong() ?: 0L) shl 48)
         return typefaces.getOrPut(key) {

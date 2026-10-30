@@ -35,6 +35,8 @@ mod focus_properties;
 mod focus_requester;
 mod focus_search;
 mod font;
+mod font_resolver;
+mod font_variation;
 mod graphics;
 mod graphics_layer;
 mod host;
@@ -115,6 +117,8 @@ pub mod platform {
         single_drawing, single_drawing_extent,
     };
     pub use crate::fixed_text::{FixedFontMetrics, FixedTextMeasurer};
+    pub use crate::font::{FontMatcher, PlatformFontLoader};
+    pub use crate::font_resolver::{NoFontLoader, PlatformFonts, ResolvedFonts};
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};
@@ -190,9 +194,12 @@ pub use focus_properties::{
 };
 pub use focus_requester::{FocusRequester, FocusRequesterRefs};
 pub use font::{
-    FontFamily, FontFamilyResolver, FontStyle, FontSynthesis, FontWeight,
-    LOCAL_FONT_FAMILY_RESOLVER, create_font_family_resolver,
+    DeviceFontFamilyName, Font, FontBytes, FontFamily, FontFamilyResolver, FontListFontFamily,
+    FontLoadingStrategy, FontOptions, FontSource, FontStyle, FontSynthesis, FontWeight,
+    LOCAL_FONT_FAMILY_RESOLVER, Typeface, TypefaceLoader, create_font_family_resolver,
 };
+pub use font_resolver::{AsyncFontListLoader, TypefaceResult};
+pub use font_variation::{FontVariation, FontVariationSetting, FontVariationSettings};
 pub use graphics::{
     Color, CornerSize, CornerSizes, CustomShape, DrawStyle, Outline, Paint, PaintStyle,
     RECTANGLE_SHAPE, Shadow, Shape, Stroke, StrokeCap, StrokeJoin,

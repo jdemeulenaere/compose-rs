@@ -135,7 +135,7 @@ impl TextStyle {
             font_weight: self.font_weight,
             font_style: self.font_style,
             font_synthesis: self.font_synthesis,
-            font_family: self.font_family,
+            font_family: self.font_family.clone(),
             font_feature_settings: self.font_feature_settings.clone(),
             letter_spacing: self.letter_spacing,
             baseline_shift: self.baseline_shift,
@@ -246,7 +246,7 @@ impl TextStyle {
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
             font_synthesis: other.font_synthesis.or(self.font_synthesis),
-            font_family: other.font_family.or(self.font_family),
+            font_family: other.font_family.clone().or_else(|| self.font_family.clone()),
             font_feature_settings: other
                 .font_feature_settings
                 .clone()
@@ -322,7 +322,7 @@ impl TextStyle {
             font_weight: Some(style.font_weight.unwrap_or(FontWeight::NORMAL)),
             font_style: Some(style.font_style.unwrap_or(FontStyle::Normal)),
             font_synthesis: Some(style.font_synthesis.unwrap_or(FontSynthesis::All)),
-            font_family: style.font_family,
+            font_family: style.font_family.clone(),
             font_feature_settings: Some(
                 style.font_feature_settings.clone().unwrap_or(SharedString::EMPTY),
             ),

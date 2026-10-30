@@ -11,9 +11,13 @@
 use compose_ui::{
     AnnotatedString, Color, Constraints, Density, FontFamily, LayoutDirection, Offset, Rect,
     TextAlign, TextOverflow, TextStyle,
-    platform::{ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition},
+    platform::{
+        NoFontLoader, ParagraphHandle, ParagraphMetrics, PlatformFontLoader, PlatformFonts,
+        ResolvedFonts, TextLayoutOptions, TextMeasurer, TextPosition,
+    },
 };
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::serialize::Writer;
 
@@ -89,7 +93,13 @@ pub struct LaidOut {
     pub max_intrinsic_width: Option<f32>,
 }
 
+/// A typeface of `TextMeasurer.kt`, by its number there.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AndroidTypeface(pub u32);
+
 struct Entry {
+    /// The fonts its styles resolved to.
+    resolved_fonts: ResolvedFonts,
     text: String,
     laid_out: LaidOut,
     right_to_left: bool,
@@ -103,15 +113,23 @@ pub struct AndroidTextMeasurer<B: TextBackend> {
     paragraphs: HashMap<u32, Entry>,
     next: u32,
     request: Writer,
+    fonts: Rc<PlatformFonts>,
 }
 
 impl<B: TextBackend> AndroidTextMeasurer<B> {
+    /// With no fonts of its own: every family is the default's. For tests.
     pub fn new(backend: B) -> Self {
+        AndroidTextMeasurer::with_fonts(backend, Rc::new(NoFontLoader))
+    }
+
+    /// Loading fonts with `loader`.
+    pub fn with_fonts(backend: B, loader: Rc<dyn PlatformFontLoader>) -> Self {
         AndroidTextMeasurer {
             backend,
             paragraphs: HashMap::new(),
             next: 0,
             request: Writer::default(),
+            fonts: PlatformFonts::new(loader),
         }
     }
 
@@ -151,6 +169,8 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         let right_to_left =
             first_strong_is_rtl(text).unwrap_or(options.direction == LayoutDirection::Rtl);
         let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
+        let mut resolved_fonts = ResolvedFonts::default();
+        let mut fonts = RequestFonts { fonts: &self.fonts, resolved: &mut resolved_fonts };
         encode_request(
             &mut self.request,
             text,
@@ -161,9 +181,13 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             density,
             right_to_left,
             probe,
+            &mut fonts,
         );
         let laid_out = self.backend.layout(handle, text, &self.request.bytes);
-        self.paragraphs.insert(handle, Entry { text: text.to_string(), laid_out, right_to_left });
+        self.paragraphs.insert(
+            handle,
+            Entry { resolved_fonts, text: text.to_string(), laid_out, right_to_left },
+        );
         ParagraphHandle(handle as u64)
     }
 }
@@ -213,6 +237,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             {
                 let entry = &self.paragraphs[&previous];
                 let entry = Entry {
+                    resolved_fonts: entry.resolved_fonts.clone(),
                     text: entry.text.clone(),
                     laid_out,
                     right_to_left: entry.right_to_left,
@@ -223,6 +248,14 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         }
         let runs = paint_free_runs(text, style);
         self.layout_runs(text.as_str(), style, &runs, options, constraints, density, true)
+    }
+
+    fn fonts(&self) -> Option<Rc<PlatformFonts>> {
+        Some(self.fonts.clone())
+    }
+
+    fn has_stale_resolved_fonts(&self, paragraph: ParagraphHandle) -> bool {
+        self.entry(paragraph).resolved_fonts.is_stale()
     }
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
@@ -276,6 +309,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         let previous = paragraph.0 as u32;
         let entry = self.paragraphs.get(&previous)?;
         let entry = Entry {
+            resolved_fonts: entry.resolved_fonts.clone(),
             text: entry.text.clone(),
             laid_out: entry.laid_out,
             right_to_left: entry.right_to_left,
@@ -539,7 +573,7 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
-/// length and UTF-8 bytes), letter spacing (px f32), decoration (u8: 1 underline, 2 line
+/// length and UTF-8 bytes, 5 a typeface, then its number), letter spacing (px f32), decoration (u8: 1 underline, 2 line
 /// through), line height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
 /// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
 /// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style.
@@ -554,6 +588,7 @@ fn encode_request(
     density: &Density,
     right_to_left: bool,
     probe: bool,
+    fonts: &mut RequestFonts<'_>,
 ) {
     out.bytes.clear();
     let ellipsis = options.overflow == TextOverflow::Ellipsis;
@@ -578,7 +613,7 @@ fn encode_request(
     let (min_width, max_width) = width_bounds(constraints);
     out.u32(min_width as u32);
     out.u32(max_width as u32);
-    encode_style(out, style, Color::TRANSPARENT, density);
+    encode_style(out, style, Color::TRANSPARENT, density, fonts);
     out.u32(runs.len() as u32);
     for (range, run_style, background) in runs {
         out.u32(utf16_index(text, range.start) as u32);
@@ -586,7 +621,7 @@ fn encode_request(
         let inherits = u8::from(!run_style.color.is_specified())
             | (u8::from(run_style.text_decoration.is_none()) << 1);
         out.u8(inherits);
-        encode_style(out, run_style, *background, density);
+        encode_style(out, run_style, *background, density, fonts);
     }
 }
 
@@ -598,15 +633,39 @@ fn paint_of(style: &TextStyle) -> (u32, u8) {
     (color.argb(), u8::from(decoration.underline) | (u8::from(decoration.line_through) << 1))
 }
 
-fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density: &Density) {
+/// What a request's styles resolve their fonts with.
+struct RequestFonts<'a> {
+    fonts: &'a Rc<PlatformFonts>,
+    resolved: &'a mut ResolvedFonts,
+}
+
+fn encode_style(
+    out: &mut Writer,
+    style: &TextStyle,
+    background: Color,
+    density: &Density,
+    fonts: &mut RequestFonts<'_>,
+) {
     let (color, decoration) = paint_of(style);
     let font_px = compose_ui::platform::resolve_font_size_px(style, density);
     out.u32(color);
     out.f32(font_px);
     out.u32(u32::from(style.font_weight.map_or(400, |weight| weight.weight())));
     out.u8(u8::from(style.font_style == Some(compose_ui::FontStyle::Italic)));
-    match style.font_family {
-        None | Some(FontFamily::SansSerif) => out.u8(0),
+    match &style.font_family {
+        None | Some(FontFamily::SansSerif | FontFamily::Default) => out.u8(0),
+        Some(FontFamily::FontList(_) | FontFamily::Loaded(_)) => {
+            let resolved = fonts.resolved.resolve(fonts.fonts, style);
+            match resolved.as_ref().and_then(|typeface| typeface.downcast_ref::<AndroidTypeface>())
+            {
+                Some(typeface) => {
+                    out.u8(5);
+                    out.u32(typeface.0);
+                }
+                // Another stack's typeface, or none: the default.
+                None => out.u8(0),
+            }
+        }
         Some(FontFamily::Serif) => out.u8(1),
         Some(FontFamily::Monospace) => out.u8(2),
         Some(FontFamily::Cursive) => out.u8(3),
