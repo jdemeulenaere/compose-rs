@@ -475,3 +475,113 @@ fn a_gesture_keeps_what_s_there_on_top() {
     assert_eq!(clicks_first.get(), 0);
     assert_eq!(clicks_second.get(), 1);
 }
+
+#[composable]
+fn Tagged(key: &'static str) {
+    Box!(modifier = Modifier.fill_max_size().test_tag(key), { Shown!(key) });
+}
+
+fn tagged_entry(key: &'static str) -> NavEntry<&'static str> {
+    NavEntry::new(key, |key| Tagged!(key))
+}
+
+fn left_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
+    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.left
+}
+
+/// The gesture's half way at the end of the steps upstream's tests make.
+fn half_a_gesture(ui: &mut ComposeTestRule, edge: i32) {
+    let event = |progress| BackEventCompat { swipe_edge: edge, ..event(progress) };
+    ui.host().on_back_started(event(0.1));
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+    ui.host().on_back_progressed(event(0.5));
+    ui.wait_for_idle();
+}
+
+fn slide_in(by: impl Fn(i32) -> i32 + 'static) -> EnterTransition {
+    slide_in_horizontally_with(spring(), by)
+}
+
+fn slide_out(by: impl Fn(i32) -> i32 + 'static) -> ExitTransition {
+    slide_out_horizontally_with(spring(), by)
+}
+
+/// `edge`'s test: `first` under `second`, each moved by `spec`.
+fn sliding_by_gesture(
+    edge: i32,
+    spec: impl Fn(Scope, i32) -> ContentTransform + Copy + 'static,
+) -> (f32, f32) {
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1080, 2400), move || {
+        NavDisplay!(
+            stack,
+            transition_spec = |_: Scope| {
+                slide_in(|width| width / 2).together_with(slide_out(|width| -width / 2))
+            },
+            predictive_pop_transition_spec = spec,
+            entry_provider = tagged_entry
+        );
+    });
+    ui.wait_for_idle();
+    stack.push(SECOND);
+    ui.wait_for_idle();
+    half_a_gesture(&mut ui, edge);
+    (left_of(&mut ui, FIRST), left_of(&mut ui, SECOND))
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt, testNavDisplayPredictiveBackAnimations
+#[test]
+fn a_gesture_slides_both_scenes_by_its_progress() {
+    let at = sliding_by_gesture(NavigationEvent::EDGE_LEFT, |_, _| {
+        slide_in(|width| -width / 2).together_with(slide_out(|width| width / 2))
+    });
+    // A spring has no curve to follow, so they go linearly: half of a half.
+    assert_eq!(at, (-270.0, 270.0));
+}
+
+/// What's popped goes the way of `edge`, and what's under it doesn't move.
+fn by_edge(_: Scope, edge: i32) -> ContentTransform {
+    EnterTransition::NONE.together_with(if edge == NavigationEvent::EDGE_LEFT {
+        slide_out(|width| width / 2)
+    } else {
+        slide_out(|width| -width / 2)
+    })
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt, testNavDisplayPredictiveBackAnimationsRightSwipeEdge
+#[test]
+fn a_gesture_from_the_right_edge_slides_left() {
+    assert_eq!(sliding_by_gesture(NavigationEvent::EDGE_RIGHT, by_edge), (0.0, -270.0));
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt, testNavDisplayPredictiveBackAnimationsLeftSwipeEdge
+#[test]
+fn an_entry_s_gesture_slides_by_its_metadata_from_the_edge() {
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1080, 2400), move || {
+        NavDisplay!(
+            stack,
+            transition_spec = |_: Scope| {
+                slide_in(|width| width / 2).together_with(slide_out(|width| -width / 2))
+            },
+            entry_provider = |key: &'static str| {
+                let entry = tagged_entry(key);
+                if key == SECOND {
+                    entry.with_metadata(NavDisplay::predictive_pop_transition_spec(
+                        |scope: Scope, edge: i32| Some(by_edge(scope, edge)),
+                    ))
+                } else {
+                    entry
+                }
+            }
+        );
+    });
+    ui.wait_for_idle();
+    stack.push(SECOND);
+    ui.wait_for_idle();
+    half_a_gesture(&mut ui, NavigationEvent::EDGE_LEFT);
+    assert_eq!((left_of(&mut ui, FIRST), left_of(&mut ui, SECOND)), (0.0, 270.0));
+}

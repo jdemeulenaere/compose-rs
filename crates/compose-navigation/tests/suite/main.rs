@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod nav_animated;
 mod nav_back_stack;
+mod nav_card_stack;
 mod nav_decorated_entries;
 mod nav_display;
 mod nav_entry;

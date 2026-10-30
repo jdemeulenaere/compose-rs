@@ -1,6 +1,5 @@
 //! What's on top during a display's transitions, and how scenes' transitions go, against Navigation
-//! 3's `NavDisplayScreenshotTest` through clicks and bounds rather than screenshots. The tests of
-//! predictive frames and nested transitions are still to do.
+//! 3's `NavDisplayScreenshotTest` through clicks and bounds rather than screenshots.
 
 use std::cell::RefCell;
 use std::rc::Rc;
