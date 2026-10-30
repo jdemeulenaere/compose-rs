@@ -136,7 +136,8 @@ fn Screen(kind: u8, small: bool) {
 fn wheel(ui: &mut ComposeTestRule, delta: f32) {
     ui.host()
         .send_pointer(PointerEvent::scroll(Offset::new(200.0, 400.0), Offset::new(0.0, delta)));
-    ui.advance_time_by(Duration::from_millis(32));
+    // Its animation and the time the scroll stays held for another turn.
+    ui.advance_time_by(Duration::from_millis(200));
 }
 
 fn height(ui: &mut ComposeTestRule) -> f32 {
@@ -174,16 +175,16 @@ fn exit_until_collapsed_collapses_then_expands_at_the_start() {
     wheel(&mut ui, 30.0);
     assert_eq!(height(&mut ui), 82.0);
     assert_eq!(content_top(&mut ui), 82.0);
-    // Collapsing takes the whole delta, as Compose's.
+    // Collapsing takes the whole delta of each step of the turn's animation, as Compose's (6 px,
+    // then 16 px, of the 18 px left); the content scrolls the rest of the turn.
     wheel(&mut ui, 100.0);
-    assert_eq!(height(&mut ui), 64.0);
+    assert_eq!((height(&mut ui), content_top(&mut ui)), (64.0, 64.0 - 78.0));
     wheel(&mut ui, 100.0);
-    // Then the content scrolls (the column moves up under the bar).
-    assert_eq!((height(&mut ui), content_top(&mut ui)), (64.0, 64.0 - 100.0));
+    assert_eq!((height(&mut ui), content_top(&mut ui)), (64.0, 64.0 - 178.0));
     // Scrolling back: the content first, then the bar once it's at its start.
     wheel(&mut ui, -20.0);
     assert_eq!(height(&mut ui), 64.0);
-    wheel(&mut ui, -200.0);
+    wheel(&mut ui, -300.0);
     assert_eq!(height(&mut ui), 112.0);
     // Collapsed, the small title is the one read.
     wheel(&mut ui, 200.0);

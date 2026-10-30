@@ -319,7 +319,8 @@ fn a_fling_past_an_estimated_start_offers_its_rest() {
 
 /// Input: a mouse wheel over a nested list at row 5 (start estimated): one turn of 280 px back.
 ///
-/// Compose (desktop): the list moves 250 px; the parent gets 30. (Holds.)
+/// Compose: the list reaches its start; the parent, which takes nothing here, is offered what's
+/// left of the step that got there, and the turn's animation stops at what wasn't used.
 #[test]
 fn a_wheel_past_an_estimated_start_offers_the_rest() {
     let state = LazyListState::new(5, 0);
@@ -327,15 +328,13 @@ fn a_wheel_past_an_estimated_start_offers_the_rest() {
     let mut ui = nested_rows(*state, records.clone());
     ui.wait_for_idle();
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, -280.0)));
-    ui.host().frame();
+    ui.wait_for_idle();
     assert_eq!(
-        (
-            state.first_visible_item_index(),
-            state.first_visible_item_scroll_offset(),
-            left_y(&records)
-        ),
-        (0, 0, 30.0),
+        (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
+        (0, 0)
     );
+    let offered = left_y(&records);
+    assert!(offered > 0.0 && offered <= 30.0, "{offered}");
 }
 
 /// A 100 px `LazyColumn` of 50 px rows (two in view), each a `LazyRow` of two focusable 50 px

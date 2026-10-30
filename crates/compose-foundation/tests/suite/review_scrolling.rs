@@ -691,8 +691,7 @@ impl ScrollableState for LateRc {
     }
 }
 
-// D879: a turn on an app's own state runs in a task; a block its state reaches only later still
-// gets the turn.
+// A state that runs its block a frame late still gets the turn: the wheel's a scroll in a task.
 #[test]
 fn a_wheel_turn_on_an_apps_state_is_not_lost_when_its_block_runs_later() {
     let (inner, total) = total_state();
@@ -706,7 +705,8 @@ fn a_wheel_turn_on_an_apps_state_is_not_lost_when_its_block_runs_later() {
     assert!(!state.is_scroll_in_progress());
 }
 
-// D879: a delta's consumer panicking in a turn on an app's own state leaves the mutex free.
+// A delta's consumer panicking in a wheel's scroll leaves the state's mutex free: the task's
+// future goes with the panic.
 #[test]
 fn a_panic_in_a_wheel_turn_on_an_apps_state_leaves_its_mutex_free() {
     let panics = Rc::new(Cell::new(false));
@@ -722,7 +722,7 @@ fn a_panic_in_a_wheel_turn_on_an_apps_state_leaves_its_mutex_free() {
     });
     panics.set(true);
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        wheel(&mut ui, Offset::new(0.0, -10.0));
+        ui.host().send_pointer(PointerEvent::scroll(CENTER, Offset::new(0.0, -10.0)));
     }));
     assert!(unwound.is_err());
     panics.set(false);

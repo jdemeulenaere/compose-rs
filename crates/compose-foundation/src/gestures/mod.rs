@@ -2,8 +2,10 @@
 //! deltas to a `DraggableState`), and scrolling (`scrollable`: `ScrollableState`,
 //! `Modifier.scrollable`, flings).
 
+mod mouse_wheel;
 mod scrollable;
 
+pub(crate) use mouse_wheel::MouseWheel;
 pub use scrollable::{
     DefaultFlingBehavior, DefaultScrollableState, FlingBehavior, LocalBoxFuture, ScrollBlock,
     ScrollScope, ScrollableDefaults, ScrollableModifier, ScrollableState, ScrollableStateExt,

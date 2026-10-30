@@ -59,9 +59,6 @@ pub struct MutatorMutex {
 struct MutexState {
     /// The mutation running.
     current: Option<Rc<Mutator>>,
-    /// The priority of the mutation running in place (`mutate_now`), which has no record of its
-    /// own.
-    now: Option<MutatePriority>,
     /// `try_mutate` holds the lock.
     locked: bool,
     /// Mutations waiting for `try_mutate` to let go.
@@ -87,7 +84,7 @@ impl MutatorMutex {
             Rc::new(Mutator { priority, interrupted: Cell::new(false), waker: RefCell::new(None) });
         let old = {
             let mut state = self.inner.borrow_mut();
-            if state.outranks(priority) {
+            if state.current.as_ref().is_some_and(|current| priority < current.priority) {
                 return None;
             }
             state.current.replace(mutator.clone())
@@ -130,46 +127,9 @@ impl MutatorMutex {
         Interruptible { mutator: &mutator, block: std::pin::pin!(block(receiver)) }.await
     }
 
-    /// Runs `f` now as a mutation of `priority`, for a scroll that ends within an event (a
-    /// wheel turn): the mutation running of the same or a lower priority is interrupted, as
-    /// [`mutate`](Self::mutate) does; one of a higher priority, or `try_mutate` holding the
-    /// lock, leaves `f` unrun (`None`). While `f` runs the mutex is held at `priority`, but `f`
-    /// can't be interrupted: a mutation of the same or a higher priority it starts runs beside
-    /// the rest of it. Temporary, as `ScrollableState::scroll_now` it serves.
-    pub(crate) fn mutate_now<R>(
-        &self,
-        priority: MutatePriority,
-        f: impl FnOnce() -> R,
-    ) -> Option<R> {
-        // No allocation per wheel turn: the mutation interrupted lets go of the mutex, and this
-        // one, which nothing can run beside but what it starts itself, is a priority.
-        let (old, outer) = {
-            let mut state = self.inner.borrow_mut();
-            if state.locked || state.outranks(priority) {
-                return None;
-            }
-            (state.current.take(), state.now.replace(priority))
-        };
-        if let Some(old) = old {
-            old.interrupted.set(true);
-            let waker = old.waker.borrow_mut().take();
-            if let Some(waker) = waker {
-                waker.wake();
-            }
-        }
-        let _end = EndNow { mutex: &self.inner, outer };
-        Some(f())
-    }
-
-    /// Whether a mutation is running in place (`mutate_now`): no state read.
-    pub(crate) fn is_mutating_now(&self) -> bool {
-        self.inner.borrow().now.is_some()
-    }
-
     /// Whether a mutation is running (not `try_mutate`): no state read.
     pub(crate) fn is_mutating(&self) -> bool {
-        let state = self.inner.borrow();
-        state.current.is_some() || state.now.is_some()
+        self.inner.borrow().current.is_some()
     }
 
     /// Runs `block` now if no mutation is running nor `try_mutate` (and returns `true`), else
@@ -177,7 +137,7 @@ impl MutatorMutex {
     pub fn try_mutate(&self, block: impl FnOnce()) -> bool {
         {
             let mut state = self.inner.borrow_mut();
-            if state.current.is_some() || state.now.is_some() || state.locked {
+            if state.current.is_some() || state.locked {
                 return false;
             }
             state.locked = true;
@@ -191,27 +151,6 @@ impl MutatorMutex {
 impl std::fmt::Debug for MutatorMutex {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("MutatorMutex")
-    }
-}
-
-impl MutexState {
-    /// Whether a mutation running keeps one of `priority` from running.
-    fn outranks(&self, priority: MutatePriority) -> bool {
-        self.now.is_some_and(|now| priority < now)
-            || self.current.as_ref().is_some_and(|current| priority < current.priority)
-    }
-}
-
-/// Ends a mutation running in place, however it ends.
-struct EndNow<'a> {
-    mutex: &'a RefCell<MutexState>,
-    /// The one it ran inside, if it did.
-    outer: Option<MutatePriority>,
-}
-
-impl Drop for EndNow<'_> {
-    fn drop(&mut self) {
-        self.mutex.borrow_mut().now = self.outer;
     }
 }
 
@@ -290,45 +229,5 @@ impl<F: Future> Future for Interruptible<'_, F> {
             }
         }
         self.block.as_mut().poll(context).map(Ok)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_mutation_in_place_holds_the_mutex_while_it_runs() {
-        let mutex = MutatorMutex::new();
-        let ran = mutex.mutate_now(MutatePriority::UserInput, || {
-            assert!(mutex.is_mutating() && mutex.is_mutating_now());
-            assert!(!mutex.try_mutate(|| panic!("the mutex is held")));
-            assert_eq!(mutex.mutate_now(MutatePriority::Default, || ()), None, "lower");
-            // One of the same priority inside it runs, and the outer one is still held after.
-            assert_eq!(mutex.mutate_now(MutatePriority::UserInput, || 1), Some(1));
-            assert!(mutex.is_mutating_now());
-            2
-        });
-        assert_eq!(ran, Some(2));
-        assert!(!mutex.is_mutating() && !mutex.is_mutating_now());
-        assert!(mutex.try_mutate(|| ()), "and let go of after");
-    }
-
-    #[test]
-    fn a_mutation_in_place_lets_go_of_the_mutex_when_it_panics() {
-        let mutex = MutatorMutex::new();
-        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            mutex.mutate_now(MutatePriority::UserInput, || panic!("a delta's consumer panics"));
-        }));
-        assert!(unwound.is_err());
-        assert!(!mutex.is_mutating());
-    }
-
-    #[test]
-    fn try_mutate_leaves_a_mutation_in_place_unrun() {
-        let mutex = MutatorMutex::new();
-        assert!(mutex.try_mutate(|| {
-            assert_eq!(mutex.mutate_now(MutatePriority::PreventUserInput, || ()), None);
-        }));
     }
 }

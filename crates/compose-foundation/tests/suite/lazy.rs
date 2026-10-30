@@ -57,8 +57,8 @@ fn only_the_items_in_view_and_a_few_beyond_are_composed() {
 #[test]
 fn scrolling_composes_the_items_it_reaches_in_the_same_frame() {
     let (mut ui, state) = list();
-    // A wheel scroll of 210 px: item 10 at the top, 10 px off.
-    ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 210.0)));
+    // A scroll of 210 px: item 10 at the top, 10 px off.
+    state.dispatch_raw_delta(210.0);
     let frames = ui.host().settle(10);
     assert_eq!(state.first_visible_item_index(), 10);
     assert_eq!(state.first_visible_item_scroll_offset(), 10);

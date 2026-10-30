@@ -350,14 +350,6 @@ impl ScrollableState for LazyGridState {
         self.list.dispatch_raw_delta(delta)
     }
 
-    fn scroll_now(
-        &self,
-        priority: MutatePriority,
-        block: &mut dyn FnMut(&ScrollScope),
-    ) -> Option<bool> {
-        self.list.scroll_now(priority, block)
-    }
-
     fn is_scroll_in_progress(&self) -> bool {
         self.list.is_scroll_in_progress()
     }

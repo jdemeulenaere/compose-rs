@@ -85,10 +85,11 @@ fn a_bar_doesnt_expand_before_an_outer_scrolling_column_is_back_at_its_start() {
     let wheel = |ui: &mut ComposeTestRule, y: f32, delta: f32| {
         ui.host()
             .send_pointer(PointerEvent::scroll(Offset::new(200.0, y), Offset::new(0.0, delta)));
-        ui.advance_time_by(Duration::from_millis(32));
+        // Its animation and the time the scroll stays held for another turn.
+        ui.advance_time_by(Duration::from_millis(200));
     };
     // Below the inner column: the first turn collapses the bar, the second scrolls the content.
-    wheel(&mut ui, 150.0, 300.0);
+    wheel(&mut ui, 150.0, 48.0);
     wheel(&mut ui, 150.0, 300.0);
     assert_eq!(bounds(&mut ui, "bar").height(), 64.0);
     let outer = OUTER.with(|cell| (*cell.borrow()).unwrap());

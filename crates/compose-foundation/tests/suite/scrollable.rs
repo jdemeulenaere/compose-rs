@@ -621,7 +621,8 @@ fn a_wheel_turn_is_a_user_scroll_that_stops_an_animation() {
     wheel(&mut ui, Offset::new(0.0, 10.0));
     ui.advance_time_by(Duration::from_millis(16));
     assert!(matches!(*result.borrow(), Some(Err(MutationInterrupted))), "the wheel stopped it");
-    assert!(!state.is_scroll_in_progress());
+    ui.advance_time_by(Duration::from_millis(200));
+    assert!(!state.is_scroll_in_progress(), "and ended");
 }
 
 // D879: a wheel turn runs in place, in the state's scroll, so a scroll of a higher priority going
@@ -669,29 +670,6 @@ fn a_wheel_turn_refuses_a_lower_scroll_started_from_its_deltas() {
     wheel(&mut ui, Offset::new(0.0, 10.0));
     assert_eq!(*refused.borrow(), Some(Err(MutationInterrupted)));
     assert!(!state.is_scroll_in_progress());
-}
-
-// A known difference, pinned as such (D879): a wheel turn's in-progress flag never reaches a state,
-// so what reads `is_scroll_in_progress` isn't composed again by the wheel. Compose's is: its
-// `userScroll` holds the scroll for at least 50 ms. Porting `MouseWheelScrollingLogic` turns this
-// test around.
-#[test]
-fn known_difference_a_wheel_turn_does_not_recompose_what_reads_is_scroll_in_progress() {
-    let (state, _) = total_state();
-    let compositions = Rc::new(Cell::new(0));
-    let (scrolled, counted) = (state.clone(), compositions.clone());
-    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
-        counted.set(counted.get() + 1);
-        let _ = scrolled.is_scroll_in_progress();
-        Box!(
-            modifier = Modifier.size(100.dp()).scrollable(scrolled.clone(), Orientation::Vertical)
-        );
-    });
-    let before = compositions.get();
-    for _ in 0..3 {
-        wheel(&mut ui, Offset::new(0.0, 10.0));
-    }
-    assert_eq!(compositions.get(), before);
 }
 
 // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/ScrollableState.kt, DefaultScrollableState's scope notes the direction of each scroll, a wheel turn's too
@@ -773,7 +751,8 @@ fn a_wheel_turn_scrolls_an_apps_own_state() {
     wheel(&mut ui, Offset::new(0.0, 10.0));
     ui.advance_time_by(Duration::from_millis(16));
     assert!(matches!(*result.borrow(), Some(Err(MutationInterrupted))), "the wheel stopped it");
-    assert!(!state.is_scroll_in_progress());
+    ui.advance_time_by(Duration::from_millis(200));
+    assert!(!state.is_scroll_in_progress(), "and ended");
 }
 
 // Review of D855: `Modifier.scrollable` without an interaction source reports its drags to none

@@ -48,7 +48,9 @@ fn host(content: fn()) -> UiHost {
     host
 }
 
-/// A frame scrolling the list by `pixels` (the wheel, at the screen's center), timed.
+/// A frame scrolling the list by `pixels` (a wheel's turn, at the screen's center), timed. Turns
+/// each frame join one scroll, a large one moving by that much a frame once its animation has
+/// caught up.
 fn scroll_frame(host: &mut UiHost, pixels: f32) -> Duration {
     platform::advance_clock(Duration::from_millis(16));
     let start = Instant::now();
@@ -57,9 +59,14 @@ fn scroll_frame(host: &mut UiHost, pixels: f32) -> Duration {
     start.elapsed()
 }
 
-/// Back to the top, untimed.
+/// Back to the top, untimed: a wheel's turn animates over 100 ms, and its scroll stays held for
+/// 50 ms more.
 fn rewind(host: &mut UiHost) {
     scroll_frame(host, -1.0e7);
+    for _ in 0..12 {
+        platform::advance_clock(Duration::from_millis(16));
+        host.frame();
+    }
     host.settle(10);
 }
 

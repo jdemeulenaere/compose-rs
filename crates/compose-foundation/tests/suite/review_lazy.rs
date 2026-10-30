@@ -157,23 +157,21 @@ fn scrolling_back_past_the_composed_items_moves_by_the_distance_asked() {
     );
 }
 
-/// Input: a `LazyColumn` of 1000 rows; ten wheel events of 0.4 px each (a trackpad's fine
-/// pixel deltas), a frame after each.
+/// Input: a `LazyColumn` of 1000 rows; ten scrolls of 0.4 px each, a frame after each.
 ///
 /// Compose: `LazyListState` keeps the fraction it couldn't consume (`scrollToBeConsumed`), so
 /// the deltas add up: the list is 4 px scrolled.
 ///
 /// Instead: each frame rounds the offset plus the pending delta (0.4 rounds to 0), so the
-/// fractions are lost and the list never moves; a slow trackpad scroll does nothing (and deltas
-/// of 0.6 px would scroll 10 px instead of 6).
+/// fractions are lost and the list never moves (and deltas of 0.6 px would scroll 10 px instead
+/// of 6).
 #[test]
-fn sub_pixel_wheel_deltas_add_up() {
+fn sub_pixel_scrolls_add_up() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     for _ in 0..10 {
-        ui.host()
-            .send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 0.4)));
+        state.dispatch_raw_delta(0.4);
         ui.wait_for_idle();
     }
     assert_eq!(state.first_visible_item_scroll_offset(), 4);
@@ -455,7 +453,7 @@ fn a_frame_that_composes_in_its_relayout_loop_reports_it_recomposed() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
-    ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 200.0)));
+    state.dispatch_raw_delta(200.0);
     let stats = ui.host().frame();
     assert_eq!(state.first_visible_item_index(), 10);
     assert!(stats.recomposed, "{stats:?}");
@@ -557,7 +555,7 @@ fn a_frame_composing_items_in_a_round_leaves_no_pending_work() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
-    ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 25.0)));
+    state.dispatch_raw_delta(25.0);
     let stats = ui.host().frame();
     assert!(stats.bodies_run > 0, "a row composed in the frame");
     assert_eq!(state.first_visible_item_index(), 1);

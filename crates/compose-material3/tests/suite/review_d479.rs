@@ -53,28 +53,28 @@ fn Screen(kind: u8, state: LazyListState) {
     });
 }
 
-fn wheel_one_frame(ui: &mut ComposeTestRule, delta: f32) {
+/// A turn, through its animation and the time the scroll stays held for another.
+fn wheel(ui: &mut ComposeTestRule, delta: f32) {
     ui.host()
         .send_pointer(PointerEvent::scroll(Offset::new(200.0, 400.0), Offset::new(0.0, delta)));
-    ui.host().frame();
+    ui.advance_time_by(Duration::from_millis(200));
 }
 
 /// Input: an exit-until-collapsed bar, collapsed (64 px), over a list at row 10 (400 px down,
 /// the start not laid out); a wheel turn of 430 px back.
 ///
-/// Compose: the list moves 400 px to its top; its post-scroll's 30 px expand the bar to 94 px,
-/// in the frame.
+/// Compose: the list moves 400 px to its top; its post-scroll's 30 px expand the bar to 94 px.
 #[test]
-fn a_bar_expands_by_what_the_list_left_in_the_frame() {
+fn a_bar_expands_by_what_the_list_left_of_a_wheel_turn() {
     let state = LazyListState::new(10, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || Screen(2, given));
     ui.set_auto_advance(false);
     ui.wait_for_idle();
-    wheel_one_frame(&mut ui, 100.0);
+    wheel(&mut ui, 48.0);
     assert_eq!(height(&mut ui), 64.0);
     assert_eq!(state.first_visible_item_index(), 10);
-    wheel_one_frame(&mut ui, -430.0);
+    wheel(&mut ui, -430.0);
     assert_eq!(
         (
             state.first_visible_item_index(),
@@ -98,7 +98,7 @@ fn a_drag_expands_the_bar_by_what_the_list_left_in_the_frame() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || Screen(2, given));
     ui.set_auto_advance(false);
     ui.wait_for_idle();
-    wheel_one_frame(&mut ui, 100.0);
+    wheel(&mut ui, 48.0);
     let finger = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
     ui.host().send_pointer(finger(PointerEvent::press(Offset::new(200.0, 100.0))));
     ui.host().send_pointer(finger(PointerEvent::moved(Offset::new(200.0, 108.0 + 430.0), true)));
@@ -128,7 +128,7 @@ fn a_fling_back_to_the_top_expands_the_bar() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || Screen(2, given));
     ui.set_auto_advance(false);
     ui.wait_for_idle();
-    wheel_one_frame(&mut ui, 100.0);
+    wheel(&mut ui, 48.0);
     assert_eq!(height(&mut ui), 64.0);
     let finger = |event: PointerEvent, time: u64| {
         let mut event = event.with_pointer(PointerId(1), PointerType::Touch);

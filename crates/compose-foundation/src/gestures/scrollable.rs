@@ -79,21 +79,6 @@ pub trait ScrollableState {
     /// returns the pixels used.
     fn dispatch_raw_delta(&self, delta: f32) -> f32;
 
-    /// Runs `block` in place in a scroll of `priority` that ends with it (a wheel turn's, D879),
-    /// with the state's scroll scope: `Some(whether it ran)`, or `None` where the state has no
-    /// such scroll (then a scroll in a task polled at once runs it). compose-rs's states have
-    /// one. Temporary: it goes with `MutatorMutex::mutate_now` when `MouseWheelScrollingLogic` is
-    /// ported, whose one task per gesture removes the cost per turn that justifies it.
-    #[doc(hidden)]
-    fn scroll_now(
-        &self,
-        priority: MutatePriority,
-        block: &mut dyn FnMut(&ScrollScope),
-    ) -> Option<bool> {
-        let _ = (priority, block);
-        None
-    }
-
     /// Whether a scroll (a block, a drag, a fling) is going on, as `isScrollInProgress` (a
     /// state read).
     fn is_scroll_in_progress(&self) -> bool;
@@ -205,8 +190,6 @@ pub(crate) struct ScrollCore {
     /// the one that interrupted it.
     generation: Cell<u64>,
     pub(crate) interaction_source: MutableInteractionSource,
-    /// The scope of the scrolls run in place (`scroll_now`), made once: a wheel turn's.
-    now_scope: std::cell::OnceCell<ScrollScope>,
 }
 
 impl ScrollCore {
@@ -219,14 +202,11 @@ impl ScrollCore {
             last_backward: compose_runtime::mutable_state_of(false),
             generation: Cell::new(0),
             interaction_source: MutableInteractionSource::new(),
-            now_scope: std::cell::OnceCell::new(),
         }
     }
 
-    /// A scroll in place says so without writing the state: it ends before anything that
-    /// observes the state could run (D879).
     pub(crate) fn is_scroll_in_progress(&self) -> bool {
-        self.scrolling.get() || self.mutex.is_mutating_now()
+        self.scrolling.get()
     }
 
     /// Whether a scroll is going on, without reading state (what reads it isn't told when it
@@ -255,30 +235,6 @@ impl ScrollCore {
             note_direction(forward, backward, used);
             used
         })
-    }
-
-    /// Runs `block` now with `scope` (the state's), as a mutation of `priority` that ends with
-    /// it, `is_scroll_in_progress` meanwhile: a wheel turn's scroll (D879). Returns whether it
-    /// ran (a scroll of a higher priority going on refuses it).
-    pub(crate) fn scroll_now(
-        &self,
-        priority: MutatePriority,
-        consume: impl FnOnce() -> Rc<dyn Fn(f32) -> f32>,
-        block: &mut dyn FnMut(&ScrollScope),
-    ) -> bool {
-        let scope = self.now_scope.get_or_init(|| self.scope(consume()));
-        self.mutex
-            .mutate_now(priority, || {
-                // A scroll interrupted leaves the flag to this one, and this one, ending in
-                // place, clears it.
-                let generation = self.generation.get().wrapping_add(1);
-                self.generation.set(generation);
-                if self.scrolling.try_get() == Some(true) {
-                    let _ = self.scrolling.try_set(false);
-                }
-                block(scope);
-            })
-            .is_some()
     }
 
     /// Runs `block` with a scope consuming through `consume`, as a mutation of `priority`.
@@ -385,14 +341,6 @@ impl ScrollableState for DefaultScrollableState {
         (self.inner.on_delta)(delta)
     }
 
-    fn scroll_now(
-        &self,
-        priority: MutatePriority,
-        block: &mut dyn FnMut(&ScrollScope),
-    ) -> Option<bool> {
-        Some(self.inner.core.scroll_now(priority, || self.inner.on_delta.clone(), block))
-    }
-
     fn is_scroll_in_progress(&self) -> bool {
         self.inner.core.is_scroll_in_progress()
     }
@@ -434,6 +382,14 @@ pub trait FlingBehavior {
         scope: ScrollScope,
         initial_velocity: f32,
     ) -> LocalBoxFuture<'a, f32>;
+
+    /// Whether it runs when a wheel's scroll stops, as Compose's internal
+    /// `shouldBeTriggeredByMouseWheel`: not the default inertia, but a custom behavior, which may
+    /// be snapping.
+    #[doc(hidden)]
+    fn should_be_triggered_by_mouse_wheel(&self) -> bool {
+        true
+    }
 }
 
 /// Compose's default fling on Android: the content glides along Android's spline
@@ -452,6 +408,10 @@ impl DefaultFlingBehavior {
 }
 
 impl FlingBehavior for DefaultFlingBehavior {
+    fn should_be_triggered_by_mouse_wheel(&self) -> bool {
+        false
+    }
+
     fn perform_fling<'a>(
         &'a self,
         scope: ScrollScope,
@@ -769,12 +729,12 @@ impl ModifierNode for ScrollableNode {
 
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.cancel();
-        self.drag.stop_fling();
+        self.drag.detach();
     }
 
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag.cancel();
-        self.drag.stop_fling();
+        self.drag.detach();
     }
 }
 
