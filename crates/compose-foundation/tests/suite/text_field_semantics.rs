@@ -399,3 +399,28 @@ fn a_disabled_fields_selection_stays() {
     assert!(!select(&mut ui, 1, 3));
     assert_eq!(selection(&mut ui), TextRange::new(0, 0));
 }
+
+#[test]
+fn a_stale_cut_of_a_field_become_read_only_does_nothing() {
+    let value = Box::leak(Box::new(mutable_state_of(String::from("hello")))).handle();
+    let read_only = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut ui = compose_test(move || {
+        BasicTextField!(
+            value.get(),
+            move |new| value.set(new),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+            read_only = read_only.get(),
+        );
+    });
+    select(&mut ui, 0, 2);
+    ui.wait_for_idle();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot().id;
+    let cut = ui.host().semantics_action(node, &A::CUT_TEXT).expect("offered");
+    read_only.set(true);
+    ui.wait_for_idle();
+    assert!(!cut());
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "hello");
+    let clipboard = ui.host().with_tree(|tree| tree.clipboard());
+    assert_eq!(clipboard.get_text(), None);
+}
