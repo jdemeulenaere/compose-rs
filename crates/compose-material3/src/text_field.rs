@@ -8,8 +8,8 @@ use compose_foundation::layout::Box;
 use compose_foundation::{BasicTextField, KeyboardActions, KeyboardOptions, VisualTransformation};
 use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
 use compose_ui::{
-    Alignment, Color, Constraints, Dp, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
-    Modifier, Paint, Path, Shape, SizeSpec, TextStyle, UnitExt,
+    Alignment, Color, Constraints, Dp, HorizontalAlignment, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, Paint, Path, Shape, SizeSpec, TextStyle, UnitExt,
 };
 
 use crate::components::{TextFieldColors, TextFieldDefaults};
@@ -46,6 +46,148 @@ impl OutlinedTextFieldDefaults {
     }
 }
 
+/// Where a field's label is, as Compose's `TextFieldLabelPosition`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TextFieldLabelPosition {
+    /// In the container, at the top when minimized: the default of `TextField`.
+    Inside {
+        is_always_minimized: bool,
+        minimized_alignment: HorizontalAlignment,
+        expanded_alignment: HorizontalAlignment,
+    },
+    /// On the container's top edge when minimized, cut into it: the default of
+    /// `OutlinedTextField`.
+    Cutout {
+        is_always_minimized: bool,
+        minimized_alignment: HorizontalAlignment,
+        expanded_alignment: HorizontalAlignment,
+    },
+    /// Above the container, always minimized.
+    Above { alignment: HorizontalAlignment },
+}
+
+impl TextFieldLabelPosition {
+    /// `Inside()`.
+    pub const fn inside() -> TextFieldLabelPosition {
+        TextFieldLabelPosition::Inside {
+            is_always_minimized: false,
+            minimized_alignment: Alignment::START,
+            expanded_alignment: Alignment::START,
+        }
+    }
+
+    /// `Cutout()`.
+    pub const fn cutout() -> TextFieldLabelPosition {
+        TextFieldLabelPosition::Cutout {
+            is_always_minimized: false,
+            minimized_alignment: Alignment::START,
+            expanded_alignment: Alignment::START,
+        }
+    }
+
+    /// `Above()`.
+    pub const fn above() -> TextFieldLabelPosition {
+        TextFieldLabelPosition::Above { alignment: Alignment::START }
+    }
+
+    /// Whether it can rest at the size of the text, as `showExpandedLabel`.
+    fn shows_expanded(self) -> bool {
+        match self {
+            TextFieldLabelPosition::Inside { is_always_minimized, .. }
+            | TextFieldLabelPosition::Cutout { is_always_minimized, .. } => !is_always_minimized,
+            TextFieldLabelPosition::Above { .. } => false,
+        }
+    }
+
+    fn minimized_alignment(self) -> HorizontalAlignment {
+        match self {
+            TextFieldLabelPosition::Inside { minimized_alignment, .. }
+            | TextFieldLabelPosition::Cutout { minimized_alignment, .. } => minimized_alignment,
+            TextFieldLabelPosition::Above { alignment } => alignment,
+        }
+    }
+
+    fn expanded_alignment(self) -> HorizontalAlignment {
+        match self {
+            TextFieldLabelPosition::Inside { expanded_alignment, .. }
+            | TextFieldLabelPosition::Cutout { expanded_alignment, .. } => expanded_alignment,
+            TextFieldLabelPosition::Above { alignment } => alignment,
+        }
+    }
+
+    fn is_cutout(self) -> bool {
+        matches!(self, TextFieldLabelPosition::Cutout { .. })
+    }
+
+    fn is_above(self) -> bool {
+        matches!(self, TextFieldLabelPosition::Above { .. })
+    }
+
+    fn is_inside(self) -> bool {
+        matches!(self, TextFieldLabelPosition::Inside { .. })
+    }
+}
+
+impl compose_runtime::ComposeArg for TextFieldLabelPosition {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl std::fmt::Display for TextFieldLabelPosition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, minimized, expanded) = match *self {
+            TextFieldLabelPosition::Above { alignment } => {
+                return write!(formatter, "Above(alignment=Horizontal(bias={:?}))", alignment.bias);
+            }
+            TextFieldLabelPosition::Inside {
+                is_always_minimized,
+                minimized_alignment,
+                expanded_alignment,
+            } => (("Inside", is_always_minimized), minimized_alignment, expanded_alignment),
+            TextFieldLabelPosition::Cutout {
+                is_always_minimized,
+                minimized_alignment,
+                expanded_alignment,
+            } => (("Cutout", is_always_minimized), minimized_alignment, expanded_alignment),
+        };
+        write!(
+            formatter,
+            "{}(isAlwaysMinimized={}, minimizedAlignment=Horizontal(bias={:?}), \
+             expandedAlignment=Horizontal(bias={:?}))",
+            name.0, name.1, minimized.bias, expanded.bias
+        )
+    }
+}
+
+/// What a label knows of its field, as Compose's `TextFieldLabelScope`, here from
+/// [`LOCAL_TEXT_FIELD_LABEL_SCOPE`], `label` being a plain closure.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct TextFieldLabelScope {
+    progress: Option<compose_runtime::State<f32>>,
+}
+
+impl TextFieldLabelScope {
+    /// 0 at the size of the text, 1 minimized, as `labelMinimizedProgress` (a state read: read it
+    /// in a layer or a draw, so a frame of it composes nothing).
+    pub fn label_minimized_progress(&self) -> f32 {
+        self.progress.map_or(1.0, |progress| progress.get())
+    }
+}
+
+impl compose_runtime::ComposeArg for TextFieldLabelScope {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// The scope of the label being composed.
+pub static LOCAL_TEXT_FIELD_LABEL_SCOPE: compose_runtime::CompositionLocal<TextFieldLabelScope> =
+    compose_runtime::CompositionLocal::new(
+        "LocalTextFieldLabelScope",
+        TextFieldLabelScope::default,
+    );
+
 /// The label, its style and color read here, so a frame of them composes this alone, as
 /// `DecoratedLabel`: from the body-large text's style to the small one's as it floats.
 #[composable]
@@ -76,10 +218,51 @@ fn FieldLabel(progress: compose_runtime::State<f32>, color: Color, focused: bool
     }
     Box!({
         CompositionLocalProvider(
-            (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style.clone())),
-            &*label,
+            (
+                LOCAL_CONTENT_COLOR.provides(color),
+                LOCAL_TEXT_STYLE.provides(style.clone()),
+                LOCAL_TEXT_FIELD_LABEL_SCOPE
+                    .provides(TextFieldLabelScope { progress: Some(progress) }),
+            ),
+            || LabelContent(label.clone()),
         );
     });
+}
+
+/// The container's shape less the cut for a label on its edge, as `outlineCutout` on a filled
+/// field's container.
+fn draw_cut_container(
+    scope: &mut compose_ui::DrawScope<'_>,
+    shape: &Shape,
+    color: Color,
+    start: f32,
+    shown: f32,
+    half_height: f32,
+) {
+    let density = scope.density();
+    let size = scope.size();
+    let inner = density.to_px(4.dp());
+    let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+    let left = if rtl { size.width - start - shown } else { start };
+    let cut = Path::new();
+    cut.add_rect(compose_ui::Rect::new(
+        left - inner,
+        -half_height,
+        left + shown + inner,
+        half_height,
+    ));
+    let whole = Path::new();
+    crate::tooltip::add_outline(&whole, shape.outline_in(size, &density, scope.layout_direction()));
+    let path = Path::combine(compose_ui::PathOperation::Difference, &whole, &cut);
+    scope.draw_path(&path, Paint::fill(color));
+}
+
+/// The label's content, skipped while a frame of the progress only changes its style, as the lambda
+/// Compose's `Decoration` is given.
+#[composable]
+#[allow(non_snake_case)]
+fn LabelContent(label: Callback) {
+    label();
 }
 
 /// A filled field's indicator line: 1 dp, 2 dp focused, its animations read here.
@@ -120,6 +303,7 @@ pub fn TextField(
     #[default(false)] read_only: bool,
     #[default(crate::LOCAL_TEXT_STYLE.current())] text_style: TextStyle,
     #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(crate::TextFieldLabelPosition::inside())] label_position: TextFieldLabelPosition,
     #[default(None)] placeholder: Option<impl Fn() + 'static>,
     #[default(None)] leading_icon: Option<impl Fn() + 'static>,
     #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
@@ -143,6 +327,7 @@ pub fn TextField(
         enabled,
         read_only,
         text_style,
+        label_position,
         Slots {
             label: label.map(compose_runtime::callback),
             placeholder: placeholder.map(compose_runtime::callback),
@@ -175,6 +360,7 @@ pub fn OutlinedTextField(
     #[default(false)] read_only: bool,
     #[default(crate::LOCAL_TEXT_STYLE.current())] text_style: TextStyle,
     #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(crate::TextFieldLabelPosition::cutout())] label_position: TextFieldLabelPosition,
     #[default(None)] placeholder: Option<impl Fn() + 'static>,
     #[default(None)] leading_icon: Option<impl Fn() + 'static>,
     #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
@@ -198,6 +384,7 @@ pub fn OutlinedTextField(
         enabled,
         read_only,
         text_style,
+        label_position,
         Slots {
             label: label.map(compose_runtime::callback),
             placeholder: placeholder.map(compose_runtime::callback),
@@ -255,6 +442,7 @@ fn decorated_field(
     enabled: bool,
     read_only: bool,
     text_style: TextStyle,
+    label_position: TextFieldLabelPosition,
     slots: Slots,
     is_error: bool,
     visual_transformation: VisualTransformation,
@@ -271,6 +459,10 @@ fn decorated_field(
         .filter(&value)
         .map_or(value.is_empty(), |transformed| transformed.text.is_empty());
     let has_label = slots.label.is_some();
+    let shows_expanded = has_label && label_position.shows_expanded();
+    // A label above is apart from the rest: to the layout, there's none.
+    let label_in_field = has_label && !label_position.is_above();
+    let is_above = has_label && label_position.is_above();
     let phase = if is_focused {
         InputPhase::Focused
     } else if empty {
@@ -288,7 +480,9 @@ fn decorated_field(
         transition.animate_float_with(
             move |_| spec.clone(),
             "LabelProgress",
-            |phase| if *phase == InputPhase::UnfocusedEmpty { 0.0 } else { 1.0 },
+            move |phase| {
+                if *phase == InputPhase::UnfocusedEmpty && shows_expanded { 0.0 } else { 1.0 }
+            },
         )
     });
     // A placeholder fades in slowly as the field empties or is focused, as `placeholderOpacity`.
@@ -305,7 +499,7 @@ fn decorated_field(
             move |phase| match phase {
                 InputPhase::Focused => 1.0,
                 InputPhase::UnfocusedEmpty => {
-                    if has_label {
+                    if shows_expanded {
                         0.0
                     } else {
                         1.0
@@ -322,7 +516,7 @@ fn decorated_field(
             move |_| spec.clone(),
             "PrefixSuffixOpacity",
             move |phase| {
-                if *phase == InputPhase::UnfocusedEmpty && has_label { 0.0 } else { 1.0 }
+                if *phase == InputPhase::UnfocusedEmpty && shows_expanded { 0.0 } else { 1.0 }
             },
         )
     });
@@ -462,12 +656,11 @@ fn decorated_field(
     // outline draws in the node the layout measures, so measuring it draws it again (a reader
     // in another repaint boundary would draw a stale cut, docs/06).
     let label_width = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
-    let label_start = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
     // The outline's path, reset each time it's drawn, as Compose's drawing caches keep one
     // (`CheckDrawingCache`): an animated cut redefines it in place on Android (D532).
     let outline = remember(Path::new);
     let decoration = {
-        let (label_width, label_start) = (label_width.clone(), label_start.clone());
+        let label_width = label_width.clone();
         let style = style.clone();
         move |inner_text_field: Callback| {
             let mut container = Modifier
@@ -478,27 +671,62 @@ fn decorated_field(
                     Dp::UNSPECIFIED,
                 ))
                 .on_focus_changed(move |now: compose_ui::FocusState| focused.set(now.is_focused()));
+            let cutout = label_in_field && label_position.is_cutout();
+            let notch_alignment = label_position.minimized_alignment();
+            // Where the cut goes, as `outlineCutout`: at the minimized label, as wide as it is yet,
+            // left to right (a right-to-left outline mirrors it).
+            let notch = {
+                let label_width = label_width.clone();
+                move |width: f32, density: compose_ui::Density| {
+                    if !cutout {
+                        return (0.0, 0.0);
+                    }
+                    let shown = label_width.get() * progress.map_or(0.0, |progress| progress.get());
+                    let padding = density.to_px(16.dp());
+                    let space = (width - 2.0 * padding).round() as i32;
+                    let x = notch_alignment.align(
+                        shown.round() as i32,
+                        space,
+                        compose_ui::LayoutDirection::Ltr,
+                    );
+                    (padding + x as f32, shown)
+                }
+            };
             container = match variant {
                 Variant::Filled => {
                     let shape = TextFieldDefaults::shape();
                     container.draw_behind(move |scope| {
-                        scope.draw_shape(&shape, container_color.get());
+                        let (start, shown) = notch(scope.size().width, scope.density());
+                        if shown <= 0.0 {
+                            scope.draw_shape(&shape, container_color.get());
+                            return;
+                        }
+                        // The container's cut as the outline's is, under the label.
+                        let half = scope.density().sp_to_px(floated_label_height) / 2.0;
+                        draw_cut_container(
+                            scope,
+                            &shape,
+                            container_color.get(),
+                            start,
+                            shown,
+                            half,
+                        );
                     })
                 }
                 Variant::Outlined => {
                     let shape = OutlinedTextFieldDefaults::shape();
-                    let (label_width, label_start) = (label_width.clone(), label_start.clone());
                     let outline = outline.clone();
                     container.draw_behind(move |scope| {
                         scope.draw_shape(&shape, container_color.get());
+                        let (start, shown) = notch(scope.size().width, scope.density());
                         draw_notched_outline(
                             scope,
                             &outline,
                             &shape,
                             indicator_thickness(),
                             indicator_color(),
-                            label_start.get(),
-                            label_width.get() * progress.map_or(0.0, |progress| progress.get()),
+                            start,
+                            shown,
                         )
                     })
                 }
@@ -507,7 +735,8 @@ fn decorated_field(
                 variant,
                 has_leading: slots.leading_icon.is_some(),
                 has_trailing: slots.trailing_icon.is_some(),
-                has_label,
+                has_label: label_in_field,
+                position: label_position,
                 has_placeholder: show_placeholder,
                 has_prefix,
                 has_suffix,
@@ -515,14 +744,19 @@ fn decorated_field(
                 progress,
                 floated_label_height,
                 label_width: label_width.clone(),
-                label_start: label_start.clone(),
             };
-            let policy = compose_runtime::remember_keyed(LayoutKey(layout.key()), || {
-                Rc::new(layout) as Rc<dyn MeasurePolicy>
-            });
+            let policy =
+                compose_runtime::remember_keyed(LayoutKey(layout.key(), label_position), || {
+                    Rc::new(layout) as Rc<dyn MeasurePolicy>
+                });
             let slots = slots.clone();
             let supporting_text = slots.supporting_text.clone();
-            let below = remember(|| Rc::new(SupportingLayout) as Rc<dyn MeasurePolicy>);
+            let above_alignment = is_above.then(|| label_position.minimized_alignment());
+            let around = compose_runtime::remember_keyed(
+                above_alignment.map(|it| it.bias.to_bits()),
+                || Rc::new(FieldColumn { above_alignment }) as Rc<dyn MeasurePolicy>,
+            );
+            let above_label = slots.label.clone().filter(|_| is_above);
             let style = style.clone();
             let (prefix_style, suffix_style) = (prefix_style.clone(), suffix_style.clone());
             let content = compose_runtime::callback(move || {
@@ -551,7 +785,9 @@ fn decorated_field(
                         });
                     }
                 }
-                if let (Some(label), Some(progress)) = (slots.label.clone(), progress) {
+                if let (Some(label), Some(progress)) =
+                    (slots.label.clone().filter(|_| label_in_field), progress)
+                {
                     FieldLabel(progress, label_color, is_focused, label);
                 }
                 if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
@@ -594,54 +830,51 @@ fn decorated_field(
                     IndicatorLine(indicator_state, indicator, thickness_state, unfocused_thickness);
                 }
             });
-            match supporting_text {
-                // The supporting text below the container, 16 dp in, 4 dp under it.
-                Some(supporting_text) => {
-                    let (container, policy, content) = (container.clone(), policy.clone(), content);
-                    let supporting_style = supporting_style.clone();
-                    compose_ui::Layout(
-                        Modifier,
-                        below,
-                        compose_runtime::callback(move || {
-                            compose_ui::Layout(container.clone(), policy.clone(), content.clone());
-                            let supporting_text = supporting_text.clone();
-                            let supporting_style = supporting_style.clone();
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(supporting_color),
-                                || {
-                                    let supporting_text = supporting_text.clone();
-                                    CompositionLocalProvider(
-                                        LOCAL_TEXT_STYLE.provides(supporting_style.clone()),
-                                        || {
-                                            let supporting_text = supporting_text.clone();
-                                            Box(
-                                                Modifier.padding((
-                                                    16.dp(),
-                                                    4.dp(),
-                                                    16.dp(),
-                                                    0.dp(),
-                                                )),
-                                                Alignment::TOP_START,
-                                                false,
-                                                compose_runtime::callback(move |_| {
-                                                    supporting_text()
-                                                }),
-                                            );
-                                        },
-                                    );
-                                },
-                            );
-                        }),
-                    );
-                }
-                None => compose_ui::Layout(container, policy, content),
+            if above_label.is_none() && supporting_text.is_none() {
+                compose_ui::Layout(container, policy, content);
+                return;
             }
+            let supporting_style = supporting_style.clone();
+            compose_ui::Layout(
+                Modifier,
+                around,
+                compose_runtime::callback(move || {
+                    // The label above, 4 dp from the field and its sides, as
+                    // `AboveLabelHorizontalPadding` and `AboveLabelBottomPadding`.
+                    if let (Some(label), Some(progress)) = (above_label.clone(), progress) {
+                        Box!(modifier = Modifier.padding((4.dp(), 0.dp(), 4.dp(), 4.dp())), {
+                            FieldLabel(progress, label_color, is_focused, label.clone());
+                        });
+                    }
+                    compose_ui::Layout(container.clone(), policy.clone(), content.clone());
+                    // The supporting text below the container, 16 dp in, 4 dp under it.
+                    if let Some(supporting_text) = supporting_text.clone() {
+                        let style = supporting_style.clone();
+                        CompositionLocalProvider(
+                            (
+                                LOCAL_CONTENT_COLOR.provides(supporting_color),
+                                LOCAL_TEXT_STYLE.provides(style),
+                            ),
+                            move || {
+                                let supporting_text = supporting_text.clone();
+                                Box(
+                                    Modifier.padding((16.dp(), 4.dp(), 16.dp(), 0.dp())),
+                                    Alignment::TOP_START,
+                                    false,
+                                    compose_runtime::callback(move |_| supporting_text()),
+                                );
+                            },
+                        );
+                    }
+                }),
+            );
         }
     };
-    // Room above an outlined field for its floated label, as `OutlinedTextFieldTopPadding`.
-    let modifier = match variant {
-        Variant::Outlined if has_label => modifier.padding((0.dp(), 8.dp(), 0.dp(), 0.dp())),
-        _ => modifier,
+    // Room above for a label on the edge, as `topPaddingForLabelCutout`.
+    let modifier = if has_label && label_position.is_cutout() {
+        modifier.padding((0.dp(), 8.dp(), 0.dp(), 0.dp()))
+    } else {
+        modifier
     };
     // In error, the field says so, as Compose's `semantics { error(…) }`.
     let modifier = if is_error {
@@ -675,7 +908,7 @@ fn decorated_field(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct LayoutKey((Variant, [bool; 7]));
+struct LayoutKey((Variant, [bool; 7]), TextFieldLabelPosition);
 
 impl compose_runtime::ComposeArg for LayoutKey {
     fn same(&self, other: &Self) -> bool {
@@ -697,6 +930,7 @@ struct DecorationLayout {
     has_leading: bool,
     has_trailing: bool,
     has_label: bool,
+    position: TextFieldLabelPosition,
     has_placeholder: bool,
     has_prefix: bool,
     has_suffix: bool,
@@ -706,8 +940,6 @@ struct DecorationLayout {
     floated_label_height: compose_ui::TextUnit,
     /// The label's width, for the outline's cut.
     label_width: Rc<std::cell::Cell<f32>>,
-    /// The floated label's start, for the outline's cut.
-    label_start: Rc<std::cell::Cell<f32>>,
 }
 
 /// A decoration's slots, as its children come.
@@ -745,12 +977,11 @@ impl DecorationLayout {
     ) -> (i32, i32, i32, i32) {
         let padding = density.round_to_px(16.dp());
         let beside_icon = density.round_to_px(4.dp());
-        let outlined = self.variant == Variant::Outlined;
-        let vertical =
-            density.round_to_px(if self.has_label && !outlined { 8.dp() } else { 16.dp() });
+        let inside = self.position.is_inside();
+        let vertical = density.round_to_px(if self.has_label && inside { 8.dp() } else { 16.dp() });
         let start = if slots.leading.is_some() { beside_icon } else { padding };
         let end = if slots.trailing.is_some() { beside_icon } else { padding };
-        let label_room = if self.has_label && !outlined {
+        let label_room = if self.has_label && inside {
             density.sp_to_px(self.floated_label_height).round() as i32
         } else {
             0
@@ -858,9 +1089,8 @@ impl MeasurePolicy for DecorationLayout {
         let density = scope.density();
         let padding = density.round_to_px(16.dp());
         let beside_icon = density.round_to_px(4.dp());
-        let outlined = self.variant == Variant::Outlined;
-        let vertical =
-            density.round_to_px(if self.has_label && !outlined { 8.dp() } else { 16.dp() });
+        let inside = self.position.is_inside();
+        let vertical = density.round_to_px(if self.has_label && inside { 8.dp() } else { 16.dp() });
         let mut children = measurables.iter().copied();
         let Some(text) = children.next() else {
             return scope.layout(constraints.min_width, constraints.min_height);
@@ -882,9 +1112,9 @@ impl MeasurePolicy for DecorationLayout {
         let loose = constraints.loosen().offset(-start - end, -2 * vertical);
         let label = label.map(|label| scope.measure(label, loose));
         self.label_width.set(label.map_or(0, |label| label.width) as f32);
-        // A filled field's text sits below the floated label (16 sp lines); an outlined one's
-        // label is on the edge, taking no room.
-        let label_room = if self.has_label && !outlined {
+        // Inside, the text sits below the floated label (16 sp lines); on the edge, the label
+        // takes no room.
+        let label_room = if self.has_label && inside {
             density.sp_to_px(self.floated_label_height).round() as i32
         } else {
             0
@@ -915,7 +1145,7 @@ impl MeasurePolicy for DecorationLayout {
         let height = constraints.constrain_height(
             (vertical + label_room + content_height + vertical).max(icons_height),
         );
-        let text_y = if self.has_label && !outlined {
+        let text_y = if self.has_label && inside {
             vertical + label_room
         } else if self.single_line {
             (height - text.height) / 2
@@ -935,20 +1165,38 @@ impl MeasurePolicy for DecorationLayout {
             } else {
                 density.round_to_px(16.dp())
             };
-            let floated = if outlined { -label.height / 2 } else { vertical };
+            let floated = if inside { vertical } else { -label.height / 2 };
             let progress = self.progress.map_or(1.0, |progress| progress.get());
             let y = resting + ((floated - resting) as f32 * progress).round() as i32;
-            // An outlined field's floated label is 16 dp in, over a leading icon.
-            let x = if outlined {
-                start + ((padding - start) as f32 * progress).round() as i32
+            // Aligned between the icons' and paddings' room (resting); minimized too, inside,
+            // while on the edge it's between the paddings alone, over a leading icon.
+            let direction = scope.layout_direction();
+            let ltr = direction == compose_ui::LayoutDirection::Ltr;
+            let left = if ltr { start } else { end };
+            let resting_x = self.position.expanded_alignment().align(
+                label.width,
+                width - start - end,
+                direction,
+            ) + left;
+            let floated_x = if inside {
+                self.position.minimized_alignment().align(
+                    label.width,
+                    width - start - end,
+                    direction,
+                ) + left
             } else {
-                start
+                self.position.minimized_alignment().align(
+                    label.width,
+                    width - 2 * padding,
+                    direction,
+                ) + padding
             };
-            self.label_start.set(x as f32);
-            scope.place_relative(label, x, y);
+            let x = resting_x + ((floated_x - resting_x) as f32 * progress).round() as i32;
+            // Not relative: the alignment has the direction.
+            scope.place(label, x, y);
         }
         // Centered on a single line without a filled field's label, else where the text is.
-        let centered = !(self.has_label && !outlined) && self.single_line;
+        let centered = !(self.has_label && inside) && self.single_line;
         let y_of = |item_height: i32| if centered { (height - item_height) / 2 } else { text_y };
         if let Some(placeholder) = &placeholder {
             scope.place_relative(placeholder, start + prefix_width, y_of(placeholder.height));
@@ -1013,26 +1261,52 @@ impl MeasurePolicy for DecorationLayout {
 
 /// The field, then its supporting text below it, as wide as the field (wrapping within it),
 /// as Compose's text field layouts measure it.
-struct SupportingLayout;
+struct FieldColumn {
+    /// With a label above, first of the children, how it's aligned.
+    above_alignment: Option<HorizontalAlignment>,
+}
 
-impl MeasurePolicy for SupportingLayout {
+impl MeasurePolicy for FieldColumn {
     fn measure(
         &self,
         scope: &mut MeasureScope<'_>,
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let [field, supporting] = measurables else {
+        let (label, rest) = match (self.above_alignment, measurables) {
+            (Some(_), [label, rest @ ..]) => (Some(*label), rest),
+            _ => (None, measurables),
+        };
+        let [field, supporting @ ..] = rest else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
+        // Measured after the field, whose width it has: its height kept for it first.
+        let reserved =
+            label.map_or(0, |label| scope.min_intrinsic_height(label, constraints.min_width));
         let mut field_constraints = constraints;
         field_constraints.min_height = 0;
+        if field_constraints.max_height != Constraints::INFINITY {
+            field_constraints.max_height = (field_constraints.max_height - reserved).max(0);
+        }
         let field = scope.measure(*field, field_constraints);
-        let supporting =
-            scope.measure(*supporting, Constraints::new(0, field.width, 0, constraints.max_height));
-        scope.place_relative(&field, 0, 0);
-        scope.place_relative(&supporting, 0, field.height);
-        let height = constraints.constrain_height(field.height + supporting.height);
+        let label =
+            label.map(|label| scope.measure(label, Constraints::new(0, field.width, 0, reserved)));
+        let label_height = label.map_or(0, |label| label.height);
+        let supporting = supporting.first().map(|supporting| {
+            scope.measure(*supporting, Constraints::new(0, field.width, 0, constraints.max_height))
+        });
+        if let (Some(label), Some(alignment)) = (&label, self.above_alignment) {
+            let direction = scope.layout_direction();
+            // Not relative: the alignment has the direction.
+            scope.place(label, alignment.align(label.width, field.width, direction), 0);
+        }
+        scope.place_relative(&field, 0, label_height);
+        if let Some(supporting) = &supporting {
+            scope.place_relative(supporting, 0, label_height + field.height);
+        }
+        let height = constraints.constrain_height(
+            label_height + field.height + supporting.map_or(0, |supporting| supporting.height),
+        );
         scope.layout(field.width, height)
     }
 

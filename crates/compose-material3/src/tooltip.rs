@@ -260,7 +260,7 @@ impl compose_ui::CustomShape for DefaultTooltipCaretShape {
     }
 }
 
-fn add_outline(path: &Path, outline: Outline) {
+pub(crate) fn add_outline(path: &Path, outline: Outline) {
     match outline {
         Outline::Rectangle(rect) => path.add_rect(rect),
         Outline::Rounded(rect, [top_left, top_right, bottom_right, bottom_left]) => {
