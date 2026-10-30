@@ -860,18 +860,24 @@ pub(crate) type VisibleFn<T> = Rc<dyn Fn(&T) -> bool>;
 pub(crate) type ShouldDispose = Rc<dyn Fn(EnterExitState, EnterExitState) -> bool>;
 
 /// The child transition's state for a parent state, as Compose's `targetEnterExit`: `Visible`
-/// when visible, else `PostExit` once it has been visible, `PreEnter` before. Calls `remember`.
+/// when visible, else `PreEnter` while a pending target shows it (a gesture coming back to it),
+/// else `PostExit` once it has been visible, `PreEnter` before. Calls `remember`.
 fn target_enter_exit<T: Clone + PartialEq + 'static>(
     transition: &Transition<T>,
     visible: &VisibleFn<T>,
     target_state: &T,
 ) -> EnterExitState {
     let has_been_visible = remember_keyed(transition.clone(), || Rc::new(Cell::new(false)));
-    if visible(&transition.current_state()) {
+    let pending_visible =
+        transition.pending_target_state().is_some_and(|pending| visible(&pending));
+    if visible(&transition.current_state()) || pending_visible {
         has_been_visible.set(true);
     }
     if visible(target_state) {
         EnterExitState::Visible
+    } else if pending_visible {
+        // A gesture on its way back to showing it: it goes to where its enter starts, and stays.
+        EnterExitState::PreEnter
     } else if has_been_visible.get() {
         EnterExitState::PostExit
     } else {

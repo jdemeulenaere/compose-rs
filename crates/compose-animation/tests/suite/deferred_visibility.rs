@@ -796,3 +796,35 @@ fn the_catch_up_goes_on_when_the_animation_under_it_settles() {
     let after = width(&mut ui);
     assert!(after < full * 0.85, "no snap to 0.9: {after} of {full}");
 }
+
+// Compose: compose/animation/animation/src/commonMain/kotlin/androidx/compose/animation/AnimatedVisibility.kt, targetEnterExit (no test of Compose's: a pending target showing the content takes it back to PreEnter)
+#[test]
+fn a_gesture_back_during_an_exit_keeps_the_content_and_enters_it_from_its_enter_s_start() {
+    let Fixture { mut ui, state, x, composed, .. } = fixture(
+        true,
+        Some(slide_in_horizontally_with(linear(100), |_| 200)),
+        Some(slide_out_horizontally_with(linear(100), |_| -100)),
+        |_| None,
+    );
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    state.animate_to(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(80));
+    ui.advance_time_by_frame();
+    close(x.get(), -80.0, 1.0, "the exit, 80 ms in");
+    // Back to visible, held: the child transition's target is PreEnter, at +200 once the exit's
+    // own frames take it there; the content stays however long it takes.
+    state.defer(true);
+    ui.advance_time_by(millis(1000));
+    ui.wait_for_idle();
+    assert!(composed.get(), "kept during the gesture");
+    close(x.get(), 200.0, 1.0, "at the enter's start");
+    // Released: it enters from there.
+    state.animate_to(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by(millis(48));
+    assert!(x.get() < 200.0 && x.get() > 0.0, "entering: {}", x.get());
+    ui.advance_time_by(millis(200));
+    assert_eq!(x.get(), 0.0);
+}

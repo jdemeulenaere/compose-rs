@@ -877,14 +877,9 @@ fn a_manual_scale_applies_at_once_at_rest_and_springs_mid_animation() {
     ui.wait_for_idle();
     let catching_up = width(&mut ui, "content_A");
     assert!((catching_up - full * 0.5).abs() > 5.0, "no snap: {catching_up} of {full}");
-    // A's exit goes on under the catch-up, and takes it away when it ends: the last seen is what
-    // Compose's test reads, caught up by then.
-    let mut last = catching_up;
-    while !ui.on_all_nodes(has_test_tag("content_A")).fetch_semantics_nodes().is_empty() {
-        last = width(&mut ui, "content_A");
-        ui.advance_time_by_frame();
-    }
-    close(last, full * 0.5, 1.0, "caught up");
+    ui.advance_time_by(millis(5000));
+    ui.wait_for_idle();
+    close(width(&mut ui, "content_A"), full * 0.5, 1.0, "caught up");
 }
 
 // Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt, testUnmutatedPropertiesDoNotJump
