@@ -247,7 +247,8 @@ pub(crate) fn default_alpha_spec() -> AnimationSpec {
 }
 
 /// The default spec of a scale, as Compose's `DefaultScaleSpring` (threshold 0.002).
-pub(crate) fn default_scale_spec() -> AnimationSpec {
+#[doc(hidden)]
+pub fn default_scale_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring().visibility_threshold(0.002f32))
 }
 

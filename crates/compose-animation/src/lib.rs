@@ -117,6 +117,8 @@ pub use transition::{
 #[doc(hidden)]
 pub use vector::default_spring;
 pub use vector::{Animate, AnimationVector, VisibilityThreshold};
+#[doc(hidden)]
+pub use visibility::default_scale_spec;
 pub use visibility::{
     AnimatedVisibility, AnimatedVisibilityScope, AnimatedVisibilityState, ChangeSizeConfig,
     EnterExitState, EnterExitTransitionConfig, EnterTransition, ExitTransition, FadeConfig,

@@ -244,7 +244,7 @@ pub fn remember_result_event_bus() -> ResultEventBus {
 #[allow(non_snake_case)]
 pub fn ResultEffect<T: 'static, F: Future<Output = ()> + 'static>(
     #[default(None)] result_key: Option<impl Into<String>>,
-    #[default(LocalResultEventBus::current())] result_event_bus: ResultEventBus,
+    #[default(crate::LocalResultEventBus::current())] result_event_bus: ResultEventBus,
     on_result: impl Fn(T) -> F + 'static,
 ) {
     let result_key = result_key.unwrap_or_else(key_of::<T>);
@@ -281,7 +281,7 @@ impl ResultEventBusNavEntryDecorator {
 /// `rememberResultEventBusNavEntryDecorator`.
 #[composable]
 pub fn remember_result_event_bus_nav_entry_decorator<T: Clone + 'static>(
-    #[default(remember_result_event_bus())] result_event_bus: ResultEventBus,
+    #[default(crate::remember_result_event_bus())] result_event_bus: ResultEventBus,
 ) -> NavEntryDecorator<T> {
     remember(|| ResultEventBusNavEntryDecorator::new(result_event_bus))
 }

@@ -93,6 +93,12 @@ fn default_size_spec() -> AnimationSpec {
     )
 }
 
+impl ComposeArg for SizeTransform {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// How one state's content gives way to the next's, as Compose's `ContentTransform`: the new
 /// content's enter, the old one's exit, the new one's z-index, and the container's size
 /// transform (none: the container is as large as the largest content).

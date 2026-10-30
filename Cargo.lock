@@ -782,6 +782,8 @@ version = "0.1.0"
 dependencies = [
  "compose-animation",
  "compose-foundation",
+ "compose-lifecycle",
+ "compose-navigation-event",
  "compose-runtime",
  "compose-test",
  "compose-ui",

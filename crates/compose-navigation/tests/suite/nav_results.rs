@@ -1,14 +1,15 @@
 //! `ResultEventBus` and `ResultEffect`, against Navigation 3's `ResultEventBusTest`,
-//! `ResultEffectTest` and `ResultEventBusAndroidTest`. `ResultEventBusNavEntryDecoratorTest` needs
-//! `NavDisplay`, and comes with it.
+//! `ResultEffectTest`, `ResultEventBusAndroidTest` and `ResultEventBusNavEntryDecoratorTest`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_foundation::BasicText;
 use compose_navigation::*;
+use compose_runtime::snapshots::mutable_state_list_from;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::DialogProperties;
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -337,4 +338,130 @@ fn a_decorator_provides_its_bus_to_entries() {
     bus.send_result("result".to_string());
     ui.wait_for_idle();
     assert_eq!(*log.borrow(), ["result"]);
+}
+
+/// What listens for a result, showing it, and what sends one: as those tests' two screens.
+#[composable]
+fn Listening() {
+    let result = remember(|| mutable_state_of(String::from("no result")));
+    ResultEffect!(
+        on_result = move |text: String| {
+            result.set(text);
+            async {}
+        }
+    );
+    BasicText!("{}", result.get());
+}
+
+#[composable]
+fn Conflating() {
+    let state = LocalResultEventBus::current().conflate_as_state(String::from("no result"));
+    BasicText!("{}", state.get());
+}
+
+#[composable]
+fn Sending() {
+    let bus = LocalResultEventBus::current();
+    BUS.with_borrow_mut(|kept| *kept = Some(bus));
+}
+
+thread_local! {
+    static BUS: RefCell<Option<ResultEventBus>> = const { RefCell::new(None) };
+}
+
+fn send(text: &str) {
+    BUS.with_borrow(|bus| bus.as_ref().unwrap().send_result(text.to_string()));
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Screen {
+    First,
+    Second,
+}
+
+fn screen(listener: fn(), dialog: bool) -> impl Fn(Screen) -> NavEntry<Screen> + Clone + 'static {
+    move |key| match key {
+        Screen::First => NavEntry::new(key, move |_| listener()),
+        Screen::Second => {
+            let entry = NavEntry::new(key, |_| Sending());
+            if dialog {
+                entry.with_metadata(DialogSceneStrategy::dialog(DialogProperties::default()))
+            } else {
+                entry
+            }
+        }
+    }
+}
+
+/// A result sent from the second screen, or a dialog, is read by the first after going back to it.
+fn result_reaches_the_first_screen(listener: fn(), dialog: bool) {
+    let owner = mutable_state_list_from([Screen::First]);
+    let stack = owner.handle();
+    let provider = screen(listener, dialog);
+    let mut ui = compose_test(move || {
+        NavDisplay!(
+            stack,
+            entry_decorators = vec![remember_result_event_bus_nav_entry_decorator!()],
+            scene_strategies = vec![scene_strategy(DialogSceneStrategy)],
+            entry_provider = provider.clone()
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_text("no result").assert_is_displayed();
+    stack.push(Screen::Second);
+    ui.wait_for_idle();
+    send("result");
+    ui.wait_for_idle();
+    stack.remove(1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("result").assert_is_displayed();
+}
+
+// Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt, testResultEventBusBetweenTwoEntries
+#[test]
+fn a_result_reaches_the_entry_before() {
+    result_reaches_the_first_screen(Listening, false);
+}
+
+// Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt, testResultEventBusWithDialog
+#[test]
+fn a_dialog_s_result_reaches_the_entry_under_it() {
+    result_reaches_the_first_screen(Listening, true);
+}
+
+// Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt, testConflateAsStateBetweenTwoEntries
+#[test]
+fn a_state_of_results_is_read_back_by_the_entry_before() {
+    result_reaches_the_first_screen(Conflating, false);
+}
+
+// Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt, testConflateAsStateWithDialog
+#[test]
+fn a_state_of_results_is_read_by_the_entry_under_a_dialog() {
+    result_reaches_the_first_screen(Conflating, true);
+}
+
+// Compose: navigation3/navigation3-runtime/src/androidDeviceTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusNavEntryDecoratorTest.kt, testHoistedResultEventBusBetweenTwoEntries
+#[test]
+fn a_hoisted_bus_reaches_the_entry_before() {
+    let owner = mutable_state_list_from([Screen::First]);
+    let stack = owner.handle();
+    let provider = screen(Listening, false);
+    let mut ui = compose_test(move || {
+        let bus = remember_result_event_bus!();
+        NavDisplay!(
+            stack,
+            entry_decorators = vec![remember_result_event_bus_nav_entry_decorator!(bus)],
+            entry_provider = provider.clone()
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_text("no result").assert_is_displayed();
+    stack.push(Screen::Second);
+    ui.wait_for_idle();
+    send("result");
+    ui.wait_for_idle();
+    stack.remove(1);
+    ui.wait_for_idle();
+    ui.on_node_with_text("result").assert_is_displayed();
 }

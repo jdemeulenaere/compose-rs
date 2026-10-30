@@ -10,6 +10,10 @@ use compose_runtime::{ComposeArg, ImmutableList, Remember, Saveable, remember_sa
 /// observed where it's read, a plain one is what it is.
 pub trait NavList<T> {
     fn to_nav_list(&self) -> Vec<T>;
+
+    /// Takes its last off it if it can, what a display's `on_back` does by default, as Kotlin's
+    /// `if (backStack is MutableList) backStack.removeLastOrNull()`.
+    fn remove_last(&self) {}
 }
 
 impl<T: Clone> NavList<T> for Vec<T> {
@@ -40,11 +44,22 @@ impl<T: Clone + 'static> NavList<T> for SnapshotStateList<T> {
     fn to_nav_list(&self) -> Vec<T> {
         self.with(Vec::clone)
     }
+
+    fn remove_last(&self) {
+        let len = self.len();
+        if len > 0 {
+            self.remove(len - 1);
+        }
+    }
 }
 
 impl<T: Clone + 'static> NavList<T> for NavBackStack<T> {
     fn to_nav_list(&self) -> Vec<T> {
         self.base.to_nav_list()
+    }
+
+    fn remove_last(&self) {
+        NavList::remove_last(&self.base);
     }
 }
 

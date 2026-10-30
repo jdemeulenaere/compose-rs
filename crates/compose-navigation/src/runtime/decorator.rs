@@ -88,8 +88,7 @@ impl SaveableStateHolderNavEntryDecorator {
 /// `rememberSaveableStateHolderNavEntryDecorator`.
 #[composable]
 pub fn remember_saveable_state_holder_nav_entry_decorator<T: Clone + 'static>(
-    #[default(compose_runtime::remember_saveable_state_holder())]
-    saveable_state_holder: SaveableStateHolder,
+    #[default(crate::remember_saveable_state_holder())] saveable_state_holder: SaveableStateHolder,
 ) -> NavEntryDecorator<T> {
     remember_keyed(saveable_state_holder, || {
         SaveableStateHolderNavEntryDecorator::new(saveable_state_holder)

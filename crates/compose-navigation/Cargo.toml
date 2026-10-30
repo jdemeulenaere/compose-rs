@@ -10,6 +10,8 @@ publish.workspace = true
 compose-runtime.workspace = true
 compose-ui.workspace = true
 compose-animation.workspace = true
+compose-lifecycle.workspace = true
+compose-navigation-event.workspace = true
 
 [dev-dependencies]
 compose-test.workspace = true
