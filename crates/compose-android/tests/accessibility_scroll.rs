@@ -831,7 +831,7 @@ fn showing_a_node_says_it_scrolled_if_any_around_it_did() {
     assert_eq!(inner.value(), 30);
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ShowOnScreenAccessibilityTest.kt, testPerformAction_showOnScreen_lazyRow
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
 #[test]
 fn showing_a_node_of_a_reversed_row_goes_the_other_way() {
     let state = list_state();

@@ -1258,10 +1258,9 @@ fn a_touch_finds_the_one_on_top_by_its_z_index() {
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_scrolled
 #[test]
 fn a_touch_finds_what_is_scrolled_there() {
-    let state = Box::leak(Box::new(ScrollState::new(0)));
-    let held = state.clone();
+    let state = **Box::leak(Box::new(ScrollState::new(0)));
     let mut host = stacked(move || {
-        Column!(modifier = Modifier.size(200.dp()).vertical_scroll(held.clone()), {
+        Column!(modifier = Modifier.size(200.dp()).vertical_scroll(state), {
             BasicText!("Before", modifier = Modifier.test_tag("before").size(200.dp()));
             BasicText!("After", modifier = Modifier.test_tag("after").size(200.dp()));
         });
@@ -1537,6 +1536,54 @@ fn a_touch_beside_a_dialog_finds_nothing_behind_it() {
     open.set(true);
     frames(&mut host);
     assert_ne!(touched(&host, 5.0, 5.0), Some(behind));
+}
+
+/// At the window's corner.
+struct AtTheCorner;
+
+impl PopupPositionProvider for AtTheCorner {
+    fn position(&self, _: Rect, _: IntSize, _: LayoutDirection, _: IntSize) -> IntOffset {
+        IntOffset::new(0, 0)
+    }
+}
+
+/// An overlay's own window takes a touch in it, as a view of its own in Compose, whatever's there.
+#[test]
+fn a_touch_in_a_window_finds_nothing_under_it_and_beside_it_goes_on() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        let window = Rc::new(AtTheCorner) as Rc<dyn PopupPositionProvider>;
+        Box!(modifier = Modifier.overlay(window, false).size(100.dp()));
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
+    assert_eq!(touched(&host, 150.0, 150.0), Some(id_of(&host, "under")));
+}
+
+/// A popup shutting out what's under it: beside it, a touch finds nothing, as a service reads.
+#[test]
+fn a_touch_beside_a_window_shutting_out_what_is_under_it_finds_nothing() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        Popup!(properties = PopupProperties { focusable: true, ..Default::default() }, {
+            Box!(modifier = Modifier.size(100.dp()));
+        });
+    });
+    assert!(by_tag(&host.accessibility_tree(), "under").is_none());
+    assert_eq!(touched(&host, 150.0, 150.0), None);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantTraversalProperties
+#[test]
+fn a_touch_finds_nothing_in_what_only_says_how_it_is_read() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier.size(100.dp()).test_tag("group").semantics(|it| {
+                it.set_is_traversal_group(true);
+                it.set_traversal_index(1.0);
+            })
+        );
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testHideFromAccessibility_propagatesToMergedChildren
@@ -2381,7 +2428,6 @@ static RATIO_EXTRA: SemanticsPropertyKey<f32> =
 static WORDS_EXTRA: SemanticsPropertyKey<StringList> =
     SemanticsPropertyKey::with_accessibility_extra("Words", "words.key");
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testAccessibilityExtraKey_setsExtra
 #[test]
 fn each_kind_of_extra_is_written_as_what_it_is() {
     let host = with_extras(Modifier.semantics(|it| {
@@ -2487,7 +2533,7 @@ fn what_merges_a_shape_has_none_of_its_own() {
 }
 
 fn f32s(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|it| f32::from_le_bytes(it.try_into().unwrap())).collect()
+    bytes.as_chunks::<4>().0.iter().map(|it| f32::from_le_bytes(*it)).collect()
 }
 
 fn shape_written(extra: &ShapeExtra, key: ShapeExtraKey) -> Vec<u8> {
