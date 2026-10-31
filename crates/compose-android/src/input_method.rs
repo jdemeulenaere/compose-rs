@@ -678,7 +678,7 @@ impl InputConnections {
             let dropped = self.connections.remove(0);
             // Kotlin closes the ones collected, so this takes a keyboard binding many times over
             // between collections. If it's the one in use nothing types: say so (D1670).
-            crate::bridge::log_input_method(&format!(
+            crate::bridge::log(&format!(
                 "connection {} dropped: {MOST_OPEN_CONNECTIONS} open",
                 dropped.id
             ));

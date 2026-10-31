@@ -908,7 +908,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1663 | [text](decisions/text.md#d1663) | revised by [D1668](decisions/text.md#d1668) |
 | D1664 | [text](decisions/text.md#d1664) | revised by [D1667](decisions/text.md#d1667), [D1668](decisions/text.md#d1668), [D1669](decisions/text.md#d1669) |
 | D1665 | [text](decisions/text.md#d1665) | current |
-| D1666 | [text](decisions/text.md#d1666) | current |
+| D1666 | [text](decisions/text.md#d1666) | reverted before merging, on the local branch `ime-logging` |
 | D1667 | [text](decisions/text.md#d1667) | revised by [D1670](decisions/text.md#d1670) |
 | D1668 | [text](decisions/text.md#d1668) | revised by [D1670](decisions/text.md#d1670) |
 | D1669 | [text](decisions/text.md#d1669) | current |

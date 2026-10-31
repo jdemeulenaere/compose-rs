@@ -112,18 +112,6 @@ pub(crate) fn log(message: &str) {
     eprintln!("compose-rs: {message}");
 }
 
-/// Writes `message` to logcat under the keyboard's temporary tag (D1666), or stderr off Android.
-pub(crate) fn log_input_method(message: &str) {
-    #[cfg(target_os = "android")]
-    {
-        let text = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
-        // 5: WARN.
-        unsafe { __android_log_write(5, c"ComposeRsIme".as_ptr(), text.as_ptr()) };
-    }
-    #[cfg(not(target_os = "android"))]
-    eprintln!("ComposeRsIme: {message}");
-}
-
 /// A panic says what it was in logcat first. Under the Android profiles (`android` and
 /// `android-release`: `panic = "abort"`, D361), the process then aborts where the panic happened,
 /// on whichever thread, caught or not. Built with unwinding (another profile), a panic reaching a
