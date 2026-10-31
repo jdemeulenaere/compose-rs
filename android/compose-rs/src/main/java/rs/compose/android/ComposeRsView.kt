@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
+import android.text.format.DateFormat
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.net.Uri
@@ -402,6 +403,7 @@ class ComposeRsView @JvmOverloads constructor(
             configuration.fontScale,
             resources.displayMetrics.density,
             night,
+            DateFormat.is24HourFormat(context),
         )
     }
 

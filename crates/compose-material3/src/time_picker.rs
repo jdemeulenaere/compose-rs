@@ -27,7 +27,7 @@ use compose_ui::{
 };
 
 use crate::button::{ButtonColors, ButtonShapes, TextButton};
-use crate::calendar_model::{default_locale, digit_value, is_date_digit, to_local_string};
+use crate::calendar_model::{default_locale, language_of, region_or_likely, to_local_string};
 use crate::components::{
     SelectableSurface, Text, TextFieldColors, minimum_interactive_component_size,
 };
@@ -430,17 +430,20 @@ impl TimePickerState {
             .await;
     }
 
-    /// As `rotateTo`: the value under an angle, and the dial there.
-    async fn rotate_to(self, angle: f32, spec: AnimationSpec, animate: bool) {
-        let Some(inner) = self.inner() else { return };
-        inner.user_override.set(false);
-        let _ = inner
+    /// As `rotateTo`: the value under an angle, and the dial there. `false` when it was interrupted
+    /// or never ran, where Compose's throws and what follows it doesn't run.
+    async fn rotate_to(self, angle: f32, spec: AnimationSpec, animate: bool) -> bool {
+        let Some(inner) = self.inner() else { return false };
+        inner
             .mutex
             .mutate(MutatePriority::UserInput, async {
                 if inner.selection.get() == TimePickerSelectionMode::Hour {
                     let hour_angle = (to_hour(angle) % 12) as f32 * RADIANS_PER_HOUR;
                     inner.hour_angle.set(hour_angle);
                     let hour = to_hour(hour_angle) % 12 + if inner.is_pm() { 12 } else { 0 };
+                    if hour != inner.hour.get() {
+                        inner.user_override.set(false);
+                    }
                     if inner.is_valid_hour(hour) {
                         inner.hour.set(hour);
                     }
@@ -449,6 +452,9 @@ impl TimePickerState {
                     let minute_angle = to_minute(angle) as f32 * RADIANS_PER_MINUTE;
                     inner.minute_angle.set(minute_angle);
                     let minute = to_minute(minute_angle);
+                    if minute != inner.minute.get() {
+                        inner.user_override.set(false);
+                    }
                     inner.minute.set(minute);
                     inner.minute_input.set(minute);
                 }
@@ -459,20 +465,23 @@ impl TimePickerState {
                     inner.angle.snap_to(offset_angle(angle));
                 }
             })
-            .await;
+            .await
+            .is_ok()
     }
 
     /// As `moveSelector`: with twenty-four hours, the inner circle is the afternoon's.
     fn move_selector(self, x: f32, y: f32, max_distance: f32, center: Offset) {
         if self.selection() == TimePickerSelectionMode::Hour && self.is_24_hour() {
             let distance = (center.x - x).hypot(center.y - y);
-            if self.is_pm() {
-                if distance >= max_distance {
-                    self.set_hour(self.hour() - 12);
-                }
-            } else if distance < max_distance {
-                self.set_hour(self.hour() + 12);
+            let change = match (self.is_pm(), distance < max_distance) {
+                (true, false) => -12,
+                (false, true) => 12,
+                _ => return,
+            };
+            if let Some(inner) = self.inner() {
+                inner.user_override.set(false);
             }
+            self.set_hour(self.hour() + change);
         }
     }
 
@@ -494,7 +503,9 @@ impl TimePickerState {
             (angle / RADIANS_PER_MINUTE / 5.0).round() * 5.0 * RADIANS_PER_MINUTE
         };
         self.move_selector(x, y, max_distance, center);
-        self.rotate_to(angle, spec, true).await;
+        if !self.rotate_to(angle, spec, true).await {
+            return;
+        }
         if hours && auto_switch_to_minute {
             delay(std::time::Duration::from_millis(100)).await;
         }
@@ -546,27 +557,33 @@ impl ComposeArg for TimePickerState {
     }
 }
 
-/// Whether a locale's clock has twenty-four hours, as Compose's `is24HourFormat` for a phone left
-/// at its locale's default: a user's choice in the system's settings isn't read (D1566). Hidden: a
-/// default of `remember_time_picker_state`.
+/// Whether the clock has twenty-four hours, as Compose's `is24HourFormat`: what the host says
+/// (on a phone, `DateFormat.is24HourFormat`), or else the locale's. Hidden: a default of
+/// `remember_time_picker_state`.
 #[doc(hidden)]
 pub fn is_24_hour_format() -> bool {
-    locale_uses_24_hours(&default_locale())
+    LOCAL_CONFIGURATION
+        .current()
+        .is_24_hour
+        .unwrap_or_else(|| locale_uses_24_hours(&default_locale()))
 }
 
-/// The regions that prefer twelve hours, by CLDR's `timeData` from memory, as the date tables.
+/// The regions whose clock has twelve hours, CLDR's `timeData` as the JDK 21 gives it for `jm`.
+const TWELVE_HOUR_REGIONS: [&str; 92] = [
+    "AE", "AG", "AL", "AS", "AU", "BB", "BD", "BH", "BM", "BN", "BS", "BT", "CA", "CO", "CY", "DJ",
+    "DM", "DO", "DZ", "EG", "EH", "ER", "ET", "FJ", "FM", "GD", "GH", "GM", "GR", "GU", "GY", "HK",
+    "IN", "IQ", "JM", "JO", "KH", "KI", "KN", "KP", "KR", "KW", "KY", "LB", "LC", "LR", "LS", "LY",
+    "MH", "MO", "MP", "MR", "MW", "MY", "NA", "NZ", "OM", "PA", "PG", "PH", "PK", "PR", "PS", "PW",
+    "QA", "SA", "SB", "SD", "SG", "SL", "SO", "SS", "SY", "SZ", "TC", "TD", "TK", "TN", "TO", "TT",
+    "TV", "TW", "UM", "US", "VC", "VE", "VG", "VI", "VU", "WS", "YE", "ZM",
+];
+
+/// A locale's clock, by its region or the one its language is most spoken in; CLDR's `fr_CA` has
+/// 24 hours in a region of 12.
 fn locale_uses_24_hours(locale: &Locale) -> bool {
-    let region = locale.region();
-    let language = locale.to_language_tag();
-    let language = language.split('-').next().unwrap_or_default().to_ascii_lowercase();
-    let twelve_hours = match region.as_str() {
-        "" => matches!(language.as_str(), "en" | "ko" | "ar" | "hi"),
-        "US" | "CA" | "AU" | "NZ" | "IN" | "PK" | "BD" | "PH" | "KR" | "EG" | "SA" | "JO"
-        | "IQ" | "KW" | "QA" | "BH" | "OM" | "AE" | "YE" | "LB" | "SY" | "SD" | "MY" | "CO"
-        | "VE" => true,
-        _ => false,
-    };
-    !twelve_hours
+    let region = region_or_likely(locale);
+    (region == "CA" && language_of(locale) == "fr")
+        || !TWELVE_HOUR_REGIONS.contains(&region.as_str())
 }
 
 /// A time picker state remembered here and saved, as `rememberTimePickerState`: `is_24_hour` is
@@ -756,9 +773,12 @@ pub fn TimePicker(
 ) {
     // No accessibility services are known of here: only a keyboard stays on the hours (D1566).
     let auto_switch = LOCAL_INPUT_MODE_MANAGER.current().input_mode() != InputMode::Keyboard;
+    // Its first run is Compose's `onRemembered`: the time may have moved while it was away.
+    let entered = remember(|| std::rc::Rc::new(Cell::new(false)));
+    let entered_now = entered.clone();
     LaunchedEffect((state.hour(), state.minute()), async move {
         if let Some(inner) = state.inner() {
-            if inner.user_override.get() {
+            if inner.user_override.get() || !entered_now.replace(true) {
                 inner.follow_time();
             }
             inner.user_override.set(true);
@@ -1246,14 +1266,16 @@ pub fn ClockFace(
                                         let at = inner.press.get() + amount;
                                         inner.press.set(at);
                                         let center = inner.dial_center.get();
-                                        state
+                                        if state
                                             .rotate_to(
                                                 atan(at.y - center.y, at.x - center.x),
                                                 spec,
                                                 false,
                                             )
-                                            .await;
-                                        state.move_selector(at.x, at.y, distance, center);
+                                            .await
+                                        {
+                                            state.move_selector(at.x, at.y, distance, center);
+                                        }
                                     });
                                 }),
                         )
@@ -1737,7 +1759,6 @@ fn transform_input(
     selection: TimePickerSelectionMode,
     state: TimePickerState,
     user_override: &Cell<bool>,
-    locale: &Locale,
     on_error: &dyn Fn(),
 ) -> Option<String> {
     let hours = selection == TimePickerSelectionMode::Hour;
@@ -1759,14 +1780,14 @@ fn transform_input(
         }
         return Some(String::new());
     }
-    if !new_text.chars().all(|character| is_date_digit(character, locale)) {
+    if !new_text.chars().all(|character| decimal_digit_value(character).is_some()) {
         return None;
     }
     let new_chars: Vec<char> = new_text.chars().collect();
     let old_chars: Vec<char> = old_text.chars().collect();
     let has_inserted_text = !is_subsequence(&new_chars, &old_chars);
     let mut kept = new_chars.clone();
-    if old_chars.len() == 2 && new_chars.len() == 3 {
+    if old_chars.len() == 2 && new_chars.len() == 3 && is_subsequence(&old_chars, &new_chars) {
         let at = (0..2).find(|&index| new_chars[index] != old_chars[index]).unwrap_or(2);
         kept = vec![new_chars[at]];
     }
@@ -1774,8 +1795,9 @@ fn transform_input(
         on_error();
         return None;
     }
-    let new_value =
-        kept.iter().fold(0, |value, character| value * 10 + digit_value(*character, locale));
+    let new_value = kept
+        .iter()
+        .fold(0, |value, character| value * 10 + decimal_digit_value(*character).unwrap_or(0));
     if hours {
         let target = if state.is_24_hour() {
             new_value
@@ -1804,6 +1826,25 @@ fn transform_input(
         state.set_minute_input(new_value);
     }
     Some(kept.into_iter().collect())
+}
+
+/// The first digits of the decimal digits a `char` of Kotlin holds, each with its nine after it:
+/// the JDK 21's `Character.isDigit` in the basic plane.
+const DECIMAL_ZEROS: [u32; 37] = [
+    0x0030, 0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6,
+    0x0D66, 0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80,
+    0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+    0xFF10,
+];
+
+/// A digit's value, as Kotlin's `isDigit` and `toIntOrNull`: any decimal digit, not the locale's
+/// alone; not `½`, `Ⅷ` or `𝟏`.
+fn decimal_digit_value(character: char) -> Option<i32> {
+    let code = character as u32;
+    DECIMAL_ZEROS
+        .iter()
+        .find(|zero| code.wrapping_sub(**zero) <= 9)
+        .map(|zero| (code - zero) as i32)
 }
 
 /// Whether `shorter` is what's left of `longer` by taking characters away.
@@ -1836,7 +1877,6 @@ fn TimePickerTextField(
         MaterialTheme::color_scheme().error
     };
     let size = (TIME_FIELD_WIDTH, TIME_FIELD_HEIGHT);
-    let locale = default_locale();
     let interaction_source = remember(MutableInteractionSource::new);
     Column!(modifier = modifier.clone().width(IntrinsicSize::Min), {
         if !selected {
@@ -1852,14 +1892,12 @@ fn TimePickerTextField(
         let policy = remember_visible_policy(selected);
         let user_override = user_override.clone();
         let on_error = on_error.clone();
-        let locale = locale.clone();
         compose_ui::Layout(
             Modifier.clip_to_bounds(),
             policy,
             compose_runtime::callback(move || {
                 let user_override = user_override.clone();
                 let on_error = on_error.clone();
-                let locale = locale.clone();
                 let current = text.get();
                 let decoration_text = current.clone();
                 BasicTextField!(
@@ -1872,22 +1910,23 @@ fn TimePickerTextField(
                             selection,
                             state,
                             &user_override,
-                            &locale,
                             &*on_error,
                         ) {
                             text.set(kept);
                         }
                     },
-                    modifier = Modifier.focus_requester(focus_requester).size(size).semantics(
-                        move |config| {
+                    modifier = Modifier
+                        .focus_properties(move |properties| properties.can_focus = selected)
+                        .focus_requester(focus_requester)
+                        .size(size)
+                        .semantics(move |config| {
                             config.set_content_description(if hours {
                                 "for hour"
                             } else {
                                 "for minutes"
                             });
                             config.set_max_text_length(2);
-                        }
-                    ),
+                        }),
                     text_style = TextStyle { color: text_color, ..LOCAL_TEXT_STYLE.current() },
                     keyboard_options = KeyboardOptions {
                         ime_action: if hours { ImeAction::Next } else { ImeAction::Done },

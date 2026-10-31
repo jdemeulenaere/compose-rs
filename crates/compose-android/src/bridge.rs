@@ -2203,6 +2203,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
     font_scale: jfloat,
     density: jfloat,
     night: jboolean,
+    is_24_hour: jboolean,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
@@ -2217,6 +2218,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
         font_scale,
         density,
         night_mode: night,
+        is_24_hour: Some(is_24_hour),
     });
 }
 

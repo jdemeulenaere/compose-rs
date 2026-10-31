@@ -36,6 +36,9 @@ pub struct Configuration {
     pub density: f32,
     /// The system's dark theme is on, as `uiMode`'s `UI_MODE_NIGHT_YES`.
     pub night_mode: bool,
+    /// The clock's format the system says, as `DateFormat.is24HourFormat(context)`: `None` where
+    /// the host doesn't know it (a desktop), and the locale's goes.
+    pub is_24_hour: Option<bool>,
 }
 
 impl Default for Configuration {
@@ -60,6 +63,7 @@ impl Configuration {
             font_scale: density.font_scale,
             density: density.density,
             night_mode,
+            is_24_hour: None,
         }
     }
 }

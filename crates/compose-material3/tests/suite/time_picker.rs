@@ -1117,3 +1117,271 @@ fn the_time_pickers_places_are_the_tokens() {
     let pm = ui.on_node_with_text("PM").get_bounds_in_root();
     assert_eq!(pm.top.0 - am.bottom.0, 4.0, "a gap of 4 between the periods");
 }
+
+fn format_with(tag: &'static str, setting: Option<bool>) -> bool {
+    let seen = Rc::new(Cell::new(None));
+    let record = seen.clone();
+    let _ui = compose_test(move || {
+        let record = record.clone();
+        let configuration = Configuration { is_24_hour: setting, ..LOCAL_CONFIGURATION.current() };
+        CompositionLocalProvider(
+            (
+                LOCAL_LOCALE_LIST.provides(LocaleList::from_language_tags(tag)),
+                LOCAL_CONFIGURATION.provides(configuration),
+            ),
+            move || {
+                record.set(Some(remember_time_picker_state!().is_24_hour()));
+            },
+        );
+    });
+    seen.get().unwrap()
+}
+
+#[test]
+fn the_phones_setting_wins_over_the_locale() {
+    assert!(format_with("en-US", Some(true)));
+    assert!(!format_with("fr-FR", Some(false)));
+}
+
+#[test]
+fn without_a_setting_the_regions_of_twelve_hours_are_the_jdks() {
+    for tag in [
+        "zh-TW", "zh-HK", "en-SG", "zh-MO", "km-KH", "ms-BN", "ar-DZ", "ar-TN", "ar-LY", "ar-MR",
+        "ar-PS", "el-GR", "sq-AL", "el-CY", "es-PR", "es-DO", "es-PA", "en-JM", "am-ET", "en-GH",
+        "en-ZM", "en-NA", "en-TT", "en-CA", "en-US", "ko-KR", "en", "ar", "ko", "hi",
+    ] {
+        assert!(!format_with(tag, None), "{tag}");
+    }
+    for tag in ["fr-CA", "fr-FR", "de-DE", "en-GB", "pt-BR", "zh-CN", "ja-JP", "es-MX", "es-ES"] {
+        assert!(format_with(tag, None), "{tag}");
+    }
+}
+
+#[test]
+fn the_hidden_minutes_field_takes_no_focus_and_no_digits() {
+    let state = twelve_hours(10, 23);
+    let mut ui = time_input(*state);
+    ui.wait_for_idle();
+    ui.on_node_with_text("10").assert_is_focused();
+    press_on_focused(&mut ui, &[Key::Tab, Key::Tab, Key::Character('7')]);
+    assert_eq!(state.minute(), 23);
+    assert_eq!(state.minute_input(), 23);
+    assert_eq!(state.hour(), 10);
+}
+
+#[test]
+fn three_digits_pasted_over_a_selection_change_nothing() {
+    let state = twenty_four_hours(10, 23);
+    let mut ui = time_input(*state);
+    // `34` over the `1` of `10`, and `459` over all of it: neither is a digit typed into `10`.
+    replace_text(&mut ui, has_text("10"), "340");
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 10);
+    replace_text(&mut ui, has_text("10"), "459");
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 10);
+    ui.on_node_with_text("10").assert_exists();
+}
+
+#[test]
+fn a_digit_of_any_numerals_counts_and_nothing_else() {
+    let state = twenty_four_hours(10, 23);
+    let mut ui = time_input(*state);
+    // Under en-US: Compose's `isDigit` doesn't ask the locale.
+    press(&mut ui, "10", &[Key::Character('٣')]);
+    assert_eq!(state.hour(), 3);
+    for rejected in ['½', 'Ⅷ', '𝟏'] {
+        press_on_focused(&mut ui, &[Key::Character(rejected)]);
+        assert_eq!(state.hour(), 3, "{rejected}");
+    }
+    press_on_focused(&mut ui, &[Key::Character('٧')]);
+    assert_eq!(state.hour_input(), 37);
+}
+
+fn assert_angle(state: TimePickerState, expected: f32) {
+    let difference = (state.current_angle() - expected).rem_euclid(2.0 * PI);
+    assert!(
+        difference.min(2.0 * PI - difference) < 0.001,
+        "{} against {expected}",
+        state.current_angle()
+    );
+}
+
+/// An outside set after a gesture that left `state` where it was.
+fn nine_oclock_follows(ui: &mut ComposeTestRule, state: TimePickerState) {
+    ui.wait_for_idle();
+    state.set_selection(TimePickerSelectionMode::Hour);
+    ui.wait_for_idle();
+    state.set_hour(9);
+    ui.wait_for_idle();
+    assert_angle(state, PI);
+}
+
+#[test]
+fn a_tap_on_the_same_hour_doesnt_lose_an_outside_set() {
+    let state = twelve_hours(3, 0);
+    let mut ui = time_picker(*state);
+    ui.wait_for_idle();
+    ui.on_all_nodes_with_content_description("3 o'clock").on_last().perform_click();
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 3);
+    nine_oclock_follows(&mut ui, *state);
+}
+
+#[test]
+fn a_drag_within_the_same_hour_doesnt_lose_an_outside_set() {
+    let state = twelve_hours(3, 0);
+    let mut ui = time_picker(*state);
+    ui.wait_for_idle();
+    ui.on_all_nodes_unmerged(is_selectable_group()).on_last().perform_touch_input(|touch| {
+        touch.down(Offset::new(228.0, 128.0));
+        // Inwards, past the slop, and a little round: still 3.
+        touch.move_to(Offset::new(190.0, 128.0));
+        touch.move_to(Offset::new(180.0, 134.0));
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 3);
+    nine_oclock_follows(&mut ui, *state);
+}
+
+#[test]
+fn a_drag_to_another_hour_doesnt_lose_an_outside_set() {
+    let state = twelve_hours(0, 0);
+    let mut ui = time_picker(*state);
+    ui.wait_for_idle();
+    ui.on_all_nodes_unmerged(is_selectable_group()).on_last().perform_touch_input(|touch| {
+        let (top, right) = (touch.top_center(), touch.center_right());
+        touch.down(top);
+        touch.move_to(right);
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 3);
+    nine_oclock_follows(&mut ui, *state);
+}
+
+#[test]
+fn a_drag_onto_the_inner_circle_isnt_snapped_while_it_goes() {
+    let state = twenty_four_hours(3, 0);
+    let mut ui = time_picker(*state);
+    ui.wait_for_idle();
+    let mut group = ui.on_all_nodes_unmerged(is_selectable_group()).on_last();
+    group.perform_touch_input(|touch| {
+        touch.down(Offset::new(228.0, 128.0));
+        // Past the slop, which the drag's offset leaves behind, then well into the inner circle
+        // about 6 degrees past three: 15.
+        touch.move_to(Offset::new(200.0, 128.0));
+        touch.move_to(Offset::new(168.0, 134.0));
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 15);
+    assert!(state.current_angle().rem_euclid(2.0 * PI) > 0.05, "{}", state.current_angle());
+    ui.on_all_nodes_unmerged(is_selectable_group()).on_last().perform_touch_input(|touch| {
+        touch.up();
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 15);
+    assert_angle(*state, 0.0);
+}
+
+#[test]
+fn the_time_set_while_the_picker_was_away_is_where_the_dial_comes_back() {
+    thread_local! {
+        static SHOWN: Cell<Option<MutableState<bool>>> = const { Cell::new(None) };
+    }
+    let state = twelve_hours(3, 0);
+    let handle = *state;
+    let mut ui = compose_test(move || {
+        let shown = remember(|| mutable_state_of(true));
+        SHOWN.with(|cell| cell.set(Some(shown)));
+        MaterialTheme!({
+            if shown.get() {
+                TimePicker!(handle);
+            }
+        });
+    });
+    let shown = SHOWN.with(Cell::get).unwrap();
+    ui.wait_for_idle();
+    // A tap that changes the hour, leaving as it goes: then the time moves without it.
+    ui.on_all_nodes_with_content_description("6 o'clock").on_last().perform_click();
+    shown.set(false);
+    ui.wait_for_idle();
+    state.set_selection(TimePickerSelectionMode::Hour);
+    state.set_hour(9);
+    ui.wait_for_idle();
+    shown.set(true);
+    ui.wait_for_idle();
+    assert_angle(*state, PI);
+    assert_eq!(state.hour(), 9);
+}
+
+#[test]
+fn the_time_set_before_the_picker_starts_is_where_the_dial_starts() {
+    let state = twelve_hours(3, 0);
+    state.set_hour(9);
+    let mut ui = time_picker(*state);
+    ui.wait_for_idle();
+    assert_angle(*state, PI);
+}
+
+#[test]
+fn a_tap_while_the_dial_is_turning_itself_is_dropped() {
+    let state = TimePickerState::new(3, 30, false, TimePickerSelectionMode::Minute);
+    let mut ui = clock_face(*state, true);
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    state.set_selection(TimePickerSelectionMode::Hour);
+    ui.advance_time_by(std::time::Duration::from_millis(32));
+    ui.on_all_nodes_unmerged(is_selectable_group()).on_last().perform_touch_input(|touch| {
+        touch.click_at(Offset::new(128.0, 228.0));
+    });
+    ui.advance_time_by(std::time::Duration::from_millis(32));
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    assert_eq!(state.hour(), 3, "the tap never ran");
+    assert_eq!(
+        state.selection(),
+        TimePickerSelectionMode::Hour,
+        "and doesn't go on to the minutes"
+    );
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TimePickerTest.kt, timePicker_initialState
+#[test]
+fn twelve_hours_show_every_hour_on_their_face() {
+    let shown = [
+        "12", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "01", "02",
+        "03", "04", "05", "06", "07", "08", "09", "10", "11",
+    ];
+    for (hour, expected) in shown.iter().enumerate() {
+        let state = twelve_hours(hour as i32, 59);
+        let mut ui = time_picker(*state);
+        ui.on_node_with_content_description("Select hour").assert(has_text(expected));
+        drop(ui);
+        let mut ui = time_input(*state);
+        ui.on_node_with_content_description("for hour").assert(has_text(expected));
+    }
+}
+
+fn minute_of_a_tap(degrees_from_the_top: f32) -> i32 {
+    let state = TimePickerState::new(10, 23, false, TimePickerSelectionMode::Minute);
+    let mut ui = clock_face(*state, false);
+    ui.wait_for_idle();
+    let radians = degrees_from_the_top.to_radians();
+    let at = Offset::new(128.0 + 100.0 * radians.sin(), 128.0 - 100.0 * radians.cos());
+    ui.on_all_nodes_unmerged(is_selectable_group())
+        .on_last()
+        .perform_touch_input(|touch| touch.click_at(at));
+    ui.wait_for_idle();
+    state.minute()
+}
+
+#[test]
+fn a_tap_off_a_mark_goes_to_the_nearest_five_minutes() {
+    assert_eq!(minute_of_a_tap(7.0), 0);
+    assert_eq!(minute_of_a_tap(23.0), 5);
+    assert_eq!(minute_of_a_tap(37.0), 5);
+    assert_eq!(minute_of_a_tap(187.0), 30);
+    assert_eq!(minute_of_a_tap(353.0), 0);
+}

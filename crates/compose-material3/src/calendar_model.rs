@@ -301,13 +301,6 @@ fn is_digit(character: char, zero: char) -> bool {
     (character as u32).wrapping_sub(zero as u32) <= 9
 }
 
-/// The value of a character `is_date_digit` takes.
-pub(crate) fn digit_value(character: char, locale: &Locale) -> i32 {
-    character
-        .to_digit(10)
-        .unwrap_or_else(|| (character as u32).wrapping_sub(zero_digit(locale) as u32)) as i32
-}
-
 /// Whether a date field takes this character: an ASCII digit or one of the locale's ten.
 pub fn is_date_digit(character: char, locale: &Locale) -> bool {
     character.is_ascii_digit() || is_digit(character, zero_digit(locale))
@@ -677,7 +670,7 @@ fn unicode_extension(locale: &Locale, key: &str) -> Option<String> {
 }
 
 /// A locale's language, by its current name: `iw` is `he`.
-fn language_of(locale: &Locale) -> String {
+pub(crate) fn language_of(locale: &Locale) -> String {
     let language = locale.language();
     if language == "iw" { "he".to_string() } else { language }
 }
@@ -701,7 +694,7 @@ fn zero_digit(locale: &Locale) -> char {
 
 /// The region a tag names, or the one its language is most spoken in, as ICU's likely subtags: from
 /// memory of CLDR's table, where the JDK's `WeekFields` takes the US for a bare language.
-fn region_or_likely(locale: &Locale) -> String {
+pub(crate) fn region_or_likely(locale: &Locale) -> String {
     let region = locale.region();
     if !region.is_empty() {
         return region;

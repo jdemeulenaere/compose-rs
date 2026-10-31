@@ -239,6 +239,7 @@ internal object ComposeRsNative {
         fontScale: Float,
         density: Float,
         night: Boolean,
+        is24Hour: Boolean,
     )
 
     /**
