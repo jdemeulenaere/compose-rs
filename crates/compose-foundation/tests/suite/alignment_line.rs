@@ -1188,3 +1188,55 @@ fn a_grandparent_reads_the_same_baseline_in_a_scope() {
         );
     });
 }
+
+/// A column of max intrinsic width, what's in it `fill_max_width`, its leaf's width from a state.
+fn intrinsic_column_width(in_scope: Option<bool>) -> (i32, i32) {
+    let wide = mutable_state_of(10);
+    let got = Rc::new(Cell::new(0));
+    let (w, g) = (wide.handle(), got.clone());
+    let filling = move || {
+        Box!(modifier = Modifier.fill_max_width(), {
+            Box!(modifier = Modifier.size((dp(w.get()), dp(5))), {});
+        });
+    };
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+        let g = g.clone();
+        let column = move |inside: bool| {
+            let g = g.clone();
+            let noted = Modifier.on_size_changed(move |size: IntSize| g.set(size.width));
+            Column!(modifier = noted.width(compose_ui::IntrinsicSize::Max), |_| {
+                if inside {
+                    in_a_scope(move |_| filling());
+                } else {
+                    filling();
+                }
+            });
+        };
+        match in_scope {
+            // The whole of it in the scope.
+            None => in_a_scope(move |_| column(false)),
+            Some(inside) => column(inside),
+        }
+    });
+    ui.wait_for_idle();
+    let before = got.get();
+    wide.set(20);
+    ui.wait_for_idle();
+    (before, got.get())
+}
+
+// Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Intrinsic.kt (what `MeasurePassDelegate`'s one flag on a `LayoutNode` gives through a scope)
+#[test]
+fn a_column_of_intrinsic_width_follows_a_change_deep_in_a_scope_in_it() {
+    assert_eq!(intrinsic_column_width(Some(true)), (10, 20));
+}
+
+#[test]
+fn a_column_of_intrinsic_width_follows_a_change_with_no_scope() {
+    assert_eq!(intrinsic_column_width(Some(false)), (10, 20));
+}
+
+#[test]
+fn a_column_of_intrinsic_width_follows_a_change_all_in_a_scope() {
+    assert_eq!(intrinsic_column_width(None), (10, 20));
+}

@@ -595,10 +595,10 @@ impl UiTree {
             point = self.map_out_of_node(current, layer, point);
             hash = mix(hash, point);
             // Ahead too: what's asked may be a lookahead position.
-            if let Some(state) = &value.lookahead
-                && let Some(ahead) = state.layer_at(0)
-            {
-                hash = mix(hash, Offset::new(ahead.offset.x as f32, ahead.offset.y as f32));
+            if let Some(state) = &value.lookahead {
+                for ahead in state.layers() {
+                    hash = mix(hash, Offset::new(ahead.offset.x as f32, ahead.offset.y as f32));
+                }
             }
             match value.parent {
                 Some(parent) if !value.overlay => {

@@ -336,6 +336,10 @@ impl UiTree {
     /// what asked may have changed (Compose's `invalidateIntrinsicsParent`).
     fn intrinsics_invalidated(&self, node: NodeId) -> bool {
         let value = self.node(node);
+        // Asked from outside a scope, what's below its outermost is told ahead (D1223).
+        if value.lookahead.is_some() && self.ahead_intrinsics_invalidated(node) {
+            return true;
+        }
         value.needs_measure
             || value.subtree_needs_measure
                 && value.children_intrinsics_asked

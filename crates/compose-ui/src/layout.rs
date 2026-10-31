@@ -396,6 +396,7 @@ impl IntrinsicMeasureScope<'_> {
                 return answer;
             }
             let child = tree.node_mut(measurable.node);
+            // Measured again after it was asked, as Compose's `onIntrinsicsQueried`: its
             // default intrinsics run its measuring code, which may keep what it saw.
             child.constraints = None;
             child.intrinsics_asked = true;

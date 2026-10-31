@@ -117,6 +117,11 @@ impl LookaheadState {
         }
     }
 
+    /// The layers of the pass it holds.
+    pub(crate) fn layers(&self) -> &[Layer] {
+        &self.layers
+    }
+
     /// A layer of the pass it holds.
     pub(crate) fn layer_at(&self, layer: usize) -> Option<&Layer> {
         self.layers.get(layer)
@@ -319,6 +324,27 @@ impl UiTree {
         child.constraints = None;
         child.intrinsics_asked = true;
         Some(pass.tree.intrinsic(node, 0, kind, value))
+    }
+
+    /// `intrinsics_invalidated` by the flags of the pass ahead, while it isn't running.
+    pub(crate) fn ahead_intrinsics_invalidated(&self, node: NodeId) -> bool {
+        if self.in_lookahead {
+            return false;
+        }
+        let value = self.node(node);
+        let Some(state) = value.lookahead.as_ref() else { return false };
+        state.needs_measure
+            || state.subtree_needs_measure
+                && state.children_intrinsics_asked
+                && value.children.iter().any(|child| {
+                    let value = self.node(child.node);
+                    !value.deactivated
+                        && value.lookahead.as_ref().is_some_and(|state| {
+                            state.intrinsics_asked
+                                && (state.needs_measure || state.subtree_needs_measure)
+                        })
+                        && self.ahead_intrinsics_invalidated(child.node)
+                })
     }
 
     /// What dirties a pass from outside dirties the one not running too: a composition, a modifier

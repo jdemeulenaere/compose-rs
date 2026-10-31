@@ -1,6 +1,6 @@
 //! `LookaheadScope` and its pass, as Compose's `LookaheadScopeTest`: what's in a scope is measured
-//! and placed ahead first, by what its code does there, and again for now. Those of its cases with
-//! an approach layout wait for `approach_layout`. Density 1.
+//! and placed ahead first, by what its code does there, and again for now. The ledger says which of
+//! its cases are here. Density 1.
 
 use crate::support;
 
@@ -84,7 +84,7 @@ fn what_s_out_of_a_scope_isn_t_looked_ahead() {
     assert_eq!(inside.borrow().iter().filter(|it| it.1).count(), 2);
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, testDifferentPlacementsInTwoPasses
+/// As `testDifferentPlacementsInTwoPasses` means them, with no pager: each pass its own.
 #[test]
 fn the_two_passes_have_their_own_results() {
     let scope_kept: Rc<Cell<Option<LookaheadScope>>> = Rc::default();
@@ -286,7 +286,7 @@ fn a_scope_adds_no_node() {
     assert_eq!(count.get(), 4);
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedLookaheadScope
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedLookaheadScopeTest (each once)
 #[test]
 fn a_nested_scope_is_ahead_with_its_outer_one_once() {
     let log: Log = Rc::default();
@@ -850,7 +850,7 @@ fn what_s_ahead_stays_as_an_approach_reads_its_frames() {
     assert_eq!(ahead_measures.get(), after, "the frames measure now, not ahead");
 }
 
-// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, skipPlacementOnlyPostLookahead
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, skipPlacementOnlyPostLookahead (its first child; Kotlin's control child isn't here)
 #[test]
 fn an_approach_may_skip_placing_what_was_placed_ahead() {
     let (ahead, now) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
@@ -1180,4 +1180,322 @@ fn wrap_at_root(modifier: Modifier, content: impl Fn() + 'static) {
     Stack!(modifier = modifier, {
         content();
     });
+}
+
+// ---- From the review -----------------------------------------------------------------------------
+
+/// A layout asking its child's max intrinsic width, whatever size it gives it.
+fn asking_intrinsic(seen: &Rc<Cell<i32>>) -> Rc<dyn MeasurePolicy> {
+    let seen = seen.clone();
+    measure_policy(move |scope, measurables, _| {
+        seen.set(scope.max_intrinsic_width(measurables[0], 10));
+        let placeable = scope.measure(measurables[0], Constraints::fixed(50, 50));
+        scope.layout_with(50, 50, move |placement| placement.place(&placeable, 0, 0))
+    })
+}
+
+/// The size fixed: only `intrinsics_asked`, in the pass that's now, says a thing.
+#[test]
+fn an_intrinsic_asked_of_an_outermost_hears_with_its_size_the_same() {
+    let wide = mutable_state_of(10);
+    let seen = Rc::new(Cell::new(0));
+    let (w, s) = (wide.handle(), seen.clone());
+    let mut host = host(move || {
+        Layout(
+            Modifier,
+            asking_intrinsic(&s),
+            callback(move || {
+                scoped(move |_| leaf(sized(w.get())));
+            }),
+        );
+    });
+    assert_eq!(seen.get(), 10);
+    wide.set(20);
+    host.frame();
+    assert_eq!(seen.get(), 20);
+}
+
+/// Below the outermost: the flags that say so are the pass's ahead (`invalidateIntrinsicsParent`).
+#[test]
+fn an_intrinsic_asked_through_an_outermost_hears_with_its_size_the_same() {
+    let wide = mutable_state_of(10);
+    let seen = Rc::new(Cell::new(0));
+    let (w, s) = (wide.handle(), seen.clone());
+    let mut host = host(move || {
+        Layout(
+            Modifier,
+            asking_intrinsic(&s),
+            callback(move || {
+                scoped(move |_| {
+                    Stack!({
+                        leaf(sized(w.get()));
+                    });
+                });
+            }),
+        );
+    });
+    assert_eq!(seen.get(), 10);
+    wide.set(20);
+    host.frame();
+    assert_eq!(seen.get(), 20);
+}
+
+/// `top`, and a child in a scope with `modifier`, where the child ended up in it.
+fn child_at(modifier: impl Fn() -> Modifier + 'static) -> Offset {
+    type Kept = Rc<Cell<Option<LayoutCoordinates>>>;
+    let (top, child): (Kept, Kept) = (Rc::default(), Rc::default());
+    let (t, k) = (top.clone(), child.clone());
+    let modifier = Rc::new(modifier);
+    let _host = host(move || {
+        let (t, k, modifier) = (t.clone(), k.clone(), modifier.clone());
+        Stack!(modifier = Modifier.on_placed(move |it: LayoutCoordinates| t.set(Some(it))), {
+            let (k, modifier) = (k.clone(), modifier.clone());
+            scoped(move |_| {
+                let k = k.clone();
+                leaf(
+                    modifier()
+                        .then(Modifier.on_placed(move |it: LayoutCoordinates| k.set(Some(it)))),
+                );
+            });
+        });
+    });
+    top.get().expect("placed").local_position_of(&child.get().expect("placed"), Offset::ZERO)
+}
+
+fn placing_at_5() -> Modifier {
+    Modifier.approach_layout(
+        |_| false,
+        |_, _| false,
+        |scope, content, constraints| {
+            let placeable = scope.measure(content, constraints);
+            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                placement.place(&placeable, 5, 0);
+            })
+        },
+    )
+}
+
+/// By pass, a size what's inside an approach gives.
+fn another_size_ahead() -> Modifier {
+    Modifier.layout(|scope, measurable, constraints| {
+        let side = if scope.is_looking_ahead() { 40 } else { 20 };
+        let placeable = scope.measure(measurable, constraints);
+        scope.layout_with(side, side, move |placement| placement.place(&placeable, 0, 0))
+    })
+}
+
+#[test]
+fn an_approach_over_at_its_sizes_goes_where_it_went_ahead() {
+    assert_eq!(child_at(|| placing_at_5().then(sized(10))).x, 0.0);
+}
+
+/// `wrapped.size == lookahead's` decides: what's inside another size isn't forced.
+#[test]
+fn an_approach_over_with_what_s_inside_another_size_goes_where_its_block_says() {
+    assert_eq!(child_at(|| placing_at_5().then(another_size_ahead()).then(sized(10))).x, 5.0);
+}
+
+/// And no snap to the size ahead.
+#[test]
+fn an_approach_over_with_what_s_inside_another_size_keeps_the_size_it_said() {
+    let got = Rc::new(Cell::new(IntSize::ZERO));
+    let g = got.clone();
+    let _host = host(move || {
+        let g = g.clone();
+        let noted = Modifier.layout(move |scope, measurable, _| {
+            let placeable = scope.measure(measurable, Constraints::new(0, 1000, 0, 1000));
+            g.set(placeable.size());
+            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                placement.place(&placeable, 0, 0);
+            })
+        });
+        Stack!(modifier = noted, {
+            scoped(|_| {
+                let approach = Modifier.approach_layout(
+                    |_| false,
+                    |_, _| false,
+                    |scope, content, constraints| {
+                        let placeable = scope.measure(content, constraints);
+                        scope.layout_with(77, 77, move |placement| {
+                            placement.place(&placeable, 0, 0);
+                        })
+                    },
+                );
+                leaf(approach.then(another_size_ahead()).then(sized(10)));
+            });
+        });
+    });
+    assert_eq!(got.get(), IntSize::new(77, 77));
+}
+
+/// Moved by a parent only ahead, reading in `which` pass.
+fn lookahead_position_read_after_a_move(inner_layer: bool, read_ahead: bool) -> (f32, f32) {
+    let x = mutable_state_of(1);
+    let seen = Rc::new(Cell::new(-1.0));
+    let (xs, s) = (x.handle(), seen.clone());
+    let mut host = host(move || {
+        let s = s.clone();
+        scoped(move |lookahead| {
+            let s = s.clone();
+            let block = move |placement: &mut PlacementScope<'_>, placeable: &Placeable| {
+                let at = if placement.is_looking_ahead() { xs.get() } else { 0 };
+                placement.place(placeable, at, 0);
+            };
+            let reader = move |s: Rc<Cell<f32>>| {
+                Modifier
+                    .layout(move |scope, measurable, constraints| {
+                        let placeable = scope.measure(measurable, constraints);
+                        let s = s.clone();
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            if placement.is_looking_ahead() == read_ahead {
+                                let frame = lookahead
+                                    .lookahead_scope_coordinates(placement)
+                                    .expect("in it");
+                                let own = placement.coordinates().expect("placing");
+                                s.set(
+                                    lookahead
+                                        .local_lookahead_position_of(frame, own, Offset::ZERO)
+                                        .x,
+                                );
+                            }
+                            placement.place(&placeable, 0, 0);
+                        })
+                    })
+                    .then(sized(5))
+            };
+            if inner_layer {
+                let moving = Modifier.layout(move |scope, measurable, constraints| {
+                    let placeable = scope.measure(measurable, constraints);
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        block(placement, &placeable);
+                    })
+                });
+                let s = s.clone();
+                Stack!(modifier = moving, {
+                    leaf(reader(s.clone()));
+                });
+            } else {
+                let policy = measure_policy(move |scope, measurables, constraints| {
+                    let placeable = scope.measure(measurables[0], constraints);
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        block(placement, &placeable);
+                    })
+                });
+                let s = s.clone();
+                Layout(Modifier, policy, callback(move || leaf(reader(s.clone()))));
+            }
+        });
+    });
+    let before = seen.get();
+    x.set(9);
+    host.frame();
+    (before, seen.get())
+}
+
+#[test]
+fn a_lookahead_position_read_now_follows_a_move_only_ahead() {
+    assert_eq!(lookahead_position_read_after_a_move(false, false), (1.0, 9.0));
+}
+
+/// On a layer inside an ancestor, not on its outside.
+#[test]
+fn a_lookahead_position_read_now_follows_an_ancestor_s_inner_layer_ahead() {
+    assert_eq!(lookahead_position_read_after_a_move(true, false), (1.0, 9.0));
+}
+
+#[test]
+fn a_lookahead_position_read_ahead_follows_a_move_ahead() {
+    assert_eq!(lookahead_position_read_after_a_move(false, true), (1.0, 9.0));
+}
+
+/// The outermost's position, from its lookahead block: where it is now.
+#[test]
+fn an_outermost_s_lookahead_block_sees_where_it_is() {
+    let seen = Rc::new(Cell::new(-1.0));
+    let s = seen.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        placing_at(7, Modifier, move || {
+            let s = s.clone();
+            scoped(move |lookahead| {
+                let s = s.clone();
+                leaf(
+                    Modifier
+                        .layout(move |scope, measurable, constraints| {
+                            let placeable = scope.measure(measurable, constraints);
+                            let s = s.clone();
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                if placement.is_looking_ahead() {
+                                    let frame = lookahead
+                                        .lookahead_scope_coordinates(placement)
+                                        .expect("in it");
+                                    let own = placement.coordinates().expect("placing");
+                                    s.set(frame.local_position_of(&own, Offset::ZERO).x);
+                                }
+                                placement.place(&placeable, 0, 0);
+                            })
+                        })
+                        .then(sized(5)),
+                );
+            });
+        });
+    });
+    assert_eq!(seen.get(), 7.0);
+}
+
+/// The outermost moved by what's around it, asked from a block in each pass.
+#[test]
+fn both_passes_blocks_see_the_outermost_moved() {
+    let x = mutable_state_of(1);
+    let (ahead, now) = (Rc::new(Cell::new(-1.0)), Rc::new(Cell::new(-1.0)));
+    let (xs, a, n) = (x.handle(), ahead.clone(), now.clone());
+    let mut host = host(move || {
+        let (a, n) = (a.clone(), n.clone());
+        let policy = measure_policy(move |scope, measurables, constraints| {
+            let placeable = scope.measure(measurables[0], constraints);
+            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                placement.place(&placeable, xs.get(), 0);
+            })
+        });
+        Layout(
+            Modifier,
+            policy,
+            callback(move || {
+                let (a, n) = (a.clone(), n.clone());
+                scoped(move |lookahead| {
+                    let (a, n) = (a.clone(), n.clone());
+                    leaf(
+                        Modifier
+                            .layout(move |scope, measurable, constraints| {
+                                let placeable = scope.measure(measurable, constraints);
+                                let (a, n) = (a.clone(), n.clone());
+                                scope.layout_with(
+                                    placeable.width,
+                                    placeable.height,
+                                    move |placement| {
+                                        let frame = lookahead
+                                            .lookahead_scope_coordinates(placement)
+                                            .expect("in it");
+                                        let own = placement.coordinates().expect("placing");
+                                        let at = lookahead
+                                            .local_lookahead_position_of(frame, own, Offset::ZERO)
+                                            .x;
+                                        if placement.is_looking_ahead() {
+                                            a.set(at);
+                                        } else {
+                                            n.set(at);
+                                        }
+                                        placement.place(&placeable, 0, 0);
+                                    },
+                                )
+                            })
+                            .then(sized(5)),
+                    );
+                });
+            }),
+        );
+    });
+    x.set(7);
+    host.frame();
+    assert_eq!((ahead.get(), now.get()), (7.0, 7.0));
 }
