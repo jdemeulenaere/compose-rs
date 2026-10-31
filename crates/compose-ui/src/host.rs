@@ -35,6 +35,8 @@ type Waker = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 /// A composition of a UI tree in a root of a given size: the core every host shares.
 pub struct UiHost {
     composition: Composition,
+    /// Its place among what's retained across hosts, if it has one.
+    retained_values: Option<Rc<crate::retained_values::RetainedValuesStoreEntry>>,
     /// After `composition`: dropped after it, as a window's lifecycle ends once its composition is
     /// disposed.
     /// Its tree's key: what's asked of the focus finds the tree if it's free through it.
@@ -98,6 +100,14 @@ pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
 
 /// The most times a frame composes and lays out again for what its layout asked (D487).
 const MOST_ROUNDS: usize = 16;
+
+impl Drop for UiHost {
+    fn drop(&mut self) {
+        if let Some(entry) = &self.retained_values {
+            entry.release();
+        }
+    }
+}
 
 impl UiHost {
     /// A host of `size` pixels at `density`, measuring text with `text_measurer`.
@@ -164,6 +174,7 @@ impl UiHost {
         let navigation_events = compose_navigation_event::NavigationEventDispatcher::new();
         let tree_key = composition.with_applier(|tree: &mut UiTree| tree.key);
         UiHost {
+            retained_values: None,
             tree_key,
             composition: {
                 composition.with_applier(|tree: &mut UiTree| {
@@ -303,6 +314,18 @@ impl UiHost {
     pub fn set_lifecycle_state(&self, state: LifecycleState) {
         let _turn = compose_runtime::platform::Turn::begin();
         let registry = &self.lifecycle.registry;
+        // As Compose's view: from `onStop` until a frame after `onResume`.
+        if let Some(entry) = &self.retained_values {
+            let was = registry.current_state();
+            if state == LifecycleState::Resumed && was != LifecycleState::Resumed {
+                let composition = &self.composition;
+                entry.stop_retaining_exited_values(|end| {
+                    composition.schedule_frame_end_callback(end)
+                });
+            } else if state < LifecycleState::Started && was >= LifecycleState::Started {
+                entry.start_retaining_exited_values();
+            }
+        }
         if registry.current_state() != LifecycleState::Destroyed {
             registry.set_current_state(if state == LifecycleState::Initialized {
                 LifecycleState::Created
@@ -319,6 +342,20 @@ impl UiHost {
 
     /// Makes `store` that store, before the content, kept by the caller when the host goes: what a
     /// platform does to keep view models across a configuration change (D838).
+    /// The store of what the content retains across hosts: the content goes under its store, and
+    /// the host's lifecycle says when it keeps what leaves. It's released as the host goes.
+    pub fn set_retained_values_entry(
+        &mut self,
+        entry: Rc<crate::retained_values::RetainedValuesStoreEntry>,
+    ) {
+        // A lifecycle resumed already has no resume to come.
+        if self.lifecycle.registry.current_state() == LifecycleState::Resumed {
+            let composition = &self.composition;
+            entry.stop_retaining_exited_values(|end| composition.schedule_frame_end_callback(end));
+        }
+        self.retained_values = Some(entry);
+    }
+
     pub fn set_retained_view_model_store(&mut self, store: ViewModelStore) {
         self.lifecycle.view_models = store;
         self.lifecycle.clears_view_models = false;
@@ -668,7 +705,7 @@ impl UiHost {
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
         // The default recomposer's frame ends here, until the hosts move onto `perform_frame` (C4).
-        compose_runtime::platform::run_frame_end_callbacks();
+        compose_runtime::platform::run_frame_end_callbacks_of(&self.composition);
         // `LaunchedEffect`s started by the pass take their first step.
         compose_runtime::platform::run_ready();
         // What the pass and its effects wrote needs the next frame.

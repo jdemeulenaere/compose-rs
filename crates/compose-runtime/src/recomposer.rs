@@ -66,7 +66,9 @@ struct RecomposerInner {
     /// Its loop waiting for its frame: woken only once it's to stop, as it has work then.
     stop_waker: RefCell<Option<Waker>>,
     change_count: Cell<u64>,
-    frame_end_callbacks: RefCell<Vec<(u64, FrameEndCallback)>>,
+    /// Each with the composition it's for, whose tree's frame runs it: the thread's hosts each
+    /// frame the default recomposer's compositions of their own (D1306).
+    frame_end_callbacks: RefCell<Vec<(u64, Option<CompositionId>, FrameEndCallback)>>,
     next_callback: Cell<u64>,
     /// Its compositions' effects and scopes' tasks not over yet.
     effects: Cell<usize>,
@@ -141,7 +143,7 @@ impl CancellationHandle {
     pub fn cancel(&self) {
         let dropped = self.recomposer.inner.try_get().and_then(|inner| {
             let mut callbacks = inner.frame_end_callbacks.borrow_mut();
-            let at = callbacks.iter().position(|(id, _)| *id == self.id)?;
+            let at = callbacks.iter().position(|(id, ..)| *id == self.id)?;
             Some(callbacks.remove(at))
         });
         drop(dropped);
@@ -501,6 +503,11 @@ impl Recomposer {
         }
     }
 
+    /// Whether a frame-end callback would run.
+    pub(crate) fn is_open_for_frames(&self) -> bool {
+        self.inner.try_get().is_some_and(|inner| !inner.is_over())
+    }
+
     /// Schedules `action` for the end of the current or next frame, asking for one when idle, as
     /// `scheduleFrameEndCallback`. Run by [`perform_frame`].
     ///
@@ -511,13 +518,35 @@ impl Recomposer {
         &self,
         action: impl FnOnce() + 'static,
     ) -> CancellationHandle {
+        self.schedule_frame_end_callback_of(None, Box::new(action))
+    }
+
+    /// [`schedule_frame_end_callback`](Self::schedule_frame_end_callback) for a frame of `owner`'s
+    /// tree.
+    pub(crate) fn schedule_frame_end_callback_of(
+        &self,
+        owner: Option<CompositionId>,
+        action: FrameEndCallback,
+    ) -> CancellationHandle {
         let Some(inner) = self.inner.try_get().filter(|inner| !inner.is_over()) else {
             misuse(ComposeError::RecomposerShutDown)
         };
         let id = inner.next_callback.get();
         inner.next_callback.set(id + 1);
         let first = inner.frame_end_callbacks.borrow().is_empty();
-        inner.frame_end_callbacks.borrow_mut().push((id, Box::new(action)));
+        inner.frame_end_callbacks.borrow_mut().push((id, owner, action));
+        // That tree's host has to frame for it, which another's frame doesn't stand for.
+        if let Some(owner) = owner {
+            with_runtime(|runtime| {
+                let compositions = &runtime.compositions;
+                if let Some(requester) =
+                    compositions.get(owner).and_then(|data| compositions.frame_requester_of(data))
+                {
+                    runtime.frame_requests.push(requester);
+                }
+            });
+            crate::runtime::request_frames();
+        }
         // The default's frames are the host's: it's asked for one as for any frame awaited, and
         // ends it with `platform::run_frame_end_callbacks`.
         if first && inner.is_default {
@@ -767,18 +796,52 @@ pub async fn with_running_recomposer<R>(block: impl AsyncFnOnce(Recomposer) -> R
     result
 }
 
-/// The end of a frame of the thread's default recomposer, which hosts run themselves: its frame-end
-/// callbacks, as [`perform_frame`] does for a recomposer's.
+/// The end of a frame of the thread's default recomposer, which hosts run themselves: its frame
+/// callbacks, as [`perform_frame`] does for a recomposer's. All of them: a host's is
+/// [`run_frame_end_callbacks_of`].
 pub fn run_frame_end_callbacks() {
+    run_default_frame_end_callbacks(|_, _| true);
+}
+
+/// The end of a frame of `composition`'s tree, on the thread's default recomposer: the callbacks
+/// for that tree, those for no tree, and those whose composition went. Another host's are for its
+/// own frame, whose content may not have composed yet (D1306).
+pub fn run_frame_end_callbacks_of(composition: &crate::composition::Composition) {
+    let root = composition.tree_root();
+    run_default_frame_end_callbacks(|runtime, owner| {
+        owner.is_none_or(|owner| {
+            runtime
+                .compositions
+                .get(owner)
+                .is_none_or(|_| runtime.compositions.tree_root_of(owner) == root)
+        })
+    });
+}
+
+fn run_default_frame_end_callbacks(
+    mut runs: impl FnMut(&crate::runtime::Runtime, Option<CompositionId>) -> bool,
+) {
     let default = DEFAULT.try_with(|default| default.borrow().as_ref().map(|owner| owner.handle()));
     let Ok(Some(default)) = default else { return };
     let Some(inner) = default.inner.try_get() else { return };
     if inner.frame_end_callbacks.borrow().is_empty() {
         return;
     }
-    let callbacks = std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut());
+    let all = std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut());
+    let mut callbacks = Vec::new();
+    let mut waiting = Vec::new();
+    with_runtime(|runtime| {
+        for callback in all {
+            if runs(runtime, callback.1) {
+                callbacks.push(callback);
+            } else {
+                waiting.push(callback);
+            }
+        }
+    });
+    *inner.frame_end_callbacks.borrow_mut() = waiting;
     drop(inner);
-    for (_, callback) in callbacks {
+    for (.., callback) in callbacks {
         callback();
     }
     default.update_state();
@@ -833,7 +896,7 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
         .try_get()
         .map(|inner| std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut()))
         .unwrap_or_default();
-    for (_, callback) in callbacks {
+    for (.., callback) in callbacks {
         callback();
     }
     recomposer.update_state();

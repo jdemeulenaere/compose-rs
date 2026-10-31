@@ -274,6 +274,10 @@ pub(crate) fn request_frames() {
 }
 
 /// The recomposer of the composition composing now, if not the thread's default.
+pub(crate) fn composing_composition() -> Option<CompositionId> {
+    with_runtime(|runtime| runtime.active.map(|active| active.composition))
+}
+
 pub(crate) fn composing_recomposer() -> Option<crate::recomposer::Recomposer> {
     with_runtime(|runtime| {
         let active = runtime.active?;

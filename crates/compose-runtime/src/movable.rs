@@ -9,6 +9,7 @@
 //! placeholder is left is removed, in rule R1's order, as what's removed anywhere.
 
 use std::any::TypeId;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::applier::NodeRef;
@@ -42,8 +43,15 @@ pub(crate) struct MovableState {
     /// Nodes to take out of a node that's being removed, which would release them with it: its
     /// node, where they are, and how many, for `apply_node_op`, last first.
     pub detach: Vec<(NodeRef, u32, u32)>,
-    /// What's removed of what stayed parked: for after the rest of the pass's work.
+    /// What's removed of what stayed parked: for after what the pass remembered, before its effects.
     pub removed: Option<Box<Deferred>>,
+    /// The sentinel's frame is walking for the placeholders, in the pass's end. What's invalid
+    /// beside them waits for the next pass, as Compose's late changes run moved content only.
+    pub walking: bool,
+    /// What such a walk passed: invalid still, in need of the next pass.
+    pub waiting: Vec<u32>,
+    /// How many placeholders have been resolved: what tells a walk got somewhere.
+    pub resolved: u64,
 }
 
 impl Parked {
@@ -115,14 +123,29 @@ where
     }))
 }
 
+/// What a call of it keeps: its content, its parameter and the nearest provider, with what that
+/// provided, when it last ran.
+type MovableKept<P> = (Rc<MovableInner<P>>, P, Cell<(u32, u32)>);
+
 fn compose_movable<P: ComposeArg + Clone + 'static>(inner: Rc<MovableInner<P>>, param: P) {
     let composer = current();
     let identity = Rc::as_ptr(&inner) as *const () as usize as u64;
     let start = start_movable_content(inner.key, identity);
+    // What's provided here, which no state tells of a move or a static value's change, whose
+    // forcing ended with the provider's frame by the time a late walk gets here: as Compose
+    // compares its group's locals (`reader.groupAux != locals`).
+    let locals = with_runtime(|runtime| runtime.locals_here());
+    let mut last_locals = locals;
     let changed = composer.update_kept(
-        |kept: &(Rc<MovableInner<P>>, P)| !kept.1.same(&param),
-        || (inner.clone(), param.clone()),
+        |kept: &MovableKept<P>| {
+            last_locals = kept.2.replace(locals);
+            !kept.1.same(&param)
+        },
+        || (inner.clone(), param.clone(), Cell::new(locals)),
     );
+    let locals_moved = last_locals != locals
+        && with_runtime(|runtime| runtime.force_if_moved(last_locals, locals));
+    let changed = changed || locals_moved;
     if start != Start::Placeholder {
         if !changed && composer.skipping() {
             composer.skip_to_group_end();
@@ -131,9 +154,8 @@ fn compose_movable<P: ComposeArg + Clone + 'static>(inner: Rc<MovableInner<P>>, 
         }
     }
     composer.end_restart_group(|kept| {
-        let (inner, param) = kept
-            .downcast_ref::<(Rc<MovableInner<P>>, P)>()
-            .expect("the kept arguments of its group");
+        let (inner, param, _) =
+            kept.downcast_ref::<MovableKept<P>>().expect("the kept arguments of its group");
         compose_movable(inner.clone(), param.clone());
     });
 }
@@ -204,7 +226,24 @@ fn unlink(table: &mut SlotTable, parent: u32, previous: u32, child: u32) {
     table[child].parent = NONE;
 }
 
+/// The placeholders in what's under `group`: none of them are reached while it's parked.
+fn placeholders_under(table: &SlotTable, group: u32) -> u32 {
+    let mut count = 0;
+    let mut child = table[group].first_child;
+    while child != NONE {
+        let entry = &table[child];
+        if entry.flags & MOVABLE_PENDING != 0 {
+            count += 1;
+        } else if entry.flags & (MOVABLE | CONTAINS_MOVABLE) != 0 {
+            count += placeholders_under(table, child);
+        }
+        child = entry.next_sibling;
+    }
+    count
+}
+
 fn park(table: &mut SlotTable, group: u32) {
+    table.movable.pending -= placeholders_under(table, group);
     let mut nodes = Vec::with_capacity(table[group].node_count as usize);
     top_nodes(table, group, &mut nodes);
     let provider = table[group].enclosing_provider;
@@ -315,7 +354,9 @@ fn take_parked(table: &mut SlotTable, identity: u64) -> Option<Parked> {
         .iter()
         .rposition(|parked| table.groups[parked.group as usize].data_key == identity);
     if let Some(at) = top {
-        return Some(table.movable.parked.remove(at));
+        let parked = table.movable.parked.remove(at);
+        table.movable.pending += placeholders_under(table, parked.group);
+        return Some(parked);
     }
     for at in (0..table.movable.parked.len()).rev() {
         let outer = table.movable.parked[at].group;
@@ -354,6 +395,7 @@ fn take_parked(table: &mut SlotTable, identity: u64) -> Option<Parked> {
         let mut nodes = Vec::with_capacity(count as usize);
         top_nodes(table, group, &mut nodes);
         let provider = table[group].enclosing_provider;
+        table.movable.pending += placeholders_under(table, group);
         return Some(Parked { group, nodes, provider });
     }
     None
@@ -390,6 +432,7 @@ impl Runtime {
         let mut adopted = None;
         if resolving {
             table.movable.pending -= 1;
+            table.movable.resolved += 1;
             table[parent.cursor].flags &= !MOVABLE_PENDING;
             if let Some(parked) = take_parked(table, identity) {
                 self.adopt_for_placeholder(
@@ -403,32 +446,16 @@ impl Runtime {
             }
         }
         let (op, _) = self.start_group(GroupKind::Restart, key, identity, None, false);
-        let Runtime { compositions, scopes, frames, providers_invalid, recorded_changes, .. } =
-            self;
+        let Runtime { compositions, scopes, frames, recorded_changes, .. } = self;
         let table = &mut compositions.data_mut(composition).table;
         let frame = frames.last_mut().expect("just started");
         let group = frame.group;
         if let Some(parked) = adopted {
             *recorded_changes += 1;
-            // What it read of the locals where it was: what's new isn't told by any state.
             let provider = table[group].enclosing_provider;
             let attach = (frame.node_parent, frame.node_index, parked.nodes);
-            let moved_providers = parked.provider != provider;
-            if moved_providers {
+            if parked.provider != provider {
                 relink_providers(table, group, provider);
-            }
-            if moved_providers
-                && !crate::local::same_locals_at(
-                    compositions,
-                    composition,
-                    parked.provider,
-                    provider,
-                )
-            {
-                if *providers_invalid == 0 {
-                    *providers_invalid = frames.len();
-                }
-                frames.last_mut().expect("just started").forced = true;
             }
             return (op, Start::Composing, Some(attach));
         }
@@ -441,6 +468,7 @@ impl Runtime {
         if table[group].flags & MOVABLE_PENDING != 0 {
             table[group].flags &= !MOVABLE_PENDING;
             table.movable.pending -= 1;
+            table.movable.resolved += 1;
             frame.inserting = true;
             return (op, Start::Composing, None);
         }
@@ -469,6 +497,42 @@ impl Runtime {
             around = table[around].parent;
         }
         (op, Start::Placeholder, None)
+    }
+
+    /// The nearest provider of the group composing now, with what it provides as a number.
+    fn locals_here(&self) -> (u32, u32) {
+        let composition = self.active.expect("composing").composition.index;
+        let frame = self.frames.last().expect("composing");
+        let table = &self.compositions.data(composition).table;
+        let provider = table[frame.group].enclosing_provider;
+        if provider == NONE {
+            return (NONE, 0);
+        }
+        (provider, table[provider].provider_version())
+    }
+
+    /// The group composing now last composed under `last`, and is under `now`: if what's provided
+    /// isn't the same, all of it composes. Returns whether it does.
+    fn force_if_moved(&mut self, last: (u32, u32), now: (u32, u32)) -> bool {
+        let composition = self.active.expect("composing").composition.index;
+        let table = &self.compositions.data(composition).table;
+        // A provider that's still what it was can be asked what it provides.
+        let known = last.0 == NONE
+            || table.groups.get(last.0 as usize).is_some_and(|group| {
+                group.kind != GroupKind::Free
+                    && group.is_provider()
+                    && group.provider_version() == last.1
+            });
+        let same =
+            known && crate::local::same_locals_at(&self.compositions, composition, last.0, now.0);
+        if same {
+            return false;
+        }
+        if self.providers_invalid == 0 {
+            self.providers_invalid = self.frames.len();
+        }
+        self.frames.last_mut().expect("composing").forced = true;
+        true
     }
 
     /// `parked` goes where `placeholder` is, which goes.
@@ -505,6 +569,7 @@ impl Runtime {
         let frame = self.frames.last_mut().expect("the sentinel frame");
         let table = &mut self.compositions.data_mut(composition).table;
         table[crate::slot_table::SENTINEL].dirty = false;
+        table.movable.walking = true;
         frame.mode = crate::composer::Mode::Walk;
         frame.skipped = true;
         frame.cursor = table[crate::slot_table::SENTINEL].first_child;
@@ -513,14 +578,46 @@ impl Runtime {
         frame.limit = NONE;
     }
 
+    /// What the walks passed is invalid still: the next pass reaches it, and a frame's asked.
+    fn leave_for_the_next_pass(&mut self, composition: u32) {
+        let Runtime { compositions, scopes, frame_requests, .. } = self;
+        let table = &mut compositions.data_mut(composition).table;
+        table.movable.walking = false;
+        let waiting = std::mem::take(&mut table.movable.waiting);
+        let mut any = false;
+        for group in waiting {
+            let invalid = table[group].kind == GroupKind::Restart
+                && scopes.get(table[group].scope).is_some_and(|scope| scope.invalid);
+            if !invalid {
+                continue;
+            }
+            any = true;
+            let mut around = table[group].parent;
+            while around != NONE && !table[around].dirty {
+                table[around].dirty = true;
+                around = table[around].parent;
+            }
+        }
+        let data = compositions.data_mut(composition);
+        if any && !data.pending {
+            data.pending = true;
+            let id = compositions.id_at(composition);
+            compositions.queue_in_parents(composition);
+            let data = compositions.get(id).expect("composing");
+            frame_requests.extend(compositions.frame_requester_of(data));
+            frame_requests.extend(compositions.recomposer_wake.clone());
+        }
+    }
+
     /// No placeholder is left: what's parked is removed, its nodes already out of the tree.
     pub(crate) fn remove_parked(&mut self, composition: u32) {
+        self.leave_for_the_next_pass(composition);
         let Runtime { compositions, scopes, removal_stack, .. } = self;
         let data = compositions.data_mut(composition);
         let parked = std::mem::take(&mut data.table.movable.parked);
         data.table.movable.parking = false;
-        // What it holds goes after the rest of the pass's work, as `discardUnusedMovableContentState`
-        // after the changes applied.
+        // What it holds goes after what the pass remembered, before its effects: one panicking
+        // loses nothing of it.
         let mut removed = Deferred::default();
         for parked in parked {
             crate::runtime::remove_parked_group(

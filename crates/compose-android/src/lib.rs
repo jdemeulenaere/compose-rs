@@ -85,7 +85,7 @@ struct RetainedViewModels {
     /// What each keeps of retained values across hosts, per view, as an activity's `retain` (D1306).
     values: std::collections::HashMap<
         i64,
-        std::rc::Rc<compose_runtime::retain::RetainedValuesStoreRegistry>,
+        std::rc::Rc<compose_ui::retained_values::LifecycleRetainedValuesStoreOwner>,
     >,
 }
 
@@ -96,7 +96,7 @@ pub fn new_retained_view_model_store() -> i64 {
     RETAINED_VIEW_MODELS.with_borrow_mut(|retained| {
         retained.last_token += 1;
         retained.stores.insert(retained.last_token, compose_lifecycle::ViewModelStore::new());
-        let values = compose_runtime::retain::RetainedValuesStoreRegistry::new();
+        let values = compose_ui::retained_values::LifecycleRetainedValuesStoreOwner::new();
         retained.values.insert(retained.last_token, values);
         retained.last_token
     })
@@ -112,7 +112,7 @@ pub fn retained_view_model_store(token: i64) -> Option<compose_lifecycle::ViewMo
 #[doc(hidden)]
 pub fn retained_values_stores(
     token: i64,
-) -> Option<std::rc::Rc<compose_runtime::retain::RetainedValuesStoreRegistry>> {
+) -> Option<std::rc::Rc<compose_ui::retained_values::LifecycleRetainedValuesStoreOwner>> {
     RETAINED_VIEW_MODELS.with_borrow(|retained| retained.values.get(&token).cloned())
 }
 
@@ -127,7 +127,7 @@ pub fn clear_retained_view_model_store(token: i64) {
         store.clear();
     }
     if let Some(values) = values {
-        values.dispose();
+        values.clear();
     }
 }
 

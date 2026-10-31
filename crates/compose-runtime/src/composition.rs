@@ -203,6 +203,24 @@ impl Composition {
             || (!data.dirty_children.is_empty() && compositions.has_work_below(data))
     }
 
+    /// `action` at the end of a frame of this composition's tree, on its recomposer: `None` if
+    /// that's shut down, as it would never run.
+    pub fn schedule_frame_end_callback(
+        &self,
+        action: Box<dyn FnOnce()>,
+    ) -> Option<crate::recomposer::CancellationHandle> {
+        let recomposer = with_runtime(|runtime| self.data(runtime).recomposer)
+            .unwrap_or_else(crate::recomposer::Recomposer::current_thread);
+        recomposer
+            .is_open_for_frames()
+            .then(|| recomposer.schedule_frame_end_callback_of(Some(self.id), action))
+    }
+
+    /// The composition on top of this one's tree.
+    pub(crate) fn tree_root(&self) -> CompositionId {
+        with_runtime(|runtime| runtime.compositions.tree_root_of(self.id))
+    }
+
     /// Sets the function called when a scope of this composition becomes invalid while none
     /// was: the host's way to schedule a frame.
     pub fn set_frame_requester(&self, requester: impl Fn() + 'static) {
@@ -1172,18 +1190,29 @@ pub(crate) fn run_unapplied(id: CompositionId) {
 fn finish_movable_content(id: CompositionId) {
     let index = id.index;
     loop {
-        let pending = with_runtime(|runtime| {
-            let pending = runtime.compositions.data(index).table.movable.pending;
-            if pending != 0 {
+        let before = with_runtime(|runtime| {
+            let movable = &runtime.compositions.data(index).table.movable;
+            let before = (movable.pending, movable.resolved);
+            if before.0 != 0 {
                 runtime.begin_movable_walk(index);
             }
-            pending
+            before
         });
-        if pending == 0 {
+        if before.0 == 0 {
             break;
         }
         run_walk(0);
         flush_node_moves();
+        // Each walk resolves one at least, or a removal took one: no spinning on what's lost.
+        let after = with_runtime(|runtime| {
+            let movable = &runtime.compositions.data(index).table.movable;
+            (movable.pending, movable.resolved)
+        });
+        assert!(
+            after.1 != before.1 || after.0 < before.0,
+            "compose-runtime: a placeholder of movable content can't be reached ({} left)",
+            after.0
+        );
     }
     with_runtime(|runtime| {
         runtime.remove_parked(index);
@@ -1242,14 +1271,7 @@ pub(crate) fn apply_work(composed: Composed) {
     let disposed = with_runtime(|runtime| {
         runtime.compositions.get(id).is_none_or(|data| data.disposed || data.closed)
     });
-    apply_deferred(&applier, &mut deferred, !disposed);
-    if let Some(mut removed) = removed_content {
-        applier
-            .try_borrow_mut()
-            .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
-            .on_begin_changes();
-        apply_deferred(&applier, &mut removed, false);
-    }
+    apply_deferred(&applier, &mut deferred, !disposed, removed_content);
     // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
     let freeing = std::mem::take(&mut finishing.freeing);
     let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));
@@ -1393,6 +1415,7 @@ fn apply_deferred(
     applier: &Rc<RefCell<dyn ErasedApplier>>,
     deferred: &mut Deferred,
     run_effects: bool,
+    removed_content: Option<Box<Deferred>>,
 ) {
     {
         // What panics in a release leaves the applier's changes as they'd be after a pass.
@@ -1432,6 +1455,15 @@ fn apply_deferred(
     deferred.removed_values.clear();
     for observer in deferred.remembered.drain(..) {
         observer.dispatch_remembered();
+    }
+    // Discarded movable content goes after what the pass remembered, as Compose's, and before any
+    // effect can panic and lose it.
+    if let Some(mut removed) = removed_content {
+        applier
+            .try_borrow_mut()
+            .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
+            .on_begin_changes();
+        apply_deferred(applier, &mut removed, false, None);
     }
     if run_effects {
         for effect in deferred.side_effects.drain(..) {
@@ -1549,7 +1581,7 @@ impl Disposal {
         if let Some(data) = self.data.take() {
             with_runtime(|runtime| runtime.disposing_data.push((self.id, data)));
         }
-        apply_deferred(&applier, &mut self.deferred, false);
+        apply_deferred(&applier, &mut self.deferred, false, None);
         drop(applier);
         let Disposal { deferred, .. } = self;
         drop(deferred);

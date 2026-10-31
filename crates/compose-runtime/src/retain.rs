@@ -220,6 +220,11 @@ impl RetainedValuesStore for ManagedRetainedValuesStore {
         if self.disposed.get() {
             return;
         }
+        // Already unwinding from the misuse below it: a second panic would abort the process.
+        if std::thread::panicking() {
+            self.content_composed.set(false);
+            return;
+        }
         assert!(
             self.content_composed.get(),
             "ManagedValuesStore tried to leave composition twice. Is the store installed in \
@@ -345,6 +350,8 @@ pub fn retain_observer_keyed<K: ComposeArg + 'static, T: RetainObserver>(
 struct PresenceIndicator {
     store: Rc<dyn RetainedValuesStore>,
     recomposer: Recomposer,
+    /// The composition it's in, whose tree's frame says the content's there.
+    owner: Option<crate::runtime::CompositionId>,
     entered: Rc<Cell<bool>>,
     pending: Cell<Option<CancellationHandle>>,
 }
@@ -352,10 +359,13 @@ struct PresenceIndicator {
 impl RememberObserver for PresenceIndicator {
     fn on_remembered(&self) {
         let (store, entered) = (self.store.clone(), self.entered.clone());
-        self.pending.set(Some(self.recomposer.schedule_frame_end_callback(move || {
-            entered.set(true);
-            store.on_content_entered_composition();
-        })));
+        self.pending.set(Some(self.recomposer.schedule_frame_end_callback_of(
+            self.owner,
+            Box::new(move || {
+                store.on_content_entered_composition();
+                entered.set(true);
+            }),
+        )));
     }
 
     fn on_forgotten(&self) {
@@ -399,9 +409,11 @@ pub fn with_local_retained_values_store<R>(
     let recomposer =
         crate::runtime::composing_recomposer().unwrap_or_else(Recomposer::current_thread);
     let indicator_store = store.clone();
+    let owner = crate::runtime::composing_composition();
     remember_observer_keyed(store, move || PresenceIndicator {
         store: indicator_store,
         recomposer,
+        owner,
         entered: Rc::new(Cell::new(false)),
         pending: Cell::new(None),
     });

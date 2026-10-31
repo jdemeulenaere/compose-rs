@@ -1048,7 +1048,7 @@ fn create(
         ui.restore_state(state);
     }
     // What the content retains outlives this host, under the same holder as its view models, by
-    // the view's id, as its instance state is: a view with none keeps nothing.
+    // the view's id, as Compose's: a list per id, views sharing one each having their own.
     let get_id = method(env, view, jni_str!("getId"), jni_sig!("()I"));
     // SAFETY: `getId` is `()I`.
     let view_id = unsafe {
@@ -1056,10 +1056,15 @@ fn create(
     }
     .and_then(|id| id.i())
     .unwrap_or(-1);
-    match crate::retained_values_stores(view_model_store).filter(|_| view_id != -1) {
-        Some(stores) => ui.set_content(move || {
-            stores.LocalRetainedValuesStoreProvider(view_id, content);
-        }),
+    match crate::retained_values_stores(view_model_store) {
+        Some(owner) => {
+            let entry = owner.get_or_create_entry(view_id);
+            let store = entry.store();
+            ui.set_retained_values_entry(entry);
+            ui.set_content(move || {
+                compose_runtime::retain::LocalRetainedValuesStoreProvider(store.clone(), content);
+            })
+        }
         None => ui.set_content(content),
     }
     let host = Box::new(Host {

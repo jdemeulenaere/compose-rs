@@ -1507,3 +1507,68 @@ fn a_retained_effect_retires_when_its_store_stops_keeping() {
     store.disable_retaining_exited_values();
     assert_eq!(log.entries(), ["Retain:1", "Retain:2", "recompose", "Retire:2", "Retire:1"]);
 }
+
+// ---- Whose frame it is --------------------------------------------------------------------------
+
+/// A host's frame end doesn't say another host's content is there: what that one keeps waits for its
+/// own frame, as a window's frame ends only its own recomposer's in Compose.
+#[test]
+fn another_trees_frame_end_leaves_what_a_store_keeps() {
+    struct Told(Rc<Cell<i32>>);
+    impl RetainObserver for Told {
+        fn on_retired(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let retired = Rc::new(Cell::new(0));
+    let store = ManagedRetainedValuesStore::new();
+    let (r, s) = (retired.clone(), store.clone());
+    let first = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let shown = mutable_state_of(true);
+    let shows = shown.handle();
+    first.set_content(move || {
+        let (r, s) = (r.clone(), s.clone());
+        LocalRetainedValuesStoreProvider(s, move || {
+            if shows.get() {
+                let r = r.clone();
+                key(0, move || {
+                    let r = r.clone();
+                    retain_observer(move || Told(r));
+                });
+            }
+        });
+    });
+    platform::run_frame_end_callbacks_of(&first);
+    // It leaves, and the content with it: the store keeps it.
+    first.dispose();
+    let again = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    let other = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+    other.set_content(|| {});
+    let s = store.clone();
+    again.set_content(move || LocalRetainedValuesStoreProvider(s.clone(), || {}));
+    platform::run_frame_end_callbacks_of(&other);
+    assert_eq!(retired.get(), 0, "another host's frame");
+    platform::run_frame_end_callbacks_of(&again);
+    assert_eq!(retired.get(), 1, "its own");
+    again.dispose();
+    other.dispose();
+    store.dispose();
+}
+
+/// One store in two compositions is its owner's misuse, and says so: it doesn't take the process
+/// with it by panicking again as what it unwinds through leaves.
+#[test]
+fn a_store_in_two_compositions_panics_once() {
+    let store = ManagedRetainedValuesStore::new();
+    let make = |store: Rc<ManagedRetainedValuesStore>| {
+        let composition = Composition::new(compose_runtime::platform::NodeTree::<()>::new());
+        composition.set_content(move || LocalRetainedValuesStoreProvider(store.clone(), || {}));
+        composition
+    };
+    let (first, second) = (make(store.clone()), make(store.clone()));
+    let frame = catch_unwind(AssertUnwindSafe(|| platform::run_frame_end_callbacks()));
+    assert!(frame.is_err(), "a misuse");
+    drop(first);
+    drop(second);
+    store.dispose();
+}

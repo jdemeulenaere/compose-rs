@@ -378,6 +378,19 @@ impl Compositions {
         }
     }
 
+    /// What's on top of `id`'s tree: what frames it.
+    pub(crate) fn tree_root_of(&self, id: CompositionId) -> CompositionId {
+        let mut id = id;
+        while let Some(data) = self.get(id) {
+            if self.is_tree_root(data) {
+                break;
+            }
+            let Some(entry) = data.parent.and_then(|place| self.contexts.get(place)) else { break };
+            id = entry.composition;
+        }
+        id
+    }
+
     /// Whether its frames are its own: nothing above it composes.
     pub(crate) fn is_tree_root(&self, data: &CompositionData) -> bool {
         let entry = data.parent.and_then(|place| self.contexts.get(place));

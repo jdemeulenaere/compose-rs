@@ -6,9 +6,11 @@
 #![allow(clippy::redundant_closure, clippy::if_same_then_else)]
 
 use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use compose_runtime::platform::{self, Applier};
+use compose_runtime::snapshots::Snapshot;
 use compose_runtime::*;
 
 use crate::mock::*;
@@ -1379,12 +1381,10 @@ fn content_moves_out_of_a_node_going() {
             Linear!(move || content());
         }
     });
-    let i = index.handle();
     test.validate(move |v| {
         for _ in 0..5 {
             v.linear(|v| v.text("Some text"));
         }
-        let _ = i;
     });
     for _ in 0..3 {
         index.update(|value| value + 1);
@@ -1411,6 +1411,8 @@ fn content_deactivated_comes_back_in_another_branch() {
     let composition =
         Composition::reusable(ViewApplier::new(), Recomposer::current_thread().as_context());
     composition.set_content(content.clone());
+    let shown = composition.with_applier(|views: &mut ViewApplier| views.tree.dump());
+    assert_eq!(shown.trim(), "<linear>\n  <text text='text'>");
     composition.deactivate();
     value.set(false);
     composition.set_content_with_reuse(content.clone());
@@ -2233,4 +2235,532 @@ fn contents_placed_at_random_agree_with_arrays() {
     for seed in 1..=120 {
         run_fuzz(seed);
     }
+}
+
+// ---- A static value changing as content moves, and late work ---------------------------------
+
+static MOVED_STATIC: CompositionLocal<i32> = CompositionLocal::new_static("moved.static", || 0);
+
+#[composable]
+fn ReadsMovedStatic(seen: Rc<Cell<i32>>) {
+    seen.set(MOVED_STATIC.current());
+}
+
+/// A provider's static value and the branch content's in change together: the provider's the same
+/// group, but the content, skipping by then, is forced by what it last composed with, as Compose's
+/// `reader.groupAux != locals`.
+#[test]
+fn a_static_value_changing_as_content_moves_under_its_provider() {
+    let mut test = composition_test();
+    let seen = Rc::new(Cell::new(0));
+    let s = seen.clone();
+    let content = movable_content_of(move || ReadsMovedStatic!(s.clone()));
+    let (value, row_up) = (mutable_state_of(1), mutable_state_of(true));
+    let (v, r) = (value.handle(), row_up.handle());
+    test.compose(move || {
+        let content = content.clone();
+        CompositionLocalProvider(MOVED_STATIC.provides(v.get()), move || {
+            let content = content.clone();
+            if r.get() {
+                Row!(move || content());
+            } else {
+                Column!(move || content());
+            }
+        });
+    });
+    assert_eq!(seen.get(), 1);
+    for round in 2..6 {
+        value.set(round);
+        row_up.update(|up| !up);
+        test.advance();
+        assert_eq!(seen.get(), round);
+    }
+    // The value alone, and the move alone.
+    value.set(10);
+    test.advance();
+    assert_eq!(seen.get(), 10);
+    row_up.update(|up| !up);
+    test.advance();
+    assert_eq!(seen.get(), 10);
+}
+
+/// Moved as the store it's under changes: what it retains goes to the store it's under now.
+#[test]
+fn a_store_changing_as_content_moves_gets_what_it_retains() {
+    use compose_runtime::retain::*;
+    struct Told(Rc<Cell<i32>>);
+    impl RetainObserver for Told {
+        fn on_retired(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let mut test = composition_test();
+    let retired = Rc::new(Cell::new(0));
+    let (first, second) = (ManagedRetainedValuesStore::new(), ManagedRetainedValuesStore::new());
+    let (in_first, row_up, shown) =
+        (mutable_state_of(true), mutable_state_of(true), mutable_state_of(true));
+    let t = retired.clone();
+    let inner = shown.handle();
+    let content = movable_content_of(move || {
+        let t = t.clone();
+        if inner.get() {
+            key(0, move || {
+                let t = t.clone();
+                retain_observer(move || Told(t));
+            });
+        }
+    });
+    let (fi, se, f, r) = (first.clone(), second.clone(), in_first.handle(), row_up.handle());
+    test.compose(move || {
+        let store: Rc<dyn RetainedValuesStore> = if f.get() { fi.clone() } else { se.clone() };
+        let content = content.clone();
+        with_composition_locals(LOCAL_RETAINED_VALUES_STORE.provides(store), move || {
+            let content = content.clone();
+            if r.get() {
+                Row!(move || content());
+            } else {
+                Column!(move || content());
+            }
+        });
+    });
+    in_first.set(false);
+    row_up.set(false);
+    test.advance();
+    // The second keeps, as its content isn't in; the first has retired what it was given.
+    second.enable_retaining_exited_values();
+    first.disable_retaining_exited_values();
+    shown.set(false);
+    test.advance();
+    assert_eq!(retired.get(), 0, "kept by the store it's under now");
+    second.dispose();
+    assert_eq!(retired.get(), 1);
+    first.dispose();
+}
+
+/// Late content calling a content nested in it and invalidating what holds it: that waits for the
+/// next pass, as Compose's late changes run only what moved. Run in this pass, it would park the
+/// content with the placeholder in it.
+#[test]
+fn late_content_invalidating_what_holds_it_waits_for_the_next_pass() {
+    #[composable]
+    fn Around(
+        calls: MutableState<bool>,
+        a: Callback,
+        scope: Rc<RefCell<Option<RecomposeScope>>>,
+        runs: Rc<Cell<i32>>,
+    ) {
+        *scope.borrow_mut() = Some(current_recompose_scope());
+        runs.set(runs.get() + 1);
+        if calls.get() {
+            a();
+        }
+    }
+    let composition = Composition::new(ViewApplier::new());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let (calls, runs) = (mutable_state_of(false), Rc::new(Cell::new(0)));
+    let scope: Rc<RefCell<Option<RecomposeScope>>> = Rc::default();
+    let inner = movable_content_of(|| Text("inner"));
+    let (i, s) = (inner.clone(), scope.clone());
+    let a = movable_content_of(move || {
+        i();
+        s.borrow().as_ref().expect("composed").invalidate();
+    });
+    let (c, ru, sc) = (calls.handle(), runs.clone(), scope.clone());
+    composition.set_content(move || Around!(c, a.clone(), sc.clone(), ru.clone()));
+    assert_eq!(runs.get(), 1);
+    calls.set(true);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(runs.get(), 2, "not again in the pass");
+    assert!(composition.has_invalidations());
+    assert_eq!(requests.get(), asked + 1, "the next pass is asked for");
+    composition.recompose();
+    assert_eq!(runs.get(), 3);
+    composition.dispose();
+}
+
+/// What's ahead of the walk, invalidated by late content: left for the next pass too, marked for it
+/// and asked for, where a plain pass would reach it.
+#[test]
+fn late_content_invalidating_what_s_after_it_waits_for_the_next_pass() {
+    #[composable]
+    fn After(scope: Rc<RefCell<Option<RecomposeScope>>>, runs: Rc<Cell<i32>>) {
+        *scope.borrow_mut() = Some(current_recompose_scope());
+        runs.set(runs.get() + 1);
+    }
+    let composition = Composition::new(ViewApplier::new());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let (calls, runs) = (mutable_state_of(false), Rc::new(Cell::new(0)));
+    let scope: Rc<RefCell<Option<RecomposeScope>>> = Rc::default();
+    let s = scope.clone();
+    let a = movable_content_of(move || s.borrow().as_ref().expect("composed").invalidate());
+    let (c, ru, sc) = (calls.handle(), runs.clone(), scope.clone());
+    composition.set_content(move || {
+        if c.get() {
+            a();
+        }
+        After!(sc.clone(), ru.clone());
+    });
+    assert_eq!(runs.get(), 1);
+    calls.set(true);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(runs.get(), 1, "not in the pass");
+    assert!(composition.has_invalidations());
+    assert_eq!(requests.get(), asked + 1, "the next pass is asked for");
+    composition.recompose();
+    assert_eq!(runs.get(), 2);
+    composition.dispose();
+}
+
+/// A placeholder in content that parks: it's not reached there, so no walk waits for it; taken back,
+/// it's there to reach.
+#[test]
+fn a_placeholder_in_parked_content_doesnt_hold_up_the_pass() {
+    let mut test = composition_test();
+    let (first, second, tick) =
+        (mutable_state_of(true), mutable_state_of(false), mutable_state_of(0));
+    let leaf = movable_content_of(|| Text("leaf"));
+    let (s, t, l) = (second.handle(), tick.handle(), leaf.clone());
+    let holder = movable_content_of(move || {
+        t.get();
+        if s.get() {
+            l();
+        }
+    });
+    let (f, h) = (first.handle(), holder.clone());
+    test.compose(move || {
+        let h = h.clone();
+        if f.get() {
+            Row!(move || h());
+        }
+    });
+    second.set(true);
+    first.set(false);
+    test.advance();
+    test.verify_consistent();
+    first.set(true);
+    test.advance();
+    test.validate(|v| row(v, |v| v.text("leaf")));
+}
+
+/// A panicking effect in the pass doesn't lose what was discarded of movable content: it's forgotten
+/// and its nodes go.
+#[test]
+fn an_effects_panic_doesnt_lose_discarded_content() {
+    struct Told(Rc<Cell<i32>>);
+    impl RememberObserver for Told {
+        fn on_forgotten(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let mut test = composition_test();
+    let forgotten = Rc::new(Cell::new(0));
+    let f = forgotten.clone();
+    let content = movable_content_of(move || {
+        let f = f.clone();
+        remember_observer(move || Told(f));
+        Text("discarded");
+    });
+    let shown = mutable_state_of(true);
+    let s = shown.handle();
+    test.compose(move || {
+        let content = content.clone();
+        let there = s.get();
+        Linear!(move || {
+            if there {
+                content();
+            }
+        });
+        SideEffect(move || assert!(there, "in an effect"));
+    });
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    let frame = catch_unwind(AssertUnwindSafe(|| test.composition().recompose()));
+    assert!(frame.is_err());
+    assert_eq!(forgotten.get(), 1);
+    assert_eq!(test.with_views(|views| views.tree.len()), 1, "the linear alone");
+}
+
+// ---- The fuzz, with providers, parameters and keys ---------------------------------------------
+
+static FUZZ_STATIC: CompositionLocal<i32> = CompositionLocal::new_static("fuzz.static", || -1);
+static FUZZ_DYNAMIC: CompositionLocal<i32> = CompositionLocal::new("fuzz.dynamic", || -1);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct WideSeen {
+    param: i32,
+    static_local: i32,
+    dynamic_local: i32,
+    token: u64,
+}
+
+type WideContent = Callback<dyn Fn(i32)>;
+
+struct WideFuzz {
+    placing: OwnedState<Rc<Placing>>,
+    contents: RefCell<Vec<WideContent>>,
+    /// Per host, what it provides: a parent always, a content if `provides` says.
+    statics: Vec<OwnedState<i32>>,
+    dynamics: Vec<OwnedState<i32>>,
+    provides: Vec<bool>,
+    /// Per content, what it's called with and under which key.
+    params: Vec<OwnedState<i32>>,
+    keys: Vec<OwnedState<i32>>,
+    seen: RefCell<Vec<WideSeen>>,
+    next: Cell<u64>,
+}
+
+/// With what it's given the same, it runs only if what's static above it changed.
+#[composable]
+fn WideReader(index: usize, fuzz: Rc<WideFuzz>) {
+    let (static_local, dynamic_local) = (FUZZ_STATIC.current(), FUZZ_DYNAMIC.current());
+    let mut seen = fuzz.seen.borrow_mut();
+    seen[index].static_local = static_local;
+    seen[index].dynamic_local = dynamic_local;
+}
+
+fn wide_hosted(fuzz: &Rc<WideFuzz>, host: usize) {
+    let calls = || {
+        let placing = fuzz.placing.get();
+        for content in &placing[host] {
+            let call = fuzz.contents.borrow()[*content].clone();
+            let param = fuzz.params[*content].get();
+            key(fuzz.keys[*content].get(), move || call(param));
+        }
+    };
+    if fuzz.provides[host] {
+        let (s, d) = (fuzz.statics[host].get(), fuzz.dynamics[host].get());
+        CompositionLocalProvider((FUZZ_STATIC.provides(s), FUZZ_DYNAMIC.provides(d)), calls);
+    } else {
+        calls();
+    }
+}
+
+fn wide_expected(fuzz: &WideFuzz, placing: &Placing, host: usize, v: &mut Expected) {
+    for content in &placing[host] {
+        let token = fuzz.seen.borrow()[*content].token;
+        v.linear(|v| {
+            v.text(&format!("{content}:{token}"));
+            wide_expected(fuzz, placing, PARENTS + content, v);
+        });
+    }
+}
+
+/// What's read in `content`, placed under `above` by the last hosts in `path`, against the arrays.
+fn wide_check(fuzz: &WideFuzz, placing: &Placing, host: usize, path: &mut Vec<usize>, seed: u64) {
+    path.push(host);
+    for content in &placing[host] {
+        let provider = path.iter().rev().find(|host| fuzz.provides[**host]).copied();
+        let seen = fuzz.seen.borrow()[*content];
+        let expected = (
+            fuzz.params[*content].get(),
+            provider.map_or(-1, |at| fuzz.statics[at].get()),
+            provider.map_or(-1, |at| fuzz.dynamics[at].get()),
+        );
+        assert_eq!(
+            (seen.param, seen.static_local, seen.dynamic_local),
+            expected,
+            "{content} under {path:?} of {placing:?}, seed {seed}"
+        );
+        wide_check(fuzz, placing, PARENTS + content, path, seed);
+    }
+    path.pop();
+}
+
+fn run_wide_fuzz(seed: u64) {
+    let mut random = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    let mut next = move |bound: u64| {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        random % bound
+    };
+    let hosts = PARENTS + CONTENTS;
+    let fuzz = Rc::new(WideFuzz {
+        placing: mutable_state_of_with(Rc::new(vec![Vec::new(); hosts]), ReferentialEqualityPolicy),
+        contents: RefCell::new(Vec::new()),
+        statics: (0..hosts).map(|_| mutable_state_of(0)).collect(),
+        dynamics: (0..hosts).map(|_| mutable_state_of(0)).collect(),
+        provides: (0..hosts).map(|host| host < PARENTS || next(2) == 0).collect(),
+        params: (0..CONTENTS).map(|_| mutable_state_of(0)).collect(),
+        keys: (0..CONTENTS).map(|_| mutable_state_of(0)).collect(),
+        seen: RefCell::new(vec![WideSeen::default(); CONTENTS]),
+        next: Cell::new(1),
+    });
+    for index in 0..CONTENTS {
+        let inner = Rc::downgrade(&fuzz);
+        let content = movable_content_of_with(move |param: i32| {
+            let fuzz = inner.upgrade().expect("it outlives the composition");
+            let made = fuzz.clone();
+            let token = remember(move || {
+                let token = made.next.get();
+                made.next.set(token + 1);
+                token
+            });
+            {
+                let mut seen = fuzz.seen.borrow_mut();
+                seen[index].param = param;
+                seen[index].token = token;
+            }
+            WideReader!(index, fuzz.clone());
+            let inner = inner.clone();
+            Linear!(move || {
+                let fuzz = inner.upgrade().expect("it outlives the composition");
+                Text(&format!("{index}:{token}"));
+                wide_hosted(&fuzz, PARENTS + index);
+            });
+        });
+        fuzz.contents.borrow_mut().push(content);
+    }
+    let mut test = composition_test();
+    let f = fuzz.clone();
+    test.compose(move || {
+        let (a, b, c) = (f.clone(), f.clone(), f.clone());
+        Row!(move || wide_hosted(&a, 0));
+        Column!(move || {
+            wide_hosted(&b, 1);
+            let c = c.clone();
+            Row!(move || wide_hosted(&c, 2));
+        });
+    });
+    let mut last_tokens: Vec<Option<u64>> = vec![None; CONTENTS];
+    for _ in 0..30 {
+        // A round may keep the placing, for what changes under a provider where it is.
+        let placing = if next(3) == 0 {
+            (*fuzz.placing.get()).clone()
+        } else {
+            let mut placing: Placing = vec![Vec::new(); hosts];
+            for content in 0..CONTENTS {
+                if next(4) == 0 {
+                    continue;
+                }
+                let host = next((PARENTS + content) as u64) as usize;
+                let at = next(placing[host].len() as u64 + 1) as usize;
+                placing[host].insert(at, content);
+            }
+            placing
+        };
+        let mut present = Vec::new();
+        for parent in 0..PARENTS {
+            reached(&placing, parent, &mut present);
+        }
+        let last_placing = fuzz.placing.get();
+        let mut last_present = Vec::new();
+        for parent in 0..PARENTS {
+            reached(&last_placing, parent, &mut last_present);
+        }
+        for _ in 0..=next(3) {
+            match next(4) {
+                0 => fuzz.statics[next(hosts as u64) as usize].set(next(1000) as i32),
+                1 => fuzz.dynamics[next(hosts as u64) as usize].set(next(1000) as i32),
+                2 => fuzz.params[next(CONTENTS as u64) as usize].set(next(1000) as i32),
+                _ => {}
+            }
+        }
+        // A new key is a new group around it: the content moves, to where it's called from.
+        if next(4) == 0 {
+            fuzz.keys[next(CONTENTS as u64) as usize].update(|key| key + 1);
+        }
+        fuzz.placing.set(Rc::new(placing));
+        test.advance();
+        test.verify_consistent();
+        let placing = fuzz.placing.get();
+        for parent in 0..PARENTS {
+            wide_check(&fuzz, &placing, parent, &mut Vec::new(), seed);
+        }
+        for (content, last) in last_tokens.iter_mut().enumerate() {
+            let token = fuzz.seen.borrow()[content].token;
+            if present.contains(&content)
+                && let Some(last) = *last
+            {
+                assert_eq!(token, last, "{content} of {placing:?}, seed {seed}");
+            }
+            *last = present.contains(&content).then_some(token);
+        }
+        let (f, p) = (fuzz.clone(), placing.clone());
+        test.validate(move |v| {
+            row(v, |v| wide_expected(&f, &p, 0, v));
+            column(v, |v| {
+                wide_expected(&f, &p, 1, v);
+                row(v, |v| wide_expected(&f, &p, 2, v));
+            });
+        });
+    }
+    test.dispose();
+}
+
+/// Contents placed at random under providers whose values change as they move, with parameters and
+/// keys changing too, against plain arrays.
+#[test]
+fn contents_under_changing_providers_agree_with_arrays() {
+    for seed in 1..=120 {
+        run_wide_fuzz(seed);
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, subcomposeLifetime_no_movable_content
+#[test]
+fn a_value_used_in_compositions_lives_until_the_last_lets_it_go() {
+    struct Use(Rc<Cell<i32>>);
+    impl RememberObserver for Use {
+        fn on_remembered(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn on_forgotten(&self) {
+            self.0.set(self.0.get() - 1);
+        }
+        fn on_abandoned(&self) {}
+    }
+    #[composable]
+    fn UseIt(used: MutableState<bool>, live: Rc<Cell<i32>>) {
+        if used.get() {
+            remember_observer(move || Use(live));
+        }
+    }
+    #[composable]
+    fn Subcompose(used: MutableState<bool>, live: Rc<Cell<i32>>) {
+        let parent = remember_composition_context();
+        let composition =
+            remember(|| Rc::new(Composition::with_parent(ViewApplier::new(), parent)));
+        composition.set_content(move || UseIt!(used, live.clone()));
+        DisposableEffect((), move |scope| scope.on_dispose(move || composition.dispose()));
+    }
+    let mut test = composition_test();
+    let live = Rc::new(Cell::new(0));
+    let (main, sub1, sub2) =
+        (mutable_state_of(false), mutable_state_of(false), mutable_state_of(false));
+    let (m, s1, s2, l) = (main.handle(), sub1.handle(), sub2.handle(), live.clone());
+    test.compose(move || {
+        UseIt!(m, l.clone());
+        Subcompose!(s1, l.clone());
+        Subcompose!(s2, l.clone());
+    });
+    let used = |test: &mut CompositionTest, expected: bool| {
+        test.advance();
+        assert_eq!(live.get() > 0, expected);
+    };
+    used(&mut test, false);
+    main.set(true);
+    used(&mut test, true);
+    sub1.set(true);
+    sub2.set(true);
+    used(&mut test, true);
+    main.set(false);
+    used(&mut test, true);
+    sub1.set(false);
+    used(&mut test, true);
+    sub1.set(false);
+    sub2.set(true);
+    used(&mut test, true);
+    main.set(false);
+    sub1.set(false);
+    sub2.set(false);
+    used(&mut test, false);
 }

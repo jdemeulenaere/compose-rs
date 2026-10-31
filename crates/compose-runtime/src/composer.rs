@@ -770,10 +770,32 @@ impl Runtime {
             }
 
             let child = frame.cursor;
+            // Walking for a pass's placeholders: what else is invalid waits for the next pass,
+            // though what moved takes its own with it (in a walk of its own, of another base). A
+            // paused scope's a resume's, as ever.
+            let waits = base == 0
+                && table.movable.walking
+                && table[child].flags & crate::slot_table::MOVABLE_PENDING == 0
+                && !scopes.get(table[child].scope).is_some_and(|scope| scope.paused);
+            if waits
+                && table[child].kind == GroupKind::Restart
+                && scopes.get(table[child].scope).is_some_and(|scope| scope.invalid)
+            {
+                table.movable.waiting.push(child);
+                if !table[child].dirty {
+                    let group = &table[child];
+                    let walking = &mut frames[top];
+                    walking.node_index += group.node_count;
+                    walking.last_placed = child;
+                    walking.cursor = group.next_sibling;
+                    continue;
+                }
+            }
             let group = &mut table[child];
             // Invalid on conditions: checked first, as Compose's `recomposeToGroupEnd` checks
             // `isInvalidFor`. Not a paused scope: its resume runs it whatever.
-            if group.kind == GroupKind::Restart
+            if !waits
+                && group.kind == GroupKind::Restart
                 && let Some(scope) = scopes.get(group.scope)
                 && scope.invalid
                 && !scope.paused
@@ -781,7 +803,8 @@ impl Runtime {
             {
                 return WalkStep::Check(group.scope, scopes.conditions(group.scope));
             }
-            if group.kind == GroupKind::Restart
+            if !waits
+                && group.kind == GroupKind::Restart
                 && scopes.get(group.scope).is_some_and(|scope| scope.invalid)
             {
                 let restart = group

@@ -19,7 +19,9 @@ pub use crate::executor::{
 pub use crate::node_tree::NodeTree;
 pub use crate::observe::ReadObserver;
 pub use crate::pausable::{PausableContent, PausableContentFor};
-pub use crate::recomposer::{perform_frame, run_frame_end_callbacks};
+pub use crate::recomposer::{
+    CancellationHandle, perform_frame, run_frame_end_callbacks, run_frame_end_callbacks_of,
+};
 pub use crate::remember::remember_across_reuse;
 pub use crate::snapshots::Turn;
 pub use crate::state::{
