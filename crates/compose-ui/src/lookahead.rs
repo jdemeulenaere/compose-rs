@@ -10,6 +10,7 @@
 
 use std::cell::Cell;
 use std::mem;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use compose_runtime::composable;
@@ -17,6 +18,9 @@ use smallvec::SmallVec;
 
 use crate::constraints::Constraints;
 use crate::coordinates::LayoutCoordinates;
+use crate::layout::{Measurable, MeasureResult, MeasureScope, Placeable};
+use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
+use crate::node_context::NodeContext;
 use crate::placement::{NodePlacements, PlacementScope};
 use crate::tree::{Layer, LayoutNode, NodeId, UiTree};
 use crate::unit::{IntOffset, IntSize, Offset};
@@ -61,11 +65,18 @@ pub fn LookaheadScope(content: impl Fn(LookaheadScope) + 'static) {
     });
 }
 
+/// The scope of a node an approach layout out of any scope made its own root, as `LayoutNode`'s
+/// `lookaheadRoot = this`.
+const OWN_ROOT: u32 = u32::MAX;
+
 /// The results of a node's pass that isn't running: Compose's `LookaheadPassDelegate` and its
 /// coordinators' `LookaheadDelegate`s, or, in a lookahead pass, the others.
 pub(crate) struct LookaheadState {
-    /// The scope it was composed in; 0 if it's only under one (`set_lookahead_scope`).
+    /// The scope it was composed in; 0 if it's only under one (`set_lookahead_scope`);
+    /// `OWN_ROOT` if an approach layout out of any scope made it its own root.
     pub(crate) scope: u32,
+    /// What each layer was last measured with ahead, whichever pass is running.
+    layer_constraints: SmallVec<[Constraints; 2]>,
     layers: SmallVec<[Layer; 2]>,
     constraints: Option<Constraints>,
     needs_measure: bool,
@@ -87,6 +98,7 @@ impl LookaheadState {
     fn new(scope: u32) -> LookaheadState {
         LookaheadState {
             scope,
+            layer_constraints: SmallVec::new(),
             layers: SmallVec::new(),
             constraints: None,
             needs_measure: true,
@@ -103,6 +115,11 @@ impl LookaheadState {
             intrinsics_asked: false,
             children_intrinsics_asked: false,
         }
+    }
+
+    /// A layer of the pass it holds.
+    pub(crate) fn layer_at(&self, layer: usize) -> Option<&Layer> {
+        self.layers.get(layer)
     }
 
     /// Changes this pass's fields and the other's around.
@@ -149,6 +166,7 @@ impl UiTree {
         let value = self.node_mut(node);
         match (scope, &mut value.lookahead) {
             (Some(scope), Some(state)) => state.scope = scope.id,
+            (None, Some(state)) if state.scope == OWN_ROOT => {}
             (Some(scope), lookahead) => {
                 *lookahead = Some(Box::new(LookaheadState::new(scope.id)));
                 self.lookahead_used = true;
@@ -168,6 +186,37 @@ impl UiTree {
             }
             (None, None) => {}
         }
+    }
+
+    /// An approach layout's come to `node`: out of any scope, it looks ahead for itself.
+    pub(crate) fn approach_attached(&mut self, node: NodeId) {
+        let value = self.node_mut(node);
+        if value.lookahead.is_none() {
+            value.lookahead = Some(Box::new(LookaheadState::new(OWN_ROOT)));
+            self.lookahead_used = true;
+            self.invalidate_layout_of(node);
+        }
+    }
+
+    /// `layer` of `node` is measured ahead with `constraints`.
+    #[cold]
+    pub(crate) fn note_lookahead_constraints(
+        &mut self,
+        node: NodeId,
+        layer: usize,
+        constraints: Constraints,
+    ) {
+        let Some(state) = self.node_mut(node).lookahead.as_mut() else { return };
+        if state.layer_constraints.len() <= layer {
+            state.layer_constraints.resize(layer + 1, constraints);
+        }
+        state.layer_constraints[layer] = constraints;
+    }
+
+    /// What `layer` of `node` measured ahead: its size and with what, the pass running being now.
+    fn lookahead_measured(&self, node: NodeId, layer: usize) -> Option<(IntSize, Constraints)> {
+        let state = self.node(node).lookahead.as_ref()?;
+        Some((state.layers.get(layer)?.measured, *state.layer_constraints.get(layer)?))
     }
 
     /// Whether `node` is the outermost of a scope: in it, its parent not.
@@ -410,5 +459,191 @@ impl LookaheadCoordinates {
             }
             None => other_at + at - this_at,
         }
+    }
+}
+
+/// What an approach layout measures with, as Compose's `ApproachMeasureScope`: a `MeasureScope`
+/// with where the pass ahead ended up, and what makes its content go there once it's over.
+pub struct ApproachMeasureScope<'s, 'a> {
+    scope: &'s mut MeasureScope<'a>,
+    lookahead_size: IntSize,
+    lookahead_constraints: Constraints,
+    /// `isMeasurementApproachInProgress`, or other constraints than ahead.
+    required: bool,
+    placement_in_progress: PlacementInProgress,
+}
+
+type PlacementInProgress = Rc<dyn Fn(&mut PlacementScope<'_>, LookaheadCoordinates) -> bool>;
+
+impl<'a> std::ops::Deref for ApproachMeasureScope<'_, 'a> {
+    type Target = MeasureScope<'a>;
+
+    fn deref(&self) -> &MeasureScope<'a> {
+        self.scope
+    }
+}
+
+impl std::ops::DerefMut for ApproachMeasureScope<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.scope
+    }
+}
+
+impl ApproachMeasureScope<'_, '_> {
+    /// Its size ahead, as `lookaheadSize`.
+    pub fn lookahead_size(&self) -> IntSize {
+        self.lookahead_size
+    }
+
+    /// What it was measured with ahead, as `lookaheadConstraints`.
+    pub fn lookahead_constraints(&self) -> Constraints {
+        self.lookahead_constraints
+    }
+
+    /// Measures its content; the approach over, with what it was measured with ahead, whatever
+    /// `constraints` say, as `forceMeasureWithLookaheadConstraints`.
+    pub fn measure(&mut self, measurable: Measurable, constraints: Constraints) -> Placeable {
+        let constraints = if self.required {
+            constraints
+        } else {
+            let (node, layer) = (measurable.node, measurable.layer as usize);
+            let ahead = self.scope.base.tree.lookahead_measured(node, layer);
+            ahead.map_or(constraints, |(_, ahead)| ahead)
+        };
+        self.scope.measure(measurable, constraints)
+    }
+
+    /// `MeasureScope::layout_with`; the approach over, its content goes where it went ahead,
+    /// wherever `block` puts it, as `forcePlaceWithLookaheadOffset`.
+    pub fn layout_with(
+        &mut self,
+        width: i32,
+        height: i32,
+        block: impl Fn(&mut PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        let (required, in_progress) = (self.required, self.placement_in_progress.clone());
+        self.scope.layout_with(width, height, move |placement| {
+            let lookahead = LookaheadCoordinates(placement.own_coordinates());
+            let complete =
+                !in_progress(placement, lookahead) && !required && placement.at_lookahead_sizes();
+            placement.force_lookahead_offset = complete;
+            block(placement);
+            placement.force_lookahead_offset = false;
+        })
+    }
+}
+
+type ApproachMeasure =
+    dyn Fn(&mut ApproachMeasureScope<'_, '_>, Measurable, Constraints) -> MeasureResult;
+
+/// `Modifier::approach_layout`'s element and node, as Compose's `ApproachLayoutElement`.
+#[derive(Clone)]
+struct ApproachElement {
+    measurement_in_progress: Rc<dyn Fn(IntSize) -> bool>,
+    placement_in_progress: PlacementInProgress,
+    measure: Rc<ApproachMeasure>,
+}
+
+impl ModifierNodeElement for ApproachElement {
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
+    }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.measurement_in_progress, &other.measurement_in_progress)
+            && Rc::ptr_eq(&self.placement_in_progress, &other.placement_in_progress)
+            && Rc::ptr_eq(&self.measure, &other.measure)
+    }
+    fn name(&self) -> &'static str {
+        "approach_layout"
+    }
+}
+
+impl ModifierNode for ApproachElement {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        let node = context.node;
+        context.tree.enter().approach_attached(node);
+    }
+}
+
+impl LayoutModifierNode for ApproachElement {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let (node, layer) = (content.node, content.layer as usize - 1);
+        let ahead = if scope.is_looking_ahead() {
+            None
+        } else {
+            scope.base.tree.lookahead_measured(node, layer)
+        };
+        let Some((lookahead_size, lookahead_constraints)) = ahead else {
+            // Ahead, it's what's inside it, as `ApproachLayoutModifierNode.measure`.
+            let placeable = scope.measure(content, constraints);
+            return scope.layout_with(placeable.width, placeable.height, move |placement| {
+                placement.place(&placeable, 0, 0);
+            });
+        };
+        let required =
+            (self.measurement_in_progress)(lookahead_size) || constraints != lookahead_constraints;
+        let result = (self.measure)(
+            &mut ApproachMeasureScope {
+                scope: &mut *scope,
+                lookahead_size,
+                lookahead_constraints,
+                required,
+                placement_in_progress: self.placement_in_progress.clone(),
+            },
+            content,
+            constraints,
+        );
+        // Over, and what's inside it where it's going: its size is too, whatever it said.
+        let tree = &*scope.base.tree;
+        let inside_there = tree.node(node).layers.get(layer + 1).map(|it| it.size)
+            == tree.lookahead_measured(node, layer + 1).map(|it| it.0);
+        let reached =
+            result.width == lookahead_size.width && result.height == lookahead_size.height;
+        if !required && inside_there && !reached {
+            MeasureResult { width: lookahead_size.width, height: lookahead_size.height }
+        } else {
+            result
+        }
+    }
+}
+
+impl Modifier {
+    /// A layout that approaches where the pass ahead put it, as `Modifier.approachLayout`. Ahead
+    /// it's nothing but what's inside it. After, `approach_measure` measures: with `lookahead_size`
+    /// and how far along it is. `is_measurement_approach_in_progress`, given that size, and
+    /// `is_placement_approach_in_progress` say when it's still on the way; over, it's measured and
+    /// placed as it was ahead. Out of any scope, it looks ahead for itself.
+    pub fn approach_layout(
+        self,
+        is_measurement_approach_in_progress: impl Fn(IntSize) -> bool + 'static,
+        is_placement_approach_in_progress: impl Fn(
+            &mut PlacementScope<'_>,
+            LookaheadCoordinates,
+        ) -> bool
+        + 'static,
+        approach_measure: impl Fn(
+            &mut ApproachMeasureScope<'_, '_>,
+            Measurable,
+            Constraints,
+        ) -> MeasureResult
+        + 'static,
+    ) -> Modifier {
+        self.then_custom(ApproachElement {
+            measurement_in_progress: Rc::new(is_measurement_approach_in_progress),
+            placement_in_progress: Rc::new(is_placement_approach_in_progress),
+            measure: Rc::new(approach_measure),
+        })
     }
 }

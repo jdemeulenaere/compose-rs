@@ -251,7 +251,7 @@ pub use layout_callbacks::{
 };
 pub use layout_modifiers::LineSpace;
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
-pub use lookahead::{LookaheadCoordinates, LookaheadScope};
+pub use lookahead::{ApproachMeasureScope, LookaheadCoordinates, LookaheadScope};
 pub use modifier::AlignByScope;
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,

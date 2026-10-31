@@ -663,3 +663,272 @@ fn an_outermost_s_lookahead_position_is_where_it_is() {
         .local_position_of(scope.to_lookahead_coordinates(child), Offset::ZERO);
     assert_eq!(at, Offset::new(30.0, 0.0));
 }
+
+// ---- Approach layouts ---------------------------------------------------------------------------
+
+/// `approach_layout` with no opinion on placing, its approach never over.
+fn intermediate(
+    measure: impl Fn(&mut ApproachMeasureScope<'_, '_>, Measurable, Constraints) -> MeasureResult
+    + 'static,
+) -> Modifier {
+    Modifier.approach_layout(|_| true, |_, _| false, measure)
+}
+
+fn passing(
+    scope: &mut ApproachMeasureScope<'_, '_>,
+    content: Measurable,
+    constraints: Constraints,
+) -> MeasureResult {
+    let placeable = scope.measure(content, constraints);
+    scope.layout_with(placeable.width, placeable.height, move |placement| {
+        placement.place(&placeable, 0, 0);
+    })
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ApproachLayoutTest.kt, toggleIsMeasurementApproachInProgress
+#[test]
+fn an_approach_over_is_measured_and_placed_as_it_was_ahead() {
+    let complete = mutable_state_of(true);
+    let (outer_ahead, inner_ahead) =
+        (Rc::new(Cell::new(IntSize::ZERO)), Rc::new(Cell::new((IntSize::ZERO, None))));
+    let at_ahead = Rc::new(Cell::new(Offset::ZERO));
+    let checks = Rc::new(Cell::new(0));
+    let (c, oa, ia, aa, ch) = (
+        complete.handle(),
+        outer_ahead.clone(),
+        inner_ahead.clone(),
+        at_ahead.clone(),
+        checks.clone(),
+    );
+    let mut host = host(move || {
+        let (oa, ia, aa, ch, ch2) = (oa.clone(), ia.clone(), aa.clone(), ch.clone(), ch.clone());
+        scoped(move |_| {
+            let (oa, ia, aa, ch, ch2) =
+                (oa.clone(), ia.clone(), aa.clone(), ch.clone(), ch2.clone());
+            let outer = Modifier.layout(move |scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                let size = placeable.size();
+                if scope.is_looking_ahead() {
+                    oa.set(size);
+                } else {
+                    assert_eq!(c.get(), size == oa.get(), "outer {size:?}");
+                    ch.set(ch.get() + 1);
+                }
+                scope.layout_with(size.width, size.height, move |placement| {
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            let approach = Modifier.approach_layout(
+                move |_| !c.get(),
+                |_, _| false,
+                |scope, content, _| {
+                    let ahead = scope.lookahead_size();
+                    let placeable = scope
+                        .measure(content, Constraints::fixed(ahead.width - 20, ahead.height - 20));
+                    scope.layout_with(ahead.width - 20, ahead.height - 20, move |placement| {
+                        placement.place(&placeable, 20, 20);
+                    })
+                },
+            );
+            let inner = Modifier.layout(move |scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                let size = placeable.size();
+                let ahead = scope.is_looking_ahead();
+                if ahead {
+                    ia.set((size, Some(constraints)));
+                } else {
+                    let (at, with) = ia.get();
+                    assert_eq!(c.get(), size == at, "inner {size:?}");
+                    assert_eq!(c.get(), Some(constraints) == with, "inner {constraints:?}");
+                    ch2.set(ch2.get() + 1);
+                }
+                let aa = aa.clone();
+                scope.layout_with(size.width, size.height, move |placement| {
+                    let in_parent = placement.coordinates().and_then(|it| {
+                        it.parent_coordinates()
+                            .map(|parent| parent.local_position_of(&it, Offset::ZERO))
+                    });
+                    if let Some(position) = in_parent {
+                        if placement.is_looking_ahead() {
+                            aa.set(position);
+                        } else {
+                            assert_eq!(c.get(), position == aa.get(), "at {position:?}");
+                        }
+                    }
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            leaf(outer.then(approach).then(inner).then(Modifier.fill_max_size()));
+        });
+    });
+    assert!(checks.get() > 0);
+    complete.set(false);
+    host.frame();
+    let before = checks.get();
+    complete.set(true);
+    host.frame();
+    assert!(checks.get() > before);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ApproachLayoutTest.kt, toggleIsPlacementApproachComplete
+#[test]
+fn a_placement_approach_over_places_as_it_was_ahead() {
+    let in_progress = mutable_state_of(true);
+    let at = Rc::new(Cell::new(Offset::ZERO));
+    let (ip, a) = (in_progress.handle(), at.clone());
+    let mut host = host(move || {
+        let a = a.clone();
+        scoped(move |_| {
+            let a = a.clone();
+            let approach = Modifier.approach_layout(
+                |_| false,
+                move |_, _| ip.get(),
+                |scope, content, constraints| {
+                    let placeable = scope.measure(content, constraints);
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        placement.place(&placeable, 30, 0);
+                    })
+                },
+            );
+            let noted = Modifier.on_placed(move |it: LayoutCoordinates| {
+                a.set(
+                    it.parent_coordinates()
+                        .expect("in the node")
+                        .local_position_of(&it, Offset::ZERO),
+                );
+            });
+            leaf(approach.then(noted).then(sized(10)));
+        });
+    });
+    assert_eq!(at.get(), Offset::new(30.0, 0.0));
+    in_progress.set(false);
+    host.frame();
+    assert_eq!(at.get(), Offset::ZERO);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, lookaheadStaysTheSameDuringAnimationTest
+#[test]
+fn what_s_ahead_stays_as_an_approach_reads_its_frames() {
+    let (large, frame) = (mutable_state_of(true), mutable_state_of(0));
+    let (ahead_measures, seen) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(IntSize::ZERO)));
+    let (l, f, am, s) = (large.handle(), frame.handle(), ahead_measures.clone(), seen.clone());
+    let mut host = host(move || {
+        let (am, s) = (am.clone(), s.clone());
+        scoped(move |_| {
+            let (am, s) = (am.clone(), s.clone());
+            let size = sized(if l.get() { 60 } else { 30 });
+            let counting = Modifier.layout(move |scope, measurable, constraints| {
+                if scope.is_looking_ahead() {
+                    am.set(am.get() + 1);
+                }
+                let placeable = scope.measure(measurable, constraints);
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            let approaching = intermediate(move |scope, content, constraints| {
+                s.set(scope.lookahead_size());
+                // An animation's frame, read only on the way.
+                f.get();
+                passing(scope, content, constraints)
+            });
+            leaf(size.then(counting).then(approaching));
+        });
+    });
+    assert_eq!(seen.get(), IntSize::new(60, 60));
+    let measured = ahead_measures.get();
+    large.set(false);
+    host.frame();
+    assert_eq!(seen.get(), IntSize::new(30, 30));
+    let after = ahead_measures.get();
+    assert!(after > measured);
+    for at in 1..10 {
+        frame.set(at);
+        host.frame();
+        assert_eq!(seen.get(), IntSize::new(30, 30));
+    }
+    assert_eq!(ahead_measures.get(), after, "the frames measure now, not ahead");
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, skipPlacementOnlyPostLookahead
+#[test]
+fn an_approach_may_skip_placing_what_was_placed_ahead() {
+    let (ahead, now) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (a, n) = (ahead.clone(), now.clone());
+    let _host = host(move || {
+        let (a, n) = (a.clone(), n.clone());
+        scoped(move |_| {
+            let (a, n) = (a.clone(), n.clone());
+            let skipping = intermediate(|scope, content, constraints| {
+                let placeable = scope.measure(content, constraints);
+                scope.layout_with(placeable.width, placeable.height, |_| {})
+            });
+            let counted = Modifier.layout(move |scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                let (a, n) = (a.clone(), n.clone());
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    let which = if placement.is_looking_ahead() { &a } else { &n };
+                    which.set(which.get() + 1);
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            leaf(skipping.then(counted).then(sized(10)));
+        });
+    });
+    assert_eq!(ahead.get(), 1);
+    assert_eq!(now.get(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, moveIntermediateLayout
+#[test]
+fn an_approach_out_of_any_scope_looks_ahead_for_itself() {
+    let seen = Rc::new(Cell::new(IntSize::ZERO));
+    let s = seen.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        leaf(sized(30).then(intermediate(move |scope, content, constraints| {
+            s.set(scope.lookahead_size());
+            passing(scope, content, constraints)
+        })));
+    });
+    assert_eq!(seen.get(), IntSize::new(30, 30));
+}
+
+/// Ahead an approach is what's inside it, whatever it does after.
+#[test]
+fn ahead_an_approach_is_only_what_s_inside_it() {
+    let sizes = Rc::new(RefCell::new(Vec::new()));
+    let s = sizes.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        scoped(move |_| {
+            let s = s.clone();
+            let reading = measure_policy(move |scope, measurables, constraints| {
+                let placeable = scope.measure(measurables[0], constraints);
+                s.borrow_mut().push((scope.is_looking_ahead(), placeable.size()));
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    placement.place(&placeable, 0, 0);
+                })
+            });
+            Layout(
+                Modifier,
+                reading,
+                callback(|| {
+                    let half = intermediate(|scope, content, _| {
+                        let ahead = scope.lookahead_size();
+                        let placeable = scope.measure(
+                            content,
+                            Constraints::fixed(ahead.width / 2, ahead.height / 2),
+                        );
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            placement.place(&placeable, 0, 0);
+                        })
+                    });
+                    leaf(half.then(Modifier.required_size(40.dp())));
+                }),
+            );
+        });
+    });
+    assert_eq!(sizes.borrow()[0], (true, IntSize::new(40, 40)));
+    assert!(!sizes.borrow()[1].0);
+}

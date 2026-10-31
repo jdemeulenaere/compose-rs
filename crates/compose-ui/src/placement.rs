@@ -62,6 +62,8 @@ impl NodePlacements {
 
 /// What a placement block places with, as `Placeable.PlacementScope`.
 pub struct PlacementScope<'a> {
+    /// An approach layout's over: its content goes where it went ahead.
+    pub(crate) force_lookahead_offset: bool,
     scope: MeasureScope<'a>,
     /// The width the layout reported, to mirror in.
     width: i32,
@@ -77,12 +79,40 @@ impl PlacementScope<'_> {
     /// If this run already placed it, or the measurement it's part of did (the fused path and a
     /// block don't mix: `layout_with` panics on a child placed before it).
     pub fn place(&mut self, placeable: &Placeable, x: i32, y: i32) {
-        self.scope.place(placeable, x, y);
+        self.place_at(placeable, IntOffset::new(x, y));
     }
 
     /// As [`place`](Self::place), at `position`.
     pub fn place_at(&mut self, placeable: &Placeable, position: IntOffset) {
+        // An approach over: what's inside it goes where it went ahead.
+        let position = if self.force_lookahead_offset {
+            self.lookahead_position_of(placeable).unwrap_or(position)
+        } else {
+            position
+        };
         self.scope.place_at(placeable, position);
+    }
+
+    /// The coordinates of what's placing, whatever the pass.
+    pub(crate) fn own_coordinates(&self) -> LayoutCoordinates {
+        self.scope.base.tree.coordinates_of_layer(self.scope.base.node, self.scope.layer)
+    }
+
+    /// Whether what's placing and what's inside it are the sizes they were ahead.
+    pub(crate) fn at_lookahead_sizes(&self) -> bool {
+        let (tree, node, layer) = (&*self.scope.base.tree, self.scope.base.node, self.scope.layer);
+        let Some(state) = tree.node(node).lookahead.as_ref() else { return false };
+        (layer..=layer + 1).all(|at| {
+            tree.node(node).layers.get(at).map(|it| it.measured)
+                == state.layer_at(at).map(|it| it.measured)
+        })
+    }
+
+    fn lookahead_position_of(&self, placeable: &Placeable) -> Option<IntOffset> {
+        let measurable = placeable.measurable;
+        let value = self.scope.base.tree.node(measurable.node);
+        let state = value.lookahead.as_ref()?;
+        state.layer_at(measurable.layer as usize).map(|it| it.position)
     }
 
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left layout,
@@ -433,7 +463,12 @@ impl UiTree {
                 self.capture_rulers(node, layer);
                 if let Some((block, measure_run, first)) = found {
                     again |= !first;
-                    self.run_placement_block(node, layer, measure_run, first, &block);
+                    let run = self.run_placement_block(node, layer, measure_run, first, &block);
+                    // What it didn't place inside it isn't placed, its block not run with it.
+                    let value = self.node(node);
+                    if layer + 1 < value.layers.len() && value.content_placed_in != run {
+                        break;
+                    }
                 }
                 layer += 1;
             }
@@ -611,7 +646,9 @@ impl UiTree {
             },
         );
         let pass = self.alignment_pass();
-        let mut run = || pass.tree.run_placement_block(node, layer, measure_run, first, &block);
+        let mut run = || {
+            pass.tree.run_placement_block(node, layer, measure_run, first, &block);
+        };
         match &observer {
             Some(observer) => observer.observe_adding(key, run),
             None => run(),
@@ -631,7 +668,7 @@ impl UiTree {
         measure_run: u64,
         first: bool,
         block: &Block,
-    ) {
+    ) -> u64 {
         let value = self.node_mut(node);
         let width = value.layers[layer].measured.width;
         let places_children = layer + 1 == value.layers.len();
@@ -649,7 +686,9 @@ impl UiTree {
         let mut scope = MeasureScope::new(&mut *self, node, run);
         scope.layer = layer;
         let _open = scope.base.tree.open();
-        let mut placement = PlacementScope { scope, width, measure_run };
+        let mut placement =
+            PlacementScope { force_lookahead_offset: false, scope, width, measure_run };
         block(&mut placement);
+        run
     }
 }

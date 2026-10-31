@@ -437,6 +437,9 @@ impl UiTree {
         layer: usize,
         constraints: Constraints,
     ) -> IntSize {
+        if self.in_lookahead {
+            self.note_lookahead_constraints(node, layer, constraints);
+        }
         let value = self.node_mut(node);
         // Its last measurement's block is over, whatever this one does. Dropped with nothing of
         // the tree in hand: what it captured is application code's. Most nodes have neither.
