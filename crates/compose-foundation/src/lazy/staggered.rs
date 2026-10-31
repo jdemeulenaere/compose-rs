@@ -6,8 +6,8 @@
 //! so its measurement is Compose's `measureStaggeredGrid` line by line. What differs is where items
 //! come from. Compose composes one as its measurement asks for it; here items are composed in a
 //! range, by the lazy list's item composition (`LazyItems`), and a measurement reaching one that
-//! isn't composed stops, asks for it and is run again in the frame's next round (D1469). Nothing
-//! of a measurement that stopped is kept but the lanes it found, which it would find again.
+//! isn't composed stops, goes back to where it started, asks for it and is run again in the frame's
+//! next round (D1469, D1470).
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -1482,6 +1482,8 @@ struct Context<'a, 'scope> {
     measurables: &'a [Measurable],
     children: &'a [usize],
     composed_start: usize,
+    /// The children out of the range, there may be many (a jump's, D1470): each one's child.
+    apart_children: std::collections::HashMap<usize, usize>,
     /// Each child's placeable, as Compose's `getPlaceables` keeps those measured.
     placeables: Vec<Option<Placeable>>,
     lane_info: &'a mut LazyStaggeredGridLaneInfo,
@@ -1596,7 +1598,7 @@ impl Context<'_, '_> {
         }
         let child = match item.checked_sub(self.composed_start) {
             Some(position) if self.children.get(position) == Some(&item) => Some(position),
-            _ => self.children.iter().position(|composed| *composed == item),
+            _ => self.apart_children.get(&item).copied(),
         };
         child.filter(|child| *child < self.measurables.len())
     }
@@ -2079,12 +2081,20 @@ impl StaggeredLayout {
         let empty = composed_start == composed_end;
         let far = first + gap < composed_start || first > composed_end + gap;
         let range = if empty || (far && staggered.jump_to_compose.replace(false)) {
-            (first.saturating_sub(step - 1), last + more)
+            let range = (first.saturating_sub(step - 1), last + more);
+            // What's placed stays until the whole measurement: shown meanwhile, the items' state
+            // kept if they're in view after it too.
+            let mut detached = state.prefetch.detached.borrow_mut();
+            let placed = staggered.last_placed.borrow();
+            detached.extend(placed.iter().map(|placed| placed.0 as usize));
+            detached.sort_unstable();
+            detached.dedup();
+            range
         } else if far {
             let mut detached = state.prefetch.detached.borrow_mut();
-            if !detached.contains(&first) {
-                detached.push(first);
-            }
+            detached.extend(first..(last + more).min(count));
+            detached.sort_unstable();
+            detached.dedup();
             (composed_start, composed_end)
         } else {
             let start = if first < composed_start {
@@ -2095,6 +2105,44 @@ impl StaggeredLayout {
             (start, composed_end.max(last + more))
         };
         state.compose((range.0, range.1.min(count).max(range.0)));
+    }
+
+    /// A stop with nothing of its own to show: what the last whole measurement placed, for the
+    /// frame whose rounds end here, at the size it had (as small as allowed before any).
+    fn show_last(
+        &self,
+        c: &mut Context<'_, '_>,
+        staggered: &StaggeredInner,
+        vertical: bool,
+        constraints: Constraints,
+        reverse: bool,
+        cross_before: i32,
+    ) -> MeasureResult {
+        *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
+        let (minimum, cross_max) = if vertical {
+            (constraints.min_height, constraints.max_width)
+        } else {
+            (constraints.min_width, constraints.max_height)
+        };
+        let main = staggered.last_main.get().unwrap_or(minimum);
+        let main = if vertical {
+            constraints.constrain_height(main)
+        } else {
+            constraints.constrain_width(main)
+        };
+        let placed = Placed {
+            reverse,
+            main_layout_size: main.min(c.available) - c.before + c.after,
+            cross_before,
+        };
+        for &(item, lane, span, at, cross) in staggered.last_placed.borrow().iter() {
+            if item < c.count
+                && let Some(measured) = c.try_measure(item, (lane.min(c.lanes - 1), span))
+            {
+                c.place(&placed, &measured.placeable, at, cross);
+            }
+        }
+        if vertical { c.scope.layout(cross_max, main) } else { c.scope.layout(main, cross_max) }
     }
 
     /// The items pinned and those a focus search asked for: laid out beyond those in view.
@@ -2253,7 +2301,9 @@ impl MeasurePolicy for StaggeredLayout {
         // The position, after a first item that moved: `updateScrollPositionIfTheFirstItemWasMoved`.
         let (mut indices, offsets) = staggered.position.borrow().clone();
         if let Some(key) = state.first_key.get() {
-            let last_known = indices.first().copied().unwrap_or(0).max(0) as usize;
+            // Near the lowest, where it was: Compose's map of keys reaches further than this
+            // search from `indices[0]` would with lanes far apart.
+            let last_known = first_visible_index(&indices) as usize;
             let found = if last_known < count && info.items.key(last_known) == key {
                 Some(last_known)
             } else {
@@ -2316,6 +2366,12 @@ impl MeasurePolicy for StaggeredLayout {
             measurables,
             children: &children,
             composed_start,
+            apart_children: children
+                .iter()
+                .enumerate()
+                .skip(composed_end - composed_start)
+                .map(|(child, item)| (*item, child))
+                .collect(),
             placeables: vec![None; measurables.len()],
             lane_info: &mut taken_lanes,
             slots: &slots,
@@ -2345,32 +2401,7 @@ impl MeasurePolicy for StaggeredLayout {
             c.lane_info.commit_pass();
         }
         if done.is_none() {
-            // Stopped before its first item: what the last whole measurement placed, for the
-            // frame whose rounds end here.
-            *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
-            let main = staggered.last_main.get().unwrap_or(main_max);
-            let main = if vertical {
-                constraints.constrain_height(main)
-            } else {
-                constraints.constrain_width(main)
-            };
-            let placed = Placed {
-                reverse,
-                main_layout_size: main.min(available) - before + after,
-                cross_before,
-            };
-            for &(item, lane, span, at, cross) in staggered.last_placed.borrow().iter() {
-                if (item as usize) < count
-                    && let Some(measured) = c.try_measure(item, (lane, span))
-                {
-                    c.place(&placed, &measured.placeable, at, cross);
-                }
-            }
-            return if vertical {
-                c.scope.layout(cross_max, main)
-            } else {
-                c.scope.layout(main, cross_max)
-            };
+            return self.show_last(c, &staggered, vertical, constraints, reverse, cross_before);
         }
         let mut done = done.take().expect("not stopped before its first item");
         let stopped = c.lacked.is_some();
@@ -2486,7 +2517,13 @@ impl MeasurePolicy for StaggeredLayout {
         }
         positioned.extend(after_visible);
         let placed = Placed { reverse, main_layout_size, cross_before };
+        // All it measured scrolled past: nothing of it in view.
+        if stopped && visible.is_empty() {
+            return self.show_last(c, &staggered, vertical, constraints, reverse, cross_before);
+        }
         if stopped {
+            // The size stays this one until a whole measurement, however many frames that takes.
+            staggered.last_main.set(Some(layout_main));
             *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
             for (placeable, main, cross) in &positioned {
                 c.place(&placed, placeable, *main, *cross);

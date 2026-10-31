@@ -696,3 +696,184 @@ fn a_lane_info_goes_back_to_what_it_was() {
     info.commit_pass();
     assert_eq!(info.get_lane(4), 0);
 }
+
+/// Each of `frames` frames, after `start`, shows something.
+fn frames_show(grid: &mut Grid, frames: usize, start: impl FnOnce(LazyStaggeredGridState)) {
+    grid.ui.wait_for_idle();
+    idle(&mut grid.ui);
+    grid.ui.set_auto_advance(false);
+    start(grid.state);
+    for frame in 0..frames {
+        grid.ui.host().frame();
+        assert!(drawn(&mut grid.ui) > 0, "frame {frame} shows nothing");
+    }
+}
+
+/// All a stop measured scrolled past: what the last whole measurement placed shows.
+#[test]
+fn a_scroll_past_all_that_it_measured_shows_each_frame() {
+    frames_show(&mut grid(2, (400, 800), 8000, (0, 0), |_| 60), 8, |state| {
+        let _ = state.dispatch_raw_delta(200_000.0);
+    });
+    frames_show(&mut grid(2, (400, 800), 40_000, (0, 0), |_| 10), 12, |state| {
+        let _ = state.dispatch_raw_delta(100_000.0);
+    });
+}
+
+/// A jump stopping before its first item: what was placed stays composed, and shows.
+#[test]
+fn a_jump_stopped_before_its_first_item_shows_what_was_placed() {
+    frames_show(&mut grid(2, (400, 800), 8000, (0, 0), |_| 10), 8, |state| {
+        state.request_scroll_to_item(3000, -40_000);
+    });
+    frames_show(&mut grid(4, (400, 1990), 40_000, (0, 0), |_| 1), 8, |state| {
+        state.request_scroll_to_item(19_999, 0);
+    });
+}
+
+/// Each item's composition, by id: more than one is a state lost.
+type Remembered = Rc<RefCell<std::collections::HashMap<i32, usize>>>;
+
+/// A grid of `ids`, sized by `main`, an item noting each time its `remember` runs.
+fn remembering(
+    lanes: usize,
+    ids: Vec<i32>,
+    main: impl Fn(i32) -> i32 + Clone + 'static,
+) -> (ComposeTestRule, LazyStaggeredGridState, OwnedState<Vec<i32>>, Remembered) {
+    use_optimizations(Optimizations::NONE);
+    let list = mutable_state_of(ids);
+    let read = list.handle();
+    let owned = LazyStaggeredGridState::new(0, 0);
+    let state = *owned;
+    std::mem::forget(owned);
+    state.set_prefetching_enabled(false);
+    let seen: Remembered = Rc::default();
+    let noted = seen.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let (noted, main) = (noted.clone(), main.clone());
+        let ids = read.get();
+        LazyVerticalStaggeredGrid!(
+            StaggeredGridCells::Fixed(lanes),
+            modifier = Modifier.size((200.dp(), 400.dp())),
+            state = state,
+            move |scope: LazyStaggeredGridScope| {
+                let (noted, main) = (noted.clone(), main.clone());
+                scope.items_list_keyed(
+                    ids.clone(),
+                    |id: &i32| *id,
+                    move |id: &i32| {
+                        let id = *id;
+                        let noted = noted.clone();
+                        let _ = remember(move || {
+                            *noted.borrow_mut().entry(id).or_default() += 1;
+                            Rc::new(id)
+                        });
+                        Spacer(Modifier.height(Dp(main(id) as f32)));
+                    },
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    (ui, state, list, seen)
+}
+
+/// A jump keeping a long item in view: it isn't composed again.
+#[test]
+fn a_jump_keeps_the_state_of_an_item_in_view_before_and_after() {
+    let long = |id: i32| if id == 4 { 100_000 } else { 50 };
+    let (mut ui, state, _list, seen) = remembering(2, (0..2000).collect(), long);
+    let _ = run(&mut ui, async move { state.scroll_by(26_000.0).await });
+    idle(&mut ui);
+    assert_eq!(seen.borrow()[&4], 1);
+    state.request_scroll_to_item(500, 0);
+    ui.wait_for_idle();
+    idle(&mut ui);
+    assert_eq!(seen.borrow()[&4], 1, "item 4 was composed again");
+}
+
+/// Items added before a long item the position's lowest: the position follows it, and it keeps its
+/// state, composed apart from the others.
+#[test]
+fn a_prepend_with_lanes_far_apart_follows_the_first_item() {
+    let long = |id: i32| if id == 5 { 100_000 } else { 40 };
+    let (mut ui, state, list, seen) = remembering(2, (0..3000).collect(), long);
+    let _ = run(&mut ui, async move { state.scroll_by(30_000.0).await });
+    idle(&mut ui);
+    assert_eq!(state.first_visible_item_index(), 5);
+    let others = laid(state).len();
+    assert!(others > 5);
+    list.set((-1..3000).collect());
+    ui.wait_for_idle();
+    idle(&mut ui);
+    assert_eq!(state.first_visible_item_index(), 6);
+    assert_eq!(seen.borrow()[&5], 1, "the long item was composed again");
+}
+
+/// Two long items, each lane's first far from the items composed and from each other: going back
+/// among them composes each apart, or the jump would replace one by the other for ever.
+fn two_long_items() -> (ComposeTestRule, LazyStaggeredGridState, usize) {
+    let long = |id: i32| if id == 4 || id == 1000 { 100_000 } else { 40 };
+    let (mut ui, state, _list, _seen) = remembering(3, (0..12_000).collect(), long);
+    // Into both.
+    let _ = run(&mut ui, async move { state.scroll_by(40_000.0).await });
+    idle(&mut ui);
+    let target = laid(state).last().expect("items").0;
+    // Past both: nothing near them composed, their lanes known.
+    let _ = run(&mut ui, async move { state.scroll_by(120_000.0).await });
+    idle(&mut ui);
+    assert!(state.first_visible_item_index() > 1000);
+    std::mem::forget(_list);
+    (ui, state, target)
+}
+
+#[test]
+fn a_jump_to_lanes_far_apart_settles_and_finishes_soon() {
+    let (mut ui, state, target) = two_long_items();
+    ui.set_auto_advance(false);
+    state.request_scroll_to_item(target, 0);
+    let mut frames = 0;
+    while !laid(state).iter().any(|item| item.0 == target) {
+        ui.host().frame();
+        frames += 1;
+        assert!(frames < 3, "{frames} frames for the jump");
+    }
+    let first = state.first_visible_item_index();
+    assert!(first <= 4 || first == target, "{first}");
+}
+
+fn sizes_of(count: usize, item: i32, most: i32) -> Vec<i32> {
+    use_optimizations(Optimizations::NONE);
+    let sizes: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let noted = sizes.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 2000), move || {
+        let noted = noted.clone();
+        LazyVerticalStaggeredGrid!(
+            StaggeredGridCells::Fixed(1),
+            modifier = Modifier
+                .height_in(0.dp(), Dp(most as f32))
+                .on_size_changed(move |size: IntSize| noted.borrow_mut().push(size.height)),
+            |scope: LazyStaggeredGridScope| {
+                scope.items(count, move |_| Spacer(Modifier.height(Dp(item as f32))));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let sizes = sizes.borrow().clone();
+    sizes
+}
+
+/// As large as what's measured so far, as a list's, never as large as it may be.
+#[test]
+fn a_stop_doesnt_say_a_false_size() {
+    assert_eq!(*sizes_of(3, 50, 800).last().expect("sizes"), 150);
+    assert!(sizes_of(3, 50, 800).iter().all(|size| *size <= 150), "{:?}", sizes_of(3, 50, 800));
+}
+
+/// A first measurement taking frames says one size until it's whole.
+#[test]
+fn partial_sizes_dont_go_on_across_frames() {
+    let sizes = sizes_of(20_000, 1, 1990);
+    assert!(sizes.len() <= 3, "{sizes:?}");
+    assert_eq!(sizes.last(), Some(&1990));
+}

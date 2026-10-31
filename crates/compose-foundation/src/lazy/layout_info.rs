@@ -288,7 +288,6 @@ impl LaidOut {
         }
     }
 
-    /// The measurement's buffer for this layout's items, empty.
     /// Whether `layout_info` was read.
     pub(crate) fn has_reader(&self) -> bool {
         self.read.get()
@@ -299,6 +298,7 @@ impl LaidOut {
         self.scratch.borrow().iter().all(|item| same(item.index))
     }
 
+    /// The measurement's buffer for this layout's items, empty.
     pub(crate) fn begin(&self) -> std::cell::RefMut<'_, Vec<LaidItem>> {
         let mut scratch = self.scratch.borrow_mut();
         scratch.clear();

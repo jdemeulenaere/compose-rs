@@ -1721,6 +1721,29 @@ impl ItemSlots {
     /// again, as Compose's measurement finds each item's composition by its key (D453, D455).
     /// `composed` may hold indices past the new count (items removed). `None` if the items are
     /// the same, or the range is the same.
+    /// The items composed apart from the range, `apart`, where their keys went among new `items`.
+    fn follow_apart(&self, items: &Rc<Items>, apart: &mut Vec<usize>) {
+        if std::ptr::eq(self.items.as_ptr(), Rc::as_ptr(items)) {
+            return;
+        }
+        let keys: HashMap<usize, u64> =
+            self.active.iter().map(|slot| (slot.index, slot.key)).collect();
+        let mut moved = false;
+        for item in apart.iter_mut() {
+            if let Some(key) = keys.get(item)
+                && let Some(found) = items.index_of(*key, *item)
+                && found != *item
+            {
+                *item = found;
+                moved = true;
+            }
+        }
+        if moved {
+            apart.sort_unstable();
+            apart.dedup();
+        }
+    }
+
     fn follow(
         &self,
         items: &Rc<Items>,
@@ -2172,11 +2195,25 @@ fn LazyItems(
     {
         indices.push(header);
     }
-    // Those composed apart from the range: before a sticking header (D895).
+    // Those composed apart from the range: before a sticking header (D895), a staggered grid's
+    // (D1470), where their items went if the items changed. Each once in `detached`, so a search
+    // through what's before them alone.
     inner.prefetch.detached_dirty.set(false);
-    for &item in inner.prefetch.detached.borrow().iter() {
-        if item < count && !indices.contains(&item) {
-            indices.push(item);
+    {
+        let mut detached = inner.prefetch.detached.borrow_mut();
+        if !detached.is_empty() {
+            slots.borrow().follow_apart(&items.0, &mut detached);
+        }
+        let (range_start, range_end) = (start.min(count), end.min(count));
+        let (in_range, others) =
+            ((range_end - range_start.min(range_end)).min(indices.len()), indices.len());
+        for &item in detached.iter() {
+            if item < count
+                && !(range_start..range_end).contains(&item)
+                && !indices[in_range..others].contains(&item)
+            {
+                indices.push(item);
+            }
         }
     }
     #[cfg(debug_assertions)]
