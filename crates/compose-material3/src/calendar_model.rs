@@ -301,6 +301,13 @@ fn is_digit(character: char, zero: char) -> bool {
     (character as u32).wrapping_sub(zero as u32) <= 9
 }
 
+/// The value of a character `is_date_digit` takes.
+pub(crate) fn digit_value(character: char, locale: &Locale) -> i32 {
+    character
+        .to_digit(10)
+        .unwrap_or_else(|| (character as u32).wrapping_sub(zero_digit(locale) as u32)) as i32
+}
+
 /// Whether a date field takes this character: an ASCII digit or one of the locale's ten.
 pub fn is_date_digit(character: char, locale: &Locale) -> bool {
     character.is_ascii_digit() || is_digit(character, zero_digit(locale))

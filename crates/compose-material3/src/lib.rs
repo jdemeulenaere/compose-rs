@@ -52,6 +52,7 @@ mod swipe_to_dismiss;
 mod tabs;
 mod text_field;
 mod theme;
+mod time_picker;
 mod tooltip;
 
 pub use app_bar::{
@@ -202,6 +203,11 @@ pub use theme::{
     ProvideTextStyle, ShapeDefaults, Shapes, ThemeValue, TypeScaleToken, TypeScaleTokens,
     Typography, content_color_for, dark_color_scheme, expressive_light_color_scheme,
     light_color_scheme,
+};
+pub use time_picker::{
+    ClockFace, TimeInput, TimeInputColors, TimeInputDefaults, TimePicker, TimePickerColors,
+    TimePickerDefaults, TimePickerLayoutType, TimePickerSelectionMode, TimePickerState,
+    is_24_hour_format, remember_time_picker_state,
 };
 pub use tooltip::{
     DefaultTooltipCaretShape, Label, PlainTooltip, RichTooltip, RichTooltipColors,
