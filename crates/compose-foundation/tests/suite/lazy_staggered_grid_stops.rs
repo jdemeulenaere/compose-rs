@@ -871,18 +871,15 @@ fn sizes_of(count: usize, item: i32, most: i32) -> Vec<i32> {
     sizes.borrow().clone()
 }
 
-/// As large as what's measured so far, as a list's, never as large as it may be.
+/// As large as what's measured so far, never as large as it may be. A list says `[50, 150]`: the
+/// 0 is the minimum, from the stop before anything is measured, which a list doesn't have.
 #[test]
 fn a_stop_doesnt_say_a_false_size() {
-    let sizes = sizes_of(6, 50, 800);
-    assert_eq!(*sizes.last().expect("sizes"), 150);
-    assert!(sizes.iter().all(|size| *size <= 150), "{sizes:?}");
+    assert_eq!(sizes_of(6, 50, 800), [0, 50, 150]);
 }
 
-/// A first measurement taking frames says one size until it's whole.
+/// A first measurement taking frames says one partial size until it's whole.
 #[test]
 fn partial_sizes_dont_go_on_across_frames() {
-    let sizes = sizes_of(20_000, 1, 1990);
-    assert!(sizes.len() <= 3, "{sizes:?}");
-    assert_eq!(sizes.last(), Some(&1990));
+    assert_eq!(sizes_of(20_000, 1, 1990), [0, 1, 1990]);
 }
