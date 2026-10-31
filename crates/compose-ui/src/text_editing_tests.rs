@@ -947,3 +947,20 @@ fn a_cursor_inside_a_character_goes_to_its_start() {
     SetComposingRegionCommand::new(2, 2).apply_to(&mut composing);
     assert_eq!(composing.composition(), None);
 }
+
+/// A processor at a value keeps its composition for the commands after it, where `reset` would end
+/// one it didn't make (a field's state between its edits, D1663).
+#[test]
+fn a_processor_from_a_value_keeps_its_composition() {
+    let value = TextFieldValue::new("abc", TextRange::at(3), Some(TextRange::new(1, 3)));
+    let mut processor = EditProcessor::from_value(value.clone());
+    assert_eq!(processor.buffer_state, value);
+    let applied = processor.apply(&[&SetComposingTextCommand::new("xy", 1)]);
+    assert_eq!(applied.text(), "axy");
+    assert_eq!(applied.composition(), Some(TextRange::new(1, 3)));
+    // A collapsed one is none.
+    let collapsed = TextFieldValue::new("abc", TextRange::at(3), Some(TextRange::at(1)));
+    let mut processor = EditProcessor::from_value(collapsed);
+    let applied = processor.apply(&[&SetSelectionCommand::new(0, 0)]);
+    assert_eq!(applied.composition(), None);
+}

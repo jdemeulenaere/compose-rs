@@ -842,6 +842,23 @@ impl EditProcessor {
         }
     }
 
+    /// A processor already at `value`, its composition kept: a field's state between its edits,
+    /// where Compose keeps one processor for a field and `reset` keeps its buffer's composition.
+    pub fn from_value(value: TextFieldValue) -> EditProcessor {
+        let mut buffer = EditingBuffer::new(value.annotated_string.clone(), value.selection);
+        if let Some(composition) = value.composition
+            && !composition.collapsed()
+        {
+            buffer.set_composition(composition.min(), composition.max());
+        }
+        EditProcessor {
+            buffer_state: value,
+            buffer,
+            #[cfg(test)]
+            buffers_made: 1,
+        }
+    }
+
     /// Takes `value` as the text field's state, as Compose's `reset` (its input session
     /// argument, deprecated, has no counterpart): a new text makes a new buffer and ends any
     /// composition; a new selection alone keeps the buffer and its composition; a new

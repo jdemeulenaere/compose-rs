@@ -137,8 +137,6 @@ internal object ComposeRsNative {
     @JvmStatic
     external fun key(host: Long, key: Int, character: Int, down: Boolean, meta: Int): Boolean
 
-    @JvmStatic external fun text(host: Long, text: String)
-
     /** A wheel's scroll at ([x], [y]), by ([dx], [dy]) pixels. */
     @JvmStatic external fun scroll(host: Long, x: Float, y: Float, dx: Float, dy: Float, meta: Int)
 
@@ -150,13 +148,47 @@ internal object ComposeRsNative {
      */
     @JvmStatic external fun textInputOptions(host: Long): Long
 
-    /** The soft keyboard's action key (`EditorInfo.IME_ACTION_*`): whether the field took it. */
-    @JvmStatic external fun performEditorAction(host: Long, action: Int): Boolean
-
     /** The milliseconds to the next timer's end, or -1. */
     @JvmStatic external fun nextTimer(): Long
 
-    @JvmStatic external fun preedit(host: Long, text: String, cursor: Int)
+    // The keyboard's connection (`input_method.rs`): UTF-16 numbers, as it gave them. A closed
+    // connection's id answers false and does nothing.
+
+    @JvmStatic external fun imeOpen(host: Long): Long
+    @JvmStatic external fun imeClose(host: Long, id: Long)
+    @JvmStatic external fun imeIsActive(host: Long, id: Long): Boolean
+    @JvmStatic external fun imeBeginBatchEdit(host: Long, id: Long): Boolean
+    @JvmStatic external fun imeEndBatchEdit(host: Long, id: Long): Boolean
+    @JvmStatic external fun imeCommitText(host: Long, id: Long, text: String, newCursorPosition: Int): Boolean
+    @JvmStatic external fun imeSetComposingText(host: Long, id: Long, text: String, newCursorPosition: Int): Boolean
+    @JvmStatic external fun imeSetComposingRegion(host: Long, id: Long, start: Int, end: Int): Boolean
+    @JvmStatic external fun imeDeleteSurroundingText(host: Long, id: Long, before: Int, after: Int): Boolean
+    @JvmStatic external fun imeDeleteSurroundingTextInCodePoints(host: Long, id: Long, before: Int, after: Int): Boolean
+    @JvmStatic external fun imeSetSelection(host: Long, id: Long, start: Int, end: Int): Boolean
+    @JvmStatic external fun imeSelectAll(host: Long, id: Long): Boolean
+    @JvmStatic external fun imeFinishComposingText(host: Long, id: Long): Boolean
+    @JvmStatic external fun imeCommitCorrection(host: Long, id: Long): Boolean
+    @JvmStatic external fun imePerformEditorAction(host: Long, id: Long, action: Int): Boolean
+    @JvmStatic external fun imeSetExtractedTextMonitor(host: Long, id: Long, monitor: Boolean, token: Int)
+    @JvmStatic external fun imeRequestCursorUpdates(host: Long, id: Long, mode: Int, sdk: Int): Boolean
+
+    /** The focused field's text, composition included; null while it has none to give. */
+    @JvmStatic external fun imeText(host: Long): String?
+    @JvmStatic external fun imeTextBeforeCursor(host: Long, maxChars: Int): String?
+    @JvmStatic external fun imeTextAfterCursor(host: Long, maxChars: Int): String?
+    @JvmStatic external fun imeSelectedText(host: Long): String?
+
+    /** Selection then composition ends in [out] (composition -1 without one); false without text. */
+    @JvmStatic external fun imeInputState(host: Long, out: IntArray): Boolean
+
+    /**
+     * What `updateSelection` should say since it last did: 4 ints in [out], then 1 and the token if
+     * `updateExtractedText` should too. False with nothing new.
+     */
+    @JvmStatic external fun imeTakeSelectionUpdate(host: Long, out: IntArray): Boolean
+
+    /** The `CursorAnchorInfo` asked for, encoded as `input_method::encode_cursor_anchor`. */
+    @JvmStatic external fun imeTakeCursorAnchor(host: Long): FloatArray?
 
     /** The merged semantics tree, for accessibility (`accessibility.rs`). */
     @JvmStatic external fun semantics(host: Long): ByteBuffer?
@@ -285,6 +317,7 @@ internal object Frame {
     const val OWNER_FOCUS = 512L
     const val OWNER_CLEAR = 1024L
     const val SEMANTICS_AT_ONCE = 2048L
+    const val INPUT_METHOD_UPDATE = 4096L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 16) - 1

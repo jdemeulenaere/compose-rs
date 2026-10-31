@@ -2945,8 +2945,8 @@ fn a_focused_field_starting_to_mask_restarts_the_keyboard() {
     });
     requester.request_focus();
     frames(&mut host);
-    let mut last = None;
-    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+    let mut last = compose_android::input_method::LastTextInput::default();
+    compose_android::input_method::take_text_input_state(&host, &mut last);
     host.frame();
     assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
     masked.set(true);

@@ -147,14 +147,14 @@ The log is split by area into the files below, one table each, rows in number or
 | D114 | [runtime](decisions/runtime.md#d114) | current |
 | D115 | [runtime](decisions/runtime.md#d115) | current |
 | D116 | [runtime](decisions/runtime.md#d116) | current |
-| D117 | [text](decisions/text.md#d117) | current |
+| D117 | [text](decisions/text.md#d117) | superseded by [D1663](decisions/text.md#d1663) |
 | D118 | [text](decisions/text.md#d118) | current |
 | D119 | [text](decisions/text.md#d119) | current |
 | D120 | [ui-and-layout](decisions/ui-and-layout.md#d120) | current |
 | D121 | [ui-and-layout](decisions/ui-and-layout.md#d121) | current |
 | D122 | [runtime](decisions/runtime.md#d122) | revised by [D711](decisions/runtime.md#d711) |
 | D123 | [runtime](decisions/runtime.md#d123) | current |
-| D124 | [text](decisions/text.md#d124) | current |
+| D124 | [text](decisions/text.md#d124) | revised by [D1663](decisions/text.md#d1663) |
 | D125 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d125) | revised by [D156](decisions/lazy-and-prefetch.md#d156), [D470](decisions/lazy-and-prefetch.md#d470), [D487](decisions/lazy-and-prefetch.md#d487), [D575](decisions/lazy-and-prefetch.md#d575) |
 | D126 | [ui-and-layout](decisions/ui-and-layout.md#d126) | current |
 | D127 | [ui-and-layout](decisions/ui-and-layout.md#d127) | superseded by [D138](decisions/ui-and-layout.md#d138) |
@@ -232,7 +232,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D235 | [text](decisions/text.md#d235) | current |
 | D240 | [runtime](decisions/runtime.md#d240) | current |
 | D241 | [ui-and-layout](decisions/ui-and-layout.md#d241) | current |
-| D250 | [text](decisions/text.md#d250) | current |
+| D250 | [text](decisions/text.md#d250) | revised by [D1664](decisions/text.md#d1664), [D1669](decisions/text.md#d1669) |
 | D251 | [android-drawing](decisions/android-drawing.md#d251) | revised by [D522](decisions/android-drawing.md#d522) |
 | D260 | [api-and-tooling](decisions/api-and-tooling.md#d260) | current |
 | D261 | [api-and-tooling](decisions/api-and-tooling.md#d261) | current |
@@ -660,7 +660,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1065 | [ui-and-layout](decisions/ui-and-layout.md#d1065) | current |
 | D1066 | [ui-and-layout](decisions/ui-and-layout.md#d1066) | current |
 | D1067 | [android-host-and-performance](decisions/android-host-and-performance.md#d1067) | current |
-| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
+| D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112), [D1664](decisions/text.md#d1664) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |
 | D1103 | [text](decisions/text.md#d1103) | revised by D1125 |
@@ -673,7 +673,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1110 | [text](decisions/text.md#d1110) | current |
 | D1111 | [text](decisions/text.md#d1111) | current |
 | D1112 | [text](decisions/text.md#d1112) | current |
-| D1113 | [text](decisions/text.md#d1113) | reverted, to be redone in the IME step |
+| D1113 | [text](decisions/text.md#d1113) | reverted, redone by [D1664](decisions/text.md#d1664) |
 | D1114 | [text](decisions/text.md#d1114) | current |
 | D1115 | [text](decisions/text.md#d1115) | current |
 | D1116 | [text](decisions/text.md#d1116) | current |
@@ -688,6 +688,14 @@ The log is split by area into the files below, one table each, rows in number or
 | D1125 | [text](decisions/text.md#d1125) | current |
 | D1126 | [text](decisions/text.md#d1126) | current |
 | D1127 | [text](decisions/text.md#d1127) | current |
+| D1663 | [text](decisions/text.md#d1663) | revised by [D1668](decisions/text.md#d1668) |
+| D1664 | [text](decisions/text.md#d1664) | revised by [D1667](decisions/text.md#d1667), [D1668](decisions/text.md#d1668), [D1669](decisions/text.md#d1669) |
+| D1665 | [text](decisions/text.md#d1665) | current |
+| D1666 | [text](decisions/text.md#d1666) | current |
+| D1667 | [text](decisions/text.md#d1667) | revised by [D1670](decisions/text.md#d1670) |
+| D1668 | [text](decisions/text.md#d1668) | revised by [D1670](decisions/text.md#d1670) |
+| D1669 | [text](decisions/text.md#d1669) | current |
+| D1670 | [text](decisions/text.md#d1670) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

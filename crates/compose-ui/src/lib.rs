@@ -330,7 +330,10 @@ pub use text_editing::{
     FinishComposingTextCommand, MoveCursorCommand, SetComposingRegionCommand,
     SetComposingTextCommand, SetSelectionCommand, TextFieldValue,
 };
-pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
+pub use text_input::{
+    CursorAnchor, CursorAnchorBox, CursorAnchorKey, ImeAction, ImeOptions, KeyboardCapitalization,
+    KeyboardType,
+};
 pub use text_measurer::{
     DEFAULT_TEXT_MEASURER_CACHE_SIZE, DrawTextLayoutOptions, DrawTextOptions, TextMeasureOptions,
     TextMeasurer, TextPainter, remember_text_measurer,

@@ -1720,6 +1720,54 @@ pub trait KeyInputModifierNode {
     ) -> bool {
         false
     }
+    /// What an input method's edits apply to and what it's told of: the text, with any
+    /// composition in it, the selection and composition in bytes, as Compose's `TextFieldValue`.
+    /// `None` if the node has no such state (a custom node: it gets `on_text_input`, `on_preedit`
+    /// and keys instead) or takes no edits.
+    fn input_method_value(&self) -> Option<crate::text_editing::TextFieldValue> {
+        None
+    }
+    /// Whether `value` is what `input_method_value` would answer, without copying the text: asked
+    /// each frame a keyboard is connected.
+    fn input_method_value_is(&self, value: &crate::text_editing::TextFieldValue) -> Option<bool> {
+        self.input_method_value().map(|own| own == *value)
+    }
+    /// An input method's edits, applied as one, as Compose's `onEditCommands`, in bytes (a
+    /// platform's bridge converts its input method's numbers, D1664). Returning true consumes
+    /// them.
+    fn on_edit_commands(
+        &mut self,
+        _commands: &[&dyn crate::text_editing::EditCommand],
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        false
+    }
+    /// Whether the text changed other than by the input method's edits or typing since the last
+    /// call (the application's value, an undo, a paste), or the node just took the focus: the
+    /// input method must start over, as Compose's `TextInputServiceAndroid.updateState`.
+    fn take_input_method_restart(&mut self) -> bool {
+        false
+    }
+    /// Whether a platform's preedit was ended since the last call other than by the platform (the
+    /// application rejected or replaced its text): the platform must be told to start over, and
+    /// the keys stay its own until then (D124, D1668).
+    fn take_preedit_interrupted(&mut self) -> bool {
+        false
+    }
+    /// What `cursor_anchor`'s answer depends on, cheap to compare (no measurer calls): `None`
+    /// before it's laid out.
+    fn cursor_anchor_key(&self) -> Option<crate::text_input::CursorAnchorKey> {
+        None
+    }
+    /// Where its text is for an input method (`CursorAnchorInfo`), `None` before it's laid out.
+    /// `lines`: with the lines it shows.
+    fn cursor_anchor(
+        &self,
+        _lines: bool,
+        _context: &mut EventContext<'_>,
+    ) -> Option<crate::text_input::CursorAnchor> {
+        None
+    }
     /// Where text input goes, in the node's coordinates: an input method places its candidate
     /// window there. `None` if the node takes no text.
     fn text_input_area(&self) -> Option<crate::unit::Rect> {

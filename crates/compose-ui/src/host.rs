@@ -996,10 +996,65 @@ impl UiHost {
         consumed
     }
 
+    /// What an input method's edits apply to in the focused field and what it's told of: the text,
+    /// with any composition in it, the selection and composition in bytes (D1664). `None` while no
+    /// focused node keeps such state (a custom node gets `send_text`, `send_preedit` and keys).
+    pub fn input_method_value(&self) -> Option<crate::text_editing::TextFieldValue> {
+        self.with_tree(|tree| tree.input_method_value())
+    }
+
+    /// Whether `value` is what `input_method_value` would answer, without copying the text; `None`
+    /// while no focused node keeps such state.
+    pub fn input_method_value_is(
+        &self,
+        value: &crate::text_editing::TextFieldValue,
+    ) -> Option<bool> {
+        self.with_tree(|tree| tree.input_method_value_is(value))
+    }
+
+    /// What `cursor_anchor`'s answer depends on, cheap to compare: `None` before it's laid out.
+    pub fn cursor_anchor_key(
+        &self,
+    ) -> Option<(crate::text_input::CursorAnchorKey, crate::unit::Offset)> {
+        self.with_tree(|tree| tree.cursor_anchor_key())
+    }
+
+    /// The focused node, what a keyboard's connection is tied to.
+    pub fn focused_node(&self) -> Option<crate::tree::NodeId> {
+        self.with_tree(|tree| tree.focused())
+    }
+
+    /// An input method's edits, in bytes, to the focused field, applied as one, as Compose's
+    /// `onEditCommands`; returns whether they were taken.
+    pub fn send_edit_commands(
+        &mut self,
+        commands: &[&dyn crate::text_editing::EditCommand],
+    ) -> bool {
+        let (consumed, actions) = self.with_tree(|tree| tree.dispatch_edit_commands(commands));
+        Self::run(actions);
+        self.wake_if_dirty();
+        consumed
+    }
+
+    /// Whether the input method must start over: the focused field's text changed other than by
+    /// its edits or typing, or a field just took the focus (D1664).
+    pub fn take_input_method_restart(&self) -> bool {
+        self.with_tree(|tree| tree.take_input_method_restart())
+    }
+
+    /// Where the focused field's text is for an input method (Android's `CursorAnchorInfo`), `None`
+    /// before it's laid out. `lines`: with the lines it shows.
+    pub fn cursor_anchor(&self, lines: bool) -> Option<crate::text_input::CursorAnchor> {
+        self.with_tree(|tree| tree.cursor_anchor(lines))
+    }
+
     /// Whether a handler asked for the input method to be reset since the last call: the
     /// platform host then resets it.
     pub fn take_input_method_reset(&self) -> bool {
-        self.with_tree(|tree| std::mem::take(&mut tree.input_method_reset))
+        self.with_tree(|tree| {
+            // Both taken: neither is left for a later call.
+            std::mem::take(&mut tree.input_method_reset) | tree.take_preedit_interrupted()
+        })
     }
 
     /// Where the focused node takes text, in the root's pixels: where an input method's

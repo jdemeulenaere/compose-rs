@@ -236,3 +236,176 @@ fn word_moves_take_a_run_of_a_script_without_a_dictionary_whole() {
     ui.wait_for_idle();
     assert_eq!(text_of(&mut ui, "field"), format!("x{thai} ab"));
 }
+
+/// A platform's preedit is part of the value, as Compose Desktop's (D1663), and it owns the keys
+/// while it lasts (D124): a Backspace goes to the input method, Tab still moves the focus.
+#[test]
+fn a_preedit_is_in_the_value_and_owns_the_keys() {
+    let mut ui = editor("ab", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.press_key(Key::MoveEnd);
+    ui.host().send_preedit("ni", Some((2, 2)));
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "abni");
+    assert_eq!(drawn_text(&mut ui), "abni");
+    ui.press_key(Key::Backspace);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "abni");
+    // Cancelled: gone, and a cancel with nothing composed takes nothing.
+    ui.host().send_preedit("", None);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab");
+    ui.press_key(Key::Backspace);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "a");
+    ui.host().send_preedit("", None);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "a");
+}
+
+/// A preedit over a selection takes its place, as `SetComposingTextCommand` does, and the cursor
+/// it gives is the selection.
+#[test]
+fn a_preedit_replaces_a_selection_and_gives_the_cursor() {
+    let mut ui = editor("abc", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.press_key(Key::MoveEnd);
+    chord(&mut ui, Key::DirectionLeft, KeyModifiers { shift: true, ..KeyModifiers::default() });
+    ui.host().send_preedit("xyz", Some((1, 1)));
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "abxyz");
+    let value = ui.host().input_method_value().expect("a value");
+    assert_eq!(value.selection(), compose_ui::TextRange::at(3));
+    assert_eq!(value.composition(), Some(compose_ui::TextRange::new(2, 5)));
+}
+
+/// A composition is underlined where it is, not at the selection (D1663), and shown as the text.
+#[test]
+fn a_composing_region_is_underlined_where_it_is() {
+    use compose_ui::{FinishComposingTextCommand, SetComposingRegionCommand};
+    let mut ui = editor("hello", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.wait_for_idle();
+    let plain = ui.dump_display_list();
+    assert!(ui.host().send_edit_commands(&[&SetComposingRegionCommand::new(1, 3)]));
+    ui.wait_for_idle();
+    let first = ui.dump_display_list();
+    assert_ne!(first, plain, "no underline");
+    assert_eq!(drawn_text(&mut ui), "hello");
+    assert!(ui.host().send_edit_commands(&[&SetComposingRegionCommand::new(2, 4)]));
+    ui.wait_for_idle();
+    assert_ne!(ui.dump_display_list(), first, "the underline stayed");
+    assert!(ui.host().send_edit_commands(&[&FinishComposingTextCommand]));
+    ui.wait_for_idle();
+    assert_eq!(ui.dump_display_list(), plain);
+}
+
+/// A field that rejects what it's given. Its text stays what it started as.
+#[composable]
+fn Rejecting(initial: &'static str) {
+    BasicTextField!(
+        value = initial.to_string(),
+        on_value_change = |_| {},
+        modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
+        single_line = true,
+    );
+}
+
+/// A rejected preedit leaves the platform composing: it's told to start over, and until it has
+/// been the keys are its own (D124, D1668). A focus change alone asks no such thing.
+#[test]
+fn a_rejected_preedit_resets_the_platform_and_keeps_its_keys_until_then() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), || Rejecting("ab"));
+    ui.on_node_with_tag("field").request_focus();
+    ui.press_key(Key::MoveEnd);
+    ui.wait_for_idle();
+    assert!(!ui.host().take_input_method_reset(), "a focus change resets nothing");
+    ui.host().send_preedit("ni", None);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab");
+    ui.press_key(Key::Backspace);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab", "the platform's key");
+    assert!(ui.host().take_input_method_reset());
+    assert!(!ui.host().take_input_method_reset(), "once");
+    // Told: the keys are the field's, which rejects this one too, and asks nothing.
+    ui.press_key(Key::Backspace);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab");
+    assert!(!ui.host().take_input_method_reset());
+}
+
+/// Undo goes back past a whole composition, not to half of it (D1668), whatever its cursor did.
+#[test]
+fn undo_goes_back_past_what_was_composed() {
+    let mut ui = editor("ab", true);
+    ui.on_node_with_tag("field").request_focus();
+    ui.press_key(Key::MoveEnd);
+    ui.host().send_preedit("n", Some((1, 1)));
+    ui.wait_for_idle();
+    ui.host().send_preedit("ni", Some((1, 1)));
+    ui.wait_for_idle();
+    ui.host().send_preedit("nih", Some((3, 3)));
+    ui.wait_for_idle();
+    ui.host().send_preedit("", None);
+    ui.host().send_text("\u{4F60}");
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab\u{4F60}");
+    let shortcut = KeyModifiers {
+        ctrl: !cfg!(target_os = "macos"),
+        meta: cfg!(target_os = "macos"),
+        ..KeyModifiers::default()
+    };
+    chord(&mut ui, Key::Character('z'), shortcut);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab");
+    // Nothing of it left to undo to.
+    chord(&mut ui, Key::Character('z'), shortcut);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "field"), "ab");
+}
+
+/// Two fields, the first rejecting any text with an "n" in it.
+#[composable]
+fn FilteringThenPlain() {
+    let first = remember(|| mutable_state_of(String::from("ab")));
+    let second = remember(|| mutable_state_of(String::new()));
+    compose_foundation::layout::Column!({
+        BasicTextField!(
+            value = first.get(),
+            on_value_change = move |value: String| {
+                if !value.contains('n') {
+                    first.set(value);
+                }
+            },
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("first"),
+            single_line = true,
+        );
+        BasicTextField!(
+            value = second.get(),
+            on_value_change = move |value| second.set(value),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("second"),
+            single_line = true,
+        );
+    });
+}
+
+/// A rejected preedit the platform wasn't told of by the time the focus moved: the blur tells it,
+/// off the focus's path nothing else would, and the keys are the field's when it's back (D1670).
+#[test]
+fn a_blur_tells_the_platform_of_a_rejected_preedit() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), FilteringThenPlain);
+    ui.on_node_with_tag("first").request_focus();
+    ui.press_key(Key::MoveEnd);
+    ui.host().send_preedit("ni", None);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "first"), "ab");
+    ui.on_node_with_tag("second").request_focus();
+    ui.wait_for_idle();
+    assert!(ui.host().take_input_method_reset());
+    ui.on_node_with_tag("first").request_focus();
+    ui.press_key(Key::MoveEnd);
+    ui.press_key(Key::Backspace);
+    ui.wait_for_idle();
+    assert_eq!(text_of(&mut ui, "first"), "a");
+}

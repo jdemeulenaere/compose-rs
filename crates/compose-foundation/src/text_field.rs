@@ -16,11 +16,12 @@ use crate::text_input::{
 };
 use compose_ui::{
     AnyModifierNodeElement, Color, CommitTextCommand, Constraints, DeleteSurroundingTextCommand,
-    DrawModifierNode, DrawScope, EditCommand, EditProcessor, EventContext, FocusTargetModifierNode,
-    IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
-    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
-    PointerInputModifierNode, Rect, ReleaseContext, SemanticsConfiguration, SemanticsModifierNode,
+    DrawModifierNode, DrawScope, EditCommand, EditProcessor, EventContext,
+    FinishComposingTextCommand, FocusTargetModifierNode, IntSize, IntrinsicMeasureScope, Key,
+    KeyEvent, KeyEventType, KeyInputModifierNode, Layout, LayoutModifierNode, Measurable,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset, Paint,
+    PointerEvent, PointerEventPass, PointerEventType, PointerInputModifierNode, Rect,
+    ReleaseContext, SemanticsConfiguration, SemanticsModifierNode, SetComposingTextCommand,
     SetSelectionCommand, TextFieldValue, TextRange, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
@@ -172,6 +173,11 @@ impl ModifierNodeElement for TextFieldElement {
             redo: Vec::new(),
             last_typing: None,
             composition: None,
+            preedit: false,
+            preedit_interrupted: false,
+            composing_over_text: false,
+            restart_input: false,
+            size: IntSize::new(0, 0),
             composition_rects: Vec::new(),
             keyboard_options: self.keyboard_options,
             keyboard_actions: self.keyboard_actions.clone(),
@@ -203,6 +209,7 @@ impl ModifierNodeElement for TextFieldElement {
                 node.undo.clear();
                 node.redo.clear();
                 node.last_typing = None;
+                node.text_replaced();
             }
             if node.style != self.style {
                 node.line_bounds = None;
@@ -395,9 +402,22 @@ pub(crate) struct TextFieldNode {
     /// When the last typed text was inserted, and where the cursor was after it: typing on from
     /// there joins its undo step.
     last_typing: Option<(u64, usize)>,
-    /// The text an input method is composing, shown in place of the selection until committed,
-    /// with its cursor's byte range.
-    composition: Option<(String, Option<(usize, usize)>)>,
+    /// The range of the text an input method is composing, as Compose's: part of the text and of
+    /// the application's value (D1663).
+    composition: Option<std::ops::Range<usize>>,
+    /// The composition is a platform's preedit (the desktop's input methods, which own the keys
+    /// and start over after a click: D124), not the edit commands of one told of the text.
+    preedit: bool,
+    /// A preedit was ended other than by the platform, which is still composing until it's told
+    /// (`take_preedit_interrupted`); the keys stay its own until then (D1668).
+    preedit_interrupted: bool,
+    /// A composition began on the text as it was (a region): its next change of the text is a step
+    /// of undo of its own, what it began on being what an undo should bring back (D1670).
+    composing_over_text: bool,
+    /// The input method must start over: `take_input_method_restart`.
+    restart_input: bool,
+    /// Its size at the last measurement.
+    size: IntSize,
     /// The composition's underline, from the measurer, refreshed at measurement.
     composition_rects: Vec<Rect>,
     keyboard_options: KeyboardOptions,
@@ -423,33 +443,6 @@ impl TextFieldNode {
         self.mapping.as_ref().map_or(offset, |mapping| mapping.transformed_to_original(offset))
     }
 
-    /// The text laid out and shown: the text, with the composition in place of the selection.
-    fn display_text(&self) -> std::borrow::Cow<'_, str> {
-        match &self.composition {
-            Some((composing, _)) => {
-                let range = self.selection();
-                let mut text = String::with_capacity(self.text.len() + composing.len());
-                text.push_str(&self.text[..range.start]);
-                text.push_str(composing);
-                text.push_str(&self.text[range.end..]);
-                std::borrow::Cow::Owned(text)
-            }
-            None => std::borrow::Cow::Borrowed(&self.text),
-        }
-    }
-
-    /// The cursor in the displayed text: in the composition while there is one.
-    fn display_cursor(&self) -> usize {
-        match &self.composition {
-            Some((composing, cursor)) => {
-                let inside =
-                    cursor.map_or(composing.len(), |(start, _)| start.min(composing.len()));
-                self.selection().start + inside
-            }
-            None => self.cursor,
-        }
-    }
-
     /// Moves the cursor, extending the selection or collapsing it.
     fn move_cursor(&mut self, cursor: usize, extend: bool, context: &mut EventContext<'_>) {
         let anchor = if extend { self.anchor } else { cursor };
@@ -466,9 +459,10 @@ impl TextFieldNode {
     }
 
     /// Replaces the selection (or inserts at the cursor) with `with`, as Compose's key input
-    /// commits typed text (`CommitTextCommand(text, 1)`).
+    /// commits typed text (`CommitTextCommand(text, 1)`, a composition finished first).
     fn replace_selection(&mut self, with: &str, typing: bool, context: &mut EventContext<'_>) {
-        self.apply_commands(&[&CommitTextCommand::new(with, 1)], typing, context);
+        let commit = CommitTextCommand::new(with, 1);
+        self.apply_commands(&[&FinishComposingTextCommand, &commit], typing, context);
     }
 
     /// Deletes `range` (empty: nothing), leaving the cursor at its start: the text around a
@@ -480,33 +474,80 @@ impl TextFieldNode {
         let collapsed = self.anchor == self.cursor;
         if collapsed && range.end == self.cursor {
             let command = DeleteSurroundingTextCommand::new(range.len(), 0);
-            self.apply_commands(&[&command], false, context);
+            self.apply_commands(&[&FinishComposingTextCommand, &command], false, context);
         } else if collapsed && range.start == self.cursor {
             let command = DeleteSurroundingTextCommand::new(0, range.len());
-            self.apply_commands(&[&command], false, context);
+            self.apply_commands(&[&FinishComposingTextCommand, &command], false, context);
         } else {
             let select = SetSelectionCommand::new(range.start as isize, range.end as isize);
-            self.apply_commands(&[&select, &CommitTextCommand::new("", 0)], false, context);
+            let commit = CommitTextCommand::new("", 0);
+            self.apply_commands(&[&FinishComposingTextCommand, &select, &commit], false, context);
         }
     }
 
-    /// Applies `commands` to the text and selection through an `EditProcessor`, as Compose's
-    /// text field applies its key input's commands, then records the edit.
+    /// Applies `commands` to the text, selection and composition through an `EditProcessor`, as
+    /// Compose's text field does, then records the edit: one that leaves the text as it was is
+    /// none, for the application or undo.
     fn apply_commands(
         &mut self,
         commands: &[&dyn EditCommand],
         typing: bool,
         context: &mut EventContext<'_>,
     ) {
-        let mut processor = EditProcessor::new();
-        processor.reset(TextFieldValue::new(
+        let selection = TextRange::new(self.anchor, self.cursor);
+        let composition =
+            self.composition.clone().map(|range| TextRange::new(range.start, range.end));
+        let mut processor = EditProcessor::from_value(TextFieldValue::new(
             self.text.as_str(),
-            TextRange::new(self.anchor, self.cursor),
-            None,
+            selection,
+            composition,
         ));
         let value = processor.apply(commands);
         let selection = value.selection();
+        let was_composing = self.composition.is_some();
+        self.composition = value.composition().map(TextRange::range);
+        self.preedit &= self.composition.is_some();
+        if value.text() == self.text {
+            if !was_composing && self.composition.is_some() {
+                self.composing_over_text = true;
+                // Nor does typing before it join what's composed over it.
+                self.last_typing = None;
+            }
+            self.composing_over_text &= self.composition.is_some();
+            self.cursor = selection.end;
+            self.anchor = selection.start;
+            context.invalidate_measure();
+            return;
+        }
+        // A composition's steps, shorter ones too, are one step of undo with what began it: no undo
+        // shows half of what was composed (Compose's undo, by the clock, can; D1668).
+        let composing_step =
+            typing && was_composing && !std::mem::take(&mut self.composing_over_text);
+        // A deletion or a new line ends a typing step.
+        let typing = typing
+            && value.text().len() >= self.text.len()
+            && value.text().matches('\n').count() <= self.text.matches('\n').count();
+        if composing_step {
+            self.redo.clear();
+            self.last_typing = Some((compose_runtime::platform::now_nanos(), selection.end));
+            self.set_text(value.text().to_string(), selection.end, selection.start, context);
+            return;
+        }
         self.edit(value.text().to_string(), selection.end, selection.start, typing, context);
+    }
+
+    /// The text changed other than by the input method's edits or typing: the composition is over
+    /// and the input method starts over, as Compose's `updateState`.
+    fn text_replaced(&mut self) {
+        self.end_composition();
+        self.restart_input = true;
+    }
+
+    /// Nothing's composed from now on; a platform's preedit is told when it asks.
+    fn end_composition(&mut self) {
+        self.composition = None;
+        self.composing_over_text = false;
+        self.preedit_interrupted |= std::mem::take(&mut self.preedit);
     }
 
     fn invalidate_paragraph(&mut self) {
@@ -589,6 +630,7 @@ impl TextFieldNode {
         let Some(snapshot) = from.pop() else { return };
         to.push(Snapshot { text: self.text.clone(), cursor: self.cursor, anchor: self.anchor });
         self.last_typing = None;
+        self.text_replaced();
         self.set_text(snapshot.text, snapshot.cursor, snapshot.anchor, context);
     }
 
@@ -624,9 +666,9 @@ impl TextFieldNode {
         }
     }
 
-    /// The transformed text words are found in, when it's shown (not while composing).
+    /// The transformed text words are found in, when it's shown.
     fn words_shown(&self) -> Option<&str> {
-        self.shown_text.as_deref().filter(|_| self.composition.is_none())
+        self.shown_text.as_deref()
     }
 
     fn by_words(&self, offset: usize, find: impl Fn(&str, usize) -> usize) -> usize {
@@ -718,21 +760,28 @@ impl TextFieldNode {
         self.replace_selection(&inserted, typing, context);
     }
 
-    /// Ends the composition, if any (committed text follows, or it was cancelled).
-    fn end_composition(&mut self) {
-        if self.composition.take().is_some() {
-            self.invalidate_paragraph();
+    /// What's composed stays as it is, no more a composition, and the input method starts over: what
+    /// a service's edit or selection does, as Compose's `onValueChange` with no composition.
+    fn commit_composition(&mut self, context: &mut EventContext<'_>) {
+        if self.composition.is_some() {
+            // The input method is told here: nothing's left to tell a platform's preedit.
+            self.preedit = false;
+            self.end_composition();
+            context.reset_input_method();
+            context.invalidate_measure();
         }
     }
 
-    /// Commits the composition in progress, if any, as Compose does when a click or a focus
-    /// change interrupts it, and has the platform's input method start over.
-    fn commit_composition(&mut self, context: &mut EventContext<'_>) {
-        let Some((composing, _)) = self.composition.take() else { return };
-        self.invalidate_paragraph();
-        context.invalidate_measure();
-        context.reset_input_method();
-        self.insert(&composing, true, context);
+    /// Ends a platform's preedit where a click or a focus change interrupts it: its text stays,
+    /// and the platform's input method starts over (D124). An input method told of the text hears
+    /// the new selection and finishes its own composition, as Compose's keeps it.
+    fn commit_preedit(&mut self, context: &mut EventContext<'_>) {
+        if self.preedit {
+            self.preedit = false;
+            self.composition = None;
+            context.invalidate_measure();
+            context.reset_input_method();
+        }
     }
 
     /// The hard line (between new lines) at `offset`: what a triple-click selects.
@@ -811,6 +860,10 @@ impl ModifierNode for TextFieldNode {
         self.redo.clear();
         self.last_typing = None;
         self.composition = None;
+        self.preedit = false;
+        self.preedit_interrupted = false;
+        self.composing_over_text = false;
+        self.restart_input = false;
     }
 }
 
@@ -882,6 +935,7 @@ impl LayoutModifierNode for TextFieldNode {
             let (anchor, cursor) = self.before_edit.unwrap_or((self.anchor, self.cursor));
             self.cursor = floor_char_boundary(&self.text, cursor);
             self.anchor = floor_char_boundary(&self.text, anchor);
+            self.text_replaced();
             self.invalidate_paragraph();
         }
         self.before_edit = None;
@@ -889,16 +943,7 @@ impl LayoutModifierNode for TextFieldNode {
             scope.text_measurer().release(paragraph);
         }
         let cursor_width = scope.density().round_to_px(CURSOR_WIDTH);
-        // A tap before this measurement is placed in the text without a composition (offsets
-        // in it are the text's); the text is laid out again with the composition at the tap.
-        let mut bare = self.pending_tap.is_some() && self.composition.is_some();
-        if bare {
-            self.invalidate_paragraph();
-            for paragraph in self.stale.drain(..) {
-                scope.text_measurer().release(paragraph);
-            }
-        }
-        let paragraph = loop {
+        let paragraph = {
             if self.constraints != Some(constraints)
                 || self.paragraph.is_none()
                 || self.density != Some(scope.density())
@@ -920,7 +965,7 @@ impl LayoutModifierNode for TextFieldNode {
                 // starts at the field's right edge.
                 let mut text_constraints = constraints.offset(-cursor_width, 0);
                 text_constraints.min_height = 0;
-                let text = if bare { self.text.clone() } else { self.display_text().into_owned() };
+                let text = self.text.clone();
                 // Shown transformed (a password's mask), its offsets mapped.
                 let text = match self.visual_transformation.filter(&text) {
                     Some(transformed) => {
@@ -950,35 +995,20 @@ impl LayoutModifierNode for TextFieldNode {
                 self.cursor = floor_char_boundary(&self.text, self.original_of(offset));
                 self.anchor = self.cursor;
             }
-            if bare {
-                bare = false;
-                if let Some(old) = self.paragraph.take() {
-                    scope.text_measurer().release(old);
-                }
-                continue;
-            }
-            break paragraph;
+            paragraph
         };
         self.cursor_rect =
-            Some(scope.text_measurer().cursor_rect(paragraph, self.shown(self.display_cursor())));
+            Some(scope.text_measurer().cursor_rect(paragraph, self.shown(self.cursor)));
         self.selection_rects.clear();
         self.composition_rects.clear();
-        match &self.composition {
-            Some((composing, _)) => {
-                let start = self.selection().start;
-                if !composing.is_empty() {
-                    let range = self.shown(start)..self.shown(start + composing.len());
-                    self.composition_rects =
-                        scope.text_measurer().selection_rects(paragraph, range);
-                }
-            }
-            None => {
-                let selection = self.selection();
-                if !selection.is_empty() {
-                    let range = self.shown(selection.start)..self.shown(selection.end);
-                    self.selection_rects = scope.text_measurer().selection_rects(paragraph, range);
-                }
-            }
+        let selection = self.selection();
+        if !selection.is_empty() {
+            let range = self.shown(selection.start)..self.shown(selection.end);
+            self.selection_rects = scope.text_measurer().selection_rects(paragraph, range);
+        }
+        if let Some(composition) = self.composition.clone() {
+            let range = self.shown(composition.start)..self.shown(composition.end);
+            self.composition_rects = scope.text_measurer().selection_rects(paragraph, range);
         }
         let metrics = scope.text_measurer().metrics(paragraph);
         // A multi-line field between `min_lines` and `max_lines` lines high, as Compose's
@@ -988,6 +1018,7 @@ impl LayoutModifierNode for TextFieldNode {
             metrics.size.width + cursor_width,
             metrics.size.height.max(min_height).min(max_height),
         ));
+        self.size = size;
         self.overflows =
             metrics.size.width + cursor_width > size.width || metrics.size.height > size.height;
         // The text scrolls to keep the cursor in view, as Compose's: sideways on a single line,
@@ -1095,7 +1126,7 @@ impl TextFieldNode {
         let cursor_width = density.round_to_px(CURSOR_WIDTH);
         let mut text_constraints = constraints.offset(-cursor_width, 0);
         text_constraints.min_height = 0;
-        let text = self.display_text().into_owned();
+        let text = self.text.clone();
         let text = match self.visual_transformation.filter(&text) {
             Some(transformed) => transformed.text,
             None => text,
@@ -1237,8 +1268,7 @@ impl TextFieldNode {
         match event.kind {
             PointerEventType::Press if !event.consumed => {
                 event.consume();
-                // A click ends a composition, which commits.
-                self.commit_composition(context);
+                self.commit_preedit(context);
                 let now = compose_runtime::platform::now_nanos();
                 let clicks = match self.last_tap {
                     Some((time, tapped, clicks))
@@ -1383,7 +1413,7 @@ impl FocusTargetModifierNode for TextFieldNode {
     /// nearest it, and asks for the on-screen keyboard as a tap on the text does (it may have
     /// been focused already, its keyboard hidden).
     fn on_focus_tap(&mut self, position: Offset, context: &mut EventContext<'_>) {
-        self.commit_composition(context);
+        self.commit_preedit(context);
         if !self.read_only {
             context.show_software_keyboard();
         }
@@ -1417,10 +1447,18 @@ impl FocusTargetModifierNode for TextFieldNode {
         if focused {
             context.bring_into_view();
         }
+        // A new field's text is for the input method to read anew, as Compose's `startInput`.
+        self.restart_input |= focused;
         if !focused {
             // As Compose's `onBlur`: a composition in progress is committed, and the
             // selection collapses to its end (`deselect`).
-            self.commit_composition(context);
+            self.commit_preedit(context);
+            self.composition = None;
+            self.composing_over_text = false;
+            // Interrupted and not yet told: this is the node's last chance, off the focus's path.
+            if std::mem::take(&mut self.preedit_interrupted) {
+                context.reset_input_method();
+            }
             let end = self.selection().end;
             self.cursor = end;
             self.anchor = end;
@@ -1473,9 +1511,10 @@ impl TextFieldNode {
         if event.kind != KeyEventType::KeyDown {
             return false;
         }
-        // While an input method composes, keys are its own; Tab still moves focus (which
-        // commits the composition).
-        if self.composition.is_some() {
+        // While a platform's input method composes, keys are its own (D124); Tab still moves focus
+        // (which commits the composition). One told of the text sends its own: a key finishes its
+        // composition first, as Compose's.
+        if self.preedit || self.preedit_interrupted {
             return key_is_not_tab(event.key);
         }
         let mut key = event.key;
@@ -1523,10 +1562,12 @@ impl TextFieldNode {
                 'x' if !selected.is_empty() && editable => {
                     context.clipboard().set_text(&selected);
                     self.replace_selection("", false, context);
+                    self.restart_input = true;
                 }
                 'v' if editable => {
                     if let Some(pasted) = context.clipboard().get_text() {
                         self.insert(&pasted, false, context);
+                        self.restart_input = true;
                     }
                 }
                 'z' if editable => self.undo(modifiers.shift, context),
@@ -1645,14 +1686,20 @@ impl KeyInputModifierNode for TextFieldNode {
         if !self.enabled || self.read_only {
             return false;
         }
-        self.end_composition();
         self.preferred_x = None;
         self.insert(text, true, context);
         true
     }
 
+    /// A window over this field's takes the keys: what's being composed stays in the text, composed
+    /// no more, and the input method starts over for whichever field it's given next (D1286).
     fn on_window_lost_keys(&mut self, context: &mut EventContext<'_>) {
-        self.commit_composition(context);
+        self.commit_preedit(context);
+        if self.composition.take().is_some() {
+            context.invalidate_measure();
+            context.invalidate_draw();
+            context.reset_input_method();
+        }
     }
 
     fn on_preedit(
@@ -1664,13 +1711,155 @@ impl KeyInputModifierNode for TextFieldNode {
         if !self.enabled || self.read_only {
             return false;
         }
-        let composition = (!text.is_empty()).then(|| (text.to_string(), cursor));
-        if composition != self.composition {
-            self.composition = composition;
-            self.invalidate_paragraph();
-            context.invalidate_measure();
+        // A platform's cancel with nothing composed, or before each commit: nothing.
+        if text.is_empty() && self.composition.is_none() {
+            return true;
         }
+        let start = self.composition.as_ref().map_or(self.selection().start, |range| range.start);
+        let composing = SetComposingTextCommand::new(text, 1);
+        match cursor.filter(|_| !text.is_empty()) {
+            Some((from, to)) => {
+                let select =
+                    SetSelectionCommand::new((start + from) as isize, (start + to) as isize);
+                self.apply_commands(&[&composing, &select], true, context);
+            }
+            None => self.apply_commands(&[&composing], true, context),
+        }
+        self.preedit = self.composition.is_some();
         true
+    }
+
+    fn input_method_value(&self) -> Option<TextFieldValue> {
+        if !self.enabled || self.read_only {
+            return None;
+        }
+        let composition =
+            self.composition.clone().map(|range| TextRange::new(range.start, range.end));
+        let selection = TextRange::new(self.anchor, self.cursor);
+        Some(TextFieldValue::new(self.text.as_str(), selection, composition))
+    }
+
+    fn on_edit_commands(
+        &mut self,
+        commands: &[&dyn EditCommand],
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        if !self.enabled || self.read_only {
+            return false;
+        }
+        self.preferred_x = None;
+        self.preedit = false;
+        self.apply_commands(commands, true, context);
+        true
+    }
+
+    fn input_method_value_is(&self, value: &TextFieldValue) -> Option<bool> {
+        if !self.enabled || self.read_only {
+            return None;
+        }
+        let composition =
+            self.composition.as_ref().map(|range| TextRange::new(range.start, range.end));
+        Some(
+            value.text() == self.text
+                && value.selection() == TextRange::new(self.anchor, self.cursor)
+                && value.composition() == composition,
+        )
+    }
+
+    fn take_input_method_restart(&mut self) -> bool {
+        std::mem::take(&mut self.restart_input)
+    }
+
+    fn take_preedit_interrupted(&mut self) -> bool {
+        std::mem::take(&mut self.preedit_interrupted)
+    }
+
+    fn cursor_anchor_key(&self) -> Option<compose_ui::CursorAnchorKey> {
+        let paragraph = self.paragraph?;
+        let (composition_start, composition_end) = self
+            .composition
+            .as_ref()
+            .map_or((u64::MAX, u64::MAX), |range| (range.start as u64, range.end as u64));
+        Some([
+            paragraph.0,
+            self.cursor as u64,
+            self.anchor as u64,
+            composition_start,
+            composition_end,
+            self.scroll.x.to_bits() as u64,
+            self.scroll.y.to_bits() as u64,
+            self.size.width as u64,
+            self.size.height as u64,
+        ])
+    }
+
+    fn cursor_anchor(
+        &self,
+        lines: bool,
+        context: &mut EventContext<'_>,
+    ) -> Option<compose_ui::CursorAnchor> {
+        let paragraph = self.paragraph?;
+        let size = (self.size.width as f32, self.size.height as f32);
+        let shown =
+            Rect::new(self.scroll.x, self.scroll.y, self.scroll.x + size.0, self.scroll.y + size.1);
+        let holds = |x: f32, y: f32| {
+            x >= shown.left && x <= shown.right && y >= shown.top && y <= shown.bottom
+        };
+        let measurer = context.text_measurer();
+        let right_to_left = measurer.is_right_to_left(paragraph);
+        let cursor = measurer.cursor_rect(paragraph, self.shown(self.selection().start));
+        let layout_width = measurer.metrics(paragraph).size.width as f32;
+        let x = cursor.left.clamp(0.0, layout_width.max(0.0));
+        let (top_shows, bottom_shows) = (holds(x, cursor.top), holds(x, cursor.bottom));
+        let insertion_marker = compose_ui::CursorAnchorBox {
+            rect: Rect::new(x, cursor.top, x, cursor.bottom),
+            visible: top_shows || bottom_shows,
+            invisible: !top_shows || !bottom_shows,
+            right_to_left,
+        };
+        let mut characters = Vec::new();
+        if let Some(composition) = self.composition.clone() {
+            for (index, c) in self.text[composition.clone()].char_indices() {
+                let offset = composition.start + index;
+                let range = self.shown(offset)..self.shown(offset + c.len_utf8());
+                let rects = measurer.selection_rects(paragraph, range);
+                let rect = rects.first().copied().unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                characters.push((
+                    offset,
+                    compose_ui::CursorAnchorBox {
+                        rect,
+                        visible: rect.left < shown.right
+                            && rect.right > shown.left
+                            && rect.top < shown.bottom
+                            && rect.bottom > shown.top,
+                        invisible: !holds(rect.left, rect.top) || !holds(rect.right, rect.bottom),
+                        right_to_left,
+                    },
+                ));
+            }
+        }
+        let mut visible_lines = Vec::new();
+        if lines && size.0 > 0.0 && size.1 > 0.0 {
+            let layout = measurer.paragraph(paragraph);
+            let last = layout.line_count().saturating_sub(1);
+            let first_line = layout.get_line_for_vertical_position(shown.top).min(last);
+            let last_line = layout.get_line_for_vertical_position(shown.bottom).min(last);
+            for line in first_line..=last_line {
+                visible_lines.push(Rect::new(
+                    layout.get_line_left(line),
+                    layout.get_line_top(line),
+                    layout.get_line_right(line),
+                    layout.get_line_bottom(line),
+                ));
+            }
+        }
+        Some(compose_ui::CursorAnchor {
+            origin: Offset::new(-self.scroll.x, -self.scroll.y),
+            insertion_marker,
+            characters,
+            editor_bounds: shown,
+            visible_lines,
+        })
     }
 
     fn ime_options(&self) -> Option<compose_ui::ImeOptions> {
@@ -1678,12 +1867,12 @@ impl KeyInputModifierNode for TextFieldNode {
     }
 
     /// The input method's action key: the field's action for it (whichever the keyboard showed,
-    /// as Compose's), committing a composition first.
+    /// as Compose's), committing a platform's preedit first.
     fn on_ime_action(&mut self, action: ImeAction, context: &mut EventContext<'_>) -> bool {
         if !self.enabled {
             return false;
         }
-        self.commit_composition(context);
+        self.commit_preedit(context);
         // Android's default action key is `Done` for a single line.
         let action = match action {
             ImeAction::Default if self.single_line => ImeAction::Done,
@@ -1709,24 +1898,20 @@ impl SemanticsModifierNode for TextFieldNode {
         // The field's node is its decoration's, as Compose's `CoreTextField`.
         config.part_of_parent();
         // What's shown, and where offsets of the text are in it: a password's mask, a
-        // transformation's own mapping, a composition in place of the selection, as Compose's.
-        let text = self.display_text();
+        // transformation's own mapping, as Compose's; a composition is in the text.
+        let text = &self.text;
         let (shown, mapping): (compose_ui::SharedString, _) =
-            match self.visual_transformation.filter(&text) {
+            match self.visual_transformation.filter(text) {
                 Some(transformed) => (transformed.text.into(), Some(transformed.offset_mapping)),
-                None => (text.into_owned().into(), None),
+                None => (text.clone().into(), None),
             };
         let in_shown = |offset: usize| {
             let offset = mapping.as_ref().map_or(offset, |it| it.original_to_transformed(offset));
             floor_char_boundary(shown.as_str(), offset)
         };
-        let (anchor, cursor) = match self.composition {
-            Some(_) => (self.display_cursor(), self.display_cursor()),
-            None => (self.anchor, self.cursor),
-        };
         config.set_text_selection_range(compose_ui::TextRange::new(
-            in_shown(anchor),
-            in_shown(cursor),
+            in_shown(self.anchor),
+            in_shown(self.cursor),
         ));
         config.set_editable_text(shown.clone());
         if self.visual_transformation.is_password() {
@@ -1803,11 +1988,10 @@ impl SemanticsModifierNode for TextFieldNode {
                 if !self.enabled {
                     return false;
                 }
-                // In what's shown, what's being composed being part of it until it's committed.
-                let display = self.display_text();
-                let transformed = self.visual_transformation.filter(&display);
+                // In what's shown; what's being composed is part of the text.
+                let transformed = self.visual_transformation.filter(&self.text);
                 let shown_length =
-                    transformed.as_ref().map_or(display.len(), |shown| shown.text.len());
+                    transformed.as_ref().map_or(self.text.len(), |shown| shown.text.len());
                 let within = |offset: i32| offset >= 0 && offset as usize <= shown_length;
                 if !within(start) || !within(end) {
                     return false;
@@ -1817,15 +2001,10 @@ impl SemanticsModifierNode for TextFieldNode {
                     let original = transformed
                         .as_ref()
                         .map_or(offset, |it| it.offset_mapping.transformed_to_original(offset));
-                    floor_char_boundary(&display, original)
+                    floor_char_boundary(&self.text, original)
                 };
                 let (anchor, cursor) = (at(start), at(end));
-                let selected = if self.composition.is_some() {
-                    (self.display_cursor(), self.display_cursor())
-                } else {
-                    (self.anchor, self.cursor)
-                };
-                if (anchor, cursor) == selected {
+                if (anchor, cursor) == (self.anchor, self.cursor) {
                     return false;
                 }
                 self.commit_composition(context);
@@ -1878,7 +2057,7 @@ impl SemanticsModifierNode for TextFieldNode {
         context: &mut EventContext<'_>,
     ) -> Option<compose_ui::TextLayoutResult> {
         let (paragraph, constraints) = (self.paragraph?, self.constraints?);
-        let text = self.shown_text.clone().unwrap_or_else(|| self.display_text().into_owned());
+        let text = self.shown_text.clone().unwrap_or_else(|| self.text.clone());
         let input = compose_ui::TextLayoutInput {
             text: text.into(),
             style: self.style.clone(),

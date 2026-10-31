@@ -1203,6 +1203,118 @@ impl UiTree {
         self.dispatch_to_key_path(|handler, context| handler.on_ime_action(action, context))
     }
 
+    /// Sends an input method's edits to the focused node and its ancestors until one takes them.
+    pub fn dispatch_edit_commands(
+        &mut self,
+        commands: &[&dyn crate::text_editing::EditCommand],
+    ) -> (bool, Vec<Action>) {
+        self.dispatch_to_key_path(|handler, context| handler.on_edit_commands(commands, context))
+    }
+
+    /// What an input method's edits apply to in the focused node taking them.
+    pub fn input_method_value(&mut self) -> Option<crate::text_editing::TextFieldValue> {
+        self.first_on_key_path(|handler| handler.input_method_value())
+    }
+
+    /// Whether `value` is what the focused node answers; `None` if it keeps no such state.
+    pub fn input_method_value_is(
+        &mut self,
+        value: &crate::text_editing::TextFieldValue,
+    ) -> Option<bool> {
+        self.first_on_key_path(|handler| handler.input_method_value_is(value))
+    }
+
+    /// What the focused field's cursor anchor depends on, with where its layer is in the root.
+    pub fn cursor_anchor_key(&mut self) -> Option<(crate::text_input::CursorAnchorKey, Offset)> {
+        let mut next = self.focused();
+        while let Some(node) = next {
+            next = self.node(node).parent;
+            for index in (0..self.node(node).chain.len()).rev() {
+                if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
+                    continue;
+                }
+                let layer = self.node(node).layer_of(index);
+                let key = self.get_mut(node)?.chain[index]
+                    .node
+                    .as_key_input()
+                    .and_then(|handler| handler.cursor_anchor_key());
+                if let Some(key) = key {
+                    return Some((key, self.layer_origin(node, layer)));
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether a focused node's platform preedit was ended other than by the platform.
+    pub fn take_preedit_interrupted(&mut self) -> bool {
+        let mut interrupted = false;
+        self.first_on_key_path(|handler| {
+            interrupted |= handler.take_preedit_interrupted();
+            None::<()>
+        });
+        interrupted
+    }
+
+    /// Whether the focused nodes' input method must start over (each one's flag is taken).
+    pub fn take_input_method_restart(&mut self) -> bool {
+        let mut restart = false;
+        self.first_on_key_path(|handler| {
+            restart |= handler.take_input_method_restart();
+            None::<()>
+        });
+        restart
+    }
+
+    /// Where the focused field's text is for an input method, its origin in the root.
+    pub fn cursor_anchor(&mut self, lines: bool) -> Option<crate::text_input::CursorAnchor> {
+        let mut anchor = None;
+        let mut found = None;
+        let _ = self.dispatch_to_key_path(|handler, context| {
+            if found.is_none() {
+                anchor = handler.cursor_anchor(lines, context);
+                if anchor.is_some() {
+                    found = Some(context.node);
+                }
+            }
+            found.is_some()
+        });
+        let node = found?;
+        let mut anchor = anchor?;
+        for index in (0..self.node(node).chain.len()).rev() {
+            if self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
+                let layer = self.node(node).layer_of(index);
+                let origin = self.layer_origin(node, layer);
+                anchor.origin = anchor.origin + origin;
+                break;
+            }
+        }
+        Some(anchor)
+    }
+
+    /// `find` over the key input nodes on the focused node's path, the nearest first, until one
+    /// answers.
+    fn first_on_key_path<R>(
+        &mut self,
+        mut find: impl FnMut(&mut dyn crate::modifier::KeyInputModifierNode) -> Option<R>,
+    ) -> Option<R> {
+        let mut next = self.focused();
+        while let Some(node) = next {
+            next = self.node(node).parent;
+            for index in (0..self.node(node).chain.len()).rev() {
+                if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
+                    continue;
+                }
+                if let Some(handler) = self.get_mut(node)?.chain[index].node.as_key_input()
+                    && let Some(found) = find(handler)
+                {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
     /// What the focused node taking text asks of an on-screen keyboard: its `ImeOptions`, the
     /// defaults if it gives none, `None` if no focused node takes text.
     pub fn text_input_options(&mut self) -> Option<crate::text_input::ImeOptions> {

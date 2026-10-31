@@ -4,6 +4,38 @@
 //! gives its options to the host (`UiHost::text_input_options`), which an on-screen keyboard
 //! reads; the input method's action key comes back as `UiHost::perform_ime_action`.
 
+/// A box of a text an input method is told of, in the text's layout coordinates, with what
+/// Android's `CursorAnchorInfo` flags say of it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CursorAnchorBox {
+    pub rect: crate::unit::Rect,
+    /// Part of it shows in the field.
+    pub visible: bool,
+    /// Part of it doesn't.
+    pub invisible: bool,
+    pub right_to_left: bool,
+}
+
+/// What a field's [`CursorAnchor`] depends on: its paragraph, selection, composition, scroll and
+/// size, as bits. Equal keys, equal anchors, without asking the measurer.
+pub type CursorAnchorKey = [u64; 9];
+
+/// Where a field's text is for an input method, as Compose's `LegacyCursorAnchorInfoBuilder`
+/// reads it from the layout: in the text's layout coordinates.
+#[derive(Clone, PartialEq, Debug)]
+pub struct CursorAnchor {
+    /// Where the layout's origin is in the root (the field's position less its scroll).
+    pub origin: crate::unit::Offset,
+    /// The cursor at the selection's start: its left is its right.
+    pub insertion_marker: CursorAnchorBox,
+    /// The composition's characters, with their byte offsets.
+    pub characters: Vec<(usize, CursorAnchorBox)>,
+    /// The part of the layout the field shows.
+    pub editor_bounds: crate::unit::Rect,
+    /// The lines it shows, when asked for: from the paragraph's queries, the costly part.
+    pub visible_lines: Vec<crate::unit::Rect>,
+}
+
 /// The action a single-line field's Enter (an input method's action key) performs, as Compose's
 /// `ImeAction`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]

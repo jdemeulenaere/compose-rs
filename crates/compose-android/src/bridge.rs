@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock};
 use compose_runtime::platform;
 use compose_ui::{
     Density, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, LayoutDirection, Offset,
-    PointerEvent, PointerId, PointerType, Rect,
+    PointerEvent, PointerId, PointerType, Rect, TextFieldValue,
     platform::{ParagraphMetrics, UiHost},
 };
 use jni::ids::{JMethodID, JStaticMethodID};
@@ -24,6 +24,7 @@ use jni::strings::JNIStr;
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong};
 use jni::{Env, EnvUnowned, JValue, JavaVM, Outcome, jni_sig, jni_str};
 
+use crate::input_method::InputConnection;
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
 use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_ui::platform::Optimizations;
@@ -109,6 +110,18 @@ pub(crate) fn log(message: &str) {
     }
     #[cfg(not(target_os = "android"))]
     eprintln!("compose-rs: {message}");
+}
+
+/// Writes `message` to logcat under the keyboard's temporary tag (D1666), or stderr off Android.
+pub(crate) fn log_input_method(message: &str) {
+    #[cfg(target_os = "android")]
+    {
+        let text = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
+        // 5: WARN.
+        unsafe { __android_log_write(5, c"ComposeRsIme".as_ptr(), text.as_ptr()) };
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("ComposeRsIme: {message}");
 }
 
 /// A panic says what it was in logcat first. Under the Android profiles (`android` and
@@ -809,7 +822,9 @@ struct Host {
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
-    ime_options: Option<(compose_ui::ImeOptions, bool)>,
+    ime_options: crate::input_method::LastTextInput,
+    /// The keyboard's connection (`input_method.rs`).
+    input_connections: crate::input_method::InputConnections,
     /// What a `MotionEvent`'s pointers cross in, kept: a move's are per sample.
     touch_buffers: TouchBuffers,
     /// Shown with performance hints enabled: its frames report the RenderThread's work
@@ -1081,7 +1096,8 @@ fn create(
         semantics_changes: Default::default(),
         custom_actions: Default::default(),
         first: true,
-        ime_options: None,
+        ime_options: Default::default(),
+        input_connections: Default::default(),
         touch_buffers: TouchBuffers::default(),
         hint: false,
     });
@@ -1338,8 +1354,7 @@ mod flags {
     pub const AGAIN: i64 = 2;
     /// A text field has focus: the soft keyboard shows.
     pub const TEXT_INPUT: i64 = 4;
-    /// A field committed or dropped its composition itself, or the focused field's options
-    /// changed: the input method restarts.
+    /// The input method restarts (`input_method::TextInputState::restart`).
     pub const RESET_INPUT: i64 = 8;
     /// The semantics may have changed (a recomposition or a layout): accessibility reads them
     /// again when next asked, and the services on hear it (D630).
@@ -1358,6 +1373,8 @@ mod flags {
     pub const OWNER_CLEAR: i64 = 1024;
     /// A property changed: a service hears at once, not within 100 ms (`tell_at_once`).
     pub const SEMANTICS_AT_ONCE: i64 = 2048;
+    /// The keyboard has something to hear of the text or the cursor: the view asks what.
+    pub const INPUT_METHOD_UPDATE: i64 = 4096;
     /// Where the timer's milliseconds start.
     pub const TIMER_SHIFT: u32 = 16;
 }
@@ -1401,6 +1418,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     }
     if input.restart {
         result |= flags::RESET_INPUT;
+    }
+    if host.input_connections.frame_has_update(&host.ui, input.restart) {
+        result |= flags::INPUT_METHOD_UPDATE;
     }
     match input.keyboard {
         Some(true) => result |= flags::SHOW_KEYBOARD,
@@ -1745,20 +1765,6 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
     crate::input_method::editor_info(options, masks_password).pack()
 }
 
-/// `ComposeRsNative.performEditorAction(host, action)`: the soft keyboard's action key
-/// (`EditorInfo.IME_ACTION_*`), for the focused field. Returns whether it took it.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performEditorAction(
-    _env: EnvUnowned,
-    _class: JClass,
-    host: jlong,
-    action: jint,
-) -> jboolean {
-    // SAFETY: a live host, on the main thread.
-    let host = unsafe { self::host(host) };
-    host.ui.perform_ime_action(crate::input_method::ime_action(action))
-}
-
 /// `ComposeRsNative.nextTimer()`: the milliseconds to the next `delay`'s end (rounded up), or
 /// -1.
 #[unsafe(no_mangle)]
@@ -1823,40 +1829,360 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
     host.ui.send_key_and_text(KeyEvent { key, kind, modifiers }, text.as_deref())
 }
 
-/// `ComposeRsNative.text(host, text)`: text an input method committed.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_text(
-    mut env: EnvUnowned,
-    _class: JClass,
+// ---- The keyboard's connection (`ComposeRsInputConnection`, `input_method.rs`) --------------
+
+/// `f` on connection `id`, while it's open; false otherwise.
+fn with_connection(
     host: jlong,
-    text: JString,
-) {
+    id: jlong,
+    f: impl FnOnce(&mut UiHost, &mut InputConnection<'_>) -> bool,
+) -> jboolean {
+    // A connection can outlive its view's host: Kotlin passes 0 then.
+    if host == 0 {
+        return false;
+    }
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    if let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) {
-        host.ui.send_text(&text);
+    match host.input_connections.get(id) {
+        Some(mut connection) => f(&mut host.ui, &mut connection),
+        None => false,
     }
 }
 
-/// `ComposeRsNative.preedit(host, text, cursor)`: the text an input method is composing (empty
-/// when it's cancelled), its cursor at UTF-16 `cursor` (-1 at its end).
+/// `ComposeRsNative.imeOpen(host)`: a new connection to the focused field, its id.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_preedit(
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeOpen(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+) -> jlong {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.input_connections.open(&host.ui)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeClose(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) {
+    if host != 0 {
+        // SAFETY: a live host, on the main thread.
+        unsafe { self::host(host) }.input_connections.close(id);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeIsActive(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.is_for_focused_node(ui))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeBeginBatchEdit(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |_, connection| connection.begin_batch_edit())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeEndBatchEdit(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.end_batch_edit(ui))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeCommitText(
     mut env: EnvUnowned,
     _class: JClass,
     host: jlong,
+    id: jlong,
     text: JString,
-    cursor: jint,
+    new_cursor_position: jint,
+) -> jboolean {
+    let text: String =
+        with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)).unwrap_or_default();
+    with_connection(host, id, |ui, connection| {
+        connection.commit_text(ui, &text, new_cursor_position)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSetComposingText(
+    mut env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    text: JString,
+    new_cursor_position: jint,
+) -> jboolean {
+    let text: String =
+        with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)).unwrap_or_default();
+    with_connection(host, id, |ui, connection| {
+        connection.set_composing_text(ui, &text, new_cursor_position)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSetComposingRegion(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    start: jint,
+    end: jint,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.set_composing_region(ui, start, end))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeDeleteSurroundingText(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    before: jint,
+    after: jint,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| {
+        connection.delete_surrounding_text(ui, before, after)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeDeleteSurroundingTextInCodePoints(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    before: jint,
+    after: jint,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| {
+        connection.delete_surrounding_text_in_code_points(ui, before, after)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSetSelection(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    start: jint,
+    end: jint,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.set_selection(ui, start, end))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSelectAll(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.select_all(ui))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeFinishComposingText(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.finish_composing_text(ui))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeCommitCorrection(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.commit_correction(ui))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imePerformEditorAction(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    action: jint,
+) -> jboolean {
+    with_connection(host, id, |ui, connection| connection.perform_editor_action(ui, action))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSetExtractedTextMonitor(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    monitor: jboolean,
+    token: jint,
 ) {
+    with_connection(host, id, |_, connection| {
+        connection.set_extracted_text_monitor(monitor.then_some(token));
+        true
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeRequestCursorUpdates(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jlong,
+    mode: jint,
+    sdk: jint,
+) -> jboolean {
+    with_connection(host, id, |_, connection| {
+        connection.request_cursor_updates(crate::input_method::CursorUpdates::from_mode(mode, sdk))
+    })
+}
+
+/// `f` on the focused field's value (`UiHost::input_method_value`), as a Java string; null without
+/// a value.
+fn value_string<'local>(
+    env: &mut EnvUnowned<'local>,
+    host: jlong,
+    f: impl FnOnce(&TextFieldValue) -> Option<&str>,
+) -> JObject<'local> {
+    // SAFETY: a live host, on the main thread (0 once it's gone).
+    let value = (host != 0).then(|| unsafe { self::host(host) }.ui.input_method_value()).flatten();
+    with_env(env, |env| match value.as_ref().and_then(f) {
+        Some(text) => env.new_string(text).map_or_else(|_| JObject::null(), JObject::from),
+        None => JObject::null(),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeText<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+) -> JObject<'local> {
+    value_string(&mut env, host, |value| Some(value.text()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeTextBeforeCursor<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    max_chars: jint,
+) -> JObject<'local> {
+    value_string(&mut env, host, |value| {
+        Some(crate::input_method::text_before_cursor(value, max_chars))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeTextAfterCursor<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    max_chars: jint,
+) -> JObject<'local> {
+    value_string(&mut env, host, |value| {
+        Some(crate::input_method::text_after_cursor(value, max_chars))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeSelectedText<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+) -> JObject<'local> {
+    value_string(&mut env, host, crate::input_method::selected_text)
+}
+
+/// `ComposeRsNative.imeInputState(host, out)`: the focused field's selection and composition ends
+/// in UTF-16 units (composition -1 without one) in `out`. False when it has no value.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeInputState<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    out: JIntArray<'local>,
+) -> jboolean {
+    if host == 0 {
+        return false;
+    }
+    // SAFETY: a live host, on the main thread.
+    let Some(value) = unsafe { self::host(host) }.ui.input_method_value() else { return false };
+    let state = crate::input_method::input_state_units(&value);
+    with_env(&mut env, |env| out.set_region(env, 0, &state)).is_ok()
+}
+
+/// `ComposeRsNative.imeTakeSelectionUpdate(host, out)`: what `updateSelection` should say, if
+/// anything since it last did, in `out`: its 4 ints, then 1 and the token if `updateExtractedText`
+/// should too.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeTakeSelectionUpdate<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    out: JIntArray<'local>,
+) -> jboolean {
+    if host == 0 {
+        return false;
+    }
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    if let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) {
-        let cursor = (cursor >= 0).then(|| {
-            let at = crate::text::byte_offset(&text, cursor as usize);
-            (at, at)
-        });
-        host.ui.send_preedit(&text, cursor);
+    let update = host.input_connections.take_selection_update(&host.ui);
+    let Some(update) = update else { return false };
+    let values = [
+        update.selection_start,
+        update.selection_end,
+        update.composition_start,
+        update.composition_end,
+        i32::from(update.extracted_text_token.is_some()),
+        update.extracted_text_token.unwrap_or(0),
+    ];
+    with_env(&mut env, |env| out.set_region(env, 0, &values)).is_ok()
+}
+
+/// `ComposeRsNative.imeTakeCursorAnchor(host)`: the `CursorAnchorInfo` the keyboard asked for,
+/// encoded (`input_method::encode_cursor_anchor`), or null with nothing to tell.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_imeTakeCursorAnchor<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+) -> JObject<'local> {
+    if host == 0 {
+        return JObject::null();
     }
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let anchor = host.input_connections.take_cursor_anchor(&host.ui);
+    let Some(anchor) = anchor else { return JObject::null() };
+    with_env(&mut env, |env| {
+        let Ok(array) = env.new_float_array(anchor.len()) else { return JObject::null() };
+        if array.set_region(env, 0, &anchor).is_err() {
+            return JObject::null();
+        }
+        array.into()
+    })
 }
 
 /// `ComposeRsNative.tick()`: runs the `delay`s that ended and the tasks woken. Returns the

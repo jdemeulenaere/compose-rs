@@ -9,6 +9,8 @@ import android.content.res.Configuration
 import android.text.format.DateFormat
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.graphics.Matrix
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -17,6 +19,7 @@ import android.os.Looper
 import android.os.Parcelable
 import android.os.SystemClock
 import android.os.Trace
+import android.text.TextUtils
 import android.util.Log
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
@@ -27,9 +30,17 @@ import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeProvider
-import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.CompletionInfo
+import android.view.inputmethod.CorrectionInfo
+import android.view.inputmethod.CursorAnchorInfo
+import android.view.inputmethod.EditorBoundsInfo
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedText
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputContentInfo
+import java.lang.ref.ReferenceQueue
+import java.lang.ref.WeakReference
 import android.view.inputmethod.InputMethodManager
 import java.util.concurrent.TimeUnit
 
@@ -78,6 +89,9 @@ class ComposeRsView @JvmOverloads constructor(
     /** A frame was asked for while the window was hidden: made when it shows ([requestFrame]). */
     private var frameWanted = false
     private var textInput = false
+    private val collectedConnections = ReferenceQueue<ComposeRsInputConnection>()
+    private val openConnections = HashSet<ConnectionReference>()
+    internal val nativeHost: Long get() = host
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
     /**
@@ -683,6 +697,7 @@ class ComposeRsView @JvmOverloads constructor(
         updateBack(result and Frame.BACK != 0L)
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
         updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
+        if (result and Frame.INPUT_METHOD_UPDATE != 0L) updateInputMethod()
         // What the content asked of the keyboard (after the frame's events, which woke it).
         if (result and Frame.SHOW_KEYBOARD != 0L && textInput) {
             requestFocus()
@@ -1140,14 +1155,6 @@ class ComposeRsView @JvmOverloads constructor(
         return sendKey(event) || super.onKeyUp(keyCode, event)
     }
 
-    internal fun commitText(text: CharSequence) {
-        if (host != 0L) ComposeRsNative.text(host, text.toString())
-    }
-
-    internal fun composeText(text: CharSequence, cursor: Int) {
-        if (host != 0L) ComposeRsNative.preedit(host, text.toString(), cursor)
-    }
-
     override fun onRtlPropertiesChanged(layoutDirection: Int) {
         super.onRtlPropertiesChanged(layoutDirection)
         if (host != 0L) {
@@ -1183,14 +1190,120 @@ class ComposeRsView @JvmOverloads constructor(
         val options = ComposeRsNative.textInputOptions(host)
         info.inputType = options.toInt()
         info.imeOptions = (options shr 32).toInt()
-        return ComposeRsInputConnection(this)
+        // What the keyboard starts from, as Compose's `EditorInfo.update`.
+        val state = IntArray(4)
+        if (ComposeRsNative.imeInputState(host, state)) {
+            info.initialSelStart = state[0]
+            info.initialSelEnd = state[1]
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                ComposeRsNative.imeText(host)?.let { info.setInitialSurroundingText(it) }
+            }
+        }
+        closeCollectedConnections()
+        val connection = ComposeRsInputConnection(this, ComposeRsNative.imeOpen(host))
+        openConnections += ConnectionReference(connection, collectedConnections)
+        ComposeRsInputConnection.log { "onCreateInputConnection(sel=${info.initialSelStart},${info.initialSelEnd}, id=${connection.id})" }
+        return connection
     }
 
-    /** The keyboard's action key: the field's action for it (its `KeyboardActions`). */
-    internal fun performEditorAction(action: Int) {
+    /**
+     * Connections Android threw away never close: those it has let go are closed here, so the cap
+     * on the open ones in Rust isn't reached by those.
+     */
+    private fun closeCollectedConnections() {
+        while (true) {
+            val collected = collectedConnections.poll() as? ConnectionReference ?: return
+            openConnections -= collected
+            ComposeRsNative.imeClose(host, collected.id)
+        }
+    }
+
+    private class ConnectionReference(
+        connection: ComposeRsInputConnection,
+        queue: ReferenceQueue<ComposeRsInputConnection>,
+    ) : WeakReference<ComposeRsInputConnection>(connection, queue) {
+        val id = connection.id
+    }
+
+    /**
+     * Tells the keyboard what it hasn't heard of the text and the cursor, as Compose's
+     * `updateInputState` and `LegacyCursorAnchorInfoController` (after its edits, and after frames).
+     */
+    internal fun updateInputMethod() {
         if (host == 0L) return
-        ComposeRsNative.performEditorAction(host, action)
-        ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+        val update = IntArray(6)
+        if (ComposeRsNative.imeTakeSelectionUpdate(host, update)) {
+            ComposeRsInputConnection.log { "updateSelection(${update[0]}, ${update[1]}, ${update[2]}, ${update[3]})" }
+            inputMethods.updateSelection(this, update[0], update[1], update[2], update[3])
+            if (update[4] != 0) {
+                extractedText()?.let { inputMethods.updateExtractedText(this, update[5], it) }
+            }
+        }
+        val anchor = ComposeRsNative.imeTakeCursorAnchor(host) ?: return
+        if (inputMethods.isActive(this)) {
+            ComposeRsInputConnection.log { "updateCursorAnchorInfo(${anchor.size} floats)" }
+            inputMethods.updateCursorAnchorInfo(this, cursorAnchorInfo(anchor))
+        }
+    }
+
+    /** The field's text for the keyboard, as Compose's `toExtractedText`. */
+    internal fun extractedText(): ExtractedText? {
+        if (host == 0L) return null
+        val text = ComposeRsNative.imeText(host) ?: return null
+        val state = IntArray(4)
+        ComposeRsNative.imeInputState(host, state)
+        return ExtractedText().also {
+            it.text = text
+            it.startOffset = 0
+            it.partialEndOffset = text.length
+            it.partialStartOffset = -1 // the whole text
+            it.selectionStart = state[0]
+            it.selectionEnd = state[1]
+            it.flags = if ('\n' in text) 0 else ExtractedText.FLAG_SINGLE_LINE
+        }
+    }
+
+    /** The field's text and cursor as Android's, from `input_method::encode_cursor_anchor`. */
+    private fun cursorAnchorInfo(data: FloatArray): CursorAnchorInfo {
+        val location = IntArray(2)
+        getLocationOnScreen(location)
+        val builder = CursorAnchorInfo.Builder()
+        builder.setMatrix(Matrix().apply { setTranslate(location[0] + data[0], location[1] + data[1]) })
+        builder.setSelectionRange(data[2].toInt(), data[3].toInt())
+        val (compositionStart, compositionEnd) = data[4].toInt() to data[5].toInt()
+        if (compositionStart >= 0 && compositionStart < compositionEnd) {
+            val text = ComposeRsNative.imeText(host)
+            if (text != null && compositionEnd <= text.length) {
+                builder.setComposingText(compositionStart, text.substring(compositionStart, compositionEnd))
+            }
+        }
+        if (data[6] != 0f) builder.setInsertionMarkerLocation(data[7], data[8], data[9], data[9], data[10].toInt())
+        if (data[11] != 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val bounds = RectF(data[12], data[13], data[14], data[15])
+            builder.setEditorBoundsInfo(
+                EditorBoundsInfo.Builder().setEditorBounds(bounds).setHandwritingBounds(bounds).build()
+            )
+        }
+        var at = CURSOR_ANCHOR_HEADER
+        repeat(data[16].toInt()) {
+            builder.addCharacterBounds(
+                data[at].toInt(), data[at + 1], data[at + 2], data[at + 3], data[at + 4], data[at + 5].toInt()
+            )
+            at += 6
+        }
+        repeat(data[17].toInt()) {
+            if (data[18] != 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                builder.addVisibleLineBounds(data[at], data[at + 1], data[at + 2], data[at + 3])
+            }
+            at += 4
+        }
+        return builder.build()
+    }
+
+    /** The keyboard's Cut, Copy or Paste, as Compose's synthesized keys. */
+    internal fun sendShortcut(keyCode: Int) {
+        sendKey(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 0, KeyEvent.META_CTRL_ON))
+        sendKey(KeyEvent(0, 0, KeyEvent.ACTION_UP, keyCode, 0, KeyEvent.META_CTRL_ON))
     }
 
     // ---- The clipboard (Rust calls these) ------------------------------------------------
@@ -1282,74 +1395,180 @@ class ComposeRsView @JvmOverloads constructor(
 
         /** Idle times in a row without time before [prefetch] waits for a frame (D340). */
         const val MOST_IDLE_TIMES_WITHOUT_TIME = 3
+
+        /** `input_method::CURSOR_ANCHOR_HEADER`. */
+        const val CURSOR_ANCHOR_HEADER = 19
     }
 }
 
 /**
- * The soft keyboard's edits, as compose-rs takes them: committed text, the composing text (shown
- * in place, underlined), deletions as Backspace and Delete keys. The field's text stays on the
- * Rust side, so the keyboard sees none (as a terminal's input connection).
+ * The soft keyboard's connection, as Compose's `RecordingInputConnection`: everything goes to Rust
+ * as it came (`input_method.rs`, host-tested, D1664), in UTF-16 units. Once closed it takes
+ * nothing more. `adb shell setprop log.tag.ComposeRsIme DEBUG` logs every call, with the text.
  */
-internal class ComposeRsInputConnection(private val view: ComposeRsView) : BaseInputConnection(view, false) {
-    private var composing: CharSequence = ""
+internal class ComposeRsInputConnection(
+    private val view: ComposeRsView,
+    val id: Long,
+) : InputConnection {
+    /** The view's host as it is now: 0 once it's gone, which Rust answers false to. */
+    private val host: Long get() = view.nativeHost
 
-    override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-        if (composing.isNotEmpty()) {
-            composing = ""
-            view.composeText("", -1)
+    private inline fun edit(name: String, arguments: () -> String, block: () -> Boolean): Boolean {
+        val result = block()
+        log { "#$id $name(${arguments()}) -> $result" }
+        view.updateInputMethod()
+        return result
+    }
+
+    private inline fun <T> read(name: String, arguments: () -> String, block: () -> T): T {
+        val result = block()
+        log { "#$id $name(${arguments()}) -> $result" }
+        return result
+    }
+
+    private inline fun ifActive(block: () -> Boolean): Boolean =
+        ComposeRsNative.imeIsActive(host, id) && block()
+
+    override fun beginBatchEdit(): Boolean =
+        edit("beginBatchEdit", { "" }) { ComposeRsNative.imeBeginBatchEdit(host, id) }
+
+    override fun endBatchEdit(): Boolean =
+        edit("endBatchEdit", { "" }) { ComposeRsNative.imeEndBatchEdit(host, id) }
+
+    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean =
+        edit("commitText", { "\"$text\", $newCursorPosition" }) {
+            ComposeRsNative.imeCommitText(host, id, text.toString(), newCursorPosition)
         }
-        view.commitText(text)
-        return true
-    }
 
-    override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
-        composing = text
-        view.composeText(text, -1)
-        return true
-    }
-
-    override fun finishComposingText(): Boolean {
-        if (composing.isNotEmpty()) {
-            val text = composing
-            composing = ""
-            view.composeText("", -1)
-            view.commitText(text)
+    override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean =
+        edit("setComposingText", { "\"$text\", $newCursorPosition" }) {
+            ComposeRsNative.imeSetComposingText(host, id, text.toString(), newCursorPosition)
         }
-        return true
-    }
 
-    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-        repeat(beforeLength) { key(KeyEvent.KEYCODE_DEL) }
-        repeat(afterLength) { key(KeyEvent.KEYCODE_FORWARD_DEL) }
-        return true
-    }
+    override fun setComposingRegion(start: Int, end: Int): Boolean =
+        edit("setComposingRegion", { "$start, $end" }) {
+            ComposeRsNative.imeSetComposingRegion(host, id, start, end)
+        }
+
+    override fun finishComposingText(): Boolean =
+        edit("finishComposingText", { "" }) { ComposeRsNative.imeFinishComposingText(host, id) }
+
+    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean =
+        edit("deleteSurroundingText", { "$beforeLength, $afterLength" }) {
+            ComposeRsNative.imeDeleteSurroundingText(host, id, beforeLength, afterLength)
+        }
+
+    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean =
+        edit("deleteSurroundingTextInCodePoints", { "$beforeLength, $afterLength" }) {
+            ComposeRsNative.imeDeleteSurroundingTextInCodePoints(host, id, beforeLength, afterLength)
+        }
+
+    override fun setSelection(start: Int, end: Int): Boolean =
+        edit("setSelection", { "$start, $end" }) { ComposeRsNative.imeSetSelection(host, id, start, end) }
+
+    override fun getTextBeforeCursor(maxChars: Int, flags: Int): CharSequence =
+        read("getTextBeforeCursor", { "$maxChars, $flags" }) {
+            ComposeRsNative.imeTextBeforeCursor(host, maxChars).orEmpty()
+        }
+
+    override fun getTextAfterCursor(maxChars: Int, flags: Int): CharSequence =
+        read("getTextAfterCursor", { "$maxChars, $flags" }) {
+            ComposeRsNative.imeTextAfterCursor(host, maxChars).orEmpty()
+        }
+
+    override fun getSelectedText(flags: Int): CharSequence? =
+        read("getSelectedText", { "$flags" }) { ComposeRsNative.imeSelectedText(host) }
+
+    override fun getCursorCapsMode(reqModes: Int): Int =
+        read("getCursorCapsMode", { "$reqModes" }) {
+            val text = ComposeRsNative.imeText(host).orEmpty()
+            val state = IntArray(4)
+            ComposeRsNative.imeInputState(host, state)
+            TextUtils.getCapsMode(text, state[0], reqModes)
+        }
+
+    override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText? =
+        read("getExtractedText", { "${request?.token}, $flags" }) {
+            val monitor = flags and InputConnection.GET_EXTRACTED_TEXT_MONITOR != 0
+            ComposeRsNative.imeSetExtractedTextMonitor(host, id, monitor, request?.token ?: 0)
+            view.extractedText()
+        }
+
+    override fun requestCursorUpdates(cursorUpdateMode: Int): Boolean =
+        edit("requestCursorUpdates", { "$cursorUpdateMode" }) {
+            ComposeRsNative.imeRequestCursorUpdates(host, id, cursorUpdateMode, Build.VERSION.SDK_INT)
+        }
+
+    /** Select all, or the keyboard's Cut, Copy and Paste as keys, as Compose's; never "handled". */
+    override fun performContextMenuAction(id: Int): Boolean =
+        edit("performContextMenuAction", { "$id" }) {
+            when (id) {
+                android.R.id.selectAll -> ComposeRsNative.imeSelectAll(host, this.id)
+                android.R.id.cut -> ifActive { view.sendShortcut(KeyEvent.KEYCODE_X); true }
+                android.R.id.copy -> ifActive { view.sendShortcut(KeyEvent.KEYCODE_C); true }
+                android.R.id.paste -> ifActive { view.sendShortcut(KeyEvent.KEYCODE_V); true }
+                else -> {}
+            }
+            false
+        }
+
+    override fun commitCompletion(text: CompletionInfo?): Boolean =
+        read("commitCompletion", { "${text?.text}" }) { false }
+
+    override fun commitCorrection(correctionInfo: CorrectionInfo?): Boolean =
+        read("commitCorrection", { "$correctionInfo" }) { ComposeRsNative.imeCommitCorrection(host, id) }
+
+    override fun clearMetaKeyStates(states: Int): Boolean =
+        read("clearMetaKeyStates", { "$states" }) { false }
+
+    override fun performPrivateCommand(action: String?, data: Bundle?): Boolean =
+        read("performPrivateCommand", { "$action" }) { ifActive { true } }
+
+    override fun commitContent(inputContentInfo: InputContentInfo, flags: Int, opts: Bundle?): Boolean =
+        read("commitContent", { "$flags" }) { false }
 
     /**
-     * The connection closes (the keyboard restarts input, focus moves): what it was composing
-     * is the field's to commit or drop (it already did), not to commit again.
+     * The connection closes (the keyboard restarts input, focus moves): what it was composing stays
+     * the field's, as Compose's.
      */
     override fun closeConnection() {
-        composing = ""
-        super.closeConnection()
+        log { "#$id closeConnection()" }
+        ComposeRsNative.imeClose(host, id)
     }
 
-    override fun sendKeyEvent(event: KeyEvent): Boolean {
-        view.sendKey(event)
-        return true
-    }
+    /** The default handler, as Compose's. */
+    override fun getHandler(): Handler? = read("getHandler", { "" }) { null }
+
+    /** Ignored by Android, as the API says. */
+    override fun reportFullscreenMode(enabled: Boolean): Boolean =
+        read("reportFullscreenMode", { "$enabled" }) { false }
+
+    override fun sendKeyEvent(event: KeyEvent): Boolean =
+        edit("sendKeyEvent", { "$event" }) { ifActive { view.sendKey(event); true } }
 
     /**
      * The keyboard's action key (Done, Search, Next…), as Compose's `RecordingInputConnection`:
-     * always taken. (Enter, which keyboards send as a key, performs a single line's action in
-     * the field itself.)
+     * always taken while open. (Enter, which keyboards send as a key, performs a single line's
+     * action in the field itself.)
      */
-    override fun performEditorAction(editorAction: Int): Boolean {
-        view.performEditorAction(editorAction)
-        return true
-    }
+    override fun performEditorAction(editorAction: Int): Boolean =
+        edit("performEditorAction", { "$editorAction" }) {
+            ifActive {
+                ComposeRsNative.imePerformEditorAction(host, id, editorAction)
+                ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+                true
+            }
+        }
 
-    private fun key(code: Int) {
-        view.sendKey(KeyEvent(KeyEvent.ACTION_DOWN, code))
-        view.sendKey(KeyEvent(KeyEvent.ACTION_UP, code))
+    companion object {
+        /** Temporary: every call and its arguments, to read a keyboard's behaviour from logcat. */
+        const val LOG_TAG = "ComposeRsIme"
+
+        inline fun log(message: () -> String) {
+            if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                val text = message()
+                Log.d(LOG_TAG, text)
+            }
+        }
     }
 }
