@@ -43,6 +43,24 @@ pub fn DeleteNote(on_delete: impl Fn() + 'static) {
 // ANCHOR_END: dialog
 
 // ANCHOR: selectable
+// ANCHOR: date_picker
+#[composable]
+pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    DatePickerDialog!(
+        on_dismiss,
+        confirm_button = {
+            TextButton!(on_click = on_confirm, {
+                Text!("OK");
+            });
+        },
+        |_| {
+            DatePicker!(state);
+        }
+    );
+}
+// ANCHOR_END: date_picker
+
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
 
 #[composable]

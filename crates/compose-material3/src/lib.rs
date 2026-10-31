@@ -16,9 +16,13 @@ mod animated_shape;
 mod app_bar;
 mod bottom_sheet_scaffold;
 mod button;
+#[doc(hidden)]
+pub mod calendar_model;
 mod checkbox;
 mod chips;
 mod components;
+mod date_input;
+mod date_picker;
 mod dialog;
 mod drag_handle;
 mod drawer;
@@ -75,6 +79,11 @@ pub use components::{
     LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE, MINIMUM_INTERACTIVE_SIZE, SelectableSurface, Surface,
     Text, TextFieldColors, TextFieldDefaults, ToggleableSurface,
     minimum_interactive_component_size,
+};
+pub use date_picker::{
+    DatePicker, DatePickerColors, DatePickerDefaults, DatePickerDialog, DatePickerFormatter,
+    DatePickerState, DisplayMode, SelectableDates, default_date_picker_focus_requester,
+    default_date_picker_headline, default_date_picker_title, remember_date_picker_state,
 };
 pub use dialog::{
     AlertDialog, AlertDialogDefaults, BasicAlertDialog, DropdownMenu, DropdownMenuItem,

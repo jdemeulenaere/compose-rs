@@ -1686,6 +1686,39 @@ pub fn DeleteNote(on_delete: impl Fn() + 'static) {
 
 A dialog shows while it's in the composition, as in Compose. Back, Escape and a tap on the scrim call `on_dismiss_request`. `Dialog!` (compose-ui) shows any content as a dialog, `Popup!` places content over the window, and `DropdownMenu!`, `ModalBottomSheet!` and `PlainTooltip!` (in a `TooltipArea!`) are Material's. All of them are drawn inside the window: on Android, inside the `ComposeRsView` ([Differences](differences.md#navigation-and-platform)).
 
+### Date pickers
+
+```kotlin
+val state = rememberDatePickerState(initialDisplayedMonthMillis = month)
+DatePickerDialog(
+    onDismissRequest = onDismiss,
+    confirmButton = { TextButton(onClick = onConfirm) { Text("OK") } },
+) {
+    DatePicker(state = state)
+}
+```
+
+<!-- snippet: src/components.rs#date_picker -->
+```rust
+#[composable]
+pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    DatePickerDialog!(
+        on_dismiss,
+        confirm_button = {
+            TextButton!(on_click = on_confirm, {
+                Text!("OK");
+            });
+        },
+        |_| {
+            DatePicker!(state);
+        }
+    );
+}
+```
+
+`initial_displayed_month_millis` is doubly optional: left out, it's the selected date's month; `Some(None)` is Compose's `null`, the current month. `SelectableDates` is a trait, given as `Rc<dyn SelectableDates>`: remember it, as a new one replaces the old.
+
 ## Selectable lists
 
 ```kotlin
@@ -1702,6 +1735,22 @@ Column(Modifier.selectableGroup()) {
 
 <!-- snippet: src/components.rs#selectable -->
 ```rust
+#[composable]
+pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    DatePickerDialog!(
+        on_dismiss,
+        confirm_button = {
+            TextButton!(on_click = on_confirm, {
+                Text!("OK");
+            });
+        },
+        |_| {
+            DatePicker!(state);
+        }
+    );
+}
+
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
 
 #[composable]

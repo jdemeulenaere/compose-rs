@@ -286,6 +286,18 @@ fn alert_dialog_buttons(
     );
 }
 
+/// As Compose's `AlertDialogFlowRow`, with spacings of its caller's.
+pub(crate) fn alert_dialog_flow_row(main: Dp, cross: Dp, content: compose_runtime::Callback) {
+    let minimum = crate::LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.current();
+    let from_touch_target = if minimum.is_specified() { minimum.0 } else { 0.0 } - 40.0;
+    let cross = Dp((cross.0 - from_touch_target).clamp(0.0, cross.0));
+    let policy =
+        compose_runtime::remember_keyed((main.0.to_bits(), cross.0.to_bits()), move || {
+            Rc::new(ButtonsFlowRow { main, cross }) as Rc<dyn MeasurePolicy>
+        });
+    Layout(Modifier, policy, content);
+}
+
 /// `AlertDialogFlowRow`'s layout: the buttons in rows as wide as allowed, `main` apart, rows
 /// `cross` apart, as a `FlowRow` with `spacedBy` arrangements in the other layout direction
 /// (each row from the end).

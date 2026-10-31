@@ -24,8 +24,9 @@ impl Locale {
         Locale { tag }
     }
 
+    /// Its subtags before any extension (`-u-nu-arab`), whose short ones aren't regions.
     fn subtags(&self) -> impl Iterator<Item = &str> {
-        self.tag.split('-')
+        self.tag.split('-').take_while(|subtag| subtag.len() != 1)
     }
 
     /// The language subtag (`en`), lower case, as Compose's `language`.
