@@ -43,6 +43,17 @@ struct ScopeInner {
     dispatching: Cell<bool>,
     /// The last event to reach the node, as `currentEvent`.
     current_event: RefCell<Option<PointerEvents>>,
+    /// The passes the block has waited for since it was last given an event, as bits (`pass_bit`):
+    /// as Compose resumes only what's waiting for a pass, it isn't polled for the others.
+    awaited_passes: Cell<u8>,
+}
+
+fn pass_bit(pass: PointerEventPass) -> u8 {
+    match pass {
+        PointerEventPass::Initial => 1,
+        PointerEventPass::Main => 2,
+        PointerEventPass::Final => 4,
+    }
 }
 
 /// What a `pointer_input` block works with, as Compose's `PointerInputScope` and
@@ -530,7 +541,11 @@ impl Future for AwaitPointerEvent {
         match delivery.take_if(|delivery| delivery.pass == self.pass) {
             Some(delivery) => Poll::Ready(delivery.event),
             // Woken by the next delivery's poll (the node polls the task itself).
-            None => Poll::Pending,
+            None => {
+                let awaited = &self.inner.awaited_passes;
+                awaited.set(awaited.get() | pass_bit(self.pass));
+                Poll::Pending
+            }
         }
     }
 }
@@ -592,6 +607,15 @@ impl PointerInputDriver {
         }
         self.scope.inner.pressed.borrow_mut().clear();
         self.scope.inner.current_event.replace(None);
+        self.scope.inner.awaited_passes.set(0);
+    }
+
+    /// Whether an event in `pass` means anything to the block now: it hasn't started, it's the first
+    /// of an event's passes (what's pressed is worked out there), or the block's waiting for it.
+    pub fn hears_pass(&self, pass: PointerEventPass) -> bool {
+        self.job.is_none()
+            || pass == PointerEventPass::Initial
+            || self.scope.inner.awaited_passes.get() & pass_bit(pass) != 0
     }
 
     /// Delivers `event`, in `pass`, to the block (starting it at the first event).
@@ -627,9 +651,12 @@ impl PointerInputDriver {
                 job
             }
         };
-        inner.delivery.replace(Some(Delivery { event: event.clone(), pass }));
-        compose_runtime::platform::poll_now(job);
-        inner.delivery.replace(None);
+        if inner.awaited_passes.get() & pass_bit(pass) != 0 {
+            inner.awaited_passes.set(0);
+            inner.delivery.replace(Some(Delivery { event: event.clone(), pass }));
+            compose_runtime::platform::poll_now(job);
+            inner.delivery.replace(None);
+        }
         inner.dispatching.set(false);
         for callback in inner.deferred.take() {
             context.run(callback);
@@ -705,6 +732,10 @@ impl ModifierNode for PointerInputNode {
 impl PointerInputModifierNode for PointerInputNode {
     fn takes_whole_events(&self) -> bool {
         true
+    }
+
+    fn hears_pass(&self, pass: PointerEventPass) -> bool {
+        self.driver.hears_pass(pass)
     }
 
     fn on_pointer_events(

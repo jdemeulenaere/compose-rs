@@ -1463,6 +1463,11 @@ pub trait PointerInputModifierNode {
     fn takes_whole_events(&self) -> bool {
         false
     }
+    /// Whether an event in `pass` means anything to it now, if `takes_whole_events`: if not, it isn't
+    /// made one.
+    fn hears_pass(&self, _pass: PointerEventPass) -> bool {
+        true
+    }
     /// Every change of a platform event that reaches it, as `onPointerEvent`, if
     /// `takes_whole_events`.
     fn on_pointer_events(

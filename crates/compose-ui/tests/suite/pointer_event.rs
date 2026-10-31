@@ -985,6 +985,42 @@ fn a_block_awaits_its_events_with_all_their_changes() {
     );
 }
 
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/SuspendingPointerInputFilter.kt, offerPointerEvent
+/// A block is only resumed for the pass it waits for, and goes on to another in the same event.
+#[test]
+fn a_block_gets_each_pass_it_waits_for_however_it_goes_between_them() {
+    let log: Rc<RefCell<Vec<(PointerEventPass, PointerEventType)>>> = Rc::default();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let seen = seen.clone();
+        Leaf(Modifier.size(50.dp()).pointer_input((), move |scope| {
+            let seen = seen.clone();
+            async move {
+                let passes = [
+                    PointerEventPass::Final,
+                    PointerEventPass::Initial,
+                    PointerEventPass::Main,
+                    PointerEventPass::Final,
+                    PointerEventPass::Main,
+                ];
+                for pass in passes {
+                    let event = scope.await_pointer_event(pass).await;
+                    seen.borrow_mut().push((pass, event.kind));
+                }
+            }
+        }));
+    });
+    host.send_pointer(finger_down(1, 5.0, 5.0));
+    host.send_pointer(finger(1, 6.0, 5.0));
+    host.send_pointer(finger_up(1, 6.0, 5.0));
+    use PointerEventPass::{Final, Initial, Main};
+    use PointerEventType::{Move, Press, Release};
+    assert_eq!(
+        *log.borrow(),
+        [(Final, Press), (Initial, Move), (Main, Move), (Final, Move), (Main, Release)]
+    );
+}
+
 // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/SuspendingPointerInputFilter.kt, currentEvent, extendedTouchPadding
 #[test]
 fn a_block_knows_the_last_event_and_its_extended_padding() {

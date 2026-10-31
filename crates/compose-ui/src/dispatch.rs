@@ -21,6 +21,8 @@ pub(crate) struct HitEntry {
     pub(crate) observer: bool,
     /// The delegate of entry `index` it is, or `NO_DELEGATE`: the entry's node.
     pub(crate) delegate: EntryId,
+    /// It takes an event's changes together (`takes_whole_events`).
+    pub(crate) whole: bool,
 }
 
 impl HitEntry {
@@ -281,6 +283,9 @@ impl UiTree {
                             version,
                             observer: modifier_node.is_pointer_observer(),
                             delegate,
+                            whole: modifier_node
+                                .as_pointer_input()
+                                .is_some_and(|handler| handler.takes_whole_events()),
                         });
                     };
                     if entry.state & entry_state::DELEGATING == 0 {
@@ -340,6 +345,8 @@ impl UiTree {
         let all = self.with_resting_fingers(events);
         let mut live = Vec::with_capacity(all.len());
         let mut branches = HitBranches::default();
+        // One pointer's path has nothing to share, and most events are one pointer's.
+        let mut alone = None;
         for &(event, resting) in &all {
             let previous =
                 self.pointer_states.iter().find(|it| it.0 == event.pointer).map(|it| it.1);
@@ -403,21 +410,38 @@ impl UiTree {
             } else {
                 Vec::new()
             };
-            branches.all.reserve(path.len());
-            branches.add(&path, live.len(), &waiting);
+            if all.len() == 1 {
+                alone = Some((path, waiting));
+            } else {
+                branches.add(&path, live.len(), &waiting);
+            }
             live.push(LiveChange::new(event, previous, resting));
         }
         let kind = event_kind(events);
         let mut delivery =
             Delivery { live: &live, kind, actions: &mut actions, requests: &mut requests };
-        for &root in &branches.roots {
-            self.deliver_before_children(&branches, root, PointerEventPass::Initial, &mut delivery);
-        }
-        for &root in &branches.roots {
-            self.deliver_after_children(&branches, root, &mut delivery);
-        }
-        for &root in &branches.roots {
-            self.deliver_before_children(&branches, root, PointerEventPass::Final, &mut delivery);
+        if let Some((path, waiting)) = alone {
+            self.deliver_along(&path, &waiting, &mut delivery);
+        } else {
+            for &root in &branches.roots {
+                self.deliver_before_children(
+                    &branches,
+                    root,
+                    PointerEventPass::Initial,
+                    &mut delivery,
+                );
+            }
+            for &root in &branches.roots {
+                self.deliver_after_children(&branches, root, &mut delivery);
+            }
+            for &root in &branches.roots {
+                self.deliver_before_children(
+                    &branches,
+                    root,
+                    PointerEventPass::Final,
+                    &mut delivery,
+                );
+            }
         }
         for change in &live {
             self.note_pointer_state(change);
@@ -476,6 +500,29 @@ impl UiTree {
             }
         } else if let Some(kept) = kept {
             self.pointer_states.swap_remove(kept);
+        }
+    }
+
+    /// The only change of an event through the passes along its path, in the order of a branch's.
+    fn deliver_along(&mut self, path: &[HitEntry], waiting: &[bool], delivery: &mut Delivery<'_>) {
+        for entry in path {
+            self.deliver_changes(entry, &[0], PointerEventPass::Initial, false, delivery);
+        }
+        // From the inside out; but one node's delegates in delegation order.
+        let mut end = path.len();
+        while end > 0 {
+            let mut start = end - 1;
+            while start > 0 && path[start].is_delegate_with(&path[start - 1]) {
+                start -= 1;
+            }
+            for (index, entry) in path[start..end].iter().enumerate() {
+                let waiting_parent = waiting.get(start + index).copied().unwrap_or(false);
+                self.deliver_changes(entry, &[0], PointerEventPass::Main, waiting_parent, delivery);
+            }
+            end = start;
+        }
+        for entry in path {
+            self.deliver_changes(entry, &[0], PointerEventPass::Final, false, delivery);
         }
     }
 
@@ -580,14 +627,19 @@ impl UiTree {
         if self.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
             return;
         }
+        // A block waiting in another pass: nothing to make its event for.
+        if entry.whole
+            && !self.node_mut(entry.node).chain[entry.index as usize]
+                .resolve(entry.delegate)
+                .and_then(|node| node.as_pointer_input())
+                .is_some_and(|handler| handler.hears_pass(pass))
+        {
+            return;
+        }
         let origin = self.layer_origin(entry.node, entry.layer as usize);
         let bounds = self.node(entry.node).layers[entry.layer as usize].measured;
-        let whole = self.node_mut(entry.node).chain[entry.index as usize]
-            .resolve(entry.delegate)
-            .and_then(|node| node.as_pointer_input())
-            .is_some_and(|handler| handler.takes_whole_events());
         let Delivery { live, kind, actions, requests } = delivery;
-        if whole {
+        if entry.whole {
             let first = &live[which[0]].event;
             let event = crate::pointer_event::PointerEvents {
                 changes: which.iter().map(|&at| live[at].change_at(origin)).collect(),
