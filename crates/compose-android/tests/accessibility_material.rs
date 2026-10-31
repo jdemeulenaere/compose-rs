@@ -460,3 +460,35 @@ fn a_snackbars_words_appearing_are_told_from_its_live_region() {
         "{changes:?}"
     );
 }
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, populateAccessibilityNodeInfoProperties (`paneTitle`)
+/// A dialog says its pane from its content, and its window nothing: the record has the one title.
+#[test]
+fn a_dialog_has_one_pane_title_and_a_menu_none() {
+    fn titles(node: &SemanticsSnapshot, out: &mut Vec<String>) {
+        if let Some(title) = node.unmerged_config().get(&SemanticsProperties::PANE_TITLE) {
+            out.push(title.as_str().to_string());
+        }
+        node.children.iter().for_each(|child| titles(child, out));
+    }
+    let host = host_of(|| {
+        MaterialTheme!({
+            BasicAlertDialog!(|| {}, {
+                BasicText!("inside", modifier = Modifier.size(100.dp()));
+            });
+        });
+    });
+    let mut found = Vec::new();
+    titles(&host.accessibility_tree(), &mut found);
+    assert_eq!(found, ["Dialog"]);
+    let host = host_of(|| {
+        MaterialTheme!({
+            DropdownMenu!(true, || {}, {
+                BasicText!("inside", modifier = Modifier.size(100.dp()));
+            });
+        });
+    });
+    let mut found = Vec::new();
+    titles(&host.accessibility_tree(), &mut found);
+    assert!(found.is_empty(), "{found:?}");
+}

@@ -1690,6 +1690,7 @@ fn a_connections_action_after_the_focus_moved_is_dropped() {
     let mut connection = connections.get(first).unwrap();
     assert!(!connection.is_for_focused_node(&host));
     assert!(connection.is_active(), "still open: Android's to close");
+    assert_eq!(host.take_software_keyboard_request(), Some(true), "the new field asks");
     connection.perform_editor_action(&mut host, editor_info::IME_ACTION_DONE);
     assert_eq!(host.take_software_keyboard_request(), None);
     let second = connections.open(&host);

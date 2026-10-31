@@ -701,7 +701,8 @@ class ComposeRsView @JvmOverloads constructor(
         // What the content asked of the keyboard (after the frame's events, which woke it).
         if (result and Frame.SHOW_KEYBOARD != 0L && textInput) {
             requestFocus()
-            inputMethods.showSoftInput(this, 0)
+            val shown = inputMethods.showSoftInput(this, 0)
+            ComposeRsInputConnection.log { "frame: showSoftInput -> $shown" }
         } else if (result and Frame.HIDE_KEYBOARD != 0L) {
             inputMethods.hideSoftInputFromWindow(windowToken, 0)
         }
@@ -1175,6 +1176,7 @@ class ComposeRsView @JvmOverloads constructor(
                 inputMethods.restartInput(this)
             }
         } else if (reset && active) {
+            ComposeRsInputConnection.log { "frame: restartInput" }
             inputMethods.restartInput(this)
         }
     }

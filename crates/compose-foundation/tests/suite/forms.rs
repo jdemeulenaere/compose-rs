@@ -168,7 +168,7 @@ fn the_default_actions_move_the_focus_and_hide_the_keyboard() {
     assert!(ui.host().perform_ime_action(ImeAction::Previous));
     ui.wait_for_idle();
     ui.on_node_with_tag("first").assert_is_focused();
-    assert_eq!(ui.host().take_software_keyboard_request(), None);
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(true), "a field focused asks");
     // A single line's default key is Done: it hides the keyboard.
     assert!(ui.host().perform_ime_action(ImeAction::Default));
     assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
@@ -178,6 +178,20 @@ fn the_default_actions_move_the_focus_and_hide_the_keyboard() {
     ui.on_node_with_tag("first").request_focus();
     ui.press_key(Key::Enter);
     assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/text/input/TextInputServiceAndroid.android.kt, startInput (`StartInput` asks for the keyboard too)
+/// With the keyboard hidden, the first tap on another field shows it: the platform's input being
+/// active already, nothing else would.
+#[test]
+fn a_tap_on_another_field_with_the_keyboard_hidden_asks_for_it() {
+    let mut ui = field(KeyboardOptions::DEFAULT, KeyboardActions::new(), true);
+    ui.on_node_with_tag("first").perform_click().assert_is_focused();
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(true));
+    assert!(ui.host().perform_ime_action(ImeAction::Done));
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
+    ui.on_node_with_tag("second").perform_click().assert_is_focused();
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(true));
 }
 
 /// As Compose's `tapToFocus`: a tap on the focused field asks for the keyboard again (after

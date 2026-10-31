@@ -312,3 +312,30 @@ fn a_top_app_bar_is_a_traversal_group() {
     ui.on_node_with_tag("bar")
         .assert(expect_value(&compose_ui::SemanticsProperties::IS_TRAVERSAL_GROUP, true));
 }
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Scaffold.kt, ScaffoldLayout (its place order: "to have correct keyboard focus order")
+/// Tab goes as a scaffold is placed: its top bar, its content, its button, its bottom bar; what's
+/// over what goes by the z indices, the button over the bottom bar.
+#[test]
+fn tab_goes_through_a_scaffold_from_its_top_bar() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || {
+        Scaffold!(
+            top_bar = || {
+                Box!(modifier = Modifier.size(20.dp()).test_tag("top").focusable());
+            },
+            bottom_bar = || {
+                Box!(modifier = Modifier.size(20.dp()).test_tag("bottom").focusable());
+            },
+            floating_action_button = || {
+                Box!(modifier = Modifier.size(20.dp()).test_tag("button").focusable());
+            },
+            |_| {
+                Box!(modifier = Modifier.size(20.dp()).test_tag("content").focusable());
+            }
+        );
+    });
+    for tag in ["top", "content", "button", "bottom"] {
+        ui.press_key(compose_ui::Key::Tab);
+        ui.on_node_with_tag(tag).assert_is_focused();
+    }
+}

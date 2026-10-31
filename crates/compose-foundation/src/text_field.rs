@@ -1353,7 +1353,7 @@ impl TextFieldNode {
                 }
                 event.consume();
                 // A tap on the field already focused asks for the on-screen keyboard (hidden by
-                // `Done`, say), as Compose's `tapToFocus`; focusing it shows it anyway.
+                // `Done`, say), as Compose's `tapToFocus`; focusing it shows it anyway (below).
                 if self.focused && !press.dragging && !self.read_only {
                     context.show_software_keyboard();
                 }
@@ -1446,6 +1446,11 @@ impl FocusTargetModifierNode for TextFieldNode {
         self.tell_focus(focused);
         if focused {
             context.bring_into_view();
+            // As Compose's `StartInput`, which always asks for the keyboard: going from one field
+            // to another with it hidden (`Done`, back) shows it at the first tap.
+            if self.enabled && !self.read_only {
+                context.show_software_keyboard();
+            }
         }
         // A new field's text is for the input method to read anew, as Compose's `startInput`.
         self.restart_input |= focused;

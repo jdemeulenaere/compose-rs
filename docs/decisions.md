@@ -688,14 +688,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D1125 | [text](decisions/text.md#d1125) | current |
 | D1126 | [text](decisions/text.md#d1126) | current |
 | D1127 | [text](decisions/text.md#d1127) | current |
-| D1663 | [text](decisions/text.md#d1663) | revised by [D1668](decisions/text.md#d1668) |
-| D1664 | [text](decisions/text.md#d1664) | revised by [D1667](decisions/text.md#d1667), [D1668](decisions/text.md#d1668), [D1669](decisions/text.md#d1669) |
-| D1665 | [text](decisions/text.md#d1665) | current |
-| D1666 | [text](decisions/text.md#d1666) | current |
-| D1667 | [text](decisions/text.md#d1667) | revised by [D1670](decisions/text.md#d1670) |
-| D1668 | [text](decisions/text.md#d1668) | revised by [D1670](decisions/text.md#d1670) |
-| D1669 | [text](decisions/text.md#d1669) | current |
-| D1670 | [text](decisions/text.md#d1670) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |
@@ -913,3 +905,13 @@ The log is split by area into the files below, one table each, rows in number or
 | D1660 | [ui-and-layout](decisions/ui-and-layout.md#d1660) | current |
 | D1661 | [ui-and-layout](decisions/ui-and-layout.md#d1661) | current |
 | D1662 | [ui-and-layout](decisions/ui-and-layout.md#d1662) | current |
+| D1663 | [text](decisions/text.md#d1663) | revised by [D1668](decisions/text.md#d1668) |
+| D1664 | [text](decisions/text.md#d1664) | revised by [D1667](decisions/text.md#d1667), [D1668](decisions/text.md#d1668), [D1669](decisions/text.md#d1669) |
+| D1665 | [text](decisions/text.md#d1665) | current |
+| D1666 | [text](decisions/text.md#d1666) | current |
+| D1667 | [text](decisions/text.md#d1667) | revised by [D1670](decisions/text.md#d1670) |
+| D1668 | [text](decisions/text.md#d1668) | revised by [D1670](decisions/text.md#d1670) |
+| D1669 | [text](decisions/text.md#d1669) | current |
+| D1670 | [text](decisions/text.md#d1670) | current |
+| D1671 | [text](decisions/text.md#d1671) | current |
+| D1672 | [ui-and-layout](decisions/ui-and-layout.md#d1672) | current |

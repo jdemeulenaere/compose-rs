@@ -442,24 +442,35 @@ pub fn Scaffold(
             modifier.then(consumed.clone()).background(container_color),
             policy.clone(),
             compose_runtime::callback(move || {
-                let slot = |content: compose_runtime::Callback| {
+                let slot = |z_index: f32, content: compose_runtime::Callback| {
                     Box(
-                        Modifier,
+                        Modifier.z_index(z_index),
                         Alignment::TOP_START,
                         false,
                         compose_runtime::callback(move |_| content()),
                     );
                 };
-                Layout(Modifier, top_bar_slot.clone(), top_bar.clone());
+                Layout(Modifier.z_index(TOP_BAR_Z_INDEX), top_bar_slot.clone(), top_bar.clone());
                 let content = content.clone();
-                slot(compose_runtime::callback(move || content(padding.get())));
-                Layout(Modifier, bottom_bar_slot.clone(), bottom_bar.clone());
-                slot(fab.clone());
-                slot(snackbar_host.clone());
+                slot(CONTENT_Z_INDEX, compose_runtime::callback(move || content(padding.get())));
+                Layout(
+                    Modifier.z_index(BOTTOM_BAR_Z_INDEX),
+                    bottom_bar_slot.clone(),
+                    bottom_bar.clone(),
+                );
+                slot(FAB_Z_INDEX, fab.clone());
+                slot(SNACKBAR_Z_INDEX, snackbar_host.clone());
             }),
         );
     });
 }
+
+// What's over what, as Compose's `Scaffold`: its place order is for the keys' focus.
+const CONTENT_Z_INDEX: f32 = 0.0;
+const TOP_BAR_Z_INDEX: f32 = 1.0;
+const SNACKBAR_Z_INDEX: f32 = 2.0;
+const BOTTOM_BAR_Z_INDEX: f32 = 3.0;
+const FAB_Z_INDEX: f32 = 4.0;
 
 /// A bar's slot: a box that says whether the bar emitted anything, as Compose's
 /// `topBarPlaceables.isEmpty()` and `bottomBarHeight == null`: no bar leaves its side to the
@@ -544,13 +555,14 @@ impl MeasurePolicy for ScaffoldLayout {
             self.padding.set(padding);
         }
         let content = scope.measure(*content, Constraints::fixed(width, height));
-        scope.place_relative(&content, 0, 0);
+        // In the order of the keys' focus, as Compose's: the z indices say what's over what.
         scope.place_relative(&top, 0, 0);
-        scope.place_relative(&bottom, 0, height - bottom.height);
+        scope.place_relative(&content, 0, 0);
         // The FAB 16 dp from the edges, above the bottom bar (over it for `EndOverlay`: above
         // the bottom inset then), and the snackbar above both, centered, as Compose's
         // `ScaffoldLayout`.
         let mut above = if bottom_present { bottom.height } else { bottom_inset };
+        let mut fab_at = None;
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
             let x = match self.fab_position {
@@ -565,7 +577,7 @@ impl MeasurePolicy for ScaffoldLayout {
             } else {
                 bottom.height + fab.height + margin
             };
-            scope.place_relative(&fab, x, height - from_bottom);
+            fab_at = Some((x, height - from_bottom));
             above = from_bottom;
         }
         if snackbar.height > 0 {
@@ -575,6 +587,10 @@ impl MeasurePolicy for ScaffoldLayout {
                 height - above - snackbar.height,
             );
         }
+        if let Some((x, y)) = fab_at {
+            scope.place_relative(&fab, x, y);
+        }
+        scope.place_relative(&bottom, 0, height - bottom.height);
         scope.layout(width, height)
     }
 

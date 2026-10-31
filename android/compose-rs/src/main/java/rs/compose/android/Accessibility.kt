@@ -523,11 +523,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             info.setTextSelection(node.selectionStart, node.selectionEnd)
             info.movementGranularities = node.granularities
         }
-        if (node.paneTitle.isNotEmpty()) {
-            info.paneTitle = node.paneTitle
-        } else if (node.flags and DIALOG != 0) {
-            info.paneTitle = node.description.ifEmpty { node.text }
-        }
+        // As Compose's `PaneTitle` alone: a dialog's window says nothing of its own, its content does.
+        if (node.paneTitle.isNotEmpty()) info.paneTitle = node.paneTitle
         return info
     }
 
@@ -814,7 +811,6 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val CHECKABLE = 1 shl 6
         const val CHECKED = 1 shl 7
         const val SELECTED = 1 shl 8
-        const val DIALOG = 1 shl 9
         const val RANGE = 1 shl 10
         const val SCROLL = 1 shl 11
         const val SCROLL_HORIZONTAL = 1 shl 12
