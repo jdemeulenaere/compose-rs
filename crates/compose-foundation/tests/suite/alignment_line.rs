@@ -650,3 +650,28 @@ fn a_ruler_is_its_default_while_aligning_then_there() {
     assert!(read[0].is_nan());
     assert!(!read.last().expect("some").is_nan());
 }
+
+/// What's before the line and after it across all of them, a row taking both.
+#[test]
+fn a_row_is_as_tall_as_what_its_lines_span() {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let size = Rc::new(Cell::new(IntSize::ZERO));
+    let s = size.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let s = s.clone();
+        Row!(modifier = Modifier.on_size_changed(move |size: IntSize| s.set(size)), |scope| {
+            line_layout(40, 40, line, 30, Modifier.align_by(scope, line));
+            line_layout(40, 40, line, 20, Modifier.align_by(scope, line));
+            // No line: it goes at the top, and takes nothing of what they span.
+            line_layout(
+                40,
+                40,
+                VerticalAlignmentLine::new(i32::min),
+                0,
+                Modifier.align_by(scope, line),
+            );
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(size.get(), IntSize::new(120, 50));
+}
