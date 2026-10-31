@@ -31,6 +31,8 @@ pub(crate) struct CoordinatesValues {
     pub(crate) position_in_root: Offset,
     pub(crate) clipped_bounds: Rect,
     pub(crate) origin: Offset,
+    /// Its lines' changes, heard if they were asked through coordinates (D1219).
+    pub(crate) lines_changed: u32,
 }
 
 /// A node told its layer was measured and placed, as Compose's `LayoutAwareModifierNode`.
@@ -875,11 +877,13 @@ impl UiTree {
             current = if value.overlay { None } else { value.parent };
         }
         let window_origin = self.window_origin;
+        let value_lines_changed = self.lines_changed_for_coordinates(node);
         CoordinatesValues {
             size,
             position_in_root: origin,
             clipped_bounds: bounds,
             origin: window_origin,
+            lines_changed: value_lines_changed,
         }
     }
 

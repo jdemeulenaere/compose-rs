@@ -13,6 +13,7 @@
 extern crate compose_runtime as compose;
 
 mod alignment;
+mod alignment_line;
 mod annotated;
 mod back;
 mod border;
@@ -172,6 +173,9 @@ pub mod platform {
 
 pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
+};
+pub use alignment_line::{
+    AlignmentLine, FIRST_BASELINE, HorizontalAlignmentLine, LAST_BASELINE, VerticalAlignmentLine,
 };
 pub use annotated::{
     AnnotatedRange, AnnotatedString, AnnotatedStringBuilder, Annotation, Bullet, LinkAnnotation,

@@ -663,6 +663,10 @@ impl LayoutModifierNode for TextNode {
         }
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
+        scope.provide_baselines(
+            metrics.first_baseline.round() as i32,
+            metrics.last_baseline.round() as i32,
+        );
         scope.layout(size.width, size.height)
     }
 

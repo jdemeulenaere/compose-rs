@@ -33,6 +33,10 @@ impl UiTree {
         }
         self.window = size;
         self.focus_requests.container_size.set(size);
+        if self.focus_requests.alignment_was_asked.get() {
+            self.focus_requests.alignment_was_asked.set(false);
+            self.note_alignment_asked_by_coordinates();
+        }
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);
@@ -49,6 +53,9 @@ impl UiTree {
         let value = self.node(root);
         if value.needs_placement || value.subtree_needs_placement {
             self.place_pass(root);
+        }
+        if !self.line_requests.is_empty() {
+            self.settle_line_requests(root, constraints);
         }
         if !self.coordinate_readers.is_empty() {
             self.place_readers_moved(root);
@@ -191,6 +198,10 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
+        if self.alignment_lines_read {
+            self.clear_alignment_uses_in_measure(node);
+        }
+        let value = self.node_mut(node);
         // What its semantics read may have changed with what measured it (a lazy list's
         // ranges, a text field's text): computed again when next asked (D1257).
         value.semantics = None;
@@ -204,7 +215,10 @@ impl UiTree {
         if value.inner_layers.is_empty() {
             // Measured, it draws again.
             self.invalidate_draw_of(node);
-            return self.measure_layer(node, 0, constraints);
+            self.node_mut(node).measuring = true;
+            let size = self.measure_layer(node, 0, constraints);
+            self.node_mut(node).measuring = false;
+            return size;
         }
         // With inner layers, what it lays out (its children) is theirs: what's before them draws
         // again only if a layer's size changed (a moved layer draws it again: `place`), as
@@ -212,8 +226,10 @@ impl UiTree {
         let sizes: smallvec::SmallVec<[IntSize; 4]> =
             value.layers.iter().map(|layer| layer.measured).collect();
         self.invalidate_inner_layers(node);
+        self.node_mut(node).measuring = true;
         let size = self.measure_layer(node, 0, constraints);
-        let value = self.node(node);
+        let value = self.node_mut(node);
+        value.measuring = false;
         if value.layers.len() != sizes.len()
             || value.layers.iter().zip(&sizes).any(|(layer, size)| layer.measured != *size)
         {
@@ -303,6 +319,10 @@ impl UiTree {
                     return true;
                 }
                 self.invalidate_placement_of(node);
+            }
+            // It read a line that changed.
+            if self.node(node).needs_measure {
+                return true;
             }
         }
         false
@@ -515,6 +535,9 @@ impl UiTree {
         if value.placements.is_some() {
             self.rulers_measured(node, layer, earlier_rulers);
         }
+        if self.node(node).alignment.is_some() {
+            self.alignment_lines_measured(node, layer);
+        }
         let value = self.node_mut(node);
         let layout_aware = value.kinds.any(NodeKinds::LAYOUT_AWARE);
         let value = &mut value.layers[layer];
@@ -526,6 +549,9 @@ impl UiTree {
         if value.offset != offset {
             value.offset = offset;
             self.invalidate_position(node, layer);
+            if self.alignment_lines_read {
+                self.alignment_position_changed(node, layer);
+            }
         }
         if resized {
             self.measure_result_changed(node, layer);
@@ -626,7 +652,9 @@ impl UiTree {
         match result {
             Ok(result) => result,
             Err(panic) => {
-                self.node_mut(node).constraints = None;
+                let value = self.node_mut(node);
+                value.constraints = None;
+                value.measuring = false;
                 self.invalidate_measure(node);
                 panic::resume_unwind(panic)
             }
@@ -649,6 +677,9 @@ impl UiTree {
             if entry.offset != offset {
                 entry.offset = offset;
                 self.invalidate_position(measurable.node, measurable.layer as usize);
+                if self.alignment_lines_read {
+                    self.alignment_position_changed(measurable.node, measurable.layer as usize);
+                }
             }
         }
     }
@@ -701,6 +732,9 @@ impl UiTree {
         }
         if moved {
             self.invalidate_position(node, layer);
+            if self.alignment_lines_read {
+                self.alignment_position_changed(node, layer);
+            }
         }
         if told {
             self.placed_layers.push((node, layer as u32));
@@ -712,7 +746,7 @@ impl UiTree {
 }
 
 /// The offset centering a layer measured outside its constraints in the size its parent sees.
-fn centering(layer: &Layer) -> IntOffset {
+pub(crate) fn centering(layer: &Layer) -> IntOffset {
     IntOffset::new(
         (layer.size.width - layer.measured.width) / 2,
         (layer.size.height - layer.measured.height) / 2,

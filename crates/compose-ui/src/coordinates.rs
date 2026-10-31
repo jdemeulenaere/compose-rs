@@ -169,6 +169,32 @@ impl LayoutCoordinates {
         self.read(|tree| tree.find_place(self).is_some()).unwrap_or(false)
     }
 
+    /// `line`'s position in it, as `LayoutCoordinates.get`, the tree as it was last laid out, or
+    /// `AlignmentLine::UNSPECIFIED`: what it says changing places what it names again.
+    #[track_caller]
+    pub fn alignment_line(&self, line: impl Into<crate::alignment_line::AlignmentLine>) -> i32 {
+        let line = line.into();
+        self.read(|tree| {
+            let place = tree.find_place(self)?;
+            tree.focus_requests.alignment_asked.borrow_mut().push(place.node);
+            tree.focus_requests.alignment_was_asked.set(true);
+            Some(tree.peek_alignment_line(place.node, place.layer, line))
+        })
+        .flatten()
+        .unwrap_or(crate::alignment_line::AlignmentLine::UNSPECIFIED)
+    }
+
+    /// What it and what's inside it in its node give, as `providedAlignmentLines`.
+    #[track_caller]
+    pub fn provided_alignment_lines(&self) -> Vec<crate::alignment_line::AlignmentLine> {
+        self.read(|tree| {
+            let place = tree.find_place(self)?;
+            Some(tree.provided_alignment_lines(place.node, place.layer))
+        })
+        .flatten()
+        .unwrap_or_default()
+    }
+
     /// Its size, as `LayoutCoordinates.size`: what it was measured at.
     #[track_caller]
     pub fn size(&self) -> IntSize {

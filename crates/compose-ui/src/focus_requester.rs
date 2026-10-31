@@ -31,6 +31,9 @@ pub(crate) struct FocusRequests {
     pub(crate) window: crate::tree_access::TreeWindow,
     /// A `LayoutCoordinates` was made: something may ask where it is any time.
     pub(crate) coordinates_given: Cell<bool>,
+    /// A `LayoutCoordinates` asked the lines of these: they hear of a change (D1219).
+    pub(crate) alignment_asked: RefCell<Vec<NodeId>>,
+    pub(crate) alignment_was_asked: Cell<bool>,
     pub(crate) pending: RefCell<Vec<FocusRequest>>,
     /// The tree's key in the thread's registry, for what holds only this.
     pub(crate) tree_key: Cell<u32>,

@@ -142,6 +142,14 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The placement blocks of its layers (`MeasureScope::layout_with`): most nodes have none.
     pub(crate) placements: Option<Box<crate::placement::NodePlacements>>,
+    /// Its measurement is running.
+    pub(crate) measuring: bool,
+    /// Its placement blocks are running.
+    pub(crate) laying_out: bool,
+    /// The layer of its text and that text's baselines, kept here as there's one for each text.
+    pub(crate) baselines: Option<(u32, i32, i32)>,
+    /// Its alignment lines, once it gives one or it's asked (D1219).
+    pub(crate) alignment: Option<Box<crate::alignment_line::AlignmentLines>>,
     /// A placement block of it must run.
     pub(crate) needs_placement: bool,
     /// One of a descendant must.
@@ -235,6 +243,10 @@ impl LayoutNode {
             subtree_needs_measure: false,
             placed: false,
             placements: None,
+            measuring: false,
+            laying_out: false,
+            baselines: None,
+            alignment: None,
             needs_placement: false,
             content_placed_in: 0,
             reader_at: u32::MAX,
@@ -410,6 +422,14 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// A line's been read in this tree: there's someone to tell (D1219).
+    pub(crate) alignment_lines_read: bool,
+    /// Blocks are running to know a line, not to place: no position or ruler is told.
+    pub(crate) placing_for_alignment: bool,
+    /// They asked one, and run again when it's placed.
+    pub(crate) asked_while_aligning: std::cell::Cell<bool>,
+    /// Those a line's change asked of, for the rest of the layout.
+    pub(crate) line_requests: Vec<NodeId>,
     /// Who read which ruler, by its id, since its last change (D1218).
     pub(crate) ruler_readers: std::collections::HashMap<(u64, NodeId), crate::ruler::Ruler>,
     /// The nodes with `UnplacedAwareModifierNode`s, and whether each was placed when last looked
@@ -542,6 +562,10 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            alignment_lines_read: false,
+            placing_for_alignment: false,
+            asked_while_aligning: std::cell::Cell::new(false),
+            line_requests: Vec::new(),
             ruler_readers: Default::default(),
             unplaced_aware: Vec::new(),
             new_layers: Vec::new(),
@@ -1519,6 +1543,8 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
+        // Its chain changed: its text gives them again, if it's still there.
+        value.baselines = None;
         // Those of layers gone: the rest measure again, whatever they were.
         if let Some(placements) = &mut value.placements {
             placements.blocks.truncate(value.layers.len());

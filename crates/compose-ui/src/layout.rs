@@ -586,6 +586,45 @@ impl<'a> MeasureScope<'a> {
         result
     }
 
+    /// Gives what's returned next alignment lines, as `layout(width, height, alignmentLines)`.
+    /// Called before [`layout`](Self::layout) or one of its kinds; another call replaces them.
+    pub fn provide_alignment_lines<L: Into<crate::alignment_line::AlignmentLine>>(
+        &mut self,
+        lines: impl IntoIterator<Item = (L, i32)>,
+    ) -> &mut Self {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            let lines = lines.into_iter().map(|(line, position)| (line.into(), position));
+            self.base.tree.enter().give_alignment_lines(node, layer, lines);
+        }
+        self
+    }
+
+    /// `provide_alignment_lines` of the two baselines: what a text gives, at no cost beyond a store
+    /// until someone reads them.
+    pub fn provide_baselines(&mut self, first: i32, last: i32) -> &mut Self {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            self.base.tree.enter().give_baselines(node, layer, first, last);
+        }
+        self
+    }
+
+    /// `placeable[line]`: its position in the placeable, or `AlignmentLine::UNSPECIFIED` where
+    /// nothing placed gives it. Blocks waiting below it run now, not again. What it reads changing
+    /// measures this again. In an intrinsic measurement, unspecified.
+    pub fn alignment_line(
+        &mut self,
+        placeable: &Placeable,
+        line: impl Into<crate::alignment_line::AlignmentLine>,
+    ) -> i32 {
+        if self.intrinsic.is_some() {
+            return crate::alignment_line::AlignmentLine::UNSPECIFIED;
+        }
+        let measurable = placeable.measurable;
+        self.base.tree.enter().read_alignment_line(measurable, line.into(), false)
+    }
+
     /// `layout_with`, giving `rulers` to what's in it, as `layout(width, height, rulers = …) { … }`:
     /// worked out each time it's placed, what they read placing it again.
     pub fn layout_with_rulers(

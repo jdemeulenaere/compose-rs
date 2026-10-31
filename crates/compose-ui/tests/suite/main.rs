@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod alignment_lines;
 mod annotated_string;
 mod annotated_string_builder;
 mod coordinates_in_passes;

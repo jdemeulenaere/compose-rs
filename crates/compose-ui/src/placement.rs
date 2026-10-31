@@ -39,6 +39,8 @@ pub(crate) struct LayerBlock {
     measure_run: u64,
     /// It hasn't run since: what it places was just measured, no child being placed yet.
     first: bool,
+    /// It ran early, for an alignment line, and needn't when the node is placed.
+    pub(crate) early: bool,
 }
 
 /// The placement blocks of a node's layers.
@@ -120,8 +122,12 @@ impl PlacementScope<'_> {
 
     /// The coordinates of what's placing, as `coordinates`: a query of where they are makes this
     /// block run again when that changes (D1212), the others (`size`, `is_attached`) don't.
-    /// Compose's are `None` while alignment lines are worked out, which this has no part in yet.
+    /// `None` while an alignment line is worked out, as Compose's: it runs again when it's placed.
     pub fn coordinates(&self) -> Option<LayoutCoordinates> {
+        if self.scope.base.tree.placing_for_alignment {
+            self.scope.base.tree.asked_while_aligning.set(true);
+            return None;
+        }
         Some(self.scope.base.tree.coordinates_of_layer(self.scope.base.node, self.scope.layer))
     }
 
@@ -136,12 +142,28 @@ impl PlacementScope<'_> {
         result
     }
 
+    /// `placeable[line]`: its position in the placeable, or `AlignmentLine::UNSPECIFIED`. What it
+    /// reads changing places this again.
+    pub fn alignment_line(
+        &mut self,
+        placeable: &Placeable,
+        line: impl Into<crate::alignment_line::AlignmentLine>,
+    ) -> i32 {
+        let measurable = placeable.measurable;
+        self.scope.base.tree.enter().read_alignment_line(measurable, line.into(), true)
+    }
+
     /// `ruler`'s value in these coordinates, as `ruler.current(default)`: its nearest provider's,
     /// at this layout or around it, else `default`. A change to it places this again; so does its
     /// reader moving, as it asks where it is.
     pub fn current(&mut self, ruler: &Ruler, default: f32) -> f32 {
         if let Some(derivation) = ruler.derivation() {
             return derivation(self, default);
+        }
+        // Unavailable while working out a line, as Compose's: it runs again when it's placed.
+        if self.scope.base.tree.placing_for_alignment {
+            self.scope.base.tree.asked_while_aligning.set(true);
+            return default;
         }
         let node = self.scope.base.node;
         self.scope.base.tree.enter().note_ruler_reader(ruler, node);
@@ -228,9 +250,13 @@ impl UiTree {
         if placements.blocks.len() <= layer {
             placements.blocks.resize_with(layer + 1, || None);
         }
-        let earlier =
-            placements.blocks[layer].replace(LayerBlock { block, measure_run, first: true });
-        self.mark_needs_placement(node);
+        let earlier = placements.blocks[layer].replace(LayerBlock {
+            block,
+            measure_run,
+            first: true,
+            early: false,
+        });
+        self.note_needs_placement(node);
         earlier
     }
 
@@ -258,6 +284,19 @@ impl UiTree {
     /// `node`'s blocks must run. Not placed or deactivated, it only waits, as `requestRelayout`
     /// marking it pending: nothing's asked of a frame until it's placed (`place_in_run`).
     pub(crate) fn mark_needs_placement(&mut self, node: NodeId) {
+        // What ran early isn't what's asked now.
+        if self.alignment_lines_read
+            && let Some(placements) = &mut self.node_mut(node).placements
+        {
+            for block in placements.blocks.iter_mut().flatten() {
+                block.early = false;
+            }
+        }
+        self.note_needs_placement(node);
+    }
+
+    /// `mark_needs_placement`, for a new block: what's inside it ran as it should.
+    fn note_needs_placement(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         value.needs_placement = true;
         if value.placed && !value.deactivated {
@@ -283,7 +322,8 @@ impl UiTree {
     /// Runs the blocks waiting in `node`'s subtree, top down: each once its node is placed, the
     /// children it places after it. A child not placed keeps what it waits for until it is.
     pub(crate) fn place_pass(&mut self, node: NodeId) {
-        if self.node(node).needs_placement {
+        let ran = self.node(node).needs_placement;
+        if ran {
             self.run_placement_blocks(node);
             // What measuring its own content asked of it is done too.
             self.node_mut(node).needs_placement = false;
@@ -305,6 +345,9 @@ impl UiTree {
             }
             self.node_mut(node).subtree_needs_placement = false;
         }
+        if ran && self.alignment_lines_read {
+            self.alignment_uses_placed(node);
+        }
     }
 
     /// `node` was placed with blocks waiting in it or under it, passed over until now.
@@ -318,10 +361,19 @@ impl UiTree {
     /// again. Each is read when its turn comes: an outer block measuring what's inside it makes
     /// the inner one. A panic leaves the flags as they were, for a later layout (`place_pass`
     /// clears them after).
-    fn run_placement_blocks(&mut self, node: NodeId) {
+    pub(crate) fn run_placement_blocks(&mut self, node: NodeId) {
         if !self.new_layers.is_empty() {
             self.run_new_layers();
         }
+        let lines = self.alignment_lines_read;
+        if lines {
+            self.clear_alignment_uses_in_placement(node);
+        }
+        self.node_mut(node).laying_out = true;
+        // Some ran already to know a line, what they read kept.
+        let adding = lines
+            && (self.node(node).placements.as_ref())
+                .is_some_and(|it| it.blocks.iter().flatten().any(|block| block.early));
         let observer = self.observer.clone();
         let mut run = || {
             let mut layer = 0;
@@ -337,9 +389,13 @@ impl UiTree {
             again
         };
         let (again, reads) = with_position_reads_of(node, || match &observer {
+            Some(observer) if adding => {
+                observer.observe_adding(observation_key(node, Observation::Placement), run)
+            }
             Some(observer) => observer.observe(observation_key(node, Observation::Placement), run),
             None => run(),
         });
+        self.node_mut(node).laying_out = false;
         if reads || self.node(node).reader_at != u32::MAX {
             self.note_reader(node, reads, false);
         }
@@ -471,10 +527,47 @@ impl UiTree {
     #[allow(clippy::type_complexity)]
     fn block_of_layer(&mut self, node: NodeId, layer: usize) -> Option<Option<(Block, u64, bool)>> {
         let blocks = &mut self.node_mut(node).placements.as_mut()?.blocks;
-        Some(blocks.get_mut(layer)?.as_mut().map(|entry| {
+        Some(blocks.get_mut(layer)?.as_mut().and_then(|entry| {
+            if std::mem::take(&mut entry.early) {
+                return None;
+            }
             let first = std::mem::replace(&mut entry.first, false);
-            (entry.block.clone(), entry.measure_run, first)
+            Some((entry.block.clone(), entry.measure_run, first))
         }))
+    }
+
+    /// The block of `layer` of `node`, if it waits, now, and not again when the node's placed:
+    /// a line's read of what's inside it, by a modifier around it whose own block may not exist.
+    pub(crate) fn run_block_for_alignment(&mut self, node: NodeId, layer: usize) {
+        let value = self.node_mut(node);
+        let waits = value.needs_placement;
+        let Some(entry) = (value.placements.as_mut())
+            .and_then(|it| it.blocks.get_mut(layer)?.as_mut())
+            .filter(|entry| !entry.early && (entry.first || waits))
+        else {
+            return;
+        };
+        entry.early = true;
+        let first = std::mem::replace(&mut entry.first, false);
+        let (block, measure_run) = (entry.block.clone(), entry.measure_run);
+        let aligning = std::mem::replace(&mut self.placing_for_alignment, true);
+        let asked = self.asked_while_aligning.replace(false);
+        let observer = self.observer.clone();
+        let mut run = || self.run_placement_block(node, layer, measure_run, first, &block);
+        match &observer {
+            Some(observer) => {
+                observer.observe_adding(observation_key(node, Observation::Placement), run)
+            }
+            None => run(),
+        }
+        self.placing_for_alignment = aligning;
+        if self.asked_while_aligning.get()
+            && let Some(entry) = (self.node_mut(node).placements.as_mut())
+                .and_then(|it| it.blocks.get_mut(layer)?.as_mut())
+        {
+            entry.early = false;
+        }
+        self.asked_while_aligning.set(asked);
     }
 
     fn run_placement_block(
