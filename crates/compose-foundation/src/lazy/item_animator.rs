@@ -630,9 +630,6 @@ pub(super) struct MovedAway {
     pub main: i32,
     pub cross: i32,
     pub to_start: bool,
-    pub lane: usize,
-    pub span: usize,
-    pub constraints: Option<Constraints>,
 }
 
 /// One settled measurement, as `onMeasured`'s arguments.
@@ -640,8 +637,8 @@ pub(super) struct Pass<'a> {
     pub items: &'a Rc<Items>,
     pub vertical: bool,
     pub reverse: bool,
-    /// A row laid out right to left.
-    pub mirrored_row: bool,
+    /// Which way its offsets go on screen, per axis: -1 where they're mirrored.
+    pub mirror: (i32, i32),
     pub main_size: i32,
     pub lane_count: usize,
     pub layout_min: i32,
@@ -932,10 +929,7 @@ impl ItemAnimator {
             let previous = previous?;
             if same_items { Some(index) } else { previous.keys().get(&key).copied() }
         };
-        let mirror = (
-            if !vertical && pass.reverse != pass.mirrored_row { -1 } else { 1 },
-            if vertical && pass.reverse { -1 } else { 1 },
-        );
+        let mirror = pass.mirror;
 
         let mut moving_away: HashSet<u64> = self.info.borrow().keys().copied().collect();
         let mut from_start: Vec<(usize, usize)> = Vec::new();
@@ -1072,12 +1066,7 @@ impl ItemAnimator {
                 info_map.remove(&key);
                 continue;
             }
-            let moved = MovedItem {
-                lane: info.lane,
-                span: info.span,
-                constraints: info.constraints,
-                cross: info.cross_offset,
-            };
+            let moved = MovedItem { lane: info.lane, span: info.span };
             let Some(size) = measure(new_index, &moved) else {
                 // Not composed: the next round of this frame, its offsets kept as they were.
                 info.waiting_at = Some(new_index);
@@ -1223,9 +1212,6 @@ impl ItemAnimator {
             main,
             cross: info.cross_offset,
             to_start,
-            lane: info.lane,
-            span: info.span,
-            constraints: info.constraints,
         }
     }
 
@@ -1289,8 +1275,6 @@ struct Waiting {
 pub(super) struct MovedItem {
     pub lane: usize,
     pub span: usize,
-    pub constraints: Option<Constraints>,
-    pub cross: i32,
 }
 
 fn item_offset(item: &Positioned, vertical: bool) -> IntOffset {

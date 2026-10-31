@@ -2820,7 +2820,7 @@ impl MeasurePolicy for LazyListLayout {
                     items: &info.items,
                     vertical,
                     reverse,
-                    mirrored_row: false,
+                    mirror: (1, 1),
                     main_size: if vertical { size.height } else { size.width },
                     lane_count: 1,
                     layout_min: 0,
@@ -3474,7 +3474,16 @@ impl MeasurePolicy for LazyListLayout {
                     items: &info.items,
                     vertical,
                     reverse,
-                    mirrored_row: !vertical && layout_direction == compose_ui::LayoutDirection::Rtl,
+                    mirror: (
+                        if !vertical
+                            && reverse != (layout_direction == compose_ui::LayoutDirection::Rtl)
+                        {
+                            -1
+                        } else {
+                            1
+                        },
+                        if vertical && reverse { -1 } else { 1 },
+                    ),
                     main_size: main_total,
                     lane_count: 1,
                     layout_min,

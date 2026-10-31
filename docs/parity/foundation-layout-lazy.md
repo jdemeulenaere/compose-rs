@@ -137,9 +137,9 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowParityTest.kt | 12 | Grid cache window configured like the old strategy | ported (`lazy_cache_window.rs`: 11, `grid_parity_*`, in both orientations; `prefetchingForwardAndBackwardReverseLayout` waits for grids' `reverseLayout`, feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridCacheWindowTest.kt | 8 | Grid cache window fill and keep | ported (`lazy_cache_window.rs`: all 8, in both orientations) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridHeadersTest.kt | 14 | `LazyGridScope.stickyHeader` | partial (`lazy_grid_headers.rs`: 13 of 14, the focus tests without their pinning, on an item in view. Left: `lazyVerticalGridwithPinnedItem`: feature:pinnable) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemAppearanceAnimationTest.kt | 10 | Grid `animateItem` fade-in | feature:animate-item |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemDisappearanceAnimationTest.kt | 13 | Grid `animateItem` fade-out | feature:animate-item |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemPlacementAnimationTest.kt | 51 | Grid `animateItem` placement | feature:animate-item |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemAppearanceAnimationTest.kt | 10 | Grid `animateItem` fade-in | partial (`lazy_animate_grid.rs`: the 3 that differ from a list's in cells; the rest run through the same animator, `lazy_animate_item.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemDisappearanceAnimationTest.kt | 13 | Grid `animateItem` fade-out | partial (`lazy_animate_grid.rs`: 3, as above; left: reversed, RTL and padded ones, and re-adding) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemPlacementAnimationTest.kt | 51 | Grid `animateItem` placement | partial (`lazy_animate_grid.rs`: 18, each orientation, reversed or not; left: those the list's file ports the same way through the same animator, the `_differentSpans*` scrolls, lookahead) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridLayoutInfoTest.kt | 17 | Grid `layoutInfo` (rows/columns/spans, viewport) | ported (`lazy_grid_layout_info.rs`: all 17, the four configurations) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridNestedPrefetchingTest.kt | 6 | Nested prefetch from grid items | ported (`lazy_nested_prefetch.rs` for 4, D1461; `overridingNestedPrefetchCountIsRespected` and `nestedPrefetchIsMeasuredWithProvidedConstraints` need a strategy of your own: n/a at the tip's window. As the list's: the rest of those in view compose in a pass after the measurement short of them, where Compose's measurement composes them) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridPinnableContainerTest.kt | 13 | Pinning grid items | feature:pinnable |
@@ -373,12 +373,12 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `isScrollInProgress`, `interactionSource`, `lastScrolledForward`/`Backward`;
   - `LazyLayoutScrollScope` (and `LazyLayoutScrollScope(state, scrollScope)` for each state), the `Saver` as a value.
 - **lazy-list-params:** done: `LazyColumn`/`LazyRow`'s `flingBehavior` and `overscrollEffect` (D1464). `reverseLayout`, `userScrollEnabled`, `contentPadding` and `cacheWindow` exist.
-- **grid-parity:** done but for `LazyGridItemScope`'s `animateItem` (with animate-item), D1451; `overscrollEffect` D1464.
+- **grid-parity:** done, `animate_item` with it (D1472), D1451; `overscrollEffect` D1464.
 - **cache-window:** done for lists, grids (D892) and staggered grids (D1469).
 - **lazy-semantics:** `CollectionInfo`, `ScrollToIndex` and `scrollByOffset` are done on lists, grids and pagers (D1468), a traversal group too. Left: `CollectionItemInfo` and `IndexForKey`, for `performScrollToKey`.
 - **pinnable:** (Started, D1282: `LOCAL_PINNABLE_CONTAINER`, `PinnableContainer` and `PinnedHandle` in ui, lazy items pinned one at a time by what's focusable; the rest of this waits.) `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
 - **beyond-bounds-api:** ui's `BeyondBoundsLayout` (`ModifierLocalBeyondBoundsLayout`, `layout(direction) {}`) answered by lazy layouts. compose-rs answers focus searches only.
-- **animate-item:** `Modifier::animate_item` and `animate_item_with(scope, fade_in_spec, placement_spec, fade_out_spec)` (`AnimateItemModifier`), D1472: lists done. Left: grids, staggered grids; lookahead scopes.
+- **animate-item:** `Modifier::animate_item` and `animate_item_with(scope, fade_in_spec, placement_spec, fade_out_spec)` (`AnimateItemModifier`), D1472: lists and grids done. Left: staggered grids; lookahead scopes.
 - **lazy-layout-public:**
   - layout: `LazyLayout(itemProvider, modifier, prefetchState, measurePolicy)`, `LazyLayoutItemProvider`, `LazyLayoutMeasurePolicy`, `LazyLayoutMeasureScope.compose(index)`;
   - prefetch: `LazyLayoutPrefetchState` (`schedulePrecomposition`, `schedulePrecompositionAndPremeasure`, `PrefetchHandle.cancel`/`markAsUrgent`, `PrefetchResultScope`), the `onNestedPrefetch` constructor (*exp*), `NestedPrefetchScope` (*exp*);
@@ -524,7 +524,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Depends on: ui modifier locals. compose-rs's `lay_out_beyond_bounds` is the mechanism, focus-only.
     - Size: M. Experimental: no.
 25. **animate-item.**
-    - API: `animateItem` for lists and grids (staggered with 27). Lists done (D1472).
+    - API: `animateItem` for lists and grids (staggered with 27). Lists and grids done (D1472).
     - Does: fades items in and out and animates moves, keeping items moving out of view composed while they leave; a removed item is drawn from what it last drew, as Compose's.
     - Tests: the 3 list, 3 grid and 3 staggered animation files.
     - Depends on: lazy-layout-info (tests), animation (exists); ui lookahead for the lookahead variants (ui ledger).
