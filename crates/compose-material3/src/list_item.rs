@@ -1033,7 +1033,8 @@ impl ListItemLayout {
             slot.map_or(0, |slot| {
                 let height = intrinsic(scope, slot, remaining);
                 if remaining != Constraints::INFINITY {
-                    remaining -= scope.max_intrinsic_width(slot, Constraints::INFINITY);
+                    let side = scope.max_intrinsic_width(slot, Constraints::INFINITY);
+                    remaining = (remaining - side).max(0);
                 }
                 height
             })

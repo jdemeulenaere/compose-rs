@@ -164,6 +164,27 @@ fn an_intrinsic_height_goes_by_how_tall_the_supporting_text_is() {
     assert_eq!(size.1, 88.0);
 }
 
+/// Its sides wider than what it's asked for leave its text no width, not less than none.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, calculateIntrinsicHeight
+#[test]
+fn an_intrinsic_height_with_sides_wider_than_the_item_is_still_answered() {
+    let size = item_size(|| {
+        ClickableListItem!(
+            || {},
+            modifier = Modifier.width(20.dp()).height(compose_ui::IntrinsicSize::Min),
+            leading_content = Some(|| {
+                Box!(modifier = Modifier.size(50.dp()), {});
+            }),
+            supporting_content = Some(|| Text!("Supporting")),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size.0, 20.0);
+    assert!(size.1 >= 72.0, "{size:?}");
+}
+
 /// An item `height` dp high with every part tagged, in `direction`, aligned by `alignment`.
 fn positioned(
     height: f32,
