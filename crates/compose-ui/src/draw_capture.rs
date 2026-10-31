@@ -21,6 +21,8 @@ struct Captured {
     groups: Vec<DrawGroup>,
     /// `groups` flattened, once they're asked for.
     flat: Option<FlatDisplayList>,
+    /// The first group's layer is left out: what moves and fades the node, whoever draws it.
+    without_own_layer: bool,
 }
 
 /// What a node's content last drew: a handle, its clones sharing it, kept as long as what
@@ -36,14 +38,30 @@ impl DrawCapture {
         DrawCapture::default()
     }
 
-    fn store(&self, groups: Vec<DrawGroup>) {
-        *self.0.borrow_mut() = Captured { groups, flat: None };
+    /// What the node draws under its own layer (a lazy item's `animate_item`'s, which draws it
+    /// with the layer's properties when its node has gone).
+    pub fn without_own_layer() -> DrawCapture {
+        let capture = DrawCapture::default();
+        capture.0.borrow_mut().without_own_layer = true;
+        capture
+    }
+
+    fn store(&self, mut groups: Vec<DrawGroup>) {
+        let mut captured = self.0.borrow_mut();
+        if captured.without_own_layer
+            && let Some(first) = groups.first_mut()
+        {
+            first.layer = None;
+        }
+        captured.groups = groups;
+        captured.flat = None;
     }
 
     /// The same groups, with the layers they have now.
     pub(crate) fn refresh_layers(&self, groups: &[DrawGroup]) {
         let mut captured = self.0.borrow_mut();
-        for (kept, group) in captured.groups.iter_mut().zip(groups) {
+        let skip = usize::from(captured.without_own_layer);
+        for (kept, group) in captured.groups.iter_mut().zip(groups).skip(skip) {
             kept.layer.clone_from(&group.layer);
         }
         captured.flat = None;
@@ -67,7 +85,7 @@ impl DrawScope<'_> {
     #[doc(hidden)]
     pub fn draw_captured(&mut self, capture: &DrawCapture) {
         let mut captured = capture.0.borrow_mut();
-        let Captured { groups, flat } = &mut *captured;
+        let Captured { groups, flat, .. } = &mut *captured;
         if groups.is_empty() {
             return;
         }

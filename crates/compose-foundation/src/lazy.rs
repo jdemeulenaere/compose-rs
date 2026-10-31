@@ -23,6 +23,7 @@
 mod animate_scroll;
 mod cache_window;
 mod grid;
+mod item_animator;
 mod layout_info;
 pub(crate) mod pager;
 mod prefetch;
@@ -38,6 +39,7 @@ pub use grid::{
     CrossAxisCells, GridCells, GridItemSpan, LazyGridItemScope, LazyGridItemSpanScope,
     LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
 };
+pub use item_animator::{AnimateItemModifier, AnimateItemScope};
 pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, LazyListLayoutInfo};
 pub use staggered::{
     LazyHorizontalStaggeredGrid, LazyStaggeredGridItemInfo, LazyStaggeredGridLaneInfo,
@@ -56,10 +58,10 @@ use compose_runtime::{
     SaveableStateHolder, composable, hash_key, key, mutable_state_of,
 };
 use compose_ui::{
-    Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
-    PrefetchScheduler, Rect, VerticalAlignment,
+    Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntOffset, IntSize, Layout,
+    Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, PaddingValues, Placeable, PointerEvent, PointerEventPass,
+    PointerInputModifierNode, PrefetchScheduler, Rect, VerticalAlignment,
 };
 
 use crate::OverscrollModifier;
@@ -69,6 +71,7 @@ use crate::gestures::{
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::mutator::{MutatePriority, MutationInterrupted};
 use crate::scroll::{DragScroller, ScrollDriver, bring_into_view_delta, same_fling};
+use item_animator::{ChildRecord, ItemAnimator, ItemChildren};
 use prefetch::{Laid, Policy, Prefetch};
 
 /// The lines a grid composes and places beyond each side of its viewport (D456), and the least
@@ -110,6 +113,8 @@ pub struct LazyListState {
 }
 
 struct LazyListInner {
+    /// What runs `animate_item`, shared with its items' nodes.
+    item_animator: Rc<ItemAnimator>,
     /// What `scroll_indicator_state` gives, one object as Compose's.
     indicator: std::cell::OnceCell<Rc<dyn crate::ScrollIndicatorState>>,
     /// The position the layout works from: the item, the pixels it is scrolled off (with
@@ -329,6 +334,7 @@ impl LazyListInner {
         // A negative offset: before the item, as Compose's; the first layout coerces it.
         let offset = first_visible_item_scroll_offset;
         LazyListInner {
+            item_animator: Rc::default(),
             indicator: Default::default(),
             position: Cell::new((first_visible_item_index, offset as f32)),
             first_key: Cell::new(None),
@@ -594,6 +600,8 @@ impl LazyListState {
         inner.overshoot.borrow_mut().take();
         if inner.published.get() != (index, scroll_offset) {
             inner.prefetch.reset_window();
+            // A jump isn't a change of its items' places to animate.
+            inner.item_animator.reset();
         }
         inner.prefetch.delta.set(0.0);
         inner.position.set((index, scroll_offset as f32));
@@ -635,6 +643,8 @@ impl LazyListState {
         self.scroll(MutatePriority::Default, move |scope| async move {
             let density = state.inner().map_or(1.0, |inner| inner.density.get());
             let scope = state.lazy_layout_scroll_scope(scope);
+            let animator = state.inner().map(|inner| inner.item_animator.clone());
+            let _skipping = animator.map(item_animator::SkipAnimation::new);
             animate_scroll::animate_scroll_to_item(&scope, index, scroll_offset, 100, density)
                 .await;
         })
@@ -2195,6 +2205,16 @@ fn LazyItems(
     {
         indices.push(header);
     }
+    // Those moving out of view with `animate_item`, by key (gone with their items).
+    if inner.item_animator.has_kept() {
+        for &(kept, near) in inner.item_animator.kept().iter() {
+            if let Some(index) = items.0.index_of(kept, near)
+                && !indices.contains(&index)
+            {
+                indices.push(index);
+            }
+        }
+    }
     // Those composed apart from the range: before a sticking header (D895), a staggered grid's
     // (D1470), where their items went if the items changed. Each once in `detached`, so a search
     // through what's before them alone.
@@ -2288,11 +2308,17 @@ fn LazyItem(
     holder: SaveableStateHolder,
     stacking: ItemStacking,
 ) {
-    let policy = compose_runtime::remember_keyed(stacking, || {
-        Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>
-    });
     let inner = state.inner_or_detached();
+    let policy = compose_runtime::remember_keyed((stacking, state), || {
+        Rc::new_cyclic(|this| ItemLayout {
+            this: this.clone(),
+            stacking,
+            animator: inner.item_animator.clone(),
+            children: ItemChildren::new(),
+        })
+    });
     let item_key = items.0.key(index);
+    inner.item_animator.item_composed(&policy, item_key);
     // The lazy lists composing in the item note themselves in this list under its key, whoever
     // composes it (a frame here, a request's resumes, a completion), as Compose's request finds
     // those of its precomposed item (`traversablePrefetchState`).
@@ -2319,7 +2345,7 @@ fn LazyItem(
     let modifier = Modifier.lazy_item_boundary();
     Layout(
         modifier,
-        policy,
+        policy as Rc<dyn MeasurePolicy>,
         compose_runtime::callback(move || {
             if let Some((interval, local)) = items.0.find(index) {
                 // The item's content, as Compose's item subcomposition: a request's paused
@@ -2446,7 +2472,68 @@ impl ComposeArg for ItemStacking {
 
 /// An item: its children stacked as its layout's `ItemStacking` says.
 struct ItemLayout {
+    /// What the animator looks its children up through.
+    this: Weak<ItemLayout>,
     stacking: ItemStacking,
+    animator: Rc<ItemAnimator>,
+    children: ItemChildren,
+}
+
+impl ItemLayout {
+    /// For the animator, when one of its children has the modifier or had it: how they stand in
+    /// the item of `width`, and their data.
+    #[cold]
+    fn note_children(
+        &self,
+        scope: &MeasureScope<'_>,
+        measurables: &[Measurable],
+        placeables: &[Placeable],
+        width: i32,
+        height: i32,
+    ) {
+        let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        let main_total: i32 = match self.stacking {
+            ItemStacking::Along { vertical: true, .. } => {
+                placeables.iter().map(|it| it.height).sum()
+            }
+            ItemStacking::Along { vertical: false, .. } => {
+                placeables.iter().map(|it| it.width).sum()
+            }
+            _ => 0,
+        };
+        let mut along = 0;
+        let mut children = Vec::with_capacity(placeables.len());
+        for (measurable, placeable) in measurables.iter().zip(placeables) {
+            let (logical, x, y) = match self.stacking {
+                ItemStacking::Along { vertical, reverse } => {
+                    let size = if vertical { placeable.height } else { placeable.width };
+                    let at = if reverse { main_total - along - size } else { along };
+                    let logical =
+                        if vertical { IntOffset::new(0, along) } else { IntOffset::new(along, 0) };
+                    along += size;
+                    if vertical { (logical, 0, at) } else { (logical, at, 0) }
+                }
+                ItemStacking::AtTheOrigin => (IntOffset::ZERO, 0, 0),
+                ItemStacking::AtTheEnd { vertical: true } => {
+                    (IntOffset::ZERO, 0, height - placeable.height)
+                }
+                ItemStacking::AtTheEnd { vertical: false } => {
+                    (IntOffset::ZERO, width - placeable.width, 0)
+                }
+            };
+            let x = if rtl { width - x - placeable.width } else { x };
+            children.push(ChildRecord {
+                data: scope
+                    .parent_data_any(*measurable)
+                    .and_then(|data| data.downcast::<item_animator::AnimateItemData>().ok()),
+                logical,
+                physical: IntOffset::new(x, y),
+                size: placeable.size(),
+            });
+        }
+        self.children.set(children);
+        self.animator.register(self.children.key(), self.this.clone());
+    }
 }
 
 impl MeasurePolicy for ItemLayout {
@@ -2458,6 +2545,9 @@ impl MeasurePolicy for ItemLayout {
     ) -> MeasureResult {
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&measurable| scope.measure(measurable, constraints)).collect();
+        // `animate_item` on a child, or had there.
+        let animated = measurables.iter().any(|&child| scope.parent_data_any(child).is_some())
+            || !self.children.is_empty();
         if let (ItemStacking::Along { vertical, reverse }, [_, _, ..]) =
             (self.stacking, placeables.as_slice())
         {
@@ -2482,6 +2572,9 @@ impl MeasurePolicy for ItemLayout {
                 scope.place_relative(placeable, x, y);
                 offset += size;
             }
+            if animated {
+                self.note_children(scope, measurables, &placeables, width, height);
+            }
             return scope.layout(width, height);
         }
         let size = placeables.iter().fold(
@@ -2497,6 +2590,9 @@ impl MeasurePolicy for ItemLayout {
                 _ => (0, 0),
             };
             scope.place_relative(placeable, x, y);
+        }
+        if animated {
+            self.note_children(scope, measurables, &placeables, size.width, size.height);
         }
         scope.layout(size.width, size.height)
     }
@@ -2666,6 +2762,10 @@ impl MeasurePolicy for LazyListLayout {
         {
             index = found;
         }
+        let animator = &state.item_animator;
+        // Where a scroll started from, for an item's place not to animate what it moved.
+        let scrolled_from =
+            (!animator.idle() && scrolled != 0.0).then_some((index, (offset - scrolled).round()));
         if count == 0 {
             // Before the first items (data still loading), the initial position waits for
             // them; a list emptied starts again at its top, as Compose's.
@@ -2709,6 +2809,28 @@ impl MeasurePolicy for LazyListLayout {
                 IntSize::new(
                     constraints.constrain_width(main_padding),
                     constraints.constrain_height(cross_padding),
+                )
+            };
+            // Its items gone, what they drew may fade out, and it holds their room for that.
+            let size = if animator.idle() {
+                animator.note_items(&info.items, 0);
+                size
+            } else {
+                let pass = item_animator::Pass {
+                    items: &info.items,
+                    vertical,
+                    reverse,
+                    mirrored_row: false,
+                    main_size: if vertical { size.height } else { size.width },
+                    lane_count: 1,
+                    layout_min: 0,
+                    layout_max: 0,
+                };
+                animator.on_measured(state, &pass, &[], &mut |_, _| None);
+                let min = animator.min_size_to_fit_disappearing();
+                IntSize::new(
+                    constraints.constrain_width(size.width.max(min.width)),
+                    constraints.constrain_height(size.height.max(min.height)),
                 )
             };
             state.laid_out.begin();
@@ -2909,7 +3031,7 @@ impl MeasurePolicy for LazyListLayout {
         // constraints.
         let scrolled_into = index > 0 || offset > 0.0;
         let main_size = if scrolled_into { main_max } else { content_end.min(main_max) };
-        let main_total = if vertical {
+        let mut main_total = if vertical {
             constraints.constrain_height(main_size)
         } else {
             constraints.constrain_width(main_size)
@@ -3224,6 +3346,26 @@ impl MeasurePolicy for LazyListLayout {
             state.sticky.set(header);
         }
         state.sticking_size.set(sticking.map_or(0, |(_, placeable, _)| main_of(&placeable)));
+        // Where the items are for `animate_item`, before a sticking header leaves them.
+        let animated_items = (!animator.idle()).then(|| {
+            let at = |base: usize| {
+                move |(position, (placeable, main)): (usize, &(Placeable, i32))| {
+                    (base + position, *placeable, *main)
+                }
+            };
+            ahead
+                .iter()
+                .enumerate()
+                .map(at(lead - ahead.len()))
+                .chain(placed.iter().enumerate().map(at(lead)))
+                .chain(beyond.iter().enumerate().map(at(end_index)))
+                .collect::<Vec<_>>()
+        });
+        // Those laid out in view, as Compose's `currentFirstItemScrollOffset` and
+        // `currentMainAxisOffset`: where those moving out of view go.
+        let layout_min = placed.first().map_or(0, |(_, main)| (before - main).max(0));
+        let layout_max =
+            placed.iter().map(|(it, _)| (main_of(it) + spacing).max(0)).sum::<i32>() - layout_min;
         let mut sticky = None;
         if let Some((header, next)) = headers
             && let Some((_, placeable, _)) = sticking
@@ -3264,11 +3406,6 @@ impl MeasurePolicy for LazyListLayout {
                 beyond.push((placeable, at));
             }
         }
-        // Sizes far from view are forgotten, so the estimates follow the data.
-        if sizes.len() > 4 * MOST_MISSING {
-            sizes.retain(|item| item.abs_diff(index) <= MOST_MISSING);
-        }
-        drop(sizes);
         // Placed along the axis, aligned across it.
         let cross_size = placed
             .iter()
@@ -3281,27 +3418,125 @@ impl MeasurePolicy for LazyListLayout {
         // size for one scrolled past (D1456).
         let cross_size = if missing { cross_size.max(state.cross_size.get()) } else { cross_size };
         state.cross_size.set(cross_size);
-        let (width, height) = if vertical {
-            (constraints.constrain_width(cross_size + cross_before + cross_after), main_total)
-        } else {
-            (main_total, constraints.constrain_height(cross_size + cross_before + cross_after))
-        };
-        let layout = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32| {
-            let main = if reverse { main_total - main - main_of(placeable) } else { main };
+        let constrain_main = |main: i32| {
             if vertical {
-                let space = IntSize::new(width - cross_before - cross_after, placeable.height);
-                let x = info.alignment.align(placeable.size(), space, layout_direction).x;
+                constraints.constrain_height(main)
+            } else {
+                constraints.constrain_width(main)
+            }
+        };
+        let constrain_cross = |cross: i32| {
+            if vertical {
+                constraints.constrain_width(cross)
+            } else {
+                constraints.constrain_height(cross)
+            }
+        };
+        let mut cross_total = constrain_cross(cross_size + cross_before + cross_after);
+        // Across the list, in its padding: where an item is aligned.
+        let aligned = |placeable: &Placeable, cross_total: i32| {
+            let room = cross_total - cross_before - cross_after;
+            if vertical {
+                let space = IntSize::new(room, placeable.height);
+                info.alignment.align(placeable.size(), space, layout_direction).x
+            } else {
+                let space = IntSize::new(placeable.width, room);
+                info.alignment.align(placeable.size(), space, direction).y
+            }
+        };
+        let mut moved_away = Vec::new();
+        if let Some(items) = &animated_items {
+            if let Some((from_index, from_offset)) = scrolled_from {
+                let moved =
+                    sizes.distance((from_index, from_offset), (index, offset.round()), spacing);
+                let consumed = moved.unwrap_or(scrolled - pending);
+                animator.add_consumed_scroll(-(consumed.round() as i32));
+            }
+            let settled = !missing
+                && wanted_before == 0
+                && !lacked_unready.get()
+                && (headers.is_none() || sticking.is_some());
+            if settled {
+                let positioned: Vec<item_animator::Positioned> = items
+                    .iter()
+                    .map(|&(item, placeable, main)| item_animator::Positioned {
+                        index: item,
+                        key: info.items.key(item),
+                        main: main - before,
+                        cross: aligned(&placeable, cross_total),
+                        main_size_with_spacing: (main_of(&placeable) + spacing).max(0),
+                        lane: 0,
+                        span: 1,
+                        constraints: None,
+                    })
+                    .collect();
+                let pass = item_animator::Pass {
+                    items: &info.items,
+                    vertical,
+                    reverse,
+                    mirrored_row: !vertical && layout_direction == compose_ui::LayoutDirection::Rtl,
+                    main_size: main_total,
+                    lane_count: 1,
+                    layout_min,
+                    layout_max,
+                };
+                let moved = animator.on_measured(state, &pass, &positioned, &mut |item, _| {
+                    measure(item, &mut sizes).map(|it| (main_of(&it) + spacing).max(0))
+                });
+                let mut before_ahead = 0;
+                for away in moved {
+                    if let Some(placeable) = measure(away.index, &mut sizes) {
+                        // Placed once, here: the items kept apart were out of the way so far.
+                        beyond.retain(|(other, _)| *other != placeable);
+                        let entry = (placeable, away.main + before);
+                        if away.to_start {
+                            ahead.insert(before_ahead, entry);
+                            before_ahead += 1;
+                        } else {
+                            beyond.push(entry);
+                        }
+                        moved_away.push((away.key, placeable, away.main + before));
+                    }
+                }
+                let min = animator.min_size_to_fit_disappearing();
+                if min != IntSize::ZERO {
+                    let (main_min, cross_min) =
+                        if vertical { (min.height, min.width) } else { (min.width, min.height) };
+                    main_total = constrain_main(main_total.max(main_min));
+                    cross_total = constrain_cross(cross_total.max(cross_min));
+                }
+            }
+        } else if !missing && wanted_before == 0 {
+            animator.note_items(&info.items, index);
+        }
+        // Sizes far from view are forgotten, so the estimates follow the data.
+        if sizes.len() > 4 * MOST_MISSING {
+            sizes.retain(|item| item.abs_diff(index) <= MOST_MISSING);
+        }
+        drop(sizes);
+        let (width, height) =
+            if vertical { (cross_total, main_total) } else { (main_total, cross_total) };
+        let position_of = |placeable: &Placeable, main: i32| {
+            let main = if reverse { main_total - main - main_of(placeable) } else { main };
+            let cross = aligned(placeable, cross_total);
+            if vertical {
                 // The content padding's start is on the right in a right-to-left layout.
                 let before = if layout_direction == compose_ui::LayoutDirection::Rtl {
                     cross_after
                 } else {
                     cross_before
                 };
-                scope.place(placeable, before + x, main);
+                (before + cross, main)
             } else {
-                let space = IntSize::new(placeable.width, height - cross_before - cross_after);
-                let y = info.alignment.align(placeable.size(), space, direction).y;
-                scope.place_relative(placeable, main, cross_before + y);
+                (main, cross_before + cross)
+            }
+        };
+        let layout = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32| {
+            let (x, y) = position_of(placeable, main);
+            if vertical {
+                scope.place(placeable, x, y);
+            } else {
+                scope.place_relative(placeable, x, y);
             }
         };
         // The sticky header last: drawn over the items, and hit first.
@@ -3311,6 +3546,30 @@ impl MeasurePolicy for LazyListLayout {
             layout(scope, placeable, *main);
         }
         scope.set_motion_frame_of_reference_placement(false);
+        if let Some(items) = &animated_items {
+            let bounds = (-before, main_total + after, vertical);
+            let note_placed = |key: u64, placeable: &Placeable, main: i32| {
+                let (x, y) = position_of(placeable, main);
+                let x = if !vertical && layout_direction == compose_ui::LayoutDirection::Rtl {
+                    width - x - placeable.width
+                } else {
+                    x
+                };
+                animator.note_placed(key, x, y, bounds);
+            };
+            let sticking_header = headers.map(|(header, _)| header).filter(|_| sticky.is_some());
+            for (item, placeable, main) in items {
+                if Some(*item) != sticking_header {
+                    note_placed(info.items.key(*item), placeable, *main);
+                }
+            }
+            if let (Some(header), Some((placeable, at))) = (sticking_header, sticky) {
+                note_placed(info.items.key(header), &placeable, at);
+            }
+            for (key, placeable, main) in &moved_away {
+                note_placed(*key, placeable, *main);
+            }
+        }
         drop(laid);
         let keys_changed = state.note_laid_items(&info.items);
         state.laid_out.end(
@@ -3715,7 +3974,30 @@ impl compose_ui::TraversableNode for LazyScrollNode {
     }
 }
 
+/// What items removed last drew fades out over the list's content, as
+/// `DisplayingDisappearingItemsNode`: this list's node, so a list with no such item has a node to
+/// ask, and no other.
+impl compose_ui::DrawModifierNode for LazyScrollNode {
+    fn draw_after(&mut self, scope: &mut compose_ui::DrawScope<'_>) {
+        if let Some(inner) = self.state.inner()
+            && !inner.item_animator.idle()
+        {
+            inner.item_animator.draw_disappearing(scope);
+        }
+    }
+}
+
 impl ModifierNode for LazyScrollNode {
+    fn as_draw(&mut self) -> Option<&mut dyn compose_ui::DrawModifierNode> {
+        Some(self)
+    }
+
+    fn on_attach(&mut self, context: &mut compose_ui::NodeContext<'_>) {
+        if let Some(inner) = self.state.inner() {
+            inner.item_animator.set_display(Some(context.handle()));
+        }
+    }
+
     fn as_key_input(&mut self) -> Option<&mut dyn compose_ui::KeyInputModifierNode> {
         Some(self)
     }
@@ -3731,6 +4013,9 @@ impl ModifierNode for LazyScrollNode {
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.cancel_leaving();
         self.drag.detach();
+        if let Some(inner) = self.state.inner() {
+            inner.item_animator.on_list_left();
+        }
     }
 
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
