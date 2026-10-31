@@ -3,7 +3,10 @@
 
 use crate::gestures::Orientation;
 use crate::lazy::pager::PagerState;
-use crate::lazy::{LazyGridLayoutInfo, LazyGridState, LazyListLayoutInfo, LazyListState};
+use crate::lazy::{
+    LazyGridLayoutInfo, LazyGridState, LazyListLayoutInfo, LazyListState,
+    LazyStaggeredGridLayoutInfo, LazyStaggeredGridState,
+};
 use crate::scroll::ScrollState;
 
 /// Where a scrollable is and how long it is along its axis, in pixels, as `ScrollIndicatorState`:
@@ -163,6 +166,54 @@ impl ScrollIndicatorState for LazyGridState {
     }
     fn content_size(&self) -> i32 {
         grid_content_size(&self.layout_info())
+    }
+    fn viewport_size(&self) -> i32 {
+        let info = self.layout_info();
+        axis_of(info.orientation, info.viewport_size)
+    }
+}
+
+/// As `visibleItemsAverageSize`.
+fn staggered_average(info: &LazyStaggeredGridLayoutInfo) -> i64 {
+    let items = &info.visible_items_info;
+    if items.is_empty() {
+        return 0;
+    }
+    let sum: i64 = items.iter().map(|item| i64::from(axis_of(info.orientation, item.size))).sum();
+    sum / items.len() as i64 + i64::from(info.main_axis_item_spacing)
+}
+
+/// As `calculateContentSize`, `lanes` being `laneCount`.
+fn staggered_content_size(info: &LazyStaggeredGridLayoutInfo, lanes: usize) -> i64 {
+    let padding = i64::from(info.before_content_padding + info.after_content_padding);
+    if info.total_items_count == 0 || lanes == 0 {
+        return padding;
+    }
+    staggered_average(info) * info.total_items_count as i64 / lanes as i64
+        - i64::from(info.main_axis_item_spacing)
+        + padding
+}
+
+impl ScrollIndicatorState for LazyStaggeredGridState {
+    fn scroll_offset(&self) -> i32 {
+        let info = self.layout_info();
+        let lanes = self.lane_count();
+        // As `calculateScrollOffset`; with no lanes yet, nothing's laid out.
+        let offset = if info.total_items_count == 0 || lanes == 0 {
+            0
+        } else {
+            staggered_average(&info) * self.first_visible_item_index() as i64 / lanes as i64
+                + i64::from(self.first_visible_item_scroll_offset())
+        };
+        if info.reverse_layout {
+            let viewport = axis_of(info.orientation, info.viewport_size);
+            clamped(staggered_content_size(&info, lanes) - i64::from(viewport) - offset)
+        } else {
+            clamped(offset)
+        }
+    }
+    fn content_size(&self) -> i32 {
+        clamped(staggered_content_size(&self.layout_info(), self.lane_count()))
     }
     fn viewport_size(&self) -> i32 {
         let info = self.layout_info();

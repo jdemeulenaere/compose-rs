@@ -470,6 +470,8 @@ type LastPlaced = (i32, usize, usize, i32, i32);
 /// The list state its scrolling, composition and prefetch are in, and the position per lane.
 struct StaggeredInner {
     _list: Owned<LazyListState>,
+    /// What `scroll_indicator_state` gives, made once.
+    indicator: std::cell::OnceCell<Rc<dyn crate::ScrollIndicatorState>>,
     /// As `laneInfo`.
     lane_info: RefCell<LazyStaggeredGridLaneInfo>,
     /// As `scrollPosition.indices` and `scrollOffsets`.
@@ -511,6 +513,7 @@ impl LazyStaggeredGridState {
         Owned::new(
             StaggeredInner {
                 _list: list,
+                indicator: std::cell::OnceCell::new(),
                 lane_info: RefCell::default(),
                 position: RefCell::new((indices, offsets)),
                 jumped: Cell::new(false),
@@ -752,7 +755,7 @@ impl LazyStaggeredGridState {
     }
 
     /// The lanes, as last measured.
-    fn lane_count(&self) -> usize {
+    pub(crate) fn lane_count(&self) -> usize {
         self.list.inner().map_or(0, |inner| inner.laid_out.read_untracked(|_, it| it.max_span))
     }
 
@@ -793,6 +796,11 @@ impl ComposeArg for LazyStaggeredGridState {
 }
 
 impl ScrollableState for LazyStaggeredGridState {
+    fn scroll_indicator_state(&self) -> Option<Rc<dyn crate::ScrollIndicatorState>> {
+        let inner = self.inner()?;
+        Some(inner.indicator.get_or_init(|| Rc::new(*self)).clone())
+    }
+
     fn scroll_boxed<'a>(
         &'a self,
         priority: MutatePriority,
