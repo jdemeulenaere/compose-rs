@@ -777,6 +777,24 @@ impl Runtime {
                 && table.movable.walking
                 && table[child].flags & crate::slot_table::MOVABLE_PENDING == 0
                 && !scopes.get(table[child].scope).is_some_and(|scope| scope.paused);
+            // A placeholder left for the end of the frame, by a pass nested in another or of a
+            // tree: not this walk's, or, in a late pass for moves, with nothing to take yet.
+            if table[child].flags & crate::slot_table::MOVABLE_PENDING != 0
+                && (!table.movable.walking
+                    || (base == 0
+                        && table
+                            .movable
+                            .move_only
+                            .as_ref()
+                            .is_some_and(|available| !available.contains(&table[child].data_key))))
+            {
+                let group = &table[child];
+                let walking = &mut frames[top];
+                walking.node_index += group.node_count;
+                walking.last_placed = child;
+                walking.cursor = group.next_sibling;
+                continue;
+            }
             if waits
                 && table[child].kind == GroupKind::Restart
                 && scopes.get(table[child].scope).is_some_and(|scope| scope.invalid)
@@ -905,8 +923,12 @@ impl Runtime {
                 paused.discard_regions_in(table, scopes, removal_stack, deferred, removed, false);
             }
             let deferred = deferred_of(deferred, paused, frame.region);
+            // Paused content takes no part in moves (D1305): what's in it goes.
+            let parking = table.movable.parking;
+            table.movable.parking = parking && frame.region == NO_REGION;
             let count =
                 remove_siblings(table, deferred, scopes, removal_stack, frame.cursor, frame.limit);
+            table.movable.parking = parking;
             table.set_next(frame.group, frame.last_placed, frame.limit);
             if frame.region != NO_REGION
                 && let Some(paused) = paused
@@ -1309,7 +1331,11 @@ fn delete_branch(
         paused.discard_regions_in(table, scopes, removal_stack, deferred, vec![branch], false);
     }
     let deferred = deferred_of(deferred, paused, parent.region);
+    // Paused content takes no part in moves (D1305): what's in it goes.
+    let parking = table.movable.parking;
+    table.movable.parking = parking && parent.region == NO_REGION;
     let count = remove_siblings(table, deferred, scopes, removal_stack, branch, next);
+    table.movable.parking = parking;
     table.set_next(parent.group, parent.last_placed, next);
     parent.cursor = next;
     if count == 0 {

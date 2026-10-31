@@ -875,6 +875,10 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
         if panic.is_some() {
             break;
         }
+        if let Some(caught) = crate::composition::finish_movable_content_of_frame(frame) {
+            panic = Some(caught);
+            break;
+        }
         Snapshot::send_apply_notifications();
     }
     let changed = with_runtime(|runtime| runtime.unapplied.iter().any(|work| work.frame == frame));
@@ -887,6 +891,7 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
     if let Some(caught) = apply_unapplied(frame) {
         panic.get_or_insert(caught);
     }
+    crate::composition::schedule_movable_discard();
     crate::runtime::request_frames();
     recomposer.update_state();
     // What the work wrote and made is everybody's, before the frame's end.

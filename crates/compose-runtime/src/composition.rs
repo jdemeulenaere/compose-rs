@@ -101,6 +101,7 @@ impl Composition {
             if runtime.compositions.get(self.id).is_some_and(|data| data.composing) {
                 misuse(ComposeError::DisposedDuringPass)
             }
+            runtime.rehome_parked(self.id);
             let disposal = Disposal::close(runtime, self.id);
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.disposed = true;
@@ -339,8 +340,12 @@ impl Drop for Composition {
     fn drop(&mut self) {
         // Paused content is discarded first, its nodes released and its observers abandoned.
         crate::pausable::cancel_for_disposal(self.id);
-        let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::take(runtime, self.id))
-        else {
+        let Some(Some(disposal)) = try_with_runtime(|runtime| {
+            if !std::thread::panicking() {
+                runtime.rehome_parked(self.id);
+            }
+            Disposal::take(runtime, self.id)
+        }) else {
             return;
         };
         disposal.run();
@@ -615,6 +620,8 @@ pub(crate) enum PassKind {
     Pausable,
     /// A paused composition's resume: the walks of its regions.
     Resume,
+    /// A walk to a composition's placeholders, once its frame's others have composed (D1308).
+    Late,
 }
 
 /// Whether the node `id`, a child composition, composes below is there. It says what's asked again
@@ -694,6 +701,9 @@ impl OuterPass {
             lending_cells: _,
             unapplied: _,
             tree_frames: _,
+            movable_late: _,
+            movable_pool: _,
+            movable_discard_scheduled: _,
             provider_versions: _,
             disposing_data: _,
             frame_requests: _,
@@ -776,10 +786,10 @@ impl Pass {
             if data.poisoned {
                 misuse(ComposeError::Poisoned)
             }
-            if data.finishing && mode != Mode::Walk {
-                misuse(ComposeError::PassInProgress)
-            }
-            if data.finishing {
+            if data.finishing && kind != PassKind::Late {
+                if mode != Mode::Walk {
+                    misuse(ComposeError::PassInProgress)
+                }
                 return None;
             }
             let sentinel = &mut data.table[SENTINEL];
@@ -792,9 +802,10 @@ impl Pass {
                 return None;
             }
             crate::snapshots::PassSnapshot::check_can_begin(&runtime.snapshots);
-            let providers_changed =
-                runtime.compositions.get(id).is_some_and(|data| data.parent.is_some())
-                    && providers_changed(runtime, id, mode);
+            // A late pass is for placeholders: what's above is for its next pass.
+            let providers_changed = kind != PassKind::Late
+                && runtime.compositions.get(id).is_some_and(|data| data.parent.is_some())
+                && providers_changed(runtime, id, mode);
             let outer = OuterPass::take(runtime);
             let Runtime {
                 compositions,
@@ -812,7 +823,7 @@ impl Pass {
                 ..
             } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
-            data.table.movable.parking = kind == PassKind::Whole;
+            data.table.movable.parking = matches!(kind, PassKind::Whole | PassKind::Late);
             let sentinel = &mut data.table[SENTINEL];
             let dirty = sentinel.dirty && !resume;
             if !resume {
@@ -827,7 +838,7 @@ impl Pass {
             // The sentinel's depth: to the end of the pass.
             *providers_invalid = usize::from(providers_changed);
             *pause = should_pause;
-            *pausable_pass = kind != PassKind::Whole;
+            *pausable_pass = matches!(kind, PassKind::Pausable | PassKind::Resume);
             *resume_next = None;
             data.composing = true;
             // Rule R2's "the next pass" is the next outermost one.
@@ -877,13 +888,41 @@ impl Pass {
     /// The pass is over before any of that runs, so effects, observers and drops may compose
     /// other compositions (a popup from an effect), and a frame requester may recompose at once.
     pub(crate) fn finish(self) {
-        apply_work(self.finish_composing());
+        let nested = self.outer.is_some();
+        let composed = self.finish_composing();
+        // On its own, with compositions nested in it having left movable content for the end: the
+        // end's now.
+        let late = !nested
+            && with_runtime(|runtime| {
+                runtime.compositions.composing_tree.is_none() && !runtime.movable_late.is_empty()
+            });
+        if !late {
+            apply_work(composed);
+            return;
+        }
+        let frame = with_runtime(|runtime| {
+            runtime.tree_frames += 1;
+            runtime.tree_frames
+        });
+        let mut composed = composed;
+        composed.frame = frame;
+        with_runtime(|runtime| runtime.unapplied.push_back(composed));
+        let mut panic = finish_movable_content_of_frame(frame);
+        if let Some(caught) = apply_unapplied(frame) {
+            panic.get_or_insert(caught);
+        }
+        schedule_movable_discard();
+        request_frames();
+        if let Some(panic) = panic {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     /// Ends the pass's composing: what [`finish`](Pass::finish) does before the work, which a
     /// frame of several compositions applies once they've all composed (D796, D1301).
     pub(crate) fn finish_composing(mut self) -> Composed {
         let resume = self.kind == PassKind::Resume;
+        let (kind, nested) = (self.kind, self.outer.is_some());
         let (op, applier, late) = with_runtime(|runtime| {
             let Runtime {
                 compositions,
@@ -892,8 +931,10 @@ impl Pass {
                 removal_stack,
                 abandoned_groups,
                 recorded_changes,
+                movable_late,
                 ..
             } = runtime;
+            let composing_tree = compositions.composing_tree;
             let data = compositions.get_mut(self.id).expect("a live composition");
             if frames.len() != 1 {
                 misuse(if *abandoned_groups {
@@ -945,20 +986,45 @@ impl Pass {
             if !resume {
                 table[SENTINEL].node_count = frame.node_index - frame.node_start;
             }
-            // Movable content: the sentinel's frame goes on for it.
-            let late = table.movable.has_work();
-            if late {
+            // Movable content: the sentinel's frame goes on for it, or, with other compositions
+            // to compose, what's left is for when they have (D1308).
+            let late = kind != PassKind::Late && table.movable.has_work();
+            if late && !frame_has_others(kind, nested, movable_late, composing_tree) {
                 frames.push(Frame { cursor: NONE, ..frame });
+                (op, data.applier.clone(), true)
             } else {
                 table.movable.parking = false;
+                (op, data.applier.clone(), false)
             }
-            (op, data.applier.clone(), late)
         });
         apply_node_op(op);
         if late {
             finish_movable_content(self.id);
         }
         flush_node_moves();
+        // What's under a context removed: its content's available.
+        let going = with_runtime(|runtime| {
+            let going = runtime.park_going_children(self.id);
+            if kind == PassKind::Late {
+                runtime.leave_for_the_next_pass(self.id.index);
+            }
+            let data = runtime.compositions.get(self.id).expect("a live composition");
+            if kind == PassKind::Whole
+                && data.table.movable.has_work()
+                && !runtime.movable_late.contains(&self.id)
+            {
+                runtime.movable_late.push(self.id);
+            }
+            going
+        });
+        for child in going {
+            crate::movable::flush_detached_of(child);
+            with_runtime(|runtime| {
+                if !runtime.movable_late.contains(&child) {
+                    runtime.movable_late.push(child);
+                }
+            });
+        }
         // Paused content the pass reached or removed.
         if self.kind == PassKind::Whole {
             crate::pausable::finish_pass_regions(self.id);
@@ -1000,6 +1066,10 @@ impl Pass {
 
 /// A frame's number, for the work it composes to be told from that of a frame around it.
 pub(crate) fn begin_tree_frame() -> u64 {
+    // What the last frame left and its effects didn't take, if nothing's run since to discard it.
+    if with_runtime(|runtime| !runtime.movable_pool.is_empty() && !runtime.is_composing()) {
+        discard_unused_movable_content();
+    }
     with_runtime(|runtime| {
         runtime.tree_frames += 1;
         runtime.tree_frames
@@ -1146,10 +1216,14 @@ fn recompose_tree(id: CompositionId) -> bool {
     }
     let frame = begin_tree_frame();
     let mut panic = compose_tree_of(id, frame).err();
+    if let Some(caught) = finish_movable_content_of_frame(frame) {
+        panic.get_or_insert(caught);
+    }
     let changed = with_runtime(|runtime| runtime.unapplied.iter().any(|work| work.frame == frame));
     if let Some(caught) = apply_unapplied(frame) {
         panic.get_or_insert(caught);
     }
+    schedule_movable_discard();
     request_frames();
     if let Some(panic) = panic {
         std::panic::resume_unwind(panic);
@@ -1174,16 +1248,15 @@ pub(crate) fn apply_unapplied(frame: u64) -> Option<Box<dyn Any + Send>> {
     }
 }
 
-/// `id`'s work, if a frame composed it and hasn't applied it.
+/// `id`'s work, if a frame composed it and hasn't applied it: that of its pass and its late pass.
 pub(crate) fn run_unapplied(id: CompositionId) {
-    let composed = with_runtime(|runtime| {
+    while let Some(composed) = with_runtime(|runtime| {
         if !runtime.compositions.get(id).is_some_and(|data| data.finishing) {
             return None;
         }
         let at = runtime.unapplied.iter().position(|work| work.id == id)?;
         runtime.unapplied.remove(at)
-    });
-    if let Some(composed) = composed {
+    }) {
         apply_work(composed);
     }
 }
@@ -1219,11 +1292,185 @@ fn finish_movable_content(id: CompositionId) {
         );
     }
     with_runtime(|runtime| {
-        runtime.remove_parked(index);
+        runtime.leave_for_the_next_pass(index);
+        // With compositions around it, another may want what's left, in this frame's effects.
+        let data = runtime.compositions.get(id).expect("composing");
+        if data.parent.is_some() || data.child_count != 0 || !runtime.movable_pool.is_empty() {
+            if !data.table.movable.parked.is_empty() && !runtime.movable_pool.contains(&id) {
+                runtime.movable_pool.push(id);
+            }
+            runtime.compositions.data_mut(index).table.movable.parking = false;
+        } else {
+            runtime.remove_parked(index);
+        }
         let frame = runtime.frames.pop().expect("the sentinel frame");
         runtime.compositions.data_mut(index).table[SENTINEL].node_count =
             frame.node_index - frame.node_start;
     });
+}
+
+/// Whether a pass ending now leaves its movable content for a late stage: it's nested in another or
+/// in a tree's frame, or those nested in it have.
+fn frame_has_others(
+    kind: PassKind,
+    nested: bool,
+    late: &[CompositionId],
+    composing_tree: Option<CompositionId>,
+) -> bool {
+    kind == PassKind::Whole && (nested || composing_tree.is_some() || !late.is_empty())
+}
+
+/// All of a frame's compositions have composed: their placeholders take what's parked in any of
+/// them, or, once none can, compose new, in passes of their own, as Compose's `performInsertValues`
+/// after `performRecompose`. What moves goes first, as what it composes may free more. What's left
+/// parked stays available until [`discard_unused_movable_content`]. The first panic comes back.
+pub(crate) fn finish_movable_content_of_frame(frame: u64) -> Option<Box<dyn Any + Send>> {
+    let mut panic = None;
+    loop {
+        let waiting: Vec<CompositionId> = with_runtime(|runtime| {
+            let late = std::mem::take(&mut runtime.movable_late);
+            let mut waiting = Vec::new();
+            for id in late {
+                let Some(data) = runtime.compositions.get(id) else { continue };
+                if !data.table.movable.parked.is_empty() && !runtime.movable_pool.contains(&id) {
+                    runtime.movable_pool.push(id);
+                }
+                if data.table.movable.pending != 0 && !data.poisoned && !data.closed {
+                    waiting.push(id);
+                }
+            }
+            waiting.iter().for_each(|id| runtime.movable_late.push(*id));
+            waiting
+        });
+        if waiting.is_empty() {
+            discard_what_nobody_can_take(frame);
+            break;
+        }
+        let moves = with_runtime(|runtime| {
+            waiting.iter().any(|id| !runtime.movable_available(*id).is_empty())
+        });
+        for id in waiting {
+            // As it is now: what ran before it may have freed some, or taken some.
+            let available = with_runtime(|runtime| runtime.movable_available(id));
+            if moves && available.is_empty() {
+                continue;
+            }
+            if let Err(caught) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                late_pass(id, moves.then_some(available), frame);
+            })) {
+                panic.get_or_insert(caught);
+            }
+        }
+    }
+    panic
+}
+
+/// With no composition around them, what's parked in those of the frame can't be asked for by what
+/// an effect composes: it goes with their work, not after the effects' first steps.
+fn discard_what_nobody_can_take(frame: u64) {
+    with_runtime(|runtime| {
+        let pool = std::mem::take(&mut runtime.movable_pool);
+        for id in pool {
+            let Some(data) = runtime.compositions.get(id) else { continue };
+            if data.parent.is_some() || data.child_count != 0 {
+                runtime.movable_pool.push(id);
+                continue;
+            }
+            let known = runtime.unapplied.iter().any(|work| work.id == id && work.frame == frame);
+            if !known {
+                runtime.movable_pool.push(id);
+                continue;
+            }
+            runtime.remove_parked(id.index);
+            let removed = runtime.compositions.data_mut(id.index).table.movable.removed.take();
+            let work =
+                runtime.unapplied.iter_mut().find(|work| work.id == id && work.frame == frame);
+            if let (Some(work), Some(mut removed)) = (work, removed) {
+                match &mut work.removed_content {
+                    Some(earlier) => earlier.append(&mut removed),
+                    none => *none = Some(removed),
+                }
+            }
+        }
+    });
+}
+
+/// A pass for `id`'s placeholders.
+fn late_pass(id: CompositionId, move_only: Option<Vec<u64>>, frame: u64) {
+    let began = with_runtime(|runtime| {
+        let data = runtime.compositions.get_mut(id)?;
+        data.table.movable.move_only = move_only;
+        data.table[SENTINEL].dirty = true;
+        Some(())
+    });
+    if began.is_none() {
+        return;
+    }
+    let Some(pass) = Pass::begin_as(id, Mode::Walk, PassKind::Late, None) else {
+        // Below a root that's gone: nothing's to show of it, and nothing's to wait for.
+        with_runtime(|runtime| {
+            if let Some(data) = runtime.compositions.get_mut(id) {
+                data.table.movable.pending = 0;
+            }
+        });
+        return;
+    };
+    let index = id.index;
+    with_runtime(|runtime| runtime.begin_movable_walk(index));
+    run_walk(0);
+    flush_node_moves();
+    let mut composed = pass.finish_composing();
+    composed.frame = frame;
+    with_runtime(|runtime| {
+        if let Some(data) = runtime.compositions.get_mut(id) {
+            data.table.movable.move_only = None;
+        }
+        // After what the frame's compositions composed, as Compose's `toLateApply`.
+        runtime.unapplied.push_back(composed);
+    });
+}
+
+/// After the frame's effects took their first step, as Compose discards after the frame's
+/// continuation is dispatched, behind what the effects launched.
+pub(crate) fn schedule_movable_discard() {
+    let schedule = with_runtime(|runtime| {
+        let schedule = !runtime.movable_pool.is_empty() && !runtime.movable_discard_scheduled;
+        runtime.movable_discard_scheduled |= schedule;
+        schedule
+    });
+    if schedule {
+        crate::executor::launch(async {
+            with_runtime(|runtime| runtime.movable_discard_scheduled = false);
+            discard_unused_movable_content();
+        });
+    }
+}
+
+/// What nobody took goes, as what's removed anywhere, as Compose's
+/// `discardUnusedMovableContentState`.
+pub(crate) fn discard_unused_movable_content() {
+    let pool = with_runtime(|runtime| std::mem::take(&mut runtime.movable_pool));
+    for id in pool {
+        let work = with_runtime(|runtime| {
+            let data = runtime.compositions.get(id)?;
+            if data.composing {
+                runtime.movable_pool.push(id);
+                return None;
+            }
+            runtime.remove_parked(id.index);
+            let data = runtime.compositions.get_mut(id)?;
+            let removed = data.table.movable.removed.take()?;
+            let applier = data.applier.clone();
+            Some((removed, crate::context::resolve_applier(&runtime.lent, &applier)))
+        });
+        if let Some((mut removed, applier)) = work {
+            applier
+                .try_borrow_mut()
+                .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
+                .on_begin_changes();
+            apply_deferred(&applier, &mut removed, false, None);
+        }
+    }
 }
 
 /// A pass that's composed, its snapshot's apply done: what [`apply_work`] needs.
@@ -1318,8 +1565,10 @@ impl Drop for Finishing {
             if runtime.finishing == 0 {
                 runtime.cells.release_held_by_passes();
             }
+            // Its late pass's work may be to come.
+            let more = runtime.unapplied.iter().any(|work| work.id == self.id);
             if let Some(data) = runtime.compositions.get_mut(self.id) {
-                data.finishing = false;
+                data.finishing = more;
             }
         });
     }

@@ -42,6 +42,13 @@ pub(crate) struct Runtime {
     pub unapplied: std::collections::VecDeque<crate::composition::Composed>,
     /// How many frames of trees began: what tells the work of one from that of another around it.
     pub tree_frames: u64,
+    /// Compositions a frame left with placeholders or parked content, for when they've all composed
+    /// (Compose's `performInsertValues`, D1308).
+    pub movable_late: Vec<CompositionId>,
+    /// Those with parked content for another to take, until `discard_unused_movable_content`.
+    pub movable_pool: Vec<CompositionId>,
+    /// `discard_unused_movable_content` is scheduled.
+    pub movable_discard_scheduled: bool,
     /// Moves on each time a provider's values change in a way that recomposes its content (a
     /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
     /// The last `Group::provider_version` given.
@@ -125,6 +132,9 @@ impl Runtime {
             lending_cells: Vec::new(),
             unapplied: std::collections::VecDeque::new(),
             tree_frames: 0,
+            movable_late: Vec::new(),
+            movable_pool: Vec::new(),
+            movable_discard_scheduled: false,
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
@@ -503,6 +513,16 @@ pub(crate) struct Deferred {
 }
 
 impl Deferred {
+    /// `later`'s, after this one's.
+    pub fn append(&mut self, later: &mut Deferred) {
+        self.deactivated_nodes.append(&mut later.deactivated_nodes);
+        self.released_nodes.append(&mut later.released_nodes);
+        self.removed_values.append(&mut later.removed_values);
+        self.remembered.append(&mut later.remembered);
+        self.side_effects.append(&mut later.side_effects);
+        self.repeated_releases |= later.repeated_releases;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.deactivated_nodes.is_empty()
             && self.released_nodes.is_empty()
@@ -731,6 +751,19 @@ impl Compositions {
     /// only while their composition is alive.
     pub fn data_mut(&mut self, index: u32) -> &mut CompositionData {
         self.entries[index as usize].data.as_mut().expect("composition of a live scope or pass")
+    }
+
+    /// The tables of two compositions, to move groups between.
+    pub fn two_tables(
+        &mut self,
+        a: CompositionId,
+        b: CompositionId,
+    ) -> (&mut SlotTable, &mut SlotTable) {
+        let [a, b] = self
+            .entries
+            .get_disjoint_mut([a.index as usize, b.index as usize])
+            .expect("two compositions");
+        (&mut a.data.as_mut().expect("live").table, &mut b.data.as_mut().expect("live").table)
     }
 
     /// The live composition at `index`.

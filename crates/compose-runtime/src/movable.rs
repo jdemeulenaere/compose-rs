@@ -18,9 +18,11 @@ use crate::compose_arg::ComposeArg;
 use crate::composer::{current, flush_node_moves};
 use crate::error::{ComposeError, misuse};
 use crate::hash::hash_key;
-use crate::runtime::{Deferred, Runtime, with_runtime};
+use crate::runtime::{CompositionId, Deferred, Runtime, with_runtime};
 use crate::scope::Scopes;
-use crate::slot_table::{CONTAINS_MOVABLE, GroupKind, MOVABLE, MOVABLE_PENDING, NONE, SlotTable};
+use crate::slot_table::{
+    CONTAINS_MOVABLE, GroupKind, MOVABLE, MOVABLE_PENDING, NONE, SENTINEL, SlotTable,
+};
 
 /// A group of content parked by a removal in the pass under way.
 pub(crate) struct Parked {
@@ -29,6 +31,9 @@ pub(crate) struct Parked {
     nodes: Vec<NodeRef>,
     /// The nearest provider where it was.
     provider: u32,
+    /// It came from another composition's table: nothing it holds of where it was is any use, so
+    /// all of it composes where it goes.
+    transplanted: bool,
 }
 
 /// What a table holds of the movable content in the pass under way.
@@ -52,6 +57,14 @@ pub(crate) struct MovableState {
     pub waiting: Vec<u32>,
     /// How many placeholders have been resolved: what tells a walk got somewhere.
     pub resolved: u64,
+    /// The placeholders, for a walk to find again (those resolved are told by their flags).
+    pub placeholders: Vec<u32>,
+    /// A late pass takes only what's been removed, the rest waiting to see if a move frees more,
+    /// as Compose doesn't mix moves with new content: identities with something to take.
+    pub move_only: Option<Vec<u64>>,
+    /// The contexts removed by this pass with compositions under them: what's in those is
+    /// available too, as Compose's `reportAllMovableContent`.
+    pub going_contexts: Vec<crate::context::ContextId>,
 }
 
 impl Parked {
@@ -185,6 +198,29 @@ fn start_movable_content(key: u64, identity: u64) -> Start {
     start
 }
 
+/// Takes out of `id`'s nodes what parked of them, with no pass of its own under way.
+pub(crate) fn flush_detached_of(id: CompositionId) {
+    let (applier, detach) = with_runtime(|runtime| {
+        let Some(data) = runtime.compositions.get_mut(id) else {
+            return (None, Vec::new());
+        };
+        let detach = std::mem::take(&mut data.table.movable.detach);
+        let applier = data.applier.clone();
+        (Some(crate::context::resolve_applier(&runtime.lent, &applier)), detach)
+    });
+    let Some(applier) = applier else { return };
+    if detach.is_empty() {
+        return;
+    }
+    let mut applier =
+        applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+    for (parent, index, count) in detach.into_iter().rev() {
+        if applier.contains(parent) {
+            applier.remove(parent, index as usize, count as usize);
+        }
+    }
+}
+
 /// Takes out of the nodes being removed what's parked of theirs.
 pub(crate) fn flush_detached() {
     let (applier, detach) = with_runtime(|runtime| {
@@ -218,6 +254,20 @@ fn top_nodes(table: &SlotTable, group: u32, nodes: &mut Vec<NodeRef>) {
     }
 }
 
+/// What's under `group` contributes this many nodes, what parked having gone from it.
+fn recount_nodes(table: &mut SlotTable, group: u32) -> u32 {
+    if table[group].kind == GroupKind::Node {
+        return 1;
+    }
+    let (mut count, mut child) = (0, table[group].first_child);
+    while child != NONE {
+        count += recount_nodes(table, child);
+        child = table[child].next_sibling;
+    }
+    table[group].node_count = count;
+    count
+}
+
 /// Takes `child` out of `parent`'s children, after `previous`.
 fn unlink(table: &mut SlotTable, parent: u32, previous: u32, child: u32) {
     let next = table[child].next_sibling;
@@ -247,7 +297,14 @@ fn park(table: &mut SlotTable, group: u32) {
     let mut nodes = Vec::with_capacity(table[group].node_count as usize);
     top_nodes(table, group, &mut nodes);
     let provider = table[group].enclosing_provider;
-    table.movable.parked.push(Parked { group, nodes, provider });
+    table.movable.parked.push(Parked { group, nodes, provider, transplanted: false });
+}
+
+/// `group`'s going: if it's a context's, what's under that goes too, at the end of the pass.
+fn note_going_context(table: &mut SlotTable, group: u32) {
+    if let Some(context) = crate::context::context_of_group(table, group) {
+        table.movable.going_contexts.push(context);
+    }
 }
 
 /// A removal reached `root`, which is or holds movable content: parks it. Returns whether `root`
@@ -262,6 +319,7 @@ pub(crate) fn park_in(table: &mut SlotTable, root: u32) -> bool {
         park(table, root);
         return true;
     }
+    note_going_context(table, root);
     if table[root].kind == GroupKind::Node {
         park_children(table, root, Some(table[root].node), &mut 0);
     } else {
@@ -295,10 +353,12 @@ fn park_children(table: &mut SlotTable, group: u32, node: Option<NodeRef>, index
             *index += count;
             previous = child;
         } else if kind == GroupKind::Node {
+            note_going_context(table, child);
             park_children(table, child, Some(child_node), &mut 0);
             *index += count;
             previous = child;
         } else {
+            note_going_context(table, child);
             park_children(table, child, node, index);
             previous = child;
         }
@@ -396,9 +456,89 @@ fn take_parked(table: &mut SlotTable, identity: u64) -> Option<Parked> {
         top_nodes(table, group, &mut nodes);
         let provider = table[group].enclosing_provider;
         table.movable.pending += placeholders_under(table, group);
-        return Some(Parked { group, nodes, provider });
+        return Some(Parked { group, nodes, provider, transplanted: false });
     }
     None
+}
+
+/// Whether there's content of `identity` to take from what's parked in `table`.
+fn can_take(table: &SlotTable, identity: u64) -> bool {
+    table.movable.parked.iter().any(|parked| {
+        let group = &table[parked.group];
+        group.data_key == identity
+            || (group.flags & CONTAINS_MOVABLE != 0
+                && find_nested(table, parked.group, identity, None, &mut 0).is_some())
+    })
+}
+
+/// Moves `old` of `source` and what's under it to `target`, as a tree of its own to be linked:
+/// its scopes and contexts follow it, and what's nested provides from the new groups.
+#[allow(clippy::too_many_arguments)]
+fn move_group(
+    source: &mut SlotTable,
+    target: &mut SlotTable,
+    scopes: &mut Scopes,
+    contexts: &mut crate::context::Contexts,
+    target_id: CompositionId,
+    moved_contexts: &mut Vec<crate::context::ContextId>,
+    old: u32,
+    parent: u32,
+    provider: u32,
+) -> u32 {
+    let new = {
+        let group = &source[old];
+        target.alloc(group.kind, group.key, group.data_key, parent)
+    };
+    let context = crate::context::context_of_group(source, old);
+    let group = &mut source[old];
+    let (first_child, scope) = (group.first_child, group.scope);
+    {
+        let moved = &mut target[new];
+        moved.dirty = group.dirty;
+        moved.flags = group.flags;
+        moved.slot_position = group.slot_position;
+        moved.enclosing_provider = provider;
+        moved.node_count = group.node_count;
+        moved.node = group.node;
+        moved.scope = scope;
+        moved.slots = std::mem::take(&mut group.slots);
+        moved.kept = group.kept.take();
+        moved.restart = group.restart;
+        moved.identity = group.identity.take();
+    }
+    group.scope = crate::scope::ScopeId::NONE;
+    if let Some(entry) = scopes.get_mut(scope) {
+        entry.composition = target_id.index;
+        entry.group = new;
+    }
+    if let Some(context) = context {
+        contexts.moved_to(context, target_id, new);
+        moved_contexts.push(context);
+    }
+    if target[new].flags & MOVABLE_PENDING != 0 {
+        target.movable.placeholders.push(new);
+    }
+    let inner = if target[new].is_provider() { new } else { provider };
+    let (mut previous, mut child) = (NONE, first_child);
+    while child != NONE {
+        let next = source[child].next_sibling;
+        let moved = move_group(
+            source,
+            target,
+            scopes,
+            contexts,
+            target_id,
+            moved_contexts,
+            child,
+            new,
+            inner,
+        );
+        target.link_after(new, previous, moved);
+        previous = moved;
+        child = next;
+    }
+    source.free(old);
+    new
 }
 
 /// Points what's in `group`, which moved, at the providers where it is.
@@ -434,7 +574,11 @@ impl Runtime {
             table.movable.pending -= 1;
             table.movable.resolved += 1;
             table[parent.cursor].flags &= !MOVABLE_PENDING;
-            if let Some(parked) = take_parked(table, identity) {
+            let taken = match take_parked(table, identity) {
+                Some(parked) => Some(parked),
+                None => self.take_from_another(composition, identity),
+            };
+            if let Some(parked) = taken {
                 self.adopt_for_placeholder(
                     composition,
                     parent.cursor,
@@ -446,7 +590,8 @@ impl Runtime {
             }
         }
         let (op, _) = self.start_group(GroupKind::Restart, key, identity, None, false);
-        let Runtime { compositions, scopes, frames, recorded_changes, .. } = self;
+        let Runtime { compositions, scopes, frames, recorded_changes, providers_invalid, .. } =
+            self;
         let table = &mut compositions.data_mut(composition).table;
         let frame = frames.last_mut().expect("just started");
         let group = frame.group;
@@ -456,6 +601,13 @@ impl Runtime {
             let attach = (frame.node_parent, frame.node_index, parked.nodes);
             if parked.provider != provider {
                 relink_providers(table, group, provider);
+            }
+            // From another table: what its nodes and calls keep of places is of that one.
+            if parked.transplanted {
+                frame.forced = true;
+                if *providers_invalid == 0 {
+                    *providers_invalid = frames.len();
+                }
             }
             return (op, Start::Composing, Some(attach));
         }
@@ -476,18 +628,23 @@ impl Runtime {
             return (op, Start::Composing, None);
         }
         table[group].flags |= MOVABLE;
-        // The groups holding it: a removal looks in them.
+        // The groups holding it, those holding a composition it's in too: a removal looks in them.
         let mut around = table[group].parent;
         while around != NONE && table[around].flags & CONTAINS_MOVABLE == 0 {
             table[around].flags |= CONTAINS_MOVABLE;
             around = table[around].parent;
         }
+        if around == NONE {
+            compositions.mark_contains_movable_above(composition);
+        }
+        let table = &mut compositions.data_mut(composition).table;
         // In paused content: new, as paused content doesn't take what's removed (D1305).
         if frame.region != crate::pausable::NO_REGION {
             return (op, Start::Composing, None);
         }
         table[group].flags |= MOVABLE_PENDING;
         table.movable.pending += 1;
+        table.movable.placeholders.push(group);
         if let Some(scope) = scopes.get_mut(table[group].scope) {
             scope.invalid = true;
         }
@@ -535,6 +692,140 @@ impl Runtime {
         true
     }
 
+    /// Content of `identity` parked in another composition this one shares its nodes' tree with, the
+    /// last to be available first: its groups come to this table.
+    fn take_from_another(&mut self, composition: u32, identity: u64) -> Option<Parked> {
+        let target_id = self.compositions.id_at(composition);
+        let applier = self.compositions.get(target_id)?.applier.clone();
+        let from = self.movable_pool.iter().rev().copied().find(|id| {
+            *id != target_id
+                && self.compositions.get(*id).is_some_and(|data| {
+                    Rc::ptr_eq(&data.applier, &applier) && can_take(&data.table, identity)
+                })
+        })?;
+        let source = &mut self.compositions.data_mut(from.index).table;
+        let parked = take_parked(source, identity)?;
+        // What a nested one's taking out of what's around it is done by this pass.
+        let detach = std::mem::take(&mut source.movable.detach);
+        let pending = placeholders_under(source, parked.group);
+        // Not parked in `source` now: those of it are counted where it goes.
+        source.movable.pending -= pending;
+        let group = self.transplant(from, target_id, parked.group);
+        let target = &mut self.compositions.data_mut(composition).table;
+        target.movable.detach.extend(detach);
+        target.movable.pending += pending;
+        Some(Parked { group, nodes: parked.nodes, provider: NONE, transplanted: true })
+    }
+
+    /// Moves `group`, in no tree, from `from`'s table to `to`'s: what's under its contexts is under
+    /// `to` from now on.
+    fn transplant(&mut self, from: CompositionId, to: CompositionId, group: u32) -> u32 {
+        let Runtime { compositions, scopes, .. } = self;
+        let mut contexts = std::mem::take(&mut compositions.contexts);
+        let mut moved_contexts = Vec::new();
+        let (source, target) = compositions.two_tables(from, to);
+        let new = move_group(
+            source,
+            target,
+            scopes,
+            &mut contexts,
+            to,
+            &mut moved_contexts,
+            group,
+            NONE,
+            NONE,
+        );
+        compositions.contexts = contexts;
+        compositions.children_moved(from, to, &moved_contexts);
+        new
+    }
+
+    /// `id`, about to go, has content parked for someone to take: it's its parent's to hold, while
+    /// there's a parent. It stays available.
+    pub(crate) fn rehome_parked(&mut self, id: CompositionId) {
+        let Some(data) = self.compositions.get(id) else { return };
+        if data.table.movable.parked.is_empty() {
+            return;
+        }
+        let parent = data.parent.and_then(|place| self.compositions.contexts.parent_of(place));
+        let Some(parent) = parent.filter(|parent| self.compositions.get(*parent).is_some()) else {
+            return;
+        };
+        let source = &mut self.compositions.data_mut(id.index).table;
+        let parked = std::mem::take(&mut source.movable.parked);
+        for one in parked {
+            let group = self.transplant(id, parent, one.group);
+            let target = &mut self.compositions.data_mut(parent.index).table;
+            target.movable.pending += placeholders_under(target, group);
+            target.movable.parked.push(Parked {
+                group,
+                nodes: one.nodes,
+                provider: NONE,
+                transplanted: true,
+            });
+        }
+        if !self.movable_pool.contains(&parent) {
+            self.movable_pool.push(parent);
+        }
+    }
+
+    /// The identities `composition`'s placeholders can take from what's parked now.
+    pub(crate) fn movable_available(&self, composition: CompositionId) -> Vec<u64> {
+        let Some(data) = self.compositions.get(composition) else { return Vec::new() };
+        let table = &data.table;
+        let mut available = Vec::new();
+        for group in &table.movable.placeholders {
+            if table[*group].flags & MOVABLE_PENDING == 0
+                || table[*group].kind != GroupKind::Restart
+            {
+                continue;
+            }
+            let identity = table[*group].data_key;
+            let there = can_take(table, identity)
+                || self.movable_pool.iter().any(|id| {
+                    *id != composition
+                        && self.compositions.get(*id).is_some_and(|other| {
+                            Rc::ptr_eq(&other.applier, &data.applier)
+                                && can_take(&other.table, identity)
+                        })
+                });
+            if there {
+                available.push(identity);
+            }
+        }
+        available
+    }
+
+    /// What's under a context the pass removed: its content parks, for who wants it.
+    pub(crate) fn park_going_children(&mut self, id: CompositionId) -> Vec<CompositionId> {
+        let mut parked = Vec::new();
+        if self.compositions.get(id).is_none_or(|data| data.table.movable.going_contexts.is_empty())
+        {
+            return parked;
+        }
+        let mut going = vec![id];
+        while let Some(composition) = going.pop() {
+            let Some(data) = self.compositions.get_mut(composition) else { continue };
+            let contexts = std::mem::take(&mut data.table.movable.going_contexts);
+            if contexts.is_empty() {
+                continue;
+            }
+            for child in self.compositions.children_of(&contexts) {
+                let data = self.compositions.get_mut(child).expect("just listed");
+                let root = data.root_node;
+                let table = &mut data.table;
+                if table[SENTINEL].flags & CONTAINS_MOVABLE == 0 {
+                    continue;
+                }
+                park_children(table, SENTINEL, Some(root), &mut 0);
+                recount_nodes(table, SENTINEL);
+                parked.push(child);
+                going.push(child);
+            }
+        }
+        parked
+    }
+
     /// `parked` goes where `placeholder` is, which goes.
     fn adopt_for_placeholder(
         &mut self,
@@ -568,6 +859,19 @@ impl Runtime {
     pub(crate) fn begin_movable_walk(&mut self, composition: u32) {
         let frame = self.frames.last_mut().expect("the sentinel frame");
         let table = &mut self.compositions.data_mut(composition).table;
+        // Those a walk passed for another's content have their way back.
+        let mut placeholders = std::mem::take(&mut table.movable.placeholders);
+        placeholders.retain(|group| {
+            table[*group].kind == GroupKind::Restart && table[*group].flags & MOVABLE_PENDING != 0
+        });
+        for group in &placeholders {
+            let mut around = table[*group].parent;
+            while around != NONE && !table[around].dirty {
+                table[around].dirty = true;
+                around = table[around].parent;
+            }
+        }
+        table.movable.placeholders = placeholders;
         table[crate::slot_table::SENTINEL].dirty = false;
         table.movable.walking = true;
         frame.mode = crate::composer::Mode::Walk;
@@ -579,7 +883,7 @@ impl Runtime {
     }
 
     /// What the walks passed is invalid still: the next pass reaches it, and a frame's asked.
-    fn leave_for_the_next_pass(&mut self, composition: u32) {
+    pub(crate) fn leave_for_the_next_pass(&mut self, composition: u32) {
         let Runtime { compositions, scopes, frame_requests, .. } = self;
         let table = &mut compositions.data_mut(composition).table;
         table.movable.walking = false;
@@ -611,7 +915,6 @@ impl Runtime {
 
     /// No placeholder is left: what's parked is removed, its nodes already out of the tree.
     pub(crate) fn remove_parked(&mut self, composition: u32) {
-        self.leave_for_the_next_pass(composition);
         let Runtime { compositions, scopes, removal_stack, .. } = self;
         let data = compositions.data_mut(composition);
         let parked = std::mem::take(&mut data.table.movable.parked);

@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use compose_runtime::platform::{self, Applier};
+use compose_runtime::platform::{self, Applier, NodeRef};
 use compose_runtime::snapshots::Snapshot;
 use compose_runtime::*;
 
@@ -2725,7 +2725,7 @@ fn a_value_used_in_compositions_lives_until_the_last_lets_it_go() {
         }
     }
     #[composable]
-    fn Subcompose(used: MutableState<bool>, live: Rc<Cell<i32>>) {
+    fn UsesItBelow(used: MutableState<bool>, live: Rc<Cell<i32>>) {
         let parent = remember_composition_context();
         let composition =
             remember(|| Rc::new(Composition::with_parent(ViewApplier::new(), parent)));
@@ -2739,8 +2739,8 @@ fn a_value_used_in_compositions_lives_until_the_last_lets_it_go() {
     let (m, s1, s2, l) = (main.handle(), sub1.handle(), sub2.handle(), live.clone());
     test.compose(move || {
         UseIt!(m, l.clone());
-        Subcompose!(s1, l.clone());
-        Subcompose!(s2, l.clone());
+        UsesItBelow!(s1, l.clone());
+        UsesItBelow!(s2, l.clone());
     });
     let used = |test: &mut CompositionTest, expected: bool| {
         test.advance();
@@ -2763,4 +2763,1004 @@ fn a_value_used_in_compositions_lives_until_the_last_lets_it_go() {
     sub1.set(false);
     sub2.set(false);
     used(&mut test, false);
+}
+
+// ---- Across compositions (C6) -------------------------------------------------------------------
+
+/// A node to compose under, found by the view it made, as the file's `Subcompose` hosts: of one tree
+/// with its parent's, its nodes can move.
+#[composable(non_restartable)]
+fn HostNode(name: &'static str, parent: CompositionContext) -> NodeRef {
+    let made = remember(|| Rc::new(Cell::new(0u64)));
+    let id = made.clone();
+    ComposeNode::<ViewApplier>(
+        move || {
+            let view = View::new(name);
+            id.set(view.id);
+            view
+        },
+        |_| {},
+    );
+    let finder = remember(|| Rc::new(platform::subcomposition(parent, ViewApplier::new().root())));
+    let wanted = made.get();
+    let found = finder.with_applier(|views: &mut ViewApplier| {
+        let mut stack = views.roots();
+        while let Some(node) = stack.pop() {
+            if views.tree.get(node).is_some_and(|view| view.id == wanted) {
+                return node;
+            }
+            stack.extend(views.tree.children(node));
+        }
+        panic!("the host's in the tree")
+    });
+    let finder = finder.clone();
+    DisposableEffect((), move |scope| scope.on_dispose(move || finder.dispose()));
+    found
+}
+
+/// As the file's `Subcompose`: a child composed at once in the body, each time.
+#[composable]
+fn Subcompose(content: impl Fn() + 'static) {
+    let parent = remember_composition_context();
+    let host = HostNode("SubcomposeHost", parent);
+    let composition = remember(|| Rc::new(platform::subcomposition(parent, host)));
+    composition.set_content(move || content());
+    DisposableEffect((), move |scope| scope.on_dispose(move || composition.dispose()));
+}
+
+/// As the file's `DeferredSubcompose`: composed by a task of an effect, the frame's composing over.
+#[composable]
+fn DeferredSubcompose(content: Callback) {
+    let parent = remember_composition_context();
+    let host = HostNode("DeferredSubcompose", parent);
+    let composition = remember(|| Rc::new(platform::subcomposition(parent, host)));
+    let (held, then) = (composition.clone(), content.clone());
+    LaunchedEffect(content, async move { held.set_content(move || then()) });
+    DisposableEffect((), move |scope| scope.on_dispose(move || composition.dispose()));
+}
+
+fn subcompose_host(v: &mut Expected, children: &mut dyn FnMut(&mut Expected)) {
+    v.view("SubcomposeHost", &[], |v| children(v));
+}
+
+fn deferred_host(v: &mut Expected, children: &mut dyn FnMut(&mut Expected)) {
+    v.view("DeferredSubcompose", &[], |v| children(v));
+}
+
+struct Lively(Rc<Cell<i32>>);
+
+impl RememberObserver for Lively {
+    fn on_remembered(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+    fn on_forgotten(&self) {
+        self.0.set(self.0.get() - 1);
+    }
+    fn on_abandoned(&self) {}
+}
+
+fn find_view(test: &CompositionTest, name: &'static str) -> Option<u64> {
+    test.with_views(|views| {
+        let mut stack = views.roots();
+        while let Some(node) = stack.pop() {
+            let view = views.tree.get(node).expect("a live view");
+            if view.name == name {
+                return Some(view.id);
+            }
+            stack.extend(views.tree.children(node));
+        }
+        None
+    })
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, moveContent_subcompose
+#[test]
+fn content_moves_in_and_out_of_compositions_and_between_them() {
+    const IN_MAIN: i32 = 0;
+    const IN_SUB1: i32 = 1;
+    const IN_SUB2: i32 = 2;
+    fn validate_content(v: &mut Expected) {
+        row(v, |v| {
+            v.text("Text from value");
+            marker(v);
+        });
+    }
+    let mut test = composition_test();
+    let live = Rc::new(Cell::new(0));
+    let l = live.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        Row!(move || {
+            let l = l.clone();
+            remember_observer(move || Lively(l));
+            Text("Text from value");
+            Marker();
+        });
+    });
+    let position = mutable_state_of(IN_MAIN);
+    let p = position.handle();
+    test.compose(move || {
+        let content = content.clone();
+        Row!(move || {
+            let (main, first, second) = (content.clone(), content.clone(), content.clone());
+            key(p.get() == IN_MAIN, move || {
+                if p.get() == IN_MAIN {
+                    main();
+                }
+            });
+            Subcompose!(move || {
+                let first = first.clone();
+                Row!(move || {
+                    let first = first.clone();
+                    key(p.get() == IN_SUB1, move || {
+                        if p.get() == IN_SUB1 {
+                            first();
+                        }
+                    });
+                    Text("Some other text");
+                });
+            });
+            Subcompose!(move || {
+                let second = second.clone();
+                Row!(move || {
+                    Text("Some more text");
+                    let second = second.clone();
+                    key(p.get() == IN_SUB2, move || {
+                        if p.get() == IN_SUB2 {
+                            second();
+                        }
+                    });
+                });
+            });
+        });
+    });
+    let the_marker = find_view(&test, "Marker").expect("composed");
+    let check = |test: &mut CompositionTest, position: i32| {
+        test.validate(move |v| {
+            row(v, |v| {
+                if position == IN_MAIN {
+                    validate_content(v);
+                }
+                subcompose_host(v, &mut |v: &mut Expected| {
+                    row(v, |v| {
+                        if position == IN_SUB1 {
+                            validate_content(v);
+                        }
+                        v.text("Some other text");
+                    });
+                });
+                subcompose_host(v, &mut |v: &mut Expected| {
+                    row(v, |v| {
+                        v.text("Some more text");
+                        if position == IN_SUB2 {
+                            validate_content(v);
+                        }
+                    });
+                });
+            });
+        });
+        assert_eq!(find_view(test, "Marker"), Some(the_marker), "the node moved with it");
+        assert_eq!(live.get(), 1, "what it remembered stayed");
+    };
+    check(&mut test, IN_MAIN);
+    for new_position in [IN_SUB1, IN_SUB2, IN_SUB1, IN_MAIN, IN_SUB2, IN_MAIN] {
+        position.set(new_position);
+        test.expect_changes();
+        check(&mut test, new_position);
+    }
+    test.dispose();
+    assert_eq!(live.get(), 0);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, subcomposeLifetime_with_movable_content
+#[test]
+fn content_used_in_compositions_lives_until_the_last_lets_it_go() {
+    let mut test = composition_test();
+    let live = Rc::new(Cell::new(0));
+    let l = live.clone();
+    let the_content = movable_content_of(move || {
+        let l = l.clone();
+        remember_observer(move || Lively(l));
+    });
+    let (main, sub1, sub2) =
+        (mutable_state_of(false), mutable_state_of(false), mutable_state_of(false));
+    let (m, s1, s2) = (main.handle(), sub1.handle(), sub2.handle());
+    test.compose(move || {
+        let (a, b, c) = (the_content.clone(), the_content.clone(), the_content.clone());
+        key(m.get(), move || {
+            if m.get() {
+                a();
+            }
+        });
+        Subcompose!(move || {
+            let b = b.clone();
+            key(s1.get(), move || {
+                if s1.get() {
+                    b();
+                }
+            });
+        });
+        Subcompose!(move || {
+            let c = c.clone();
+            key(s2.get(), move || {
+                if s2.get() {
+                    c();
+                }
+            });
+        });
+    });
+    let used = |test: &mut CompositionTest, expected: bool| {
+        test.advance();
+        assert_eq!(live.get() > 0, expected);
+    };
+    used(&mut test, false);
+    main.set(true);
+    used(&mut test, true);
+    sub1.set(true);
+    sub2.set(true);
+    used(&mut test, true);
+    main.set(false);
+    used(&mut test, true);
+    sub1.set(false);
+    used(&mut test, true);
+    sub1.set(false);
+    sub2.set(true);
+    used(&mut test, true);
+    main.set(false);
+    sub1.set(false);
+    sub2.set(false);
+    used(&mut test, false);
+}
+
+/// `deferredSubcompose_conditional_*`'s scene, content among its siblings or `nested` in a column.
+fn deferred_conditional(nested: bool, change_state: bool) {
+    let mut test = composition_test();
+    let (subcompose, state) = (mutable_state_of(false), mutable_state_of(String::from("one")));
+    let last: Rc<Cell<u64>> = Rc::default();
+    let next = Rc::new(Cell::new(1u64));
+    let (l, n, st) = (last.clone(), next.clone(), state.handle());
+    let content = movable_content_of(move || {
+        let n = n.clone();
+        let token = remember(move || {
+            n.set(n.get() + 1);
+            n.get()
+        });
+        l.set(token);
+        Text(&format!("Movable content state: {}", st.get()));
+    });
+    let s = subcompose.handle();
+    test.compose(move || {
+        Text("Main content start");
+        let main = content.clone();
+        key(s.get(), move || {
+            if !s.get() {
+                main();
+            }
+        });
+        Text("Main content end");
+        let sub = content.clone();
+        key(s.get(), move || {
+            if s.get() {
+                let sub = sub.clone();
+                DeferredSubcompose!(move || {
+                    let sub = sub.clone();
+                    let inside = move || {
+                        Text("Sub-composed content start");
+                        sub();
+                        Text("Sub-composed content end");
+                    };
+                    if nested {
+                        Column!(inside);
+                    } else {
+                        inside();
+                    }
+                });
+            }
+        });
+    });
+    let (sub, st) = (subcompose.handle(), state.handle());
+    test.validate(move |v| {
+        let text = format!("Movable content state: {}", st.get());
+        v.text("Main content start");
+        if !sub.get() {
+            v.text(&text);
+        }
+        v.text("Main content end");
+        if sub.get() {
+            deferred_host(v, &mut |v: &mut Expected| {
+                let inside = |v: &mut Expected| {
+                    v.text("Sub-composed content start");
+                    v.text(&text);
+                    v.text("Sub-composed content end");
+                };
+                if nested {
+                    column(v, inside);
+                } else {
+                    inside(v);
+                }
+            });
+        }
+    });
+    let expected = last.get();
+    subcompose.set(true);
+    if change_state {
+        state.set("two".into());
+    }
+    test.expect_changes();
+    test.revalidate();
+    assert_eq!(last.get(), expected, "not made again");
+    if change_state {
+        return;
+    }
+    subcompose.set(false);
+    test.expect_changes();
+    test.revalidate();
+    assert_eq!(last.get(), expected, "not made again");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, deferredSubcompose_conditional_rootLevelChildren
+#[test]
+fn content_moves_to_the_top_of_a_composition_made_after_the_frame() {
+    deferred_conditional(false, false);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, deferredSubcompose_conditional_nestedChildren
+#[test]
+fn content_moves_into_a_node_of_a_composition_made_after_the_frame() {
+    deferred_conditional(true, false);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, deferredSubcompose_conditional_and_invalid
+#[test]
+fn content_invalid_moves_to_a_composition_made_after_the_frame() {
+    deferred_conditional(false, true);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, parameterPassingThroughDeferredSubcompose
+#[test]
+fn a_parameter_goes_through_a_composition_made_after_the_frame() {
+    let mut test = composition_test();
+    let state = mutable_state_of(false);
+    let last_seen: Rc<Cell<Option<bool>>> = Rc::default();
+    let l = last_seen.clone();
+    let content = movable_content_of_with(move |parameter: bool| {
+        let l = l.clone();
+        Linear!(move || l.set(Some(parameter)));
+    });
+    let s = state.handle();
+    test.compose(move || {
+        let (direct, deferred) = (content.clone(), content.clone());
+        key(s.get(), move || {
+            if s.get() {
+                direct(true);
+            } else {
+                let deferred = deferred.clone();
+                DeferredSubcompose!(move || deferred(s.get()));
+            }
+        });
+    });
+    test.advance();
+    assert_eq!(last_seen.get(), Some(false));
+    for round in 0..5 {
+        state.update(|state| !state);
+        test.expect_changes();
+        assert_eq!(last_seen.get(), Some(state.get()), "round {round}");
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, stateChangesWhilePendingMove
+#[test]
+fn a_scope_invalidated_while_its_content_waits_composes_as_it_moves() {
+    let mut test = composition_test();
+    let read = Rc::new(Cell::new(0));
+    let last_seen = Rc::new(Cell::new(-1));
+    let scope = ScopeHolder::new();
+    let deferred = mutable_state_of(false);
+    let (r, l, sc) = (read.clone(), last_seen.clone(), scope.clone());
+    let content = movable_content_of(move || {
+        let (r, l, sc) = (r.clone(), l.clone(), sc.clone());
+        Linear!(move || {
+            l.set(r.get());
+            sc.capture();
+        });
+    });
+    let (d, r, sc) = (deferred.handle(), read.clone(), scope.clone());
+    test.compose(move || {
+        let (direct, sub) = (content.clone(), content.clone());
+        let (r, sc) = (r.clone(), sc.clone());
+        key(d.get(), move || {
+            if d.get() {
+                let sub = sub.clone();
+                DeferredSubcompose!(move || sub());
+                let (r, sc) = (r.clone(), sc.clone());
+                SideEffect(move || {
+                    r.set(r.get() + 1);
+                    sc.invalidate();
+                });
+            } else {
+                direct();
+            }
+        });
+    });
+    test.advance();
+    assert_eq!(last_seen.get(), read.get());
+    deferred.set(true);
+    test.advance();
+    assert_eq!(last_seen.get(), read.get());
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, movableContent_movingContentOutOfDeferredSubcomposition
+#[test]
+fn content_moves_out_of_a_composition_going_in_the_frame() {
+    let mut test = composition_test();
+    let toggle = mutable_state_of(true);
+    let t = toggle.handle();
+    let content = movable_content_of(move || Text(&format!("Toggle = {}", t.get())));
+    let t = toggle.handle();
+    test.compose(move || {
+        let (sub, main) = (content.clone(), content.clone());
+        key(t.get(), move || {
+            if t.get() {
+                let sub = sub.clone();
+                DeferredSubcompose!(move || sub());
+            } else {
+                main();
+            }
+        });
+    });
+    test.advance();
+    let t = toggle.handle();
+    test.validate(move |v| {
+        let text = format!("Toggle = {}", t.get());
+        if t.get() {
+            deferred_host(v, &mut |v: &mut Expected| v.text(&text));
+        } else {
+            v.text(&text);
+        }
+    });
+    toggle.update(|toggle| !toggle);
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, moveContentBetweenSubcompositions
+#[test]
+fn content_moves_from_a_composition_going_to_one_made_after_the_frame() {
+    let mut test = composition_test();
+    let in_subcompose = mutable_state_of(true);
+    let content = movable_content_of(|| Text("Some text"));
+    let i = in_subcompose.handle();
+    test.compose(move || {
+        let (at_once, later) = (content.clone(), content.clone());
+        key(i.get(), move || {
+            if i.get() {
+                let at_once = at_once.clone();
+                Subcompose!(move || at_once());
+            } else {
+                let later = later.clone();
+                DeferredSubcompose!(move || later());
+            }
+        });
+    });
+    in_subcompose.set(false);
+    test.advance();
+    test.validate(|v| deferred_host(v, &mut |v: &mut Expected| v.text("Some text")));
+}
+
+/// Content in a paused region, inside a node of it, that a whole pass removes as it goes through the
+/// region, and calls elsewhere: paused content takes no part in moves (D1305), so it's made anew,
+/// and what the region made goes with the region's work.
+#[test]
+fn content_in_a_paused_region_a_whole_pass_removes_doesnt_move() {
+    #[composable]
+    fn Item() {
+        Text("item");
+    }
+    #[composable]
+    fn Body(show: MutableState<bool>, content: Callback) {
+        let inner = content.clone();
+        let showing = show.get();
+        platform::PausableContent(move || {
+            let inner = inner.clone();
+            key(showing, move || {
+                let inner = inner.clone();
+                Linear!(move || {
+                    if showing {
+                        inner();
+                    }
+                    Item!();
+                });
+            });
+        });
+        if !show.get() {
+            let content = content.clone();
+            Row!(move || content());
+        }
+    }
+    let composition =
+        Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+    let show = mutable_state_of(true);
+    let made = Rc::new(Cell::new(0));
+    let m = made.clone();
+    let content = movable_content_of(move || {
+        let m = m.clone();
+        remember(move || m.set(m.get() + 1));
+        Text("moved");
+    });
+    let s = show.handle();
+    let paused = composition.set_pausable_content(move || Body!(s, content.clone()));
+    // Paused at the item, the content composed apart.
+    let m = made.clone();
+    assert!(!paused.resume(move || m.get() > 0));
+    assert_eq!(made.get(), 1);
+    show.set(false);
+    composition.recompose();
+    while !paused.resume(|| false) {}
+    paused.apply();
+    let dump = composition.with_applier(|views: &mut ViewApplier| views.tree.dump());
+    assert_eq!(dump.trim(), "<linear>\n  <text text='item'>\n<Row>\n  <text text='moved'>");
+    assert_eq!(made.get(), 2, "made anew");
+    composition.validate();
+    composition.dispose();
+}
+
+// Compose: compose/runtime/runtime/integration-tests/src/androidTest/kotlin/androidx/compose/runtime/PausableCompositionInstrumentedTests.kt, movableContentDisposed
+#[test]
+fn content_a_resume_no_longer_calls_is_disposed_when_applied() {
+    let composition =
+        Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+    let (emit, active) = (mutable_state_of(true), Rc::new(Cell::new(0)));
+    let a = active.clone();
+    let content = movable_content_of(move || {
+        Text("box");
+        let a = a.clone();
+        DisposableEffect((), move |scope| {
+            a.set(a.get() + 1);
+            scope.on_dispose(move || a.set(a.get() - 1))
+        });
+    });
+    let e = emit.handle();
+    let paused = composition.set_pausable_content(move || {
+        let content = content.clone();
+        key(e.get(), move || {
+            if e.get() {
+                content();
+            }
+        });
+    });
+    assert!(paused.resume(|| false));
+    emit.set(false);
+    Snapshot::send_apply_notifications();
+    while !paused.resume(|| false) {}
+    paused.apply();
+    assert_eq!(active.get(), 0);
+    composition.dispose();
+}
+
+/// Content holding a composition of its own moves into another: what's under it goes on, in the
+/// frames of where it is now, and hears what it provides.
+#[test]
+fn content_holding_a_composition_moves_with_it() {
+    static PROVIDED: CompositionLocal<i32> = CompositionLocal::new("moved.provided", || 0);
+    let mut test = composition_test();
+    let (in_sub, value) = (mutable_state_of(false), mutable_state_of(0));
+    let (seen, made) = (Rc::new(Cell::new((-1, -1))), Rc::new(Cell::new(0)));
+    let (s, m, v) = (seen.clone(), made.clone(), value.handle());
+    let content = movable_content_of(move || {
+        let (s, m) = (s.clone(), m.clone());
+        Subcompose!(move || {
+            let m = m.clone();
+            remember(move || m.set(m.get() + 1));
+            s.set((v.get(), PROVIDED.current()));
+        });
+    });
+    let i = in_sub.handle();
+    test.compose(move || {
+        let (main, sub) = (content.clone(), content.clone());
+        key(i.get(), move || {
+            if !i.get() {
+                main();
+            }
+        });
+        CompositionLocalProvider(PROVIDED.provides(1), move || {
+            let sub = sub.clone();
+            Subcompose!(move || {
+                let sub = sub.clone();
+                key(i.get(), move || {
+                    if i.get() {
+                        sub();
+                    }
+                });
+            });
+        });
+    });
+    assert_eq!(seen.get(), (0, 0));
+    in_sub.set(true);
+    test.expect_changes();
+    assert_eq!(seen.get(), (0, 1), "composed under what's there");
+    assert_eq!(made.get(), 1, "the one composition");
+    value.set(1);
+    test.advance();
+    assert_eq!(seen.get(), (1, 1), "in the frames of where it is");
+    in_sub.set(false);
+    test.expect_changes();
+    assert_eq!(seen.get(), (1, 0));
+    assert_eq!(made.get(), 1);
+    // It goes with where it's ended up.
+    in_sub.set(true);
+    test.expect_changes();
+    assert_eq!(seen.get(), (1, 1));
+    test.dispose();
+}
+
+/// Between compositions of different trees nodes can't move: it's made anew, what was there goes.
+#[test]
+fn content_called_in_a_composition_of_another_tree_is_new() {
+    let mut test = composition_test();
+    let there = mutable_state_of(false);
+    let (made, live) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (m, l) = (made.clone(), live.clone());
+    let content = movable_content_of(move || {
+        let (m, l) = (m.clone(), l.clone());
+        remember(move || m.set(m.get() + 1));
+        remember_observer(move || Lively(l));
+        Text("text");
+    });
+    let t = there.handle();
+    test.compose(move || {
+        let (main, other) = (content.clone(), content.clone());
+        key(t.get(), move || {
+            if !t.get() {
+                main();
+            }
+        });
+        let parent = remember_composition_context();
+        let composition =
+            remember(|| Rc::new(Composition::with_parent(ViewApplier::new(), parent)));
+        composition.set_content(move || {
+            let other = other.clone();
+            key(t.get(), move || {
+                if t.get() {
+                    other();
+                }
+            });
+        });
+    });
+    there.set(true);
+    test.expect_changes();
+    assert_eq!(made.get(), 2);
+    assert_eq!(live.get(), 1);
+}
+
+/// Nobody takes it, with compositions around: it's discarded after the effects' first steps.
+#[test]
+fn content_nobody_takes_goes_after_the_frame() {
+    let mut test = composition_test();
+    let (shown, live) = (mutable_state_of(true), Rc::new(Cell::new(0)));
+    let l = live.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        remember_observer(move || Lively(l));
+        Text("text");
+    });
+    let s = shown.handle();
+    test.compose(move || {
+        let content = content.clone();
+        Subcompose!(move || {
+            let content = content.clone();
+            key(s.get(), move || {
+                if s.get() {
+                    content();
+                }
+            });
+        });
+    });
+    assert_eq!(live.get(), 1);
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    test.composition().recompose();
+    assert_eq!(live.get(), 1, "an effect could still ask for it");
+    platform::run_ready();
+    assert_eq!(live.get(), 0);
+    test.validate(|v| subcompose_host(v, &mut |_: &mut Expected| {}));
+}
+
+/// A panic in a late pass goes out after what composed has applied; the composition's poisoned.
+#[test]
+fn a_panic_in_a_late_pass_goes_out_after_the_work() {
+    let mut test = composition_test();
+    let (there, bad) = (mutable_state_of(false), Rc::new(Cell::new(false)));
+    let (ran, b) = (Rc::new(Cell::new(false)), bad.clone());
+    let content = movable_content_of(move || assert!(!b.get(), "in new content"));
+    let (t, r) = (there.handle(), ran.clone());
+    test.compose(move || {
+        let content = content.clone();
+        let r = r.clone();
+        let there = t.get();
+        SideEffect(move || r.set(there));
+        Subcompose!(move || {
+            let content = content.clone();
+            key(t.get(), move || {
+                if t.get() {
+                    content();
+                }
+            });
+        });
+    });
+    bad.set(true);
+    there.set(true);
+    Snapshot::send_apply_notifications();
+    let frame = catch_unwind(AssertUnwindSafe(|| test.composition().recompose()));
+    assert!(frame.is_err());
+    assert!(ran.get(), "the parent's work ran");
+}
+
+// ---- The fuzz, across compositions ------------------------------------------------------------
+
+fn run_tree_fuzz(seed: u64) {
+    let mut random = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    let mut next = move |bound: u64| {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        random % bound
+    };
+    let fuzz = Rc::new(Fuzz {
+        placing: mutable_state_of_with(
+            Rc::new(vec![Vec::new(); PARENTS + CONTENTS]),
+            ReferentialEqualityPolicy,
+        ),
+        contents: RefCell::new(Vec::new()),
+        tokens: RefCell::new(vec![None; CONTENTS]),
+        next: Cell::new(1),
+        live: Cell::new(0),
+    });
+    for index in 0..CONTENTS {
+        let inner = Rc::downgrade(&fuzz);
+        let content = movable_content_of(move || {
+            let fuzz = inner.upgrade().expect("it outlives the composition");
+            let made = fuzz.clone();
+            let token = remember(move || {
+                let token = made.next.get();
+                made.next.set(token + 1);
+                token
+            });
+            let alive = fuzz.clone();
+            remember_observer(move || Alive(alive));
+            fuzz.tokens.borrow_mut()[index] = Some(token);
+            let inner = inner.clone();
+            Linear!(move || {
+                let fuzz = inner.upgrade().expect("it outlives the composition");
+                Text(&format!("{index}:{token}"));
+                compose_hosted(&fuzz, PARENTS + index);
+            });
+        });
+        fuzz.contents.borrow_mut().push(content);
+    }
+    // The second composition's made at once or by an effect, and each may go and come.
+    let deferred = seed.is_multiple_of(2);
+    let shown: Vec<OwnedState<bool>> = (0..2).map(|_| mutable_state_of(true)).collect();
+    let mut test = composition_test();
+    let (f, first, second) = (fuzz.clone(), shown[0].handle(), shown[1].handle());
+    test.compose(move || {
+        let (a, b, c) = (f.clone(), f.clone(), f.clone());
+        Row!(move || compose_hosted(&a, 0));
+        key(first.get(), move || {
+            if first.get() {
+                let b = b.clone();
+                Subcompose!(move || compose_hosted(&b, 1));
+            }
+        });
+        key(second.get(), move || {
+            if second.get() {
+                let c = c.clone();
+                if deferred {
+                    DeferredSubcompose!(move || compose_hosted(&c, 2));
+                } else {
+                    Subcompose!(move || compose_hosted(&c, 2));
+                }
+            }
+        });
+    });
+    test.advance();
+    let mut last_tokens: Vec<Option<u64>> = vec![None; CONTENTS];
+    for _ in 0..25 {
+        let mut placing: Placing = vec![Vec::new(); PARENTS + CONTENTS];
+        for content in 0..CONTENTS {
+            if next(4) == 0 {
+                continue;
+            }
+            let host = next((PARENTS + content) as u64) as usize;
+            let at = next(placing[host].len() as u64 + 1) as usize;
+            placing[host].insert(at, content);
+        }
+        if next(4) == 0 {
+            let which = next(2) as usize;
+            shown[which].update(|shown| !shown);
+        }
+        let there = [true, shown[0].get(), shown[1].get()];
+        let mut present = Vec::new();
+        for (parent, there) in there.iter().enumerate() {
+            if *there {
+                reached(&placing, parent, &mut present);
+            }
+        }
+        fuzz.placing.set(Rc::new(placing));
+        test.advance();
+        test.verify_consistent();
+
+        // What stayed kept what it remembered, wherever it went.
+        let placing = fuzz.placing.get();
+        let tokens = fuzz.tokens.borrow().clone();
+        for (content, last) in last_tokens.iter_mut().enumerate() {
+            if present.contains(&content)
+                && let Some(last) = *last
+            {
+                assert_eq!(tokens[content], Some(last), "{content} of {placing:?}, seed {seed}");
+            }
+            *last = if present.contains(&content) { tokens[content] } else { None };
+        }
+        assert_eq!(fuzz.live.get(), present.len() as i32, "{placing:?}, seed {seed}");
+        let (f, p) = (fuzz.clone(), placing.clone());
+        test.validate(move |v| {
+            row(v, |v| expected_hosted(&f, &p, 0, v));
+            if there[1] {
+                subcompose_host(v, &mut |v: &mut Expected| expected_hosted(&f, &p, 1, v));
+            }
+            if there[2] {
+                let host = if deferred { deferred_host } else { subcompose_host };
+                host(v, &mut |v: &mut Expected| expected_hosted(&f, &p, 2, v));
+            }
+        });
+    }
+    test.dispose();
+    assert_eq!(fuzz.live.get(), 0, "seed {seed}");
+}
+
+/// Contents placed at random in a composition and those under it, at once or by an effect, each of
+/// them going and coming, against plain arrays.
+#[test]
+fn contents_placed_across_compositions_agree_with_arrays() {
+    for seed in 1..=120 {
+        run_tree_fuzz(seed);
+    }
+}
+
+/// What's moving composes before what's new, whichever comes first: what it lets go of may be
+/// asked for, as Compose's `performInsertValues`.
+#[test]
+fn what_moves_composes_before_what_is_new() {
+    let mut test = composition_test();
+    let there = mutable_state_of(false);
+    let log: Rc<RefCell<Vec<&str>>> = Rc::default();
+    let (l1, l2) = (log.clone(), log.clone());
+    let new_one = movable_content_of(move || l1.borrow_mut().push("new"));
+    let moved = movable_content_of(move || l2.borrow_mut().push("moved"));
+    let t = there.handle();
+    test.compose(move || {
+        let (main, new_one, other) = (moved.clone(), new_one.clone(), moved.clone());
+        key(t.get(), move || {
+            if !t.get() {
+                main();
+            }
+        });
+        Subcompose!(move || {
+            let (new_one, other) = (new_one.clone(), other.clone());
+            key(t.get(), move || {
+                if t.get() {
+                    new_one();
+                    other();
+                }
+            });
+        });
+    });
+    log.borrow_mut().clear();
+    there.set(true);
+    test.advance();
+    assert_eq!(*log.borrow(), ["moved", "new"]);
+}
+
+/// What the last frame left, with nothing having run to discard it: the next frame does first.
+#[test]
+fn a_frame_discards_what_the_last_left_if_nothing_has() {
+    let mut test = composition_test();
+    let (shown, tick, live) = (mutable_state_of(true), mutable_state_of(0), Rc::new(Cell::new(0)));
+    let l = live.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        remember_observer(move || Lively(l));
+    });
+    let (s, t) = (shown.handle(), tick.handle());
+    test.compose(move || {
+        let content = content.clone();
+        t.get();
+        Subcompose!(move || {
+            let content = content.clone();
+            key(s.get(), move || {
+                if s.get() {
+                    content();
+                }
+            });
+        });
+    });
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    test.composition().recompose();
+    assert_eq!(live.get(), 1);
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    test.composition().recompose();
+    assert_eq!(live.get(), 0);
+}
+
+/// A child kept after its place went, its host still there: what's left counts its nodes without
+/// what parked, so its disposal takes only those.
+#[test]
+fn a_kept_child_counts_what_s_left_after_its_content_parked() {
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        Linear!(|| {});
+        let p = p.clone();
+        key(t.get(), move || {
+            if t.get() {
+                *p.borrow_mut() = Some(remember_composition_context());
+            }
+        });
+    });
+    let host = test.with_views(|views| views.roots()[0]);
+    let child = platform::subcomposition(place.borrow().expect("composed"), host);
+    let content = movable_content_of(|| Text("moves"));
+    child.set_content(move || {
+        Text("stays");
+        content();
+    });
+    platform::run_ready();
+    test.with_views(|views| assert_eq!(views.tree.children(host).count(), 2));
+    there.set(false);
+    test.advance();
+    test.with_views(|views| assert_eq!(views.tree.children(host).count(), 1));
+    child.dispose();
+    test.with_views(|views| assert_eq!(views.tree.children(host).count(), 0));
+}
+
+/// `set_content` of a parent, on its own: content a nested composition lets go of in it is what the
+/// parent's call takes.
+#[test]
+fn a_parents_set_content_takes_what_a_nested_child_let_go_of() {
+    let composition = Composition::new(ViewApplier::new());
+    let made = Rc::new(Cell::new(0));
+    let m = made.clone();
+    let content = movable_content_of(move || {
+        let m = m.clone();
+        remember(move || m.set(m.get() + 1));
+        Text("text");
+    });
+    let compose = |in_parent: bool| {
+        let content = content.clone();
+        move || {
+            let (main, sub) = (content.clone(), content.clone());
+            Subcompose!(move || {
+                let sub = sub.clone();
+                key(in_parent, move || {
+                    if !in_parent {
+                        sub();
+                    }
+                });
+            });
+            key(in_parent, move || {
+                if in_parent {
+                    main();
+                }
+            });
+        }
+    };
+    composition.set_content(compose(false));
+    assert_eq!(made.get(), 1);
+    composition.set_content(compose(true));
+    assert_eq!(made.get(), 1, "the one state");
+    composition.dispose();
 }
