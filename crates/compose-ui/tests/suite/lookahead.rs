@@ -983,3 +983,77 @@ fn what_starts_being_placed_is_placed_in_both_passes() {
     assert_eq!(now.get(), 1);
     assert_eq!(total.get() - now.get(), 1, "ahead");
 }
+
+/// Other constraints than ahead: it's on the way, whatever it says, its measurement its own.
+#[test]
+fn other_constraints_than_ahead_are_an_approach_in_progress() {
+    let inner = Rc::new(Cell::new(0));
+    let i = inner.clone();
+    let _host = host(move || {
+        let i = i.clone();
+        scoped(move |_| {
+            let i = i.clone();
+            let by_pass = measure_policy(move |scope, measurables, _| {
+                let at = if scope.is_looking_ahead() { 40 } else { 10 };
+                let placeable = scope.measure(measurables[0], Constraints::fixed(at, at));
+                scope.layout_with(at, at, move |placement| placement.place(&placeable, 0, 0))
+            });
+            let i = i.clone();
+            Layout(
+                Modifier,
+                by_pass,
+                callback(move || {
+                    let i = i.clone();
+                    let approaching = Modifier.approach_layout(
+                        |_| false,
+                        |_, _| false,
+                        move |scope, content, constraints| {
+                            let placeable = scope.measure(content, constraints);
+                            i.set(placeable.width);
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                placement.place(&placeable, 0, 0);
+                            })
+                        },
+                    );
+                    leaf(approaching);
+                }),
+            );
+        });
+    });
+    assert_eq!(inner.get(), 10);
+}
+
+/// A scope asked its intrinsic from outside: what asked hears when it changes.
+#[test]
+fn what_asked_a_scope_s_intrinsic_hears_of_a_change() {
+    let wide = mutable_state_of(10);
+    let seen = Rc::new(Cell::new(0));
+    let (w, s) = (wide.handle(), seen.clone());
+    let mut host = host(move || {
+        let s = s.clone();
+        let asking = measure_policy(move |scope, measurables, constraints| {
+            s.set(scope.max_intrinsic_width(measurables[0], 10));
+            let placeable = scope.measure(measurables[0], constraints);
+            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                placement.place(&placeable, 0, 0);
+            })
+        });
+        Layout(
+            Modifier,
+            asking,
+            callback(move || {
+                scoped(move |_| {
+                    Layout(
+                        Modifier,
+                        measure_policy(move |scope, _, _| scope.layout(w.get(), 5)),
+                        callback(|| {}),
+                    );
+                });
+            }),
+        );
+    });
+    assert_eq!(seen.get(), 10);
+    wide.set(20);
+    host.frame();
+    assert_eq!(seen.get(), 20);
+}

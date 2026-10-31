@@ -1139,3 +1139,52 @@ fn a_lazy_list_in_a_scope_scrolls() {
     assert_eq!(shown.borrow().get(&11), Some(&Offset::new(0.0, 100.0)));
     assert_eq!(state.layout_info().visible_items_info.len(), 3);
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, firstBaselineAlignmentInLookaheadScope
+#[test]
+fn baselines_align_the_same_in_a_scope() {
+    same_with_and_without_a_scope(|modifier| {
+        let m = modifier.clone();
+        Box!(modifier = m.fill_max_width(), {
+            let modifier = modifier.clone();
+            Row!(move |scope| {
+                let aligned = modifier.clone().align_by_baseline(scope);
+                BasicText!("Short", modifier = aligned.clone());
+                BasicText!("3\nline\ntext", modifier = aligned.clone());
+                BasicText!("A longer text, which wraps as often as it has to.", modifier = aligned);
+            });
+        });
+    });
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, grandparentQueryBaseline
+#[test]
+fn a_grandparent_reads_the_same_baseline_in_a_scope() {
+    same_with_and_without_a_scope(|modifier| {
+        let policy = measure_policy(|scope, measurables, constraints| {
+            let row = scope.measure(measurables[0], constraints);
+            let line = scope.measure(measurables[1], constraints);
+            let position = scope.alignment_line(&row, FIRST_BASELINE);
+            scope.layout_with(row.width, row.height, move |placement| {
+                placement.place(&row, 0, 0);
+                placement.place(&line, 0, position);
+            })
+        });
+        let content = modifier.clone();
+        Layout(
+            modifier,
+            policy,
+            callback(move || {
+                let m = content.clone();
+                let modifier = content.clone();
+                Row!(modifier = m.fill_max_width().wrap_content_height(), move |scope| {
+                    let aligned = modifier.clone().align_by_baseline(scope);
+                    BasicText!("First", modifier = aligned.clone());
+                    Spacer(modifier.clone().size(dp(10)));
+                    BasicText!("Second", modifier = aligned);
+                });
+                Spacer(content.clone().fill_max_width().required_height(dp(1)));
+            }),
+        );
+    });
+}
