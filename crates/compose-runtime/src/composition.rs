@@ -859,7 +859,10 @@ impl Pass {
             });
             Some((crate::context::resolve_applier(lent, &data.applier), snapshot, outer))
         })?;
-        let pass = Pass { id, kind, finished: false, snapshot: Some(snapshot), outer };
+        let mut pass = Pass { id, kind, finished: false, snapshot: Some(snapshot), outer };
+        if let Some(snapshot) = &mut pass.snapshot {
+            snapshot.tell_tools();
+        }
         applier
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))

@@ -12,6 +12,7 @@ mod records;
 mod set;
 mod snapshot;
 mod state_object;
+pub mod tooling;
 
 pub(crate) use global::ReadKind;
 pub use global::{ChangeSet, ObserverHandle, StateObserverFn, Turn};

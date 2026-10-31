@@ -16,15 +16,15 @@ What compose-rs's runtime (`crates/compose-runtime`, `crates/compose-macros`) ha
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 5 | 27 |
-| `ported` | 25 | 404 |
+| `ported` | 26 | 418 |
 | `port` | 0 | 0 |
 | `partial` | 18 | 454 |
-| `feature:…` | 12 | 149 |
+| `feature:…` | 11 | 135 |
 | `n/a` | 91 | 968 |
 
-677 tests are ported so far (each cites its Compose test in a `// Compose:` comment), in `ported` and `partial` files.
+691 tests are ported so far (each cites its Compose test in a `// Compose:` comment), in `ported` and `partial` files.
 
-The `feature:…` files by feature: computed-state 2 (54), movable-content 2 (5), error-traces 1 (33), composition-observer 4 (28), snapshot-isolation 1 (14), composition-data 2 (15). `partial` rows name further features they need for some of their tests (composition-context, composition-api, recomposer, movable-content, host-defaults, snapshot-isolation, computed-state).
+The `feature:…` files by feature: computed-state 2 (54), movable-content 2 (5), error-traces 1 (33), composition-observer 4 (28), composition-data 2 (15). `partial` rows name further features they need for some of their tests (composition-context, composition-api, recomposer, movable-content, host-defaults, snapshot-isolation, computed-state).
 
 Of the 968 `n/a` tests, 142 are Android Lint checks, 122 benchmarks, 513 tests of internal data structures and internal APIs (two slot tables, change lists, collections, snapshot id sets, the opt-in tracing API), 49 hot reload (Live Edit), and 142 platform or language specifics (threads, JVM reflection, `Parcelable`, RxJava, LiveData, Kotlin delegates and autoboxing, the Kotlin compiler's ABI and group sizes, Android tracing).
 
@@ -78,7 +78,7 @@ The core suite alone (`nonEmulatorCommonTest`, 1,099 tests) splits: 17 in `cover
 | `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotStateSetTests.kt` | 21 | `SnapshotStateSet`: the `MutableSet` API, ordered iteration, snapshots. | ported: 17 in crates/compose-runtime/tests/suite/state_set.rs (steps S3 and S5, D761); `validateIterator_remove` is n/a (the iteration is a copy, `retain` writes: D766), the 3 concurrent ones are n/a (D14). |
 | `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotTests.kt` | 89 | Snapshots: isolation, nested and mutable snapshots, apply and conflicts, merging policies, read/write/apply observers, transparent snapshots, record reuse. | ported: 83 in crates/compose-runtime/tests/suite/snapshot_isolation.rs (step S5, D769-D790) and snapshot_observation.rs (the observers', steps S1 and S2; `stateReadsCanBeObserved` and `stateWritesCanBeObserved` on `Snapshot::observe` there, on snapshots in the first); `Transparent…` are on `Snapshot::observe`'s frames (D771), whose 5 tests of the object's reuse, and `readOnly_clearsParentSnapshotOnRelease`, are n/a. |
 | `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/SnapshotWeakSetTests.kt` | 5 | Internal weak set. | n/a: internal. |
-| `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/tooling/SnapshotObserverTests.kt` | 14 | `observeSnapshots`/`SnapshotObserver` (experimental): creation, apply, dispose, reads and writes per snapshot. | feature:snapshot-isolation |
+| `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/snapshots/tooling/SnapshotObserverTests.kt` | 14 | `observeSnapshots`/`SnapshotObserver` (experimental): creation, apply, dispose, reads and writes per snapshot. | ported: 14 in crates/compose-runtime/tests/suite/snapshot_tooling.rs (D1502, D1503) |
 | `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/tooling/CompositionDataTests.kt` | 10 | `CompositionData`/`CompositionGroup`: iterating the slot table, finding nodes and source info, groups without calls. | feature:composition-data |
 | `compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/tooling/CompositionInstanceTests.kt` | 5 | `findCompositionInstance`, context groups and parent instances. | feature:composition-data (also composition-context). |
 
@@ -263,7 +263,7 @@ From each module's `api/current.txt` (`restricted_current.txt` only to tell what
 | state-collections | `SnapshotStateList` (the `MutableList` API, `toList`, `SnapshotStateList(size, init)`), `SnapshotStateMap` (`MutableMap` API, `toMap`), `SnapshotStateSet` (`MutableSet` API, `toSet`), `mutableStateMapOf`, `mutableStateSetOf`, `toMutableStateMap`, element-wise `mutableStateListOf` | done (step S3, D761, `compose::runtime::snapshots`): the handles, `OwnedStateList`/`Map`/`Set`, `mutable_state_list_of`/`_from`, `snapshot_state_list`, `mutable_state_map_of`/`_from`, `mutable_state_set_of`/`_from`, `to_list`, `to_map`, `to_set` |
 | computed-state | `computedStateOf(policy, calculation)` | none |
 | snapshot-observation | `Snapshot.withoutReadObservation`, `Snapshot.observe(readObserver, writeObserver, block)`, `Snapshot.registerApplyObserver`, `Snapshot.registerGlobalWriteObserver`, `Snapshot.sendApplyNotifications`, `Snapshot.isApplyObserverNotificationPending`, `ObserverHandle`, `snapshots.SnapshotStateObserver` (`observeReads`, `clear`, `clearIf`, `start`, `stop`, `notifyChanges`) | done (step S1, D751–D753, `compose::runtime::snapshots`): `Snapshot::without_read_observation`, `observe`, `register_apply_observer`, `register_global_write_observer`, `send_apply_notifications`, `is_apply_observer_notification_pending`, `notify_objects_initialized`, `ObserverHandle`, `ChangeSet`, `StateObjectId`, `SnapshotStateObserver` (`observe_reads`, `clear`, `clear_if`, `clear_all`, `start`, `stop`, `notify_changes`) |
-| snapshot-isolation | `snapshots.Snapshot` (`takeSnapshot`, `takeMutableSnapshot`, `withMutableSnapshot`, `global`, `readOnly`, `current`, `isInSnapshot`, `enter`, `unsafeEnter`/`unsafeLeave`, `dispose`, `takeNestedSnapshot`, `hasPendingChanges`, `snapshotId`, `notifyObjectsInitialized`, `openSnapshotCount`), `MutableSnapshot` (`apply`, `takeNestedMutableSnapshot`), `SnapshotApplyResult` (`Success`, `Failure`, `check`), `SnapshotApplyConflictException`, `SnapshotMutationPolicy.merge`, `StateObject`, `StateRecord`, `readable`, `writable`, `withCurrent`, `SnapshotMutableState.policy`, `SnapshotContextElement` and `Snapshot.asContextElement`, `snapshots.tooling.observeSnapshots`, `SnapshotObserver`, `SnapshotInstanceObservers` *(exp)* | done (steps S5 and S6, D769-D795, `compose::runtime::snapshots`) but tooling (S7). `Snapshot.readOnly { }` is `Snapshot::with_read_only`, `asContextElement` is `Snapshot::enter_future`, `SnapshotApplyConflictException` is the panic payload `SnapshotApplyConflict`, `StateObject` is `SnapshotStateObject` over a `StateRecord`, with `record_snapshot_id` for `StateRecord.snapshotId` and `writable_in`/`readable_in` for `writable(state, snapshot)`. Not there: `firstStateRecord`, `prependStateRecord`, `StateRecord.next`, `create`, `assign` (the chain is the runtime's, D784), and `SnapshotMutableState.policy` (a policy is a type, whose functions the cell keeps) |
+| snapshot-isolation | `snapshots.Snapshot` (`takeSnapshot`, `takeMutableSnapshot`, `withMutableSnapshot`, `global`, `readOnly`, `current`, `isInSnapshot`, `enter`, `unsafeEnter`/`unsafeLeave`, `dispose`, `takeNestedSnapshot`, `hasPendingChanges`, `snapshotId`, `notifyObjectsInitialized`, `openSnapshotCount`), `MutableSnapshot` (`apply`, `takeNestedMutableSnapshot`), `SnapshotApplyResult` (`Success`, `Failure`, `check`), `SnapshotApplyConflictException`, `SnapshotMutationPolicy.merge`, `StateObject`, `StateRecord`, `readable`, `writable`, `withCurrent`, `SnapshotMutableState.policy`, `SnapshotContextElement` and `Snapshot.asContextElement`, `snapshots.tooling.observeSnapshots`, `SnapshotObserver`, `SnapshotInstanceObservers` *(exp)* | done (steps S5 to S7, D769-D795, D1502, D1503, `compose::runtime::snapshots`). `Snapshot.readOnly { }` is `Snapshot::with_read_only`, `asContextElement` is `Snapshot::enter_future`, `SnapshotApplyConflictException` is the panic payload `SnapshotApplyConflict`, `StateObject` is `SnapshotStateObject` over a `StateRecord`, with `record_snapshot_id` for `StateRecord.snapshotId` and `writable_in`/`readable_in` for `writable(state, snapshot)`. Not there: `firstStateRecord`, `prependStateRecord`, `StateRecord.next`, `create`, `assign` (the chain is the runtime's, D784), and `SnapshotMutableState.policy` (a policy is a type, whose functions the cell keeps) |
 | snapshot-flow | `snapshotFlow(block)`, `snapshotFlow(manager, block)` *(exp)*, `SnapshotFlowManager` *(exp)* | done (step S4, D768): `snapshot_flow`, `snapshot_flow_with`, `flow::SnapshotFlowManager` |
 | flow-adapters | `Flow.collectAsState(initial, context, policy)`, `StateFlow.collectAsState(context, policy)` | done (step S4, D768): `collect_as_state`, `collect_as_state_with`, `flow::MutableStateFlow`, `flow::StateFlow` |
 | movable-content | `movableContentOf` (0 to 4 parameters), `movableContentWithReceiverOf` (0 to 3 parameters) | `movable_content_of`, `movable_content_of_with`, `movable_content_with_receiver_of` (several parameters as a tuple), in a composition (D1305); across compositions, C6 |
@@ -402,11 +402,11 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 - **Tests:** `RetainTests` (33), `RetainedEffectTest` (4).
 - **Depends on:** local-variants (the store is a local; nothing beyond today's locals strictly), movable-content (2 tests), pausable composition (exists). Navigation 3 doesn't retain its entries, a `SaveableStateHolder` keeping what's saved: its users are the apps'.
 
-### snapshot-isolation (XL): done but tooling (steps S5 and S6 of docs/parity/design/snapshots.md, D769-D795)
+### snapshot-isolation (XL): done (steps S5 to S7 of docs/parity/design/snapshots.md, D769-D795, D1502, D1503)
 - **APIs:** see the API table: snapshots, mutable snapshots, apply and merge, state records, `SnapshotContextElement`, snapshot tooling observers *(exp)*.
 - **Does:** MVCC state: reads in a snapshot see a consistent view, writes in a mutable snapshot are invisible until applied, conflicts merge by policy or fail.
-- **Tests:** `SnapshotTests` (89), `SnapshotContextElementTests` (2), the snapshot tests of the state-collection and derived suites: ported. Waiting: `SnapshotObserverTests` (14, step S7) and the 5 isolation tests of `ComputedSnapshotStateTests` (with computed-state). Composition in a snapshot has its own tests (crates/compose-runtime/tests/suite/composition_snapshot.rs), with `stateChangesDuringApplyChangesAreNotifiedBeforeFrameFinished` and `removedScopeInvalidationsAreCleared` (now in a mutable snapshot) among the ported.
-- **Depends on:** nothing now; S7 next.
+- **Tests:** `SnapshotTests` (89), `SnapshotContextElementTests` (2), `SnapshotObserverTests` (14), the snapshot tests of the state-collection and derived suites: ported. Waiting: the 5 isolation tests of `ComputedSnapshotStateTests` (with computed-state). Composition in a snapshot has its own tests (crates/compose-runtime/tests/suite/composition_snapshot.rs), with `stateChangesDuringApplyChangesAreNotifiedBeforeFrameFinished` and `removedScopeInvalidationsAreCleared` (now in a mutable snapshot) among the ported.
+- **Depends on:** nothing.
 
 ### composition-observer (M, experimental)
 - **APIs:** `CompositionObserver`, `CompositionObserverHandle`, `ObservableComposition`, `Composition.setObserver`, `CompositionRegistrationObserver`, `Recomposer.observe`, `RecomposerInfo.observe`.
@@ -442,7 +442,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 7. **composition-context (L)**: done (it unblocks movable content across compositions and the ui area's `SubcomposeLayout`).
 8. **host-content-groups (M)**, when its decision is made, before more tests are ported through `compose_test(|| …)` with branches.
 9. **error-traces (M)**, **composition-tracing (S)**, **composition-observer (M, exp)**, **composition-data (M)**, **composable-annotations (S)**.
-10. **snapshot-isolation (XL)**: S7 of its design remains; **remember-serializable** if serde is accepted.
+10. **remember-serializable** if serde is accepted.
 
 ## Notes for the porting agents
 

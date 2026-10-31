@@ -44,6 +44,7 @@ mod side_effects;
 mod snapshot_fuzz;
 mod snapshot_isolation;
 mod snapshot_observation;
+mod snapshot_tooling;
 mod snapshots;
 mod state_list;
 mod state_map;

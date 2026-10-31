@@ -75,12 +75,21 @@ pub(super) struct OuterPass {
     barriers: u32,
 }
 
+impl OuterPass {
+    /// The snapshot the pass nests in, if not the global one.
+    pub(super) fn current(&self) -> Option<&SnapshotRef> {
+        self.current.as_ref()
+    }
+}
+
 /// The thread's snapshot world, in its runtime.
 pub(crate) struct Snapshots {
     /// The states the global snapshot modified since the last send, in write order.
     modified: Vec<StateId>,
     apply_observers: Vec<(u64, ApplyObserver)>,
     global_write_observers: Vec<(u64, StateObserverFn)>,
+    /// `tooling::observe_snapshots`'s.
+    snapshot_observers: Vec<(u64, Rc<dyn super::tooling::SnapshotObserver>)>,
     next_handle: u64,
     /// [`Snapshot::observe`]'s and [`Snapshot::without_read_observation`]'s frames.
     frames: Vec<ObserverFrame>,
@@ -178,6 +187,7 @@ impl Snapshots {
             modified: Vec::new(),
             apply_observers: Vec::new(),
             global_write_observers: Vec::new(),
+            snapshot_observers: Vec::new(),
             next_handle: 0,
             frames: Vec::new(),
             barriers: 0,
@@ -685,6 +695,7 @@ impl Snapshots {
     pub(crate) fn is_empty(&self) -> bool {
         self.apply_observers.is_empty()
             && self.global_write_observers.is_empty()
+            && self.snapshot_observers.is_empty()
             && self.turns == 0
             && !self.isolated
     }
@@ -763,6 +774,10 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
+    pub(super) fn of(ids: Vec<StateId>) -> ChangeSet {
+        ChangeSet { ids }
+    }
+
     /// Whether `state` changed.
     pub fn contains(&self, state: impl Into<StateObjectId>) -> bool {
         let id = state.into().0;
@@ -801,6 +816,7 @@ pub struct ObserverHandle {
 pub(super) enum HandleKind {
     Apply,
     GlobalWrite,
+    Snapshots,
 }
 
 impl ObserverHandle {
@@ -820,6 +836,10 @@ impl Drop for ObserverHandle {
                         .map(|observer| Box::new(observer) as Box<dyn std::any::Any>);
                     snapshots.update_writes_observed();
                     removed
+                }
+                HandleKind::Snapshots => {
+                    take_observer(&mut snapshots.snapshot_observers, self.handle)
+                        .map(|observer| Box::new(observer) as Box<dyn std::any::Any>)
                 }
             }
         })
@@ -853,6 +873,33 @@ impl Snapshots {
         self.global_write_observers.push((handle, observer));
         self.update_writes_observed();
         ObserverHandle { handle, kind: HandleKind::GlobalWrite }
+    }
+
+    /// Registers a `tooling::observe_snapshots` observer.
+    pub(super) fn add_snapshot_observer(
+        &mut self,
+        observer: Rc<dyn super::tooling::SnapshotObserver>,
+    ) -> ObserverHandle {
+        self.next_handle += 1;
+        let handle = self.next_handle;
+        self.snapshot_observers.push((handle, observer));
+        ObserverHandle { handle, kind: HandleKind::Snapshots }
+    }
+
+    /// Whether a tool observes snapshots: all they check when none does.
+    #[inline]
+    pub(super) fn has_snapshot_observers(&self) -> bool {
+        !self.snapshot_observers.is_empty()
+    }
+
+    /// The tools observing snapshots, in registration order, if any.
+    pub(super) fn snapshot_observers(
+        &self,
+    ) -> Option<Vec<Rc<dyn super::tooling::SnapshotObserver>>> {
+        if self.snapshot_observers.is_empty() {
+            return None;
+        }
+        Some(self.snapshot_observers.iter().map(|(_, observer)| observer.clone()).collect())
     }
 
     /// Whether code runs in a snapshot other than the plain global one, as `isInSnapshot`.

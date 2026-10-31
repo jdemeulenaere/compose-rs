@@ -16,6 +16,7 @@ use super::global::{
 };
 use super::id_set::IdSet;
 use super::records::{ApplyViews, Merged, View};
+use super::tooling;
 use crate::observe::Observing;
 use crate::runtime::{Runtime, try_with_runtime, with_runtime};
 use crate::snapshots::{Snapshots, StateObjectId};
@@ -352,6 +353,9 @@ fn dispose(inner: &SnapshotRef) {
         }
     }
     super::global::reclaim_records();
+    if with_runtime(|runtime| runtime.snapshots.has_snapshot_observers()) {
+        tooling::pre_dispose(&Snapshot::handle_of(inner.clone()));
+    }
 }
 
 /// As `innerApplyLocked`: decides each modified state against `current`, what the snapshot applies
@@ -433,10 +437,17 @@ fn apply_root(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
         return SnapshotApplyResult::Failure(handle.handle());
     }
     inner.modified.borrow_mut().clear();
-    with_runtime(|runtime| inner.close(&mut runtime.snapshots));
+    let (observed, tell_tools) = with_runtime(|runtime| {
+        inner.close(&mut runtime.snapshots);
+        let tools = runtime.snapshots.has_snapshot_observers();
+        (if tools { modified.clone() } else { Vec::new() }, tools)
+    });
     inner.applied.set(true);
     // A new global snapshot, which sees this one, and what changed is told.
     super::global::send_with(true, Some(Applied { states: modified, snapshot: handle }));
+    if tell_tools {
+        tooling::applied(handle, &ChangeSet::of(observed));
+    }
     // Pinned until the observers have run: they may take nested snapshots of it.
     with_runtime(|runtime| inner.release_pins(&mut runtime.snapshots));
     super::global::reclaim_records();
@@ -464,7 +475,7 @@ fn apply_nested(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
             return SnapshotApplyResult::Failure(handle.handle());
         }
         inner.modified.borrow_mut().clear();
-        parent.modified.borrow_mut().append(&mut modified);
+        parent.modified.borrow_mut().extend_from_slice(&modified);
     }
     with_runtime(|runtime| {
         let snapshots = &mut runtime.snapshots;
@@ -488,6 +499,9 @@ fn apply_nested(inner: &SnapshotRef, handle: &Snapshot) -> SnapshotApplyResult {
     });
     inner.applied.set(true);
     deactivate(inner);
+    if with_runtime(|runtime| runtime.snapshots.has_snapshot_observers()) {
+        tooling::applied(handle, &ChangeSet::of(modified));
+    }
     SnapshotApplyResult::Success
 }
 
@@ -654,6 +668,14 @@ impl Snapshot {
     /// A read-only snapshot of what this one sees now, as `takeNestedSnapshot`. Its reads call
     /// `read_observer`, then this snapshot's read observer.
     pub fn take_nested_snapshot(&self, read_observer: Option<StateObserverFn>) -> Snapshot {
+        let parent = self.inner.is_some().then_some(self);
+        let (read_observer, _, creating) = tooling::pre_create(parent, true, read_observer, None);
+        let snapshot = self.nested_snapshot(read_observer);
+        tooling::created(&snapshot, parent, creating);
+        snapshot
+    }
+
+    fn nested_snapshot(&self, read_observer: Option<StateObserverFn>) -> Snapshot {
         let Some(parent) = &self.inner else {
             return take_root(self, Kind::ReadOnly, read_observer, None);
         };
@@ -1032,6 +1054,19 @@ impl MutableSnapshot {
         read_observer: Option<StateObserverFn>,
         write_observer: Option<StateObserverFn>,
     ) -> MutableSnapshot {
+        let parent = self.0.inner.is_some().then_some(&self.0);
+        let (read_observer, write_observer, creating) =
+            tooling::pre_create(parent, false, read_observer, write_observer);
+        let snapshot = self.nested_mutable_snapshot(read_observer, write_observer);
+        tooling::created(&snapshot.0, parent, creating);
+        snapshot
+    }
+
+    fn nested_mutable_snapshot(
+        &self,
+        read_observer: Option<StateObserverFn>,
+        write_observer: Option<StateObserverFn>,
+    ) -> MutableSnapshot {
         let Some(parent) = &self.0.inner else {
             return MutableSnapshot(take_root(
                 &self.0,
@@ -1106,19 +1141,26 @@ fn nested_mutable(
 
 /// The snapshot a pass composes in, as `Recomposer.composing` takes (§3.13): of the current one, the
 /// global one nearly always. It has no observers and no frame: composition's reads register in the
-/// cells, and what observes the pass goes on observing.
+/// cells, and what observes the pass goes on observing. A tool observing snapshots hears of it as
+/// of any, and what it gives is a frame (D1503).
 pub(crate) struct PassSnapshot {
     snapshot: SnapshotRef,
     outer: Option<OuterPass>,
     /// Nothing else could have written during the pass.
     alone: bool,
+    /// Tools observe snapshots: it goes through `apply`, as a pass's dispatches nothing else.
+    observed: bool,
+    /// What the tools gave it is a frame on the stack, till `leave`.
+    framed: bool,
+    /// That frame, to drop outside the runtime's borrow: closures have drops of their own.
+    _left: Option<Box<ObserverFrame>>,
 }
 
 /// [`PassSnapshot::commit`] when there may be something to decide, as any snapshot's apply.
 fn commit_by_apply(inner: SnapshotRef) -> Committed {
     let snapshot = MutableSnapshot(Snapshot::owning(inner));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| snapshot.apply()));
-    match result {
+    let committed = match result {
         Ok(SnapshotApplyResult::Success) => Committed::Applied,
         Ok(SnapshotApplyResult::Failure(_)) => Committed::Conflict,
         // Nothing applied: a policy's merge panicked. Otherwise an apply observer.
@@ -1126,6 +1168,12 @@ fn commit_by_apply(inner: SnapshotRef) -> Committed {
             Committed::MergePanicked(panic)
         }
         Err(panic) => Committed::ObserverPanicked(panic),
+    };
+    // A tool's `on_pre_dispose` panicking is an observer's, too.
+    let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(snapshot)));
+    match (committed, disposed) {
+        (Committed::Applied, Err(panic)) => Committed::ObserverPanicked(panic),
+        (committed, _) => committed,
     }
 }
 
@@ -1181,11 +1229,51 @@ impl PassSnapshot {
             }
         };
         let outer = snapshots.begin_pass(snapshot.clone());
-        PassSnapshot { snapshot, outer: Some(outer), alone: false }
+        let observed = snapshots.has_snapshot_observers();
+        PassSnapshot {
+            snapshot,
+            outer: Some(outer),
+            alone: false,
+            observed,
+            framed: false,
+            _left: None,
+        }
+    }
+
+    /// Tells the tools observing snapshots of it, as `creatingSnapshot`, once it's begun: it's made
+    /// in the runtime's borrow, where their user code can't run. What they give hears the pass's
+    /// reads and writes.
+    pub(crate) fn tell_tools(&mut self) {
+        if !self.observed {
+            return;
+        }
+        let parent = self
+            .outer
+            .as_ref()
+            .and_then(OuterPass::current)
+            .map(|outer| Snapshot::handle_of(outer.clone()));
+        let (read, write, creating) = tooling::pre_create(parent.as_ref(), false, None, None);
+        if read.is_some() || write.is_some() {
+            self.framed = true;
+            with_runtime(|runtime| {
+                runtime.snapshots.push_frame(ObserverFrame {
+                    read,
+                    write,
+                    barrier: false,
+                    entered: None,
+                })
+            });
+        }
+        let handle = Snapshot::handle_of(self.snapshot.clone());
+        tooling::created(&handle, parent.as_ref(), creating);
     }
 
     /// What it replaced is current again; composing is over.
     pub(crate) fn leave(&mut self, snapshots: &mut Snapshots) {
+        if self.framed {
+            self.framed = false;
+            self._left = snapshots.pop_frame().map(|(frame, _)| Box::new(frame));
+        }
         self.alone = snapshots.pass_alone();
         if let Some(outer) = self.outer.take() {
             snapshots.end_pass(outer);
@@ -1205,7 +1293,7 @@ impl PassSnapshot {
     fn apply(self) -> Committed {
         let inner = self.snapshot;
         // A nested snapshot still open holds the object, so it's not reused; its pins are its own.
-        if inner.kind != Kind::Mutable || !self.alone {
+        if inner.kind != Kind::Mutable || !self.alone || self.observed {
             return commit_by_apply(inner);
         }
         let mut modified = std::mem::take(&mut *inner.modified.borrow_mut());
