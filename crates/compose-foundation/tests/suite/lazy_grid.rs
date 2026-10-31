@@ -1974,3 +1974,27 @@ fn reversed_an_items_layouts_end_together() {
         assert_eq!(lazy.main_size(&mut ui, "1"), 100.0);
     }
 }
+
+/// `layout_info` read where the grid is called: it goes idle. Its content runs again with new
+/// closures, so new items, which say nothing new: Compose's lambda is memoized (D1471).
+#[test]
+fn reading_layout_info_where_the_grid_is_called_goes_idle() {
+    let reads = Rc::new(Cell::new(0));
+    let counted = reads.clone();
+    let owned = LazyGridState::new(0, 0);
+    let state = *owned;
+    let mut ui = rule(move || {
+        let _ = state.layout_info();
+        counted.set(counted.get() + 1);
+        LazyVerticalGrid!(
+            fixed(2),
+            modifier = Modifier.size(300.dp()),
+            state = state,
+            |scope: LazyGridScope| {
+                scope.items(60, |_| Spacer(Modifier.height(50.dp())));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert!(reads.get() < 8, "{} compositions", reads.get());
+}

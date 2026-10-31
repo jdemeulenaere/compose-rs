@@ -472,3 +472,27 @@ fn a_scroll_back_at_the_end_with_lanes_off_starts_them_again() {
     assert_eq!(start[1], (1, 1, 0));
     assert_eq!(start[2], (2, 1, 20));
 }
+/// `layout_info` read where the grid is called: it stays idle, its items' new closures saying
+/// nothing new (D1470).
+#[test]
+fn reading_layout_info_where_the_grid_is_called_goes_idle() {
+    use_optimizations(Optimizations::NONE);
+    let reads = Rc::new(Cell::new(0));
+    let counted = reads.clone();
+    let owned = LazyStaggeredGridState::new(0, 0);
+    let state = *owned;
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let _ = state.layout_info();
+        counted.set(counted.get() + 1);
+        LazyVerticalStaggeredGrid!(
+            StaggeredGridCells::Fixed(2),
+            modifier = Modifier.size(300.dp()),
+            state = state,
+            |scope: LazyStaggeredGridScope| {
+                scope.items(60, |_| Spacer(Modifier.height(50.dp())));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert!(reads.get() < 8, "{} compositions", reads.get());
+}

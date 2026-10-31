@@ -295,13 +295,23 @@ impl LazyListInner {
         !self.laid_items.borrow().as_ref().is_some_and(|laid| Rc::ptr_eq(laid, items))
     }
 
+    /// Other items may say the same of those in view: a caller reading `layout_info` runs its
+    /// content again, with new closures but the same keys, where Compose's lambda is memoized, and
+    /// hears of nothing new (D1471). Compared only with a reader.
     fn note_laid_items(&self, items: &Rc<Items>) -> bool {
         let mut laid = self.laid_items.borrow_mut();
-        if laid.as_ref().is_some_and(|laid| Rc::ptr_eq(laid, items)) {
-            return false;
-        }
+        let same = match laid.as_ref() {
+            Some(laid) if Rc::ptr_eq(laid, items) => return false,
+            Some(laid) if self.laid_out.has_reader() => self.laid_out.laying_out(|index| {
+                index < laid.count
+                    && index < items.count
+                    && laid.key(index) == items.key(index)
+                    && laid.content_type(index) == items.content_type(index)
+            }),
+            _ => false,
+        };
         *laid = Some(items.clone());
-        true
+        !same
     }
 
     /// Asks the items' composition for the items `range`: a write of `composed`, or, when it

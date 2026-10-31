@@ -629,3 +629,41 @@ fn a_list_of_empty_items_composes_a_few_thousand_at_most_in_a_frame() {
     let composed = ZERO_BODIES.with(Cell::get);
     assert!(composed <= 6000, "{composed} composed in a frame");
 }
+
+/// `layout_info` read where the list is called: it goes idle, and hears of keys that do change.
+#[test]
+fn reading_layout_info_where_the_list_is_called_goes_idle() {
+    let reads = Rc::new(Cell::new(0));
+    let counted = reads.clone();
+    let owned = LazyListState::new(0, 0);
+    let state = *owned;
+    let keys = mutable_state_of(vec![1, 2, 3]);
+    let read = keys.handle();
+    let seen = Rc::new(Cell::new(0u64));
+    let noted = seen.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let info = state.layout_info();
+        noted.set(info.visible_items_info.first().map_or(0, |item| item.key));
+        counted.set(counted.get() + 1);
+        let ids = read.get();
+        LazyColumn!(
+            modifier = Modifier.size(300.dp()),
+            state = state,
+            move |scope: LazyListScope| {
+                scope.items_list_keyed(
+                    ids.clone(),
+                    |id: &i32| *id,
+                    |_, _: &i32| {
+                        Spacer(Modifier.height(50.dp()));
+                    },
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert!(reads.get() < 8, "{} compositions", reads.get());
+    assert_eq!(seen.get(), hash_key(&1));
+    keys.set(vec![7, 2, 3]);
+    ui.wait_for_idle();
+    assert_eq!(seen.get(), hash_key(&7));
+}
