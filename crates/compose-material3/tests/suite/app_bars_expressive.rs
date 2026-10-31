@@ -299,7 +299,7 @@ fn custom_rows_are_told_which_they_are() {
     assert_eq!(navigation.top, (36.0 - 24.0) / 2.0);
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, topAppBar_customTwoRows_scrolled_positioning
+/// Its rows are under the inset, top and bottom both, on the collapsed row.
 #[test]
 fn custom_rows_are_under_the_inset() {
     let mut ui = custom_two_rows(40.0, 120.0, true);
@@ -431,9 +431,8 @@ fn a_behavior_that_cant_scroll_leaves_the_bar() {
     let owned = TopAppBarState::new(-100.0, 0.0, 0.0);
     let state = *owned;
     let mut ui = rule(move || {
-        let scope = remember_coroutine_scope();
         let behavior = remember(move || {
-            TopAppBarScrollBehavior::exit_until_collapsed(state, scope).with_can_scroll(|| false)
+            TopAppBarScrollBehavior::exit_until_collapsed(state).with_can_scroll(|| false)
         });
         let connection = behavior.nested_scroll_connection();
         connection.on_pre_scroll(
@@ -454,7 +453,7 @@ fn a_behavior_that_cant_scroll_leaves_the_bar() {
 
 /// `height` by the state: the overlap is the content's, whichever way, and "all" for a list not at
 /// its start with nothing seen to scroll.
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, topAppBar_pinned_changeColors_preScrolledLazyColumn
+/// A list scrolled already counts as all overlapped, with nothing seen to scroll.
 #[test]
 fn a_pinned_bar_over_a_list_scrolled_already_takes_the_scrolled_color() {
     let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -474,7 +473,6 @@ fn a_pinned_bar_over_a_list_scrolled_already_takes_the_scrolled_color() {
 }
 
 /// At its start, by contrast, nothing's overlapped.
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, topAppBar_pinned_changeColors_scrolledLazyColumn
 #[test]
 fn a_pinned_bar_over_a_list_at_its_start_doesnt() {
     let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -604,7 +602,6 @@ fn an_offset_out_of_range_leaves_no_bar() {
 
 /// Scrolling forward takes it away, whole, and back brings it; a drag goes the other way round,
 /// its height being below the finger.
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, bottomAppBar_exitAlways_scaffoldWithFAB_scrolled_positioning
 #[test]
 fn exit_always_goes_with_the_content() {
     let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -769,8 +766,8 @@ fn a_settle_is_told_its_velocity() {
         let scope = remember_coroutine_scope();
         let told = told.clone();
         remember(move || {
-            let behavior = TopAppBarScrollBehavior::exit_until_collapsed(state, scope)
-                .with_snap_animation_spec(None);
+            let behavior =
+                TopAppBarScrollBehavior::exit_until_collapsed(state).with_snap_animation_spec(None);
             let told = told.clone();
             scope.launch(async move {
                 let connection = behavior.nested_scroll_connection();

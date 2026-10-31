@@ -103,6 +103,8 @@ pub struct LazyListState {
 }
 
 struct LazyListInner {
+    /// What `scroll_indicator_state` gives, one object as Compose's.
+    indicator: std::cell::OnceCell<Rc<dyn crate::ScrollIndicatorState>>,
     /// The position the layout works from: the item, the pixels it is scrolled off (with
     /// their fraction, so slow scrolls add up).
     position: Cell<(usize, f32)>,
@@ -310,6 +312,7 @@ impl LazyListInner {
         // A negative offset: before the item, as Compose's; the first layout coerces it.
         let offset = first_visible_item_scroll_offset;
         LazyListInner {
+            indicator: Default::default(),
             position: Cell::new((first_visible_item_index, offset as f32)),
             first_key: Cell::new(None),
             pending: Cell::new(0.0),
@@ -743,7 +746,8 @@ impl LazyListState {
 
 impl ScrollableState for LazyListState {
     fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
-        Some(std::rc::Rc::new(*self))
+        let inner = self.inner()?;
+        Some(inner.indicator.get_or_init(|| Rc::new(*self)).clone())
     }
 
     fn scroll_boxed<'a>(

@@ -148,3 +148,64 @@ fn in_a_small_box_it_fits() {
     assert_eq!(size_of(&mut ui), (10.0, 10.0));
     assert_eq!(drawn(&mut ui).0, Rect::new(0.0, 0.0, 10.0, 10.0));
 }
+
+/// A tint that changes is drawn: the node's told, and draws again.
+#[test]
+fn a_tint_that_changes_is_drawn() {
+    let which = mutable_state_of(false);
+    let handle = which.handle();
+    let image = bitmap(2, 2);
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        let tint = if handle.get() { Color::BLUE } else { Color::RED };
+        let image = image.clone();
+        MaterialTheme!({
+            BitmapIcon!(image.clone(), None::<&str>, tint = tint);
+        });
+    });
+    ui.wait_for_idle();
+    let tint = |ui: &mut ComposeTestRule| {
+        ui.host().display_list().ops.iter().find_map(|op| match op {
+            DrawOp::DrawImage { tint, .. } => *tint,
+            _ => None,
+        })
+    };
+    assert_eq!(tint(&mut ui), Some(Color::RED));
+    which.set(true);
+    ui.wait_for_idle();
+    assert_eq!(tint(&mut ui), Some(Color::BLUE));
+}
+
+/// Transparent draws nothing: on the wire, 0 is no tint, which would draw the bitmap as it is.
+#[test]
+fn a_transparent_tint_draws_nothing() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {
+        MaterialTheme!({
+            BitmapIcon!(bitmap(2, 2), None::<&str>, tint = Color::TRANSPARENT);
+        });
+    });
+    ui.wait_for_idle();
+    let images = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DrawOp::DrawImage { .. }))
+        .count();
+    assert_eq!(images, 0);
+}
+
+/// A bitmap that isn't the shape of its box fits inside it, centered, as `ContentScale.Fit`.
+#[test]
+fn a_bitmap_of_another_shape_fits_centered() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), || {
+        MaterialTheme!({
+            BitmapIcon!(bitmap(48, 24), None::<&str>, modifier = Modifier.size(24.dp()));
+        });
+    });
+    ui.wait_for_idle();
+    let dst = ui.host().display_list().ops.iter().find_map(|op| match op {
+        DrawOp::DrawImage { dst, .. } => Some(*dst),
+        _ => None,
+    });
+    assert_eq!(dst, Some(Rect::new(0.0, 6.0, 24.0, 18.0)));
+}

@@ -376,7 +376,7 @@ pub fn PullToRefreshBox(
     on_refresh: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(None)] state: Option<Rc<dyn PullToRefreshState>>,
-    #[default(compose_ui::Alignment::TOP_START)] content_alignment: Alignment,
+    #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
     #[default(None)] indicator: Option<impl Fn(BoxScope) + 'static>,
     #[default(true)] enabled: bool,
     #[default(crate::PullToRefreshDefaults::POSITIONAL_THRESHOLD)] threshold: Dp,

@@ -17,7 +17,7 @@ use compose_ui::{
 };
 
 use crate::components::Surface;
-use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme, provide_content_color_text_style};
 
 // ---- AlertDialog -----------------------------------------------------------------------------
 
@@ -160,20 +160,6 @@ struct AlertDialogParts {
     title_content_color: compose_ui::Color,
     text_content_color: compose_ui::Color,
     tonal_elevation: Dp,
-}
-
-/// `content` in `color` and `style` merged into the text style, as Compose's
-/// `ProvideContentColorTextStyle`.
-fn provide_content_color_text_style(
-    color: compose_ui::Color,
-    style: compose_ui::TextStyle,
-    content: impl FnOnce(),
-) {
-    let merged = LOCAL_TEXT_STYLE.current().merge(&style);
-    CompositionLocalProvider(
-        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(merged)),
-        content,
-    );
 }
 
 /// As Compose's `AlertDialogContent`.

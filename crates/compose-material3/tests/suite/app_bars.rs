@@ -53,8 +53,7 @@ fn a_top_app_bar_is_64_dp_its_title_after_the_navigation_icon() {
     assert!(((centered.left + centered.right) / 2.0 - 200.0).abs() <= 1.0, "{centered:?}");
 }
 
-/// A top app bar is a repaint boundary, as Compose's (its `Surface` clips with a graphics
-/// layer): a frame drawing something else again (an animation beside it) keeps the bar's
+/// A top app bar is a repaint boundary, as Compose's (its row clips with a graphics layer): a frame drawing something else again (an animation beside it) keeps the bar's
 /// drawing instead of drawing, sending and replaying it again.
 #[test]
 fn a_top_app_bar_keeps_its_drawing_while_what_is_beside_it_draws_again() {
@@ -75,16 +74,15 @@ fn a_top_app_bar_keeps_its_drawing_while_what_is_beside_it_draws_again() {
         });
     });
     let before = ui.host().display_list();
-    assert_eq!(before.groups.len(), 1, "the bar is a group: {}", ui.dump_display_list());
+    // The clip's and, in it, the title's layer, as Compose's.
+    assert_eq!(before.groups.len(), 2, "the bar's two groups: {}", ui.dump_display_list());
     tick.set(1);
     ui.wait_for_idle();
     let after = ui.host().display_list();
     assert_ne!(before.ops, after.ops, "the box drew again");
-    assert_eq!(
-        (after.groups[0].key, after.groups[0].version),
-        (before.groups[0].key, before.groups[0].version),
-        "the bar kept its drawing"
-    );
+    for (after, before) in after.groups.iter().zip(&before.groups) {
+        assert_eq!((after.key, after.version), (before.key, before.version), "kept its drawing");
+    }
 }
 
 /// A scaffold whose content scrolls under a bar of `kind` (0 pinned, 1 enter-always, 2

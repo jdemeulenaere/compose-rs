@@ -23,7 +23,7 @@ impl ScrollIndicatorState for ScrollState {
         if self.reverse_scrolling() { self.max_value() - self.value() } else { self.value() }
     }
     fn content_size(&self) -> i32 {
-        self.max_value().saturating_add(self.viewport_size())
+        ScrollState::content_size(self)
     }
     fn viewport_size(&self) -> i32 {
         ScrollState::viewport_size(self)
@@ -35,6 +35,12 @@ fn axis_of(orientation: Orientation, size: compose_ui::IntSize) -> i32 {
         Orientation::Vertical => size.height,
         Orientation::Horizontal => size.width,
     }
+}
+
+/// A length worked out in `i64`: a list's count can be `i32::MAX`, whose estimates don't fit. The
+/// largest then, as the pager's, where Compose's `Int`s wrap.
+fn clamped(length: i64) -> i32 {
+    length.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// As `visibleItemsAverageSize`.
@@ -49,25 +55,25 @@ fn list_average(info: &LazyListLayoutInfo) -> i32 {
 
 /// As `calculateContentSize`.
 fn list_content_size(info: &LazyListLayoutInfo) -> i32 {
-    let padding = info.before_content_padding + info.after_content_padding;
-    let count = info.total_items_count as i32;
+    let padding = i64::from(info.before_content_padding + info.after_content_padding);
+    let count = info.total_items_count as i64;
     if count == 0 {
-        return padding;
+        return padding as i32;
     }
-    (list_average(info) - info.main_axis_item_spacing) * count
-        + (count - 1) * info.main_axis_item_spacing
-        + padding
+    let spacing = i64::from(info.main_axis_item_spacing);
+    clamped((i64::from(list_average(info)) - spacing) * count + (count - 1) * spacing + padding)
 }
 
 impl ScrollIndicatorState for LazyListState {
     fn scroll_offset(&self) -> i32 {
         let info = self.layout_info();
-        let offset = list_average(&info) * self.first_visible_item_index() as i32
-            + self.first_visible_item_scroll_offset();
+        let offset = i64::from(list_average(&info)) * self.first_visible_item_index() as i64
+            + i64::from(self.first_visible_item_scroll_offset());
         if info.reverse_layout {
-            list_content_size(&info) - axis_of(info.orientation, info.viewport_size) - offset
+            let viewport = axis_of(info.orientation, info.viewport_size);
+            clamped(i64::from(list_content_size(&info)) - i64::from(viewport) - offset)
         } else {
-            offset
+            clamped(offset)
         }
     }
     fn content_size(&self) -> i32 {
@@ -117,14 +123,13 @@ fn grid_average(info: &LazyGridLayoutInfo) -> i32 {
 
 /// As `calculateContentSize`.
 fn grid_content_size(info: &LazyGridLayoutInfo) -> i32 {
-    let padding = info.before_content_padding + info.after_content_padding;
+    let padding = i64::from(info.before_content_padding + info.after_content_padding);
     if info.total_items_count == 0 {
-        return padding;
+        return padding as i32;
     }
-    let lines = info.total_items_count.div_ceil(info.max_span.max(1)) as i32;
-    (grid_average(info) - info.main_axis_item_spacing) * lines
-        + (lines - 1) * info.main_axis_item_spacing
-        + padding
+    let lines = info.total_items_count.div_ceil(info.max_span.max(1)) as i64;
+    let spacing = i64::from(info.main_axis_item_spacing);
+    clamped((i64::from(grid_average(info)) - spacing) * lines + (lines - 1) * spacing + padding)
 }
 
 impl ScrollIndicatorState for LazyGridState {
@@ -147,11 +152,13 @@ impl ScrollIndicatorState for LazyGridState {
                 .unwrap_or(0);
             (next - 1).max(0)
         };
-        let offset = grid_average(&info) * line + self.first_visible_item_scroll_offset();
+        let offset = i64::from(grid_average(&info)) * i64::from(line)
+            + i64::from(self.first_visible_item_scroll_offset());
         if info.reverse_layout {
-            grid_content_size(&info) - axis_of(info.orientation, info.viewport_size) - offset
+            let viewport = axis_of(info.orientation, info.viewport_size);
+            clamped(i64::from(grid_content_size(&info)) - i64::from(viewport) - offset)
         } else {
-            offset
+            clamped(offset)
         }
     }
     fn content_size(&self) -> i32 {

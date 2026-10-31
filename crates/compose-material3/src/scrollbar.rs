@@ -126,16 +126,17 @@ impl ModifierNodeElement for ScrollbarElement {
             fade: None,
         }
     }
+    /// As Compose's wrapper, which makes its node again: faded out if it fades, and what it finds
+    /// of a new state isn't a scroll.
     fn update(&self, node: &mut ScrollbarNode) {
-        if node.style.is_fade_enabled != self.style.is_fade_enabled {
-            node.alpha = Animatable::new(if self.style.is_fade_enabled { 0.0 } else { 1.0 });
-            if let Some(fade) = node.fade.take() {
-                fade.cancel();
-            }
+        node.alpha = Animatable::new(if self.style.is_fade_enabled { 0.0 } else { 1.0 });
+        if let Some(fade) = node.fade.take() {
+            fade.cancel();
         }
         node.state = self.state.clone();
         node.orientation = self.orientation;
         node.style = self.style;
+        node.last_offset = node.state.scroll_offset();
     }
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.state, &other.state)

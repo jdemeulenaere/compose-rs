@@ -142,6 +142,8 @@ fn peek<T: Clone + 'static>(state: &OwnedState<T>) -> T {
 }
 
 struct PagerInner {
+    /// What `scroll_indicator_state` gives, one object as Compose's.
+    indicator: std::cell::OnceCell<Rc<dyn crate::ScrollIndicatorState>>,
     list: Owned<LazyListState>,
     /// The page count: asked by what recomposes when `count_changes` does.
     page_count: RefCell<Rc<dyn Fn() -> usize>>,
@@ -440,6 +442,7 @@ impl PagerState {
         );
         let owned = Owned::new(
             PagerInner {
+                indicator: Default::default(),
                 list: LazyListState::new(current_page, 0),
                 page_count: RefCell::new(Rc::new(page_count)),
                 count_changes: mutable_state_of(0),
@@ -808,7 +811,8 @@ impl PagerState {
 
 impl ScrollableState for PagerState {
     fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
-        Some(std::rc::Rc::new(*self))
+        let inner = self.inner()?;
+        Some(inner.indicator.get_or_init(|| Rc::new(*self)).clone())
     }
 
     fn scroll_boxed<'a>(

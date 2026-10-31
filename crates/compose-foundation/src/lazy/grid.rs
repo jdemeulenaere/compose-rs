@@ -172,6 +172,8 @@ pub struct LazyGridState {
 /// The list state a grid's position is kept in (in items, as a list's).
 struct GridInner {
     _list: Owned<LazyListState>,
+    /// What `scroll_indicator_state` gives, one object as Compose's.
+    indicator: std::cell::OnceCell<Rc<dyn crate::ScrollIndicatorState>>,
 }
 
 impl LazyGridState {
@@ -208,7 +210,9 @@ impl LazyGridState {
     ) -> Owned<LazyGridState> {
         let list = LazyListState::new(first_visible_item_index, first_visible_item_scroll_offset);
         let handle = *list;
-        Owned::new(GridInner { _list: list }, |object| LazyGridState { list: handle, object })
+        Owned::new(GridInner { _list: list, indicator: Default::default() }, |object| {
+            LazyGridState { list: handle, object }
+        })
     }
 
     /// The first item of the first visible line, as `firstVisibleItemIndex` (a state read).
@@ -424,7 +428,8 @@ impl super::LazyLayoutScrollScope for GridScrollScope {
 
 impl ScrollableState for LazyGridState {
     fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
-        Some(std::rc::Rc::new(*self))
+        let inner = self.object.get()?;
+        Some(inner.indicator.get_or_init(|| Rc::new(*self)).clone())
     }
 
     fn scroll_boxed<'a>(

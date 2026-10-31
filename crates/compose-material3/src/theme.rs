@@ -656,6 +656,20 @@ impl<T: PartialEq + 'static> ComposeArg for ThemeValue<T> {
     }
 }
 
+/// `content` in `color` and `style` merged into the text style, as Compose's
+/// `ProvideContentColorTextStyle`.
+pub(crate) fn provide_content_color_text_style(
+    color: Color,
+    style: TextStyle,
+    content: impl FnOnce(),
+) {
+    let merged = LOCAL_TEXT_STYLE.current().merge(&style);
+    compose_runtime::CompositionLocalProvider(
+        (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(merged)),
+        content,
+    );
+}
+
 /// `value` merged into the current text style for `content`, as Compose's `ProvideTextStyle`:
 /// what it sets wins, the rest stays.
 #[composable]

@@ -2060,8 +2060,7 @@ fn a_top_app_bars_color_animates_with_the_scheme() {
         let state = TopAppBarState::new(-f32::MAX, 0.0, 0.0);
         let handle = *state;
         let mut ui = themed(scheme, move || {
-            let scope = remember_coroutine_scope();
-            let behavior = TopAppBarScrollBehavior::pinned(handle, scope);
+            let behavior = TopAppBarScrollBehavior::pinned(handle);
             TopAppBar!({ Text!("Title") }, scroll_behavior = Some(behavior));
         });
         handle.set_content_offset(-100.0);

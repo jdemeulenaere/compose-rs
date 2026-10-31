@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 163 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 350 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 351 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 47 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 99 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
@@ -209,7 +209,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D183 | [ui-and-layout](decisions/ui-and-layout.md#d183) | superseded by [D1359](decisions/ui-and-layout.md#d1359) |
 | D184 | [ui-and-layout](decisions/ui-and-layout.md#d184) | revised by [D526](decisions/ui-and-layout.md#d526) |
 | D185 | [ui-and-layout](decisions/ui-and-layout.md#d185) | current |
-| D186 | [ui-and-layout](decisions/ui-and-layout.md#d186) | current |
+| D186 | [ui-and-layout](decisions/ui-and-layout.md#d186) | revised by [D1561](decisions/ui-and-layout.md#d1561) |
 | D187 | [ui-and-layout](decisions/ui-and-layout.md#d187) | current |
 | D188 | [ui-and-layout](decisions/ui-and-layout.md#d188) | revised by [D891](decisions/ui-and-layout.md#d891) |
 | D189 | [ui-and-layout](decisions/ui-and-layout.md#d189) | current |
@@ -341,7 +341,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D512 | [ui-and-layout](decisions/ui-and-layout.md#d512) | superseded by [D530](decisions/ui-and-layout.md#d530), [D534](decisions/android-drawing.md#d534) |
 | D520 | [android-host-and-performance](decisions/android-host-and-performance.md#d520) | revised by [D581](decisions/android-host-and-performance.md#d581), [D601](decisions/android-host-and-performance.md#d601) |
 | D521 | [android-drawing](decisions/android-drawing.md#d521) | revised by [D648](decisions/android-drawing.md#d648) |
-| D522 | [android-drawing](decisions/android-drawing.md#d522) | current |
+| D522 | [android-drawing](decisions/android-drawing.md#d522) | revised by [D1561](decisions/ui-and-layout.md#d1561) |
 | D523 | [ui-and-layout](decisions/ui-and-layout.md#d523) | current |
 | D524 | [ui-and-layout](decisions/ui-and-layout.md#d524) | current |
 | D525 | [android-drawing](decisions/android-drawing.md#d525) | current |
@@ -858,6 +858,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1559 | [ui-and-layout](decisions/ui-and-layout.md#d1559) | current |
 | D1560 | [ui-and-layout](decisions/ui-and-layout.md#d1560) | current |
 | D1561 | [ui-and-layout](decisions/ui-and-layout.md#d1561) | current |
+| D1563 | [ui-and-layout](decisions/ui-and-layout.md#d1563) | current |
 | D1650 | [ui-and-layout](decisions/ui-and-layout.md#d1650) | current |
 | D1651 | [ui-and-layout](decisions/ui-and-layout.md#d1651) | current |
 | D1652 | [ui-and-layout](decisions/ui-and-layout.md#d1652) | current |

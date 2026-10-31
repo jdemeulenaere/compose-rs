@@ -69,6 +69,8 @@ struct ScrollStates {
     reverse_scrolling: Cell<bool>,
     /// Its scrolls' mutex and flags.
     core: ScrollCore,
+    /// What `scroll_indicator_state` gives, one object as Compose's.
+    indicator: std::cell::OnceCell<std::rc::Rc<dyn crate::ScrollIndicatorState>>,
 }
 
 impl ScrollState {
@@ -82,6 +84,7 @@ impl ScrollState {
             accumulator: Cell::new(0.0),
             reverse_scrolling: Cell::new(false),
             core: ScrollCore::new(),
+            indicator: Default::default(),
         };
         let (value, max, viewport) =
             (states.value.handle(), states.max.handle(), states.viewport.handle());
@@ -128,6 +131,11 @@ impl ScrollState {
     /// read; 0 until laid out).
     pub fn viewport_size(&self) -> i32 {
         self.read(self.viewport, 0)
+    }
+
+    /// The content's length along the axis, 0 until laid out, as `contentSize`.
+    pub(crate) fn content_size(&self) -> i32 {
+        self.object.try_get().map_or(0, |states| states.content_size.get())
     }
 
     /// Whether its container scrolls in reverse, as last laid out.
@@ -179,7 +187,8 @@ impl ScrollState {
 
 impl ScrollableState for ScrollState {
     fn scroll_indicator_state(&self) -> Option<std::rc::Rc<dyn crate::ScrollIndicatorState>> {
-        Some(std::rc::Rc::new(*self))
+        let states = self.object.try_get()?;
+        Some(states.indicator.get_or_init(|| std::rc::Rc::new(*self)).clone())
     }
 
     fn scroll_boxed<'a>(
@@ -796,11 +805,17 @@ impl LayoutModifierNode for ScrollNode {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult {
+        // The minimum stays, as Compose's: content that fits fills the viewport.
         let content_constraints = if self.vertical {
-            Constraints::new(constraints.min_width, constraints.max_width, 0, Constraints::INFINITY)
+            Constraints::new(
+                constraints.min_width,
+                constraints.max_width,
+                constraints.min_height,
+                Constraints::INFINITY,
+            )
         } else {
             Constraints::new(
-                0,
+                constraints.min_width,
                 Constraints::INFINITY,
                 constraints.min_height,
                 constraints.max_height,

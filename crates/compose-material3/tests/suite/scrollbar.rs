@@ -1,10 +1,11 @@
 //! Compose's `ScrollbarTest.kt`: what its pixels show, read from the display list, in each of its
 //! four orientations and directions. Its `inspectableProperties` have no counterpart here.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use compose_foundation::gestures::Orientation;
+use compose_foundation::gestures::{Orientation, ScrollableState as _};
 use compose_foundation::layout::*;
 use compose_foundation::{ScrollIndicatorState, ScrollModifiers, remember_scroll_state};
 use compose_material3::*;
@@ -238,7 +239,7 @@ fn the_thumb_goes_with_the_offset() {
     }
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarTest.kt, nonInteractiveScrollbar_hidesWhenContentFitsViewport
+/// Each way a content can fit, from the start.
 #[test]
 fn nothing_shows_while_the_content_fits() {
     for case in CASES {
@@ -371,4 +372,173 @@ fn it_follows_a_scroll_state() {
     assert_eq!(ScrollIndicatorState::viewport_size(&state), 100);
     let (bounds, _) = thumb(&mut ui).expect("a thumb");
     assert_eq!((bounds.top, bounds.height()), (0.0, 25.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ScrollbarTest.kt, nonInteractiveScrollbar_hidesWhenContentFitsViewport
+#[test]
+fn the_thumb_comes_and_goes_with_the_viewport() {
+    struct Live(MutableState<i32>);
+    impl ScrollIndicatorState for Live {
+        fn scroll_offset(&self) -> i32 {
+            0
+        }
+        fn content_size(&self) -> i32 {
+            100
+        }
+        fn viewport_size(&self) -> i32 {
+            self.0.get()
+        }
+    }
+    for case in CASES {
+        let viewport = mutable_state_of(100);
+        let state: Rc<dyn ScrollIndicatorState> = Rc::new(Live(viewport.handle()));
+        let mut ui = rule(state, case, no_fade(), SIZE, None);
+        ui.wait_for_idle();
+        assert_eq!(thumb(&mut ui), None);
+        viewport.set(50);
+        ui.wait_for_idle();
+        assert!(thumb(&mut ui).is_some());
+        viewport.set(150);
+        ui.wait_for_idle();
+        assert_eq!(thumb(&mut ui), None);
+    }
+}
+
+/// `scroll_indicator_state()` in composition: the same object, so a recomposition's element is the
+/// same and nothing's drawn again.
+#[test]
+fn asking_for_the_indicator_each_composition_draws_nothing_again() {
+    let tick = mutable_state_of(0);
+    let handle = tick.handle();
+    let draws = Rc::new(Cell::new(0));
+    let count = draws.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let _ = handle.get();
+        let count = count.clone();
+        MaterialTheme!({
+            let count = count.clone();
+            let state = remember_scroll_state!();
+            let counting = compose_runtime::remember(move || {
+                Modifier.draw_behind(move |_| count.set(count.get() + 1))
+            });
+            let style = compose_runtime::remember(no_fade);
+            Box!(
+                modifier = Modifier
+                    .size(100.dp())
+                    .then(counting)
+                    .non_interactive_scrollbar(
+                        state.scroll_indicator_state().unwrap(),
+                        Orientation::Vertical,
+                        style,
+                    )
+                    .vertical_scroll(state),
+                content = |_| Spacer(Modifier.width(100.dp()).height(400.dp()))
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let before = draws.get();
+    tick.set(1);
+    ui.wait_for_idle();
+    assert_eq!(draws.get(), before);
+}
+
+/// Another state's offset isn't a scroll: nothing shows for it, as Compose's node made again.
+#[test]
+fn a_new_state_doesnt_show_the_thumb() {
+    let which = mutable_state_of(false);
+    let handle = which.handle();
+    let (_first_offset, first) = fixed(1000, 100);
+    let (second_offset, second) = fixed(1000, 100);
+    second_offset.set(300);
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let state = if handle.get() { second.clone() } else { first.clone() };
+        Box!(
+            modifier = Modifier.size(SIZE.dp()).non_interactive_scrollbar(
+                state,
+                Orientation::Vertical,
+                test_style(),
+            )
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(thumb(&mut ui), None, "it hasn't scrolled");
+    which.set(true);
+    ui.wait_for_idle();
+    assert_eq!(thumb(&mut ui), None, "nor has the other");
+}
+
+/// `ScrollState.reverseScrolling` read in the offset: a scroll turned round moves the thumb.
+#[test]
+fn a_scroll_turned_round_moves_the_thumb() {
+    let reversed = mutable_state_of(false);
+    let handle = reversed.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let on = handle.get();
+        MaterialTheme!({
+            let state = remember_scroll_state!();
+            let indicator = state.scroll_indicator_state().unwrap();
+            Box!(
+                modifier = Modifier.size(100.dp()).non_interactive_scrollbar(
+                    indicator,
+                    Orientation::Vertical,
+                    compose_runtime::remember(no_fade),
+                ),
+                content = move |_| {
+                    Box!(
+                        modifier =
+                            Modifier.size(100.dp()).vertical_scroll_with(state, true, None, on),
+                        content = |_| Spacer(Modifier.width(100.dp()).height(400.dp()))
+                    );
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let before = thumb(&mut ui).expect("a thumb").0.top;
+    reversed.set(true);
+    ui.wait_for_idle();
+    assert_ne!(thumb(&mut ui).expect("a thumb").0.top, before);
+}
+
+/// The track fades with the thumb, and a new style is drawn.
+#[test]
+fn the_track_fades_and_a_new_style_is_drawn() {
+    let which = mutable_state_of(false);
+    let handle = which.handle();
+    let (offset, state) = fixed(1000, 100);
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let style = NonInteractiveScrollbarStyle {
+            is_fade_enabled: true,
+            fade_delay_millis: 0,
+            fade_duration_millis: 1000,
+            thumb_color: if handle.get() { Color::BLUE } else { THUMB },
+            ..test_style()
+        };
+        Box!(
+            modifier = Modifier.size(SIZE.dp()).non_interactive_scrollbar(
+                state.clone(),
+                Orientation::Vertical,
+                style,
+            )
+        );
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    offset.set(100);
+    ui.advance_time_by(Duration::from_millis(500));
+    let alpha = track(&mut ui).expect("a track").1.alpha();
+    assert!(alpha > 0 && alpha < TRACK.alpha(), "part way: {alpha}");
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    // A new style, and a scroll to show it: it's what's drawn.
+    which.set(true);
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    offset.set(200);
+    ui.advance_time_by(Duration::from_millis(50));
+    let color = thumb(&mut ui).expect("a thumb").1;
+    assert_eq!(color.argb() & 0xFF_FFFF, Color::BLUE.argb() & 0xFF_FFFF);
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
 }

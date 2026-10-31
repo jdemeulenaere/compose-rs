@@ -200,7 +200,7 @@ pub use compose_foundation::{
     PasswordVisualTransformation, ScrollState, VisualTransformation, remember_scroll_state,
 };
 pub use compose_ui::{
-    AnnotatedString, Color, Dp, DpOffset, FontFamily, FontStyle, IntOffset, Modifier,
+    Alignment, AnnotatedString, Color, Dp, DpOffset, FontFamily, FontStyle, IntOffset, Modifier,
     RECTANGLE_SHAPE, SpanStyle, StrokeCap, TextAlign, TextDecoration, TextOverflow, TextUnit,
 };
 
