@@ -273,6 +273,9 @@ impl UiTree {
         let pass = self.lookahead_pass(node);
         pass.tree.measure_node(node, constraints);
         drop(pass);
+        if !self.ahead_readers.is_empty() {
+            self.note_ahead_readers();
+        }
         let state = self.node(node).lookahead.as_ref().expect("a root has it");
         if state.needs_placement || state.subtree_needs_placement {
             self.note_placement_below(Some(node));
@@ -293,6 +296,9 @@ impl UiTree {
         let pass = self.lookahead_pass(node);
         pass.tree.place_pass(node);
         drop(pass);
+        if !self.ahead_readers.is_empty() {
+            self.note_ahead_readers();
+        }
     }
 
     /// `node`'s intrinsic asked from outside its scope, if it's a scope's outermost: asked of

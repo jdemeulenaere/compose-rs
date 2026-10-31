@@ -29,6 +29,8 @@ pub(crate) struct CoordinateReader {
     pub(crate) blocks: bool,
     /// What was told it was placed asked.
     pub(crate) told: bool,
+    /// Its lookahead blocks asked (D1224).
+    pub(crate) ahead: bool,
 }
 
 /// The block a layer's measurement left its placing to.
@@ -479,7 +481,11 @@ impl UiTree {
             Some(observer) => observer.observe(key, run),
             None => run(),
         });
-        if !in_lookahead && (reads || self.node(node).reader_at != u32::MAX) {
+        if in_lookahead {
+            if reads || self.node(node).reader_at != u32::MAX {
+                self.ahead_readers.push((node, reads));
+            }
+        } else if reads || self.node(node).reader_at != u32::MAX {
             self.note_reader(node, reads, false);
         }
         if again
@@ -499,7 +505,8 @@ impl UiTree {
         }
         let signature = self.signature_of_reader(node);
         let at = if at == u32::MAX {
-            let reader = CoordinateReader { node, signature, blocks: false, told: false };
+            let reader =
+                CoordinateReader { node, signature, blocks: false, told: false, ahead: false };
             self.coordinate_readers.push(reader);
             let at = self.coordinate_readers.len() - 1;
             self.node_mut(node).reader_at = at as u32;
@@ -524,8 +531,37 @@ impl UiTree {
             }
         }
         let reader = &self.coordinate_readers[at];
-        if !reader.blocks && !reader.told {
+        if !reader.blocks && !reader.told && !reader.ahead {
             self.forget_reader(at);
+        }
+    }
+
+    /// What the lookahead blocks that ran asked of where they are: with the passes back in place,
+    /// what moves them moves a reader's signature, and they run again.
+    pub(crate) fn note_ahead_readers(&mut self) {
+        for (node, reads) in std::mem::take(&mut self.ahead_readers) {
+            if self.get(node).is_none() {
+                continue;
+            }
+            if self.node(node).reader_at == u32::MAX {
+                if !reads {
+                    continue;
+                }
+                self.note_reader(node, true, false);
+                let at = self.node(node).reader_at as usize;
+                self.coordinate_readers[at].blocks = false;
+            }
+            let at = self.node(node).reader_at as usize;
+            let signature = self.signature_of_reader(node);
+            let reader = &mut self.coordinate_readers[at];
+            reader.ahead = reads;
+            // Those of the other pass haven't heard of the move this one took in yet.
+            if reads && !reader.blocks && !reader.told {
+                reader.signature = signature;
+            }
+            if !reader.blocks && !reader.told && !reader.ahead {
+                self.forget_reader(at);
+            }
         }
     }
 
@@ -601,6 +637,10 @@ impl UiTree {
                         }
                         if reader.blocks {
                             self.mark_needs_placement(reader.node);
+                            moved = true;
+                        }
+                        if reader.ahead {
+                            self.invalidate_other_pass_placement(reader.node);
                             moved = true;
                         }
                     }

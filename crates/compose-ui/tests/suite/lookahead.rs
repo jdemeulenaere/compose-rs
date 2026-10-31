@@ -1057,3 +1057,59 @@ fn what_asked_a_scope_s_intrinsic_hears_of_a_change() {
     host.frame();
     assert_eq!(seen.get(), 20);
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementLayoutCoordinatesTest.kt, onlyRealPositionReadsTriggerRelayout_inLookahead
+#[test]
+fn a_lookahead_block_asking_where_it_is_runs_again_when_that_moves() {
+    let x = mutable_state_of(0);
+    let (asking, not_asking) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (xs, a, n) = (x.handle(), asking.clone(), not_asking.clone());
+    let mut host = host(move || {
+        let (a, n) = (a.clone(), n.clone());
+        scoped(move |_| {
+            let (a, n) = (a.clone(), n.clone());
+            let moving = measure_policy(move |scope, measurables, constraints| {
+                let (first, second) = (
+                    scope.measure(measurables[0], constraints),
+                    scope.measure(measurables[1], constraints),
+                );
+                scope.layout_with(first.width, first.height, move |placement| {
+                    placement.place(&first, xs.get(), 0);
+                    placement.place(&second, xs.get(), 0);
+                })
+            });
+            let (a, n) = (a.clone(), n.clone());
+            Layout(
+                Modifier,
+                moving,
+                callback(move || {
+                    let reads = |count: &Rc<Cell<i32>>, asks: bool| {
+                        let count = count.clone();
+                        Modifier.layout(move |scope, measurable, constraints| {
+                            let placeable = scope.measure(measurable, constraints);
+                            let count = count.clone();
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                if placement.is_looking_ahead() {
+                                    count.set(count.get() + 1);
+                                    if asks {
+                                        placement
+                                            .coordinates()
+                                            .expect("placing")
+                                            .position_in_root();
+                                    }
+                                }
+                                placement.place(&placeable, 0, 0);
+                            })
+                        })
+                    };
+                    leaf(reads(&a, true));
+                    leaf(reads(&n, false));
+                }),
+            );
+        });
+    });
+    assert_eq!((asking.get(), not_asking.get()), (1, 1));
+    x.set(30);
+    host.frame();
+    assert_eq!((asking.get(), not_asking.get()), (2, 1));
+}

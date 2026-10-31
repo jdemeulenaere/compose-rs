@@ -427,6 +427,8 @@ pub struct UiTree {
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
     /// A node's in a `LookaheadScope`: measuring and placing look for its roots (D1221).
     pub(crate) lookahead_used: bool,
+    /// Nodes whose lookahead blocks ran in this pass, and whether they asked where they are.
+    pub(crate) ahead_readers: Vec<(NodeId, bool)>,
     /// What's invalidated is for the pass not ahead alone: a read made there.
     pub(crate) one_pass: bool,
     /// A lookahead pass is running: nodes under its root have that pass's fields.
@@ -572,6 +574,7 @@ impl UiTree {
             position_listeners: 0,
             coordinate_readers: Vec::new(),
             lookahead_used: false,
+            ahead_readers: Vec::new(),
             one_pass: false,
             in_lookahead: false,
             alignment_lines_read: false,
