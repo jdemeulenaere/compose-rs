@@ -16,7 +16,8 @@
 //!   code in it finds the tree busy (its answer is nothing), or opens the window again with a
 //!   pointer of its own from a site inside: there's no way to query under a live `&mut`.
 //! - **Reads:** [`TreeAccess`]'s `Deref` hands out `&UiTree`, which a query's `&UiTree` may
-//!   overlap. A query runs no application code and writes nothing but `Cell`s
+//!   overlap. A query runs no application code and writes nothing of the tree but `Cell`s and,
+//!   for `LayoutCoordinates::alignment_line`, a push to a `RefCell` held for that push alone
 //!   (`coordinates.rs`), so reads nest.
 //!
 //! A window holds the pointer of the innermost site, as each guard puts back what it found, a

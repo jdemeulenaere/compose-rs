@@ -146,10 +146,6 @@ pub struct LayoutNode {
     pub(crate) measuring: bool,
     /// Its placement blocks are running.
     pub(crate) laying_out: bool,
-    /// The layer of its text and that text's baselines, kept here as there's one for each text.
-    pub(crate) baselines: Option<(u32, i32, i32)>,
-    /// Its alignment lines, once it gives one or it's asked (D1219).
-    pub(crate) alignment: Option<Box<crate::alignment_line::AlignmentLines>>,
     /// A placement block of it must run.
     pub(crate) needs_placement: bool,
     /// One of a descendant must.
@@ -245,8 +241,6 @@ impl LayoutNode {
             placements: None,
             measuring: false,
             laying_out: false,
-            baselines: None,
-            alignment: None,
             needs_placement: false,
             content_placed_in: 0,
             reader_at: u32::MAX,
@@ -1543,8 +1537,6 @@ impl UiTree {
         }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
-        // Its chain changed: its text gives them again, if it's still there.
-        value.baselines = None;
         // Those of layers gone: the rest measure again, whatever they were.
         if let Some(placements) = &mut value.placements {
             placements.blocks.truncate(value.layers.len());
@@ -1568,8 +1560,7 @@ impl UiTree {
                     parent_data.alignment = Some(*alignment)
                 }
                 Element::AlignBlock(block) if parent_data.alignment.is_none() => {
-                    let id = Rc::as_ptr(block).cast::<()>() as usize;
-                    parent_data.alignment = Some(crate::modifier::ParentAlignment::Block(id));
+                    parent_data.alignment = Some(crate::modifier::ParentAlignment::Block(block.0));
                 }
                 Element::FillCrossAxis(fraction)
                     if parent_data.fill_cross_axis_fraction.is_none() =>

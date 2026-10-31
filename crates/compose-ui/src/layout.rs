@@ -201,6 +201,7 @@ impl Measured<'_, '_> {
 
 /// `Modifier::align_by_block`'s block.
 pub type AlignByBlock = dyn Fn(&mut Measured<'_, '_>) -> i32;
+pub(crate) type AlignBlockFn = Box<AlignByBlock>;
 
 /// The size a policy or layout modifier measured, from [`MeasureScope::layout`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -620,7 +621,9 @@ impl<'a> MeasureScope<'a> {
     ) -> &mut Self {
         if self.intrinsic.is_none() {
             let (node, layer) = (self.base.node, self.layer);
-            let lines = lines.into_iter().map(|(line, position)| (line.into(), position));
+            // Application code's iterator, before the tree's taken.
+            let lines: smallvec::SmallVec<[(crate::alignment_line::AlignmentLine, i32); 4]> =
+                lines.into_iter().map(|(line, position)| (line.into(), position)).collect();
             self.base.tree.enter().give_alignment_lines(node, layer, lines);
         }
         self
@@ -639,17 +642,15 @@ impl<'a> MeasureScope<'a> {
                 _ => None,
             })
             .expect("compose-ui: its parent data says it has one");
-        block(&mut Measured { scope: self, placeable })
+        (block.1)(&mut Measured { scope: self, placeable })
     }
 
-    /// `provide_alignment_lines` of the two baselines: what a text gives, at no cost beyond a store
-    /// until someone reads them.
-    pub fn provide_baselines(&mut self, first: i32, last: i32) -> &mut Self {
-        if self.intrinsic.is_none() {
-            let (node, layer) = (self.base.node, self.layer);
-            self.base.tree.enter().give_baselines(node, layer, first, last);
+    /// `ModifierNode::baselines` of the node measuring changed, or came: who read one hears.
+    pub fn baselines_changed(&mut self) {
+        if self.base.tree.alignment_lines_read {
+            let node = self.base.node;
+            self.base.tree.enter().baselines_changed(node);
         }
-        self
     }
 
     /// `placeable[line]`: its position in the placeable, or `AlignmentLine::UNSPECIFIED` where
@@ -663,8 +664,8 @@ impl<'a> MeasureScope<'a> {
         if self.intrinsic.is_some() {
             return crate::alignment_line::AlignmentLine::UNSPECIFIED;
         }
-        let measurable = placeable.measurable;
-        self.base.tree.enter().read_alignment_line(measurable, line.into(), false)
+        let (reader, measurable) = (self.base.node, placeable.measurable);
+        self.base.tree.enter().read_alignment_line(reader, measurable, line.into(), false)
     }
 
     /// `layout_with`, giving `rulers` to what's in it, as `layout(width, height, rulers = …) { … }`:

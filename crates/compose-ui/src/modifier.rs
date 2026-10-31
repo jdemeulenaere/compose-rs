@@ -249,7 +249,9 @@ impl Modifier {
         _scope: S,
         block: impl Fn(&mut crate::layout::Measured<'_, '_>) -> i32 + 'static,
     ) -> Modifier {
-        self.then_element(Element::AlignBlock(Rc::new(block)))
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.then_element(Element::AlignBlock(Rc::new((id, Box::new(block)))))
     }
 
     /// Parent data filling `fraction` of a flow layout's line across it: what foundation's
@@ -770,7 +772,7 @@ pub enum ParentAlignment {
     /// `align_by` a line: its siblings' and its own lines coincide.
     Line(crate::alignment_line::AlignmentLine),
     /// `align_by_block`, by which closure: compared, so a new one is told to the parent.
-    Block(usize),
+    Block(u32),
 }
 
 /// The data a child gives its parent's measure policy, as Compose's parent data modifiers.
@@ -889,7 +891,7 @@ pub(crate) enum Element {
     Weight(f32, bool),
     Align(ParentAlignment),
     /// `align_by_block`: `Align(Block)` read from the elements, with the block it names.
-    AlignBlock(Rc<crate::layout::AlignByBlock>),
+    AlignBlock(Rc<(u32, crate::layout::AlignBlockFn)>),
     FillCrossAxis(f32),
     Background(Color, Shape),
     /// A solid border (a brush's is a custom element, as `background_with`'s).
@@ -1213,6 +1215,13 @@ pub trait ModifierNode: Any {
     fn as_measured_size_aware(
         &mut self,
     ) -> Option<&mut dyn crate::layout_callbacks::MeasuredSizeAwareModifierNode> {
+        None
+    }
+
+    /// A text's first and last baselines in its layer, if this node's a layout that has them:
+    /// asked only by who reads one, so a text keeps nothing for it in the tree. A change is told
+    /// with `MeasureScope::baselines_changed`.
+    fn baselines(&self) -> Option<(i32, i32)> {
         None
     }
 

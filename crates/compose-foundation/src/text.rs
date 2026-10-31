@@ -313,6 +313,7 @@ impl ModifierNodeElement for TextElement {
             restyle: false,
             probe: None,
             overflows: false,
+            baselines: None,
             selection: None,
             selection_rects: Vec::new(),
             selectable: self.selectable,
@@ -409,6 +410,8 @@ pub(crate) struct TextNode {
     probe: Option<Probe>,
     /// The paragraph is larger than the node: drawn clipped.
     overflows: bool,
+    /// Its first and last baselines, for `ModifierNode::baselines`.
+    baselines: Option<(i32, i32)>,
     /// The part a `SelectionContainer` selected, and its highlight (from the measurer).
     selection: Option<std::ops::Range<usize>>,
     selection_rects: Vec<compose_ui::Rect>,
@@ -434,6 +437,10 @@ impl ModifierNode for TextNode {
         // Another item's text, even if it reads the same: a selection doesn't move to it.
         self.version += 1;
     }
+    fn baselines(&self) -> Option<(i32, i32)> {
+        self.baselines
+    }
+
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
@@ -663,10 +670,12 @@ impl LayoutModifierNode for TextNode {
         }
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
-        scope.provide_baselines(
-            metrics.first_baseline.round() as i32,
-            metrics.last_baseline.round() as i32,
-        );
+        let baselines =
+            (metrics.first_baseline.round() as i32, metrics.last_baseline.round() as i32);
+        if self.baselines != Some(baselines) {
+            self.baselines = Some(baselines);
+            scope.baselines_changed();
+        }
         scope.layout(size.width, size.height)
     }
 

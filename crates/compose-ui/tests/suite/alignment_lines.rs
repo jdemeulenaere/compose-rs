@@ -2406,13 +2406,112 @@ fn on_placed_asking_an_inherited_line_hears_of_it_changing() {
     assert_eq!((calls.get(), seen.get()), (1, 15));
 }
 
-/// A text's baselines kept apart from other lines, read and inherited as they are, a change told.
+// ---- Through a graphics layer ------------------------------------------------------------------
+
+fn translated(y: f32) -> Modifier {
+    Modifier.graphics_layer(move |layer| layer.translation_y = y)
+}
+
+/// A node with `modifier` giving a line at 7, read directly by what's around it through a wrap.
+fn read_through_a_parent(modifier: impl Fn(HorizontalAlignmentLine) -> Modifier + 'static) -> i32 {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let seen = Rc::new(Cell::new(0));
+    let s = seen.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        let modifier = modifier(line);
+        one_child(
+            move |scope, placeable, _| {
+                s.set(scope.alignment_line(&placeable, line));
+                scope.layout_with(0, 0, move |placement| placement.place(&placeable, 0, 0))
+            },
+            move || {
+                let modifier = modifier.clone();
+                wrap(move || {
+                    Layout(
+                        modifier.clone(),
+                        measure_policy(move |scope, _, _| {
+                            scope.provide_alignment_lines([(line, 7)]);
+                            scope.layout_with(0, 0, |_| {})
+                        }),
+                        callback(|| {}),
+                    );
+                });
+            },
+        );
+    });
+    seen.get()
+}
+
+fn placing_layout() -> Modifier {
+    Modifier.layout(|scope, measurable, constraints| {
+        let placeable = scope.measure(measurable, constraints);
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            placement.place(&placeable, 0, 0);
+        })
+    })
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/LayoutNodeAlignmentLines.kt, addAlignmentLine (`toParentPosition`, a layer's `mapOffset`)
 #[test]
-fn baselines_given_without_a_box_read_as_any_line() {
-    let first = mutable_state_of(10);
+fn an_inherited_line_goes_through_a_graphics_layer() {
+    assert_eq!(read_through_a_parent(|_| translated(20.0)), 27);
+}
+
+#[test]
+fn an_inherited_line_goes_through_a_graphics_layer_inside_a_layout_modifier() {
+    assert_eq!(read_through_a_parent(|_| placing_layout().then(translated(20.0))), 27);
+}
+
+#[test]
+fn an_inherited_line_goes_through_a_graphics_layer_around_a_layout_modifier() {
+    assert_eq!(read_through_a_parent(|_| translated(20.0).then(placing_layout())), 27);
+}
+
+#[test]
+fn a_modifier_s_line_goes_through_a_graphics_layer_around_it_not_inside_it() {
+    let around =
+        read_through_a_parent(|line| translated(20.0).then(supply(move || vec![(line.into(), 3)])));
+    assert_eq!(around, 23);
+    let inside =
+        read_through_a_parent(|line| supply(move || vec![(line.into(), 3)]).then(translated(20.0)));
+    assert_eq!(inside, 3);
+}
+
+/// As `get` is: a parent reading its child sees no transform of the child's own, as
+/// `calculateAlignmentAndPlaceChildAsNeeded` adds positions only.
+#[test]
+fn a_line_read_of_the_node_itself_doesn_t_go_through_its_layer() {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let seen = Rc::new(Cell::new(0));
+    let s = seen.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        one_child(
+            move |scope, placeable, _| {
+                s.set(scope.alignment_line(&placeable, line));
+                scope.layout_with(0, 0, move |placement| placement.place(&placeable, 0, 0))
+            },
+            move || {
+                Layout(
+                    translated(20.0),
+                    measure_policy(move |scope, _, _| {
+                        scope.provide_alignment_lines([(line, 7)]);
+                        scope.layout_with(0, 0, |_| {})
+                    }),
+                    callback(|| {}),
+                );
+            },
+        );
+    });
+    assert_eq!(seen.get(), 7);
+}
+
+#[test]
+fn merged_baselines_go_through_each_child_s_layer() {
     let seen = Rc::new(Cell::new((0, 0)));
-    let (f, s) = (first.handle(), seen.clone());
-    let mut host = host(move || {
+    let s = seen.clone();
+    let _host = host(move || {
         let s = s.clone();
         one_child(
             move |scope, placeable, _| {
@@ -2420,24 +2519,169 @@ fn baselines_given_without_a_box_read_as_any_line() {
                     scope.alignment_line(&placeable, FIRST_BASELINE),
                     scope.alignment_line(&placeable, LAST_BASELINE),
                 ));
-                scope.layout_with(0, 0, |_| {})
+                scope.layout_with(0, 0, move |placement| placement.place(&placeable, 0, 0))
             },
-            move || {
-                wrap(move || {
-                    let giving = Modifier.layout(move |scope, measurable, constraints| {
-                        let placeable = scope.measure(measurable, constraints);
-                        scope.provide_baselines(f.get(), 30);
-                        scope.layout_with(placeable.width, placeable.height, move |placement| {
-                            placement.place(&placeable, 0, 5);
-                        })
-                    });
-                    Layout(giving, empty_measure_policy(), callback(|| {}));
+            || {
+                wrap(|| {
+                    let giving = |at: i32, modifier: Modifier| {
+                        Layout(
+                            modifier,
+                            measure_policy(move |scope, _, _| {
+                                scope.provide_alignment_lines([
+                                    (FIRST_BASELINE, at),
+                                    (LAST_BASELINE, at),
+                                ]);
+                                scope.layout_with(0, 0, |_| {})
+                            }),
+                            callback(|| {}),
+                        );
+                    };
+                    giving(15, Modifier);
+                    giving(7, translated(20.0));
                 });
             },
         );
     });
-    assert_eq!(seen.get(), (10, 30));
-    first.set(20);
+    assert_eq!(seen.get(), (15, 27));
+}
+
+#[test]
+fn coordinates_read_an_inherited_line_through_a_graphics_layer() {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let seen = Rc::new(Cell::new((0, 0)));
+    let s = seen.clone();
+    let _host = host(move || {
+        let s = s.clone();
+        let told = Modifier.on_placed(move |coordinates: LayoutCoordinates| {
+            s.set((coordinates.alignment_line(line), s.get().1));
+        });
+        wrap_with(told, move || {
+            Layout(
+                translated(20.0).then(placing_layout()),
+                measure_policy(move |scope, _, _| {
+                    scope.provide_alignment_lines([(line, 5)]);
+                    scope.layout_with(0, 0, |_| {})
+                }),
+                callback(|| {}),
+            );
+        });
+    });
+    assert_eq!(seen.get().0, 25);
+}
+
+// ---- A panic in a block run for a line ---------------------------------------------------------
+
+/// A block panics while a parent's measure reads a line; the panic's caught; what's placed after
+/// knows where it is, and rulers.
+#[test]
+fn a_panic_in_a_block_run_for_a_line_leaves_no_alignment_pass() {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let ruler = VerticalRuler::new();
+    let trigger = mutable_state_of(0);
+    let again = mutable_state_of(0);
+    let panics = Rc::new(Cell::new(false));
+    let seen = Rc::new(Cell::new((false, 0.0)));
+    let (t, a, p, s, r) =
+        (trigger.handle(), again.handle(), panics.clone(), seen.clone(), ruler.clone());
+    let mut host = host(move || {
+        let (p, s, r) = (p.clone(), s.clone(), r.clone());
+        let r2 = r.clone();
+        let providing = Modifier.layout(move |scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            let r = r2.clone();
+            scope.layout_with_rulers(
+                placeable.width,
+                placeable.height,
+                move |rulers| rulers.provides(&r, 3.0),
+                move |placement| placement.place(&placeable, 0, 0),
+            )
+        });
+        wrap_with(providing, move || {
+            let p = p.clone();
+            one_child(
+                move |scope, placeable, _| {
+                    t.get();
+                    scope.alignment_line(&placeable, line);
+                    scope.layout_with(0, 0, move |placement| placement.place(&placeable, 0, 0))
+                },
+                move || {
+                    let p = p.clone();
+                    Layout(
+                        Modifier,
+                        measure_policy(move |scope, _, _| {
+                            t.get();
+                            scope.provide_alignment_lines([(line, 1)]);
+                            let p = p.clone();
+                            scope.layout_with(0, 0, move |_| {
+                                assert!(!p.get(), "the block's panic");
+                            })
+                        }),
+                        callback(|| {}),
+                    );
+                },
+            );
+            let (s, r) = (s.clone(), r.clone());
+            Leaf(Modifier.layout(move |scope, measurable, constraints| {
+                let placeable = scope.measure(measurable, constraints);
+                let (s, r) = (s.clone(), r.clone());
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    a.get();
+                    s.set((placement.coordinates().is_some(), placement.current(&r, -1.0)));
+                    placement.place(&placeable, 0, 0);
+                })
+            }));
+        });
+    });
+    assert_eq!(seen.get(), (true, 3.0));
+    panics.set(true);
+    trigger.set(1);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.frame();
+    }));
+    assert!(panicked.is_err());
+    panics.set(false);
+    seen.set((false, 0.0));
+    again.set(1);
     host.frame();
-    assert_eq!(seen.get(), (20, 30));
+    assert_eq!(seen.get(), (true, 3.0));
+}
+
+/// A provider's rulers aren't worked out while it's placed for a line: where it is isn't known.
+#[test]
+fn rulers_aren_t_captured_for_a_line() {
+    let line = HorizontalAlignmentLine::new(i32::min);
+    let ruler = VerticalRuler::new();
+    let captured = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (c, r) = (captured.clone(), ruler.clone());
+    let _host = host(move || {
+        let (c, r) = (c.clone(), r.clone());
+        one_child(
+            move |scope, placeable, _| {
+                scope.alignment_line(&placeable, line);
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    placement.place(&placeable, 30, 0);
+                })
+            },
+            move || {
+                let (c, r) = (c.clone(), r.clone());
+                let providing = Modifier.layout(move |scope, measurable, constraints| {
+                    let placeable = scope.measure(measurable, constraints);
+                    scope.provide_alignment_lines([(line, 1)]);
+                    let (c, r) = (c.clone(), r.clone());
+                    scope.layout_with_rulers(
+                        placeable.width,
+                        placeable.height,
+                        move |rulers| {
+                            let at = -rulers.coordinates().position_in_root().x;
+                            c.borrow_mut().push(at);
+                            rulers.provides(&r, at);
+                        },
+                        move |placement| placement.place(&placeable, 0, 0),
+                    )
+                });
+                wrap(move || Layout(providing.clone(), empty_measure_policy(), callback(|| {})));
+            },
+        );
+    });
+    assert_eq!(*captured.borrow(), [-30.0]);
 }

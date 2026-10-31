@@ -312,7 +312,7 @@ fn a_state_a_value_reads_tells_its_readers() {
         assert_eq!(*read.borrow(), [(3.0, 10.0)]);
         value.set(36.0);
         host.frame();
-        assert_eq!(read.borrow().last().copied(), Some((3.0, 11.0)), "lazily {lazily}");
+        assert_eq!(*read.borrow(), [(3.0, 10.0), (3.0, 11.0)], "lazily {lazily}");
     }
 }
 
@@ -1168,4 +1168,59 @@ fn the_innermost_of_rect_rulers() {
 #[test]
 fn the_outermost_of_rect_rulers() {
     assert_eq!(of_two(RectRulers::outermost_of), Rect::new(10.0, 5.0, 35.0, 40.0));
+}
+
+/// Two readers of two rulers, one's value changing: only its reader's told.
+#[test]
+fn one_value_changing_tells_only_who_read_it() {
+    for lazily in BOTH {
+        let (rulers, first, second): (Rulers, Read, Read) =
+            (rulers(), Rc::default(), Rc::default());
+        let value = mutable_state_of(1.0f32);
+        let (r, a, b, va) = (rulers.clone(), first.clone(), second.clone(), value.handle());
+        let mut host = host(move || {
+            let (r, a, b) = (r.clone(), a.clone(), b.clone());
+            let vertical: Value = Rc::new(move |_| Some(va.get()));
+            Stack!(modifier = provide(&r, lazily, fixed(5.0), vertical), {
+                let (h, v) = (r.horizontal.clone(), r.vertical.clone());
+                let reads = |ruler: Ruler, read: Read| {
+                    Modifier.layout(move |scope, measurable, constraints| {
+                        let placeable = scope.measure(measurable, constraints);
+                        let (ruler, read) = (ruler.clone(), read.clone());
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            let at = placement.current(&ruler, f32::NAN);
+                            read.borrow_mut().push((at, at));
+                            placement.place(&placeable, 0, 0);
+                        })
+                    })
+                };
+                Leaf(reads(v, a.clone()).then(size(5, 5)));
+                Leaf(reads(h, b.clone()).then(size(5, 5)));
+            });
+        });
+        assert_eq!((first.borrow().len(), second.borrow().len()), (1, 1));
+        value.set(2.0);
+        host.frame();
+        assert_eq!((first.borrow().len(), second.borrow().len()), (2, 1), "lazily {lazily}");
+    }
+}
+
+#[test]
+#[should_panic(expected = "only a vertical ruler")]
+fn a_horizontal_ruler_isn_t_provided_relatively() {
+    let ruler = HorizontalRuler::new();
+    let r = ruler.clone();
+    let _host = host(move || {
+        let r = r.clone();
+        Leaf(Modifier.layout(move |scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            let r = r.clone();
+            scope.layout_with_rulers(
+                5,
+                5,
+                move |rulers| rulers.provides_relative(&r, 1.0),
+                move |placement| placement.place(&placeable, 0, 0),
+            )
+        }));
+    });
 }

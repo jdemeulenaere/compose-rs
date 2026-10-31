@@ -675,3 +675,142 @@ fn a_row_is_as_tall_as_what_its_lines_span() {
     ui.wait_for_idle();
     assert_eq!(size.get(), IntSize::new(120, 50));
 }
+
+/// Through its box, a translated text's baselines are where it shows.
+#[test]
+fn a_text_s_baseline_inherited_goes_through_its_layer() {
+    let seen = Rc::new(Cell::new((0, 0)));
+    let s = seen.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let s = s.clone();
+        let read = Modifier.layout(move |scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            s.set((
+                scope.alignment_line(&placeable, FIRST_BASELINE),
+                scope.alignment_line(&placeable, LAST_BASELINE),
+            ));
+            scope.layout(placeable.width, placeable.height)
+        });
+        Box!(modifier = read, {
+            BasicText!("Hello");
+        });
+    });
+    ui.wait_for_idle();
+    let (first, _) = seen.get();
+    assert!(first > 0);
+    let s2 = Rc::new(Cell::new(0));
+    let s3 = s2.clone();
+    let mut ui2 = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let s3 = s3.clone();
+        let read = Modifier.layout(move |scope, measurable, constraints| {
+            let placeable = scope.measure(measurable, constraints);
+            s3.set(scope.alignment_line(&placeable, FIRST_BASELINE));
+            scope.layout(placeable.width, placeable.height)
+        });
+        Box!(modifier = read, {
+            BasicText!(
+                "Hello",
+                modifier = Modifier.graphics_layer(|layer| layer.translation_y = 20.0)
+            );
+        });
+    });
+    ui2.wait_for_idle();
+    assert_eq!(s2.get(), first + 20);
+}
+
+/// A text's new baselines tell who read them; the same ones don't.
+#[test]
+fn a_text_s_new_baseline_tells_who_read_it() {
+    let big = mutable_state_of(false);
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (b, s) = (big.handle(), seen.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let s = s.clone();
+        let policy = measure_policy(move |scope, measurables, constraints| {
+            let placeable = scope.measure(measurables[0], constraints);
+            s.borrow_mut().push(scope.alignment_line(&placeable, FIRST_BASELINE));
+            scope.layout(placeable.width, placeable.height)
+        });
+        Layout(
+            Modifier,
+            policy,
+            callback(move || {
+                let style = compose_ui::TextStyle {
+                    font_size: if b.get() { TextUnit::sp(40.0) } else { TextUnit::sp(10.0) },
+                    ..compose_ui::TextStyle::DEFAULT
+                };
+                BasicText!("Hello", style = style);
+            }),
+        );
+    });
+    ui.wait_for_idle();
+    let before = seen.borrow().last().copied().expect("read");
+    big.set(true);
+    ui.wait_for_idle();
+    let after = seen.borrow().last().copied().expect("read");
+    assert!(after > before, "{before} {after}");
+}
+
+struct Unplaced(Rc<Cell<u32>>);
+
+impl compose_ui::ModifierNode for Unplaced {
+    fn as_unplaced_aware(&mut self) -> Option<&mut dyn compose_ui::UnplacedAwareModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::UnplacedAwareModifierNode for Unplaced {
+    fn on_unplaced(&mut self, _: &mut compose_ui::NodeContext<'_>) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct UnplacedElement(Rc<Cell<u32>>);
+
+impl compose_ui::ModifierNodeElement for UnplacedElement {
+    type Node = Unplaced;
+    fn create(&self) -> Unplaced {
+        Unplaced(self.0.clone())
+    }
+    fn update(&self, node: &mut Unplaced) {
+        node.0 = self.0.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A lazy list's item scrolled out, its node hears it isn't placed any more, once.
+#[test]
+fn a_lazy_item_scrolled_away_hears_it_s_unplaced() {
+    let told = Rc::new(Cell::new(0));
+    let owner = LazyListState::new(0, 0);
+    let state = *owner;
+    let t = told.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        let t = t.clone();
+        LazyColumn!(
+            state = state,
+            modifier = Modifier.fill_max_size(),
+            move |scope: LazyListScope| {
+                let t = t.clone();
+                scope.items(20, move |index| {
+                    let told = if index == 0 {
+                        Modifier.then_custom(UnplacedElement(t.clone()))
+                    } else {
+                        Modifier
+                    };
+                    Box!(modifier = told.size(dp(100)), {});
+                });
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(told.get(), 0);
+    let scope = compose_runtime::CoroutineScope::new();
+    scope.launch(async move {
+        let _ = state.scroll_to_item(10, 0).await;
+    });
+    ui.wait_for_idle();
+    assert_eq!(told.get(), 1);
+}

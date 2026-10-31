@@ -1,7 +1,7 @@
 //! Rulers, as Compose's `Ruler`, `RulerScope` and `RectRulers`: positions a layout provides to
 //! what's in it (`MeasureScope::layout_with_rulers`), read while placing
 //! (`PlacementScope::current`) in the reader's coordinates, a change telling only those that read
-//! (D1218). They cost a tree nothing until one's provided.
+//! (D1218). D1219 says what they and alignment lines cost a tree with neither.
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -245,8 +245,13 @@ impl RulerScope {
         }
     }
 
-    /// As `provides`, from the end in a right-to-left layout, as `providesRelative`.
+    /// As `provides`, from the end in a right-to-left layout, as `VerticalRuler.providesRelative`.
+    ///
+    /// # Panics
+    ///
+    /// For a horizontal ruler: a right-to-left layout's top is where it is.
     pub fn provides_relative(&mut self, ruler: &Ruler, value: f32) {
+        assert!(ruler.0.vertical, "compose-ui: only a vertical ruler is provided relatively");
         let value = if self.direction == LayoutDirection::Rtl {
             self.size.width as f32 - value
         } else {
@@ -323,6 +328,11 @@ impl UiTree {
         else {
             return;
         };
+        // Not for a line's sake, as Compose's: where it is isn't known, and it's placed again.
+        if self.placing_for_alignment {
+            self.asked_while_aligning.set(true);
+            return;
+        }
         let block = block.clone();
         let new = {
             let measure = crate::layout::MeasureScope::new(&mut *self, node, 0);
@@ -389,13 +399,13 @@ impl UiTree {
         &mut self,
         node: NodeId,
         layer: usize,
-        earlier: Option<LayerRulers>,
+        earlier: Option<Box<LayerRulers>>,
     ) {
         let now = (self.node_mut(node).placements.as_mut())
             .and_then(|it| it.rulers.get_mut(layer)?.as_mut());
         let Some(now) = now else {
             if let Some(earlier) = earlier {
-                self.rulers_gone(node, earlier);
+                self.rulers_gone(node, &earlier);
             }
             return;
         };
@@ -408,7 +418,7 @@ impl UiTree {
             (RulerSource::Lazily(is_provided, _), earlier) => {
                 let is_provided = is_provided.clone();
                 if let Some(earlier) = earlier {
-                    self.rulers_gone(node, earlier);
+                    self.rulers_gone(node, &earlier);
                 }
                 self.tell_ruler_readers(node, |ruler| is_provided(ruler));
             }
@@ -416,7 +426,7 @@ impl UiTree {
     }
 
     /// `rulers` aren't provided by `node` any more.
-    fn rulers_gone(&mut self, node: NodeId, rulers: LayerRulers) {
+    fn rulers_gone(&mut self, node: NodeId, rulers: &LayerRulers) {
         match &rulers.source {
             RulerSource::Block(_) => self
                 .tell_ruler_readers(node, |ruler| rulers.values.iter().any(|(it, _)| it == ruler)),
@@ -430,10 +440,10 @@ impl UiTree {
         if placements.rulers.len() <= layers {
             return;
         }
-        let gone: SmallVec<[LayerRulers; 1]> =
+        let gone: SmallVec<[Box<LayerRulers>; 1]> =
             placements.rulers.drain(layers..).flatten().collect();
         for rulers in gone {
-            self.rulers_gone(node, rulers);
+            self.rulers_gone(node, &rulers);
         }
     }
 }

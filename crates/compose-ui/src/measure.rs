@@ -198,10 +198,6 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
-        if self.alignment_lines_read {
-            self.clear_alignment_uses_in_measure(node);
-        }
-        let value = self.node_mut(node);
         // What its semantics read may have changed with what measured it (a lazy list's
         // ranges, a text field's text): computed again when next asked (D1257).
         value.semantics = None;
@@ -211,13 +207,18 @@ impl UiTree {
         if value.children_intrinsics_asked && !value.intrinsics_asked {
             self.clear_intrinsics_usage_below(node);
         }
+        // Only a line's change asks if it's measuring, and only who read one can be told of one.
+        if self.alignment_lines_read {
+            self.alignment_measure_starts(node);
+        }
         let value = self.node_mut(node);
         if value.inner_layers.is_empty() {
             // Measured, it draws again.
             self.invalidate_draw_of(node);
-            self.node_mut(node).measuring = true;
             let size = self.measure_layer(node, 0, constraints);
-            self.node_mut(node).measuring = false;
+            if self.alignment_lines_read {
+                self.node_mut(node).measuring = false;
+            }
             return size;
         }
         // With inner layers, what it lays out (its children) is theirs: what's before them draws
@@ -226,7 +227,6 @@ impl UiTree {
         let sizes: smallvec::SmallVec<[IntSize; 4]> =
             value.layers.iter().map(|layer| layer.measured).collect();
         self.invalidate_inner_layers(node);
-        self.node_mut(node).measuring = true;
         let size = self.measure_layer(node, 0, constraints);
         let value = self.node_mut(node);
         value.measuring = false;
@@ -321,7 +321,7 @@ impl UiTree {
                 self.invalidate_placement_of(node);
             }
             // It read a line that changed.
-            if self.node(node).needs_measure {
+            if self.alignment_lines_read && self.node(node).needs_measure {
                 return true;
             }
         }
@@ -436,12 +436,15 @@ impl UiTree {
     ) -> IntSize {
         let value = self.node_mut(node);
         // Its last measurement's block is over, whatever this one does. Dropped with nothing of
-        // the tree in hand: what it captured is application code's.
-        let earlier = value.placements.as_mut().and_then(|it| it.blocks.get_mut(layer)?.take());
+        // the tree in hand: what it captured is application code's. Most nodes have neither.
+        let (earlier, earlier_rulers) = match &mut value.placements {
+            Some(placements) => (
+                placements.blocks.get_mut(layer).and_then(Option::take),
+                placements.rulers.get_mut(layer).and_then(Option::take),
+            ),
+            None => (None, None),
+        };
         drop(earlier);
-        let value = self.node_mut(node);
-        let earlier_rulers =
-            value.placements.as_mut().and_then(|it| it.rulers.get_mut(layer)?.take());
         let value = self.node_mut(node);
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
@@ -532,13 +535,7 @@ impl UiTree {
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
         let value = self.node_mut(node);
-        if value.placements.is_some() {
-            self.rulers_measured(node, layer, earlier_rulers);
-        }
-        if self.node(node).alignment.is_some() {
-            self.alignment_lines_measured(node, layer);
-        }
-        let value = self.node_mut(node);
+        let has_placements = value.placements.is_some();
         let layout_aware = value.kinds.any(NodeKinds::LAYOUT_AWARE);
         let value = &mut value.layers[layer];
         let resized = value.measured != measured;
@@ -558,6 +555,10 @@ impl UiTree {
         }
         if layout_aware {
             self.layer_measured(node, layer, measured);
+        }
+        if has_placements {
+            self.rulers_measured(node, layer, earlier_rulers);
+            self.alignment_lines_measured(node, layer);
         }
         size
     }

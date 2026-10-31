@@ -942,3 +942,47 @@ fn a_handle_read_on_another_thread_names_no_tree_there() {
     });
     assert_eq!(thread.ok(), Some(false));
 }
+
+/// A measure reading where a child is, which only a `layout_with` block moved: what it last placed,
+/// and asking measures nothing again by itself.
+#[test]
+fn a_measure_reads_where_a_block_put_a_child() {
+    let offset = mutable_state_of(0);
+    let again = mutable_state_of(0);
+    let kept: Rc<Cell<Option<LayoutCoordinates>>> = Rc::default();
+    let (seen, measures) = (Rc::new(Cell::new(Offset::ZERO)), Rc::new(Cell::new(0)));
+    let (o, a, k, s, m) =
+        (offset.handle(), again.handle(), kept.clone(), seen.clone(), measures.clone());
+    let mut host = support::host(move || {
+        let (k, s, m) = (k.clone(), s.clone(), m.clone());
+        let k2 = k.clone();
+        let policy = measure_policy(move |scope, measurables, constraints| {
+            a.get();
+            m.set(m.get() + 1);
+            if let Some(coordinates) = k2.get() {
+                s.set(coordinates.position_in_root());
+            }
+            let placeable = scope.measure(measurables[0], constraints);
+            scope.place(&placeable, 0, 0);
+            scope.layout(placeable.width, placeable.height)
+        });
+        Layout(
+            Modifier,
+            policy,
+            callback(move || {
+                let k = k.clone();
+                let keeping = Modifier
+                    .offset_with(move |_| IntOffset::new(o.get(), 0))
+                    .on_placed(move |coordinates: LayoutCoordinates| k.set(Some(coordinates)));
+                Layout(keeping, empty_measure_policy(), callback(|| {}));
+            }),
+        );
+    });
+    offset.set(30);
+    host.frame();
+    assert_eq!(measures.get(), 1, "a move measures nothing");
+    again.set(1);
+    host.frame();
+    assert_eq!(measures.get(), 2);
+    assert_eq!(seen.get(), Offset::new(30.0, 0.0));
+}

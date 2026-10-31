@@ -1,10 +1,10 @@
 //! Alignment lines, as Compose's `AlignmentLine` and `LayoutNodeAlignmentLines`: positions a layout
 //! gives with its size (`MeasureScope::provide_alignment_lines`), asked of a child while measuring
 //! or placing (`MeasureScope::alignment_line`), inherited through what's placed. Reading one may
-//! run blocks waiting below it. A change tells only who read, and a tree where nothing's read pays
-//! one load in the places they'd be told from (D1219).
+//! run blocks waiting below it. A change tells only who read. D1219 says what a tree where nothing's
+//! read pays.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use smallvec::SmallVec;
 
@@ -14,36 +14,58 @@ use crate::unit::Offset;
 
 /// A position a layout gives its ancestors, along one axis, as Compose's `AlignmentLine`: what
 /// [`HorizontalAlignmentLine`] and [`VerticalAlignmentLine`] make. What merges two children's is
-/// a function, so a line is `Copy` and [`FIRST_BASELINE`] a constant.
+/// a function, kept apart, so a line is a number: `Copy`, small in the parent data every node has,
+/// and [`FIRST_BASELINE`] a constant.
 #[derive(Clone, Copy)]
-pub struct AlignmentLine {
-    id: u32,
-    horizontal: bool,
-    merger: fn(i32, i32) -> i32,
-}
+pub struct AlignmentLine(u32);
+
+/// The bit of a line saying it's horizontal.
+const HORIZONTAL: u32 = 1 << 31;
+
+/// The mergers of the lines made, after the two baselines'. A line's made once, as Compose's are,
+/// so a program making them over and over keeps them: the only growth, a word each.
+static MERGERS: Mutex<Vec<Merger>> = Mutex::new(Vec::new());
+
+type Merger = fn(i32, i32) -> i32;
 
 impl AlignmentLine {
     /// What's read of a line nothing gives, as `AlignmentLine.Unspecified`.
     pub const UNSPECIFIED: i32 = i32::MIN;
 
     fn make(horizontal: bool, merger: fn(i32, i32) -> i32) -> AlignmentLine {
-        static NEXT: AtomicU32 = AtomicU32::new(3);
-        AlignmentLine { id: NEXT.fetch_add(1, Ordering::Relaxed), horizontal, merger }
+        let mut mergers = MERGERS.lock().unwrap_or_else(PoisonError::into_inner);
+        mergers.push(merger);
+        let index = mergers.len() as u32 + 1;
+        AlignmentLine(if horizontal { index | HORIZONTAL } else { index })
     }
 
     /// Whether it's a position along the height.
     pub fn is_horizontal(&self) -> bool {
-        self.horizontal
+        self.0 & HORIZONTAL != 0
+    }
+
+    fn merge(&self, first: i32, second: i32) -> i32 {
+        match self.0 & !HORIZONTAL {
+            0 => first.min(second),
+            1 => first.max(second),
+            index => {
+                let mergers = MERGERS.lock().unwrap_or_else(PoisonError::into_inner);
+                let merger = mergers[index as usize - 2];
+                // Not holding it: it's application code.
+                drop(mergers);
+                merger(first, second)
+            }
+        }
     }
 
     fn of(&self, point: crate::unit::IntOffset) -> i32 {
-        if self.horizontal { point.y } else { point.x }
+        if self.is_horizontal() { point.y } else { point.x }
     }
 }
 
 impl PartialEq for AlignmentLine {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.0 == other.0
     }
 }
 
@@ -51,8 +73,8 @@ impl Eq for AlignmentLine {}
 
 impl std::fmt::Debug for AlignmentLine {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let axis = if self.horizontal { "Horizontal" } else { "Vertical" };
-        write!(formatter, "{axis}AlignmentLine({})", self.id)
+        let axis = if self.is_horizontal() { "Horizontal" } else { "Vertical" };
+        write!(formatter, "{axis}AlignmentLine({})", self.0 & !HORIZONTAL)
     }
 }
 
@@ -90,21 +112,13 @@ impl From<VerticalAlignmentLine> for AlignmentLine {
     }
 }
 
-const fn smaller(first: i32, second: i32) -> i32 {
-    if first < second { first } else { second }
-}
-
-const fn larger(first: i32, second: i32) -> i32 {
-    if first > second { first } else { second }
-}
-
 /// The baseline of a layout's first line of text, as `FirstBaseline`.
 pub const FIRST_BASELINE: HorizontalAlignmentLine =
-    HorizontalAlignmentLine(AlignmentLine { id: 1, horizontal: true, merger: smaller });
+    HorizontalAlignmentLine(AlignmentLine(HORIZONTAL));
 
 /// The baseline of a layout's last line of text, as `LastBaseline`.
 pub const LAST_BASELINE: HorizontalAlignmentLine =
-    HorizontalAlignmentLine(AlignmentLine { id: 2, horizontal: true, merger: larger });
+    HorizontalAlignmentLine(AlignmentLine(1 | HORIZONTAL));
 
 type Lines = SmallVec<[(AlignmentLine, i32); 2]>;
 
@@ -148,29 +162,41 @@ impl Default for AlignmentLines {
     }
 }
 
-/// What a layer gives of `line`: of a text's baselines, kept in the node, or the others.
+/// A node's alignment lines, if it has any.
+fn lines_of(value: &LayoutNode) -> Option<&AlignmentLines> {
+    value.placements.as_ref()?.alignment.as_deref()
+}
+
+fn lines_of_mut(value: &mut LayoutNode) -> Option<&mut AlignmentLines> {
+    value.placements.as_mut()?.alignment.as_deref_mut()
+}
+
+/// The baselines of the layout node of `layer`, if it's a text's (`ModifierNode::baselines`).
+fn baselines_at(value: &LayoutNode, layer: usize) -> Option<(i32, i32)> {
+    let index = *value.layout_indices.get(layer)? as usize;
+    value.chain.get(index)?.node.baselines()
+}
+
+/// What a layer gives of `line`: a text's baselines, asked of it, or what it gave.
 fn provided_at(value: &LayoutNode, layer: usize, line: AlignmentLine) -> Option<i32> {
-    if let Some((at, first, last)) = value.baselines
-        && at as usize == layer
+    if (line == FIRST_BASELINE.0 || line == LAST_BASELINE.0)
+        && let Some((first, last)) = baselines_at(value, layer)
     {
-        if line == FIRST_BASELINE.0 {
-            return Some(first);
-        }
-        if line == LAST_BASELINE.0 {
-            return Some(last);
-        }
+        return Some(if line == FIRST_BASELINE.0 { first } else { last });
     }
-    value.alignment.as_ref().and_then(|lines| lines.provided_at(layer, line))
+    lines_of(value).and_then(|lines| lines.provided_at(layer, line))
 }
 
 /// All a node's layers give, a text's baselines with the others.
 fn all_provided(value: &LayoutNode) -> SmallVec<[(u32, AlignmentLine, i32); 4]> {
     let mut provided = SmallVec::new();
-    if let Some((at, first, last)) = value.baselines {
-        provided.push((at, FIRST_BASELINE.0, first));
-        provided.push((at, LAST_BASELINE.0, last));
+    for layer in 0..value.layout_indices.len() {
+        if let Some((first, last)) = baselines_at(value, layer) {
+            provided.push((layer as u32, FIRST_BASELINE.0, first));
+            provided.push((layer as u32, LAST_BASELINE.0, last));
+        }
     }
-    if let Some(lines) = &value.alignment {
+    if let Some(lines) = lines_of(value) {
         provided.extend(lines.provided.iter().copied());
     }
     provided
@@ -191,20 +217,35 @@ impl AlignmentLines {
     }
 }
 
+/// Blocks running to know a line: over when it's dropped, a panic in them included.
+pub(crate) struct AlignmentPass<'a> {
+    pub(crate) tree: &'a mut UiTree,
+    aligning: bool,
+    asked: bool,
+}
+
+impl Drop for AlignmentPass<'_> {
+    fn drop(&mut self) {
+        self.tree.placing_for_alignment = self.aligning;
+        self.tree.asked_while_aligning.set(self.asked);
+    }
+}
+
 impl UiTree {
-    fn alignment_mut(&mut self, node: NodeId) -> &mut AlignmentLines {
-        self.node_mut(node).alignment.get_or_insert_with(Default::default)
+    pub(crate) fn alignment_pass(&mut self) -> AlignmentPass<'_> {
+        let aligning = std::mem::replace(&mut self.placing_for_alignment, true);
+        let asked = self.asked_while_aligning.replace(false);
+        AlignmentPass { tree: self, aligning, asked }
     }
 
-    /// A text's baselines, without a box for each text (D1219).
-    pub(crate) fn give_baselines(&mut self, node: NodeId, layer: usize, first: i32, last: i32) {
-        let baselines = Some((layer as u32, first, last));
-        let value = self.node_mut(node);
-        let changed = value.baselines != baselines;
-        value.baselines = baselines;
-        if changed && self.alignment_lines_read {
-            self.on_alignments_changed(node);
-        }
+    /// A text's baselines changed, or came: `ModifierNode::baselines` says what they are.
+    pub(crate) fn baselines_changed(&mut self, node: NodeId) {
+        self.on_alignments_changed(node);
+    }
+
+    fn alignment_mut(&mut self, node: NodeId) -> &mut AlignmentLines {
+        let placements = self.node_mut(node).placements.get_or_insert_with(Default::default);
+        placements.alignment.get_or_insert_with(Default::default)
     }
 
     /// What layer `layer` of `node`'s measurement gives so far.
@@ -222,7 +263,7 @@ impl UiTree {
     /// Layer `layer` of `node` was measured: what it gave's kept, and a change told, as
     /// `measureResult`'s setter.
     pub(crate) fn alignment_lines_measured(&mut self, node: NodeId, layer: usize) {
-        let lines = self.alignment_mut(node);
+        let Some(lines) = lines_of_mut(self.node_mut(node)) else { return };
         let at = |entry: &&(u32, AlignmentLine, i32)| entry.0 as usize == layer;
         let same = lines.provided.iter().filter(at).count()
             == lines.giving.iter().filter(at).count()
@@ -251,7 +292,7 @@ impl UiTree {
         while let Some(id) = current {
             let Some(value) = self.get_mut(id) else { return };
             let parent = value.parent;
-            if let Some(lines) = &mut value.alignment {
+            if let Some(lines) = lines_of_mut(value) {
                 lines.dirty = true;
                 let (in_measure, in_layout) = (
                     lines.used_during_parent_measurement,
@@ -356,13 +397,14 @@ impl UiTree {
 
     /// A measurement of `node` starts: what it read before, of its children and its content, it
     /// says again if it still reads it.
-    pub(crate) fn clear_alignment_uses_in_measure(&mut self, node: NodeId) {
-        if let Some(lines) = &mut self.node_mut(node).alignment {
+    pub(crate) fn alignment_measure_starts(&mut self, node: NodeId) {
+        self.node_mut(node).measuring = true;
+        if let Some(lines) = lines_of_mut(self.node_mut(node)) {
             lines.used_by_modifier_measurement = false;
         }
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
-            if let Some(lines) = &mut self.node_mut(child).alignment {
+            if let Some(lines) = lines_of_mut(self.node_mut(child)) {
                 lines.used_during_parent_measurement = false;
             }
         }
@@ -370,12 +412,12 @@ impl UiTree {
 
     /// `node`'s blocks start: what they read they say again, as `layoutChildrenBlock`.
     pub(crate) fn clear_alignment_uses_in_placement(&mut self, node: NodeId) {
-        if let Some(lines) = &mut self.node_mut(node).alignment {
+        if let Some(lines) = lines_of_mut(self.node_mut(node)) {
             lines.used_by_modifier_layout = false;
         }
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
-            if let Some(lines) = &mut self.node_mut(child).alignment {
+            if let Some(lines) = lines_of_mut(self.node_mut(child)) {
                 lines.used_during_parent_layout = false;
             }
         }
@@ -385,7 +427,7 @@ impl UiTree {
     pub(crate) fn alignment_uses_placed(&mut self, node: NodeId) {
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
-            if let Some(lines) = &mut self.node_mut(child).alignment {
+            if let Some(lines) = lines_of_mut(self.node_mut(child)) {
                 lines.previous_used_during_parent_layout = lines.used_during_parent_layout;
             }
         }
@@ -393,7 +435,7 @@ impl UiTree {
     }
 
     fn finish_layout_children(&mut self, node: NodeId) {
-        let Some(lines) = &mut self.node_mut(node).alignment else {
+        let Some(lines) = lines_of_mut(self.node_mut(node)) else {
             // Asked through what's above it, it needs its own.
             if self.required(node) {
                 self.recalculate_lines(node);
@@ -411,15 +453,15 @@ impl UiTree {
     /// Whether what's above it relies on `node`'s lines, as `required`.
     fn required(&mut self, node: NodeId) -> bool {
         self.recalculate_query_owner(node);
-        self.node(node).alignment.as_ref().is_some_and(|lines| lines.query_owner.is_some())
+        lines_of(self.node(node)).is_some_and(|lines| lines.query_owner.is_some())
     }
 
     fn query_owner_of(&self, node: NodeId) -> Option<NodeId> {
-        self.node(node).alignment.as_ref().and_then(|lines| lines.query_owner)
+        lines_of(self.node(node)).and_then(|lines| lines.query_owner)
     }
 
     fn is_queried(&self, node: NodeId) -> bool {
-        self.get(node).and_then(|value| value.alignment.as_ref()).is_some_and(|it| it.queried())
+        self.get(node).and_then(lines_of).is_some_and(|it| it.queried())
     }
 
     /// As `recalculateQueryOwner`.
@@ -445,7 +487,7 @@ impl UiTree {
                 }
             }
         };
-        if owner.is_some() || self.node(node).alignment.is_some() {
+        if owner.is_some() || lines_of(self.node(node)).is_some() {
             self.alignment_mut(node).query_owner = owner;
         }
     }
@@ -453,11 +495,18 @@ impl UiTree {
     /// `measurable[line]`, as `MeasurePassDelegate.get` and `NodeCoordinator.get`.
     pub(crate) fn read_alignment_line(
         &mut self,
+        reader: NodeId,
         measurable: Measurable,
         line: AlignmentLine,
         placing: bool,
     ) -> i32 {
-        self.alignment_lines_read = true;
+        // The first in the tree: who's reading didn't say it's measuring.
+        if !self.alignment_lines_read {
+            self.alignment_lines_read = true;
+            if !placing {
+                self.node_mut(reader).measuring = true;
+            }
+        }
         let (node, layer) = (measurable.node, measurable.layer as usize);
         let from_parent = layer == 0;
         if from_parent {
@@ -483,8 +532,7 @@ impl UiTree {
         let last = self.node(node).layers.len() - 1;
         let measured = if layer == last {
             self.calculate_alignment_lines(node, from_parent, placing);
-            let lines = self.node(node).alignment.as_ref();
-            (lines.into_iter().flat_map(|lines| lines.map.iter()))
+            (lines_of(self.node(node)).into_iter().flat_map(|lines| lines.map.iter()))
                 .find(|(it, _)| *it == line)
                 .map_or(AlignmentLine::UNSPECIFIED, |(_, position)| *position)
         } else {
@@ -529,16 +577,14 @@ impl UiTree {
     fn layout_children(&mut self, node: NodeId) {
         self.recalculate_query_owner(node);
         if self.node(node).needs_placement {
-            let aligning = std::mem::replace(&mut self.placing_for_alignment, true);
-            let asked = self.asked_while_aligning.replace(false);
-            self.run_placement_blocks(node);
-            self.node_mut(node).needs_placement = false;
+            let pass = self.alignment_pass();
+            pass.tree.run_placement_blocks(node);
+            pass.tree.node_mut(node).needs_placement = false;
             // Where it is it wasn't told: it runs in the placement pass too.
-            if self.asked_while_aligning.get() {
-                self.mark_needs_placement(node);
+            if pass.tree.asked_while_aligning.get() {
+                pass.tree.mark_needs_placement(node);
             }
-            self.asked_while_aligning.set(asked);
-            self.placing_for_alignment = aligning;
+            drop(pass);
             self.alignment_uses_placed(node);
         } else {
             self.finish_layout_children(node);
@@ -547,6 +593,10 @@ impl UiTree {
 
     /// As `recalculate`: what `node`'s placed children give, in its content.
     fn recalculate_lines(&mut self, node: NodeId) {
+        // A line goes through what's around it, as placing them would have run them.
+        if !self.new_layers.is_empty() {
+            self.run_new_layers();
+        }
         let mut map = Lines::new();
         for index in 0..self.node(node).children.len() {
             let child = self.node(node).children[index].node;
@@ -554,12 +604,12 @@ impl UiTree {
             if !value.placed || value.deactivated {
                 continue;
             }
-            if value.alignment.as_ref().is_none_or(|lines| lines.dirty) {
+            if lines_of(value).is_none_or(|lines| lines.dirty) {
                 self.layout_children(child);
             }
             let value = self.node(child);
             let last = value.layers.len() - 1;
-            let inherited = value.alignment.as_ref().map(|lines| lines.map.clone());
+            let inherited = lines_of(value).map(|lines| lines.map.clone());
             let of_modifiers = all_provided(value);
             for (line, position) in inherited.into_iter().flatten() {
                 self.add_alignment_line(&mut map, line, position, child, last);
@@ -576,7 +626,8 @@ impl UiTree {
         let value = self.node_mut(node);
         let last = value.layers.len() as u32 - 1;
         let provided = all_provided(value);
-        let lines = value.alignment.get_or_insert_with(Default::default);
+        let placements = value.placements.get_or_insert_with(Default::default);
+        let lines = placements.alignment.get_or_insert_with(Default::default);
         for (at, line, position) in provided {
             if at == last {
                 match map.iter_mut().find(|(it, _)| *it == line) {
@@ -606,9 +657,9 @@ impl UiTree {
         });
         let (layer, position) = outer.unwrap_or((layer, position));
         let point = self.map_line_out_of_node(child, layer, position as f32);
-        let position = if line.horizontal { point.y } else { point.x }.round() as i32;
+        let position = if line.is_horizontal() { point.y } else { point.x }.round() as i32;
         match map.iter_mut().find(|(it, _)| *it == line) {
-            Some(entry) => entry.1 = (line.merger)(entry.1, position),
+            Some(entry) => entry.1 = line.merge(entry.1, position),
             None => map.push((line, position)),
         }
     }
@@ -620,8 +671,8 @@ impl UiTree {
         use crate::layout_callbacks::layer_origin;
         let value = self.node(node);
         let mut point = Offset::new(position, position) + layer_origin(value, layer);
-        let end = if layer == 0 { 0 } else { value.layout_indices[layer - 1] as usize };
-        for index in (0..end).rev() {
+        // What wraps the layer: all before its own layout node, those of its own segment too.
+        for index in (0..value.entries_of_layer(layer).end).rev() {
             let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() else {
                 continue;
             };
@@ -650,32 +701,50 @@ impl UiTree {
                 inner => inner + line.of(value.layers[layer + 1].offset),
             }
         } else {
-            let mut merged = AlignmentLine::UNSPECIFIED;
-            for child in &value.children {
-                let of_child = self.node(child.node);
-                if !of_child.placed || of_child.deactivated {
-                    continue;
-                }
-                let inner = self.peek_alignment_line(child.node, 0, line);
-                if inner == AlignmentLine::UNSPECIFIED {
-                    continue;
-                }
-                // `get` counted how it's centered; its position counts it too, once in the end.
-                let inner = inner - line.of(crate::measure::centering(&of_child.layers[0]));
-                let point = self.map_line_out_of_node(child.node, 0, inner as f32);
-                let position = if line.horizontal { point.y } else { point.x }.round() as i32;
-                merged = if merged == AlignmentLine::UNSPECIFIED {
-                    position
-                } else {
-                    (line.merger)(merged, position)
-                };
-            }
-            merged
+            self.peek_inherited_line(node, line)
         };
         if measured == AlignmentLine::UNSPECIFIED {
             return measured;
         }
         measured + line.of(crate::measure::centering(&value.layers[layer]))
+    }
+
+    /// What `node`'s placed children give of `line` in its content, as `recalculate`, working out
+    /// and keeping nothing.
+    fn peek_inherited_line(&self, node: NodeId, line: AlignmentLine) -> i32 {
+        let mut merged = AlignmentLine::UNSPECIFIED;
+        for child in &self.node(node).children {
+            let value = self.node(child.node);
+            if !value.placed || value.deactivated {
+                continue;
+            }
+            let last = value.layers.len() - 1;
+            // The outermost that gives it, or what's in it, from its last layer.
+            let given = (0..=last).find_map(|at| {
+                let position = provided_at(value, at, line)?;
+                let centered = if at < last {
+                    line.of(crate::measure::centering(&value.layers[at]))
+                } else {
+                    0
+                };
+                Some((at, position + centered))
+            });
+            let (layer, position) = match given {
+                Some(given) => given,
+                None => match self.peek_inherited_line(child.node, line) {
+                    AlignmentLine::UNSPECIFIED => continue,
+                    inner => (last, inner),
+                },
+            };
+            let point = self.map_line_out_of_node(child.node, layer, position as f32);
+            let position = if line.is_horizontal() { point.y } else { point.x }.round() as i32;
+            merged = if merged == AlignmentLine::UNSPECIFIED {
+                position
+            } else {
+                line.merge(merged, position)
+            };
+        }
+        merged
     }
 
     /// What `node` gives from `layer` in, as `providedAlignmentLines`.
@@ -696,7 +765,7 @@ impl UiTree {
     /// How many changes to `node`'s lines those asking through coordinates heard of: another's a
     /// reason to tell them, its position or size the same.
     pub(crate) fn lines_changed_for_coordinates(&self, node: NodeId) -> u32 {
-        self.node(node).alignment.as_ref().map_or(0, |lines| lines.told_coordinates)
+        lines_of(self.node(node)).map_or(0, |lines| lines.told_coordinates)
     }
 
     /// A `LayoutCoordinates` asked `node`'s lines: as a modifier placing, it hears of a change.
@@ -712,7 +781,7 @@ impl UiTree {
 
     /// As `resetAlignmentLines`: `node`, reused or gone, has no one reading.
     pub(crate) fn reset_alignment_lines(&mut self, node: NodeId) {
-        if let Some(lines) = &mut self.node_mut(node).alignment {
+        if let Some(lines) = lines_of_mut(self.node_mut(node)) {
             lines.dirty = true;
             lines.used_during_parent_measurement = false;
             lines.previous_used_during_parent_layout = false;
