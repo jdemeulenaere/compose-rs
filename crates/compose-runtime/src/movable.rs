@@ -461,6 +461,15 @@ fn take_parked(table: &mut SlotTable, identity: u64) -> Option<Parked> {
     None
 }
 
+/// Whether `group` is in the composition's tree, and not in something parked.
+fn reachable(table: &SlotTable, group: u32) -> bool {
+    let mut around = group;
+    while table[around].parent != NONE {
+        around = table[around].parent;
+    }
+    around == SENTINEL
+}
+
 /// Whether there's content of `identity` to take from what's parked in `table`.
 fn can_take(table: &SlotTable, identity: u64) -> bool {
     table.movable.parked.iter().any(|parked| {
@@ -590,8 +599,15 @@ impl Runtime {
             }
         }
         let (op, _) = self.start_group(GroupKind::Restart, key, identity, None, false);
-        let Runtime { compositions, scopes, frames, recorded_changes, providers_invalid, .. } =
-            self;
+        let Runtime {
+            compositions,
+            scopes,
+            frames,
+            recorded_changes,
+            providers_invalid,
+            movable_late,
+            ..
+        } = self;
         let table = &mut compositions.data_mut(composition).table;
         let frame = frames.last_mut().expect("just started");
         let group = frame.group;
@@ -645,6 +661,13 @@ impl Runtime {
         table[group].flags |= MOVABLE_PENDING;
         table.movable.pending += 1;
         table.movable.placeholders.push(group);
+        // In the order calls are made, what's taken going to the first to ask, as Compose's
+        // `movableContentAwaitingInsert`.
+        let id = compositions.id_at(composition);
+        if !movable_late.contains(&id) {
+            movable_late.push(id);
+        }
+        let table = &mut compositions.data_mut(composition).table;
         if let Some(scope) = scopes.get_mut(table[group].scope) {
             scope.invalid = true;
         }
@@ -751,6 +774,14 @@ impl Runtime {
         let Some(parent) = parent.filter(|parent| self.compositions.get(*parent).is_some()) else {
             return;
         };
+        // Its nodes mean nothing in another tree: they go with it, on its own applier.
+        let same_tree = Rc::ptr_eq(
+            &self.compositions.get(id).expect("just found").applier,
+            &self.compositions.get(parent).expect("just found").applier,
+        );
+        if !same_tree {
+            return;
+        }
         let source = &mut self.compositions.data_mut(id.index).table;
         let parked = std::mem::take(&mut source.movable.parked);
         for one in parked {
@@ -777,6 +808,7 @@ impl Runtime {
         for group in &table.movable.placeholders {
             if table[*group].flags & MOVABLE_PENDING == 0
                 || table[*group].kind != GroupKind::Restart
+                || !reachable(table, *group)
             {
                 continue;
             }

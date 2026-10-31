@@ -800,7 +800,9 @@ pub async fn with_running_recomposer<R>(block: impl AsyncFnOnce(Recomposer) -> R
 /// callbacks, as [`perform_frame`] does for a recomposer's. All of them: a host's is
 /// [`run_frame_end_callbacks_of`].
 pub fn run_frame_end_callbacks() {
-    run_default_frame_end_callbacks(|_, _| true);
+    crate::composition::after_movable_discard(|| {
+        run_default_frame_end_callbacks(|_, _| true);
+    });
 }
 
 /// The end of a frame of `composition`'s tree, on the thread's default recomposer: the callbacks
@@ -808,13 +810,15 @@ pub fn run_frame_end_callbacks() {
 /// own frame, whose content may not have composed yet (D1306).
 pub fn run_frame_end_callbacks_of(composition: &crate::composition::Composition) {
     let root = composition.tree_root();
-    run_default_frame_end_callbacks(|runtime, owner| {
-        owner.is_none_or(|owner| {
-            runtime
-                .compositions
-                .get(owner)
-                .is_none_or(|_| runtime.compositions.tree_root_of(owner) == root)
-        })
+    crate::composition::after_movable_discard(move || {
+        run_default_frame_end_callbacks(|runtime, owner| {
+            owner.is_none_or(|owner| {
+                runtime
+                    .compositions
+                    .get(owner)
+                    .is_none_or(|_| runtime.compositions.tree_root_of(owner) == root)
+            })
+        });
     });
 }
 
@@ -872,11 +876,11 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
                 break;
             }
         }
-        if panic.is_some() {
-            break;
-        }
+        // Also with a panic: what those composed left isn't to wait for a frame nobody asked.
         if let Some(caught) = crate::composition::finish_movable_content_of_frame(frame) {
-            panic = Some(caught);
+            panic.get_or_insert(caught);
+        }
+        if panic.is_some() {
             break;
         }
         Snapshot::send_apply_notifications();
@@ -896,15 +900,17 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
     recomposer.update_state();
     // What the work wrote and made is everybody's, before the frame's end.
     Snapshot::notify_objects_initialized();
-    let callbacks = recomposer
-        .inner
-        .try_get()
-        .map(|inner| std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut()))
-        .unwrap_or_default();
-    for (.., callback) in callbacks {
-        callback();
-    }
-    recomposer.update_state();
+    crate::composition::after_movable_discard(move || {
+        let callbacks = recomposer
+            .inner
+            .try_get()
+            .map(|inner| std::mem::take(&mut *inner.frame_end_callbacks.borrow_mut()))
+            .unwrap_or_default();
+        for (.., callback) in callbacks {
+            callback();
+        }
+        recomposer.update_state();
+    });
     if let Some(panic) = panic {
         resume_unwind(panic);
     }

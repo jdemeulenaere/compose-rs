@@ -49,6 +49,10 @@ pub(crate) struct Runtime {
     pub movable_pool: Vec<CompositionId>,
     /// `discard_unused_movable_content` is scheduled.
     pub movable_discard_scheduled: bool,
+    /// Frame ends waiting for that discard, as Compose's come after it.
+    pub after_movable_discard: Vec<Box<dyn FnOnce()>>,
+    /// A late pass's work is among `unapplied`, a composition having two.
+    pub late_work_unapplied: bool,
     /// Moves on each time a provider's values change in a way that recomposes its content (a
     /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
     /// The last `Group::provider_version` given.
@@ -135,6 +139,8 @@ impl Runtime {
             movable_late: Vec::new(),
             movable_pool: Vec::new(),
             movable_discard_scheduled: false,
+            after_movable_discard: Vec::new(),
+            late_work_unapplied: false,
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),

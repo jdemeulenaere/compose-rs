@@ -2866,13 +2866,18 @@ fn content_moves_in_and_out_of_compositions_and_between_them() {
         });
     }
     let mut test = composition_test();
-    let live = Rc::new(Cell::new(0));
-    let l = live.clone();
+    // Each is live, as the test's `rememberObservers`: one made anew doesn't net out.
+    let observers: Rc<RefCell<Vec<Rc<Cell<i32>>>>> = Rc::default();
+    let o = observers.clone();
     let content = movable_content_of(move || {
-        let l = l.clone();
+        let o = o.clone();
         Row!(move || {
-            let l = l.clone();
-            remember_observer(move || Lively(l));
+            let o = o.clone();
+            remember_observer(move || {
+                let live: Rc<Cell<i32>> = Rc::default();
+                o.borrow_mut().push(live.clone());
+                Lively(live)
+            });
             Text("Text from value");
             Marker();
         });
@@ -2940,7 +2945,7 @@ fn content_moves_in_and_out_of_compositions_and_between_them() {
             });
         });
         assert_eq!(find_view(test, "Marker"), Some(the_marker), "the node moved with it");
-        assert_eq!(live.get(), 1, "what it remembered stayed");
+        assert!(observers.borrow().iter().all(|live| live.get() == 1), "kept alive");
     };
     check(&mut test, IN_MAIN);
     for new_position in [IN_SUB1, IN_SUB2, IN_SUB1, IN_MAIN, IN_SUB2, IN_MAIN] {
@@ -2948,8 +2953,9 @@ fn content_moves_in_and_out_of_compositions_and_between_them() {
         test.expect_changes();
         check(&mut test, new_position);
     }
+    assert_eq!(observers.borrow().len(), 1, "the one");
     test.dispose();
-    assert_eq!(live.get(), 0);
+    assert!(observers.borrow().iter().all(|live| live.get() == 0));
 }
 
 // Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/MovableContentTests.kt, subcomposeLifetime_with_movable_content
@@ -3227,8 +3233,13 @@ fn content_moves_out_of_a_composition_going_in_the_frame() {
 #[test]
 fn content_moves_from_a_composition_going_to_one_made_after_the_frame() {
     let mut test = composition_test();
-    let in_subcompose = mutable_state_of(true);
-    let content = movable_content_of(|| Text("Some text"));
+    let (in_subcompose, made) = (mutable_state_of(true), Rc::new(Cell::new(0)));
+    let m = made.clone();
+    let content = movable_content_of(move || {
+        let m = m.clone();
+        remember(move || m.set(m.get() + 1));
+        Text("Some text");
+    });
     let i = in_subcompose.handle();
     test.compose(move || {
         let (at_once, later) = (content.clone(), content.clone());
@@ -3245,6 +3256,7 @@ fn content_moves_from_a_composition_going_to_one_made_after_the_frame() {
     in_subcompose.set(false);
     test.advance();
     test.validate(|v| deferred_host(v, &mut |v: &mut Expected| v.text("Some text")));
+    assert_eq!(made.get(), 1, "its composition gave it to its parent, to hold");
 }
 
 /// Content in a paused region, inside a node of it, that a whole pass removes as it goes through the
@@ -3545,13 +3557,13 @@ fn run_tree_fuzz(seed: u64) {
     test.compose(move || {
         let (a, b, c) = (f.clone(), f.clone(), f.clone());
         Row!(move || compose_hosted(&a, 0));
-        key(first.get(), move || {
+        key((1, first.get()), move || {
             if first.get() {
                 let b = b.clone();
                 Subcompose!(move || compose_hosted(&b, 1));
             }
         });
-        key(second.get(), move || {
+        key((2, second.get()), move || {
             if second.get() {
                 let c = c.clone();
                 if deferred {
@@ -3762,5 +3774,725 @@ fn a_parents_set_content_takes_what_a_nested_child_let_go_of() {
     assert_eq!(made.get(), 1);
     composition.set_content(compose(true));
     assert_eq!(made.get(), 1, "the one state");
+    composition.dispose();
+}
+
+// ---- C6's review: other trees, call order, panics ------------------------------------------------
+
+/// As a popup's window: a composition of its own tree, under this place, gone with it.
+#[composable]
+fn Popup(content: impl Fn() + 'static) {
+    let parent = remember_composition_context();
+    let composition = remember(|| Rc::new(Composition::with_parent(ViewApplier::new(), parent)));
+    composition.set_content(move || content());
+    DisposableEffect((), move |scope| scope.on_dispose(move || composition.dispose()));
+}
+
+fn main_tree_of_a_popup(v: &mut Expected) {
+    v.text("main 1");
+    row(v, |v| {
+        v.text("main 2");
+        v.text("main 3");
+    });
+}
+
+#[composable(non_restartable)]
+fn MainOfAPopup() {
+    Text("main 1");
+    Row!(|| {
+        Text("main 2");
+        Text("main 3");
+    });
+}
+
+/// A popup closing: what's in it goes on its own tree, nothing of it touching the main one's.
+#[test]
+fn a_popup_closing_leaves_the_main_tree_as_it_is() {
+    let mut test = composition_test();
+    let (open, live) = (mutable_state_of(true), Rc::new(Cell::new(0)));
+    let l = live.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        remember_observer(move || Lively(l));
+        Text("in the popup");
+    });
+    let o = open.handle();
+    test.compose(move || {
+        MainOfAPopup();
+        let content = content.clone();
+        key(o.get(), move || {
+            if o.get() {
+                let content = content.clone();
+                Popup!(move || content());
+            }
+        });
+    });
+    assert_eq!(live.get(), 1);
+    open.set(false);
+    test.advance();
+    test.validate(main_tree_of_a_popup);
+    assert_eq!(live.get(), 0);
+}
+
+/// Its content called in the main tree as it closes: new there, as nodes can't move between trees.
+#[test]
+fn a_popup_closing_with_its_content_called_in_the_main_tree() {
+    let mut test = composition_test();
+    let (open, live, made) = (mutable_state_of(true), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (l, m) = (live.clone(), made.clone());
+    let content = movable_content_of(move || {
+        let (l, m) = (l.clone(), m.clone());
+        remember(move || m.set(m.get() + 1));
+        remember_observer(move || Lively(l));
+        Text("content");
+    });
+    let o = open.handle();
+    test.compose(move || {
+        MainOfAPopup();
+        let (popup, main) = (content.clone(), content.clone());
+        key(o.get(), move || {
+            if o.get() {
+                let popup = popup.clone();
+                Popup!(move || popup());
+            } else {
+                main();
+            }
+        });
+    });
+    open.set(false);
+    test.advance();
+    test.validate(|v| {
+        main_tree_of_a_popup(v);
+        v.text("content");
+    });
+    assert_eq!((made.get(), live.get()), (2, 1));
+}
+
+/// Its content called by what an effect composes in the main tree, as it closes: new there too.
+#[test]
+fn a_popup_closing_with_its_content_taken_by_an_effects_composition() {
+    let mut test = composition_test();
+    let (open, live, made) = (mutable_state_of(true), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (l, m) = (live.clone(), made.clone());
+    let content = movable_content_of(move || {
+        let (l, m) = (l.clone(), m.clone());
+        remember(move || m.set(m.get() + 1));
+        remember_observer(move || Lively(l));
+        Text("content");
+    });
+    let o = open.handle();
+    test.compose(move || {
+        MainOfAPopup();
+        let (popup, later) = (content.clone(), content.clone());
+        key(o.get(), move || {
+            if o.get() {
+                let popup = popup.clone();
+                Popup!(move || popup());
+            } else {
+                let later = later.clone();
+                DeferredSubcompose!(move || later());
+            }
+        });
+    });
+    open.set(false);
+    test.advance();
+    test.validate(|v| {
+        main_tree_of_a_popup(v);
+        deferred_host(v, &mut |v: &mut Expected| v.text("content"));
+    });
+    assert_eq!((made.get(), live.get()), (2, 1));
+}
+
+/// A placeholder nested in what parked is no one's to reach: the frame's end doesn't wait for it.
+#[test]
+fn a_placeholder_inside_what_parks_doesnt_hold_up_the_frame() {
+    let composition = Composition::new(ViewApplier::new());
+    let (at, made) = (mutable_state_of(false), Rc::new(Cell::new(0)));
+    let b = movable_content_of(|| Text("b"));
+    let b2 = b.clone();
+    let a = movable_content_of_with(move |at: bool| {
+        if at {
+            b2();
+        }
+    });
+    let m = made.clone();
+    let c = movable_content_of(move || m.set(m.get() + 1));
+    let requested = at.handle();
+    composition.set_content(move || {
+        let (b, a, c) = (b.clone(), a.clone(), c.clone());
+        let at = requested.get();
+        key(at, move || {
+            if !at {
+                b();
+            }
+        });
+        let parent = remember_composition_context();
+        let child =
+            remember(|| Rc::new(platform::subcomposition(parent, ViewApplier::new().root())));
+        // In one body: what calls `b` goes, with `b`'s placeholder in it, for what's new.
+        child.set_content(move || a(at));
+        if at {
+            child.set_content(move || c());
+        }
+        let held = child.clone();
+        DisposableEffect((), move |scope| scope.on_dispose(move || held.dispose()));
+    });
+    at.set(true);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(made.get(), 1, "the new content composed");
+    assert!(!composition.has_invalidations());
+    composition.dispose();
+}
+
+/// Two callers in one frame: what moves goes to the first to call, a nested composition finishing
+/// before its parent or not, as Compose goes by the calls.
+#[test]
+fn what_moves_goes_to_the_first_to_call_it() {
+    let mut test = composition_test();
+    let (moved, next) = (mutable_state_of(false), Rc::new(Cell::new(0)));
+    let seen: Rc<RefCell<Vec<(i32, i32)>>> = Rc::default();
+    let (n, s) = (next.clone(), seen.clone());
+    let content = movable_content_of_with(move |who: i32| {
+        let n = n.clone();
+        let token = remember(move || {
+            n.set(n.get() + 1);
+            n.get()
+        });
+        s.borrow_mut().push((who, token));
+    });
+    let m = moved.handle();
+    test.compose(move || {
+        let (home, first, second) = (content.clone(), content.clone(), content.clone());
+        key(m.get(), move || {
+            if m.get() {
+                first(1);
+                let second = second.clone();
+                Subcompose!(move || second(2));
+            } else {
+                home(0);
+            }
+        });
+    });
+    assert_eq!(*seen.borrow(), [(0, 1)]);
+    seen.borrow_mut().clear();
+    moved.set(true);
+    test.advance();
+    let mut seen = seen.borrow().clone();
+    seen.sort();
+    assert_eq!(seen, [(1, 1), (2, 2)]);
+}
+
+/// One composition's `on_forgotten` panicking leaves the next one's content to go.
+#[test]
+fn a_panic_in_a_discard_leaves_the_others() {
+    struct Bad(Rc<Cell<i32>>, bool);
+    impl RememberObserver for Bad {
+        fn on_forgotten(&self) {
+            self.0.set(self.0.get() + 1);
+            assert!(!self.1, "in a discard");
+        }
+    }
+    let mut test = composition_test();
+    let (shown, forgotten) = (mutable_state_of(true), Rc::new(Cell::new(0)));
+    let make = |bad: bool| {
+        let f = forgotten.clone();
+        movable_content_of(move || {
+            let f = f.clone();
+            remember_observer(move || Bad(f, bad));
+        })
+    };
+    let (first, second) = (make(true), make(false));
+    let s = shown.handle();
+    test.compose(move || {
+        let (first, second) = (first.clone(), second.clone());
+        Subcompose!(move || {
+            let first = first.clone();
+            key(s.get(), move || {
+                if s.get() {
+                    first();
+                }
+            });
+        });
+        Subcompose!(move || {
+            let second = second.clone();
+            key(s.get(), move || {
+                if s.get() {
+                    second();
+                }
+            });
+        });
+    });
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    test.composition().recompose();
+    assert_eq!(forgotten.get(), 0);
+    assert!(catch_unwind(AssertUnwindSafe(platform::run_ready)).is_err());
+    assert_eq!(forgotten.get(), 2, "the other's went too");
+    std::mem::forget(test);
+}
+
+/// A panic composing in a recomposer's frame leaves no placeholder of it waiting.
+#[test]
+fn a_panic_in_a_frame_still_resolves_its_placeholders() {
+    let owner = Recomposer::new();
+    let recomposer = owner.handle();
+    let composition = Composition::with_parent(ViewApplier::new(), recomposer.as_context());
+    let (at, bad) = (mutable_state_of(false), mutable_state_of(false));
+    let content = movable_content_of(|| Text("content"));
+    let (a, b) = (at.handle(), bad.handle());
+    composition.set_content(move || {
+        let content = content.clone();
+        key(a.get(), move || {
+            if a.get() {
+                content();
+            }
+        });
+        // Composed once here, so that it's the frame's to compose, not the parent's body.
+        let parent = remember_composition_context();
+        let child = remember(|| {
+            let child = Rc::new(Composition::with_parent(ViewApplier::new(), parent));
+            child.set_content(move || assert!(!b.get(), "a child's body"));
+            child
+        });
+        drop(child);
+    });
+    at.set(true);
+    bad.set(true);
+    Snapshot::send_apply_notifications();
+    assert!(catch_unwind(AssertUnwindSafe(|| platform::perform_frame(recomposer, 0))).is_err());
+    let dump = composition.with_applier(|views: &mut ViewApplier| views.tree.dump());
+    assert!(dump.contains("content"), "{dump}");
+    std::mem::forget(composition);
+    recomposer.cancel();
+    drop(owner);
+}
+
+/// A frame-end callback sees what nobody took gone, as Compose's discard comes before it.
+#[test]
+fn a_frame_end_callback_comes_after_the_discard() {
+    let owner = Recomposer::new();
+    let recomposer = owner.handle();
+    let composition = Composition::with_parent(ViewApplier::new(), recomposer.as_context());
+    let (shown, log) = (mutable_state_of(true), Rc::new(RefCell::new(Vec::new())));
+    struct Told(Rc<RefCell<Vec<&'static str>>>);
+    impl RememberObserver for Told {
+        fn on_forgotten(&self) {
+            self.0.borrow_mut().push("forgotten");
+        }
+    }
+    let l = log.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        remember_observer(move || Told(l));
+    });
+    let s = shown.handle();
+    composition.set_content(move || {
+        let content = content.clone();
+        Subcompose!(move || {
+            let content = content.clone();
+            key(s.get(), move || {
+                if s.get() {
+                    content();
+                }
+            });
+        });
+    });
+    let l = log.clone();
+    recomposer.schedule_frame_end_callback(move || l.borrow_mut().push("callback"));
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    platform::perform_frame(recomposer, 0);
+    platform::run_ready();
+    assert_eq!(*log.borrow(), ["forgotten", "callback"]);
+    composition.dispose();
+    recomposer.cancel();
+}
+
+/// Two instances of one function hash alike inside, as Compose's root theirs at a constant
+/// (`movableContentOfTheSameFunctionShouldHaveStableKeys`): a registry tells them by the order
+/// they save and restore in, a list per key, as Compose's.
+#[test]
+fn two_instances_of_one_function_each_restore_their_own() {
+    fn run(registry: SaveableStateRegistry, given: &[i32]) -> (Composition, Vec<i32>) {
+        let composition = Composition::new(ViewApplier::new());
+        let values: Rc<RefCell<Vec<i32>>> = Rc::default();
+        let next: Rc<Cell<usize>> = Rc::default();
+        let given = given.to_vec();
+        let (v, n) = (values.clone(), next.clone());
+        let make = || {
+            let (v, n, given) = (v.clone(), n.clone(), given.clone());
+            movable_content_of(move || {
+                let at = n.get();
+                n.set(at + 1);
+                let value = remember_saveable(|| mutable_state_of(given[at]));
+                v.borrow_mut().push(value.get());
+            })
+        };
+        let (first, second) = (make(), make());
+        composition.set_content(move || {
+            let (first, second) = (first.clone(), second.clone());
+            CompositionLocalProvider(
+                LOCAL_SAVEABLE_STATE_REGISTRY.provides(Some(registry.clone())),
+                move || {
+                    first();
+                    second();
+                },
+            );
+        });
+        let values = values.borrow().clone();
+        (composition, values)
+    }
+    let registry = SaveableStateRegistry::new(None);
+    let (composition, values) = run(registry.clone(), &[1, 2]);
+    assert_eq!(values, [1, 2]);
+    let saved = registry.perform_save();
+    composition.dispose();
+    let (composition, values) = run(SaveableStateRegistry::new(Some(saved)), &[8, 9]);
+    assert_eq!(values, [1, 2]);
+    composition.dispose();
+}
+
+// ---- The fuzz, with a popup's tree, writes after moves, contents holding compositions -------------
+
+const TREE_PARENTS: usize = 4;
+const TREE_CONTENTS: usize = 6;
+/// The popup: its own tree.
+const FOREIGN: usize = 3;
+
+struct TreeFuzz {
+    placing: OwnedState<Rc<Placing>>,
+    contents: RefCell<Vec<Callback>>,
+    values: Vec<OwnedState<i32>>,
+    tokens: RefCell<Vec<Option<u64>>>,
+    inner: RefCell<Vec<Option<(u64, i32)>>>,
+    next: Cell<u64>,
+    live: Cell<i32>,
+    compositions: RefCell<Vec<Rc<Composition>>>,
+    popup: RefCell<Option<Rc<Composition>>>,
+}
+
+struct TreeAlive(Rc<TreeFuzz>);
+
+impl RememberObserver for TreeAlive {
+    fn on_remembered(&self) {
+        self.0.live.set(self.0.live.get() + 1);
+    }
+    fn on_forgotten(&self) {
+        self.0.live.set(self.0.live.get() - 1);
+    }
+}
+
+fn tree_hosted(fuzz: &Rc<TreeFuzz>, host: usize) {
+    let placing = fuzz.placing.get();
+    for content in &placing[host] {
+        let call = fuzz.contents.borrow()[*content].clone();
+        call();
+    }
+}
+
+/// A composition of the tree it's in, or of `own_tree`, known to the fuzz while it's there.
+#[composable]
+fn TreeChild(fuzz: Rc<TreeFuzz>, own_tree: bool, deferred: bool, content: Callback) {
+    let parent = remember_composition_context();
+    let host = (!own_tree)
+        .then(|| HostNode(if deferred { "DeferredSubcompose" } else { "SubcomposeHost" }, parent));
+    let composition = remember(|| {
+        let composition = Rc::new(match host {
+            Some(host) => platform::subcomposition(parent, host),
+            None => Composition::with_parent(ViewApplier::new(), parent),
+        });
+        fuzz.compositions.borrow_mut().push(composition.clone());
+        if own_tree {
+            *fuzz.popup.borrow_mut() = Some(composition.clone());
+        }
+        composition
+    });
+    if deferred {
+        let (held, then) = (composition.clone(), content.clone());
+        LaunchedEffect(content, async move { held.set_content(move || then()) });
+    } else {
+        composition.set_content(move || content());
+    }
+    let f = fuzz.clone();
+    DisposableEffect((), move |scope| {
+        scope.on_dispose(move || {
+            f.compositions.borrow_mut().retain(|other| !Rc::ptr_eq(other, &composition));
+            composition.dispose();
+        })
+    });
+}
+
+fn tree_expected(fuzz: &TreeFuzz, placing: &Placing, host: usize, indent: usize, out: &mut String) {
+    let pad = "  ".repeat(indent);
+    for content in &placing[host] {
+        let token = fuzz.tokens.borrow()[*content].expect("composed");
+        let value = fuzz.values[*content].get();
+        out.push_str(&format!("{pad}<linear>\n{pad}  <text text='{content}:{token}:{value}'>\n"));
+        tree_expected(fuzz, placing, TREE_PARENTS + content, indent + 1, out);
+        if content % 2 == 0 {
+            let (inner, _) = fuzz.inner.borrow()[*content].expect("composed");
+            out.push_str(&format!(
+                "{pad}  <SubcomposeHost>\n{pad}    <text text='in {content}:{inner}:{value}'>\n"
+            ));
+        }
+    }
+}
+
+fn run_foreign_tree_fuzz(seed: u64) {
+    let mut random = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    let mut next = move |bound: u64| {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        random % bound
+    };
+    let hosts = TREE_PARENTS + TREE_CONTENTS;
+    let fuzz = Rc::new(TreeFuzz {
+        placing: mutable_state_of_with(Rc::new(vec![Vec::new(); hosts]), ReferentialEqualityPolicy),
+        contents: RefCell::new(Vec::new()),
+        values: (0..TREE_CONTENTS).map(|_| mutable_state_of(0)).collect(),
+        tokens: RefCell::new(vec![None; TREE_CONTENTS]),
+        inner: RefCell::new(vec![None; TREE_CONTENTS]),
+        next: Cell::new(1),
+        live: Cell::new(0),
+        compositions: RefCell::new(Vec::new()),
+        popup: RefCell::new(None),
+    });
+    for index in 0..TREE_CONTENTS {
+        let inner = Rc::downgrade(&fuzz);
+        let content = movable_content_of(move || {
+            let fuzz = inner.upgrade().expect("it outlives the composition");
+            let made = fuzz.clone();
+            let token = remember(move || {
+                let token = made.next.get();
+                made.next.set(token + 1);
+                token
+            });
+            let alive = fuzz.clone();
+            remember_observer(move || TreeAlive(alive));
+            fuzz.tokens.borrow_mut()[index] = Some(token);
+            let value = fuzz.values[index].get();
+            let weak = inner.clone();
+            Linear!(move || {
+                let fuzz = weak.upgrade().expect("it outlives the composition");
+                Text(&format!("{index}:{token}:{value}"));
+                tree_hosted(&fuzz, TREE_PARENTS + index);
+                // It holds a composition, whose place moves with it.
+                if index % 2 == 0 {
+                    let f = fuzz.clone();
+                    TreeChild!(fuzz.clone(), false, false, move || {
+                        let m = f.clone();
+                        let inner_token = remember(move || {
+                            let token = m.next.get();
+                            m.next.set(token + 1);
+                            token
+                        });
+                        let value = f.values[index].get();
+                        f.inner.borrow_mut()[index] = Some((inner_token, value));
+                        Text(&format!("in {index}:{inner_token}:{value}"));
+                    });
+                }
+            });
+        });
+        fuzz.contents.borrow_mut().push(content);
+    }
+    let deferred = seed.is_multiple_of(2);
+    let shown: Vec<OwnedState<bool>> = (0..3).map(|_| mutable_state_of(true)).collect();
+    let mut test = composition_test();
+    let (f, first, second, third) =
+        (fuzz.clone(), shown[0].handle(), shown[1].handle(), shown[2].handle());
+    test.compose(move || {
+        let (a, b, c, d) = (f.clone(), f.clone(), f.clone(), f.clone());
+        Row!(move || tree_hosted(&a, 0));
+        key((1, first.get()), move || {
+            if first.get() {
+                let (b, r) = (b.clone(), b.clone());
+                TreeChild!(r, false, false, move || tree_hosted(&b, 1));
+            }
+        });
+        key((2, second.get()), move || {
+            if second.get() {
+                let (c, r) = (c.clone(), c.clone());
+                TreeChild!(r, false, deferred, move || tree_hosted(&c, 2));
+            }
+        });
+        key((3, third.get()), move || {
+            if third.get() {
+                let (d, r) = (d.clone(), d.clone());
+                TreeChild!(r, true, false, move || tree_hosted(&d, FOREIGN));
+            }
+        });
+    });
+    test.advance();
+    let mut last: Vec<Option<(u64, bool, Option<u64>)>> = vec![None; TREE_CONTENTS];
+    for round in 0..24 {
+        let placing = if round % 3 == 2 {
+            // A write alone, where it is.
+            (*fuzz.placing.get()).clone()
+        } else {
+            let mut placing: Placing = vec![Vec::new(); hosts];
+            for content in 0..TREE_CONTENTS {
+                if next(4) == 0 {
+                    continue;
+                }
+                let host = next((TREE_PARENTS + content) as u64) as usize;
+                let at = next(placing[host].len() as u64 + 1) as usize;
+                placing[host].insert(at, content);
+            }
+            placing
+        };
+        if next(4) == 0 {
+            shown[next(3) as usize].update(|shown| !shown);
+        }
+        let there = [true, shown[0].get(), shown[1].get(), shown[2].get()];
+        let (mut present, mut foreign) = (Vec::new(), Vec::new());
+        for (parent, there) in there.iter().enumerate() {
+            if *there {
+                let mut here = Vec::new();
+                tree_reached(&placing, parent, &mut here);
+                if parent == FOREIGN {
+                    foreign.extend(here.iter().copied());
+                }
+                present.extend(here);
+            }
+        }
+        fuzz.placing.set(Rc::new(placing));
+        test.advance();
+        // After a move, a write reaches where it's gone: in what it holds too.
+        for _ in 0..2 {
+            fuzz.values[next(TREE_CONTENTS as u64) as usize].set(next(1000) as i32);
+        }
+        test.advance();
+        test.verify_consistent();
+        for composition in fuzz.compositions.borrow().iter() {
+            composition.validate();
+        }
+        let placing = fuzz.placing.get();
+        let tokens = fuzz.tokens.borrow().clone();
+        let inner = fuzz.inner.borrow().clone();
+        for content in 0..TREE_CONTENTS {
+            let in_foreign = foreign.contains(&content);
+            if present.contains(&content) {
+                let held = inner[content].map(|(token, _)| token);
+                if let Some((token, was_foreign, was_inner)) = last[content]
+                    && was_foreign == in_foreign
+                {
+                    assert_eq!(tokens[content], Some(token), "{content}, seed {seed}");
+                    if content % 2 == 0 {
+                        assert_eq!(held, was_inner, "what {content} holds, seed {seed}");
+                    }
+                }
+                last[content] = Some((tokens[content].expect("composed"), in_foreign, held));
+                if content % 2 == 0 {
+                    assert_eq!(
+                        inner[content].map(|(_, value)| value),
+                        Some(fuzz.values[content].get()),
+                        "{content} holds a composition with the value, seed {seed}"
+                    );
+                }
+            } else {
+                last[content] = None;
+            }
+        }
+        assert_eq!(fuzz.live.get(), present.len() as i32, "{placing:?}, seed {seed}");
+        // Each tree shows its own.
+        let mut main = String::new();
+        main.push_str("<Row>\n");
+        tree_expected(&fuzz, &placing, 0, 1, &mut main);
+        for (parent, name) in [(1, false), (2, deferred)] {
+            if there[parent] {
+                main.push_str(if name { "<DeferredSubcompose>\n" } else { "<SubcomposeHost>\n" });
+                tree_expected(&fuzz, &placing, parent, 1, &mut main);
+            }
+        }
+        let dump = test.with_views(|views| views.tree.dump());
+        assert_eq!(dump.trim(), main.trim(), "{placing:?}, seed {seed}");
+        if there[FOREIGN] {
+            let mut own = String::new();
+            tree_expected(&fuzz, &placing, FOREIGN, 0, &mut own);
+            let popup = fuzz.popup.borrow().clone().expect("shown");
+            let dump = popup.with_applier(|views: &mut ViewApplier| views.tree.dump());
+            assert_eq!(dump.trim(), own.trim(), "the popup: {placing:?}, seed {seed}");
+        }
+    }
+    test.dispose();
+    assert_eq!(fuzz.live.get(), 0, "seed {seed}");
+    assert!(fuzz.compositions.borrow().is_empty(), "seed {seed}");
+    *fuzz.popup.borrow_mut() = None;
+}
+
+fn tree_reached(placing: &Placing, host: usize, out: &mut Vec<usize>) {
+    for content in &placing[host] {
+        out.push(*content);
+        tree_reached(placing, TREE_PARENTS + content, out);
+    }
+}
+
+/// Contents placed at random in a tree, a composition of its own tree, and each other, holding
+/// compositions, with writes after the moves, every composition checked, against plain arrays.
+#[test]
+fn contents_across_trees_and_writes_after_moves_agree_with_arrays() {
+    for seed in 1..=100 {
+        run_foreign_tree_fuzz(seed);
+    }
+}
+
+/// A parent's effect setting a child's content with both the child's pass and its late pass to
+/// apply: all of that goes first.
+#[test]
+fn a_parents_effect_runs_a_childs_late_work_before_setting_its_content() {
+    let composition = Composition::new(ViewApplier::new());
+    let log: Rc<RefCell<Vec<&str>>> = Rc::default();
+    let (moved, tick) = (mutable_state_of(false), mutable_state_of(0));
+    let l = log.clone();
+    let content = movable_content_of(move || {
+        let l = l.clone();
+        SideEffect(move || l.borrow_mut().push("moved"));
+    });
+    let (m, t, l) = (moved.handle(), tick.handle(), log.clone());
+    composition.set_content(move || {
+        let (home, away) = (content.clone(), content.clone());
+        let is_moved = m.get();
+        key(is_moved, move || {
+            if !is_moved {
+                home();
+            }
+        });
+        let parent = remember_composition_context();
+        let child = remember(|| {
+            let child = Rc::new(platform::subcomposition(parent, ViewApplier::new().root()));
+            let away = away.clone();
+            child.set_content(move || {
+                t.get();
+                let away = away.clone();
+                key(m.get(), move || {
+                    if m.get() {
+                        away();
+                    }
+                });
+            });
+            child
+        });
+        let l = l.clone();
+        SideEffect(move || {
+            if is_moved {
+                l.borrow_mut().push("parent");
+                let l = l.clone();
+                child.set_content(move || {
+                    SideEffect({
+                        let l = l.clone();
+                        move || l.borrow_mut().push("new content")
+                    })
+                });
+            }
+        });
+    });
+    log.borrow_mut().clear();
+    moved.set(true);
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(*log.borrow(), ["parent", "moved", "new content"]);
     composition.dispose();
 }
