@@ -668,6 +668,13 @@ impl Snapshot {
     /// A read-only snapshot of what this one sees now, as `takeNestedSnapshot`. Its reads call
     /// `read_observer`, then this snapshot's read observer.
     pub fn take_nested_snapshot(&self, read_observer: Option<StateObserverFn>) -> Snapshot {
+        // First, as Compose's: a snapshot refused isn't one tools hear of.
+        if let Some(parent) = &self.inner {
+            parent.validate_not_disposed();
+            if !parent.kind.read_only() {
+                parent.validate_not_applied_or_pinned();
+            }
+        }
         let parent = self.inner.is_some().then_some(self);
         let (read_observer, _, creating) = tooling::pre_create(parent, true, read_observer, None);
         let snapshot = self.nested_snapshot(read_observer);
@@ -679,10 +686,6 @@ impl Snapshot {
         let Some(parent) = &self.inner else {
             return take_root(self, Kind::ReadOnly, read_observer, None);
         };
-        parent.validate_not_disposed();
-        if !parent.kind.read_only() {
-            parent.validate_not_applied_or_pinned();
-        }
         let inner = with_runtime(|runtime| {
             let (base_read, _, context) = self.base(runtime);
             let read = merged_with(read_observer, base_read);
@@ -1054,6 +1057,10 @@ impl MutableSnapshot {
         read_observer: Option<StateObserverFn>,
         write_observer: Option<StateObserverFn>,
     ) -> MutableSnapshot {
+        if let Some(parent) = &self.0.inner {
+            parent.validate_not_disposed();
+            parent.validate_not_applied_or_pinned();
+        }
         let parent = self.0.inner.is_some().then_some(&self.0);
         let (read_observer, write_observer, creating) =
             tooling::pre_create(parent, false, read_observer, write_observer);
@@ -1075,8 +1082,6 @@ impl MutableSnapshot {
                 write_observer,
             ));
         };
-        parent.validate_not_disposed();
-        parent.validate_not_applied_or_pinned();
         let inner = with_runtime(|runtime| {
             let (base_read, base_write, context) = self.0.base(runtime);
             nested_mutable(
@@ -1148,7 +1153,8 @@ pub(crate) struct PassSnapshot {
     outer: Option<OuterPass>,
     /// Nothing else could have written during the pass.
     alone: bool,
-    /// Tools observe snapshots: it goes through `apply`, as a pass's dispatches nothing else.
+    /// Tools observe snapshots, as of its begin and then of its leaving: it goes through `apply`,
+    /// as the shortcut dispatches nothing.
     observed: bool,
     /// What the tools gave it is a frame on the stack, till `leave`.
     framed: bool,
@@ -1275,6 +1281,7 @@ impl PassSnapshot {
             self._left = snapshots.pop_frame().map(|(frame, _)| Box::new(frame));
         }
         self.alone = snapshots.pass_alone();
+        self.observed = snapshots.has_snapshot_observers();
         if let Some(outer) = self.outer.take() {
             snapshots.end_pass(outer);
         }

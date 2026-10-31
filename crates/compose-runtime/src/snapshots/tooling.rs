@@ -2,6 +2,7 @@
 //! created, applied and disposed, and its reads and writes. For tools: with no observer, a snapshot
 //! pays one check of a list's length at each of those, and reads and writes nothing (D1502).
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use super::global::{ChangeSet, ObserverHandle, StateObserverFn, merged_with};
@@ -31,7 +32,8 @@ pub trait SnapshotObserver: 'static {
     ) {
     }
 
-    /// Called while a snapshot is disposed, as `onPreDispose`.
+    /// Called while a snapshot is disposed, as `onPreDispose`. When a panic is dropping the snapshot,
+    /// a panic here is dropped.
     fn on_pre_dispose(&self, _snapshot: &Snapshot) {}
 
     /// Called after a snapshot is applied, as `onApplied`: to its parent if it's nested, where only
@@ -49,7 +51,8 @@ pub struct SnapshotInstanceObservers {
 
 /// Observes when snapshots are created, applied and disposed, a pass's too, as
 /// `Snapshot.observeSnapshots`: on this thread, as its snapshots are. Disposing or dropping the
-/// handle unregisters it. A tool's API: it adds work to every snapshot while registered.
+/// handle unregisters it, and what it gave snapshots still open goes on with them. A tool's API: it
+/// adds work to every snapshot while registered.
 pub fn observe_snapshots(observer: impl SnapshotObserver) -> ObserverHandle {
     with_runtime(|runtime| runtime.snapshots.add_snapshot_observer(Rc::new(observer)))
 }
@@ -92,7 +95,12 @@ pub(super) fn created(snapshot: &Snapshot, parent: Option<&Snapshot>, creating: 
 /// As `dispatchObserverOnPreDispose`.
 pub(super) fn pre_dispose(snapshot: &Snapshot) {
     for observer in registered().into_iter().flatten() {
-        observer.on_pre_dispose(snapshot);
+        // A snapshot's destructor, in an unwind: a panic let out of it would abort the process.
+        if std::thread::panicking() {
+            let _ = catch_unwind(AssertUnwindSafe(|| observer.on_pre_dispose(snapshot)));
+        } else {
+            observer.on_pre_dispose(snapshot);
+        }
     }
 }
 
