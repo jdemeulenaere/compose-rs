@@ -259,7 +259,7 @@ const LARGE_DIMENSION: i32 = (1 << 15) - 1;
 /// content's) intrinsics. A [`MeasureScope`] is one too (it dereferences to it), so a policy
 /// asks its children's intrinsics while measuring.
 pub struct IntrinsicMeasureScope<'a> {
-    pub(crate) tree: &'a mut UiTree,
+    pub(crate) tree: crate::tree_access::TreeAccess<'a>,
     /// The node whose policy or modifier asks.
     pub(crate) node: NodeId,
 }
@@ -276,7 +276,8 @@ impl IntrinsicMeasureScope<'_> {
         &self,
         local: &compose_runtime::CompositionLocal<T>,
     ) -> T {
-        self.tree.node(self.node).locals.get(local)
+        let locals = self.tree.node(self.node).locals;
+        locals.get(local)
     }
 
     /// The direction of the layout, as `IntrinsicMeasureScope.layoutDirection`.
@@ -354,31 +355,33 @@ impl IntrinsicMeasureScope<'_> {
                 Some(self.node),
                 "compose-ui: a layout asked the intrinsic size of a node that isn't its child"
             );
-            let child = self.tree.node_mut(measurable.node);
+            let mut tree = self.tree.enter();
+            let child = tree.node_mut(measurable.node);
             // Measured again after it was asked, as Compose's `onIntrinsicsQueried`: its
             // default intrinsics run its measuring code, which may keep what it saw.
             child.constraints = None;
             child.intrinsics_asked = true;
-            self.tree.node_mut(self.node).children_intrinsics_asked = true;
+            tree.node_mut(self.node).children_intrinsics_asked = true;
         } else {
             assert_eq!(
                 measurable.node, self.node,
                 "compose-ui: a layout modifier asked the intrinsic size of another node's content"
             );
         }
-        self.tree.intrinsic(measurable.node, measurable.layer as usize, kind, value)
+        self.tree.enter().intrinsic(measurable.node, measurable.layer as usize, kind, value)
     }
 
     /// A measure scope where measuring a child asks its intrinsic `kind` and placing does
     /// nothing, as Compose's `IntrinsicsMeasureScope`: what the default intrinsics measure in.
     pub(crate) fn intrinsics_scope(&mut self, kind: Intrinsic) -> MeasureScope<'_> {
         MeasureScope {
-            base: IntrinsicMeasureScope { tree: &mut *self.tree, node: self.node },
+            base: IntrinsicMeasureScope { tree: self.tree.reborrow(), node: self.node },
             run: 0,
             relative: Vec::new(),
             intrinsic: Some(kind),
             layer: 0,
             placed: false,
+            motion: false,
         }
     }
 }
@@ -399,6 +402,8 @@ pub struct MeasureScope<'a> {
     pub(crate) layer: usize,
     /// It placed a child: `layout_with` is a mistake.
     pub(crate) placed: bool,
+    /// What it places is under a motion frame of reference.
+    pub(crate) motion: bool,
 }
 
 impl<'a> std::ops::Deref for MeasureScope<'a> {
@@ -418,13 +423,34 @@ impl std::ops::DerefMut for MeasureScope<'_> {
 impl<'a> MeasureScope<'a> {
     pub(crate) fn new(tree: &'a mut UiTree, node: NodeId, run: u64) -> MeasureScope<'a> {
         MeasureScope {
-            base: IntrinsicMeasureScope { tree, node },
+            base: IntrinsicMeasureScope { tree: crate::tree_access::TreeAccess::new(tree), node },
             run,
             relative: Vec::new(),
             intrinsic: None,
             layer: 0,
             placed: false,
+            motion: false,
         }
+    }
+
+    /// Places what `block` places as under a motion frame of reference, as
+    /// `withMotionFrameOfReferencePlacement` (a scroll's, a list's): what's on the way from it is
+    /// left out of `LayoutCoordinates::local_position_of_with`'s answer when it asks to.
+    pub fn with_motion_frame_of_reference_placement<R>(
+        &mut self,
+        block: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let motion = std::mem::replace(&mut self.motion, true);
+        let result = block(self);
+        self.motion = motion;
+        result
+    }
+
+    /// `with_motion_frame_of_reference_placement` for code placing as it goes, with this scope
+    /// in a struct it can't lend to a closure (a lazy grid's).
+    #[doc(hidden)]
+    pub fn set_motion_frame_of_reference_placement(&mut self, motion: bool) {
+        self.motion = motion;
     }
 
     /// Measures `measurable` with `constraints`.
@@ -454,7 +480,7 @@ impl<'a> MeasureScope<'a> {
             return Placeable { measurable, width, height, measured };
         }
         let node = self.base.node;
-        let tree = &mut *self.base.tree;
+        let mut tree = self.base.tree.enter();
         let size = if measurable.layer == 0 {
             assert_eq!(
                 tree.parent_of(measurable.node),
@@ -490,7 +516,11 @@ impl<'a> MeasureScope<'a> {
     /// frame (D172). Nothing runs from an intrinsic measurement, which isn't the layout's.
     pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
         if self.intrinsic.is_none() {
-            self.base.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+            self.base
+                .tree
+                .enter()
+                .layout_callbacks
+                .push(crate::input::Action::Run(Box::new(action)));
         }
     }
 
@@ -509,7 +539,8 @@ impl<'a> MeasureScope<'a> {
         self.placed = true;
         let measurable = placeable.measurable;
         let layer = measurable.layer as usize;
-        self.base.tree.place_in_run(measurable.node, layer, position, self.run);
+        let (run, motion) = (self.run, self.motion);
+        self.base.tree.enter().place_in_run(measurable.node, layer, position, run, motion);
     }
 
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left
@@ -547,7 +578,10 @@ impl<'a> MeasureScope<'a> {
                 "compose-ui: a measurement placed a child and left its placing to a block too"
             );
             let (node, layer, run) = (self.base.node, self.layer, self.run);
-            self.base.tree.set_placement_block(node, layer, run, Rc::new(block));
+            // Dropped here, the window open: what it captured is application code's.
+            let earlier =
+                self.base.tree.enter().set_placement_block(node, layer, run, Rc::new(block));
+            drop(earlier);
         }
         result
     }

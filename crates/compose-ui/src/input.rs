@@ -617,7 +617,7 @@ impl EventContext<'_> {
 
     /// The text measurer, for handlers that hit-test their paragraphs (a text field's tap).
     pub fn text_measurer(&mut self) -> std::cell::RefMut<'_, dyn crate::text::TextMeasurer> {
-        self.context.tree.text_measurer()
+        self.context.tree.text_measurer.borrow_mut()
     }
 
     /// The clipboard, for copy and paste.

@@ -10,11 +10,25 @@ use smallvec::SmallVec;
 
 use crate::alignment::LayoutDirection;
 use crate::constraints::Constraints;
+use crate::coordinates::{LayoutCoordinates, with_position_reads_of};
 use crate::layout::{Measurable, MeasureScope, Placeable};
 use crate::tree::{NodeId, Observation, UiTree, observation_key};
-use crate::unit::{Density, IntOffset};
+use crate::unit::{Density, IntOffset, Offset};
 
 type Block = Rc<dyn Fn(&mut PlacementScope<'_>)>;
+
+/// A node whose placing code asked where it is, as Compose's `coordinatesAccessedDuringPlacement`
+/// and `onCoordinatesUsed`.
+#[derive(Clone, Copy)]
+pub(crate) struct CoordinateReader {
+    pub(crate) node: NodeId,
+    /// Where it and its ancestors were then.
+    pub(crate) signature: u64,
+    /// Its placement blocks asked.
+    pub(crate) blocks: bool,
+    /// What was told it was placed asked.
+    pub(crate) told: bool,
+}
 
 /// The block a layer's measurement left its placing to.
 pub(crate) struct LayerBlock {
@@ -96,9 +110,27 @@ impl PlacementScope<'_> {
         );
         let placeable = self.scope.measure(measurable, constraints);
         if measurable.layer == 0 {
-            self.scope.base.tree.node_mut(measurable.node).measured_in_block = true;
+            self.scope.base.tree.enter().node_mut(measurable.node).measured_in_block = true;
         }
         placeable
+    }
+
+    /// The coordinates of what's placing, as `coordinates`: a query of where they are makes this
+    /// block run again when that changes (D1212), the others (`size`, `is_attached`) don't.
+    /// Compose's are `None` while alignment lines are worked out, which this has no part in yet.
+    pub fn coordinates(&self) -> Option<LayoutCoordinates> {
+        Some(self.scope.base.tree.coordinates_of_layer(self.scope.base.node, self.scope.layer))
+    }
+
+    /// `MeasureScope::with_motion_frame_of_reference_placement`.
+    pub fn with_motion_frame_of_reference_placement<R>(
+        &mut self,
+        block: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let motion = std::mem::replace(&mut self.scope.motion, true);
+        let result = block(self);
+        self.scope.motion = motion;
+        result
     }
 
     /// The layout direction where the node is composed.
@@ -122,21 +154,24 @@ impl PlacementScope<'_> {
 
 impl UiTree {
     /// Keeps `block`, what the measurement `run` of `layer` of `node` left its placing to, for the
-    /// placement pass.
+    /// placement pass. What it replaces is the caller's to drop, its captures being application
+    /// code's, outside the tree.
     pub(crate) fn set_placement_block(
         &mut self,
         node: NodeId,
         layer: usize,
         measure_run: u64,
         block: Block,
-    ) {
+    ) -> Option<LayerBlock> {
         let value = self.node_mut(node);
         let placements = value.placements.get_or_insert_with(Default::default);
         if placements.blocks.len() <= layer {
             placements.blocks.resize_with(layer + 1, || None);
         }
-        placements.blocks[layer] = Some(LayerBlock { block, measure_run, first: true });
+        let earlier =
+            placements.blocks[layer].replace(LayerBlock { block, measure_run, first: true });
         self.mark_needs_placement(node);
+        earlier
     }
 
     /// `node` asked to be placed again, as `invalidatePlacement`, or a child measured in its block
@@ -162,7 +197,7 @@ impl UiTree {
 
     /// `node`'s blocks must run. Not placed or deactivated, it only waits, as `requestRelayout`
     /// marking it pending: nothing's asked of a frame until it's placed (`place_in_run`).
-    fn mark_needs_placement(&mut self, node: NodeId) {
+    pub(crate) fn mark_needs_placement(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         value.needs_placement = true;
         if value.placed && !value.deactivated {
@@ -224,6 +259,9 @@ impl UiTree {
     /// the inner one. A panic leaves the flags as they were, for a later layout (`place_pass`
     /// clears them after).
     fn run_placement_blocks(&mut self, node: NodeId) {
+        if !self.new_layers.is_empty() {
+            self.run_new_layers();
+        }
         let observer = self.observer.clone();
         let mut run = || {
             let mut layer = 0;
@@ -237,12 +275,133 @@ impl UiTree {
             }
             again
         };
-        let again = match &observer {
+        let (again, reads) = with_position_reads_of(node, || match &observer {
             Some(observer) => observer.observe(observation_key(node, Observation::Placement), run),
             None => run(),
-        };
+        });
+        if reads || self.node(node).reader_at != u32::MAX {
+            self.note_reader(node, reads, false);
+        }
         if again && self.node(node).kinds.any(crate::node_chain::NodeKinds::ON_PLACED) {
             self.placed_layers.push((node, 0));
+        }
+    }
+
+    /// `node`'s placing code ran, asking where it is if `reads`: its blocks, or with `told` what
+    /// it told of its placing. It runs again when that changes.
+    pub(crate) fn note_reader(&mut self, node: NodeId, reads: bool, told: bool) {
+        let at = self.node(node).reader_at;
+        if !reads && at == u32::MAX {
+            return;
+        }
+        let signature = self.signature_of_reader(node);
+        let at = if at == u32::MAX {
+            let reader = CoordinateReader { node, signature, blocks: false, told: false };
+            self.coordinate_readers.push(reader);
+            let at = self.coordinate_readers.len() - 1;
+            self.node_mut(node).reader_at = at as u32;
+            at
+        } else {
+            at as usize
+        };
+        let reader = &mut self.coordinate_readers[at];
+        if told {
+            reader.told = reads;
+            if reads {
+                reader.signature = signature;
+            }
+        } else {
+            reader.blocks = reads;
+            // What was told it was placed hears of the move this block's run takes in.
+            if reader.signature != signature {
+                reader.signature = signature;
+                if reader.told {
+                    self.placed_layers.push((node, 0));
+                }
+            }
+        }
+        let reader = &self.coordinate_readers[at];
+        if !reader.blocks && !reader.told {
+            self.forget_reader(at);
+        }
+    }
+
+    /// Reader `at` isn't one any more.
+    fn forget_reader(&mut self, at: usize) {
+        let gone = self.coordinate_readers.swap_remove(at);
+        if let Some(value) = self.get_mut(gone.node) {
+            value.reader_at = u32::MAX;
+        }
+        if let Some(moved) = self.coordinate_readers.get(at) {
+            let node = moved.node;
+            self.node_mut(node).reader_at = at as u32;
+        }
+    }
+
+    /// Where a reader is: the layer inside all of its node, as it may ask from any, and where
+    /// each of its ancestors is. A parent and grandparent moving by opposite amounts leave its
+    /// position in the root as it was, not its position in its parent.
+    pub(crate) fn signature_of_reader(&self, node: NodeId) -> u64 {
+        let mix = |hash: u64, point: Offset| {
+            let bits = (point.x.to_bits() as u64) << 32 | point.y.to_bits() as u64;
+            (hash.rotate_left(5) ^ bits).wrapping_mul(0x517c_c1b7_2722_0a95)
+        };
+        let last = self.node(node).layers.len() - 1;
+        let mut hash = mix(0, self.window_origin);
+        let mut current = node;
+        let mut layer = last;
+        let mut point = Offset::ZERO;
+        loop {
+            let value = self.node(current);
+            point = self.map_out_of_node(current, layer, point);
+            hash = mix(hash, point);
+            match value.parent {
+                Some(parent) if !value.overlay => {
+                    current = parent;
+                    layer = self.node(parent).layers.len() - 1;
+                }
+                _ => return hash,
+            }
+        }
+    }
+
+    /// Runs the blocks of those that asked where they are and aren't there any more, and tells
+    /// what told them, as `requestLayoutIfCoordinatesAreUsedAndNotifyChildren`. Until none moves:
+    /// what they place may be another. Top down, each runs once: what's above it moved it first,
+    /// or it wasn't waiting.
+    pub(crate) fn place_readers_moved(&mut self, root: NodeId) {
+        loop {
+            let mut moved = false;
+            let mut index = 0;
+            while index < self.coordinate_readers.len() {
+                let reader = self.coordinate_readers[index];
+                let Some(value) = self.get(reader.node) else {
+                    self.forget_reader(index);
+                    continue;
+                };
+                if value.placed
+                    && !value.deactivated
+                    && !value.needs_placement
+                    && self.is_placed_in_root(reader.node)
+                {
+                    let signature = self.signature_of_reader(reader.node);
+                    if signature != reader.signature {
+                        self.coordinate_readers[index].signature = signature;
+                        if reader.told {
+                            self.placed_layers.push((reader.node, 0));
+                        }
+                        if reader.blocks {
+                            self.mark_needs_placement(reader.node);
+                            moved = true;
+                        }
+                    }
+                }
+                index += 1;
+            }
+            if !moved {
+                return;
+            }
+            self.place_pass(root);
         }
     }
 
@@ -281,6 +440,7 @@ impl UiTree {
         let run = self.next_measure_run();
         let mut scope = MeasureScope::new(&mut *self, node, run);
         scope.layer = layer;
+        let _open = scope.base.tree.open();
         let mut placement = PlacementScope { scope, width, measure_run };
         block(&mut placement);
     }

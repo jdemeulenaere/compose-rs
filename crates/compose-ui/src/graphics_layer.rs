@@ -138,6 +138,105 @@ pub(crate) struct GraphicsLayerNode {
     positional: Cell<Option<(u32, LayerTransform)>>,
     /// Its alpha was none when last drawn.
     transparent: Cell<bool>,
+    /// What its block last gave, of what coordinates and hit testing ask: they read this, as
+    /// Compose's read the render node's matrix, and don't run the block (D1214).
+    ran: Cell<Option<LayerRun>>,
+    /// The shape its block last gave with a clip.
+    ran_shape: std::cell::RefCell<Shape>,
+    /// The outline it last drew with, in its own coordinates: what a press tests against.
+    last_outline: std::cell::RefCell<Option<Outline>>,
+}
+
+/// What moves or clips what's in a layer, as a layer's block last gave it.
+#[derive(Clone, Copy, PartialEq)]
+struct LayerRun {
+    scale: (f32, f32),
+    rotation: f32,
+    translation: Offset,
+    pivot_fraction: (f32, f32),
+    clip: bool,
+}
+
+impl LayerRun {
+    const NONE: LayerRun = LayerRun {
+        scale: (1.0, 1.0),
+        rotation: 0.0,
+        translation: Offset::ZERO,
+        pivot_fraction: (0.5, 0.5),
+        clip: false,
+    };
+
+    fn of(layer: &GraphicsLayerScope) -> LayerRun {
+        LayerRun {
+            scale: (layer.scale_x, layer.scale_y),
+            rotation: layer.rotation_z,
+            translation: Offset::new(layer.translation_x, layer.translation_y),
+            pivot_fraction: (
+                layer.transform_origin.pivot_fraction_x,
+                layer.transform_origin.pivot_fraction_y,
+            ),
+            clip: layer.clip,
+        }
+    }
+}
+
+/// How a layer moves points of the node's first layer's coordinates, as its matrix does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct LayerMap {
+    origin: Offset,
+    pivot: Offset,
+    scale: (f32, f32),
+    rotation: f32,
+    translation: Offset,
+    clip: bool,
+}
+
+impl LayerMap {
+    /// Where it draws `point`, as `mapOffset`.
+    pub(crate) fn map(&self, point: Offset) -> Offset {
+        let (x, y) =
+            ((point.x - self.pivot.x) * self.scale.0, (point.y - self.pivot.y) * self.scale.1);
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        Offset::new(
+            self.pivot.x + self.translation.x + x * cos - y * sin,
+            self.pivot.y + self.translation.y + x * sin + y * cos,
+        )
+    }
+
+    /// Whether it can be undone: not with a scale of 0.
+    pub(crate) fn invertible(&self) -> bool {
+        self.scale.0 != 0.0 && self.scale.1 != 0.0
+    }
+
+    /// The inverse of `map`, as `mapOffset(inverse = true)`: infinite where it can't be undone,
+    /// as Compose's `Offset.Infinite`.
+    pub(crate) fn unmap(&self, point: Offset) -> Offset {
+        if !self.invertible() {
+            return Offset::new(f32::INFINITY, f32::INFINITY);
+        }
+        let (x, y) = (
+            point.x - self.pivot.x - self.translation.x,
+            point.y - self.pivot.y - self.translation.y,
+        );
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        Offset::new(
+            self.pivot.x + (x * cos + y * sin) / self.scale.0,
+            self.pivot.y + (y * cos - x * sin) / self.scale.1,
+        )
+    }
+
+    /// What `map` does, as a matrix.
+    pub(crate) fn matrix(&self) -> crate::path::Matrix {
+        use crate::path::Matrix;
+        let mut matrix = Matrix::translation(0.0 - self.pivot.x, 0.0 - self.pivot.y);
+        matrix.post_concat(&Matrix::scaling(self.scale.0, self.scale.1));
+        matrix.post_concat(&Matrix::rotation(self.rotation));
+        matrix.post_concat(&Matrix::translation(
+            self.pivot.x + self.translation.x,
+            self.pivot.y + self.translation.y,
+        ));
+        matrix
+    }
 }
 
 /// What of a layer moves what's in it, as Compose's `LayerPositionalProperties`.
@@ -147,6 +246,8 @@ struct LayerTransform {
     scale: (f32, f32),
     rotation: f32,
     translation: Offset,
+    /// Not a move, but what's under it is clipped otherwise: its bounds change.
+    clip: bool,
 }
 
 impl LayerTransform {
@@ -160,6 +261,7 @@ impl LayerTransform {
             scale: properties.scale,
             rotation: properties.rotation,
             translation: properties.translation,
+            clip: properties.clip,
         }
     }
 }
@@ -185,6 +287,9 @@ impl GraphicsLayerNode {
             outline: Default::default(),
             positional: Cell::new(None),
             transparent: Cell::new(false),
+            ran: Cell::new(None),
+            ran_shape: std::cell::RefCell::new(Shape::Rectangle),
+            last_outline: Default::default(),
         }
     }
 
@@ -196,6 +301,10 @@ impl GraphicsLayerNode {
             Layer::Block(block) => {
                 let mut layer = GraphicsLayerScope { size, density, ..Default::default() };
                 block(&mut layer);
+                self.ran.set(Some(LayerRun::of(&layer)));
+                if layer.clip {
+                    self.ran_shape.replace(layer.shape.clone());
+                }
                 layer
             }
             Layer::Shadow(shadow) => GraphicsLayerScope {
@@ -218,9 +327,83 @@ impl GraphicsLayerNode {
         self.transparent.replace(transparent) != transparent
     }
 
-    /// Keeps how `properties` transform, which a node under it was just told.
-    pub(crate) fn note_transform(&self, properties: &LayerProperties, listeners: u32) {
-        self.positional.set(Some((listeners, LayerTransform::of(properties))));
+    /// A block no frame drew runs for a press, once: queries find the tree busy there.
+    fn run_if_never_ran(&self, size: Size, density: Density) {
+        if self.ran.get().is_none() {
+            let _ = self.scope(density, size);
+        }
+    }
+
+    /// What a press is clipped by here: the outline it last drew with.
+    pub(crate) fn hit_outline(
+        &self,
+        size: Size,
+        density: Density,
+        direction: LayoutDirection,
+    ) -> Option<Outline> {
+        if let Layer::Block(_) = &self.layer {
+            self.run_if_never_ran(size, density);
+        }
+        if !self.clips() {
+            return None;
+        }
+        if let Some(outline) = &*self.last_outline.borrow() {
+            return Some(outline.clone());
+        }
+        let shape = match &self.layer {
+            Layer::Fixed(layer) => layer.shape.clone(),
+            Layer::Block(_) => self.ran_shape.borrow().clone(),
+            Layer::Shadow(shadow) => shadow.shape.clone(),
+        };
+        Some(shape.outline_in(size, &density, direction))
+    }
+
+    /// Whether it has a block: application code, that only passes that draw or look ahead run.
+    pub(crate) fn has_block(&self) -> bool {
+        matches!(self.layer, Layer::Block(_))
+    }
+
+    /// What it last gave, for a layer of `size` at `origin` in its node: what a query asks. A
+    /// block that hasn't run moves nothing yet.
+    fn last_run(&self) -> LayerRun {
+        match &self.layer {
+            Layer::Fixed(layer) => LayerRun::of(layer),
+            Layer::Block(_) => self.ran.get().unwrap_or(LayerRun::NONE),
+            Layer::Shadow(shadow) => LayerRun { clip: shadow.clip, ..LayerRun::NONE },
+        }
+    }
+
+    /// How it moves points, as a query reads it: `last_run`'s, no block running.
+    pub(crate) fn layer_map(&self, origin: Offset, size: Size) -> LayerMap {
+        let run = self.last_run();
+        LayerMap {
+            origin,
+            pivot: Offset::new(
+                origin.x + size.width * run.pivot_fraction.0,
+                origin.y + size.height * run.pivot_fraction.1,
+            ),
+            scale: run.scale,
+            rotation: run.rotation,
+            translation: run.translation,
+            clip: run.clip,
+        }
+    }
+
+    /// Whether it clips what's in it, as a query reads it.
+    pub(crate) fn clips(&self) -> bool {
+        self.last_run().clip
+    }
+
+    /// Keeps how `map` transforms, which a node under it was just told.
+    pub(crate) fn note_transform(&self, map: &LayerMap, listeners: u32) {
+        let transform = LayerTransform {
+            pivot: Offset::new(map.pivot.x - map.origin.x, map.pivot.y - map.origin.y),
+            scale: map.scale,
+            rotation: map.rotation,
+            translation: map.translation,
+            clip: map.clip,
+        };
+        self.positional.set(Some((listeners, transform)));
     }
 
     /// Whether a node under it was told where it is, and may still listen.
@@ -253,6 +436,7 @@ impl GraphicsLayerNode {
                 && cached.direction == direction
                 && cached.density == layer.density
             {
+                self.last_outline.replace(Some(cached.outline.clone()));
                 return cached.outline.clone();
             }
             let outline = layer.shape.outline_in(size, &layer.density, direction);
@@ -268,6 +452,7 @@ impl GraphicsLayerNode {
                 density: layer.density,
                 outline: outline.clone(),
             });
+            self.last_outline.replace(Some(outline.clone()));
             outline
         })
     }
@@ -334,31 +519,6 @@ impl LayerProperties {
             bounds,
             density: layer.density.density,
         }
-    }
-
-    /// Where it draws `point` (of what it transforms), as its `Transform` operation does.
-    pub(crate) fn map(&self, point: Offset) -> Offset {
-        let (x, y) =
-            ((point.x - self.pivot.x) * self.scale.0, (point.y - self.pivot.y) * self.scale.1);
-        let (sin, cos) = self.rotation.to_radians().sin_cos();
-        Offset::new(
-            self.pivot.x + self.translation.x + x * cos - y * sin,
-            self.pivot.y + self.translation.y + x * sin + y * cos,
-        )
-    }
-
-    /// What it draws at `point`: `map`'s inverse, as a layer's `mapOffset(inverse = true)`. A scale
-    /// of none has nothing there: no point is in anything then.
-    pub(crate) fn unmap(&self, point: Offset) -> Offset {
-        let (x, y) = (
-            point.x - self.pivot.x - self.translation.x,
-            point.y - self.pivot.y - self.translation.y,
-        );
-        let (sin, cos) = self.rotation.to_radians().sin_cos();
-        Offset::new(
-            self.pivot.x + (x * cos + y * sin) / self.scale.0,
-            self.pivot.y + (y * cos - x * sin) / self.scale.1,
-        )
     }
 
     fn transforms(&self) -> bool {
@@ -446,6 +606,9 @@ impl ModifierNodeElement for GraphicsLayerElement {
             outline: Default::default(),
             positional: Cell::new(None),
             transparent: Cell::new(false),
+            ran: Cell::new(None),
+            ran_shape: std::cell::RefCell::new(Shape::Rectangle),
+            last_outline: Default::default(),
         }
     }
 
@@ -476,9 +639,16 @@ impl ModifierNode for GraphicsLayerNode {
     }
     /// Its clip, for hit testing, as Compose's layer's `isInLayer`: what's outside its shape
     /// isn't hit (its block run for the layer's size and density).
+    /// As a query's: its last block's, which a press doesn't run. One no frame drew runs now.
     fn hit_clip_at(&self, size: Size, density: Density) -> Option<Shape> {
-        let layer = self.scope(density, size);
-        layer.clip.then_some(layer.shape)
+        match &self.layer {
+            Layer::Fixed(layer) => layer.clip.then(|| layer.shape.clone()),
+            Layer::Block(_) => {
+                self.run_if_never_ran(size, density);
+                self.clips().then(|| self.ran_shape.borrow().clone())
+            }
+            Layer::Shadow(shadow) => shadow.clip.then(|| shadow.shape.clone()),
+        }
     }
 }
 

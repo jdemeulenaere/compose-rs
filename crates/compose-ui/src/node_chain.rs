@@ -54,6 +54,9 @@ impl NodeKinds {
     pub const OBSERVED: NodeKinds = NodeKinds(1 << 24);
     /// A graphics layer (`graphics_layer`, `clip`, `alpha`, …).
     pub const GRAPHICS_LAYER: NodeKinds = NodeKinds(1 << 25);
+    /// A node with a `hit_clip` when it was made: what clip walks of coordinates count without
+    /// asking it (a graphics layer's clip is its last block's).
+    pub const HIT_CLIP: NodeKinds = NodeKinds(1 << 31);
     /// An overlay (`Modifier.overlay`: a popup's or a dialog's window).
     pub const OVERLAY: NodeKinds = NodeKinds(1 << 26);
     /// `Modifier.focus_requester`.
@@ -71,6 +74,7 @@ impl NodeKinds {
     /// `bring_into_view`, `as_selectable`) the tree asks the delegates too (D1194).
     const DELEGATED: NodeKinds = NodeKinds(
         NodeKinds::ANY.0
+            | NodeKinds::HIT_CLIP.0
             | NodeKinds::LAYOUT.0
             | NodeKinds::DRAW.0
             | NodeKinds::SEMANTICS.0
@@ -101,6 +105,12 @@ impl NodeKinds {
     #[inline]
     pub(crate) const fn with(self, other: NodeKinds) -> NodeKinds {
         NodeKinds(self.0 | other.0)
+    }
+
+    /// These kinds and `other`, or without `other`.
+    #[inline]
+    pub(crate) const fn set(self, other: NodeKinds, on: bool) -> NodeKinds {
+        NodeKinds(if on { self.0 | other.0 } else { self.0 & !other.0 })
     }
 
     /// Whether it has every one of `other`'s kinds.
@@ -151,6 +161,7 @@ impl NodeKinds {
         // an update changes, so the selection walks ask each node.
         add(node.is_repaint_boundary(), NodeKinds::REPAINT_BOUNDARY);
         add(node.draw_capture().is_some(), NodeKinds::DRAW_CAPTURE);
+        add(node.hit_clip().is_some(), NodeKinds::HIT_CLIP);
         add(node.is_beyond_bounds_layout(), NodeKinds::BEYOND_BOUNDS_LAYOUT);
         add(
             node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some(),
@@ -339,6 +350,42 @@ impl ChainEntry {
         viewport: crate::unit::IntSize,
     ) -> Option<crate::unit::Rect> {
         crate::delegation::bring_into_view_of(&mut *self.node, rect, viewport)
+    }
+
+    /// What hit testing is clipped by here. A graphics layer's is what its last block drew: a press
+    /// runs no block and no shape, as Compose's `isInLayer`.
+    pub(crate) fn hit_outline(
+        &mut self,
+        size: crate::unit::Size,
+        density: crate::unit::Density,
+        direction: crate::alignment::LayoutDirection,
+    ) -> Option<crate::graphics::Outline> {
+        if self.kinds.any(NodeKinds::GRAPHICS_LAYER)
+            && let Some(graphics) =
+                self.node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
+        {
+            return graphics.hit_outline(size, density, direction);
+        }
+        self.hit_clip_at(size, density).map(|clip| clip.outline_in(size, &density, direction))
+    }
+
+    /// Asks the node, or its delegates, again whether it clips: an update may change that.
+    pub(crate) fn refresh_hit_clip(&mut self) {
+        let clips = crate::delegation::hit_clip_of(
+            &mut *self.node,
+            crate::unit::Size::ZERO,
+            crate::unit::Density::default(),
+        )
+        .is_some();
+        self.kinds = self.kinds.set(NodeKinds::HIT_CLIP, clips);
+    }
+
+    /// Whether it clips, as a query asks: running no block and no node's code.
+    pub(crate) fn clips(&self) -> bool {
+        match self.node.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>() {
+            Some(graphics) => graphics.clips(),
+            None => self.kinds.any(NodeKinds::HIT_CLIP),
+        }
     }
 
     /// Its selectable: its node's, or a delegate's.

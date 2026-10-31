@@ -304,10 +304,9 @@ impl UiTree {
                 let bits = value.chain[index].kinds;
                 let size = value.layers[layer].measured.into();
                 if bits.any(NodeKinds::DRAW | NodeKinds::DELEGATING)
-                    && let Some(clip) = value.chain[index].hit_clip_at(size, density)
-                    && !clip
-                        .outline_in(size, &density, value.layout_direction)
-                        .contains(local - origin)
+                    && let Some(outline) =
+                        value.chain[index].hit_outline(size, density, value.layout_direction)
+                    && !outline.contains(local - origin)
                 {
                     // Outside the clip: nothing after it, nor the children, is hit.
                     return hit_since(path, start);

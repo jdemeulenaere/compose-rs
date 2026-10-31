@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use compose_runtime::ComposeArg;
 use smallvec::SmallVec;
 
+use crate::lifecycle::EntryOut;
 pub use crate::semantics_properties::*;
 use crate::tree::NodeId;
 use crate::unit::{Offset, Rect};
@@ -278,7 +279,7 @@ impl UiTree {
 
     /// Each semantics modifier's `apply_semantics`, tail to head.
     fn apply_own_semantics(&mut self, node: NodeId) -> OwnSemantics {
-        let value = self.node_mut(node);
+        let value = self.node(node);
         let mut config = SemanticsConfiguration::default();
         let mut layers: SmallVec<[usize; 8]> = SmallVec::new();
         let mut layer = 0;
@@ -292,15 +293,20 @@ impl UiTree {
         let mut merging_bounds = None;
         // From the innermost to the outermost, so an outer modifier's values win, as Compose's
         // `collapsedSemantics` (`tailToHead`).
-        for index in (0..value.chain.len()).rev() {
-            let entry = &mut value.chain[index];
+        for index in (0..self.node(node).chain.len()).rev() {
+            let entry = &self.node(node).chain[index];
             if !entry.kinds.any(NodeKinds::SEMANTICS) {
                 continue;
             }
+            let own = entry.own;
+            // Out of its chain, as what it runs may ask where something is.
+            let mut out = self.entry_out(node, index);
+            let EntryOut { access, entry, .. } = &mut out;
+            let _open = access.open();
             // The node, or each of its delegates that adds semantics.
             crate::delegation::dispatch_for_kind(
-                &mut *entry.node,
-                entry.own,
+                &mut **entry,
+                own,
                 NodeKinds::SEMANTICS,
                 crate::node_chain::EntryId::NO_DELEGATE,
                 &mut |modifier_node, _| {

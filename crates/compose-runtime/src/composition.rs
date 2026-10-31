@@ -1402,6 +1402,15 @@ impl<A: Applier> ApplierRef<A> {
         let applier = applier.as_any_mut().downcast_mut::<A>()?;
         Some(f(applier))
     }
+
+    /// Runs `f` with the applier to read it, if nothing borrows it: as `try_with`, a pass under
+    /// way or not. It mustn't change what a pass applies to.
+    pub fn try_peek<R>(&self, f: impl FnOnce(&mut A) -> R) -> Option<R> {
+        let applier = self.applier.upgrade()?;
+        let mut applier = applier.try_borrow_mut().ok()?;
+        let applier = applier.as_any_mut().downcast_mut::<A>()?;
+        Some(f(applier))
+    }
 }
 
 /// The removals' lifecycle has run: `id`'s provider groups removed go, what they provided dropped

@@ -10,12 +10,18 @@ use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult,
 use crate::node_chain::{NodeKinds, entry_state};
 use crate::nodes::Taken;
 use crate::tree::{Layer, NodeId, Observation, UiTree, observation_key};
+use crate::tree_access::TreeAccess;
 use crate::unit::{IntOffset, IntSize};
 
 impl UiTree {
     /// Measures and places the tree in a root of `size` pixels. Does nothing when nothing
     /// changed since the last call with this size.
     pub fn layout(&mut self, size: IntSize) -> bool {
+        // As Compose's as a write applies: what's about to ask reads what they give. With nothing
+        // handed out, nothing can ask before the draw.
+        if !self.new_layers.is_empty() && self.focus_requests.coordinates_given.get() {
+            self.run_new_layers();
+        }
         if self.window != size {
             // Popups are measured with the window's size, whatever their host's constraints.
             for index in 0..self.overlays.len() {
@@ -44,7 +50,14 @@ impl UiTree {
         if value.needs_placement || value.subtree_needs_placement {
             self.place_pass(root);
         }
+        if !self.coordinate_readers.is_empty() {
+            self.place_readers_moved(root);
+        }
         self.position_overlays();
+        // Where the popups just went is where their readers are.
+        if !self.coordinate_readers.is_empty() {
+            self.place_readers_moved(root);
+        }
         self.needs_draw = true;
         self.laid_out_since_callbacks = true;
         true
@@ -345,7 +358,8 @@ impl UiTree {
             let own = entry.chain[index].own;
             let mut modifier_node = mem::replace(&mut entry.chain[index].node, Box::new(Taken));
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
+                let mut scope = IntrinsicMeasureScope { tree: TreeAccess::new(&mut *self), node };
+                let _open = scope.tree.open();
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let layout = first_of_kind(&mut *modifier_node, own, NodeKinds::LAYOUT)
                     .and_then(|node| node.as_layout())
@@ -375,7 +389,8 @@ impl UiTree {
                 &children
             };
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
+            let mut scope = IntrinsicMeasureScope { tree: TreeAccess::new(&mut *self), node };
+            let _open = scope.tree.open();
             match kind {
                 Intrinsic::MinWidth => policy.min_intrinsic_width(&mut scope, measurables, value),
                 Intrinsic::MinHeight => policy.min_intrinsic_height(&mut scope, measurables, value),
@@ -400,12 +415,11 @@ impl UiTree {
         constraints: Constraints,
     ) -> IntSize {
         let value = self.node_mut(node);
-        // Its last measurement's block is over, whatever this one does.
-        if let Some(placements) = &mut value.placements
-            && let Some(block) = placements.blocks.get_mut(layer)
-        {
-            *block = None;
-        }
+        // Its last measurement's block is over, whatever this one does. Dropped with nothing of
+        // the tree in hand: what it captured is application code's.
+        let earlier = value.placements.as_mut().and_then(|it| it.blocks.get_mut(layer)?.take());
+        drop(earlier);
+        let value = self.node_mut(node);
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
@@ -419,6 +433,7 @@ impl UiTree {
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope::new(&mut *self, node, run);
                 scope.layer = layer;
+                let _open = scope.base.tree.open();
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let mut measure = || {
                     first_of_kind(&mut *modifier_node, own, NodeKinds::LAYOUT)
@@ -475,6 +490,7 @@ impl UiTree {
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope::new(&mut *self, node, run);
                 scope.layer = layer;
+                let _open = scope.base.tree.open();
                 let result = match &observer {
                     Some(observer) => observer
                         .observe(observation_key(node, Observation::Measure), || {
@@ -639,7 +655,7 @@ impl UiTree {
     /// content). A layer measured outside its constraints is centered in the size its parent
     /// sees, as Compose does.
     pub(crate) fn place(&mut self, node: NodeId, layer: usize, position: IntOffset) {
-        self.place_in_run(node, layer, position, 0);
+        self.place_in_run(node, layer, position, 0, false);
     }
 
     /// `place` by the measurement or placement block `run` (0: by none, as the root is), which
@@ -650,8 +666,12 @@ impl UiTree {
         layer: usize,
         position: IntOffset,
         run: u64,
+        motion: bool,
     ) {
         let value = self.node_mut(node);
+        if (motion | (value.motion_layers != 0)) && value.placed_in_motion(layer) != motion {
+            value.note_motion(layer, motion);
+        }
         let told = value.kinds.any(NodeKinds::ON_PLACED);
         let waiting = value.needs_placement || value.subtree_needs_placement;
         if layer == 0 {

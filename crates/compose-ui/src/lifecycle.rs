@@ -14,6 +14,7 @@ use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state, traverse_ke
 use crate::node_context::{Invalidation, NodeContext};
 use crate::nodes::Taken;
 use crate::tree::{NodeId, UiTree};
+use crate::tree_access::TreeAccess;
 
 thread_local! {
     /// A default lifecycle callback of `ModifierNode` ran (debug builds' check of built-ins).
@@ -63,6 +64,26 @@ pub(crate) enum Lifecycle {
     ViewConfiguration(NodeId),
     /// What a node reads composition locals from changed: its consumers are told.
     CompositionLocals(NodeId),
+}
+
+/// A chain entry's node out of its chain, its window yet to open: goes back when dropped.
+pub(crate) struct EntryOut<'a> {
+    pub(crate) access: TreeAccess<'a>,
+    node: NodeId,
+    index: usize,
+    pub(crate) entry: Box<dyn crate::modifier::ModifierNode>,
+}
+
+impl Drop for EntryOut<'_> {
+    fn drop(&mut self) {
+        let entry = mem::replace(&mut self.entry, Box::new(Taken));
+        let (node, index) = (self.node, self.index);
+        let mut tree = self.access.enter();
+        if let Some(slot) = tree.get_mut(node).and_then(|value| value.chain.get_mut(index)) {
+            // `Taken` has no size and nothing to drop.
+            mem::forget(mem::replace(&mut slot.node, entry));
+        }
+    }
 }
 
 impl UiTree {
@@ -132,7 +153,7 @@ impl UiTree {
         self.entries_running += 1;
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let mut context = NodeContext {
-                tree: &mut *self,
+                tree: TreeAccess::new(&mut *self),
                 node,
                 index: Some(index),
                 entry: id,
@@ -141,6 +162,7 @@ impl UiTree {
                 place: index,
                 traverse_key,
             };
+            let _open = context.tree.open();
             f(&mut *taken, &mut context)
         }));
         self.entries_running -= 1;
@@ -461,7 +483,7 @@ impl UiTree {
             if alive && entry.state & entry_state::ATTACH_RAN != 0 {
                 let traverse_key = traverse_key_of(&mut *entry.node, entry.own);
                 let mut context = NodeContext {
-                    tree: &mut *self,
+                    tree: TreeAccess::new(&mut *self),
                     node,
                     index: None,
                     entry: entry.id,
@@ -470,7 +492,9 @@ impl UiTree {
                     place: *place,
                     traverse_key,
                 };
+                let open = context.tree.open();
                 detach_with_delegates(&mut *entry.node, &mut context);
+                drop(open);
                 entry.state = context.out_state;
             }
         }
@@ -480,12 +504,29 @@ impl UiTree {
             self.mark_entry_detached(entry.id, &mut state);
             self.forget_entry_reads(entry.id, state);
             self.release_delegates(&mut *entry.node);
-            let mut context = ReleaseContext {
-                text_measurer: &self.text_measurer,
-                held_paragraphs: &mut self.held_paragraphs,
-            };
-            entry.node.on_release(&mut context);
+            self.release_node(entry.node);
         }
+    }
+
+    /// Takes entry `index` of `node` out of its chain, for application code that the rest of the
+    /// tree may be read under, until what it returns is dropped, a panic included.
+    pub(crate) fn entry_out(&mut self, node: NodeId, index: usize) -> EntryOut<'_> {
+        let slot = &mut self.node_mut(node).chain[index].node;
+        let entry = mem::replace(slot, Box::new(Taken));
+        EntryOut { access: TreeAccess::new(&mut *self), node, index, entry }
+    }
+
+    /// Tells `node`, out of the tree, it's released, and drops it: what it runs may ask where
+    /// something is, the only part of the tree in hand being the text measurer.
+    pub(crate) fn release_node(&mut self, mut node: Box<dyn crate::modifier::ModifierNode>) {
+        let access = TreeAccess::new(&mut *self);
+        let _open = access.open();
+        let mut context = ReleaseContext {
+            text_measurer: &access.text_measurer,
+            held_paragraphs: &access.held_paragraphs,
+        };
+        node.on_release(&mut context);
+        drop(node);
     }
 
     /// Detaches and releases now the entries chain changes of the pass removed from the nodes of

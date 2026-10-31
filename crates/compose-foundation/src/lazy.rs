@@ -3305,9 +3305,12 @@ impl MeasurePolicy for LazyListLayout {
             }
         };
         // The sticky header last: drawn over the items, and hit first.
+        // Under a motion frame of reference, as `LazyListMeasure`: a scroll isn't a move of its own.
+        scope.set_motion_frame_of_reference_placement(true);
         for (placeable, main) in ahead.iter().chain(&placed).chain(&beyond).chain(&sticky) {
             layout(scope, placeable, *main);
         }
+        scope.set_motion_frame_of_reference_placement(false);
         drop(laid);
         let keys_changed = state.note_laid_items(&info.items);
         state.laid_out.end(

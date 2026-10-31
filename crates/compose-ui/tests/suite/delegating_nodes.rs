@@ -1970,7 +1970,7 @@ fn delegating_on_a_node_a_traversal_found_attaches_the_delegate() {
     take_log();
     handle("below")
         .with_node(|_: &mut Mod, context| {
-            let owner = context.find_nearest_ancestor_with_key(&KEY).expect("the owner");
+            let mut owner = context.find_nearest_ancestor_with_key(&KEY).expect("the owner");
             let owner = owner.downcast_mut::<Owner>().expect("of its type");
             owner.0.delegate(Mod::draw("found"));
         })

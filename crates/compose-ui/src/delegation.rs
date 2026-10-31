@@ -9,7 +9,7 @@ use std::ops::ControlFlow;
 
 use smallvec::SmallVec;
 
-use crate::modifier::{ModifierNode, ReleaseContext};
+use crate::modifier::ModifierNode;
 use crate::node_chain::{EntryId, NodeKinds, entry_state};
 use crate::node_context::{Invalidation, NodeContext};
 use crate::tree::{NodeId, UiTree};
@@ -164,7 +164,8 @@ impl Delegates {
         self.changed = changed;
         let entry = self.entries.last_mut().expect("just delegated to");
         self.pending |= entry.kinds;
-        context.tree.add_entry_kinds(context.node, context.index, entry.kinds);
+        let (node, index) = (context.node, context.index);
+        context.tree.enter().add_entry_kinds(node, index, entry.kinds);
         if context.is_attached() {
             let requests = context.tree.focus_requests.clone();
             mark_delegate_attached(entry, &requests);
@@ -256,6 +257,9 @@ impl Delegates {
         let mut union = NodeKinds::NONE;
         let mut layouts = 0;
         for entry in &mut self.entries {
+            // An update may change it (`ChainEntry::refresh_hit_clip`).
+            entry.own = entry.own.set(NodeKinds::HIT_CLIP, entry.node.hit_clip().is_some());
+            entry.kinds = entry.kinds.set(NodeKinds::HIT_CLIP, entry.own.any(NodeKinds::HIT_CLIP));
             if let Some(delegates) = entry.node.delegates() {
                 entry.kinds = entry.own | delegates.refresh_kinds(entry.own);
             }
@@ -610,11 +614,7 @@ impl UiTree {
         if entry.state & entry_state::HAS_HANDLE != 0 {
             self.focus_requests.attached_entries.borrow_mut().remove(&entry.id.0);
         }
-        let mut context = ReleaseContext {
-            text_measurer: &self.text_measurer,
-            held_paragraphs: &mut self.held_paragraphs,
-        };
-        entry.node.on_release(&mut context);
+        self.release_node(entry.node);
     }
 
     /// Whether what entry `index` of `node` delegates to changed; if so it's looked at later,
@@ -746,8 +746,9 @@ fn sync_node(node: &mut dyn ModifierNode, attached: bool, context: &mut NodeCont
     for mut gone in mem::take(&mut delegates.removed) {
         delegates.pending |= gone.kinds.without(NodeKinds::LAYOUT_AWARE);
         detach_delegate(&mut gone, context);
-        context.tree.mark_delegate_detached(&mut gone);
-        context.tree.release_delegate(gone);
+        let mut tree = context.tree.enter();
+        tree.mark_delegate_detached(&mut gone);
+        tree.release_delegate(gone);
     }
     // Between: Compose's `update` undelegates, makes the new one and delegates to it, in order.
     if delegates.wants_context && attached {

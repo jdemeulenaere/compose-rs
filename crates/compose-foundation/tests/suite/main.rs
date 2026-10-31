@@ -58,6 +58,7 @@ mod legacy;
 mod locals;
 mod modifier_memoization;
 mod modifiers_api;
+mod motion_frame_of_reference;
 mod mouse_wheel;
 mod movable_content_ui;
 mod mutator_mutex;

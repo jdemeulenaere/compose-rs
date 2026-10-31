@@ -688,7 +688,10 @@ impl MeasurePolicy for DrawerLayout {
         // the start, as Compose's offset: the pane is placed, and so in the semantics, what's
         // in it not (`DrawerPaneLayout`).
         let hidden = 1.0 - self.state.fraction();
-        scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
+        // Under a motion frame of reference, as `DraggableAnchors`' offset: a slide isn't a move.
+        scope.with_motion_frame_of_reference_placement(|scope| {
+            scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
+        });
         scope.layout(width, height)
     }
 

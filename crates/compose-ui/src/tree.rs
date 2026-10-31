@@ -34,6 +34,9 @@ pub(crate) enum Observation {
     FocusProperties = 5,
     /// Its placement blocks (`MeasureScope::layout_with`): they run again, it isn't measured.
     Placement = 6,
+    /// An inner layer's block run ahead of its drawing (`run_new_layers`), apart from what its
+    /// recording reads, the drawing taking that run.
+    InnerLayerBlock = 7,
 }
 
 /// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
@@ -51,7 +54,8 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
         3 => Observation::InnerLayers,
         4 => Observation::Semantics,
         5 => Observation::FocusProperties,
-        _ => Observation::Placement,
+        6 => Observation::Placement,
+        _ => Observation::InnerLayerBlock,
     };
     (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
 }
@@ -148,6 +152,11 @@ pub struct LayoutNode {
     /// Its parent measured it in a placement block, as `measuredByParent == InLayoutBlock`: a new
     /// size places the parent again, doesn't measure it.
     pub(crate) measured_in_block: bool,
+    /// Where it is in `UiTree::coordinate_readers`, or `u32::MAX`.
+    pub(crate) reader_at: u32,
+    /// Which layers (the first 8) a motion frame of reference placed
+    /// (`with_motion_frame_of_reference_placement`).
+    pub(crate) motion_layers: u8,
     /// In `UiTree::layers_moved`.
     pub(crate) layer_moved: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
@@ -228,6 +237,8 @@ impl LayoutNode {
             placements: None,
             needs_placement: false,
             content_placed_in: 0,
+            reader_at: u32::MAX,
+            motion_layers: 0,
             subtree_needs_placement: false,
             measured_in_block: false,
             layer_moved: false,
@@ -266,6 +277,19 @@ impl LayoutNode {
 
     /// The layer chain entry `index` measures and draws in: the number of layout modifier
     /// nodes before it.
+    #[cold]
+    pub(crate) fn note_motion(&mut self, layer: usize, motion: bool) {
+        if layer < 8 {
+            let bit = 1u8 << layer;
+            self.motion_layers =
+                if motion { self.motion_layers | bit } else { self.motion_layers & !bit };
+        }
+    }
+
+    pub(crate) fn placed_in_motion(&self, layer: usize) -> bool {
+        layer < 8 && self.motion_layers & (1 << layer) != 0
+    }
+
     pub(crate) fn layer_of(&self, index: usize) -> usize {
         self.chain[..index].iter().filter(|entry| entry.kinds.any(NodeKinds::LAYOUT)).count()
     }
@@ -309,7 +333,7 @@ pub struct UiTree {
     root: NodeId,
     pub(crate) text_measurer: crate::text::SharedTextMeasurer,
     /// The paragraphs `Modifier.capture_content`'s captures still draw.
-    pub(crate) held_paragraphs: crate::draw_capture::HeldParagraphs,
+    pub(crate) held_paragraphs: std::cell::RefCell<crate::draw_capture::HeldParagraphs>,
     pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
     /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
     /// `LOCAL_HAPTIC_FEEDBACK`.
@@ -383,6 +407,13 @@ pub struct UiTree {
     /// is good only if they kept it since (`GraphicsLayerNode::note_transform`), so a layer no
     /// one under it listens to any more doesn't run its block for nothing.
     pub(crate) position_listeners: u32,
+    /// The nodes whose placing code last asked where they are: it runs again once they aren't
+    /// there (D1212).
+    pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// Nodes whose graphics layers came or were updated since the last draw (`run_new_layers`).
+    pub(crate) new_layers: Vec<NodeId>,
+    /// Where the host's root is on the screen (`UiHost::set_window_origin`).
+    pub(crate) window_origin: Offset,
     /// The last `EntryId` given to a chain entry.
     pub(crate) next_entry: u64,
     /// The last semantics id given (the root's is 0).
@@ -505,6 +536,9 @@ impl UiTree {
             placed_layers: Vec::new(),
             layers_moved: Vec::new(),
             position_listeners: 0,
+            coordinate_readers: Vec::new(),
+            new_layers: Vec::new(),
+            window_origin: Offset::ZERO,
             next_entry: 0,
             last_semantics_id: 0,
             window_insets: crate::configuration::WindowInsetsSource::NONE,
@@ -987,15 +1021,20 @@ impl UiTree {
                     self.invalidate_draw_before_inner_layers(node)
                 }
                 Observation::Draw => {}
-                Observation::InnerLayers => {
-                    if self.get(node).is_some_and(|value| !value.deactivated) {
+                Observation::InnerLayers | Observation::InnerLayerBlock => {
+                    if let Some(value) = self.get_mut(node).filter(|value| !value.deactivated) {
+                        for inner in &mut value.inner_layers {
+                            inner.ahead = None;
+                        }
                         self.invalidate_inner_layers(node);
                         self.note_layer_change(node, false);
+                        self.new_layers.push(node);
                     }
                 }
                 Observation::Layer => {
                     // Its layer's properties only: its content and version stay.
                     self.needs_draw = true;
+                    self.new_layers.push(node);
                     let value = self.get_mut(node);
                     if let Some(retained) = value.and_then(|value| value.retained.as_mut()) {
                         retained.layer_dirty = true;
@@ -1077,6 +1116,7 @@ impl UiTree {
                 if !old.same(new) {
                     let entry = &mut value.chain[index];
                     nodes::update(new, &mut *entry.node);
+                    entry.refresh_hit_clip();
                     if let Some(flip) = entry.focus_target_flip() {
                         target_flips.push(flip);
                     }
@@ -1143,6 +1183,7 @@ impl UiTree {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
                         nodes::update(element, &mut *entry.node);
+                        entry.refresh_hit_clip();
                         if let Some(flip) = entry.focus_target_flip() {
                             target_flips.push(flip);
                         }
@@ -1242,11 +1283,7 @@ impl UiTree {
                 if removed.state & entry_state::DELEGATING != 0 {
                     self.release_delegates(&mut *removed.node);
                 }
-                let mut context = ReleaseContext {
-                    text_measurer: &self.text_measurer,
-                    held_paragraphs: &mut self.held_paragraphs,
-                };
-                removed.node.on_release(&mut context);
+                self.release_node(removed.node);
             }
         }
         if !detaching.is_empty() {
@@ -1710,6 +1747,9 @@ impl UiTree {
                 if value.placements.is_some() {
                     observer.forget(observation_key(id, Observation::Placement));
                 }
+                if !value.inner_layers.is_empty() {
+                    observer.forget(observation_key(id, Observation::InnerLayerBlock));
+                }
             }
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
@@ -1720,14 +1760,18 @@ impl UiTree {
                     self.release_delegates(&mut *entry.node);
                 }
             }
+            // As `release_node`: what they run may ask where something is.
+            let access = crate::tree_access::TreeAccess::new(&mut *self);
+            let open = access.open();
             let mut context = ReleaseContext {
-                text_measurer: &self.text_measurer,
-                held_paragraphs: &mut self.held_paragraphs,
+                text_measurer: &access.text_measurer,
+                held_paragraphs: &access.held_paragraphs,
             };
             for entry in &mut value.chain {
                 entry.node.on_release(&mut context);
             }
             drop(value);
+            drop(open);
         }
     }
 }

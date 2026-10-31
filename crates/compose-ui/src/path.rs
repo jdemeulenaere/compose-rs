@@ -159,6 +159,62 @@ impl Matrix {
         matrix
     }
 
+    /// Makes it first do what it does, then `other`, as `this *= other` reads in Compose's
+    /// column order (`other` × this).
+    pub fn post_concat(&mut self, other: &Matrix) {
+        let (a, b) = (other.values, self.values);
+        for column in 0..4 {
+            for row in 0..4 {
+                self.values[column * 4 + row] =
+                    (0..4).map(|k| a[k * 4 + row] * b[column * 4 + k]).sum();
+            }
+        }
+    }
+
+    /// Inverts it, as `invert()`: a singular one stays as it is.
+    pub fn invert(&mut self) {
+        let m = self.values;
+        let (a00, a01, a02, a03) = (m[0], m[1], m[2], m[3]);
+        let (a10, a11, a12, a13) = (m[4], m[5], m[6], m[7]);
+        let (a20, a21, a22, a23) = (m[8], m[9], m[10], m[11]);
+        let (a30, a31, a32, a33) = (m[12], m[13], m[14], m[15]);
+        let b00 = a00 * a11 - a01 * a10;
+        let b01 = a00 * a12 - a02 * a10;
+        let b02 = a00 * a13 - a03 * a10;
+        let b03 = a01 * a12 - a02 * a11;
+        let b04 = a01 * a13 - a03 * a11;
+        let b05 = a02 * a13 - a03 * a12;
+        let b06 = a20 * a31 - a21 * a30;
+        let b07 = a20 * a32 - a22 * a30;
+        let b08 = a20 * a33 - a23 * a30;
+        let b09 = a21 * a32 - a22 * a31;
+        let b10 = a21 * a33 - a23 * a31;
+        let b11 = a22 * a33 - a23 * a32;
+        let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+        if det == 0.0 {
+            return;
+        }
+        let i = 1.0 / det;
+        self.values = [
+            (a11 * b11 - a12 * b10 + a13 * b09) * i,
+            (-a01 * b11 + a02 * b10 - a03 * b09) * i,
+            (a31 * b05 - a32 * b04 + a33 * b03) * i,
+            (-a21 * b05 + a22 * b04 - a23 * b03) * i,
+            (-a10 * b11 + a12 * b08 - a13 * b07) * i,
+            (a00 * b11 - a02 * b08 + a03 * b07) * i,
+            (-a30 * b05 + a32 * b02 - a33 * b01) * i,
+            (a20 * b05 - a22 * b02 + a23 * b01) * i,
+            (a10 * b10 - a11 * b08 + a13 * b06) * i,
+            (-a00 * b10 + a01 * b08 - a03 * b06) * i,
+            (a30 * b04 - a31 * b02 + a33 * b00) * i,
+            (-a20 * b04 + a21 * b02 - a23 * b00) * i,
+            (-a10 * b09 + a11 * b07 - a12 * b06) * i,
+            (a00 * b09 - a01 * b07 + a02 * b06) * i,
+            (-a30 * b03 + a31 * b01 - a32 * b00) * i,
+            (a20 * b03 - a21 * b01 + a22 * b00) * i,
+        ];
+    }
+
     /// Where `point` goes, as `map(Offset)`.
     pub fn map(&self, point: Offset) -> Offset {
         let v = &self.values;

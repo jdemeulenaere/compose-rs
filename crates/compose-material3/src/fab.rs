@@ -10,10 +10,10 @@ use compose_animation::{
 use compose_foundation::layout::{Arrangement, Box, Row, RowScope, Spacer};
 use compose_runtime::{Callback, CompositionLocalProvider, composable};
 use compose_ui::{
-    Alignment, Color, Constraints, ContentDrawScope, Delegates, Density, Dp, DrawModifierNode,
-    DrawScope, IntSize, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier,
-    ModifierNode, ModifierNodeElement, MutableInteractionSource, NodeContext, Offset, Rect, Role,
-    Shape, Size, SizeSpec, TextStyle, UnitExt,
+    Alignment, Color, Constraints, ContentDrawScope, Delegates, Dp, DrawModifierNode, DrawScope,
+    IntSize, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, MutableInteractionSource, NodeContext, Offset, Rect, Role, Shape,
+    SizeSpec, TextStyle, UnitExt,
 };
 
 use crate::components::{Elevations, SurfaceClick, remembered_interaction_source, surface};
@@ -472,8 +472,9 @@ impl ModifierNode for FabVisibleNode {
         Some(self)
     }
 
-    /// Hidden, measured at nothing: this clips everything inside out of a hit.
-    fn hit_clip_at(&self, _size: Size, _density: Density) -> Option<Shape> {
+    /// Hidden, measured at nothing: this clips everything inside out of a hit. (For coordinates,
+    /// as an update last left it: measured at nothing, there's nothing to clip by then.)
+    fn hit_clip(&self) -> Option<Shape> {
         (self.alpha.value() == 0.0).then_some(Shape::Rectangle)
     }
 

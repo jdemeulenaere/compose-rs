@@ -1442,7 +1442,9 @@ impl UiTree {
             }
             let value = self.node(node);
             if let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() {
-                local = self.properties_of_layer(node, index, graphics).unmap(local);
+                let at = value.layer_of(index);
+                let origin = crate::layout_callbacks::layer_origin(value, at);
+                local = graphics.layer_map(origin, value.layers[at].measured.into()).unmap(local);
             }
             let value = self.node_mut(node);
             let measured = value.layers[layer].measured;

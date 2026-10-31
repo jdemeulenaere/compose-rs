@@ -1054,10 +1054,14 @@ impl UiTree {
                     if entry.kinds.any(NodeKinds::FOCUS_PROPERTIES)
                         && entry.state & entry_state::ATTACHED != 0
                     {
-                        let entry = &mut self.node_mut(id).chain[each];
+                        let own = self.node(id).chain[each].own;
+                        // Out of its chain, as what it runs may ask where something is.
+                        let mut out = self.entry_out(id, each);
+                        let crate::lifecycle::EntryOut { access, entry, .. } = &mut out;
+                        let _open = access.open();
                         crate::delegation::dispatch_for_kind(
-                            &mut *entry.node,
-                            entry.own,
+                            &mut **entry,
+                            own,
                             NodeKinds::FOCUS_PROPERTIES,
                             EntryId::NO_DELEGATE,
                             &mut |node, _| {
@@ -1631,7 +1635,7 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut actions = mem::take(&mut self.pending_actions);
         let context = NodeContext {
-            tree: &mut *self,
+            tree: crate::tree_access::TreeAccess::new(&mut *self),
             node,
             index: None,
             entry: id,
@@ -1640,6 +1644,8 @@ impl UiTree {
             place: *place,
             traverse_key: None,
         };
+        // Over before the tree is used again, which its guard's borrow says.
+        let open = context.tree.open();
         let mut context = EventContext {
             context,
             actions: &mut actions,
@@ -1659,6 +1665,7 @@ impl UiTree {
                 }
             }
         }
+        drop(open);
         actions.append(&mut self.pending_actions);
         self.pending_actions = actions;
         self.apply_focus_node_requests(requests);

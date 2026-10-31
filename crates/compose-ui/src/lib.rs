@@ -3,7 +3,7 @@
 //! pointer and key input, focus, and semantics (docs/06-ui.md). It knows no platform: hosts
 //! give it a size, a density, a text measurer and events, and replay its display list.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(unreachable_pub)]
 // Every type reachable from the public API can be named (D260): a type in a private
 // module that a public signature uses must be re-exported.
@@ -22,6 +22,7 @@ mod clipboard;
 mod configuration;
 mod constraints;
 mod content_scale;
+mod coordinates;
 mod delegation;
 mod dispatch;
 mod display_list;
@@ -94,6 +95,8 @@ mod text_style;
 mod trace;
 mod traversal;
 mod tree;
+#[allow(unsafe_code)]
+mod tree_access;
 mod unit;
 mod velocity_tracker;
 mod view_configuration;
@@ -187,6 +190,7 @@ pub use configuration::{
 };
 pub use constraints::Constraints;
 pub use content_scale::ContentScale;
+pub use coordinates::LayoutCoordinates;
 pub use delegation::{Delegate, Delegates};
 pub use draw::{DrawScope, SharedPath};
 #[doc(hidden)]
@@ -235,8 +239,7 @@ pub use layout::{
     measure_policy,
 };
 pub use layout_callbacks::{
-    GlobalPositionAwareModifierNode, LayoutAwareModifierNode, LayoutCoordinates,
-    MeasuredSizeAwareModifierNode,
+    GlobalPositionAwareModifierNode, LayoutAwareModifierNode, MeasuredSizeAwareModifierNode,
 };
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
@@ -326,6 +329,7 @@ pub use text_range::TextRange;
 pub use text_selection::Selectable;
 pub use text_style::TextStyle;
 pub use traversal::{TraversableNode, TraverseDescendantsAction, TraverseKey};
+pub use tree_access::TreeRef;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
     TextUnitType, UnitExt,
