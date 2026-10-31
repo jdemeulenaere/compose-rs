@@ -990,3 +990,108 @@ fn what_s_measured_now_doesn_t_lose_what_s_stale_ahead() {
         iterations.set(round + 1);
     }
 }
+
+/// What `content`'s tagged nodes measured to, with and without a scope around it.
+fn same_with_and_without_a_scope(content: impl Fn(Modifier) + Clone + 'static) {
+    let measure = |scoped: bool| {
+        let sizes: Rc<std::cell::RefCell<Vec<IntSize>>> = Rc::default();
+        let (s, content) = (sizes.clone(), content.clone());
+        let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+            let (s, content) = (s.clone(), content.clone());
+            let modifier =
+                Modifier.on_placed(move |it: LayoutCoordinates| s.borrow_mut().push(it.size()));
+            if scoped {
+                in_a_scope(move |_| content(modifier.clone()));
+            } else {
+                content(modifier);
+            }
+        });
+        ui.wait_for_idle();
+        let sizes = sizes.borrow().clone();
+        sizes
+    };
+    let (with, without) = (measure(true), measure(false));
+    assert!(!without.is_empty());
+    assert_eq!(with, without);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, lookaheadMaxHeightIntrinsicsTest
+#[test]
+fn a_row_of_max_intrinsic_height_is_the_same_in_a_scope() {
+    same_with_and_without_a_scope(|modifier| {
+        let m = modifier.clone();
+        Box!(modifier = m, {
+            let m = modifier.clone();
+            let modifier = modifier.clone();
+            Row!(modifier = m.height(compose_ui::IntrinsicSize::Max), move |scope| {
+                let m = modifier.clone();
+                let tall = |m: Modifier| m.fill_max_height().weight(scope, 1.0);
+                Box!(modifier = tall(m.clone()).aspect_ratio(2.0), {});
+                Box!(modifier = tall(m.clone()).width(dp(1)), {});
+                Box!(modifier = tall(m.clone()).aspect_ratio(1.0), {});
+            });
+        });
+    });
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, lookaheadMinHeightIntrinsicsTest
+#[test]
+fn a_row_of_min_intrinsic_height_is_the_same_in_a_scope() {
+    same_with_and_without_a_scope(|modifier| {
+        Box!({
+            let m = modifier.clone();
+            let modifier = modifier.clone();
+            Row!(modifier = m.height(compose_ui::IntrinsicSize::Min), move |scope| {
+                let m = modifier.clone();
+                BasicText!(
+                    "This is a really short text",
+                    modifier = m.clone().weight(scope, 1.0).fill_max_height()
+                );
+                Box!(modifier = m.clone().width(dp(1)).fill_max_height(), {});
+                BasicText!(
+                    "This is a much much much much much much much much much much much much much much much longer text",
+                    modifier = m.weight(scope, 1.0).fill_max_height()
+                );
+            });
+        });
+    });
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, intermediateLayoutMaxHeightIntrinsicsTest
+#[test]
+fn an_approach_in_an_intrinsic_row_counts_as_it_is_now() {
+    let tenths = mutable_state_of(0);
+    let height = Rc::new(Cell::new(-1));
+    let (t, h) = (tenths.handle(), height.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || {
+        let h = h.clone();
+        in_a_scope(move |_| {
+            let h = h.clone();
+            let row = Modifier
+                .height(compose_ui::IntrinsicSize::Max)
+                .on_globally_positioned(move |it: LayoutCoordinates| h.set(it.size().height))
+                .fill_max_width();
+            Row!(modifier = row, |scope| {
+                let approaching = Modifier.approach_layout(
+                    |_| true,
+                    |_, _| false,
+                    move |measure, content, constraints| {
+                        let placeable = measure.measure(content, constraints);
+                        let ahead = measure.lookahead_size();
+                        let tall = (ahead.height as f32 * t.get() as f32 / 10.0).round() as i32;
+                        measure.layout_with(ahead.width, tall, move |placement| {
+                            placement.place(&placeable, 0, 0);
+                        })
+                    },
+                );
+                Box!(modifier = approaching.width(dp(5)).required_height(dp(300)), {});
+                Box!(modifier = Modifier.required_height(dp(20)).weight(scope, 1.0), {});
+            });
+        });
+    });
+    for at in 0..11 {
+        tenths.set(at);
+        ui.wait_for_idle();
+        assert_eq!(height.get(), (300 * at / 10).max(20), "{at}");
+    }
+}

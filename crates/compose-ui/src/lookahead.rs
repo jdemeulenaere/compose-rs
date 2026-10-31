@@ -295,6 +295,26 @@ impl UiTree {
         drop(pass);
     }
 
+    /// `node`'s intrinsic asked from outside its scope, if it's a scope's outermost: asked of
+    /// what's ahead, what asked hearing of a change in either pass.
+    #[cold]
+    pub(crate) fn intrinsic_ahead(
+        &mut self,
+        node: NodeId,
+        kind: crate::layout::Intrinsic,
+        value: i32,
+    ) -> Option<i32> {
+        if self.in_lookahead || !self.is_outermost_lookahead_root(node) {
+            return None;
+        }
+        self.node_mut(node).intrinsics_asked = true;
+        let pass = self.lookahead_pass(node);
+        let child = pass.tree.node_mut(node);
+        child.constraints = None;
+        child.intrinsics_asked = true;
+        Some(pass.tree.intrinsic(node, 0, kind, value))
+    }
+
     /// What dirties a pass from outside dirties the one not running too: a composition, a modifier
     /// or a node asking, as `invalidateMeasurements`. Up to the scope's outermost: above it there's
     /// one pass.

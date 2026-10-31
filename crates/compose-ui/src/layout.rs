@@ -388,8 +388,14 @@ impl IntrinsicMeasureScope<'_> {
                 "compose-ui: a layout asked the intrinsic size of a node that isn't its child"
             );
             let mut tree = self.tree.enter();
+            // A scope asked from outside answers from ahead, as `MeasurePassDelegate`'s.
+            if tree.lookahead_used
+                && let Some(answer) = tree.intrinsic_ahead(measurable.node, kind, value)
+            {
+                tree.node_mut(self.node).children_intrinsics_asked = true;
+                return answer;
+            }
             let child = tree.node_mut(measurable.node);
-            // Measured again after it was asked, as Compose's `onIntrinsicsQueried`: its
             // default intrinsics run its measuring code, which may keep what it saw.
             child.constraints = None;
             child.intrinsics_asked = true;
