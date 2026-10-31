@@ -2357,3 +2357,45 @@ fn an_item_jumped_to_far_away_shows_at_once() {
     assert_eq!(handle.first_visible_item_index(), 199);
     assert_slots(&mut ui, true, 0.0, &[Some((Color::BLACK, 1.0))]);
 }
+
+/// Past the fade's end: a removal of an item before the last, seen again by later measurements
+/// that find another item at its index.
+fn run_removal_past_its_fade(
+    colors: Vec<Color>,
+    max_size: i32,
+    left: Vec<Color>,
+    wanted: &[Color],
+) {
+    let mut fixture = fade_fixture(FadeList { colors, max_size, ..FadeList::default() });
+    fixture.set(left);
+    on_animation_frame(&mut fixture.ui, |_, _| {});
+    for _ in 0..4 {
+        fixture.ui.advance_time_by_frame();
+    }
+    let expected: Vec<_> = wanted.iter().map(|color| Some((*color, 1.0))).collect();
+    assert_slots(&mut fixture.ui, true, 1.0, &expected);
+    assert_eq!(size_of(&mut fixture.ui, LIST_TAG).1, max_size);
+}
+
+#[test]
+fn a_removal_before_the_last_item_of_a_list_longer_than_its_viewport_ends() {
+    let colors =
+        vec![Color::BLACK, Color::RED, Color::GREEN, Color::BLUE, Color::YELLOW, Color::GRAY];
+    for removed in [0, 1] {
+        let mut left = colors.clone();
+        left.remove(removed);
+        let wanted = [left[0], left[1]];
+        run_removal_past_its_fade(colors.clone(), ITEM * 2, left, &wanted);
+    }
+}
+
+#[test]
+fn a_removal_before_the_last_item_of_a_list_that_fits_ends() {
+    let colors = vec![Color::BLACK, Color::RED, Color::GREEN];
+    run_removal_past_its_fade(
+        colors,
+        ITEM * 3,
+        vec![Color::RED, Color::GREEN],
+        &[Color::RED, Color::GREEN],
+    );
+}

@@ -1133,7 +1133,10 @@ impl ItemAnimator {
             info.span = info.span.min(pass.lane_count.max(1));
             info.lane = info.lane.min(pass.lane_count.max(1) - info.span);
             let new_index = if same_items {
-                info.waiting_at.or(Some(info.index)).filter(|index| *index < pass.items.count)
+                // By its key: what was at its last index may be another's, the item removed.
+                info.waiting_at
+                    .or(Some(info.index))
+                    .filter(|index| *index < pass.items.count && pass.items.key(*index) == key)
             } else {
                 current.keys().get(&key).copied()
             };
