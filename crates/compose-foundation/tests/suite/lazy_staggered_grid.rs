@@ -1246,6 +1246,7 @@ fn noting_composed(
 fn items_scrolled_past_forward_leave_the_composition() {
     for lazy in orientations() {
         let (mut ui, state, composed) = noting_composed(lazy, 0);
+        state.set_prefetching_enabled(false);
         scroll_by(&mut ui, state, ITEM * 3);
         assert_eq!(state.first_visible_item_index(), 6);
         assert_eq!(state.first_visible_item_scroll_offset(), 0);
@@ -1266,6 +1267,7 @@ fn items_scrolled_past_forward_leave_the_composition() {
 fn items_scrolled_past_backward_leave_the_composition() {
     for lazy in orientations() {
         let (mut ui, state, composed) = noting_composed(lazy, 6);
+        state.set_prefetching_enabled(false);
         scroll_by(&mut ui, state, -(ITEM * 2 + ITEM / 2));
         assert_eq!(state.first_visible_item_index(), 0);
         assert_eq!(state.first_visible_item_scroll_offset(), ITEM / 2);
@@ -2822,4 +2824,27 @@ fn more_lanes_after_a_resize_keep_the_position() {
         scroll_by(&mut ui, state, -ITEM);
         assert_eq!(lazy.main_start(&mut ui, "4"), ITEM as f32);
     }
+}
+
+#[test]
+fn a_lane_window_keeps_what_fits_as_it_moves() {
+    let mut info = LazyStaggeredGridLaneInfo::new();
+    // Grows from 0 by doubling, up to its most, the anchor staying.
+    info.set_lane(100_000, 1);
+    assert_eq!(info.lower_bound(), 0);
+    assert_eq!(info.get_lane(100_000), 1);
+    info.set_lane(5, 0);
+    assert_eq!(info.get_lane(5), 0);
+    info.set_lane(130_000, 1);
+    // Past its most: the anchor moves, what's still in the window kept at its index.
+    info.set_lane(150_000, 1);
+    assert!(info.lower_bound() > 0);
+    assert_eq!(info.get_lane(5), LazyStaggeredGridLaneInfo::LANE_UNSET);
+    assert_eq!(info.get_lane(150_000), 1);
+    assert_eq!(info.get_lane(130_000), 1);
+    // Back before it: what's left is at the same index, as far as it fits.
+    let bound = info.lower_bound();
+    info.set_lane(bound - 1000, 0);
+    assert_eq!(info.get_lane(bound - 1000), 0);
+    assert_eq!(info.get_lane(130_000), 1);
 }

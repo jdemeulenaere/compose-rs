@@ -2139,6 +2139,7 @@ impl MeasurePolicy for LazyGridLayout {
                         viewport: main_max,
                         average: 0,
                         density,
+                        lanes: None,
                     })
                 }
                 _ => None,

@@ -152,6 +152,8 @@ pub(super) struct Prefetch {
     pub(super) sizes: RefCell<Vec<(usize, i32)>>,
     /// A grid's lines, for the window's requests between frames; a list's units are its items.
     pub(super) units: RefCell<Option<Rc<dyn Units>>>,
+    /// The lanes the window fills: a staggered grid's, else 1.
+    pub(super) window_lanes: Rc<Cell<usize>>,
     /// Compose's `PrefetchMetrics`: the steps' averages by content type.
     metrics: RefCell<HashMap<Option<u64>, Averages>>,
     /// D341's estimates (`PREFETCH_BUDGET_RECENT_MAXIMUM`), one for all content types: a whole
@@ -215,6 +217,7 @@ impl Prefetch {
             detached_dirty: Cell::new(false),
             sizes: RefCell::default(),
             units: RefCell::new(None),
+            window_lanes: Rc::new(Cell::new(1)),
             metrics: RefCell::default(),
             compose_cost: Cell::default(),
             apply_cost: Cell::default(),
@@ -238,6 +241,18 @@ pub(super) trait Units {
     fn items_of(&self, unit: usize) -> Option<Range<usize>>;
     /// The unit of `item`.
     fn unit_of(&self, item: usize) -> usize;
+    /// The next unit after `unit` in `lane`, as `getNextEndItemIndexInLane`.
+    fn next_end_in_lane(&self, _lane: i32, unit: i32) -> i32 {
+        unit + 1
+    }
+    /// The next unit before `unit` in `lane` (-1: none), as `getNextStartItemIndexInLane`.
+    fn next_start_in_lane(&self, _lane: i32, unit: i32) -> i32 {
+        unit - 1
+    }
+    /// Whether `unit` takes every lane, as `isSpanItem`.
+    fn is_span(&self, _unit: i32) -> bool {
+        false
+    }
 }
 
 /// A list's units.
@@ -267,6 +282,19 @@ pub(super) struct Laid {
     /// (`visibleLinesAverageMainAxisSize`).
     pub(super) average: i32,
     pub(super) density: Density,
+    /// Per lane, a staggered grid's: `None` is one lane, of the above.
+    pub(super) lanes: Option<LanesLaid>,
+}
+
+/// What a layout shows per lane: each one's first and last in view, how far the first starts before
+/// the viewport and the last ends past it, and the lane of each item in view.
+#[derive(Default)]
+pub(super) struct LanesLaid {
+    pub(super) first: Vec<i32>,
+    pub(super) last: Vec<i32>,
+    pub(super) start: Vec<i32>,
+    pub(super) end: Vec<i32>,
+    pub(super) visible: Vec<i32>,
 }
 
 /// The last `Laid`, the units in view (their sizes and keys), and the count.
@@ -282,6 +310,7 @@ struct Shown {
     /// grid's lines before a header sticking have size 0 and no key, Compose's `NoKey`, D1451).
     visible: Vec<(i32, i32, Option<u64>)>,
     average: i32,
+    lanes: Option<LanesLaid>,
 }
 
 impl Default for Shown {
@@ -296,6 +325,7 @@ impl Default for Shown {
             count: 0,
             visible: Vec::new(),
             average: 0,
+            lanes: None,
         }
     }
 }
@@ -339,19 +369,31 @@ impl CacheWindowScope for WindowScope<'_> {
     }
 
     fn update_per_lane_main_axis_extra_start_space(&self, spaces: &mut [i32]) {
-        spaces[0] = self.shown.start_overflow;
+        match &self.shown.lanes {
+            Some(lanes) => spaces.copy_from_slice(&lanes.start),
+            None => spaces[0] = self.shown.start_overflow,
+        }
     }
 
     fn update_per_lane_main_axis_extra_end_space(&self, spaces: &mut [i32]) {
-        spaces[0] = self.shown.end_overflow;
+        match &self.shown.lanes {
+            Some(lanes) => spaces.copy_from_slice(&lanes.end),
+            None => spaces[0] = self.shown.end_overflow,
+        }
     }
 
     fn update_per_lane_first_visible_item_index(&self, indices: &mut [i32]) {
-        indices[0] = self.shown.first;
+        match &self.shown.lanes {
+            Some(lanes) => indices.copy_from_slice(&lanes.first),
+            None => indices[0] = self.shown.first,
+        }
     }
 
     fn update_per_lane_last_visible_item_indexes(&self, indices: &mut [i32]) {
-        indices[0] = self.shown.last;
+        match &self.shown.lanes {
+            Some(lanes) => indices.copy_from_slice(&lanes.last),
+            None => indices[0] = self.shown.last,
+        }
     }
 
     fn schedule_prefetch(&self, lane: i32, item_index: i32) -> Vec<Rc<Handle>> {
@@ -388,8 +430,20 @@ impl CacheWindowScope for WindowScope<'_> {
         self.shown.visible[position as usize].2
     }
 
-    fn visible_item_lane(&self, _: i32) -> i32 {
-        0
+    fn visible_item_lane(&self, position: i32) -> i32 {
+        self.shown.lanes.as_ref().map_or(0, |lanes| lanes.visible[position as usize])
+    }
+
+    fn next_end_item_index_in_lane(&self, lane: i32, item: i32) -> i32 {
+        self.units.next_end_in_lane(lane, item)
+    }
+
+    fn next_start_item_index_in_lane(&self, lane: i32, item: i32) -> i32 {
+        self.units.next_start_in_lane(lane, item)
+    }
+
+    fn is_span_item(&self, item: i32) -> bool {
+        self.units.is_span(item)
     }
 
     fn last_item_index_in_line(&self, item: i32) -> i32 {
@@ -439,7 +493,8 @@ impl Prefetch {
         if let Some(old) = current.as_mut() {
             old.reset_strategy();
         }
-        *current = Some(CacheWindowLogic::new(window, || 1));
+        let lanes = self.window_lanes.clone();
+        *current = Some(CacheWindowLogic::new(window, move || lanes.get()));
         *self.laid.borrow_mut() = Shown::default();
         self.kept.set(None);
         let mut detached = self.detached.borrow_mut();
@@ -623,10 +678,18 @@ impl Prefetch {
                         }
                     }
                     shown.average = laid.average;
+                    shown.lanes = laid.lanes.as_ref().map(|lanes| LanesLaid {
+                        first: lanes.first.clone(),
+                        last: lanes.last.clone(),
+                        start: lanes.start.clone(),
+                        end: lanes.end.clone(),
+                        visible: lanes.visible.clone(),
+                    });
                 }
                 None => {
                     shown.visible.clear();
                     shown.average = 0;
+                    shown.lanes = None;
                 }
             }
             !same
@@ -738,6 +801,7 @@ impl Prefetch {
         }
         let logic = self.window.borrow();
         let Some(logic) = logic.as_ref() else { return (start, end) };
+        let lanes = self.window_lanes.get().max(1);
         let holds = |handle: &&Rc<Handle>| {
             !handle.canceled.get()
                 && (handle.composed.get() || (composed.0..composed.1).contains(&handle.item))
@@ -745,11 +809,12 @@ impl Prefetch {
         loop {
             let mut grew = false;
             for handle in logic.handles().filter(holds) {
-                if handle.item == end {
-                    end += 1;
+                // Next to them, or across what the other lanes hold (a staggered grid's).
+                if (end..end + lanes).contains(&handle.item) {
+                    end = handle.item + 1;
                     grew = true;
-                } else if handle.item + 1 == start {
-                    start -= 1;
+                } else if handle.item < start && handle.item + lanes >= start {
+                    start = handle.item;
                     grew = true;
                 }
             }
@@ -985,9 +1050,12 @@ impl Prefetch {
             return Some(self.composed_by(scope, item_target(state, key)));
         }
         let (low, high) = self.limits.get();
-        let range = if item == end {
+        // Next to them, or across what the other lanes hold (a staggered grid's: the items between
+        // are composed with it, in the frame's way, where Compose's composes it alone).
+        let lanes = self.window_lanes.get().max(1);
+        let range = if (end..end + lanes).contains(&item) {
             (start.max(low).min(item), item + 1)
-        } else if item + 1 == start {
+        } else if item < start && item + lanes >= start {
             (item, end.min(high).max(item + 1))
         } else if state.sticky_written.get().is_some_and(|header| item < header) {
             // Before a sticking header, away from the range (D895).

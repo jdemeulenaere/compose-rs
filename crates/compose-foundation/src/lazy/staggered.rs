@@ -22,7 +22,7 @@ use compose_ui::{
 
 use super::grid::{CrossAxisCells, GridItemSpan, Slots};
 use super::layout_info::{LaidItem, LaidViewport};
-use super::prefetch::Policy;
+use super::prefetch::{Laid, LanesLaid, Policy, Units};
 use super::{
     FIRST_STEP, Interval, ItemStacking, Items, ItemsRef, LazyItems, LazyListInner, LazyListState,
     LazyScrollElement, ListObserver, MOST_IN_A_ROUND, MOST_MISSING, composed_range,
@@ -34,6 +34,10 @@ use crate::gestures::{
 };
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::mutator::{MutatePriority, MutationInterrupted};
+
+/// No spacing: what the defaults of a lazy layout's parameters name, whatever the caller imports.
+#[doc(hidden)]
+pub const NO_SPACING: Dp = Dp(0.0);
 
 /// How a staggered grid's cross axis is cut into lanes, as Compose's `StaggeredGridCells`: a
 /// vertical grid's columns, a horizontal one's rows.
@@ -186,11 +190,35 @@ pub struct LazyStaggeredGridLaneInfo {
     lanes: Vec<i32>,
     /// By index.
     spanned_items: VecDeque<(i32, Vec<i32>)>,
+    /// While a measurement may stop, what it changed, to go back (D1470).
+    journal: Option<LaneJournal>,
+}
+
+/// The anchor, the lanes and the full lines.
+type ReplacedLanes = (i32, Vec<i32>, VecDeque<(i32, Vec<i32>)>);
+
+/// What a pass changed in a `LazyStaggeredGridLaneInfo`, cheap as a pass writes only what differs:
+/// its writes in order, and from a move of the window or a reset on, the whole of what it replaced.
+#[derive(Default)]
+struct LaneJournal {
+    /// The number of lanes kept when it began: growing adds only zeros.
+    size: usize,
+    /// (at, what it held) in `lanes`.
+    lanes: Vec<(usize, i32)>,
+    /// (item, what it held) in `spanned_items`.
+    gaps: Vec<(i32, Option<Vec<i32>>)>,
+    /// What the window and reset replaced, the writes before it still to undo in it.
+    replaced: Option<ReplacedLanes>,
 }
 
 impl Default for LazyStaggeredGridLaneInfo {
     fn default() -> Self {
-        LazyStaggeredGridLaneInfo { anchor: 0, lanes: vec![0; 16], spanned_items: VecDeque::new() }
+        LazyStaggeredGridLaneInfo {
+            anchor: 0,
+            lanes: vec![0; 16],
+            spanned_items: VecDeque::new(),
+            journal: None,
+        }
     }
 }
 
@@ -212,7 +240,64 @@ impl LazyStaggeredGridLaneInfo {
         assert!(item >= 0, "Negative lanes are not supported");
         self.ensure_valid_index(item);
         let at = (item - self.anchor) as usize;
-        self.lanes[at] = lane + 1;
+        if self.lanes[at] != lane + 1 {
+            if let Some(journal) = &mut self.journal
+                && journal.replaced.is_none()
+            {
+                journal.lanes.push((at, self.lanes[at]));
+            }
+            self.lanes[at] = lane + 1;
+        }
+    }
+
+    /// A measurement that may stop starts: `roll_back` undoes what it changes from here.
+    fn begin_pass(&mut self) {
+        self.journal = Some(LaneJournal { size: self.lanes.len(), ..LaneJournal::default() });
+    }
+
+    /// What it changed stays.
+    fn commit_pass(&mut self) {
+        self.journal = None;
+    }
+
+    /// It stopped: as it was when it began, so the next round measures from the same place.
+    fn roll_back(&mut self) {
+        let Some(journal) = self.journal.take() else { return };
+        if let Some((anchor, lanes, spanned)) = journal.replaced {
+            self.anchor = anchor;
+            self.lanes = lanes;
+            self.spanned_items = spanned;
+        }
+        for (at, held) in journal.lanes.into_iter().rev() {
+            self.lanes[at] = held;
+        }
+        self.lanes.truncate(journal.size);
+        for (item, held) in journal.gaps.into_iter().rev() {
+            match (self.spanned_items.binary_search_by_key(&item, |it| it.0), held) {
+                (Ok(at), Some(gaps)) => self.spanned_items[at].1 = gaps,
+                (Ok(at), None) => {
+                    self.spanned_items.remove(at);
+                }
+                (Err(at), Some(gaps)) => self.spanned_items.insert(at, (item, gaps)),
+                (Err(_), None) => {}
+            }
+        }
+    }
+
+    /// The window or a reset is about to replace it all: the first time in a pass, it's kept.
+    fn keep_replaced(&mut self, copy: bool) {
+        if let Some(mut journal) = self.journal.take() {
+            if journal.replaced.is_none() {
+                let lanes = if copy {
+                    self.lanes.clone()
+                } else {
+                    let zeros = vec![0; self.lanes.len()];
+                    std::mem::replace(&mut self.lanes, zeros)
+                };
+                journal.replaced = Some((self.anchor, lanes, self.spanned_items.clone()));
+            }
+            self.journal = Some(journal);
+        }
     }
 
     /// As `getLane`.
@@ -241,6 +326,7 @@ impl LazyStaggeredGridLaneInfo {
 
     /// As `reset`.
     pub fn reset(&mut self) {
+        self.keep_replaced(false);
         self.lanes.fill(0);
         self.spanned_items.clear();
     }
@@ -264,6 +350,7 @@ impl LazyStaggeredGridLaneInfo {
             self.ensure_capacity(capacity + 1, 0);
         } else {
             // Beyond the window: the anchor moves so the requested index is in its middle.
+            self.keep_replaced(true);
             let old = self.anchor;
             let size = self.lanes.len() as i32;
             self.anchor = (requested - size / 2).max(0);
@@ -296,7 +383,15 @@ impl LazyStaggeredGridLaneInfo {
 
     /// As `setGaps`.
     pub fn set_gaps(&mut self, item: i32, gaps: Option<Vec<i32>>) {
-        match (self.spanned_items.binary_search_by_key(&item, |item| item.0), gaps) {
+        let found = self.spanned_items.binary_search_by_key(&item, |item| item.0);
+        if let Some(journal) = &mut self.journal
+            && journal.replaced.is_none()
+            && (gaps.is_some() || found.is_ok())
+        {
+            let held = found.ok().map(|at| self.spanned_items[at].1.clone());
+            journal.gaps.push((item, held));
+        }
+        match (found, gaps) {
             (Err(_), None) => {}
             (Err(at), Some(gaps)) => self.spanned_items.insert(at, (item, gaps)),
             (Ok(at), None) => {
@@ -366,6 +461,9 @@ pub struct LazyStaggeredGridState {
     object: ObjectHandle<StaggeredInner>,
 }
 
+/// An item placed: it, its lane, its lanes, along the axis and across.
+type LastPlaced = (i32, usize, usize, i32, i32);
+
 /// The list state its scrolling, composition and prefetch are in, and the position per lane.
 struct StaggeredInner {
     _list: Owned<LazyListState>,
@@ -376,6 +474,16 @@ struct StaggeredInner {
     /// A jump since the last layout: what was laid out says nothing of where it is. A layout comes
     /// after each jump in Compose's (`forceRemeasure`), at the next frame here (D1469).
     jumped: Cell<bool>,
+    /// A jump not measured yet: the first items it lacks replace those composed, once (D1470).
+    jump_to_compose: Cell<bool>,
+    /// What the last whole measurement placed in view (an item, its lanes, where), and its size
+    /// along the axis: what a measurement stopped before its first item shows.
+    last_placed: RefCell<Vec<LastPlaced>>,
+    last_main: Cell<Option<i32>>,
+    /// The stops since the last whole measurement.
+    stops: Cell<u32>,
+    /// As `prefetchingEnabled`: off, the window asks for nothing and keeps nothing.
+    prefetching_enabled: Cell<bool>,
 }
 
 impl LazyStaggeredGridState {
@@ -403,6 +511,11 @@ impl LazyStaggeredGridState {
                 lane_info: RefCell::default(),
                 position: RefCell::new((indices, offsets)),
                 jumped: Cell::new(false),
+                jump_to_compose: Cell::new(false),
+                last_placed: RefCell::default(),
+                last_main: Cell::new(None),
+                stops: Cell::new(0),
+                prefetching_enabled: Cell::new(true),
             },
             |object| LazyStaggeredGridState { list: handle, object },
         )
@@ -410,6 +523,51 @@ impl LazyStaggeredGridState {
 
     fn inner(&self) -> Option<Rc<StaggeredInner>> {
         self.object.try_get()
+    }
+
+    /// The list state it's on.
+    pub(super) fn list(&self) -> LazyListState {
+        self.list
+    }
+
+    /// Composes these items, for tests measuring without a stop.
+    #[doc(hidden)]
+    pub fn compose_items(&self, start: usize, end: usize) {
+        if let Some(inner) = self.list.inner() {
+            inner.compose((start, end));
+        }
+    }
+
+    /// As `prefetchingEnabled`, for tests.
+    #[doc(hidden)]
+    pub fn set_prefetching_enabled(&self, enabled: bool) {
+        if let Some(inner) = self.inner() {
+            inner.prefetching_enabled.set(enabled);
+        }
+    }
+
+    /// The cache window it uses, if composed.
+    #[doc(hidden)]
+    pub fn cache_window(&self) -> Option<Rc<dyn super::LazyLayoutCacheWindow>> {
+        self.list.cache_window()
+    }
+
+    /// The window's units with requests under way, for tests, whatever they request.
+    #[doc(hidden)]
+    pub fn prefetch_units_held(&self) -> Vec<usize> {
+        self.list.inner().map_or_else(Vec::new, |inner| inner.prefetch.units_held())
+    }
+
+    /// The window's requests under way, for tests: their items, and whether they are urgent.
+    #[doc(hidden)]
+    pub fn prefetch_requests(&self) -> Vec<(usize, bool)> {
+        self.list.prefetch_requests()
+    }
+
+    /// Measures it again, as `Remeasurement.forceRemeasure`, for tests.
+    #[doc(hidden)]
+    pub fn force_remeasure(&self) {
+        self.list.force_remeasure();
     }
 
     /// The first item across the lanes, as `firstVisibleItemIndex` (a state read).
@@ -495,8 +653,12 @@ impl LazyStaggeredGridState {
                 let lanes = position.0.len();
                 let indices = self.fill_indices(&inner, &list, index as i32, lanes);
                 let offsets = vec![scroll_offset; lanes];
+                // The lanes' lowest, as `calculateFirstVisibleIndex` (a full line's the item).
+                let first = first_visible_index(&indices) as usize;
+                let first_offset = first_visible_offset(&indices, &offsets);
                 *position = (indices, offsets);
-                self.list.snap_to_item(index, scroll_offset);
+                self.list.snap_to_item(first, first_offset);
+                inner.jump_to_compose.set(true);
             }
         }
     }
@@ -912,6 +1074,64 @@ impl LazyStaggeredGridScope {
         );
     }
 
+    /// `items_list` with content types and spans, as `items(items, contentType = { … }, span = { … })`.
+    pub fn items_list_with_span<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(&T) -> C + 'static,
+        span: impl Fn(&T) -> StaggeredGridItemSpan + 'static,
+        content: impl Fn(&T) + 'static,
+    ) {
+        let items = items.into();
+        let (types, spans) = (items.clone(), items.clone());
+        self.push(
+            Interval::new(items.len(), Rc::new(move |index| content(&items[index])))
+                .typed(Rc::new(move |index| content_type_of(&content_type(&types[index]))))
+                .spanned(Rc::new(move |_, index| span(&spans[index]).cells())),
+        );
+    }
+
+    /// `items_indexed` with content types and spans, as
+    /// `itemsIndexed(items, contentType = { … }, span = { … })`.
+    pub fn items_indexed_with_span<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        span: impl Fn(usize, &T) -> StaggeredGridItemSpan + 'static,
+        content: impl Fn(usize, &T) + 'static,
+    ) {
+        let items = items.into();
+        let (types, spans) = (items.clone(), items.clone());
+        self.push(
+            Interval::new(items.len(), Rc::new(move |index| content(index, &items[index])))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index]))))
+                .spanned(Rc::new(move |_, index| span(index, &spans[index]).cells())),
+        );
+    }
+
+    /// `items_indexed` with keys, content types and spans, as
+    /// `itemsIndexed(items, key = { … }, contentType = { … }, span = { … })`.
+    pub fn items_indexed_keyed_with_span<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        key: impl Fn(usize, &T) -> K + 'static,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        span: impl Fn(usize, &T) -> StaggeredGridItemSpan + 'static,
+        content: impl Fn(usize, &T) + 'static,
+    ) {
+        let items = items.into();
+        let (keys, types, spans) = (items.clone(), items.clone(), items.clone());
+        self.push(
+            Interval::keyed(
+                items.len(),
+                move |index| key(index, &keys[index]),
+                Rc::new(move |index| content(index, &items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index]))))
+            .spanned(Rc::new(move |_, index| span(index, &spans[index]).cells())),
+        );
+    }
+
     /// An item for each of `items`, with its index, as `itemsIndexed(items) { index, item -> … }`.
     pub fn items_indexed<T: 'static>(
         &self,
@@ -948,15 +1168,15 @@ pub fn LazyVerticalStaggeredGrid(
     #[default(crate::remember_lazy_staggered_grid_state(0, 0))] state: LazyStaggeredGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(Dp(0.0))] vertical_item_spacing: Dp,
-    #[default(crate::layout::Arrangement::spaced_by(Dp(0.0)))] horizontal_arrangement: impl Into<
-        HorizontalArrangement,
-    >,
+    #[default(crate::NO_SPACING)] vertical_item_spacing: Dp,
+    #[default(crate::layout::Arrangement::spaced_by(crate::NO_SPACING))]
+    horizontal_arrangement: impl Into<HorizontalArrangement>,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
     #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
         Rc<dyn crate::OverscrollEffect>,
     >,
+    #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyStaggeredGridScope) + 'static,
 ) {
     LazyStaggeredGrid(
@@ -971,6 +1191,7 @@ pub fn LazyVerticalStaggeredGrid(
         fling_behavior,
         overscroll_effect,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -984,15 +1205,16 @@ pub fn LazyHorizontalStaggeredGrid(
     #[default(crate::remember_lazy_staggered_grid_state(0, 0))] state: LazyStaggeredGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::spaced_by(Dp(0.0)))] vertical_arrangement: impl Into<
+    #[default(crate::layout::Arrangement::spaced_by(crate::NO_SPACING))] vertical_arrangement: impl Into<
         VerticalArrangement,
     >,
-    #[default(Dp(0.0))] horizontal_item_spacing: Dp,
+    #[default(crate::NO_SPACING)] horizontal_item_spacing: Dp,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
     #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
         Rc<dyn crate::OverscrollEffect>,
     >,
+    #[default(None)] cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyStaggeredGridScope) + 'static,
 ) {
     LazyStaggeredGrid(
@@ -1007,6 +1229,7 @@ pub fn LazyHorizontalStaggeredGrid(
         fling_behavior,
         overscroll_effect,
         user_scroll_enabled,
+        cache_window,
         content,
     );
 }
@@ -1081,6 +1304,7 @@ fn LazyStaggeredGrid(
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     overscroll_effect: Option<Rc<dyn crate::OverscrollEffect>>,
     user_scroll_enabled: bool,
+    cache_window: Option<Rc<dyn super::LazyLayoutCacheWindow>>,
     content: impl Fn(LazyStaggeredGridScope) + 'static,
 ) {
     let list = state.list;
@@ -1094,6 +1318,8 @@ fn LazyStaggeredGrid(
     content(scope.clone());
     let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
     let items = Rc::new(Items::new(intervals));
+    let owner = compose_runtime::remember(|| Rc::new(()));
+    inner.prefetch.use_window(&inner, cache_window, &owner);
     super::prefetch::note_nested(&inner);
     let density = compose_ui::LOCAL_DENSITY.current();
     let cross_spacing = cross_arrangement.spacing(&density);
@@ -1109,12 +1335,15 @@ fn LazyStaggeredGrid(
     let policy = {
         let scheduler = compose_ui::LOCAL_PREFETCH_SCHEDULER.current();
         compose_runtime::remember_keyed((state, info.clone(), scheduler.clone()), || {
+            *inner.prefetch.units.borrow_mut() =
+                Some(Rc::new(StaggeredUnits { state, items: info.items.clone() }));
             Rc::new(StaggeredLayout {
                 state,
                 list: list.inner_or_detached(),
                 info,
                 scheduler,
                 slots: RefCell::new(None),
+                told: RefCell::new(None),
             }) as Rc<dyn MeasurePolicy>
         })
     };
@@ -1160,6 +1389,58 @@ fn LazyStaggeredGrid(
     );
 }
 
+/// A staggered grid's units for its window: items, with their lanes as `LazyStaggeredGridLaneInfo`
+/// tells, as `LazyStaggeredGridCacheWindowScope`.
+struct StaggeredUnits {
+    state: LazyStaggeredGridState,
+    items: Rc<Items>,
+}
+
+impl StaggeredUnits {
+    /// `item`'s lane noted if it's a full line, or not known yet, as it goes from `lane`.
+    fn note(&self, info: &mut LazyStaggeredGridLaneInfo, item: i32, lane: i32) {
+        if self.is_span(item) {
+            info.set_lane(item, LazyStaggeredGridLaneInfo::LANE_FULL_SPAN);
+        } else if info.get_lane(item) == LazyStaggeredGridLaneInfo::LANE_UNSET {
+            info.set_lane(item, lane);
+        }
+    }
+}
+
+impl Units for StaggeredUnits {
+    fn items_of(&self, unit: usize) -> Option<std::ops::Range<usize>> {
+        (unit < self.items.count).then(|| unit..unit + 1)
+    }
+
+    fn unit_of(&self, item: usize) -> usize {
+        item
+    }
+
+    fn next_end_in_lane(&self, lane: i32, unit: i32) -> i32 {
+        let Some(inner) = self.state.inner() else { return -1 };
+        let mut info = inner.lane_info.borrow_mut();
+        let next = info.find_next_item_index(unit, lane);
+        self.note(&mut info, next, lane);
+        next
+    }
+
+    fn next_start_in_lane(&self, lane: i32, unit: i32) -> i32 {
+        let Some(inner) = self.state.inner() else { return -1 };
+        if (unit as usize) < self.state.lane_count() {
+            return -1;
+        }
+        let mut info = inner.lane_info.borrow_mut();
+        let found = info.find_previous_item_index(unit, lane);
+        let previous = if found == -1 { (unit - 1).max(0) } else { found };
+        self.note(&mut info, previous, lane);
+        previous
+    }
+
+    fn is_span(&self, unit: i32) -> bool {
+        unit >= 0 && self.items.is_full_span(unit as usize)
+    }
+}
+
 /// The cells' cache key: the room across, the spacing between them and the density.
 type SlotsKey = (i32, i32, Density);
 
@@ -1171,6 +1452,8 @@ struct StaggeredLayout {
     scheduler: Option<PrefetchScheduler>,
     /// The lanes as last worked out, as `LazyStaggeredGridSlotCache`.
     slots: RefCell<Option<(SlotsKey, Rc<Slots>)>>,
+    /// The lanes prefetching was told items' constraints in.
+    told: RefCell<Option<Rc<Slots>>>,
 }
 
 /// An item measured, as `LazyStaggeredGridMeasuredItem`.
@@ -1217,6 +1500,28 @@ struct Context<'a, 'scope> {
     lacked: Option<(usize, usize)>,
     /// More it may need after the last one lacked: the room left, in items of the average size.
     lacked_room: usize,
+}
+
+impl Context<'_, '_> {
+    /// `MeasuredItem.place`.
+    fn place(&mut self, placed: &Placed, placeable: &Placeable, main: i32, cross: i32) {
+        let size = if self.vertical { placeable.height } else { placeable.width };
+        let main = if placed.reverse { placed.main_layout_size - main - size } else { main };
+        let main = main + self.before;
+        let cross = cross + placed.cross_before;
+        if self.vertical {
+            self.scope.place_relative(placeable, cross, main);
+        } else {
+            self.scope.place_relative(placeable, main, cross);
+        }
+    }
+}
+
+/// How items are placed in the layout.
+struct Placed {
+    reverse: bool,
+    main_layout_size: i32,
+    cross_before: i32,
 }
 
 /// A lane range, as `SpanRange`: the first lane and how many.
@@ -1543,7 +1848,8 @@ impl Context<'_, '_> {
                     let room: i32 =
                         current_offsets.iter().map(|offset| (max_offset - *offset).max(0)).sum();
                     self.lacked_room = (room as usize).div_ceil(average as usize);
-                    return Err(missing);
+                    let Missing = missing;
+                    break;
                 }
             };
             let offset = max_in_range(&current_offsets, span);
@@ -1579,6 +1885,23 @@ impl Context<'_, '_> {
                 first_offsets[lane] -= item.size_with_spacing + gap;
             }
             first_indices[lane] = measured[lane].front().map_or(-1, |at| arena[*at].index);
+        }
+        // Short of items going down: what it has is placed if the frame's rounds end here, the
+        // position staying (the caller goes back).
+        if self.lacked.is_some() {
+            let scroll_offsets: Vec<i32> = first_offsets.iter().map(|offset| -offset).collect();
+            return Ok(Measured {
+                first_indices,
+                first_offsets,
+                current_indices,
+                current_offsets,
+                scroll_offsets,
+                arena,
+                lanes_of_items: measured,
+                consumed: 0.0,
+                min_offset,
+                max_offset,
+            });
         }
         // No spacing after the last item.
         if current_indices.contains(&(count - 1)) {
@@ -1699,8 +2022,11 @@ impl Context<'_, '_> {
     }
 }
 
-/// How many items back a layout looks for how far it can scroll: past them, it estimates.
-const MOST_ROOM_STEPS: usize = 32;
+/// How far apart the items a grid needs are for those between not to be composed: a lane's first
+/// behind a very long item in it, past what the other lanes' items fill.
+fn apart_gap(lanes: usize) -> usize {
+    4 * lanes
+}
 
 /// `fastRoundToInt`.
 fn kotlin_round(value: f32) -> i32 {
@@ -1721,6 +2047,51 @@ impl StaggeredLayout {
         let slots = Rc::new(Slots::new(sizes, &self.info.cross_arrangement, room, &density));
         *cached = Some((key, slots.clone()));
         slots
+    }
+
+    /// A measurement lacked item `first` to `last`: the items its next round has. As many as it
+    /// says cover the room, at least twice the last round's, up to `MOST_MISSING`: 4, 8 … 128, 200
+    /// … makes about 2,250 in a frame's 16 rounds. The first stop after a jump starts over around
+    /// the item; one far from those composed comes apart from them.
+    fn ask_for(
+        &self,
+        staggered: &StaggeredInner,
+        (first, last): (usize, usize),
+        room: usize,
+        (composed_start, composed_end): (usize, usize),
+        lanes: usize,
+    ) {
+        let state = &self.list;
+        let count = self.info.items.count;
+        let asked = state.asked.get();
+        let step = FIRST_STEP.max(2 * asked).max(lanes).min(MOST_IN_A_ROUND);
+        // The estimate first; twice in a row short of it (a global average, items changing size),
+        // it doubles.
+        let stops = staggered.stops.get();
+        staggered.stops.set(stops + 1);
+        let floor = if stops < 2 { 1 } else { 2 * asked };
+        let more = room.max(floor).min(step).min(MOST_MISSING);
+        state.asked.set(more);
+        let gap = apart_gap(lanes);
+        let empty = composed_start == composed_end;
+        let far = first + gap < composed_start || first > composed_end + gap;
+        let range = if empty || (far && staggered.jump_to_compose.replace(false)) {
+            (first.saturating_sub(step - 1), last + more)
+        } else if far {
+            let mut detached = state.prefetch.detached.borrow_mut();
+            if !detached.contains(&first) {
+                detached.push(first);
+            }
+            (composed_start, composed_end)
+        } else {
+            let start = if first < composed_start {
+                first.saturating_sub(if room == 0 { step - 1 } else { 0 })
+            } else {
+                composed_start
+            };
+            (start, composed_end.max(last + more))
+        };
+        state.compose((range.0, range.1.min(count).max(range.0)));
     }
 
     /// The items pinned and those a focus search asked for: laid out beyond those in view.
@@ -1797,6 +2168,24 @@ impl MeasurePolicy for StaggeredLayout {
         let cross_room = cross_max - cross_before - cross_after;
         let slots = self.slots(cross_room, cross_spacing, density);
         let lanes = slots.count();
+        state.prefetch.window_lanes.set(lanes.max(1));
+        if !self.told.borrow().as_ref().is_some_and(|told| Rc::ptr_eq(told, &slots)) {
+            *self.told.borrow_mut() = Some(slots.clone());
+            // As `schedulePrefetch`: a full line across them all, another in its lane.
+            let (cells, grid, items) = (slots.clone(), self.state, info.items.clone());
+            let constraints_of = Rc::new(move |item: usize| {
+                let inner = grid.inner()?;
+                let lane = inner.lane_info.try_borrow().ok()?.get_lane(item as i32);
+                let full = items.is_full_span(item);
+                if cells.count() == 0 || (!full && lane < 0) {
+                    return None;
+                }
+                let (slot, span) = if full { (0, cells.count()) } else { (lane as usize, 1) };
+                let slot = slot.min(cells.count() - 1);
+                Some(super::grid::cell_constraints(vertical, cells.of(slot, span).1))
+            });
+            *state.prefetch.constraints_of.borrow_mut() = Some(constraints_of);
+        }
         let available = main_max - before - after;
         // As large as its padding at least.
         let (horizontal_padding, vertical_padding) = if vertical {
@@ -1835,6 +2224,17 @@ impl MeasurePolicy for StaggeredLayout {
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
             state.laid_out.begin();
+            // Nothing visible: the window starts over.
+            state.prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                None,
+                0,
+                false,
+                None,
+                &[],
+                &mut |_| None,
+            );
             let keys_changed = state.note_laid_items(&info.items);
             state.laid_out.end(viewport(size), keys_changed);
             // Its lanes as asked keep waiting for items.
@@ -1867,6 +2267,7 @@ impl MeasurePolicy for StaggeredLayout {
                 staggered.position.borrow_mut().0 = filled;
             }
         }
+        lane_info.begin_pass();
         let initial_indices = if indices.len() == lanes {
             indices
         } else {
@@ -1904,13 +2305,16 @@ impl MeasurePolicy for StaggeredLayout {
         const MOST_DELTA: f32 = 1.0e9;
         let pending = if pending.is_nan() { 0.0 } else { pending.clamp(-MOST_DELTA, MOST_DELTA) };
         let unready = state.prefetch.layout_started();
+        // Out of its cell for the pass: the window's scope reads it after it, in this measurement.
+        let mut taken_lanes = std::mem::take(&mut *lane_info);
+        drop(lane_info);
         let mut context = Context {
             scope,
             measurables,
             children: &children,
             composed_start,
             placeables: vec![None; measurables.len()],
-            lane_info: &mut lane_info,
+            lane_info: &mut taken_lanes,
             slots: &slots,
             items: &info.items,
             prefetch: &state.prefetch,
@@ -1930,30 +2334,48 @@ impl MeasurePolicy for StaggeredLayout {
         };
         let c = &mut context;
         let result = c.run(kotlin_round(-pending), &initial_indices, &initial_offsets, true);
-        let mut done = match result {
-            Ok(done) => done,
-            Err(Missing) => {
-                // Composed in the frame's next round, which measures again.
-                let (first, last) = c.lacked.expect("noted");
-                let step = FIRST_STEP.max(2 * state.asked.get()).max(lanes).min(MOST_IN_A_ROUND);
-                let more = c.lacked_room.max(1).min(step).min(MOST_MISSING);
-                state.asked.set(more);
-                let start = if first < composed_start || composed_start == composed_end {
-                    first.saturating_sub(if c.lacked_room == 0 { step - 1 } else { 0 })
-                } else {
-                    composed_start
-                };
-                let end = composed_end.max(last + more).min(count);
-                state.compose((start, end.max(last + 1)));
-                let (width, height) = if vertical {
-                    (cross_max, constraints.constrain_height(main_max))
-                } else {
-                    (constraints.constrain_width(main_max), cross_max)
-                };
-                return c.scope.layout(width, height);
+        let mut done = result.ok();
+        if let Some(lacked) = c.lacked {
+            c.lane_info.roll_back();
+            self.ask_for(&staggered, lacked, c.lacked_room, (composed_start, composed_end), lanes);
+        } else {
+            c.lane_info.commit_pass();
+        }
+        if done.is_none() {
+            // Stopped before its first item: what the last whole measurement placed, for the
+            // frame whose rounds end here.
+            *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
+            let main = staggered.last_main.get().unwrap_or(main_max);
+            let main = if vertical {
+                constraints.constrain_height(main)
+            } else {
+                constraints.constrain_width(main)
+            };
+            let placed = Placed {
+                reverse,
+                main_layout_size: main.min(available) - before + after,
+                cross_before,
+            };
+            for &(item, lane, span, at, cross) in staggered.last_placed.borrow().iter() {
+                if (item as usize) < count
+                    && let Some(measured) = c.try_measure(item, (lane, span))
+                {
+                    c.place(&placed, &measured.placeable, at, cross);
+                }
             }
-        };
-        state.asked.set(0);
+            return if vertical {
+                c.scope.layout(cross_max, main)
+            } else {
+                c.scope.layout(main, cross_max)
+            };
+        }
+        let mut done = done.take().expect("not stopped before its first item");
+        let stopped = c.lacked.is_some();
+        if !stopped {
+            state.asked.set(0);
+            staggered.stops.set(0);
+            staggered.jump_to_compose.set(false);
+        }
         let content_padding = before + after;
         let max_current = done.current_offsets.iter().copied().max().unwrap_or(0);
         let layout_main = if vertical {
@@ -1962,6 +2384,17 @@ impl MeasurePolicy for StaggeredLayout {
         } else {
             let min = Constraints::new(min_width, main_max, min_height, cross_max);
             min.constrain_width(max_current + content_padding)
+        };
+        // A stop keeps the size as it is, what's measured being only so far.
+        let layout_main = match staggered.last_main.get() {
+            Some(last) if stopped => {
+                if vertical {
+                    constraints.constrain_height(last)
+                } else {
+                    constraints.constrain_width(last)
+                }
+            }
+            _ => layout_main,
         };
         let main_layout_size = layout_main.min(available) - before + after;
         // The items pinned, or a focus search's, around those in view.
@@ -1973,7 +2406,7 @@ impl MeasurePolicy for StaggeredLayout {
             .map(|at| done.arena[*at].index)
             .max()
             .unwrap_or(first_item);
-        let extra = self.extra_items(first_item, last_visible);
+        let extra = if stopped { Vec::new() } else { self.extra_items(first_item, last_visible) };
         let mut positioned: Vec<(Placeable, i32, i32)> = Vec::new();
         let mut scroll_offsets = done.scroll_offsets.clone();
         let mut extra_offset = scroll_offsets[0];
@@ -2020,7 +2453,8 @@ impl MeasurePolicy for StaggeredLayout {
             }
             scroll_offsets[span.0..span.0 + span.1].fill(main + with_spacing);
         }
-        let mut extra_offset = done.scroll_offsets[0];
+        // After `calculateVisibleItems` moved them on, past what's in view.
+        let mut extra_offset = scroll_offsets[0];
         // The items placed: those before in the items' order.
         positioned.reverse();
         let current_indices = &done.current_indices;
@@ -2048,31 +2482,147 @@ impl MeasurePolicy for StaggeredLayout {
             positioned.push((item.placeable, item.main, item.cross));
         }
         positioned.extend(after_visible);
-        // What stays composed: those measured, whose lanes a next measurement starts from.
-        let least =
-            done.first_indices.iter().copied().filter(|index| *index >= 0).min().unwrap_or(0);
+        let placed = Placed { reverse, main_layout_size, cross_before };
+        if stopped {
+            *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
+            for (placeable, main, cross) in &positioned {
+                c.place(&placed, placeable, *main, *cross);
+            }
+            return if vertical {
+                c.scope.layout(cross_max, layout_main)
+            } else {
+                c.scope.layout(layout_main, cross_max)
+            };
+        }
+        // What stays composed: what's in view and each lane's first, where the next measurement
+        // starts from (those under the start padding too). A lane's first far behind the others
+        // (a very long item) goes apart: those in between aren't wanted.
+        let mut needed: Vec<usize> =
+            visible.iter().map(|at| done.arena[*at].index as usize).collect();
+        needed.extend(
+            done.lanes_of_items
+                .iter()
+                .filter_map(|lane| lane.front())
+                .map(|at| done.arena[*at].index as usize),
+        );
+        needed.extend(
+            done.first_indices.iter().filter(|index| **index >= 0).map(|index| *index as usize),
+        );
+        needed.sort_unstable();
+        needed.dedup();
+        let gap = apart_gap(lanes);
+        let range_from =
+            needed.windows(2).rposition(|pair| pair[1] - pair[0] > gap).map_or(0, |at| at + 1);
+        let apart: Vec<usize> = needed[..range_from].to_vec();
+        let least = needed.get(range_from).copied().unwrap_or(0) as i32;
         let most = done.current_indices.iter().copied().max().unwrap_or(least);
         let (beyond_before, beyond_after) = state.beyond_bounds.get();
         let wanted = (
             (least as usize).saturating_sub(beyond_before),
             ((most as usize) + 1 + beyond_after).min(count),
         );
+        // Exact if the first lane's first item is laid out; else from the average, as the sizes
+        // remembered of those before may be old.
+        let known_room =
+            done.lanes_of_items[0].front().map(|at| &done.arena[*at]).and_then(|front| {
+                if front.index != 0 {
+                    return None;
+                }
+                let first = done.first_indices[0];
+                if first == 0 {
+                    return Some(done.first_offsets[0]);
+                }
+                // Under the start padding: the position is past it.
+                let gap = c.lane_info.get_gaps(0).map_or(0, |gaps| gaps[0]);
+                let room = done.first_offsets[0] + front.size_with_spacing + gap;
+                // No room back with items before: as Compose's, it can scroll, and finds it can't.
+                (room > 0).then_some(room)
+            });
+        let average = if visible.is_empty() {
+            0
+        } else {
+            visible.iter().map(|at| done.arena[*at].main_size).sum::<i32>() / visible.len() as i32
+                + spacing
+        };
+        *staggered.lane_info.borrow_mut() = std::mem::take(c.lane_info);
         let optimizations = c.scope.optimizations();
         let prefetch = &state.prefetch;
         prefetch.policy.set(Policy::of(optimizations));
         prefetch.vertical.set(vertical);
         prefetch.visible.set(visible.len());
+        // The window, as `onVisibleItemsUpdated` and `onScroll` with `LazyStaggeredGridCacheWindowScope`.
+        if staggered.prefetching_enabled.get() {
+            let mut shown = prefetch.sizes.borrow_mut();
+            shown.clear();
+            let mut last = vec![-1; lanes];
+            let mut end = vec![i32::MIN; lanes];
+            let mut visible_lanes = Vec::with_capacity(visible.len());
+            for at in &visible {
+                let item = &done.arena[*at];
+                shown.push((item.index as usize, item.main_size));
+                visible_lanes.push(item.lane as i32);
+                if item.main + item.main_size > end[item.lane] {
+                    end[item.lane] = item.main + item.main_size;
+                    last[item.lane] = item.index;
+                }
+            }
+            for end in &mut end {
+                *end = if *end == i32::MIN { 0 } else { (*end + spacing - done.max_offset).max(0) };
+            }
+            let laid = match (visible.first(), visible.last()) {
+                (Some(first), Some(last_visible)) => Some(Laid {
+                    first: done.arena[*first].index,
+                    last: done.arena[*last_visible].index as usize,
+                    start_overflow: 0,
+                    end_overflow: 0,
+                    viewport: layout_main,
+                    average,
+                    density,
+                    lanes: Some(LanesLaid {
+                        first: done.first_indices.clone(),
+                        last,
+                        start: done.first_offsets.clone(),
+                        end,
+                        visible: visible_lanes,
+                    }),
+                }),
+                _ => None,
+            };
+            let units = StaggeredUnits { state: self.state, items: info.items.clone() };
+            let items = &info.items;
+            prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                laid.as_ref(),
+                count,
+                state.laid_items_changed(&info.items),
+                Some(&units),
+                &shown,
+                &mut |item| Some(items.key(item)),
+            );
+        } else {
+            prefetch.reset_window();
+        }
         let beyond_ended = state.beyond_ended.take();
         if beyond_ended {
             prefetch.search_ended();
         }
-        let next = if prefetch.forward.get() { wanted.1 + 1 } else { wanted.0.saturating_sub(1) };
-        let limits = prefetch.target(
-            wanted,
-            (composed_start, composed_end),
-            None,
-            (!beyond_ended).then_some(next),
-        );
+        // What's measured and what's in the window stay, as Compose's `keepAroundItems`; those
+        // apart stay on their own, and what's between them and the others doesn't.
+        {
+            let mut detached = prefetch.detached.borrow_mut();
+            if *detached != apart {
+                if detached.iter().any(|item| !apart.contains(item)) {
+                    prefetch.detached_dirty.set(true);
+                }
+                *detached = apart.clone();
+            }
+        }
+        let window = prefetch.window_bounds().map(|(first, last)| {
+            let first = if apart.is_empty() { first } else { first.max(wanted.0) };
+            (first, (last + 1).min(count))
+        });
+        let limits = prefetch.target(wanted, (composed_start, composed_end), window, None);
         let covers = composed_start <= wanted.0 && composed_end >= wanted.1;
         let past_limits = composed_start < limits.0 || composed_end > limits.1;
         let search_ended = beyond_ended && past_limits;
@@ -2118,12 +2668,6 @@ impl MeasurePolicy for StaggeredLayout {
             post_scroll = overshoot.rest(moved);
         }
         let pending = state.pending.get();
-        let average = if visible.is_empty() {
-            0
-        } else {
-            visible.iter().map(|at| done.arena[*at].main_size).sum::<i32>() / visible.len() as i32
-                + spacing
-        };
         let reaches_end = done.current_indices.contains(&(count as i32 - 1));
         let forward_room = (max_current - available) as f32;
         state.room_forward.set(if reaches_end {
@@ -2133,26 +2677,6 @@ impl MeasurePolicy for StaggeredLayout {
             (forward_room.max(0.0) + average.max(1) as f32 * remaining / lanes as f32 - pending)
                 .max(1.0)
         });
-        // Exact if what's before the first lane's first item is known: its lane and sizes.
-        let known_room = {
-            let (mut item, mut room) = (done.first_indices[0], done.first_offsets[0]);
-            for _ in 0..MOST_ROOM_STEPS {
-                if item <= 0 {
-                    break;
-                }
-                let previous = c.lane_info.find_previous_item_index(item, 0);
-                if previous < 0
-                    || c.lane_info.get_lane(previous) == LazyStaggeredGridLaneInfo::LANE_UNSET
-                {
-                    break;
-                }
-                let Some(size) = c.sizes.get(previous as usize) else { break };
-                let gap = c.lane_info.get_gaps(previous).map_or(0, |gaps| gaps[0]);
-                room += (size + spacing).max(0) + gap;
-                item = previous;
-            }
-            (item == 0).then_some(room)
-        };
         let reaches_start = known_room.is_some();
         state.room_backward.set(if let Some(room) = known_room {
             if room > 0 { room as f32 + pending } else { 0.0 }
@@ -2176,16 +2700,17 @@ impl MeasurePolicy for StaggeredLayout {
         }
         let (width, height) =
             if vertical { (cross_max, layout_main) } else { (layout_main, cross_max) };
-        // `MeasuredItem.place`.
         for (placeable, main, cross) in &positioned {
-            let size = if vertical { placeable.height } else { placeable.width };
-            let main = if reverse { main_layout_size - main - size } else { *main } + before;
-            let cross = cross + cross_before;
-            if vertical {
-                c.scope.place_relative(placeable, cross, main);
-            } else {
-                c.scope.place_relative(placeable, main, cross);
-            }
+            c.place(&placed, placeable, *main, *cross);
+        }
+        staggered.last_main.set(Some(layout_main));
+        {
+            let mut last = staggered.last_placed.borrow_mut();
+            last.clear();
+            last.extend(visible.iter().map(|at| {
+                let item = &done.arena[*at];
+                (item.index, item.lane, item.span, item.main, item.cross)
+            }));
         }
         let mut laid = state.laid_out.begin();
         for at in &visible {

@@ -30,8 +30,8 @@ mod staggered;
 
 pub use animate_scroll::LazyLayoutScrollScope;
 pub use cache_window::{
-    LazyGridDefaults, LazyLayoutCacheWindow, LazyListDefaults, WindowValue,
-    lazy_layout_cache_window, lazy_layout_cache_window_fraction,
+    LazyGridDefaults, LazyLayoutCacheWindow, LazyListDefaults, LazyStaggeredGridDefaults,
+    WindowValue, lazy_layout_cache_window, lazy_layout_cache_window_fraction,
     lazy_layout_cache_window_fraction_with, lazy_layout_cache_window_with,
 };
 pub use grid::{
@@ -42,7 +42,7 @@ pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, La
 pub use staggered::{
     LazyHorizontalStaggeredGrid, LazyStaggeredGridItemInfo, LazyStaggeredGridLaneInfo,
     LazyStaggeredGridLayoutInfo, LazyStaggeredGridScope, LazyStaggeredGridState,
-    LazyVerticalStaggeredGrid, StaggeredGridCells, StaggeredGridItemSpan,
+    LazyVerticalStaggeredGrid, NO_SPACING, StaggeredGridCells, StaggeredGridItemSpan,
     remember_lazy_staggered_grid_state,
 };
 
@@ -2983,6 +2983,7 @@ impl MeasurePolicy for LazyListLayout {
                         (of_header + in_view) / count.max(1) as i32 + spacing
                     },
                     density,
+                    lanes: None,
                 }),
                 _ => None,
             };

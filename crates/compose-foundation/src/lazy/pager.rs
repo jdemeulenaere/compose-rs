@@ -1606,10 +1606,10 @@ pub fn pager_key<K: std::hash::Hash + 'static>(
 pub fn HorizontalPager(
     state: PagerState,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(PageSize::Fill)] page_size: PageSize,
+    #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
+    #[default(crate::PageSize::Fill)] page_size: PageSize,
     #[default(0)] beyond_viewport_page_count: usize,
-    #[default(Dp(0.0))] page_spacing: Dp,
+    #[default(crate::NO_SPACING)] page_spacing: Dp,
     #[default(crate::Alignment::CENTER_VERTICALLY)]
     vertical_alignment: compose_ui::VerticalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn TargetedFlingBehavior>>,
@@ -1617,7 +1617,7 @@ pub fn HorizontalPager(
     #[default(false)] reverse_layout: bool,
     #[default(None)] key: Option<Rc<dyn Fn(usize) -> u64>>,
     #[default(None)] page_nested_scroll_connection: Option<Rc<dyn NestedScrollConnection>>,
-    #[default(SnapPosition::Start)] snap_position: SnapPosition,
+    #[default(crate::SnapPosition::Start)] snap_position: SnapPosition,
     #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
         Rc<dyn OverscrollEffect>,
     >,
@@ -1649,10 +1649,10 @@ pub fn HorizontalPager(
 pub fn VerticalPager(
     state: PagerState,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(PageSize::Fill)] page_size: PageSize,
+    #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
+    #[default(crate::PageSize::Fill)] page_size: PageSize,
     #[default(0)] beyond_viewport_page_count: usize,
-    #[default(Dp(0.0))] page_spacing: Dp,
+    #[default(crate::NO_SPACING)] page_spacing: Dp,
     #[default(crate::Alignment::CENTER_HORIZONTALLY)]
     horizontal_alignment: compose_ui::HorizontalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn TargetedFlingBehavior>>,
@@ -1660,7 +1660,7 @@ pub fn VerticalPager(
     #[default(false)] reverse_layout: bool,
     #[default(None)] key: Option<Rc<dyn Fn(usize) -> u64>>,
     #[default(None)] page_nested_scroll_connection: Option<Rc<dyn NestedScrollConnection>>,
-    #[default(SnapPosition::Start)] snap_position: SnapPosition,
+    #[default(crate::SnapPosition::Start)] snap_position: SnapPosition,
     #[default(crate::remember_overscroll_effect())] overscroll_effect: Option<
         Rc<dyn OverscrollEffect>,
     >,

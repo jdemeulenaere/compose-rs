@@ -203,6 +203,16 @@ impl LazyGridDefaults {
     }
 }
 
+/// Compose's `LazyStaggeredGridDefaults`.
+pub struct LazyStaggeredGridDefaults;
+
+impl LazyStaggeredGridDefaults {
+    /// The default window of `state`'s grid, as `LazyStaggeredGridDefaults.cacheWindow(state)`.
+    pub fn cache_window(state: super::LazyStaggeredGridState) -> Rc<dyn LazyLayoutCacheWindow> {
+        LazyListDefaults::cache_window(state.list())
+    }
+}
+
 /// Whether two windows are the same one, as Compose's `remember(state, cacheWindow)` compares: by
 /// value for the factories', else by identity.
 pub(super) fn same_window(
@@ -362,7 +372,10 @@ impl CacheWindowLogic {
 
     /// The window's first and last units, if it has bounds (lane 0: lists and grids have one).
     pub(super) fn bounds(&mut self) -> Option<(i32, i32)> {
-        self.has_valid_bounds().then(|| (self.start_index[0], self.end_index[0]))
+        self.has_valid_bounds().then(|| {
+            let start = self.start_index.iter().copied().min().unwrap_or(i32::MAX);
+            (start, self.end_index.iter().copied().max().unwrap_or(i32::MIN))
+        })
     }
 
     fn cached(&self, index: i32) -> Option<&CachedItem> {
