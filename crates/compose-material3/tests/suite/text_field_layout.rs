@@ -1262,3 +1262,40 @@ fn the_text_takes_the_focused_and_error_colors() {
     settle(&mut ui);
     assert_eq!(log.borrow().last(), Some(&Color::GREEN));
 }
+
+thread_local! { static CONTAINERS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+
+#[composable]
+fn CountedContainer() {
+    CONTAINERS.with(|count| count.set(count.get() + 1));
+}
+
+/// What's typed composes the decoration, not its container, as Compose's `Container`, which skips:
+/// its animations and drawing don't run again for a keystroke (D1564).
+#[test]
+fn a_keystroke_doesnt_compose_the_container() {
+    let value = mutable_state_of(String::new());
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            let source = remember(MutableInteractionSource::new);
+            TextFieldDecorationBox!(
+                handle.get(),
+                || {},
+                true,
+                false,
+                compose_foundation::VisualTransformation::NONE,
+                source,
+                container = Some(CountedContainer)
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let before = CONTAINERS.with(std::cell::Cell::get);
+    assert!(before > 0);
+    value.set("a".to_string());
+    ui.wait_for_idle();
+    value.set("ab".to_string());
+    ui.wait_for_idle();
+    assert_eq!(CONTAINERS.with(std::cell::Cell::get), before);
+}

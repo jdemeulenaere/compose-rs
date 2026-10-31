@@ -585,6 +585,33 @@ pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
 
 /// A text field's colors, as Compose's `TextFieldColors`: each part's focused, unfocused, disabled
 /// and in error, as its methods pick (with struct update syntax to change some).
+/// A field's default colors, with what they came from.
+pub(crate) struct CachedFieldColors {
+    scheme: std::rc::Rc<crate::ColorScheme>,
+    selection: compose_foundation::TextSelectionColors,
+    colors: TextFieldColors,
+}
+
+/// The colors `make` gives for the theme's scheme and selection colors, kept in `cache` while
+/// they're the same.
+pub(crate) fn cached_field_colors(
+    cache: &std::cell::RefCell<Option<CachedFieldColors>>,
+    make: fn(&crate::ColorScheme, compose_foundation::TextSelectionColors) -> TextFieldColors,
+) -> TextFieldColors {
+    let scheme = MaterialTheme::color_scheme();
+    let selection = compose_foundation::LOCAL_TEXT_SELECTION_COLORS.current();
+    let mut cache = cache.borrow_mut();
+    if let Some(cached) = &*cache
+        && std::rc::Rc::ptr_eq(&cached.scheme, &scheme)
+        && cached.selection == selection
+    {
+        return cached.colors;
+    }
+    let colors = make(&scheme, selection);
+    *cache = Some(CachedFieldColors { scheme, selection, colors });
+    colors
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldColors {
     pub focused_text_color: Color,
@@ -855,10 +882,13 @@ impl TextFieldDefaults {
     pub const FOCUSED_INDICATOR_THICKNESS: Dp = Dp(2.0);
 
     pub fn colors() -> TextFieldColors {
-        Self::colors_of(
-            &MaterialTheme::color_scheme(),
-            compose_foundation::LOCAL_TEXT_SELECTION_COLORS.current(),
-        )
+        thread_local! {
+            /// The last ones, as `ColorScheme.defaultTextFieldColorsCached`: a keystroke composes
+            /// the field, which reads them again.
+            static CACHE: std::cell::RefCell<Option<CachedFieldColors>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        CACHE.with(|cache| cached_field_colors(cache, Self::colors_of))
     }
 
     /// `colors()` from these, for what's not composing.

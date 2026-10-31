@@ -925,6 +925,12 @@ pub fn OutlinedTextField(
     );
 }
 
+impl compose_runtime::ComposeArg for Variant {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Variant {
     Filled,
@@ -1099,40 +1105,6 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
             })
         })
     });
-    let custom_container = container_slot.is_some();
-    let indicator = colors.indicator_color(enabled, is_error, is_focused);
-    // As `animateBorderStrokeAsState`: disabled, it snaps. With the default container alone: one of
-    // its own has its own.
-    let indicator_state = (enabled && !custom_container).then(|| {
-        compose_animation::animate_color_as_state(
-            indicator,
-            motion.fast_effects_spec(),
-            "IndicatorColor",
-            None,
-        )
-    });
-    let (focused_thickness, unfocused_thickness) = match variant {
-        Variant::Filled => (
-            TextFieldDefaults::FOCUSED_INDICATOR_THICKNESS,
-            TextFieldDefaults::UNFOCUSED_INDICATOR_THICKNESS,
-        ),
-        Variant::Outlined => (
-            OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS,
-            OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS,
-        ),
-    };
-    let thickness_state = (enabled && !custom_container).then(|| {
-        compose_animation::animate_dp_as_state(
-            if is_focused { focused_thickness } else { unfocused_thickness },
-            motion.fast_spatial_spec(),
-            "IndicatorThickness",
-            None,
-        )
-    });
-    let indicator_color = move || indicator_state.map_or(indicator, |state| state.get());
-    let indicator_thickness =
-        move || thickness_state.map_or(unfocused_thickness, |state| state.get());
-    let typography = MaterialTheme::typography();
     let label_color = colors.label_color(enabled, is_error, is_focused);
     let leading_color = colors.leading_icon_color(enabled, is_error, is_focused);
     let trailing_color = colors.trailing_icon_color(enabled, is_error, is_focused);
@@ -1140,15 +1112,6 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
     let prefix_color = colors.prefix_color(enabled, is_error, is_focused);
     let suffix_color = colors.suffix_color(enabled, is_error, is_focused);
     let placeholder_color = colors.placeholder_color(enabled, is_error, is_focused);
-    // As `TextFieldDefaults.Container`: the color read as it draws (`textFieldBackground`).
-    let container_color = (!custom_container).then(|| {
-        compose_animation::animate_color_as_state(
-            colors.container_color(enabled, is_error, is_focused),
-            motion.fast_effects_spec(),
-            "ContainerColor",
-            None,
-        )
-    });
     // Shown while the field is empty and it's not transparent, as Compose's.
     let show_placeholder = empty && slots.placeholder.is_some() && show_placeholder_alpha;
     let (has_prefix, has_suffix) =
@@ -1158,102 +1121,7 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
     // The label as last measured, for the cut, as `cutoutSize`: state, so the container, a node of
     // its own, draws again when it changes.
     let label_size = remember(|| mutable_state_of(compose_ui::Size::new(0.0, 0.0)));
-    // The outline's path, reset each time it's drawn, as Compose's drawing caches keep one
-    // (`CheckDrawingCache`): an animated cut redefines it in place on Android (D532).
-    let outline = remember(Path::new);
-    let line_path = remember(|| Rc::new(IndicatorPath::default()));
-    let cut_path = remember(|| Rc::new(CutPath::default()));
     let is_cutout = has_label && label_position.is_cutout();
-    let notch_alignment = label_position.minimized_alignment();
-    // Where the cut goes, as `outlineCutout`: at the minimized label, as big as it is yet.
-    let notch = move |size: compose_ui::Size,
-                      density: compose_ui::Density,
-                      direction: compose_ui::LayoutDirection| {
-        if !is_cutout {
-            return None;
-        }
-        let along = progress.map_or(0.0, |progress| progress.get());
-        let label = label_size.get();
-        let (width, height) = (label.width * along, label.height * along);
-        if width <= 0.0 {
-            return None;
-        }
-        let inner = density.to_px(4.dp());
-        let ltr = direction == compose_ui::LayoutDirection::Ltr;
-        let (start, end) =
-            (density.to_px(content_padding.start), density.to_px(content_padding.end));
-        let (left, right) = if ltr { (start, end) } else { (end, start) };
-        let x = notch_alignment.align(
-            width.round() as i32,
-            (size.width - left - right).round() as i32,
-            direction,
-        ) as f32
-            + left;
-        Some(Notch {
-            left: (x - inner).max(0.0),
-            right: (x + width + inner).min(size.width),
-            half_height: height / 2.0,
-        })
-    };
-    let container_modifier = match (&container_slot, variant, container_color) {
-        (None, Variant::Filled, Some(color)) => {
-            let shape = shape.clone();
-            let (line_path, cut_path) = (line_path.clone(), cut_path.clone());
-            Modifier.draw_behind(move |scope| {
-                let at = notch(scope.size(), scope.density(), scope.layout_direction());
-                in_cut(scope, &cut_path, at, |scope| {
-                    scope.draw_shape(&shape, color.get());
-                    draw_indicator(
-                        scope,
-                        &line_path,
-                        &shape,
-                        indicator_thickness(),
-                        indicator_color(),
-                    );
-                });
-            })
-        }
-        (None, Variant::Outlined, Some(color)) => {
-            let shape = shape.clone();
-            let (outline, cut_path) = (outline.clone(), cut_path.clone());
-            Modifier.draw_behind(move |scope| {
-                let at = notch(scope.size(), scope.density(), scope.layout_direction());
-                // Usually transparent: no clip for nothing.
-                let fill = color.get();
-                if fill.alpha() > 0 {
-                    in_cut(scope, &cut_path, at, |scope| scope.draw_shape(&shape, fill));
-                }
-                draw_notched_outline(
-                    scope,
-                    &outline,
-                    &shape,
-                    indicator_thickness(),
-                    indicator_color(),
-                    at,
-                );
-            })
-        }
-        // The label's room out of what's given, as `outlineCutout`.
-        _ if is_cutout => {
-            let cut_path = cut_path.clone();
-            Modifier.draw_with_content(move |scope| {
-                let at = notch(scope.size(), scope.density(), scope.layout_direction());
-                let Some(at) = at else {
-                    scope.draw_content();
-                    return;
-                };
-                let path = cut_path.path(scope, at);
-                scope.save();
-                scope.clip_outline(compose_ui::Outline::Generic(
-                    path.data(),
-                    compose_ui::Offset::ZERO,
-                ));
-                scope.draw_content();
-                scope.restore();
-            })
-        }
-        _ => Modifier,
-    };
     let has_supporting = slots.supporting_text.is_some();
     let layout = DecorationLayout {
         has_leading: slots.leading_icon.is_some(),
@@ -1291,8 +1159,6 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
             scope.layout(placeable.width, placeable.height)
         })
     });
-    let body_large = typography.body_large.clone();
-    let body_small = typography.body_small.clone();
     // Remembered: a keystroke composes the decoration, which is no reason to update the text's node.
     let text_sides = PaddingValues::new(
         if has_prefix { 0.dp() } else { start_padding },
@@ -1324,7 +1190,7 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
         // 2 dp between them and the text, as `PrefixSuffixTextPadding`.
         let affix = |content: &Option<Callback>, shows: bool, color: Color, padding: (Dp, Dp)| {
             let Some(content) = content.clone().filter(|_| shows) else { return };
-            let style = body_large.clone();
+            let style = MaterialTheme::typography().body_large.clone();
             CompositionLocalProvider(
                 (LOCAL_CONTENT_COLOR.provides(color), LOCAL_TEXT_STYLE.provides(style)),
                 || {
@@ -1375,7 +1241,7 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
             FieldLabel(modifier, progress, label_color, is_focused, label);
         }
         if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
-            let style = body_large.clone();
+            let style = MaterialTheme::typography().body_large.clone();
             let placeholder_modifier = Modifier
                 .graphics_layer(move |layer| {
                     layer.alpha = placeholder_alpha.map_or(0.0, |alpha| alpha.get());
@@ -1392,7 +1258,7 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
             });
         }
         if let Some(supporting_text) = slots.supporting_text.clone() {
-            let style = body_small.clone();
+            let style = MaterialTheme::typography().body_small.clone();
             CompositionLocalProvider(
                 (LOCAL_CONTENT_COLOR.provides(supporting_color), LOCAL_TEXT_STYLE.provides(style)),
                 move || {
@@ -1411,17 +1277,23 @@ fn decoration_box(parts: DecorationParts, inner_text_field: Callback) {
             );
         }
         // Behind everything by being placed first, and composed last so that no slot of the
-        // decoration's other nodes moves when it changes.
-        let container = container_slot.clone();
-        Box(
-            container_modifier.clone(),
-            Alignment::TOP_START,
-            true,
-            compose_runtime::callback(move |_| {
-                if let Some(container) = &container {
-                    container();
-                }
-            }),
+        // decoration's other nodes moves when it changes. Skipped by a keystroke, as Compose's
+        // `Container`: its animations and drawing don't run again for one.
+        DecorationContainer(
+            ContainerParts {
+                variant,
+                enabled,
+                is_error,
+                is_focused,
+                colors,
+                shape: shape.clone(),
+                content_padding,
+                is_cutout,
+                notch_alignment: label_position.minimized_alignment(),
+                progress,
+                label_size,
+            },
+            container_slot.clone(),
         );
     });
     compose_ui::Layout(Modifier, policy, content);
@@ -1521,6 +1393,206 @@ fn decorated_field(
                 compose_runtime::callback(decoration),
             );
         },
+    );
+}
+
+/// What the decoration's container is made from: all of it the same through a keystroke.
+#[derive(Clone, PartialEq)]
+struct ContainerParts {
+    variant: Variant,
+    enabled: bool,
+    is_error: bool,
+    is_focused: bool,
+    colors: TextFieldColors,
+    shape: Shape,
+    content_padding: PaddingValues,
+    is_cutout: bool,
+    notch_alignment: compose_ui::HorizontalAlignment,
+    progress: Option<compose_runtime::State<f32>>,
+    label_size: compose_runtime::MutableState<compose_ui::Size>,
+}
+
+impl compose_runtime::ComposeArg for ContainerParts {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// The decoration's container: `container` if it's given one, or the default of its variant, as
+/// `TextFieldDefaults.Container` and `OutlinedTextFieldDefaults.Container`, drawn by the box itself
+/// (no composition for a frame) when its outline is a rounded rectangle.
+#[composable]
+fn DecorationContainer(parts: ContainerParts, container: Option<Callback>) {
+    let ContainerParts {
+        variant,
+        enabled,
+        is_error,
+        is_focused,
+        colors,
+        shape,
+        content_padding,
+        is_cutout,
+        notch_alignment,
+        progress,
+        label_size,
+    } = parts;
+    let motion = MaterialTheme::motion_scheme();
+    let custom_container = container.is_some();
+    let indicator = colors.indicator_color(enabled, is_error, is_focused);
+    // As `animateBorderStrokeAsState`: disabled, it snaps. With the default container alone: one of
+    // its own has its own.
+    let indicator_state = (enabled && !custom_container).then(|| {
+        compose_animation::animate_color_as_state(
+            indicator,
+            motion.fast_effects_spec(),
+            "IndicatorColor",
+            None,
+        )
+    });
+    let (focused_thickness, unfocused_thickness) = match variant {
+        Variant::Filled => (
+            TextFieldDefaults::FOCUSED_INDICATOR_THICKNESS,
+            TextFieldDefaults::UNFOCUSED_INDICATOR_THICKNESS,
+        ),
+        Variant::Outlined => (
+            OutlinedTextFieldDefaults::FOCUSED_BORDER_THICKNESS,
+            OutlinedTextFieldDefaults::UNFOCUSED_BORDER_THICKNESS,
+        ),
+    };
+    let thickness_state = (enabled && !custom_container).then(|| {
+        compose_animation::animate_dp_as_state(
+            if is_focused { focused_thickness } else { unfocused_thickness },
+            motion.fast_spatial_spec(),
+            "IndicatorThickness",
+            None,
+        )
+    });
+    let indicator_color = move || indicator_state.map_or(indicator, |state| state.get());
+    let indicator_thickness =
+        move || thickness_state.map_or(unfocused_thickness, |state| state.get());
+    // As `TextFieldDefaults.Container`: the color read as it draws (`textFieldBackground`).
+    let container_color = (!custom_container).then(|| {
+        compose_animation::animate_color_as_state(
+            colors.container_color(enabled, is_error, is_focused),
+            motion.fast_effects_spec(),
+            "ContainerColor",
+            None,
+        )
+    });
+    // The outline's path, reset each time it's drawn, as Compose's drawing caches keep one
+    // (`CheckDrawingCache`): an animated cut redefines it in place on Android (D532).
+    let outline = remember(Path::new);
+    let line_path = remember(|| Rc::new(IndicatorPath::default()));
+    let cut_path = remember(|| Rc::new(CutPath::default()));
+    // Where the cut goes, as `outlineCutout`: at the minimized label, as big as it is yet.
+    let notch = move |size: compose_ui::Size,
+                      density: compose_ui::Density,
+                      direction: compose_ui::LayoutDirection| {
+        if !is_cutout {
+            return None;
+        }
+        let along = progress.map_or(0.0, |progress| progress.get());
+        let label = label_size.get();
+        let (width, height) = (label.width * along, label.height * along);
+        if width <= 0.0 {
+            return None;
+        }
+        let inner = density.to_px(4.dp());
+        let ltr = direction == compose_ui::LayoutDirection::Ltr;
+        let (start, end) =
+            (density.to_px(content_padding.start), density.to_px(content_padding.end));
+        let (left, right) = if ltr { (start, end) } else { (end, start) };
+        let x = notch_alignment.align(
+            width.round() as i32,
+            (size.width - left - right).round() as i32,
+            direction,
+        ) as f32
+            + left;
+        Some(Notch {
+            left: (x - inner).max(0.0),
+            right: (x + width + inner).min(size.width),
+            half_height: height / 2.0,
+        })
+    };
+    // Kept while nothing it was made from changes: a keystroke composes the decoration, which is no
+    // reason to draw the container again, as Compose's `Container`, which skips.
+    let container_key = (
+        (variant, shape.clone(), content_padding, is_cutout, notch_alignment.bias.to_bits()),
+        (container.is_some(), container_color.is_some(), indicator, unfocused_thickness),
+    );
+    let has_container_slot = container.is_some();
+    let make_shape = shape.clone();
+    let container_modifier = compose_runtime::remember_keyed(container_key, move || {
+        let shape = make_shape;
+        match (has_container_slot, variant, container_color) {
+            (false, Variant::Filled, Some(color)) => {
+                let shape = shape.clone();
+                let (line_path, cut_path) = (line_path.clone(), cut_path.clone());
+                Modifier.draw_behind(move |scope| {
+                    let at = notch(scope.size(), scope.density(), scope.layout_direction());
+                    in_cut(scope, &cut_path, at, |scope| {
+                        scope.draw_shape(&shape, color.get());
+                        draw_indicator(
+                            scope,
+                            &line_path,
+                            &shape,
+                            indicator_thickness(),
+                            indicator_color(),
+                        );
+                    });
+                })
+            }
+            (false, Variant::Outlined, Some(color)) => {
+                let shape = shape.clone();
+                let (outline, cut_path) = (outline.clone(), cut_path.clone());
+                Modifier.draw_behind(move |scope| {
+                    let at = notch(scope.size(), scope.density(), scope.layout_direction());
+                    // Usually transparent: no clip for nothing.
+                    let fill = color.get();
+                    if fill.alpha() > 0 {
+                        in_cut(scope, &cut_path, at, |scope| scope.draw_shape(&shape, fill));
+                    }
+                    draw_notched_outline(
+                        scope,
+                        &outline,
+                        &shape,
+                        indicator_thickness(),
+                        indicator_color(),
+                        at,
+                    );
+                })
+            }
+            // The label's room out of what's given, as `outlineCutout`.
+            _ if is_cutout => {
+                let cut_path = cut_path.clone();
+                Modifier.draw_with_content(move |scope| {
+                    let at = notch(scope.size(), scope.density(), scope.layout_direction());
+                    let Some(at) = at else {
+                        scope.draw_content();
+                        return;
+                    };
+                    let path = cut_path.path(scope, at);
+                    scope.save();
+                    scope.clip_outline(compose_ui::Outline::Generic(
+                        path.data(),
+                        compose_ui::Offset::ZERO,
+                    ));
+                    scope.draw_content();
+                    scope.restore();
+                })
+            }
+            _ => Modifier,
+        }
+    });
+    Box(
+        container_modifier,
+        Alignment::TOP_START,
+        true,
+        compose_runtime::callback(move |_| {
+            if let Some(container) = &container {
+                container();
+            }
+        }),
     );
 }
 
