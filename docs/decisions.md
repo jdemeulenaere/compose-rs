@@ -915,3 +915,4 @@ The log is split by area into the files below, one table each, rows in number or
 | D1670 | [text](decisions/text.md#d1670) | current |
 | D1671 | [text](decisions/text.md#d1671) | current |
 | D1672 | [ui-and-layout](decisions/ui-and-layout.md#d1672) | current |
+| D1673 | [text](decisions/text.md#d1673) | current |

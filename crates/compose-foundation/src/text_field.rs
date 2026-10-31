@@ -228,6 +228,10 @@ impl ModifierNodeElement for TextFieldElement {
         node.on_value_change = self.on_value_change.clone();
         node.enabled = self.enabled;
         node.read_only = self.read_only;
+        // No more written to: the input ends with what it composed, as Compose's `endInputSession`.
+        if !node.enabled || node.read_only {
+            node.end_composition();
+        }
         node.cursor_color = self.cursor_color;
         node.selection_color = self.selection_color;
         node.keyboard_options = self.keyboard_options;
@@ -495,6 +499,10 @@ impl TextFieldNode {
         context: &mut EventContext<'_>,
     ) {
         let selection = TextRange::new(self.anchor, self.cursor);
+        // Away from what's composed, or over more of the text, an edit is a step of its own.
+        let within_composition = self.composition.as_ref().is_some_and(|range| {
+            range.start <= self.anchor.min(self.cursor) && self.anchor.max(self.cursor) <= range.end
+        });
         let composition =
             self.composition.clone().map(|range| TextRange::new(range.start, range.end));
         let mut processor = EditProcessor::from_value(TextFieldValue::new(
@@ -521,8 +529,8 @@ impl TextFieldNode {
         }
         // A composition's steps, shorter ones too, are one step of undo with what began it: no undo
         // shows half of what was composed (Compose's undo, by the clock, can; D1668).
-        let composing_step =
-            typing && was_composing && !std::mem::take(&mut self.composing_over_text);
+        let over_text = std::mem::take(&mut self.composing_over_text);
+        let composing_step = typing && within_composition && !over_text;
         // A deletion or a new line ends a typing step.
         let typing = typing
             && value.text().len() >= self.text.len()
@@ -761,7 +769,8 @@ impl TextFieldNode {
     }
 
     /// What's composed stays as it is, no more a composition, and the input method starts over: what
-    /// a service's edit or selection does, as Compose's `onValueChange` with no composition.
+    /// a service's edit does, as Compose's `FinishComposingTextCommand` first, and its selection, as
+    /// Compose's `onValueChange` with no composition.
     fn commit_composition(&mut self, context: &mut EventContext<'_>) {
         if self.composition.is_some() {
             // The input method is told here: nothing's left to tell a platform's preedit.
@@ -779,6 +788,7 @@ impl TextFieldNode {
         if self.preedit {
             self.preedit = false;
             self.composition = None;
+            self.composing_over_text = false;
             context.invalidate_measure();
             context.reset_input_method();
         }
@@ -1692,6 +1702,10 @@ impl KeyInputModifierNode for TextFieldNode {
             return false;
         }
         self.preferred_x = None;
+        // What a platform's preedit shows was never typed: what's sent takes its place.
+        if self.preedit {
+            self.on_preedit("", None, context);
+        }
         self.insert(text, true, context);
         true
     }
@@ -1700,6 +1714,7 @@ impl KeyInputModifierNode for TextFieldNode {
     /// no more, and the input method starts over for whichever field it's given next (D1286).
     fn on_window_lost_keys(&mut self, context: &mut EventContext<'_>) {
         self.commit_preedit(context);
+        self.composing_over_text = false;
         if self.composition.take().is_some() {
             context.invalidate_measure();
             context.invalidate_draw();
@@ -1868,6 +1883,9 @@ impl KeyInputModifierNode for TextFieldNode {
     }
 
     fn ime_options(&self) -> Option<compose_ui::ImeOptions> {
+        if !self.enabled || self.read_only {
+            return None;
+        }
         Some(self.keyboard_options.to_ime_options(self.single_line))
     }
 
@@ -1886,7 +1904,12 @@ impl KeyInputModifierNode for TextFieldNode {
         self.perform_ime_action(action, context)
     }
 
+    /// Only a field that's written to has an input, as Compose's session starting for
+    /// `hasFocus && enabled && !readOnly`.
     fn text_input_area(&self) -> Option<Rect> {
+        if !self.enabled || self.read_only {
+            return None;
+        }
         let rect = self.cursor_rect?;
         let scroll = self.scroll;
         Some(Rect::new(
@@ -2033,6 +2056,7 @@ impl SemanticsModifierNode for TextFieldNode {
                 context.clipboard().set_text(&selected);
                 if is_cut {
                     self.replace_selection("", false, context);
+                    self.restart_input = true;
                 }
                 true
             }
@@ -2042,6 +2066,7 @@ impl SemanticsModifierNode for TextFieldNode {
                 }
                 if let Some(pasted) = context.clipboard().get_text() {
                     self.insert(&pasted, false, context);
+                    self.restart_input = true;
                 }
                 true
             }

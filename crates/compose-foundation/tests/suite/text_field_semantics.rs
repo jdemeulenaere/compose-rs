@@ -257,6 +257,40 @@ fn a_refused_set_text_leaves_the_selection_and_nothing_for_the_next_key() {
     assert_eq!(selection(&mut ui), TextRange::new(2, 2));
 }
 
+/// A service's cut and paste give the value from outside the keyboard's edits: it starts over,
+/// as with the keys, or its cached text goes stale.
+#[test]
+fn a_services_cut_and_paste_restart_the_input_method() {
+    let (mut ui, value) = focused_at("hello", 0);
+    select(&mut ui, 0, 5);
+    ui.wait_for_idle();
+    ui.host().take_input_method_restart();
+    let node = ui.on_node_with_tag("field").fetch_semantics_snapshot().id;
+    let cut = ui.host().semantics_action(node, &A::CUT_TEXT).expect("offered");
+    assert!(cut());
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "");
+    assert!(ui.host().take_input_method_restart(), "cut");
+    let paste = ui.host().semantics_action(node, &A::PASTE_TEXT).expect("offered");
+    assert!(paste());
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "hello");
+    assert!(ui.host().take_input_method_restart(), "paste");
+}
+
+/// Text sent over a preedit takes its place, whether or not the platform cancels it first.
+#[test]
+fn text_sent_over_a_preedit_replaces_it() {
+    let (mut ui, value) = focused_at("a", 0);
+    ui.host().send_preedit("ni", None);
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "nia");
+    ui.host().send_text("X");
+    ui.wait_for_idle();
+    assert_eq!(value.get(), "Xa");
+    assert_eq!(selection(&mut ui), TextRange::new(1, 1));
+}
+
 #[test]
 fn set_text_with_the_text_there_still_moves_the_cursor_to_its_end() {
     let (mut ui, value) = focused_at("hello", 1);

@@ -696,10 +696,20 @@ class ComposeRsView @JvmOverloads constructor(
         if (result and Frame.PREFETCH != 0L) schedulePrefetch()
         updateBack(result and Frame.BACK != 0L)
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
-        updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
+        // Another editor having the focus has the keyboard too, as `processInputCommands`, unless
+        // the content is taking the focus from it now.
+        val anotherEditor = !isFocused && result and Frame.OWNER_FOCUS == 0L &&
+            rootView.findFocus()?.onCheckIsTextEditor() == true
+        updateTextInput(
+            result and Frame.TEXT_INPUT != 0L,
+            result and Frame.RESET_INPUT != 0L,
+            anotherEditor,
+        )
         if (result and Frame.INPUT_METHOD_UPDATE != 0L) updateInputMethod()
         // What the content asked of the keyboard (after the frame's events, which woke it).
-        if (result and Frame.SHOW_KEYBOARD != 0L && textInput) {
+        if (anotherEditor) {
+            // Not this view's keyboard to show or hide.
+        } else if (result and Frame.SHOW_KEYBOARD != 0L && textInput) {
             requestFocus()
             inputMethods.showSoftInput(this, 0)
         } else if (result and Frame.HIDE_KEYBOARD != 0L) {
@@ -1163,9 +1173,10 @@ class ComposeRsView @JvmOverloads constructor(
         }
     }
 
-    private fun updateTextInput(active: Boolean, reset: Boolean) {
+    private fun updateTextInput(active: Boolean, reset: Boolean, anotherEditor: Boolean) {
         if (active != textInput) {
             textInput = active
+            if (anotherEditor) return
             if (active) {
                 requestFocus()
                 inputMethods.restartInput(this)
@@ -1174,7 +1185,7 @@ class ComposeRsView @JvmOverloads constructor(
                 inputMethods.hideSoftInputFromWindow(windowToken, 0)
                 inputMethods.restartInput(this)
             }
-        } else if (reset && active) {
+        } else if (reset && active && !anotherEditor) {
             inputMethods.restartInput(this)
         }
     }

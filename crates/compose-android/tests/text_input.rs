@@ -194,6 +194,8 @@ struct Keyboard {
     connections: InputConnections,
     id: i64,
     value: OwnedState<String>,
+    /// Whether the field is written to: read-only otherwise.
+    writable: OwnedState<bool>,
     /// How many text changes the application heard.
     edits: Rc<Cell<u32>>,
     /// The options the frames saw, for `take_text_input_state`.
@@ -203,13 +205,14 @@ struct Keyboard {
 impl Keyboard {
     fn with(initial: &str, read_only: bool, filter: fn(String) -> String) -> Keyboard {
         let value = mutable_state_of(initial.to_string());
+        let writable = mutable_state_of(!read_only);
         let edits = Rc::new(Cell::new(0));
         let mut host = UiHost::new(
             IntSize::new(400, 200),
             Density::new(1.0),
             Box::new(AndroidTextMeasurer::new(Fake)),
         );
-        let (state, heard) = (value.handle(), edits.clone());
+        let (state, heard, shown_writable) = (value.handle(), edits.clone(), writable.handle());
         host.set_content(move || {
             let heard = heard.clone();
             BasicTextField!(
@@ -219,7 +222,7 @@ impl Keyboard {
                     state.set(filter(new));
                 },
                 modifier = Modifier.size((300.dp(), 40.dp())),
-                read_only = read_only
+                read_only = !shown_writable.get()
             );
         });
         host.frame();
@@ -227,8 +230,15 @@ impl Keyboard {
         host.frame();
         let mut connections = InputConnections::default();
         let id = connections.open(&host);
-        let mut keyboard =
-            Keyboard { host, connections, id, value, edits, options: LastTextInput::default() };
+        let mut keyboard = Keyboard {
+            host,
+            connections,
+            id,
+            value,
+            writable,
+            edits,
+            options: LastTextInput::default(),
+        };
         keyboard.frame();
         keyboard
     }
@@ -1435,6 +1445,96 @@ fn a_read_only_field_takes_no_edits_from_the_keyboard() {
     assert_eq!(keyboard.edits.get(), 0);
 }
 
+/// A focused read-only field has no input, so no keyboard: the session starts only for
+/// `hasFocus && enabled && !readOnly`.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/CoreTextField.kt, CoreTextField
+#[test]
+fn a_focused_read_only_field_has_no_input() {
+    let mut keyboard = Keyboard::with("abc", true, |new| new);
+    keyboard.host.frame();
+    let input = take_text_input_state(&keyboard.host, &mut keyboard.options);
+    assert!(!input.active);
+    assert_eq!(keyboard.host.text_input_area(), None);
+    assert_ne!(input.keyboard, Some(true));
+}
+
+/// The field stops being written to, focused: the input ends with what it composed. Written to
+/// again, it starts over with no composition left.
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/CoreTextField.kt, CoreTextField
+#[test]
+fn a_field_made_read_only_ends_its_input_and_what_it_composed() {
+    let mut keyboard = Keyboard::typed("abc");
+    keyboard.compose("x", 1);
+    assert!(take_text_input_state(&keyboard.host, &mut keyboard.options).active);
+
+    keyboard.writable.set(false);
+    keyboard.host.frame();
+    assert!(!take_text_input_state(&keyboard.host, &mut keyboard.options).active);
+
+    keyboard.writable.set(true);
+    keyboard.host.frame();
+    assert!(take_text_input_state(&keyboard.host, &mut keyboard.options).active);
+    assert_eq!(keyboard.value(), "abcx");
+    assert_eq!(keyboard.composition(), None);
+    keyboard.commit("y", 1);
+    assert_eq!(keyboard.value(), "abcxy");
+}
+
+/// From a field that's written to, on to an `ExposedDropdownMenu`'s read-only anchor: the input
+/// ends, so the keyboard goes; back to the field, it starts again.
+#[test]
+fn going_to_a_read_only_dropdown_anchor_ends_the_input() {
+    use compose_material3::*;
+    let mut host = UiHost::new(
+        IntSize::new(400, 400),
+        Density::new(1.0),
+        Box::new(AndroidTextMeasurer::new(Fake)),
+    );
+    host.set_content(|| {
+        MaterialTheme!({
+            Column!({
+                BasicTextField!(
+                    String::from("written"),
+                    |_: String| {},
+                    modifier = Modifier.size((300.dp(), 40.dp()))
+                );
+                ExposedDropdownMenuBox!(
+                    false,
+                    |_: bool| {},
+                    |scope: ExposedDropdownMenuBoxScope| {
+                        TextField!(
+                            String::from("chosen"),
+                            |_: String| {},
+                            modifier = Modifier.height(60.dp()).menu_anchor(
+                                &scope,
+                                ExposedDropdownMenuAnchorType::PrimaryNotEditable
+                            ),
+                            read_only = true
+                        );
+                    }
+                );
+            });
+        });
+    });
+    let mut last = LastTextInput::default();
+    host.frame();
+    click(&mut host, 10.0, 10.0);
+    host.frame();
+    let input = take_text_input_state(&host, &mut last);
+    assert!(input.active, "the field");
+    assert_eq!(input.keyboard, Some(true));
+
+    click(&mut host, 10.0, 70.0);
+    host.frame();
+    let input = take_text_input_state(&host, &mut last);
+    assert!(!input.active, "the anchor");
+    assert_ne!(input.keyboard, Some(true));
+
+    click(&mut host, 10.0, 10.0);
+    host.frame();
+    assert!(take_text_input_state(&host, &mut last).active, "the field again");
+}
+
 /// Any sequence of the keyboard's edits, over text of 1 to 4 bytes a character and 1 or 2 units,
 /// keeps the selection and composition at character boundaries of the value, which the application
 /// has, and the keyboard's next update telling it where they are.
@@ -1559,6 +1659,45 @@ fn cut_and_paste_restart_the_input() {
 
 fn undo_key() -> KeyEvent {
     shortcut_key('z')
+}
+
+/// A key typed away from what's composed, or over more than it, ends the composition and is a step
+/// of its own: undo brings back what was composed.
+#[test]
+fn undo_of_a_key_typed_outside_a_composition_keeps_what_was_composed() {
+    let mut keyboard = Keyboard::typed("abc");
+    keyboard.compose("x", 1);
+    keyboard.select(0, 0);
+    keyboard.host.send_text("y");
+    keyboard.frame();
+    assert_eq!(keyboard.value(), "yabcx");
+    keyboard.host.send_key(undo_key());
+    keyboard.frame();
+    assert_eq!(keyboard.value(), "abcx");
+
+    let mut keyboard = Keyboard::typed("abc");
+    keyboard.compose("x", 1);
+    keyboard.select(0, 4);
+    keyboard.host.send_text("y");
+    keyboard.frame();
+    assert_eq!(keyboard.value(), "y");
+    keyboard.host.send_key(undo_key());
+    keyboard.frame();
+    assert_eq!(keyboard.value(), "abcx");
+}
+
+/// The cursor within what's composed, a keyboard's steps are still one: no undo shows half of it.
+#[test]
+fn undo_of_a_composition_with_its_cursor_inside_is_one_step() {
+    let mut keyboard = Keyboard::new("abc ");
+    keyboard.select(4, 4);
+    keyboard.compose("ni", 0);
+    keyboard.compose("nih", 1);
+    keyboard.select(5, 5);
+    keyboard.compose("niha", 1);
+    keyboard.host.send_key(undo_key());
+    keyboard.frame();
+    assert_eq!(keyboard.value(), "abc ");
 }
 
 /// A composition begun on the text as it was (a region): undo brings that text back, not what came
