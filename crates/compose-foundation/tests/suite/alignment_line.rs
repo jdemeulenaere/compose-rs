@@ -1007,8 +1007,7 @@ fn same_with_and_without_a_scope(content: impl Fn(Modifier) + Clone + 'static) {
             }
         });
         ui.wait_for_idle();
-        let sizes = sizes.borrow().clone();
-        sizes
+        sizes.borrow().clone()
     };
     let (with, without) = (measure(true), measure(false));
     assert!(!without.is_empty());
@@ -1094,4 +1093,49 @@ fn an_approach_in_an_intrinsic_row_counts_as_it_is_now() {
         ui.wait_for_idle();
         assert_eq!(height.get(), (300 * at / 10).max(20), "{at}");
     }
+}
+
+/// A lazy list in a scope, scrolled: what comes is composed and placed in both passes, what's gone
+/// goes from both.
+#[test]
+fn a_lazy_list_in_a_scope_scrolls() {
+    let owner = LazyListState::new(0, 0);
+    let state = *owner;
+    let shown =
+        Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::<usize, Offset>::new()));
+    let s = shown.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 300), move || {
+        let s = s.clone();
+        in_a_scope(move |_| {
+            let s = s.clone();
+            LazyColumn!(
+                state = state,
+                modifier = Modifier.fill_max_size(),
+                move |scope: LazyListScope| {
+                    let s = s.clone();
+                    scope.items(50, move |index| {
+                        let s = s.clone();
+                        Box!(
+                            modifier =
+                                Modifier.size(dp(100)).on_placed(move |it: LayoutCoordinates| {
+                                    s.borrow_mut().insert(index, it.position_in_root());
+                                }),
+                            {}
+                        );
+                    });
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(shown.borrow().get(&2), Some(&Offset::new(0.0, 200.0)));
+    assert_eq!(state.first_visible_item_index(), 0);
+    let scope = compose_runtime::CoroutineScope::new();
+    scope.launch(async move {
+        let _ = state.scroll_to_item(10, 0).await;
+    });
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 10);
+    assert_eq!(shown.borrow().get(&11), Some(&Offset::new(0.0, 100.0)));
+    assert_eq!(state.layout_info().visible_items_info.len(), 3);
 }
