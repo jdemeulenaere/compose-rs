@@ -389,6 +389,53 @@ fn a_tabs_text_is_centered_vertically() {
     }
 }
 
+/// What's taller than the tab's height leaves 20 sp more: an icon alone.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tab.kt, TabBaselineLayout
+#[test]
+fn a_tall_icon_alone_makes_the_tab_20_sp_taller_than_it() {
+    let height = height_of(|| {
+        Tab!(
+            true,
+            || {},
+            icon = Some(|| {
+                Box!(modifier = Modifier.size(60.dp()), {});
+            })
+        );
+    });
+    assert_eq!(height, 80.0);
+}
+
+/// And two tall lines of text alone: the same 20 sp past them.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tab.kt, TabBaselineLayout
+#[test]
+fn two_tall_lines_alone_make_the_tab_20_sp_taller_than_them() {
+    let text_height = std::rc::Rc::new(Cell::new(0));
+    let measured = text_height.clone();
+    let height = height_of(move || {
+        let measured = measured.clone();
+        Tab!(
+            true,
+            || {},
+            text = Some(move || {
+                let measured = measured.clone();
+                Text!(
+                    "One\nTwo",
+                    modifier =
+                        Modifier.on_size_changed(move |size: IntSize| measured.set(size.height)),
+                    style = compose_ui::TextStyle {
+                        font_size: compose_ui::TextUnit::sp(30.0),
+                        line_height: compose_ui::TextUnit::sp(30.0),
+                        ..compose_ui::TextStyle::DEFAULT
+                    },
+                    max_lines = 2
+                );
+            })
+        );
+    });
+    assert!(text_height.get() > 48);
+    assert_eq!(height, text_height.get() as f32 + 20.0);
+}
+
 /// A tab with `title` and a tagged 24 dp icon in a secondary row.
 fn tab_with_icon(title: &'static str) -> ComposeTestRule {
     compose_test(move || {

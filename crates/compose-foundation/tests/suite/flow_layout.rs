@@ -522,7 +522,7 @@ fn a_flow_rows_items_align_by_a_line_in_their_row() {
     assert_eq!(size.get().height, 50 + 25);
 }
 
-/// `align_by_baseline`, `align_by_block` and an item with no line, which goes at the line's start.
+/// `align_by_baseline`, `align_by_block` and an item with no line, which goes to the row's top.
 // Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/FlowLayout.kt, FlowRow
 #[test]
 fn a_flow_row_mixes_baselines_blocks_and_its_own_alignment() {
@@ -597,6 +597,42 @@ fn a_flow_columns_items_align_by_a_line_in_their_column_either_way() {
         };
         assert_eq!(rect(&placed, 0).left, first);
         assert_eq!(rect(&placed, 1).left, second);
+    }
+}
+
+/// An item without the line it asks for goes to 0 across its column: the left, either way, which
+/// is the far side right to left.
+// Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/RowColumnImpl.kt, AlignmentLineCrossAxisAlignment
+#[test]
+fn a_flow_column_item_without_its_line_stays_at_the_left_either_way() {
+    for direction in [LayoutDirection::Ltr, LayoutDirection::Rtl] {
+        let placed = recorded(1);
+        let recorded = placed.clone();
+        let size = size_cell();
+        let measured = size.clone();
+        let line = compose_ui::VerticalAlignmentLine::new(i32::min);
+        let _ui = rule(400, move || {
+            let (recorded, measured) = (recorded.clone(), measured.clone());
+            CompositionLocalProvider(
+                compose_ui::LOCAL_LAYOUT_DIRECTION.provides(direction),
+                || {
+                    let recorded = recorded.clone();
+                    let flow = size_into(&measured);
+                    FlowColumn!(modifier = flow, |scope| {
+                        with_a_line(30, 10, line, 25, Modifier.align_by(scope, line));
+                        with_a_line(30, 10, line, 5, Modifier.align_by(scope, line));
+                        Box!(
+                            modifier = Modifier
+                                .align_by(scope, line)
+                                .size(10.dp())
+                                .then(bounds_into(&recorded, 0))
+                        );
+                    });
+                },
+            );
+        });
+        assert_eq!(size.get().width, 50);
+        assert_eq!(rect(&placed, 0).left, 0.0, "{direction:?}");
     }
 }
 
