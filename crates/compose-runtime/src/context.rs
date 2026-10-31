@@ -81,6 +81,7 @@ struct ContextEntry {
 }
 
 /// The contexts of a thread's compositions: an arena as they are.
+#[derive(Default)]
 pub(crate) struct Contexts {
     entries: Vec<ContextEntry>,
     free: Vec<u32>,
@@ -153,6 +154,19 @@ impl Contexts {
         self.free_if_unused(id);
     }
 
+    /// Its group moved to `composition`'s table.
+    pub(crate) fn moved_to(&mut self, id: ContextId, composition: CompositionId, group: u32) {
+        if let Some(entry) = self.get_mut(id) {
+            entry.composition = composition;
+            entry.group = group;
+        }
+    }
+
+    /// The composition it's in.
+    pub(crate) fn parent_of(&self, id: ContextId) -> Option<CompositionId> {
+        self.get(id).map(|entry| entry.composition)
+    }
+
     /// What's freed, to drop outside the borrow.
     pub(crate) fn take_dropping(&mut self) -> Vec<CompositionLocalMap> {
         std::mem::take(&mut self.dropping)
@@ -221,7 +235,83 @@ fn holds_context(table: &SlotTable, group: u32, id: ContextId) -> bool {
     })
 }
 
+/// The context whose slot `group` holds, if it's one's.
+pub(crate) fn context_of_group(table: &SlotTable, group: u32) -> Option<ContextId> {
+    let entry = table.groups.get(group as usize)?;
+    if entry.kind == GroupKind::Free || entry.key != CONTEXT_KEY {
+        return None;
+    }
+    match &entry.slots.first()?.value {
+        SlotValue::KeptOnReuse(value) => {
+            value.downcast_ref::<Rc<ContextHolder>>().map(|holder| holder.id)
+        }
+        _ => None,
+    }
+}
+
 impl Compositions {
+    /// `id`'s sentinel has come to hold movable content: so does what's holding it, in the
+    /// compositions above, for a removal there to look.
+    pub(crate) fn mark_contains_movable_above(&mut self, index: u32) {
+        let mut place = self.data(index).parent;
+        while let Some(context) = place {
+            let Some(entry) = self.contexts.get(context) else { return };
+            let (above, mut group) = (entry.composition, entry.group);
+            let Some(data) = self.get_mut(above) else { return };
+            let table = &mut data.table;
+            while group != NONE && table[group].flags & crate::slot_table::CONTAINS_MOVABLE == 0 {
+                table[group].flags |= crate::slot_table::CONTAINS_MOVABLE;
+                group = table[group].parent;
+            }
+            if group != NONE {
+                return;
+            }
+            place = data.parent;
+        }
+    }
+
+    /// The live compositions directly under `contexts`.
+    pub(crate) fn children_of(&self, contexts: &[ContextId]) -> Vec<CompositionId> {
+        (self.live_ids().into_iter())
+            .filter(|id| {
+                self.get(*id)
+                    .and_then(|data| data.parent)
+                    .is_some_and(|place| contexts.contains(&place))
+            })
+            .collect()
+    }
+
+    /// `contexts` moved to `to`'s table with what's under them: it goes on in `to`'s frames.
+    pub(crate) fn children_moved(
+        &mut self,
+        from: CompositionId,
+        to: CompositionId,
+        contexts: &[ContextId],
+    ) {
+        let children = if contexts
+            .iter()
+            .any(|context| self.contexts.get(*context).is_some_and(|entry| entry.children > 0))
+        {
+            self.children_of(contexts)
+        } else {
+            return;
+        };
+        if let Some(data) = self.get_mut(from) {
+            data.child_count -= children.len() as u32;
+            data.dirty_children.retain(|child| !children.contains(child));
+        }
+        if let Some(data) = self.get_mut(to) {
+            data.child_count += children.len() as u32;
+        }
+        for child in children {
+            let data = self.get_mut(child).expect("just listed");
+            data.queued = false;
+            if data.pending {
+                self.queue_in_parents(child.index);
+            }
+        }
+    }
+
     /// The composition and group `id` is in, while it's there: where what's read across it
     /// continues.
     pub(crate) fn context_place(&self, id: ContextId) -> Option<(&CompositionData, u32)> {
