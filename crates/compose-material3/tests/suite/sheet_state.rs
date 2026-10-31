@@ -388,3 +388,44 @@ fn a_scrim_that_doesnt_dismiss_has_no_semantics() {
     sheet(true).on_node_with_content_description("Close sheet").assert_exists();
     sheet(false).on_node_with_content_description("Close sheet").assert_does_not_exist();
 }
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SheetDefaults.kt rememberSheetState
+#[test]
+fn other_enabled_values_make_another_state() {
+    let skip = mutable_state_of(false);
+    let read = skip.handle();
+    let noted: std::rc::Rc<Cell<Option<SheetState>>> = Default::default();
+    let keep = noted.clone();
+    let mut ui = compose_test(move || {
+        let values: &[SheetValue] =
+            if read.get() { &[SheetValue::Hidden, SheetValue::Expanded] } else { &SheetValue::ALL };
+        keep.set(Some(remember_bottom_sheet_state!(SheetValue::Hidden, enabled_values = values)));
+    });
+    ui.wait_for_idle();
+    let first = noted.get().expect("composed");
+    skip.set(true);
+    ui.wait_for_idle();
+    assert!(noted.get().expect("composed") != first);
+}
+
+#[test]
+fn the_latest_confirmation_is_the_one_asked() {
+    let refuse = mutable_state_of(false);
+    let read = refuse.handle();
+    let noted: std::rc::Rc<Cell<Option<SheetState>>> = Default::default();
+    let keep = noted.clone();
+    let mut ui = compose_test(move || {
+        let refused = read.get();
+        keep.set(Some(remember_bottom_sheet_state!(
+            SheetValue::Expanded,
+            confirm_value_change = move |_| !refused
+        )));
+    });
+    ui.wait_for_idle();
+    let state = noted.get().expect("composed");
+    assert!(state.confirms(SheetValue::Hidden));
+    refuse.set(true);
+    ui.wait_for_idle();
+    assert!(noted.get().expect("composed") == state);
+    assert!(!state.confirms(SheetValue::Hidden));
+}

@@ -230,7 +230,8 @@ impl SheetState {
     }
 
     /// Whether `confirm_value_change` lets it go to `value`.
-    pub(crate) fn confirms(&self, value: SheetValue) -> bool {
+    #[doc(hidden)]
+    pub fn confirms(&self, value: SheetValue) -> bool {
         self.inner().is_some_and(|inner| (inner.confirm_value_change)(value))
     }
 
@@ -470,29 +471,42 @@ fn remember_sheet_state(
     let density = compose_ui::LOCAL_DENSITY.current();
     let (positional, velocity) = thresholds(density);
     let values = enabled_values.to_vec();
-    compose_runtime::remember_saveable_with(
-        SheetState::saver_with(
-            values.clone(),
-            positional.clone(),
-            velocity.clone(),
-            confirm_value_change.clone(),
-        ),
-        move || {
-            let (positional, velocity) = (positional.clone(), velocity.clone());
-            SheetState::create(
-                &values,
-                Box::new(move || positional()),
-                Box::new(move || velocity()),
-                initial_value,
-                confirm_value_change.clone(),
-            )
-        },
-    )
+    // The latest: a closure can't be compared as Compose's `rememberSaveable(confirmValueChange)`
+    // compares its lambda, which would make a new state at each composition.
+    let latest = compose_runtime::remember(|| Rc::new(RefCell::new(confirm_value_change.clone())));
+    *latest.borrow_mut() = confirm_value_change;
+    let confirm: Rc<dyn Fn(SheetValue) -> bool> = Rc::new(move |value| {
+        let current = latest.borrow().clone();
+        current(value)
+    });
+    // Other values are another state, as `rememberSaveable(enabledValues, …)`.
+    let inputs = values.iter().fold(0u8, |set, value| set | 1 << (*value as u8));
+    compose_runtime::key(inputs, move || {
+        compose_runtime::remember_saveable_with(
+            SheetState::saver_with(
+                values.clone(),
+                positional.clone(),
+                velocity.clone(),
+                confirm.clone(),
+            ),
+            move || {
+                let (positional, velocity) = (positional.clone(), velocity.clone());
+                SheetState::create(
+                    &values,
+                    Box::new(move || positional()),
+                    Box::new(move || velocity()),
+                    initial_value,
+                    confirm.clone(),
+                )
+            },
+        )
+    })
 }
 
 /// A sheet's state remembered here, at `initial_value`, as `rememberBottomSheetState(
 /// initialValue, enabledValues, confirmValueChange)`: saved across the host's recreation (a
-/// `rememberSaveable`, as Compose's). `confirm_value_change` is the first composition's.
+/// `rememberSaveable`, as Compose's), another state for other `enabled_values`.
+/// `confirm_value_change` is the latest composition's.
 #[composable(non_restartable)]
 pub fn remember_bottom_sheet_state(
     initial_value: SheetValue,
@@ -826,8 +840,16 @@ pub fn ModalBottomSheet(
     };
     // The scrim fades in while the sheet is going anywhere but hidden, on the default effects
     // spring.
+    // A boolean, as `derivedStateOf { sheetState.targetValue != Hidden }`: nothing composes again
+    // for a step of a drag that doesn't change it.
+    let scrim_visible = {
+        let state = sheet_state;
+        compose_runtime::remember_keyed(sheet_state, move || {
+            compose_runtime::derived_state_of(move || state.target_value() != SheetValue::Hidden)
+        })
+    };
     let scrim_alpha = compose_animation::animate_float_as_state(
-        if sheet_state.target_value() != SheetValue::Hidden { 1.0 } else { 0.0 },
+        if scrim_visible.get() { 1.0 } else { 0.0 },
         MaterialTheme::motion_scheme().default_effects_spec(),
         Spring::DEFAULT_DISPLACEMENT_THRESHOLD,
         "ScrimAlpha",
