@@ -211,6 +211,13 @@ fn semantics(c: &mut Criterion) {
                 write_tree(&host.semantics_tree(true), &mut Default::default(), &mut writer);
             }),
         );
+        report(
+            name,
+            "pruned_tree_and_record",
+            fastest(|| {
+                write_tree(&host.accessibility_tree(), &mut Default::default(), &mut writer);
+            }),
+        );
         if let Some(node) = clickable {
             report(
                 name,

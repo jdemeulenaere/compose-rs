@@ -74,6 +74,8 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         at += length + 12;
         let tag = u32_at(&mut at) as usize;
         at += tag;
+        // No extras in these scenes.
+        at += 4;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -379,7 +381,7 @@ fn the_frame_switching_screens_reports_a_semantics_change() {
     assert!(semantics_may_have_changed(&host.frame()));
     host.settle(10);
     let mut writer = Writer::default();
-    write_tree(&host.semantics_tree(true), &mut KeptCustomActions::default(), &mut writer);
+    write_tree(&host.accessibility_tree(), &mut KeptCustomActions::default(), &mut writer);
     let texts: Vec<String> = records(&writer.bytes).into_iter().map(|record| record.text).collect();
     assert!(texts.iter().any(|text| text == "Heavy row 0"), "{texts:?}");
     assert!(!texts.iter().any(|text| text == "Open" || text == "Navigation"), "{texts:?}");
@@ -432,9 +434,9 @@ fn a_panes_title_is_in_its_record() {
                 config.set_pane_title("Navigation menu");
             })
         );
-        BasicText!("Beside it");
+        BasicText!("Beside it", modifier = Modifier.offset(100.dp(), 0.dp()));
     });
-    let root = host.semantics_tree(true);
+    let root = host.accessibility_tree();
     let mut out = Writer::default();
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let read = records(&out.bytes);

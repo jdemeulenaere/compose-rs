@@ -297,3 +297,32 @@ fn a_page_preceding_is_about_the_height_of_the_node() {
     assert!((step - height).abs() < line_height, "{step} about {height}");
     assert_eq!(segments.preceding(Granularity::Page(&layout, height), 0), None);
 }
+
+#[test]
+fn a_page_following_ends_with_the_last_whole_line_inside_it() {
+    let (_host, layout, text, height) = long_text();
+    let segments = TextSegments::new(text);
+    let (_, end) = segments.following(Granularity::Page(&layout, height), 0).expect("a page");
+    let last = layout.get_line_for_offset(end as usize - 1);
+    assert!(layout.get_line_bottom(last) <= height, "{} in {height}", layout.get_line_bottom(last));
+    assert!(layout.get_line_bottom(last + 1) > height);
+}
+
+#[test]
+fn a_page_preceding_the_end_starts_a_line_later_than_one_from_inside() {
+    let (_host, layout, text, height) = long_text();
+    let segments = TextSegments::new(text);
+    let (start, _) =
+        segments.preceding(Granularity::Page(&layout, height), segments.len()).expect("a page");
+    let last = layout.get_line_for_offset(text.len());
+    let above = layout.get_line_for_vertical_position(layout.get_line_top(last) - height);
+    assert_eq!(layout.get_line_for_offset(start as usize), above + 1);
+
+    // From the start of a line inside the text: the line itself is above's.
+    let inside = layout.get_line_start(last) as i32;
+    let (start, end) =
+        segments.preceding(Granularity::Page(&layout, height), inside).expect("a page");
+    assert_eq!(end, inside);
+    let above = layout.get_line_for_vertical_position(layout.get_line_top(last) - height);
+    assert_eq!(layout.get_line_for_offset(start as usize), above);
+}

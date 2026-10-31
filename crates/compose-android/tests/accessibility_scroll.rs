@@ -7,7 +7,8 @@
 extern crate compose_runtime as compose;
 
 use compose_android::accessibility::{
-    find_shown, flag, scroll_action, scroll_actions, scroll_amount, virtual_id, write_tree,
+    find_shown, flag, scroll_action, scroll_actions, scroll_amount, show_on_screen, virtual_id,
+    write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -62,6 +63,8 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         at += length + 12;
         let tag = u32_at(&mut at) as usize;
         at += tag;
+        // No extras in these scenes.
+        at += 4;
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
@@ -80,7 +83,7 @@ fn written(content: fn()) -> Vec<Record> {
     host.settle(10);
     let mut writer = Writer::default();
     write_tree(
-        &host.semantics_tree(true),
+        &host.accessibility_tree(),
         &mut compose_android::accessibility::KeptCustomActions::default(),
         &mut writer,
     );
@@ -123,20 +126,36 @@ fn a_lazy_list_is_a_scrolling_container_with_its_items_in_it() {
 }
 
 #[test]
-fn what_a_scrolling_column_clips_away_is_hidden() {
+fn what_a_scrolling_column_clips_away_is_left_out() {
     let records = written(ScrollingRows);
     let column = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
     assert_eq!(column.scroll, Some((0.0, 100.0, 100.0)));
+    assert!(records.iter().all(|record| record.flags & flag::HIDDEN == 0));
+    assert!(records.iter().all(|record| !record.text.starts_with("row 5")));
+    // The last row in view is visible.
+    let row = records.iter().find(|record| record.text == "row 4").unwrap();
+    assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
+}
+
+/// The tree before what's covered is left out, as a test's or a keyboard's: past the clip, hidden.
+#[test]
+fn what_a_scrolling_column_clips_away_is_hidden_in_the_whole_tree() {
+    let mut host = UiHost::headless(200, 200);
+    host.set_content(ScrollingRows);
+    host.settle(10);
+    let mut writer = Writer::default();
+    write_tree(
+        &host.accessibility_tree_with_covered(),
+        &mut compose_android::accessibility::KeptCustomActions::default(),
+        &mut writer,
+    );
+    let records = records(&writer.bytes);
     let hidden: Vec<&str> = records
         .iter()
         .filter(|record| record.flags & flag::HIDDEN != 0)
         .map(|record| record.text.as_str())
         .collect();
     assert_eq!(hidden, ["row 5", "row 6", "row 7", "row 8", "row 9"]);
-    // The last row in view is visible.
-    let row = records.iter().find(|record| record.text == "row 4").unwrap();
-    assert_eq!(row.flags & flag::HIDDEN, 0);
-    assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
 }
 
 /// A page of 100 px each way.
@@ -167,7 +186,7 @@ fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsSnapshot {
         }
         node.children.iter().find_map(find)
     }
-    find(&host.semantics_tree(true)).expect("a scrolling node")
+    find(&host.accessibility_tree()).expect("a scrolling node")
 }
 
 fn rtl(content: impl Fn() + 'static) {
@@ -289,7 +308,7 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
     let mut host = UiHost::headless(200, 200);
     host.set_content(BothAxes);
     host.settle(10);
-    let root = host.semantics_tree(true);
+    let root = host.accessibility_tree();
     fn find(
         node: &compose_ui::platform::SemanticsSnapshot,
     ) -> Option<&compose_ui::platform::SemanticsSnapshot> {
@@ -342,7 +361,7 @@ fn a_card_around_a_scrolling_row_offers_no_scroll() {
     let mut host = UiHost::headless(200, 200);
     host.set_content(CardAroundARow);
     host.settle(10);
-    let root = host.semantics_tree(true);
+    let root = host.accessibility_tree();
     let card = root
         .children
         .iter()
@@ -454,7 +473,7 @@ fn the_scrolling_node(host: &UiHost) -> compose_ui::platform::SemanticsSnapshot 
         }
         node.children.iter().find_map(find)
     }
-    find(&host.semantics_tree(true)).expect("a scrolling node")
+    find(&host.accessibility_tree()).expect("a scrolling node")
 }
 
 fn shows_text(host: &UiHost, text: &str) -> bool {
@@ -464,7 +483,7 @@ fn shows_text(host: &UiHost, text: &str) -> bool {
             .is_some_and(|texts| texts.iter().any(|it| it.as_str() == text))
             || node.children.iter().any(|child| find(child, text))
     }
-    find(&host.semantics_tree(true), text)
+    find(&host.accessibility_tree(), text)
 }
 
 /// Compose's `testScrollAction`, from the middle: 47 items and 13 px in, 1,000 px either side.
@@ -558,4 +577,363 @@ fn a_grid_offers_the_actions_its_position_has() {
         verify_grid_actions(config, 47, 13, true, true);
         verify_grid_actions(config, 95, 5, config.reversed, !config.reversed);
     }
+}
+
+// ---- ACTION_SHOW_ON_SCREEN ------------------------------------------------------------------------
+
+fn tagged_id(host: &UiHost, tag: &str) -> i32 {
+    fn visit(node: &compose_ui::platform::SemanticsSnapshot, tag: &str) -> Option<i32> {
+        if node.config.get(&SemanticsProperties::TEST_TAG).is_some_and(|it| it.as_str() == tag) {
+            return Some(virtual_id(node));
+        }
+        node.children.iter().find_map(|child| visit(child, tag))
+    }
+    visit(&host.accessibility_tree(), tag).expect("tagged")
+}
+
+fn show(host: &mut UiHost, tag: &str) -> Option<bool> {
+    let id = tagged_id(host, tag);
+    let tree = host.accessibility_tree();
+    let shown = show_on_screen(host, &tree, id);
+    host.settle(20);
+    shown
+}
+
+fn list_state() -> LazyListState {
+    **Box::leak(Box::new(LazyListState::new(0, 0)))
+}
+
+#[composable]
+fn Square(tag: &'static str, side: i32) {
+    BasicText!(tag, modifier = Modifier.test_tag(tag).size(side.dp()));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen
+#[test]
+fn showing_a_node_scrolls_its_column_the_least_that_shows_it() {
+    let mut host = UiHost::headless(400, 800);
+    let state = **Box::leak(Box::new(ScrollState::new(0)));
+    host.set_content(move || {
+        Box!({
+            Column!(modifier = Modifier.size(200.dp()).vertical_scroll(state), {
+                Square("backward", 150);
+                Square("forward", 150);
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(state.value(), 0);
+    assert_eq!(show(&mut host, "forward"), Some(true));
+    assert_eq!(state.value(), 100);
+    assert_eq!(show(&mut host, "backward"), Some(true));
+    assert_eq!(state.value(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen_lazy
+#[test]
+fn showing_a_node_scrolls_its_lazy_list() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyColumn!(
+                modifier = Modifier.size(200.dp()),
+                state = state,
+                |scope: LazyListScope| {
+                    scope.item(|| Square("backward", 150));
+                    scope.item(|| Square("forward", 150));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "forward"), Some(true));
+    assert_eq!(state.first_visible_item_index(), 0);
+    assert_eq!(state.first_visible_item_scroll_offset(), 100);
+    assert_eq!(show(&mut host, "backward"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen_lazy_withContentPadding
+#[test]
+fn showing_a_node_clears_a_lazy_lists_content_padding() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyColumn!(
+                modifier = Modifier.size(200.dp()),
+                state = state,
+                content_padding = PaddingValues::new(0.dp(), 40.dp(), 0.dp(), 60.dp()),
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 80));
+                    scope.item(|| Square("second", 80));
+                    scope.item(|| Square("third", 80));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    // Within the list, but under its padding at the bottom.
+    assert_eq!(show(&mut host, "second"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 60);
+    assert_eq!(show(&mut host, "first"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen_lazy_reverseLayout_withContentPadding
+#[test]
+fn showing_a_node_of_a_reversed_list_goes_the_other_way() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyColumn!(
+                modifier = Modifier.size(200.dp()),
+                state = state,
+                reverse_layout = true,
+                content_padding = PaddingValues::new(0.dp(), 60.dp(), 0.dp(), 40.dp()),
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 70));
+                    scope.item(|| Square("second", 70));
+                    scope.item(|| Square("third", 70));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "second"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 40);
+    assert_eq!(show(&mut host, "first"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen_lazyRow_rtl_withContentPadding
+#[test]
+fn showing_a_node_of_a_right_to_left_row_goes_the_other_way() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        compose_runtime::CompositionLocalProvider(
+            compose_ui::LOCAL_LAYOUT_DIRECTION.provides(compose_ui::LayoutDirection::Rtl),
+            move || {
+                Box!({
+                    LazyRow!(
+                        modifier = Modifier.size(200.dp()),
+                        state = state,
+                        content_padding = PaddingValues::new(40.dp(), 0.dp(), 60.dp(), 0.dp()),
+                        |scope: LazyListScope| {
+                            scope.item(|| Square("first", 70));
+                            scope.item(|| Square("second", 70));
+                            scope.item(|| Square("third", 70));
+                        }
+                    );
+                });
+            },
+        );
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "second"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 40);
+    assert_eq!(show(&mut host, "first"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testPerformAction_showOnScreen_lazynested
+#[test]
+fn showing_a_node_in_nested_lists_leaves_the_outer_one_where_it_shows_already() {
+    let outer = list_state();
+    let inner = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyRow!(modifier = Modifier.size(250.dp()), state = outer, |scope: LazyListScope| {
+                scope.item(move || {
+                    LazyColumn!(
+                        modifier = Modifier.size(200.dp()),
+                        state = inner,
+                        |scope: LazyListScope| {
+                            scope.item(|| Square("backward", 150));
+                            scope.item(|| Square("forward", 150));
+                        }
+                    );
+                });
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "forward"), Some(true));
+    assert_eq!(inner.first_visible_item_scroll_offset(), 100);
+    assert_eq!(outer.first_visible_item_scroll_offset(), 0);
+    assert_eq!(show(&mut host, "backward"), Some(true));
+    assert_eq!(inner.first_visible_item_scroll_offset(), 0);
+    assert_eq!(outer.first_visible_item_scroll_offset(), 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ShowOnScreenAccessibilityTest.kt, testPerformAction_showOnScreen_noScrollableComposeParent
+#[test]
+fn with_nothing_around_it_scrolling_the_view_is_asked() {
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(|| Square("alone", 20));
+    host.settle(5);
+    assert_eq!(show(&mut host, "alone"), None);
+    let id = host.semantics_owner().unmerged_root_semantics_node().children()[0].id();
+    assert_eq!(
+        compose_android::accessibility::rectangle_on_screen(&host, id),
+        Some([0, 0, 20, 20])
+    );
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// The outer one moves for where the inner one has moved it, not for where it was.
+#[test]
+fn showing_a_node_in_a_nested_scroller_counts_what_the_nearer_one_moved_it() {
+    let mut host = UiHost::headless(400, 800);
+    let outer = **Box::leak(Box::new(ScrollState::new(0)));
+    let inner = **Box::leak(Box::new(ScrollState::new(0)));
+    host.set_content(move || {
+        Box!({
+            Column!(modifier = Modifier.size((200.dp(), 200.dp())).vertical_scroll(outer), {
+                Box!(modifier = Modifier.size((200.dp(), 150.dp())));
+                Column!(modifier = Modifier.size((200.dp(), 200.dp())).vertical_scroll(inner), {
+                    Box!(modifier = Modifier.size((200.dp(), 30.dp())));
+                    Square("target", 180);
+                });
+                Box!(modifier = Modifier.size((200.dp(), 300.dp())));
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "target"), Some(true));
+    assert_eq!(inner.value(), 10);
+    assert_eq!(outer.value(), 150);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// One of them doing it is enough.
+#[test]
+fn showing_a_node_says_it_scrolled_if_any_around_it_did() {
+    let mut host = UiHost::headless(400, 800);
+    let inner = **Box::leak(Box::new(ScrollState::new(0)));
+    host.set_content(move || {
+        let refuses = Modifier.size(300.dp()).semantics(|config| {
+            config.scroll_by(None, |_, _| false);
+        });
+        Box!(modifier = refuses, {
+            Column!(modifier = Modifier.size(200.dp()).vertical_scroll(inner), {
+                Box!(modifier = Modifier.size((200.dp(), 180.dp())));
+                Square("target", 50);
+            });
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "target"), Some(true));
+    assert_eq!(inner.value(), 30);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+#[test]
+fn showing_a_node_of_a_reversed_row_goes_the_other_way() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyRow!(
+                modifier = Modifier.size(200.dp()),
+                state = state,
+                reverse_layout = true,
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 150));
+                    scope.item(|| Square("second", 150));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "second"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 100);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// A padding with no room left inside it isn't taken off.
+#[test]
+fn a_padding_leaving_no_room_is_not_what_a_node_is_shown_within() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        Box!({
+            LazyColumn!(
+                modifier = Modifier.size(100.dp()),
+                state = state,
+                content_padding = PaddingValues::new(0.dp(), 60.dp(), 0.dp(), 60.dp()),
+                |scope: LazyListScope| {
+                    scope.item(|| Square("first", 70));
+                    scope.item(|| Square("second", 70));
+                }
+            );
+        });
+    });
+    host.settle(20);
+    assert_eq!(show(&mut host, "first"), Some(true));
+    assert_eq!(state.first_visible_item_scroll_offset(), 30);
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, scrollOntoScreen
+/// The whole of it, in whole pixels around it: what's covered or its touch target don't count.
+#[test]
+fn the_rectangle_asked_of_the_view_is_its_bounds_floored_and_ceiled() {
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(|| {
+        Box!({
+            Box!(
+                modifier = Modifier
+                    .graphics_layer(|layer| {
+                        layer.translation_x = 1.5;
+                        layer.translation_y = 2.5;
+                    })
+                    .size(10.dp())
+                    .clickable(|| {})
+            );
+            // Over its top half.
+            BasicText!("over", modifier = Modifier.size((100.dp(), 7.dp())));
+        });
+    });
+    host.settle(5);
+    let owner = host.semantics_owner();
+    let small = owner.unmerged_root_semantics_node().children()[0].id();
+    assert_eq!(
+        compose_android::accessibility::rectangle_on_screen(&host, small),
+        Some([1, 2, 12, 13])
+    );
+    assert_eq!(compose_android::accessibility::rectangle_on_screen(&host, -5), None);
+}
+
+#[test]
+fn a_page_of_a_lazy_list_leaves_out_its_content_padding() {
+    let state = list_state();
+    let mut host = UiHost::headless(400, 800);
+    host.set_content(move || {
+        LazyColumn!(
+            modifier = Modifier.size(200.dp()).test_tag("list"),
+            state = state,
+            content_padding = PaddingValues::new(0.dp(), 40.dp(), 0.dp(), 60.dp()),
+            |scope: LazyListScope| {
+                for _ in 0..10 {
+                    scope.item(|| Square("item", 80));
+                }
+            }
+        );
+    });
+    host.settle(20);
+    let tree = host.accessibility_tree();
+    let id = tagged_id(&host, "list");
+    let forward = i32::from(compose_android::accessibility::action::SCROLL_FIRST);
+    let mut custom = compose_android::accessibility::KeptCustomActions::default();
+    custom.assign(&tree);
+    assert!(compose_android::accessibility::perform_action(
+        &mut host, &tree, &custom, id, forward, 0.0
+    ));
+    host.settle(20);
+    assert_eq!(state.first_visible_item_index(), 1);
+    assert_eq!(state.first_visible_item_scroll_offset(), 20, "100 of the 200");
 }

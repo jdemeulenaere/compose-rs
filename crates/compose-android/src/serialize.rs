@@ -652,7 +652,7 @@ fn write_path(writer: &mut Writer, id: u32, path: &PathData) {
 /// order; `step::COMBINE_OR` and the operation; `step::ADD`; `step::FILL` and a fill type), then
 /// its commands' count (u32) and each
 /// command (its kind, its points). A list, written and read in one pass however many steps.
-fn write_path_contents(writer: &mut Writer, path: &PathData) {
+pub(crate) fn write_path_contents(writer: &mut Writer, path: &PathData) {
     write_fill_type(writer, path.fill_type());
     writer.u32(path.steps().len() as u32);
     for path_step in path.steps() {

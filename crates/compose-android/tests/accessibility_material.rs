@@ -20,7 +20,11 @@ use compose_ui::*;
 
 fn host_of(content: impl Fn() + 'static) -> UiHost {
     let mut host = UiHost::headless(400, 800);
-    host.set_content(content);
+    let content = compose_runtime::callback(content);
+    host.set_content(move || {
+        let content = content.clone();
+        Column!({ content() });
+    });
     host.settle(100);
     host
 }
@@ -51,7 +55,7 @@ fn center(node: &SemanticsSnapshot) -> (f32, f32) {
 /// What a touch at `(x, y)` finds, by what it says.
 fn found_at(host: &UiHost, x: f32, y: f32) -> SemanticsSnapshot {
     let root = host.accessibility_tree();
-    let id = node_at(&root, x, y).expect("something's there");
+    let id = node_at(host, x, y).expect("something's there");
     by_id(&root, id).expect("in the tree").clone()
 }
 
@@ -186,9 +190,14 @@ fn a_tri_state_checkbox_says_partly_only_when_it_is() {
 fn a_progress_indicator_is_a_progress_bar_saying_its_percent_or_that_it_is_in_progress() {
     let host = host_of(|| {
         MaterialTheme!({
-            LinearProgressIndicator!(|| 0.25, modifier = Modifier.test_tag("at a quarter"));
-            LinearProgressIndicator!(|| 0.001, modifier = Modifier.test_tag("just started"));
-            IndeterminateLinearProgressIndicator!(modifier = Modifier.test_tag("indeterminate"));
+            // Apart: each one's semantics go past its line.
+            Column!(vertical_arrangement = Arrangement::spaced_by(40.dp()), {
+                LinearProgressIndicator!(|| 0.25, modifier = Modifier.test_tag("at a quarter"));
+                LinearProgressIndicator!(|| 0.001, modifier = Modifier.test_tag("just started"));
+                IndeterminateLinearProgressIndicator!(
+                    modifier = Modifier.test_tag("indeterminate")
+                );
+            });
         });
     });
     let quarter = tagged(&host, "at a quarter");

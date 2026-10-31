@@ -347,6 +347,20 @@ impl LayerProperties {
         )
     }
 
+    /// What it draws at `point`: `map`'s inverse, as a layer's `mapOffset(inverse = true)`. A scale
+    /// of none has nothing there: no point is in anything then.
+    pub(crate) fn unmap(&self, point: Offset) -> Offset {
+        let (x, y) = (
+            point.x - self.pivot.x - self.translation.x,
+            point.y - self.pivot.y - self.translation.y,
+        );
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        Offset::new(
+            self.pivot.x + (x * cos + y * sin) / self.scale.0,
+            self.pivot.y + (y * cos - x * sin) / self.scale.1,
+        )
+    }
+
     fn transforms(&self) -> bool {
         self.scale != (1.0, 1.0) || self.rotation != 0.0 || self.translation != Offset::ZERO
     }

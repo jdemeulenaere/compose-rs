@@ -10,8 +10,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_android::accessibility::{
-    Change, ChangeKind, KeptCustomActions, KeptForChanges, action, actions_of, character_locations,
-    class_and_role, flag, perform_action, read_as, spoken, write_tree,
+    Change, ChangeKind, ExtraValue, KeptCustomActions, KeptForChanges, ShapeExtra, ShapeExtraKey,
+    action, actions_of, character_locations, class_and_role, extras_of, flag, perform_action,
+    read_as, shape_extra, shape_set, spoken, write_shape_extra, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -20,9 +21,14 @@ use compose_runtime::{MutableState, mutable_state_of};
 use compose_ui::platform::{SemanticsSnapshot, UiHost};
 use compose_ui::*;
 
+/// `content` in a column: at the root, each would be over the one before.
 fn host_of(content: impl Fn() + 'static) -> UiHost {
     let mut host = UiHost::headless(400, 800);
-    host.set_content(content);
+    let content = compose_runtime::callback(content);
+    host.set_content(move || {
+        let content = content.clone();
+        Column!({ content() });
+    });
     frames(&mut host);
     host
 }
@@ -38,8 +44,10 @@ fn by_tag<'a>(node: &'a SemanticsSnapshot, tag: &str) -> Option<&'a SemanticsSna
     node.children.iter().find_map(|child| by_tag(child, tag))
 }
 
+/// A node from the tree before what's covered is left out: the scenes this finds nodes for have
+/// nodes of no size, or over each other, to say what's written of a node, whatever's around it.
 fn tagged(host: &UiHost, tag: &str) -> SemanticsSnapshot {
-    by_tag(&host.accessibility_tree(), tag).expect("tagged").clone()
+    by_tag(&host.accessibility_tree_with_covered(), tag).expect("tagged").clone()
 }
 
 /// The tags of `sorted_for_accessibility`, in the merged tree.
@@ -208,7 +216,7 @@ fn a_live_region_and_a_heading_show_in_the_flags() {
         let heading = Modifier.semantics(|config| config.heading());
         Box!(modifier = heading.test_tag("heading"), {});
     });
-    let root = host.accessibility_tree();
+    let root = host.accessibility_tree_with_covered();
     let mut out = Writer::default();
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let flags = read_flags(&out.bytes);
@@ -219,23 +227,48 @@ fn a_live_region_and_a_heading_show_in_the_flags() {
     assert_ne!(of("heading") & HEADING, 0);
 }
 
-/// Each record's id and flags, its strings and the rest stepped over, and who it's read before.
+/// An extra as a record has it: its key and kind, and its value's bytes (a text's or a list's
+/// without their lengths, its parts on their own).
+type WrittenExtra = (String, u8, Vec<u8>, Vec<String>);
+
+/// What `Accessibility.kt` reads of a record, its other strings and the rest stepped over.
+struct Written {
+    id: i32,
+    flags: u32,
+    before: i32,
+    bounds: [f32; 4],
+    /// A scrolling node's page.
+    page: Option<f32>,
+    extras: Vec<WrittenExtra>,
+}
+
+/// Each record's id and flags, and who it's read before.
 fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
+    read_records(bytes).iter().map(|it| (it.id, it.flags, it.before)).collect()
+}
+
+fn read_records(bytes: &[u8]) -> Vec<Written> {
     let mut at = 0;
     let read_u32 = |at: &mut usize| {
         let value = u32::from_le_bytes(bytes[*at..*at + 4].try_into().unwrap());
         *at += 4;
         value
     };
-    let skip_string = |at: &mut usize| {
+    let read_f32 = |at: &mut usize| f32::from_bits(read_u32(at));
+    let read_string = |at: &mut usize| {
         let length = read_u32(at) as usize;
+        let text = String::from_utf8(bytes[*at..*at + length].to_vec()).unwrap();
         *at += length;
+        text
+    };
+    let skip_string = |at: &mut usize| {
+        read_string(at);
     };
     let mut out = Vec::new();
     while at < bytes.len() {
         let id = read_u32(&mut at) as i32;
         read_u32(&mut at);
-        at += 16;
+        let bounds = [read_f32(&mut at), read_f32(&mut at), read_f32(&mut at), read_f32(&mut at)];
         let flags = read_u32(&mut at);
         at += 1;
         for _ in 0..6 {
@@ -244,8 +277,11 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
         if flags & flag::RANGE != 0 {
             at += 12;
         }
+        let mut page = None;
         if flags & flag::SCROLL != 0 {
-            at += 13;
+            at += 8;
+            page = Some(read_f32(&mut at));
+            at += 1;
         }
         let before = read_u32(&mut at) as i32;
         // Its drawing order, class, role, state and percent, selection and granularities.
@@ -253,13 +289,39 @@ fn records(bytes: &[u8]) -> Vec<(i32, u32, i32)> {
         skip_string(&mut at);
         at += 12;
         skip_string(&mut at);
+        // Its extras.
+        let mut extras = Vec::new();
+        for _ in 0..read_u32(&mut at) {
+            let key = read_string(&mut at);
+            let kind = bytes[at];
+            at += 1;
+            let (mut value, mut texts) = (Vec::new(), Vec::new());
+            match kind {
+                0 | 1 => {
+                    value = bytes[at..at + 4].to_vec();
+                    at += 4;
+                }
+                2 => {
+                    value = vec![bytes[at]];
+                    at += 1;
+                }
+                3 => texts.push(read_string(&mut at)),
+                5 => {
+                    for _ in 0..read_u32(&mut at) {
+                        texts.push(read_string(&mut at));
+                    }
+                }
+                _ => {}
+            }
+            extras.push((key, kind, value, texts));
+        }
         let actions = bytes[at] as usize;
         at += 1;
         for _ in 0..actions {
             at += 1;
             skip_string(&mut at);
         }
-        out.push((id, flags, before));
+        out.push(Written { id, flags, before, bounds, page, extras });
     }
     out
 }
@@ -705,7 +767,7 @@ fn what_is_hidden_or_says_nothing_is_not_read_and_each_record_names_the_next() {
     });
     assert_eq!(order(&host), ["first", "last"]);
 
-    let root = host.accessibility_tree();
+    let root = host.accessibility_tree_with_covered();
     let mut out = Writer::default();
     write_tree(&root, &mut KeptCustomActions::default(), &mut out);
     let read = records(&out.bytes);
@@ -1127,21 +1189,638 @@ fn a_cursor_moved_by_a_key_or_a_tap_is_told_at_once() {
     assert!(host.frame().semantics_changed, "a tap");
 }
 
+// ---- What a touch finds for a service (D1659) --------------------------------------------------------
+
+/// `content` over the whole window, each child placed over the one before.
+fn stacked(content: impl Fn() + 'static) -> UiHost {
+    let mut host = UiHost::headless(400, 800);
+    let content = compose_runtime::callback(content);
+    host.set_content(move || {
+        let content = content.clone();
+        Box!({ content() });
+    });
+    frames(&mut host);
+    host
+}
+
+fn id_of(host: &UiHost, tag: &str) -> i32 {
+    fn find(node: compose_ui::SemanticsNode, tag: &str) -> Option<i32> {
+        let tagged = node.unmerged_config().get(&SemanticsProperties::TEST_TAG).cloned();
+        if tagged.is_some_and(|it| it.as_str() == tag) {
+            return Some(node.id());
+        }
+        node.children().into_iter().find_map(|child| find(child, tag))
+    }
+    let owner = host.semantics_owner();
+    find(owner.unmerged_root_semantics_node(), tag).unwrap_or_else(|| panic!("no {tag}"))
+}
+
+fn touched(host: &UiHost, x: f32, y: f32) -> Option<i32> {
+    compose_android::accessibility::node_at(host, x, y)
+}
+
+fn target() -> Modifier {
+    Modifier.size(100.dp()).clickable(|| {}).test_tag("target")
+}
+
+/// Says nothing a service reads.
+fn unimportant() -> Modifier {
+    Modifier.size(100.dp()).semantics(|_| {})
+}
+
+fn tag_only() -> Modifier {
+    Modifier.size(100.dp()).test_tag("overlay")
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest
 #[test]
-fn a_touch_looks_through_what_says_nothing_to_what_is_around_it_not_what_is_under_it() {
-    let host = host_of(|| {
-        let parent = Modifier.size(50.dp()).semantics(says).test_tag("parent");
-        Box!(modifier = parent, {
-            let under = Modifier.size(20.dp()).semantics(says).test_tag("under");
-            Box!(modifier = under, {});
-            Box!(modifier = Modifier.size(20.dp()).test_tag("says nothing"), {});
+fn a_touch_finds_what_merges_what_is_under_it() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.toggleable(true, |_| {}).test_tag("toggle"), {
+            BasicText!("Toggleable");
         });
     });
+    let toggle = tagged(&host, "toggle");
+    let (x, y) = (toggle.bounds.left + 5.0, toggle.bounds.top + 5.0);
+    assert_eq!(touched(&host, x, y), Some(toggle.semantics_id));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_overlappedChildren
+#[test]
+fn a_touch_finds_the_one_on_top_by_its_z_index() {
+    let host = stacked(|| {
+        BasicText!("One", modifier = Modifier.z_index(1.0).test_tag("one").required_size(50.dp()));
+        BasicText!("Two", modifier = Modifier.test_tag("two").required_size(50.dp()));
+    });
+    assert_eq!(touched(&host, 25.0, 25.0), Some(id_of(&host, "one")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_scrolled
+#[test]
+fn a_touch_finds_what_is_scrolled_there() {
+    let state = **Box::leak(Box::new(ScrollState::new(0)));
+    let mut host = stacked(move || {
+        Column!(modifier = Modifier.size(200.dp()).vertical_scroll(state), {
+            BasicText!("Before", modifier = Modifier.test_tag("before").size(200.dp()));
+            BasicText!("After", modifier = Modifier.test_tag("after").size(200.dp()));
+        });
+    });
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "before")));
+    assert_eq!(touched(&host, 100.0, 250.0), None, "past the clip");
+    state.dispatch_raw_delta(10_000.0);
+    frames(&mut host);
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "after")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_hideFromAccessibilitySemantics
+#[test]
+fn a_touch_finds_nothing_in_what_hides_from_a_service() {
+    let host = stacked(|| {
+        let modifier =
+            Modifier.size(100.dp()).clickable(|| {}).semantics(|it| it.hide_from_accessibility());
+        Box!(modifier = modifier);
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantOverlay
+#[test]
+fn a_touch_goes_through_what_says_nothing_to_what_is_under_it() {
+    let host = stacked(|| {
+        Box!(modifier = target());
+        Box!(modifier = tag_only());
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantOverlay_firstChild, testSemanticsHitTest_unimportantOverlay_secondChild
+#[test]
+fn a_touch_goes_through_what_says_nothing_to_each_of_a_row_under_it() {
+    let host = stacked(|| {
+        Row!({
+            Box!(modifier = Modifier.size(100.dp()).clickable(|| {}).test_tag("first"));
+            Box!(modifier = Modifier.size(100.dp()).clickable(|| {}).test_tag("second"));
+        });
+        Column!(modifier = Modifier.fill_max_size().semantics(|_| {}), {});
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "first")));
+    assert_eq!(touched(&host, 150.0, 50.0), Some(id_of(&host, "second")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_overlayWithExplicitZIndex
+#[test]
+fn a_touch_goes_through_what_says_nothing_whatever_its_z_index() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(100.dp()).z_index(1.0).semantics(|_| {}));
+        Box!(modifier = Modifier.size(100.dp()).z_index(0.0).clickable(|| {}).test_tag("target"));
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_doubleOverlay
+#[test]
+fn a_touch_goes_through_two_that_say_nothing_at_two_depths() {
+    let host = stacked(|| {
+        Box!({
+            Box!(modifier = target());
+            Box!(modifier = unimportant());
+        });
+        Box!(modifier = unimportant());
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_sandwichedTarget
+#[test]
+fn a_touch_finds_what_is_between_two_that_say_nothing() {
+    let host = stacked(|| {
+        Box!(modifier = unimportant());
+        Box!(modifier = target());
+        Box!(modifier = unimportant());
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_offsetOverlap
+#[test]
+fn a_touch_goes_through_what_says_nothing_where_they_overlap() {
+    let host = stacked(|| {
+        Box!(modifier = target());
+        Box!(modifier = Modifier.offset(50.dp(), 50.dp()).size(100.dp()).semantics(|_| {}));
+    });
+    assert_eq!(touched(&host, 75.0, 75.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_importantOverlay
+#[test]
+fn a_touch_finds_what_is_over_it_if_that_means_something() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(100.dp()).clickable(|| {}));
+        Box!(modifier = target());
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_hiddenFromAccessibilityOverlay
+#[test]
+fn a_touch_goes_through_what_hides_from_a_service_to_what_is_under_it() {
+    let host = stacked(|| {
+        Box!(modifier = target());
+        Box!(
+            modifier = Modifier
+                .size(100.dp())
+                .clickable(|| {})
+                .semantics(|it| it.hide_from_accessibility())
+        );
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_clearAndSetSemanticsOverlay
+#[test]
+fn a_touch_goes_through_what_clears_its_semantics_and_says_nothing() {
+    let host = stacked(|| {
+        Box!(modifier = target());
+        Box!(modifier = Modifier.size(100.dp()).clear_and_set_semantics(|_| {}));
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "target")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantOverlayWithImportantChild_clickOutsideChild, testSemanticsHitTest_unimportantOverlayWithImportantChild_clickInsideChild
+#[test]
+fn a_touch_under_what_says_nothing_finds_its_child_only_on_the_child() {
+    let host = stacked(|| {
+        Box!(modifier = target());
+        Box!(modifier = unimportant(), {
+            Box!(modifier = Modifier.size(50.dp()).clickable(|| {}).test_tag("child"));
+        });
+    });
+    assert_eq!(touched(&host, 75.0, 75.0), Some(id_of(&host, "target")));
+    assert_eq!(touched(&host, 25.0, 25.0), Some(id_of(&host, "child")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantOverlayWithImportantMinTouchTargetSibling
+#[test]
+fn a_touch_finds_a_small_node_by_its_touch_target_under_what_says_nothing() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("small"));
+        Box!(modifier = unimportant());
+    });
+    assert_eq!(touched(&host, 20.0, 20.0), Some(id_of(&host, "small")));
+    assert_eq!(touched(&host, 40.0, 40.0), None, "past its target");
+}
+
+// Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt, hitTestSemantics_pointerInMinimumTouchTarget_closestHit
+#[test]
+fn of_two_touch_targets_the_closer_one_is_found_and_a_direct_hit_beats_them() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("left"));
+        Box!(
+            modifier =
+                Modifier.offset(30.dp(), 0.dp()).size(10.dp()).clickable(|| {}).test_tag("right")
+        );
+        Box!(
+            modifier =
+                Modifier.offset(100.dp(), 0.dp()).size(10.dp()).clickable(|| {}).test_tag("far")
+        );
+        Box!(
+            modifier =
+                Modifier.offset(112.dp(), 0.dp()).size(10.dp()).test_tag("big").semantics(says)
+        );
+    });
+    assert_eq!(touched(&host, 14.0, 5.0), Some(id_of(&host, "left")));
+    assert_eq!(touched(&host, 25.0, 5.0), Some(id_of(&host, "right")));
+    // A sibling under one whose target's there, hit directly.
+    assert_eq!(touched(&host, 115.0, 5.0), Some(id_of(&host, "big")));
+}
+
+/// A clip stops what's in it for a service as for a finger: the record tells it no more than the box.
+#[test]
+fn a_touch_past_a_clip_finds_what_is_under_it() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        Box!(modifier = Modifier.size(100.dp()).clip_to_bounds(), {
+            Box!(modifier = Modifier.required_size(300.dp()).clickable(|| {}).test_tag("clipped"));
+        });
+    });
+    assert_eq!(touched(&host, 150.0, 150.0), Some(id_of(&host, "under")));
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "clipped")));
+}
+
+/// A rounded clip's corner isn't in it.
+#[test]
+fn a_touch_past_a_rounded_clips_corner_finds_what_is_under_it() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(100.dp()));
+        Box!(
+            modifier = Modifier
+                .size(100.dp())
+                .clip(RoundedCornerShape(50.dp()))
+                .clickable(|| {})
+                .test_tag("round")
+        );
+    });
+    assert_eq!(touched(&host, 2.0, 2.0), Some(id_of(&host, "under")));
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "round")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_mergeDescendantsOverlay_hitsOverlay
+#[test]
+fn a_touch_finds_what_merges_with_nothing_of_its_own() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(100.dp()).clickable(|| {}));
+        Box!(modifier = Modifier.size(100.dp()).semantics_with(true, |_| {}).test_tag("merging"));
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "merging")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_transparentNode
+#[test]
+fn a_touch_finds_nothing_in_what_is_transparent() {
+    let host = stacked(|| {
+        Box!(
+            modifier =
+                Modifier.graphics_layer(|layer| layer.alpha = 0.0).size(100.dp()).clickable(|| {})
+        );
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_clearAndSet
+#[test]
+fn a_touch_stops_at_what_clears_what_is_in_it() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("outer")
+                .clear_and_set_semantics(|_| {}),
+            {
+                Box!(modifier = Modifier.size(100.dp()).clickable(|| {}).test_tag("inner"));
+            }
+        );
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "outer")));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testHitTest_doesNotHitHiddenMergedChildren
+#[test]
+fn a_touch_finds_nothing_in_a_merging_node_hiding_what_it_merges() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .semantics_with(true, |it| it.hide_from_accessibility())
+                .test_tag("parent")
+                .size(100.dp()),
+            {
+                Box!(
+                    modifier = Modifier
+                        .semantics_with(true, |it| it.set_content_description("child"))
+                        .test_tag("child")
+                        .size(50.dp())
+                );
+            }
+        );
+    });
+    assert_eq!(touched(&host, 25.0, 25.0), None);
+}
+
+/// One window shuts out what's under it: a touch beside what it shows finds its own, not that.
+#[test]
+fn a_touch_beside_a_dialog_finds_nothing_behind_it() {
+    let open = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let mut host = field_and_dialog(open);
+    let behind = id_of(&host, "behind");
+    assert_eq!(touched(&host, 5.0, 5.0), Some(behind));
+    open.set(true);
+    frames(&mut host);
+    assert_ne!(touched(&host, 5.0, 5.0), Some(behind));
+}
+
+/// At the window's corner.
+struct AtTheCorner;
+
+impl PopupPositionProvider for AtTheCorner {
+    fn position(&self, _: Rect, _: IntSize, _: LayoutDirection, _: IntSize) -> IntOffset {
+        IntOffset::new(0, 0)
+    }
+}
+
+/// A touch target reaches no further than its window: beside it, what's under finds the touch.
+#[test]
+fn a_touch_target_stops_at_its_window() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        Popup!(properties = PopupProperties::default(), {
+            Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("small"));
+        });
+    });
+    assert_eq!(touched(&host, 20.0, 5.0), Some(id_of(&host, "under")));
+    assert_eq!(touched(&host, 5.0, 5.0), Some(id_of(&host, "small")));
+}
+
+// ---- Through a layer's transform ---------------------------------------------------------------------
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, unclippedBoundsInRoot
+/// Turned about its centre, a button at (0,0) is at (0,0): nothing's where its top left has gone.
+#[test]
+fn a_node_turned_right_round_is_where_it_shows_not_where_its_corner_went() {
+    let host = stacked(|| {
+        BasicText!(
+            "beyond",
+            modifier = Modifier.offset(100.dp(), 100.dp()).test_tag("beyond").size(100.dp())
+        );
+        Box!(
+            modifier = Modifier
+                .graphics_layer(|layer| layer.rotation_z = 180.0)
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("button")
+        );
+    });
     let root = host.accessibility_tree();
-    assert_eq!(
-        compose_android::accessibility::node_at(&root, 5.0, 5.0),
-        Some(tagged(&host, "parent").semantics_id)
-    );
+    let button = by_tag(&root, "button").expect("there");
+    assert_eq!(button.uncovered_bounds, Some(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    assert!(by_tag(&root, "beyond").is_some(), "nothing covers it");
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 150.0, 150.0), Some(id_of(&host, "beyond")));
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, unclippedBoundsInRoot
+#[test]
+fn a_node_scaled_up_is_as_big_as_it_shows() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(100.dp(), 100.dp())
+                .graphics_layer(|layer| {
+                    layer.scale_x = 1.5;
+                    layer.scale_y = 1.5;
+                })
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("button")
+        );
+    });
+    let button = uncovered(&host, "button");
+    assert_eq!(button.uncovered_bounds, Some(Rect::new(75.0, 75.0, 225.0, 225.0)));
+    assert_eq!(touched(&host, 220.0, 220.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 80.0, 80.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 240.0, 240.0), None);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+/// A clip is asked where it is: in what's scaled, its outline is scaled with it.
+#[test]
+fn a_rounded_clip_is_asked_in_its_own_coordinates_under_a_scale() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .graphics_layer(|layer| {
+                    layer.scale_x = 2.0;
+                    layer.scale_y = 2.0;
+                    layer.transform_origin =
+                        TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+                })
+                .size(100.dp())
+                .clip(RoundedCornerShape(50.dp()))
+                .clickable(|| {})
+                .test_tag("round")
+        );
+    });
+    assert_eq!(touched(&host, 180.0, 180.0), None, "(90, 90) of it is past its corner");
+    // (85, 85) of it is just in the circle.
+    assert_eq!(touched(&host, 170.0, 170.0), Some(id_of(&host, "round")));
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "round")));
+    assert_eq!(touched(&host, 100.0, 195.0), Some(id_of(&host, "round")));
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+/// What's in a scaled parent is asked in the parent's scale.
+#[test]
+fn a_rounded_clip_in_a_scaled_parent_is_asked_where_it_is() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier.graphics_layer(|layer| {
+                layer.scale_x = 1.25;
+                layer.scale_y = 1.25;
+                layer.transform_origin =
+                    TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+            }),
+            {
+                Box!(
+                    modifier = Modifier
+                        .size(200.dp())
+                        .clip(RoundedCornerShape(100.dp()))
+                        .clickable(|| {})
+                        .test_tag("round")
+                );
+            }
+        );
+    });
+    // (176, 80) of the 200 circle: in it. Without the scale, (220, 100) would be past it.
+    assert_eq!(touched(&host, 220.0, 100.0), Some(id_of(&host, "round")));
+    // (192, 16): past its corner, though in its bounds.
+    assert_eq!(touched(&host, 240.0, 20.0), None);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+#[test]
+fn a_clip_turned_a_quarter_is_asked_turned() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(100.dp(), 100.dp())
+                .graphics_layer(|layer| {
+                    layer.rotation_z = 90.0;
+                    layer.transform_origin =
+                        TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+                })
+                .size((100.dp(), 50.dp()))
+                .clip_to_bounds()
+                .clickable(|| {})
+                .test_tag("turned")
+        );
+    });
+    // (95, 25) of it: 90 degrees about its top left, at (100 - 25, 100 + 95).
+    assert_eq!(touched(&host, 75.0, 195.0), Some(id_of(&host, "turned")));
+    assert_eq!(touched(&host, 120.0, 120.0), None, "where it'd be unturned");
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, isPointerInBounds
+/// A diamond's bounding box isn't it.
+#[test]
+fn a_node_turned_an_eighth_is_hit_only_on_it_not_its_bounding_box() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(50.dp(), 50.dp())
+                .graphics_layer(|layer| layer.rotation_z = 45.0)
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("diamond")
+        );
+    });
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "diamond")));
+    // Its bounding box reaches about 29..171: this corner's in that and nowhere near it.
+    assert_eq!(touched(&host, 35.0, 35.0), None);
+}
+
+/// An overlay's own window takes a touch in it, as a view of its own in Compose, whatever's there.
+#[test]
+fn a_touch_in_a_window_finds_nothing_under_it_and_beside_it_goes_on() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        let window = Rc::new(AtTheCorner) as Rc<dyn PopupPositionProvider>;
+        Box!(modifier = Modifier.overlay(window, false).size(100.dp()));
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
+    assert_eq!(touched(&host, 150.0, 150.0), Some(id_of(&host, "under")));
+}
+
+/// A popup shutting out what's under it: beside it, a touch finds nothing, as a service reads.
+#[test]
+fn a_touch_beside_a_window_shutting_out_what_is_under_it_finds_nothing() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        Popup!(properties = PopupProperties { focusable: true, ..Default::default() }, {
+            Box!(modifier = Modifier.size(100.dp()));
+        });
+    });
+    assert!(by_tag(&host.accessibility_tree(), "under").is_none());
+    assert_eq!(touched(&host, 150.0, 150.0), None);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testSemanticsHitTest_unimportantTraversalProperties
+#[test]
+fn a_touch_finds_nothing_in_what_only_says_how_it_is_read() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier.size(100.dp()).test_tag("group").semantics(|it| {
+                it.set_is_traversal_group(true);
+                it.set_traversal_index(1.0);
+            })
+        );
+    });
+    assert_eq!(touched(&host, 50.0, 50.0), None);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testHideFromAccessibility_propagatesToMergedChildren
+#[test]
+fn hiding_in_a_merging_node_reaches_what_merges_and_what_does_not_in_it() {
+    let host = host_of(|| {
+        Column!(
+            modifier = Modifier
+                .semantics_with(true, |it| it.hide_from_accessibility())
+                .test_tag("parent")
+                .size(100.dp()),
+            {
+                Box!(
+                    modifier = Modifier
+                        .semantics_with(true, |it| it.set_content_description("child"))
+                        .test_tag("merging child")
+                        .size(50.dp())
+                );
+                Box!(
+                    modifier = Modifier
+                        .semantics(|it| it.set_content_description("child2"))
+                        .test_tag("other child")
+                        .size(50.dp())
+                );
+            }
+        );
+    });
+    let root = host.accessibility_tree();
+    let flags = read_flags(&written(&root));
+    for tag in ["parent", "merging child"] {
+        let id = by_tag(&root, tag).expect("there").semantics_id;
+        let of = flags.iter().find(|it| it.0 == id).expect("written").1;
+        assert_ne!(of & flag::HIDDEN, 0, "{tag}");
+        assert_eq!(of & flag::SCREEN_READER_FOCUSABLE, 0, "{tag}");
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testHideFromAccessibility_propagatesToDeeplyNestedMergedChildren
+#[test]
+fn hiding_in_a_merging_node_reaches_deep_into_what_merges_in_it() {
+    let host = host_of(|| {
+        Column!(
+            modifier = Modifier
+                .semantics_with(true, |it| it.hide_from_accessibility())
+                .test_tag("parent")
+                .size(100.dp()),
+            {
+                Column!(
+                    modifier = Modifier
+                        .semantics_with(true, |it| it.set_content_description("child"))
+                        .test_tag("child")
+                        .size(50.dp()),
+                    {
+                        Box!(
+                            modifier = Modifier
+                                .semantics_with(true, |it| it.set_content_description("grandchild"))
+                                .test_tag("grandchild")
+                                .size(50.dp())
+                        );
+                    }
+                );
+            }
+        );
+    });
+    let root = host.accessibility_tree();
+    let flags = read_flags(&written(&root));
+    for tag in ["parent", "child", "grandchild"] {
+        let id = by_tag(&root, tag).expect("there").semantics_id;
+        let of = flags.iter().find(|it| it.0 == id).expect("written").1;
+        assert_ne!(of & flag::HIDDEN, 0, "{tag}");
+    }
+}
+
+fn written(root: &SemanticsSnapshot) -> Vec<u8> {
+    let mut out = Writer::default();
+    write_tree(root, &mut KeptCustomActions::default(), &mut out);
+    out.bytes
 }
 
 #[test]
@@ -1309,6 +1988,16 @@ fn the_kotlin_says_what_rust_chose() {
         "if (code == CODE_PASTE && !clipboardHasText()) continue",
         "?.hasMimeType(\"text/*\") == true",
         "info.isEditable = node.flags and CAN_EDIT != 0",
+        // What a shape's key sets is Rust's to say (`shape_set`).
+        "if (set and SHAPE_SET_TYPE != 0) extras.putInt(EXTRA_SHAPE_TYPE_KEY, kind)",
+        "if (set and SHAPE_SET_RECT != 0) extras.putParcelable(EXTRA_SHAPE_RECT_KEY, bounds)",
+        "if (set and SHAPE_SET_CORNERS != 0) {",
+        "region.setPath(path, Region(bounds))",
+        // No record's node is asked past the record's own lists.
+        "if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {\n            if (accessibilityFocused != virtualViewId) return false",
+        "override fun findFocus(focus: Int): AccessibilityNodeInfo? {",
+        "if (node.flags and FOCUSED != 0) return createAccessibilityNodeInfo(node.id)",
+        "event.isPassword = (nodes.get(virtualViewId)?.flags ?: 0) and PASSWORD != 0",
     ] {
         assert!(kotlin.contains(line), "Accessibility.kt lacks {line:?}");
     }
@@ -1609,4 +2298,898 @@ fn a_merging_nodes_role_is_its_class_with_or_without_what_is_beside_it() {
     for tag in ["empty", "with text", "with a child"] {
         assert_eq!(class_and_role(&tagged(&host, tag)).0, "android.widget.Button", "{tag}");
     }
+}
+
+// ---- What's completely covered is left out (D1655) -----------------------------------------------
+
+/// The node tagged `tag` in what a service is told of.
+fn uncovered(host: &UiHost, tag: &str) -> SemanticsSnapshot {
+    by_tag(&host.accessibility_tree(), tag).expect("tagged").clone()
+}
+
+/// The children of the root that are written, by text.
+fn texts_of(host: &UiHost) -> Vec<String> {
+    host.accessibility_tree().children.iter().map(|child| read_as(child).0).collect()
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_completelyCovered
+#[test]
+fn a_node_a_sibling_completely_covers_is_left_out() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!("Child One", modifier = Modifier.z_index(1.0).required_size(50.dp()));
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    let parent = uncovered(&host, "parent");
+    assert_eq!(parent.children.len(), 1);
+    assert_eq!(read_as(&parent.children[0]).0, "Child One");
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_partiallyCovered
+#[test]
+fn a_node_partly_covered_stays_with_what_is_left_of_its_bounds() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!("Child One", modifier = Modifier.z_index(1.0).required_size(100.dp()));
+            BasicText!(
+                "Child Two",
+                modifier = Modifier.test_tag("two").required_size((200.dp(), 100.dp()))
+            );
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+    let two = uncovered(&host, "two");
+    let left = two.uncovered_bounds.expect("pruned");
+    assert_eq!((left.width(), left.height()), (100.0, 100.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_testTagOnlyDoesNotPrune
+#[test]
+fn what_over_it_means_nothing_to_a_service_covers_nothing() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            Box!(modifier = Modifier.z_index(1.0).test_tag("one").required_size(50.dp()));
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, testAccessibilityNodeInfoTreePruned_hideFromAccessibilityDoesNotPrune
+#[test]
+fn what_over_it_is_hidden_covers_nothing() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.test_tag("parent"), {
+            BasicText!(
+                "Child One",
+                modifier = Modifier
+                    .z_index(1.0)
+                    .semantics(|it| it.hide_from_accessibility())
+                    .required_size(50.dp())
+            );
+            BasicText!("Child Two", modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    assert_eq!(uncovered(&host, "parent").children.len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testUncoveredNodes_notPlacedNodes_notIncluded
+#[test]
+fn what_is_not_placed_is_left_out() {
+    let host = host_of(|| {
+        Row!(modifier = Modifier.size(10.dp()), {
+            for _ in 0..3 {
+                Box!(
+                    modifier =
+                        Modifier.size(10.dp()).semantics(|it| it.set_content_description("a"))
+                );
+            }
+        });
+    });
+    assert_eq!(host.accessibility_tree().children.len(), 1);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testUncoveredNodes_zeroBoundsRoot_included
+#[test]
+fn a_root_of_no_size_is_still_visited() {
+    let mut host = UiHost::headless(0, 0);
+    host.set_content(|| {});
+    frames(&mut host);
+    let owner = host.semantics_owner();
+    let root = owner.unmerged_root_semantics_node().id();
+    let mut visited = Vec::new();
+    owner.for_each_uncovered_semantics_node(|node, _, _| visited.push(node.id()));
+    assert_eq!(visited, [root]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, clippedChildInScrollContainer_doesNotOccludeAdjacentSiblingTouchTarget
+#[test]
+fn a_clipped_childs_touch_target_covers_nothing_past_its_clip() {
+    let offset = Box::leak(Box::new(mutable_state_of(-12i32))).handle();
+    let mut host = host_of(move || {
+        Column!(modifier = Modifier.size(200.dp()), {
+            Box!(modifier = Modifier.fill_max_width().height(56.dp()), |scope: BoxScope| {
+                Box!(
+                    modifier = Modifier
+                        .size(48.dp())
+                        .align(scope, Alignment::BOTTOM_START)
+                        .test_tag("top")
+                        .clickable(|| {})
+                );
+            });
+            Box!(modifier = Modifier.fill_max_width().height(144.dp()).clip_to_bounds(), {
+                Box!(
+                    modifier = Modifier
+                        .offset(0.dp(), offset.get().dp())
+                        .size(100.dp())
+                        .test_tag("item")
+                        .clickable(|| {})
+                );
+            });
+        });
+    });
+    assert_eq!(uncovered(&host, "top").uncovered_bounds.expect("pruned").height(), 48.0);
+    // A little past the clip's start: its target starts at the clip, not with it.
+    fn find_node(node: compose_ui::SemanticsNode, id: i32) -> Option<compose_ui::SemanticsNode> {
+        if node.id() == id {
+            return Some(node);
+        }
+        node.children().into_iter().find_map(|child| find_node(child, id))
+    }
+    let touch_top = |host: &UiHost| {
+        let owner = host.semantics_owner();
+        let item = uncovered(host, "item").semantics_id;
+        find_node(owner.unmerged_root_semantics_node(), item)
+            .expect("there")
+            .touch_bounds_in_root()
+            .top
+    };
+    assert_eq!(touch_top(&host), 56.0);
+    // 20 of it left in the clip: its target goes past it, and still covers nothing there.
+    offset.set(-80);
+    frames(&mut host);
+    assert!(touch_top(&host) < 56.0);
+    assert_eq!(uncovered(&host, "top").uncovered_bounds.expect("pruned").height(), 48.0);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, rectInParent
+/// All past a clip, there's no target to speak of.
+#[test]
+fn a_target_all_past_its_clip_has_no_touch_bounds() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.padding(50.dp()).size(100.dp()).clip_to_bounds(), {
+            Box!(
+                modifier = Modifier
+                    .offset(150.dp(), 0.dp())
+                    .size(10.dp())
+                    .clickable(|| {})
+                    .test_tag("past")
+            );
+        });
+    });
+    let owner = host.semantics_owner();
+    let id = id_of(&host, "past");
+    let touch = owner.get(id).expect("there").touch_bounds_in_root();
+    assert!(touch.right <= touch.left || touch.bottom <= touch.top, "{touch:?}");
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, clippedTouchBoundsInRoot
+/// A clip narrower than the target lets it past, and what's beside that is covered by it.
+#[test]
+fn a_clip_smaller_than_the_target_doesnt_stop_it_from_covering() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.offset(34.dp(), 0.dp()).size((10.dp(), 48.dp())), {
+            BasicText!("beside", modifier = Modifier.test_tag("beside").fill_max_size());
+        });
+        Box!(
+            modifier = Modifier.offset(14.dp(), 0.dp()).size((20.dp(), 48.dp())).clip_to_bounds(),
+            {
+                Box!(
+                    modifier = Modifier
+                        .offset(5.dp(), 0.dp())
+                        .size((10.dp(), 48.dp()))
+                        .clickable(|| {})
+                        .test_tag("narrow")
+                );
+            }
+        );
+    });
+    let root = host.accessibility_tree();
+    assert!(by_tag(&root, "narrow").is_some());
+    assert!(by_tag(&root, "beside").is_none(), "its target reaches past the clip");
+}
+
+// ---- A merging node past its scroller --------------------------------------------------------------
+
+fn visited(host: &UiHost) -> Vec<(i32, Rect)> {
+    let mut out = Vec::new();
+    host.semantics_owner().for_each_uncovered_semantics_node(|node, bounds, _| {
+        out.push((node.id(), bounds));
+    });
+    out
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsOwner.kt, isPartiallyOffscreenInScrollParent
+/// What's all past the scroller is told too, for a service to scroll to, by its bounds there; what
+/// covers what, there too.
+#[test]
+fn what_a_merging_node_has_past_its_scroller_is_visited_by_its_bounds_there() {
+    let host = stacked(|| {
+        let scroll = remember_scroll_state!();
+        Column!(modifier = Modifier.size(100.dp()).vertical_scroll(scroll), {
+            Column!(
+                modifier = Modifier.semantics_with(true, |_| {}).fill_max_width().test_tag("item"),
+                {
+                    BasicText!("seen", modifier = Modifier.test_tag("seen").size(100.dp()));
+                    BasicText!(
+                        "past",
+                        modifier = Modifier.test_tag("past").size((100.dp(), 50.dp()))
+                    );
+                    Box!({
+                        BasicText!("under", modifier = Modifier.test_tag("under").size(50.dp()));
+                        BasicText!("over", modifier = Modifier.test_tag("over").size(50.dp()));
+                    });
+                }
+            );
+        });
+    });
+    let all = visited(&host);
+    let bounds_of = |tag: &str| {
+        let id = id_of(&host, tag);
+        all.iter().find(|it| it.0 == id).map(|it| it.1)
+    };
+    assert_eq!(bounds_of("past"), Some(Rect::new(0.0, 100.0, 100.0, 150.0)));
+    assert_eq!(bounds_of("over"), Some(Rect::new(0.0, 150.0, 50.0, 200.0)));
+    assert_eq!(bounds_of("under"), None, "covered there too");
+}
+
+#[test]
+fn what_is_past_a_scroller_outside_a_merging_node_is_not_visited() {
+    let host = stacked(|| {
+        let scroll = remember_scroll_state!();
+        Column!(modifier = Modifier.size(100.dp()).vertical_scroll(scroll), {
+            BasicText!("seen", modifier = Modifier.test_tag("seen").size(100.dp()));
+            BasicText!("past", modifier = Modifier.test_tag("past").size(100.dp()));
+        });
+    });
+    let id = id_of(&host, "past");
+    assert!(visited(&host).iter().all(|it| it.0 != id));
+}
+
+// ---- The record ------------------------------------------------------------------------------------
+
+#[test]
+fn a_record_tells_whats_left_of_a_node_and_a_page_all_of_it() {
+    let host = stacked(|| {
+        Box!(modifier = Modifier.size(200.dp()), {
+            let scroll = remember_scroll_state!();
+            Column!(
+                modifier = Modifier.size(200.dp()).vertical_scroll(scroll).test_tag("scroller"),
+                {
+                    Box!(modifier = Modifier.size(400.dp()));
+                }
+            );
+            BasicText!("over", modifier = Modifier.size((200.dp(), 50.dp())));
+        });
+    });
+    let root = host.accessibility_tree();
+    let id = by_tag(&root, "scroller").expect("there").semantics_id;
+    let all = read_records(&written(&root));
+    let record = all.iter().find(|it| it.id == id).expect("written");
+    assert_eq!(record.bounds, [0.0, 50.0, 200.0, 200.0]);
+    assert_eq!(record.page, Some(200.0));
+}
+
+// ---- Its extras, as they're written -------------------------------------------------------------------
+
+static RATIO_EXTRA: SemanticsPropertyKey<f32> =
+    SemanticsPropertyKey::with_accessibility_extra("Ratio", "ratio.key");
+static WORDS_EXTRA: SemanticsPropertyKey<StringList> =
+    SemanticsPropertyKey::with_accessibility_extra("Words", "words.key");
+
+#[test]
+fn each_kind_of_extra_is_written_as_what_it_is() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 123);
+        it.set(&RATIO_EXTRA, 0.5);
+        it.set(&FLAG_EXTRA, true);
+        it.set(&NAME_EXTRA, "test".into());
+        it.set(
+            &WORDS_EXTRA,
+            [SharedString::from("a"), SharedString::from("bc")].into_iter().collect(),
+        );
+    }));
+    let root = host.accessibility_tree();
+    let id = by_tag(&root, "node").expect("there").semantics_id;
+    let all = read_records(&written(&root));
+    let extras = &all.iter().find(|it| it.id == id).expect("written").extras;
+    let of = |key: &str| extras.iter().find(|it| it.0 == key).expect(key);
+    let count = of("count.key");
+    assert_eq!((count.1, &count.2[..]), (0, &123u32.to_le_bytes()[..]));
+    let ratio = of("ratio.key");
+    assert_eq!((ratio.1, &ratio.2[..]), (1, &0.5f32.to_le_bytes()[..]));
+    let flag = of("flag.key");
+    assert_eq!((flag.1, &flag.2[..]), (2, &[1u8][..]));
+    let name = of("name.key");
+    assert_eq!((name.1, &name.3[..]), (3, &[String::from("test")][..]));
+    let words = of("words.key");
+    assert_eq!((words.1, &words.3[..]), (5, &[String::from("a"), String::from("bc")][..]));
+    assert!(matches!(
+        extras_of(by_tag(&root, "node").expect("there"))
+            .iter()
+            .find(|it| it.0 == "ratio.key")
+            .map(|it| &it.1),
+        Some(ExtraValue::Float(_))
+    ));
+}
+
+// ---- A shape's extras, as they're written ---------------------------------------------------------
+
+fn half_covered(shape: Shape) -> UiHost {
+    stacked(move || {
+        let shape = shape.clone();
+        Box!(
+            modifier = Modifier
+                .size(100.dp())
+                .test_tag("shaped")
+                .semantics(move |it| it.set_shape(shape.clone()))
+        );
+        BasicText!("over", modifier = Modifier.size((100.dp(), 50.dp())));
+    })
+}
+
+/// A shape goes from the bounds a service was told of: what's left of the node.
+#[test]
+fn a_shape_is_placed_from_whats_left_of_its_node() {
+    let host = half_covered(compose_ui::RECTANGLE_SHAPE);
+    let node = uncovered(&host, "shaped");
+    assert_eq!(node.uncovered_bounds, Some(Rect::new(0.0, 50.0, 100.0, 100.0)));
+    let Some(ShapeExtra::Rectangle(rect)) = shape_extra(&host, &node) else {
+        panic!("a rectangle")
+    };
+    assert_eq!(rect, Rect::new(0.0, -50.0, 100.0, 50.0));
+    let host = half_covered(Shape::custom(Triangle));
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Generic(_, offset, bounds)) = shape_extra(&host, &node) else {
+        panic!("a path")
+    };
+    assert_eq!(offset, Offset::new(0.0, -50.0));
+    assert_eq!(bounds, Rect::new(0.0, -50.0, 100.0, 50.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeExtras_roundedCornerRectangle
+#[test]
+fn right_to_left_a_shapes_corners_are_mirrored() {
+    let host = stacked(|| {
+        compose_runtime::CompositionLocalProvider(
+            LOCAL_LAYOUT_DIRECTION.provides(LayoutDirection::Rtl),
+            || {
+                Box!(
+                    modifier = Modifier.size(10.dp()).test_tag("shaped").semantics(|it| {
+                        it.set_shape(RoundedCornerShape((1.dp(), 2.dp(), 3.dp(), 4.dp())))
+                    })
+                );
+            },
+        );
+    });
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Rounded(_, radii)) = shape_extra(&host, &node) else { panic!("rounded") };
+    assert_eq!(radii, [2.0, 2.0, 1.0, 1.0, 4.0, 4.0, 3.0, 3.0]);
+}
+
+#[test]
+fn what_merges_a_shape_has_none_of_its_own() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.semantics_with(true, |it| it.set_text("a")).test_tag("parent"), {
+            Box!(
+                modifier = Modifier
+                    .size(10.dp())
+                    .semantics(|it| it.set_shape(compose_ui::RECTANGLE_SHAPE))
+            );
+        });
+    });
+    assert_eq!(flags_of(&uncovered(&host, "parent")) & flag::HAS_SHAPE, 0);
+}
+
+fn f32s(bytes: &[u8]) -> Vec<f32> {
+    bytes.as_chunks::<4>().0.iter().map(|it| f32::from_le_bytes(*it)).collect()
+}
+
+fn shape_written(extra: &ShapeExtra, key: ShapeExtraKey) -> Vec<u8> {
+    let mut out = Writer::default();
+    write_shape_extra(extra, key, &mut out);
+    out.bytes
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_rectangle, testPopulateShapeExtras_requestShapeExtra_rectangle, testPopulateShapeExtras_requestWrongShapeExtra_rectangle_doesNotSetExtra
+#[test]
+fn a_rectangle_is_told_for_its_type_and_rectangle_alone() {
+    let extra = ShapeExtra::Rectangle(Rect::new(1.0, 2.0, 3.0, 4.0));
+    let bytes = shape_written(&extra, ShapeExtraKey::Type);
+    assert_eq!(bytes[0], shape_set::TYPE | shape_set::RECT);
+    assert_eq!(bytes[1], 0, "its kind");
+    assert_eq!(f32s(&bytes[2..]), [1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Rect)[0], shape_set::RECT);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Corners)[0], 0);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Region)[0], 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_roundedCornerRectangle, testPopulateShapeExtras_requestShapeExtras_roundedCornerRectangle, testPopulateShapeExtras_requestWrongShapeExtra_roundedCornerRectangle_doesNotSetExtra
+#[test]
+fn a_rounded_rectangle_is_told_for_all_but_a_region() {
+    let radii = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0];
+    let extra = ShapeExtra::Rounded(Rect::new(0.0, 0.0, 5.0, 6.0), radii);
+    let bytes = shape_written(&extra, ShapeExtraKey::Type);
+    assert_eq!(bytes[0], shape_set::TYPE | shape_set::RECT | shape_set::CORNERS);
+    assert_eq!(bytes[1], 1, "its kind");
+    assert_eq!(f32s(&bytes[2..6 * 4 - 2]), [0.0, 0.0, 5.0, 6.0, 1.0]);
+    assert_eq!(f32s(&bytes[18..]), radii);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Rect)[0], shape_set::RECT);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Corners)[0], shape_set::CORNERS);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Region)[0], 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_genericShape, testPopulateShapeExtras_requestShapeExtra_genericShape, testPopulateShapeExtras_requestWrongShapeExtra_genericShape_doesNotSetExtra
+#[test]
+fn any_other_shape_is_told_for_its_type_and_region_alone_moved_where_it_is() {
+    let host = half_covered(Shape::custom(Triangle));
+    let node = uncovered(&host, "shaped");
+    let extra = shape_extra(&host, &node).expect("a shape");
+    let bytes = shape_written(&extra, ShapeExtraKey::Type);
+    assert_eq!(bytes[0], shape_set::TYPE | shape_set::REGION);
+    assert_eq!(bytes[1], 2, "its kind");
+    assert_eq!(f32s(&bytes[2..26]), [0.0, -50.0, 100.0, 50.0, 0.0, -50.0], "bounds, then offset");
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Region)[0], shape_set::REGION);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Rect)[0], 0);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Corners)[0], 0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, overlappingClippedChildrenNearContainerEdge_occludedChildIsPruned
+#[test]
+fn what_is_covered_inside_a_clip_is_left_out_whatever_sticks_past_it() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.size(100.dp()).clip_to_bounds(), {
+            for tag in ["primary", "secondary"] {
+                Box!(
+                    modifier = Modifier
+                        .offset(0.dp(), 80.dp())
+                        .size((80.dp(), 0.dp()))
+                        .test_tag(tag)
+                        .clickable(|| {})
+                );
+            }
+        });
+    });
+    let root = host.accessibility_tree();
+    assert_eq!(root.children.len(), 1);
+    assert!(by_tag(&root, "primary").is_none());
+    assert_eq!(by_tag(&root, "secondary").expect("there").uncovered_bounds.unwrap().height(), 48.0);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, overlappingClippedChildrenInContainerCorner_occludedChildIsPruned
+#[test]
+fn what_is_covered_in_a_corner_of_a_clip_is_left_out() {
+    let host = host_of(|| {
+        Box!(
+            modifier = Modifier.padding(50.dp()).size(100.dp()).clip_to_bounds(),
+            |scope: BoxScope| {
+                for tag in ["primary", "secondary"] {
+                    Box!(
+                        modifier = Modifier
+                            .align(scope, Alignment::BOTTOM_START)
+                            .size(20.dp())
+                            .test_tag(tag)
+                            .clickable(|| {})
+                    );
+                }
+            }
+        );
+    });
+    let root = host.accessibility_tree();
+    assert_eq!(root.children.len(), 1);
+    let left = by_tag(&root, "secondary").expect("there").uncovered_bounds.unwrap();
+    assert_eq!((left.width(), left.height()), (48.0, 48.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, clippedChildWithPerpendicularSiblingOverlap_preservesFullTouchTargetBounds
+#[test]
+fn a_clipped_childs_whole_touch_target_is_told_when_a_sibling_overlaps_a_side() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.padding(50.dp()).size(200.dp()), {
+            Box!(
+                modifier = Modifier.size((100.dp(), 32.dp())).clip_to_bounds(),
+                |scope: BoxScope| {
+                    Box!(
+                        modifier = Modifier
+                            .align(scope, Alignment::CENTER_END)
+                            .padding((0.dp(), 0.dp(), 4.dp(), 0.dp()))
+                            .size(24.dp())
+                            .test_tag("dismiss")
+                            .clickable(|| {})
+                    );
+                }
+            );
+            Box!(
+                modifier = Modifier
+                    .offset(0.dp(), 40.dp())
+                    .size((100.dp(), 32.dp()))
+                    .test_tag("lower")
+                    .clickable(|| {})
+            );
+        });
+    });
+    let left = uncovered(&host, "dismiss").uncovered_bounds.expect("pruned");
+    assert_eq!((left.width(), left.height()), (48.0, 48.0));
+}
+
+#[test]
+fn one_window_over_another_covers_nothing_in_it() {
+    let host = host_of(|| {
+        Box!({
+            BasicText!("under", modifier = Modifier.test_tag("under").size(100.dp()));
+            Popup!(properties = PopupProperties::default(), {
+                BasicText!("over", modifier = Modifier.size(300.dp()));
+            });
+        });
+    });
+    assert!(by_tag(&host.accessibility_tree(), "under").is_some());
+}
+
+#[test]
+fn a_service_gets_each_tree_pruned() {
+    let two = Box::leak(Box::new(mutable_state_of(String::from("Two")))).handle();
+    let mut host = host_of(move || {
+        Box!({
+            BasicText!("One", modifier = Modifier.z_index(1.0).required_size(50.dp()));
+            BasicText!(two.get(), modifier = Modifier.required_size(50.dp()));
+        });
+    });
+    let mut kept = compose_android::accessibility::KeptSemanticsTree::default();
+    assert_eq!(kept.get(&host).children.len(), 1);
+    assert_eq!(texts_of(&host), ["One"]);
+    // A new tree is pruned anew.
+    two.set(String::from("Three"));
+    let stats = host.frame();
+    assert!(kept.after_frame(&stats), "it changed");
+    assert_eq!(kept.get(&host).children.len(), 1);
+}
+
+/// A field scrolled away keeps what a keyboard's told of it, whatever a service read since.
+#[test]
+fn a_field_scrolled_away_is_still_a_password_for_the_keyboard() {
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        let scroll = remember_scroll_state!();
+        Column!(modifier = Modifier.size(100.dp()).test_tag("scroller").vertical_scroll(scroll), {
+            BasicTextField!(
+                String::from("secret"),
+                |_| {},
+                modifier =
+                    Modifier.size((100.dp(), 40.dp())).focus_requester(requester).test_tag("field"),
+                visual_transformation = PasswordVisualTransformation::new()
+            );
+            Box!(modifier = Modifier.size((100.dp(), 400.dp())));
+        });
+    });
+    requester.request_focus();
+    frames(&mut host);
+    let mut kept = compose_android::accessibility::KeptSemanticsTree::default();
+    assert!(host.text_input_masks_password());
+    let tree = host.accessibility_tree();
+    let scroller = by_tag(&tree, "scroller").expect("there").semantics_id;
+    let custom = KeptCustomActions::default();
+    assert!(perform_action(&mut host, &tree, &custom, scroller, action::SCROLL_FIRST as i32, 0.0));
+    let stats = host.frame();
+    frames(&mut host);
+    assert!(kept.after_frame(&stats), "it moved");
+    assert!(by_tag(kept.get(&host), "field").is_none(), "gone for a service");
+    assert!(host.text_input_masks_password());
+}
+
+/// What's around it clearing its semantics, as `clear_and_set_semantics`, hides nothing from a
+/// keyboard.
+#[test]
+fn a_field_with_its_semantics_cleared_around_it_is_still_a_password_for_the_keyboard() {
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        Box!(modifier = Modifier.clear_and_set_semantics(|_| {}), {
+            BasicTextField!(
+                String::from("secret"),
+                |_| {},
+                modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester),
+                visual_transformation = PasswordVisualTransformation::new()
+            );
+        });
+    });
+    requester.request_focus();
+    frames(&mut host);
+    assert!(host.text_input_options().is_some());
+    assert!(host.text_input_masks_password());
+}
+
+#[test]
+fn a_field_not_masking_is_no_password_for_the_keyboard_and_no_field_none() {
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        BasicTextField!(
+            String::from("plain"),
+            |_| {},
+            modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester)
+        );
+    });
+    assert!(!host.text_input_masks_password(), "nothing focused");
+    requester.request_focus();
+    frames(&mut host);
+    assert!(host.text_input_options().is_some());
+    assert!(!host.text_input_masks_password());
+}
+
+/// A field that starts or stops masking: another keyboard, so it restarts.
+#[test]
+fn a_focused_field_starting_to_mask_restarts_the_keyboard() {
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        let transformation = if masked.get() {
+            PasswordVisualTransformation::new().into()
+        } else {
+            VisualTransformation::NONE
+        };
+        BasicTextField!(
+            String::from("secret"),
+            |_| {},
+            modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester),
+            visual_transformation = transformation
+        );
+    });
+    requester.request_focus();
+    frames(&mut host);
+    let mut last = None;
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+    host.frame();
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+    masked.set(true);
+    frames(&mut host);
+    let state = compose_android::input_method::take_text_input_state(&host, &mut last);
+    assert!(state.active && state.restart, "{state:?}");
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+}
+
+#[test]
+fn a_custom_key_with_a_list_of_texts_goes_as_one_and_how_many_needs_no_byte() {
+    static WORDS: compose_ui::SemanticsPropertyKey<StringList> =
+        compose_ui::SemanticsPropertyKey::with_accessibility_extra("Words", "my.words");
+    let host = host_of(|| {
+        let modifier = Modifier.size(20.dp()).test_tag("node").semantics(|config| {
+            let words = [SharedString::from("a"), SharedString::from("bc")];
+            config.set(&WORDS, words.into_iter().collect());
+        });
+        Box!(modifier = modifier, {});
+    });
+    let node = tagged(&host, "node");
+    let extras = extras_of(&node);
+    let ExtraValue::Texts(words) = &extras[0].1 else { panic!("a list") };
+    assert_eq!(words.iter().map(|it| it.as_str()).collect::<Vec<_>>(), ["a", "bc"]);
+    // The record goes on with what follows, the node's kept whole.
+    let mut out = Writer::default();
+    let root = host.accessibility_tree();
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    assert_eq!(read_flags(&out.bytes).len(), ids_written(&host).len());
+}
+
+#[test]
+fn what_a_scroller_clips_all_of_away_is_left_out() {
+    let host = host_of(|| {
+        let scroll = remember_scroll_state!();
+        Column!(modifier = Modifier.size(100.dp()).vertical_scroll(scroll), {
+            BasicText!("shown", modifier = Modifier.size(100.dp()).test_tag("shown"));
+            BasicText!("past it", modifier = Modifier.size(100.dp()).test_tag("past it"));
+        });
+    });
+    let root = host.accessibility_tree();
+    assert!(by_tag(&root, "shown").is_some());
+    assert!(by_tag(&root, "past it").is_none());
+}
+
+// ---- A node's shape and its own extras (D1656) ----------------------------------------------------
+
+fn shaped(shape: Shape) -> UiHost {
+    host_of(move || {
+        let shape = shape.clone();
+        Box!(
+            modifier = Modifier
+                .padding(4.dp())
+                .size(10.dp())
+                .test_tag("shaped")
+                .semantics(move |it| it.set_shape(shape.clone()))
+        );
+    })
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_rectangle, testPopulateShapeExtras_requestShapeExtra_rectangle, testPopulateShapeExtras_shapeSet_setsAllAvailableShapeExtraKeys
+#[test]
+fn a_rectangles_extra_is_its_bounds() {
+    let host = shaped(compose_ui::RECTANGLE_SHAPE);
+    let node = uncovered(&host, "shaped");
+    assert_ne!(flags_of(&node) & flag::HAS_SHAPE, 0);
+    let Some(ShapeExtra::Rectangle(rect)) = shape_extra(&host, &node) else {
+        panic!("a rectangle")
+    };
+    assert_eq!(rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_roundedCornerRectangle, testPopulateShapeExtras_requestShapeExtras_roundedCornerRectangle
+#[test]
+fn a_rounded_rectangles_extra_says_its_corners_in_order() {
+    let host = shaped(RoundedCornerShape((1.dp(), 2.dp(), 3.dp(), 4.dp())));
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Rounded(rect, radii)) = shape_extra(&host, &node) else {
+        panic!("rounded")
+    };
+    assert_eq!(rect, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(radii, [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]);
+}
+
+/// A triangle in its box.
+struct Triangle;
+
+impl CustomShape for Triangle {
+    fn create_outline(
+        &self,
+        size: Size,
+        _direction: LayoutDirection,
+        _density: &Density,
+    ) -> Outline {
+        let path = Path::new();
+        path.move_to(size.width / 2.0, 0.0);
+        path.line_to(size.width, size.height);
+        path.line_to(0.0, size.height);
+        path.close();
+        Outline::Generic(path.data(), Offset::ZERO)
+    }
+
+    fn same(&self, other: &dyn CustomShape) -> bool {
+        (other as &dyn std::any::Any).downcast_ref::<Self>().is_some()
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_requestShapeTypeExtra_genericShape, testPopulateShapeExtras_requestShapeExtra_genericShape
+#[test]
+fn any_other_shapes_extra_is_its_path_where_it_shows() {
+    let host = shaped(Shape::custom(Triangle));
+    let node = uncovered(&host, "shaped");
+    let Some(ShapeExtra::Generic(path, offset, bounds)) = shape_extra(&host, &node) else {
+        panic!("a path")
+    };
+    assert_eq!(offset, Offset::ZERO);
+    assert_eq!(bounds, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(path.bounds(), Rect::new(0.0, 0.0, 10.0, 10.0));
+    let extra = ShapeExtra::Generic(path, offset, bounds);
+    assert_eq!(shape_written(&extra, ShapeExtraKey::Type)[1], 2);
+}
+
+#[test]
+fn a_shape_set_inside_what_is_around_it_is_placed_from_the_node() {
+    let host = host_of(|| {
+        Box!(
+            modifier = Modifier
+                .size(50.dp())
+                .test_tag("around")
+                .semantics_with(true, |_| {})
+                .padding(5.dp())
+                .semantics(|it| it.set_shape(compose_ui::RECTANGLE_SHAPE))
+        );
+    });
+    let node = uncovered(&host, "around");
+    let Some(ShapeExtra::Rectangle(rect)) = shape_extra(&host, &node) else {
+        panic!("a rectangle")
+    };
+    assert_eq!(rect, Rect::new(5.0, 5.0, 45.0, 45.0));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidComposeViewAccessibilityDelegateCompatTest.kt, testPopulateShapeExtras_shapeUnset_doesNotSetShapeExtraKeys
+#[test]
+fn no_shape_is_no_extra() {
+    let host = host_of(|| {
+        Box!(modifier = Modifier.size(10.dp()).test_tag("plain").semantics(|it| it.set_text("a")));
+    });
+    let node = uncovered(&host, "plain");
+    assert_eq!(flags_of(&node) & flag::HAS_SHAPE, 0);
+    assert!(shape_extra(&host, &node).is_none());
+}
+
+static COUNT_EXTRA: SemanticsPropertyKey<i32> =
+    SemanticsPropertyKey::with_accessibility_extra("Count", "count.key");
+static NAME_EXTRA: SemanticsPropertyKey<SharedString> =
+    SemanticsPropertyKey::with_accessibility_extra("Name", "name.key");
+static FLAG_EXTRA: SemanticsPropertyKey<bool> =
+    SemanticsPropertyKey::with_accessibility_extra("Flag", "flag.key");
+
+#[derive(Clone, PartialEq, Debug)]
+struct NoBundleHoldsThis;
+
+impl SemanticsValue for NoBundleHoldsThis {}
+
+static INVALID_EXTRA: SemanticsPropertyKey<NoBundleHoldsThis> =
+    SemanticsPropertyKey::with_accessibility_extra("Invalid", "invalid.key");
+
+fn with_extras(modifier: Modifier) -> UiHost {
+    host_of(move || {
+        Box!(modifier = modifier.clone().size(10.dp()).test_tag("node"));
+    })
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData
+#[test]
+fn a_keys_extra_goes_by_its_own_key_with_its_value() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 123);
+        it.set(&NAME_EXTRA, "test".into());
+        it.set(&FLAG_EXTRA, true);
+    }));
+    let node = uncovered(&host, "node");
+    let extras = extras_of(&node);
+    assert!(extras.contains(&("count.key", ExtraValue::Int(123))));
+    assert!(extras.contains(&("name.key", ExtraValue::Text("test"))));
+    assert!(extras.contains(&("flag.key", ExtraValue::Bool(true))));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_sameExtraSetMultipleTimes_sameModifier_lastOneWins
+#[test]
+fn set_twice_in_one_modifier_the_last_wins() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 1);
+        it.set(&COUNT_EXTRA, 2);
+    }));
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("count.key", ExtraValue::Int(2))]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_sameExtraSetMultipleTimes_twoModifiers_outerOneWins
+#[test]
+fn set_by_two_modifiers_the_outer_wins() {
+    let host = with_extras(
+        Modifier.semantics(|it| it.set(&COUNT_EXTRA, 1)).semantics(|it| it.set(&COUNT_EXTRA, 2)),
+    );
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("count.key", ExtraValue::Int(1))]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getCustomExtrasFromExtraData_multipleSemanticsModifiers_mergesExtras
+#[test]
+fn extras_of_several_modifiers_are_all_there() {
+    let host = with_extras(
+        Modifier
+            .semantics(|it| it.set(&COUNT_EXTRA, 123))
+            .semantics(|it| it.set(&NAME_EXTRA, "test".into())),
+    );
+    assert_eq!(extras_of(&uncovered(&host, "node")).len(), 2);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AndroidAccessibilityTest.kt, getInvalidExtraFromExtraData_throws
+#[test]
+fn what_no_bundle_holds_is_refused_when_asked_for() {
+    let host = with_extras(Modifier.semantics(|it| it.set(&INVALID_EXTRA, NoBundleHoldsThis)));
+    assert_eq!(extras_of(&uncovered(&host, "node")), [("invalid.key", ExtraValue::Unsendable)]);
+    let kotlin = include_str!(
+        "../../../android/compose-rs/src/main/java/rs/compose/android/Accessibility.kt"
+    );
+    assert!(
+        kotlin
+            .contains("\"Accessibility extra values must be either Serializable or Parcelable.\"")
+    );
+    assert!(kotlin.contains("keys.addAll(node.extras.keys)"));
+}
+
+#[test]
+fn a_records_extras_are_read_past_for_the_rest_of_it() {
+    let host = with_extras(Modifier.semantics(|it| {
+        it.set(&COUNT_EXTRA, 7);
+        it.set(&NAME_EXTRA, "seven".into());
+    }));
+    let node = uncovered(&host, "node");
+    let mut out = Writer::default();
+    let root = SemanticsSnapshot { children: vec![node], ..host.accessibility_tree() };
+    write_tree(&root, &mut KeptCustomActions::default(), &mut out);
+    // Once through, its bytes all accounted for.
+    assert_eq!(records(&out.bytes).len(), 1);
 }

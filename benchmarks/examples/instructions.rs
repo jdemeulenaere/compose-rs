@@ -49,6 +49,66 @@ fn Scrollables() {
     });
 }
 
+/// Rows the width of the window: what's covered goes from the top, whole.
+#[composable]
+fn ServiceFlat() {
+    Column!({
+        for _ in 0..1600 {
+            BasicText!("row", modifier = Modifier.fill_max_width().height(10.dp()));
+        }
+    });
+}
+
+/// Rows narrower than the window: what's beside them stays, the region's worst case unbanded.
+#[composable]
+fn ServicePadded() {
+    Column!(modifier = Modifier.fill_max_width().padding((16.dp(), 0.dp())), {
+        for _ in 0..1600 {
+            BasicText!("row", modifier = Modifier.fill_max_width().height(10.dp()));
+        }
+    });
+}
+
+/// Clickables smaller than their touch targets, the target past each's bounds.
+#[composable]
+fn ServiceClick() {
+    Column!({
+        for _ in 0..400 {
+            Box!(modifier = Modifier.size(10.dp()).clickable(|| {}));
+        }
+    });
+}
+
+/// A grid of cells with gaps: most fragments, one band with many parts.
+#[composable]
+fn ServiceCells() {
+    Column!({
+        for _ in 0..40 {
+            Row!({
+                for _ in 0..40 {
+                    BasicText!("cell", modifier = Modifier.size(5.dp()).padding(1.dp()));
+                }
+            });
+        }
+    });
+}
+
+/// `n` reads by a service of `content`, what's covered taken out, on a host that shows it all.
+fn service_reads(content: fn(), n: usize) {
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = UiHost::new(
+        IntSize::new(1080, 50_000),
+        Density::new(2.625),
+        Box::new(FixedTextMeasurer::new()),
+    );
+    host.set_optimizations(Optimizations::NONE);
+    host.set_content(content);
+    host.settle(10);
+    for _ in 0..n {
+        std::hint::black_box(host.accessibility_tree());
+    }
+}
+
 /// `n` first frames of `content`: the host's making and dropping counted.
 fn first_frames(content: fn(), n: usize) {
     platform::set_manual_clock(platform::now_nanos());
@@ -386,6 +446,10 @@ fn main() {
     let n: usize = n.parse().expect("a number of iterations");
     use_optimizations(Optimizations::NONE);
     match scenario.as_str() {
+        "service_flat" => service_reads(ServiceFlat, n),
+        "service_padded" => service_reads(ServicePadded, n),
+        "service_click" => service_reads(ServiceClick, n),
+        "service_cells" => service_reads(ServiceCells, n),
         "state_read" => {
             let state = mutable_state_of(1u64);
             for _ in 0..n {

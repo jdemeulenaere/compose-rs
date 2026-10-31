@@ -592,6 +592,8 @@ pub struct SemanticsPropertyKey<T> {
     name: &'static str,
     merge_policy: fn(Option<&T>, &T) -> Option<T>,
     important_for_accessibility: bool,
+    /// The key a service asks for it by (`AccessibilityNodeInfo.getExtras`), if it does.
+    accessibility_extra_key: Option<&'static str>,
     /// Keeps each key's address its own: a type with interior mutability isn't `Freeze`, so a
     /// static holding it goes to writable `.data`, where the compiler doesn't fold statics of
     /// equal contents into one address (as it may in read-only data), and `&KEY` is never
@@ -677,8 +679,23 @@ impl<T: SemanticsValue> SemanticsPropertyKey<T> {
             name,
             merge_policy,
             important_for_accessibility: false,
+            accessibility_extra_key: None,
             _identity: AtomicBool::new(false),
         }
+    }
+
+    /// A key exposed to a service among its node's extras under `accessibility_extra_key`, as
+    /// `accessibilityExtraKey`, merging by Compose's default: the parent's, else the child's.
+    pub const fn with_accessibility_extra(
+        name: &'static str,
+        accessibility_extra_key: &'static str,
+    ) -> SemanticsPropertyKey<T>
+    where
+        T: Clone,
+    {
+        let mut key = SemanticsPropertyKey::with_merge_policy(name, parent_or_child::<T>);
+        key.accessibility_extra_key = Some(accessibility_extra_key);
+        key
     }
 
     /// Marks the key important for accessibility (Compose's `AccessibilityKey`).
@@ -722,6 +739,8 @@ impl<T> fmt::Debug for SemanticsPropertyKey<T> {
 pub trait AnySemanticsPropertyKey: 'static {
     fn name(&self) -> &'static str;
     fn is_important_for_accessibility(&self) -> bool;
+    /// What a service asks for it by as an extra, as `accessibilityExtraKey`.
+    fn accessibility_extra_key(&self) -> Option<&'static str>;
     /// The key's policy over slots of its type.
     #[doc(hidden)]
     fn merge_slots(&self, parent: Option<&ValueSlot>, child: &ValueSlot) -> Option<ValueSlot>;
@@ -733,6 +752,9 @@ impl<T: SemanticsValue> AnySemanticsPropertyKey for SemanticsPropertyKey<T> {
     }
     fn is_important_for_accessibility(&self) -> bool {
         self.important_for_accessibility
+    }
+    fn accessibility_extra_key(&self) -> Option<&'static str> {
+        self.accessibility_extra_key
     }
     fn merge_slots(&self, parent: Option<&ValueSlot>, child: &ValueSlot) -> Option<ValueSlot> {
         let child = T::from_slot(child)?;

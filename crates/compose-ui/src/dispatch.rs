@@ -786,6 +786,27 @@ impl UiTree {
     /// What the focused node taking text asks of an on-screen keyboard: its `ImeOptions`, the
     /// defaults if it gives none, `None` if no focused node takes text.
     pub fn text_input_options(&mut self) -> Option<crate::text_input::ImeOptions> {
+        self.text_input_node().map(|(_, options)| options)
+    }
+
+    /// Whether the focused node taking text masks it, from its own configuration: what's around it
+    /// clearing its semantics, or a service's tree leaving it out, changes nothing for a keyboard.
+    pub fn text_input_masks_password(&mut self) -> bool {
+        let Some((field, _)) = self.text_input_node() else { return false };
+        let mut next = Some(field);
+        while let Some(node) = next {
+            next = self.node(node).parent;
+            if let Some(own) = self.own_semantics(node)
+                && own.config.contains(&crate::semantics::SemanticsProperties::EDITABLE_TEXT)
+            {
+                return own.config.contains(&crate::semantics::SemanticsProperties::PASSWORD);
+            }
+        }
+        false
+    }
+
+    /// The focused node taking text, or what's around it that does, and what it asks of a keyboard.
+    fn text_input_node(&mut self) -> Option<(NodeId, crate::text_input::ImeOptions)> {
         let mut next = self.focused();
         while let Some(node) = next {
             next = self.node(node).parent;
@@ -809,8 +830,8 @@ impl UiTree {
                         }
                     },
                 );
-                if options.is_some() {
-                    return options;
+                if let Some(options) = options {
+                    return Some((node, options));
                 }
             }
         }

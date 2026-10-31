@@ -945,6 +945,11 @@ impl UiHost {
         self.with_tree(|tree| tree.text_input_options())
     }
 
+    /// Whether the focused node taking text masks it, as a keyboard's type asks.
+    pub fn text_input_masks_password(&self) -> bool {
+        self.with_tree(|tree| tree.text_input_masks_password())
+    }
+
     /// The input method's action key (Android's `performEditorAction`): the focused field runs
     /// its `KeyboardActions`. Returns whether it was taken.
     pub fn perform_ime_action(&mut self, action: crate::text_input::ImeAction) -> bool {
@@ -1120,6 +1125,11 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// Where the modifier that set `node`'s `Shape` is in the root, as Compose's `getShapeBounds`.
+    pub fn semantics_shape_bounds(&self, node: NodeId) -> crate::unit::Rect {
+        self.with_tree(|tree| tree.semantics_shape_bounds(node))
+    }
+
     /// Where the first text laid out at or below `node` is in the root: what its semantics'
     /// `GetTextLayoutResult` is relative to.
     pub fn text_layout_origin(&self, node: NodeId) -> Option<crate::unit::Offset> {
@@ -1132,9 +1142,40 @@ impl UiHost {
         crate::semantics_node::SemanticsOwner::new(key)
     }
 
-    /// The merged tree an accessibility service reads: the top window and what's over it.
+    /// The merged tree an accessibility service reads: the top window and what's over it, without
+    /// what's completely covered (`prune_covered_semantics`).
     pub fn accessibility_tree(&self) -> SemanticsSnapshot {
+        let mut tree = self.accessibility_tree_with_covered();
+        self.prune_covered_semantics(&mut tree);
+        tree
+    }
+
+    /// `accessibility_tree`, with what's covered: for what doesn't depend on it.
+    pub fn accessibility_tree_with_covered(&self) -> SemanticsSnapshot {
         self.with_tree(|tree| tree.accessibility_tree())
+    }
+
+    /// Takes what siblings drawn over it completely cover out of `tree`, as Compose's
+    /// `getAllUncoveredSemanticsNodesToIntObjectMap`, and says what's left of the rest (D1655).
+    pub fn prune_covered_semantics(&self, tree: &mut SemanticsSnapshot) {
+        fn prune(
+            node: &mut SemanticsSnapshot,
+            uncovered: &std::collections::HashMap<i32, (crate::unit::Rect, bool)>,
+        ) {
+            node.children.retain(|child| uncovered.contains_key(&child.semantics_id));
+            for child in &mut node.children {
+                if let Some(&(bounds, hidden)) = uncovered.get(&child.semantics_id) {
+                    child.uncovered_bounds = Some(bounds);
+                    child.hidden |= hidden;
+                }
+                prune(child, uncovered);
+            }
+        }
+        let mut uncovered = std::collections::HashMap::new();
+        self.semantics_owner().for_each_uncovered_semantics_node(|node, bounds, hidden| {
+            uncovered.insert(node.id(), (bounds, hidden));
+        });
+        prune(tree, &uncovered);
     }
 
     pub fn semantics_tree(&self, merged: bool) -> SemanticsSnapshot {

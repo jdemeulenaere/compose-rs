@@ -59,6 +59,8 @@ pub mod flag {
     pub const TEXT_LAID_OUT: u32 = 1 << 24;
     /// Its text can be changed, as `IsEditable`: `EDITABLE` says it's a field.
     pub const CAN_EDIT: u32 = 1 << 25;
+    /// It says its shape (`shape_extra`).
+    pub const HAS_SHAPE: u32 = 1 << 26;
 }
 
 /// What a service reads that isn't the application's words, which `Accessibility.kt` finds in the
@@ -129,7 +131,11 @@ pub fn tell_at_once(stats: &FrameStats) -> bool {
 /// built when first asked after a frame that may have changed it, or a change since the last
 /// frame (a focus moved by an event), as they'd each build it otherwise (D1259).
 #[derive(Default)]
-pub struct KeptSemanticsTree(Option<SemanticsSnapshot>);
+pub struct KeptSemanticsTree {
+    tree: Option<SemanticsSnapshot>,
+    /// What's covered was taken out of it: only a service's asking pays for that.
+    pruned: bool,
+}
 
 impl KeptSemanticsTree {
     /// A frame that did `stats` ran: returns whether the semantics may have changed
@@ -137,17 +143,30 @@ impl KeptSemanticsTree {
     pub fn after_frame(&mut self, stats: &FrameStats) -> bool {
         let changed = semantics_may_have_changed(stats);
         if changed {
-            self.0 = None;
+            self.tree = None;
         }
         changed
     }
 
     /// The tree, as it is now.
     pub fn get(&mut self, ui: &UiHost) -> &SemanticsSnapshot {
-        if ui.semantics_changed_since_frame() {
-            self.0 = None;
+        self.build(ui);
+        let pruned = std::mem::replace(&mut self.pruned, true);
+        let tree = self.tree.as_mut().expect("kept");
+        if !pruned {
+            ui.prune_covered_semantics(tree);
         }
-        self.0.get_or_insert_with(|| ui.accessibility_tree())
+        tree
+    }
+
+    fn build(&mut self, ui: &UiHost) {
+        if ui.semantics_changed_since_frame() {
+            self.tree = None;
+        }
+        if self.tree.is_none() {
+            self.pruned = false;
+            self.tree = Some(ui.accessibility_tree_with_covered());
+        }
     }
 }
 
@@ -266,6 +285,200 @@ fn tags_are_resource_ids(node: &SemanticsSnapshot, around: bool) -> bool {
     node.unmerged_config().get(&P::TEST_TAGS_AS_RESOURCE_ID).copied().unwrap_or(around)
 }
 
+/// What a key with an `accessibilityExtraKey` holds, as a service gets it. Compose's are whatever is
+/// `Serializable` or `Parcelable`; here, what a `Bundle` holds of what Rust has (D1656).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ExtraValue<'a> {
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    Text(&'a str),
+    /// A `StringList`: a `Bundle` takes it, as Compose's `ArrayList`, a `Serializable`.
+    Texts(&'a compose_ui::StringList),
+    /// What can't be sent: asked for, `Accessibility.kt` throws, as Compose's.
+    Unsendable,
+}
+
+/// `node`'s extras, by the keys a service asks for them by, from its own configuration.
+pub fn extras_of(node: &SemanticsSnapshot) -> Vec<(&'static str, ExtraValue<'_>)> {
+    let own = node.unmerged_config();
+    let mut extras = Vec::new();
+    for (key, value) in own.properties() {
+        let Some(extra) = key.accessibility_extra_key() else { continue };
+        let value = match value {
+            compose_ui::ValueSlot::Int(it) => ExtraValue::Int(*it),
+            compose_ui::ValueSlot::Float(it) => ExtraValue::Float(*it),
+            compose_ui::ValueSlot::Bool(it) => ExtraValue::Bool(*it),
+            compose_ui::ValueSlot::String(it) => ExtraValue::Text(it.as_str()),
+            compose_ui::ValueSlot::Strings(it) => ExtraValue::Texts(it),
+            _ => ExtraValue::Unsendable,
+        };
+        extras.push((extra, value));
+    }
+    extras
+}
+
+/// An extra's kind (u8: 0 an integer, 1 a float, 2 a boolean, 3 a text, 4 nothing that can be sent,
+/// 5 a list of texts: how many, then each), then its value.
+fn write_extra(out: &mut Writer, value: &ExtraValue<'_>) {
+    match value {
+        ExtraValue::Int(it) => {
+            out.u8(0);
+            out.u32(*it as u32);
+        }
+        ExtraValue::Float(it) => {
+            out.u8(1);
+            out.f32(*it);
+        }
+        ExtraValue::Bool(it) => {
+            out.u8(2);
+            out.u8(*it as u8);
+        }
+        ExtraValue::Text(it) => {
+            out.u8(3);
+            write_string(out, it);
+        }
+        ExtraValue::Unsendable => out.u8(4),
+        ExtraValue::Texts(texts) => {
+            out.u8(5);
+            out.u32(texts.len() as u32);
+            for text in texts.iter() {
+                write_string(out, text.as_str());
+            }
+        }
+    }
+}
+
+/// The rectangle to ask of what's around the view when nothing in it scrolls node `id`, as Compose's
+/// `scrollOntoScreen`: its bounds in the root, not what's left uncovered of them, whole pixels around
+/// them.
+pub fn rectangle_on_screen(ui: &UiHost, id: i32) -> Option<[i32; 4]> {
+    let bounds = ui.semantics_owner().get(id)?.bounds_in_root();
+    Some([
+        bounds.left.floor() as i32,
+        bounds.top.floor() as i32,
+        bounds.right.ceil() as i32,
+        bounds.bottom.ceil() as i32,
+    ])
+}
+
+/// `node`'s shape as a service asks for it, as Compose's `ExtraDataShape*`: its outline, relative to
+/// the node's bounds in its record.
+pub enum ShapeExtra {
+    Rectangle(Rect),
+    /// With its corners' radii: x and y of the top left, top right, bottom right and bottom left.
+    Rounded(Rect, [f32; 8]),
+    /// With where its path's moved to, and the bounds of that.
+    Generic(std::sync::Arc<compose_ui::PathData>, compose_ui::Offset, Rect),
+}
+
+pub fn shape_extra(ui: &UiHost, node: &SemanticsSnapshot) -> Option<ShapeExtra> {
+    let shape = node.unmerged_config().get(&P::SHAPE)?;
+    let density = ui.with_tree(|tree| tree.density());
+    let around = ui.semantics_shape_bounds(node.id);
+    let reported = node.uncovered_bounds.unwrap_or(node.bounds);
+    let (left, top) = (around.left - reported.left, around.top - reported.top);
+    let direction =
+        if node.rtl { compose_ui::LayoutDirection::Rtl } else { compose_ui::LayoutDirection::Ltr };
+    let size = compose_ui::Size::new(around.width(), around.height());
+    let moved = |rect: Rect| {
+        Rect::new(rect.left + left, rect.top + top, rect.right + left, rect.bottom + top)
+    };
+    Some(match shape.outline_in(size, &density, direction) {
+        compose_ui::Outline::Rectangle(rect) => ShapeExtra::Rectangle(moved(rect)),
+        compose_ui::Outline::Rounded(rect, [a, b, c, d]) => {
+            ShapeExtra::Rounded(moved(rect), [a, a, b, b, c, c, d, d])
+        }
+        compose_ui::Outline::Generic(path, offset) => {
+            let bounds = path.bounds();
+            let (x, y) = (offset.x + left, offset.y + top);
+            let bounds =
+                Rect::new(bounds.left + x, bounds.top + y, bounds.right + x, bounds.bottom + y);
+            ShapeExtra::Generic(path, compose_ui::Offset::new(x, y), bounds)
+        }
+    })
+}
+
+/// What a service may ask of a shape, each its own key (`Accessibility.kt`'s `EXTRA_SHAPE_*`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapeExtraKey {
+    Type,
+    Rect,
+    Corners,
+    Region,
+}
+
+impl ShapeExtraKey {
+    /// `ComposeRsNative.semanticsShape`'s number for it.
+    pub fn from_code(code: i32) -> Option<ShapeExtraKey> {
+        match code {
+            0 => Some(ShapeExtraKey::Type),
+            1 => Some(ShapeExtraKey::Rect),
+            2 => Some(ShapeExtraKey::Corners),
+            3 => Some(ShapeExtraKey::Region),
+            _ => None,
+        }
+    }
+}
+
+/// What asking for `key` sets, as bits, as Compose's: its type comes with what it describes, as it
+/// had to make the outline for it, and a key for what this shape hasn't sets nothing.
+pub mod shape_set {
+    pub const TYPE: u8 = 1;
+    pub const RECT: u8 = 1 << 1;
+    pub const CORNERS: u8 = 1 << 2;
+    pub const REGION: u8 = 1 << 3;
+}
+
+fn shape_extras_set(extra: &ShapeExtra, key: ShapeExtraKey) -> u8 {
+    use shape_set::*;
+    match (extra, key) {
+        (ShapeExtra::Rectangle(_), ShapeExtraKey::Type) => TYPE | RECT,
+        (ShapeExtra::Rectangle(_), ShapeExtraKey::Rect) => RECT,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Type) => TYPE | RECT | CORNERS,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Rect) => RECT,
+        (ShapeExtra::Rounded(..), ShapeExtraKey::Corners) => CORNERS,
+        (ShapeExtra::Generic(..), ShapeExtraKey::Type) => TYPE | REGION,
+        (ShapeExtra::Generic(..), ShapeExtraKey::Region) => REGION,
+        _ => 0,
+    }
+}
+
+/// Writes a `ShapeExtra` for `key`, as `Accessibility.kt` reads it: what's to be set (u8,
+/// `shape_set`), its kind (u8: 0 a rectangle, 1 rounded, 2 any path), its bounds (4 × f32), then the
+/// eight radii, or where the path's moved (2 × f32) and its contents
+/// (`serialize::write_path_contents`).
+pub fn write_shape_extra(extra: &ShapeExtra, key: ShapeExtraKey, out: &mut Writer) {
+    out.bytes.clear();
+    out.u8(shape_extras_set(extra, key));
+    let rect = |out: &mut Writer, rect: &Rect| {
+        out.f32(rect.left);
+        out.f32(rect.top);
+        out.f32(rect.right);
+        out.f32(rect.bottom);
+    };
+    match extra {
+        ShapeExtra::Rectangle(bounds) => {
+            out.u8(0);
+            rect(out, bounds);
+        }
+        ShapeExtra::Rounded(bounds, radii) => {
+            out.u8(1);
+            rect(out, bounds);
+            for radius in radii {
+                out.f32(*radius);
+            }
+        }
+        ShapeExtra::Generic(path, offset, bounds) => {
+            out.u8(2);
+            rect(out, bounds);
+            out.f32(offset.x);
+            out.f32(offset.y);
+            crate::serialize::write_path_contents(out, path);
+        }
+    }
+}
+
 /// As Compose's `ParcelSafeTextLength`: what goes in a node or an event, at most so many UTF-16 units.
 const PARCEL_SAFE_LENGTH: usize = 100_000;
 
@@ -319,49 +532,11 @@ fn in_written_order(node: &SemanticsSnapshot) -> Vec<(usize, &SemanticsSnapshot)
 }
 
 /// The node a touch at `(x, y)` in the root finds for a service, as Compose's
-/// `hitTestSemanticsAndInteropAt`: front to back, in drawing order, those not important looked
-/// through to what's around them; a sibling under one hit isn't looked at.
-pub fn node_at(root: &SemanticsSnapshot, x: f32, y: f32) -> Option<i32> {
-    enum Hit {
-        Nothing,
-        /// Something's here, that a service doesn't read, so what's around it is asked.
-        LookedThrough,
-        Found(i32),
-    }
-    fn visit(node: &SemanticsSnapshot, x: f32, y: f32, clip: Rect) -> Hit {
-        let shown = clipped(node.bounds, clip);
-        let scrolls = scroll_range(node).is_some();
-        let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
-        let mut hit = Hit::Nothing;
-        for child in node.children.iter().rev() {
-            match visit(child, x, y, inner) {
-                Hit::Nothing => continue,
-                found @ Hit::Found(_) => return found,
-                Hit::LookedThrough => {
-                    hit = Hit::LookedThrough;
-                    break;
-                }
-            }
-        }
-        let on_it = shown.is_some_and(|shown| {
-            x >= shown.left && x < shown.right && y >= shown.top && y < shown.bottom
-        });
-        if !on_it {
-            return hit;
-        }
-        if compose_ui::is_important_for_accessibility(node) {
-            return Hit::Found(virtual_id(node));
-        }
-        Hit::LookedThrough
-    }
-    for child in root.children.iter().rev() {
-        match visit(child, x, y, root.bounds) {
-            Hit::Nothing => continue,
-            Hit::Found(id) => return Some(id),
-            Hit::LookedThrough => return None,
-        }
-    }
-    None
+/// `hitTestSemanticsAndInteropAt`, walking the layouts as it does (`SemanticsOwner::
+/// accessibility_hit_test`): what a service wouldn't read isn't there for it, the touch target
+/// counts, and so does each clip.
+pub fn node_at(ui: &UiHost, x: f32, y: f32) -> Option<i32> {
+    ui.semantics_owner().accessibility_hit_test(compose_ui::Offset::new(x, y))
 }
 
 use compose_ui::clipped_by as clipped;
@@ -397,6 +572,7 @@ fn flags(node: &SemanticsSnapshot) -> u32 {
     set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
     set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
     set(&mut flags, config.get(&P::IS_EDITABLE) == Some(&true), flag::CAN_EDIT);
+    set(&mut flags, node.unmerged_config().contains(&P::SHAPE), flag::HAS_SHAPE);
     set(&mut flags, is_password(node), flag::PASSWORD);
     set(&mut flags, config.contains(&P::DISABLED), flag::DISABLED);
     set(&mut flags, config.contains(&P::IS_DIALOG), flag::DIALOG);
@@ -506,8 +682,9 @@ pub fn state_description_of(node: &SemanticsSnapshot) -> (u8, u8) {
 /// who a service reads it before (i32, -1 for none), its drawing order (u32), its class name (a
 /// length and UTF-8 bytes), its role description, its state and that state's percent (three
 /// `spoken`-code u8s), its selection (2 × i32, -1 for none) and how it's moved through (u8, 0:
-/// it isn't, `movement_granularities`), its test tag (a length and UTF-8 bytes), and its actions
-/// (a count: u8; each `action`'s u8 and a label).
+/// it isn't, `movement_granularities`), its test tag (a length and UTF-8 bytes), its extras (a
+/// count: u8; each a key and `ExtraValue`'s kind and value, `write_extra`), and its actions (a
+/// count: u8; each `action`'s u8 and a label).
 #[allow(clippy::too_many_arguments)]
 fn write_node(
     node: &SemanticsSnapshot,
@@ -524,7 +701,9 @@ fn write_node(
     let clip = around.clip;
     let visible = clipped(node.bounds, clip);
     let tags_are_ids = tags_are_resource_ids(node, around.tags_are_ids);
-    let bounds = visible.unwrap_or(node.bounds);
+    let shown = visible.unwrap_or(node.bounds);
+    // A service is told of what's left of its touch target, as `adjustedBounds`.
+    let bounds = node.uncovered_bounds.unwrap_or(shown);
     let scroll = scroll_range(node);
     let mut flags = flags(node);
     if visible.is_none() || node.hidden {
@@ -582,7 +761,7 @@ fn write_node(
         out.f32(range.max_value);
         // A page: the viewport's length along the axis, as shown (clipped), as Compose's
         // `boundsInParent`.
-        out.f32(if horizontal { bounds.width() } else { bounds.height() });
+        out.f32(if horizontal { shown.width() } else { shown.height() });
         out.u8(scroll_actions(node));
     }
     out.u32(before.get(&id).copied().unwrap_or(-1) as u32);
@@ -598,6 +777,12 @@ fn write_node(
     out.u32(selection_end as u32);
     out.u8(movement_granularities(node) as u8);
     write_string(out, text_of(node.unmerged_config().get(&P::TEST_TAG)));
+    let extras = extras_of(node);
+    out.u32(extras.len() as u32);
+    for (key, value) in &extras {
+        write_string(out, key);
+        write_extra(out, value);
+    }
     let actions = actions_of(node, custom);
     out.u8(actions.len() as u8);
     for (action, label) in &actions {
@@ -1347,7 +1532,10 @@ pub fn perform_action(
         }
         action::SCROLL_FIRST..=8 => {
             let direction = 1u8 << (code - action::SCROLL_FIRST);
-            let Some((x, y)) = scroll_amount(found, direction, shown) else {
+            // A page is the active viewport where the node says what that is.
+            let page = viewport_of(ui, found)
+                .map_or(shown, |it| Rect::new(0.0, 0.0, it.length, it.length));
+            let Some((x, y)) = scroll_amount(found, direction, page) else {
                 return false;
             };
             ui.perform_semantics_action_with(node, &A::SCROLL_BY, |scroll| scroll(x, y))
@@ -1607,6 +1795,120 @@ fn set_selection(
         cursor.told.push(told);
     }
     true
+}
+
+/// What a scrolling node says of its viewport, as Compose's `getScrollViewportLength` and
+/// `getScrollViewportPadding`: its length without the content padding, and the padding.
+struct ScrollViewport {
+    length: f32,
+    padding: Option<(f32, f32)>,
+}
+
+fn viewport_of(ui: &mut UiHost, node: &SemanticsSnapshot) -> Option<ScrollViewport> {
+    let action = ui.semantics_action(node.id, &A::GET_SCROLL_VIEWPORT_LENGTH)?;
+    let mut said = Vec::new();
+    if !action(&mut said) {
+        return None;
+    }
+    let length = *said.first()?;
+    let padding = (said.len() > 2).then(|| (said[1], said[2]));
+    Some(ScrollViewport { length, padding })
+}
+
+/// Which of the two ends is the least to move to line up `a` or `b`; nothing if they'd move
+/// opposite ways, the target being past the viewport at both or inside it at both.
+fn least_scroll(a: f32, b: f32) -> f32 {
+    let sign = |it: f32| if it == 0.0 { 0.0 } else { it.signum() };
+    if sign(a) != sign(b) {
+        0.0
+    } else if a.abs() < b.abs() {
+        a
+    } else {
+        b
+    }
+}
+
+/// `viewport` less a scrolling node's content padding, as Compose's
+/// `insetViewportByContentPadding`: unless there's no room left.
+fn inside_content_padding(ui: &mut UiHost, scroller: &SemanticsSnapshot, viewport: Rect) -> Rect {
+    let Some((before, after)) = viewport_of(ui, scroller).and_then(|it| it.padding) else {
+        return viewport;
+    };
+    let own = scroller.unmerged_config();
+    let (mut left, mut right, mut top, mut bottom) = (0.0, 0.0, 0.0, 0.0);
+    if let Some(range) = own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE) {
+        (left, right) =
+            if range.reverse_scrolling != scroller.rtl { (after, before) } else { (before, after) };
+    }
+    if let Some(range) = own.get(&P::VERTICAL_SCROLL_AXIS_RANGE) {
+        (top, bottom) = if range.reverse_scrolling { (after, before) } else { (before, after) };
+    }
+    let across = viewport.width() > left + right;
+    let along = viewport.height() > top + bottom;
+    Rect::new(
+        if across { viewport.left + left } else { viewport.left },
+        if along { viewport.top + top } else { viewport.top },
+        if across { viewport.right - right } else { viewport.right },
+        if along { viewport.bottom - bottom } else { viewport.bottom },
+    )
+}
+
+/// Scrolls what's around virtual view `id` for all of it to show, the least it can, as Compose's
+/// `scrollOntoScreen`: each scrolling node around it, nearest first, what the nearer ones moved it
+/// taken into account. Whether one scrolled; `None` if none is around it, and the view is to ask
+/// for the rectangle itself (`requestRectangleOnScreen`).
+pub fn show_on_screen(ui: &mut UiHost, tree: &SemanticsSnapshot, id: i32) -> Option<bool> {
+    fn path<'a>(
+        node: &'a SemanticsSnapshot,
+        id: i32,
+        out: &mut Vec<&'a SemanticsSnapshot>,
+    ) -> bool {
+        if virtual_id(node) == id {
+            return true;
+        }
+        out.push(node);
+        if node.children.iter().any(|child| path(child, id, out)) {
+            return true;
+        }
+        out.pop();
+        false
+    }
+    let target = find(tree, id)?;
+    let mut around = Vec::new();
+    path(tree, id, &mut around);
+    around.retain(|node| node.unmerged_config().contains(&A::SCROLL_BY));
+    if around.is_empty() {
+        return None;
+    }
+    let mut scrolled = false;
+    let (mut moved_x, mut moved_y) = (0.0, 0.0);
+    for scroller in around.iter().rev() {
+        let viewport = inside_content_padding(ui, scroller, scroller.bounds);
+        let bounds = target.bounds;
+        let (left, top) = (bounds.left + moved_x, bounds.top + moved_y);
+        let (right, bottom) = (bounds.right + moved_x, bounds.bottom + moved_y);
+        let dx = least_scroll(left - viewport.left, right - viewport.right);
+        let dy = least_scroll(top - viewport.top, bottom - viewport.bottom);
+        // As `ScrollBy` takes it: towards the content's end.
+        let own = scroller.unmerged_config();
+        let mut x = dx;
+        if own.get(&P::HORIZONTAL_SCROLL_AXIS_RANGE).is_some_and(|it| it.reverse_scrolling) {
+            x = -x;
+        }
+        if target.rtl {
+            x = -x;
+        }
+        let mut y = dy;
+        if own.get(&P::VERTICAL_SCROLL_AXIS_RANGE).is_some_and(|it| it.reverse_scrolling) {
+            y = -y;
+        }
+        let done =
+            ui.perform_semantics_action_with(scroller.id, &A::SCROLL_BY, |scroll| scroll(x, y));
+        scrolled |= done;
+        moved_x -= dx;
+        moved_y -= dy;
+    }
+    Some(scrolled)
 }
 
 /// The scroll range of `node` along its axis (horizontal: `true`), from its own

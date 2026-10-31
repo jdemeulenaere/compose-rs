@@ -159,6 +159,12 @@ impl SemanticsOwner {
         hits.into_iter().find(|info| on_hit(info))
     }
 
+    /// The node of the merged tree a service's touch at `position` in the root finds, as Compose's
+    /// `hitTestSemanticsAndInteropAt`, for a window's hit test each.
+    pub fn accessibility_hit_test(&self, position: Offset) -> Option<i32> {
+        self.read(|ui| ui.accessibility_hit(position)).flatten()
+    }
+
     /// Visits the nodes of the unmerged tree no sibling over them completely covers, with the
     /// bounding box of what's left of their touch bounds, and whether a merging node hiding from
     /// accessibility holds them, as `forEachUncoveredSemanticsNode`. The root always; synthetic
@@ -171,52 +177,145 @@ impl SemanticsOwner {
         if !root.layout_info().is_attached() {
             return;
         }
-        let mut unaccounted = SemanticsRegion::of(root.bounds_in_root());
-        visit_uncovered(root, root, &mut unaccounted, false, &mut visitor);
+        // The root always, and its windows each on their own: one over another covers nothing, as
+        // in Compose, where each is a host of its own.
+        let bounds = root.bounds_in_root();
+        visitor(root, SemanticsRegion::of(bounds).bounds_or(rounded(bounds)), false);
+        let mut windows: Vec<(Option<NodeId>, SemanticsRegion)> = Vec::new();
+        let mut children = Vec::new();
+        root.for_each_accessibility_child(|child| children.push(child));
+        for child in children.into_iter().rev() {
+            let window = child.read(|tree, node| tree.overlay_around(node)).flatten();
+            let at = match windows.iter().position(|(it, _)| *it == window) {
+                Some(at) => at,
+                None => {
+                    windows.push((window, SemanticsRegion::of(bounds)));
+                    windows.len() - 1
+                }
+            };
+            visit_uncovered(child, &mut windows[at].1, false, &mut visitor);
+        }
+    }
+}
+
+fn is_placed(node: SemanticsNode) -> bool {
+    let info = node.layout_info();
+    info.is_placed() && info.is_attached()
+}
+
+/// Whether the node hides what's in it, as `hideFromAccessibility` on a merging node.
+fn hides_what_it_merges(config: &SemanticsConfiguration) -> bool {
+    config.is_merging_semantics_of_descendants
+        && config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+}
+
+/// As `isPartiallyOffscreenInScrollParent`: some of it is past the nearest scrolling node's ends.
+fn is_partly_past_its_scroller(node: SemanticsNode) -> bool {
+    let mut parent = node.parent();
+    while let Some(scroller) = parent {
+        let scrolls = scroller.read(|tree, id| {
+            tree.own_semantics(id).is_some_and(|own| {
+                own.config.contains(&SemanticsProperties::VERTICAL_SCROLL_AXIS_RANGE)
+                    || own.config.contains(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE)
+            })
+        });
+        if scrolls == Some(true) {
+            let (own, around) =
+                (node.unclipped_bounds_in_root(), scroller.unclipped_bounds_in_root());
+            return own.left < around.left
+                || own.top < around.top
+                || own.right > around.right
+                || own.bottom > around.bottom;
+        }
+        parent = scroller.parent();
+    }
+    false
+}
+
+fn fake_node_bounds(node: SemanticsNode) -> Rect {
+    match node.parent() {
+        Some(owner) if owner.layout_info().is_placed() => rounded(owner.bounds_in_root()),
+        _ => Rect::new(0.0, 0.0, 10.0, 10.0),
     }
 }
 
 fn visit_uncovered(
-    root: SemanticsNode,
     node: SemanticsNode,
     unaccounted: &mut SemanticsRegion,
     hidden: bool,
     visitor: &mut impl FnMut(SemanticsNode, Rect, bool),
 ) {
-    let is_root = node == root;
-    let info = node.layout_info();
-    if (unaccounted.is_empty() && !is_root)
-        || (node.fake.is_none() && !(is_root || (info.is_placed() && info.is_attached())))
-    {
+    if unaccounted.is_empty() || (node.fake.is_none() && !is_placed(node)) {
         return;
     }
     if node.fake.is_some() {
-        let owner = node.parent().unwrap_or(root);
-        let bounds = owner.bounds_in_root();
-        visitor(node, rounded(bounds), hidden);
+        visitor(node, fake_node_bounds(node), hidden);
+        return;
+    }
+    let (touch, clipped) =
+        node.read(|tree, id| tree.semantics_touch_bounds_both(id)).unwrap_or((EMPTY, EMPTY));
+    let (touch, clipped) = (rounded(touch), rounded(clipped));
+    let config = node.unmerged_config();
+    let hidden = hidden || hides_what_it_merges(&config);
+    // What's uncovered is decided inside what clips it, and a node left in is reported with all its
+    // touch target: an overhang past a clip neither keeps it alone nor covers what's beside.
+    let Some(left) = unaccounted.bounds_within(clipped) else {
+        return;
+    };
+    let left =
+        if clipped != touch { unaccounted.bounds_within(touch).unwrap_or(EMPTY) } else { left };
+    visitor(node, left, hidden);
+    let mut children = Vec::new();
+    node.for_each_accessibility_child_of(&config, |child| children.push(child));
+    if config.is_merging_semantics_of_descendants && is_partly_past_its_scroller(node) {
+        // What's past the scroller is reported too, unclipped, for a screen reader to scroll to.
+        let mut inside = SemanticsRegion::of(node.unclipped_bounds_in_root());
+        for child in children.into_iter().rev() {
+            visit_uncovered_past_scroller(child, &mut inside, hidden, visitor);
+        }
+    } else {
+        for child in children.into_iter().rev() {
+            visit_uncovered(child, unaccounted, hidden, visitor);
+        }
+    }
+    if node.is_important_given(&config) {
+        unaccounted.difference(clipped);
+    }
+}
+
+/// `visit_uncovered` inside a merging node partly past its scroller: what's all past it counts by
+/// its unclipped bounds, and what's accounted for is within that node.
+fn visit_uncovered_past_scroller(
+    node: SemanticsNode,
+    unaccounted: &mut SemanticsRegion,
+    hidden: bool,
+    visitor: &mut impl FnMut(SemanticsNode, Rect, bool),
+) {
+    if node.fake.is_some() {
+        if is_placed(node.parent().unwrap_or(node)) || !unaccounted.is_empty() {
+            visitor(node, fake_node_bounds(node), hidden);
+        }
+        return;
+    }
+    if !is_placed(node) || unaccounted.is_empty() {
         return;
     }
     let touch = node.touch_bounds_in_root();
+    let empty = touch.right <= touch.left || touch.bottom <= touch.top;
+    let bounds = rounded(if empty { node.unclipped_bounds_in_root() } else { touch });
     let config = node.unmerged_config();
-    let hidden = hidden
-        || (config.is_merging_semantics_of_descendants
-            && config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY));
-    let mut region = SemanticsRegion::of(touch);
-    let uncovered = region.intersect(unaccounted);
-    if uncovered {
-        visitor(node, region.bounds(), hidden);
-        // The children over one another: those drawn last first.
-        let mut children = Vec::new();
-        node.for_each_accessibility_child(|child| children.push(child));
-        for child in children.into_iter().rev() {
-            visit_uncovered(root, child, unaccounted, hidden, visitor);
-        }
-        if node.is_important_for_accessibility() {
-            unaccounted.difference(rounded(touch));
-        }
-    } else if is_root {
-        // A root with nothing in it is still a root (a host maps its id to its own).
-        visitor(node, region.bounds(), hidden);
+    let hidden = hidden || hides_what_it_merges(&config);
+    let Some(left) = unaccounted.bounds_within(bounds) else {
+        return;
+    };
+    visitor(node, left, hidden);
+    let mut children = Vec::new();
+    node.for_each_accessibility_child_of(&config, |child| children.push(child));
+    for child in children.into_iter().rev() {
+        visit_uncovered_past_scroller(child, unaccounted, hidden, visitor);
+    }
+    if node.is_important_given(&config) {
+        unaccounted.difference(bounds);
     }
 }
 
@@ -224,85 +323,126 @@ fn rounded(rect: Rect) -> Rect {
     Rect::new(rect.left.round(), rect.top.round(), rect.right.round(), rect.bottom.round())
 }
 
-/// A region of the root as rectangles that don't overlap, as `SemanticsRegion`.
+/// A region of the root, as `SemanticsRegion`, in bands as Android's `Region` keeps its: from the top,
+/// each band a height and what's in it across, left to right and apart. Touching bands across alike
+/// are one, so a list of rows narrower than the window leaves a band beside them, not a rectangle a
+/// row: taking a row out is a matter of the few bands it meets.
 struct SemanticsRegion {
-    rects: SmallVec<[Rect; 4]>,
+    bands: Vec<RegionBand>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct RegionBand {
+    top: f32,
+    bottom: f32,
+    /// Left and right of each part.
+    spans: SmallVec<[(f32, f32); 2]>,
 }
 
 impl SemanticsRegion {
     fn of(rect: Rect) -> SemanticsRegion {
         let rect = rounded(rect);
-        let mut rects = SmallVec::new();
+        let mut bands = Vec::new();
         if rect.right > rect.left && rect.bottom > rect.top {
-            rects.push(rect);
+            let spans = SmallVec::from_slice(&[(rect.left, rect.right)]);
+            bands.push(RegionBand { top: rect.top, bottom: rect.bottom, spans });
         }
-        SemanticsRegion { rects }
+        SemanticsRegion { bands }
     }
 
     fn is_empty(&self) -> bool {
-        self.rects.is_empty()
+        self.bands.is_empty()
     }
 
-    /// Keeps what's in `other`: whether anything is left.
-    fn intersect(&mut self, other: &SemanticsRegion) -> bool {
-        let mut left = SmallVec::new();
-        for mine in &self.rects {
-            for theirs in &other.rects {
-                let rect = Rect::new(
-                    mine.left.max(theirs.left),
-                    mine.top.max(theirs.top),
-                    mine.right.min(theirs.right),
-                    mine.bottom.min(theirs.bottom),
-                );
-                if rect.right > rect.left && rect.bottom > rect.top {
-                    left.push(rect);
-                }
-            }
+    /// Its bounds, or `otherwise` if nothing's in it (a root of no size is still a root).
+    fn bounds_or(&self, otherwise: Rect) -> Rect {
+        let all = Rect::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY);
+        self.bounds_within(all).unwrap_or(otherwise)
+    }
+
+    /// The bounds of what's left of it in `rect`, if anything is.
+    fn bounds_within(&self, rect: Rect) -> Option<Rect> {
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            return None;
         }
-        self.rects = left;
-        !self.is_empty()
+        let first = self.bands.partition_point(|band| band.bottom <= rect.top);
+        let mut bounds: Option<Rect> = None;
+        for band in &self.bands[first..] {
+            if band.top >= rect.bottom {
+                break;
+            }
+            let start = band.spans.partition_point(|span| span.1 <= rect.left);
+            let Some(&(left, _)) = band.spans.get(start).filter(|span| span.0 < rect.right) else {
+                continue;
+            };
+            let end = band.spans.partition_point(|span| span.0 < rect.right);
+            let (left, right) = (left.max(rect.left), band.spans[end - 1].1.min(rect.right));
+            let (top, bottom) = (band.top.max(rect.top), band.bottom.min(rect.bottom));
+            bounds = Some(match bounds {
+                None => Rect::new(left, top, right, bottom),
+                Some(it) => Rect::new(it.left.min(left), it.top, it.right.max(right), bottom),
+            });
+        }
+        bounds
     }
 
     /// Takes `cut` out.
     fn difference(&mut self, cut: Rect) {
-        let mut left = SmallVec::new();
-        for rect in &self.rects {
-            if cut.right <= rect.left
-                || cut.left >= rect.right
-                || cut.bottom <= rect.top
-                || cut.top >= rect.bottom
-            {
-                left.push(*rect);
+        if cut.right <= cut.left || cut.bottom <= cut.top {
+            return;
+        }
+        let first = self.bands.partition_point(|band| band.bottom <= cut.top);
+        let mut at = first;
+        while at < self.bands.len() && self.bands[at].top < cut.bottom {
+            let band = &self.bands[at];
+            let start = band.spans.partition_point(|span| span.1 <= cut.left);
+            if band.spans.get(start).is_none_or(|span| span.0 >= cut.right) {
+                at += 1;
                 continue;
             }
-            let (top, bottom) = (rect.top.max(cut.top), rect.bottom.min(cut.bottom));
-            if rect.top < cut.top {
-                left.push(Rect::new(rect.left, rect.top, rect.right, cut.top));
+            // Only the height it's cut at changes.
+            if band.top < cut.top {
+                let above = RegionBand { bottom: cut.top, ..band.clone() };
+                self.bands[at].top = cut.top;
+                self.bands.insert(at, above);
+                at += 1;
             }
-            if cut.bottom < rect.bottom {
-                left.push(Rect::new(rect.left, cut.bottom, rect.right, rect.bottom));
+            if cut.bottom < self.bands[at].bottom {
+                let below = RegionBand { top: cut.bottom, ..self.bands[at].clone() };
+                self.bands[at].bottom = cut.bottom;
+                self.bands.insert(at + 1, below);
             }
-            if rect.left < cut.left {
-                left.push(Rect::new(rect.left, top, cut.left, bottom));
+            let spans = &mut self.bands[at].spans;
+            let end = spans.partition_point(|span| span.0 < cut.right);
+            let (before, after) = (spans[start].0, spans[end - 1].1);
+            spans.drain(start..end);
+            let mut put = start;
+            if before < cut.left {
+                spans.insert(put, (before, cut.left));
+                put += 1;
             }
-            if cut.right < rect.right {
-                left.push(Rect::new(cut.right, top, rect.right, bottom));
+            if cut.right < after {
+                spans.insert(put, (cut.right, after));
+            }
+            if spans.is_empty() {
+                self.bands.remove(at);
+            } else {
+                at += 1;
             }
         }
-        self.rects = left;
-    }
-
-    fn bounds(&self) -> Rect {
-        let mut rects = self.rects.iter();
-        let Some(first) = rects.next() else { return EMPTY };
-        rects.fold(*first, |bounds, rect| {
-            Rect::new(
-                bounds.left.min(rect.left),
-                bounds.top.min(rect.top),
-                bounds.right.max(rect.right),
-                bounds.bottom.max(rect.bottom),
-            )
-        })
+        // What was split may be as its neighbours are now.
+        let mut joined = first.saturating_sub(1);
+        let mut end = (at + 1).min(self.bands.len());
+        while joined + 1 < end {
+            let (one, next) = (&self.bands[joined], &self.bands[joined + 1]);
+            if one.bottom == next.top && one.spans == next.spans {
+                self.bands[joined].bottom = self.bands[joined + 1].bottom;
+                self.bands.remove(joined + 1);
+                end -= 1;
+            } else {
+                joined += 1;
+            }
+        }
     }
 }
 
@@ -624,11 +764,19 @@ impl SemanticsNode {
     /// Each child for the accessibility tree, as `forEachAccessibilityChild`: none under a node
     /// clearing its semantics, link markers left out; a merging node's own description and role as
     /// fake nodes around its children in the unmerged tree.
-    pub fn for_each_accessibility_child(&self, mut block: impl FnMut(SemanticsNode)) {
+    pub fn for_each_accessibility_child(&self, block: impl FnMut(SemanticsNode)) {
         if self.fake.is_some() {
             return;
         }
-        let config = self.unmerged_config();
+        self.for_each_accessibility_child_of(&self.unmerged_config(), block);
+    }
+
+    /// `for_each_accessibility_child`, its unmerged configuration at hand.
+    fn for_each_accessibility_child_of(
+        &self,
+        config: &SemanticsConfiguration,
+        mut block: impl FnMut(SemanticsNode),
+    ) {
         if config.is_clearing_semantics {
             return;
         }
@@ -753,7 +901,7 @@ impl SemanticsNode {
     /// at least the minimum touch target around it.
     pub fn touch_bounds_in_root(&self) -> Rect {
         let this = self.owner_of_bounds();
-        this.read(|tree, node| tree.semantics_touch_bounds(node)).unwrap_or(EMPTY)
+        this.read(|tree, node| tree.semantics_touch_bounds(node, false)).unwrap_or(EMPTY)
     }
 
     /// Its bounds in the closest layout around it with bounds, or the root, clipped, as
@@ -797,15 +945,17 @@ impl SemanticsNode {
     /// Whether it means anything to accessibility, as `isImportantForAccessibility`: not hidden nor
     /// a link marker, and it merges or sets what accessibility reads.
     pub fn is_important_for_accessibility(&self) -> bool {
-        if self.is_hidden() {
-            return false;
-        }
-        let config = self.unmerged_config();
-        if config.contains(&SemanticsProperties::LINK_TEST_MARKER) {
-            return false;
-        }
-        config.is_merging_semantics_of_descendants
-            || config.properties().any(|(key, _)| key.is_important_for_accessibility())
+        self.is_important_given(&self.unmerged_config())
+    }
+
+    /// `is_important_for_accessibility`, its unmerged configuration at hand: what says so first, what
+    /// walks the layers around it last.
+    fn is_important_given(&self, config: &SemanticsConfiguration) -> bool {
+        says_something_important(config)
+            && !self
+                .owner_of_bounds()
+                .read(|tree, node| tree.semantics_is_transparent(node))
+                .unwrap_or(false)
     }
 
     /// Whether a click action makes `touch_bounds_in_root` the minimum touch target.
@@ -817,6 +967,53 @@ impl SemanticsNode {
     pub fn role(&self) -> Option<Role> {
         self.unmerged_config().get(&SemanticsProperties::ROLE).copied()
     }
+}
+
+/// `is_important_for_accessibility`, but for what's transparent: what its configuration says.
+fn says_something_important(config: &SemanticsConfiguration) -> bool {
+    if config.contains(&SemanticsProperties::LINK_TEST_MARKER)
+        || config.contains(&SemanticsProperties::HIDE_FROM_ACCESSIBILITY)
+    {
+        return false;
+    }
+    config.is_merging_semantics_of_descendants
+        || config.properties().any(|(key, _)| key.is_important_for_accessibility())
+}
+
+/// What a service's touch found at and below a node, as `HitTestResult` for its `SemanticsSource`.
+struct AccessibilityHit {
+    /// The innermost node hit a service reads, or what merges it. `None`: something's hit that it
+    /// isn't told of (it's in a merging node hiding it), which still stops what's under it.
+    found: Option<NodeId>,
+    /// Negative: on it. Else the square of how far outside it, in its minimum touch target.
+    distance: f32,
+    /// In the layers around it, as a touch target past a clip isn't.
+    in_layer: bool,
+}
+
+impl AccessibilityHit {
+    /// Nothing under it can do better, as `hasHit`.
+    fn stops_the_search(&self) -> bool {
+        self.distance < 0.0 && self.in_layer
+    }
+
+    /// As `DistanceAndFlags`'s order: an earlier one wins a tie.
+    fn is_better_than(&self, other: &AccessibilityHit) -> bool {
+        if self.in_layer != other.in_layer {
+            return self.in_layer;
+        }
+        self.distance < other.distance
+    }
+}
+
+/// A touch taken down through a node's chain (`UiTree::point_through_chain`).
+struct PointInNode {
+    /// At its semantics entry: where it is there, and whether in the clips before that.
+    at_entry: (Offset, bool),
+    /// Whether it's in all of the chain's clips.
+    in_clips: bool,
+    /// Where it is in what the children are placed in.
+    in_content: Offset,
 }
 
 /// Bounds of a semantics node in the root.
@@ -842,7 +1039,7 @@ impl UiTree {
     /// Where `node`'s semantic bounds are, and its size: the root's, or with no modifier saying
     /// so, its innermost layer's.
     pub(crate) fn semantics_geometry(&mut self, node: NodeId) -> (SemanticsBounds, IntSize) {
-        if let Some((unclipped, clipped)) = self.semantics_bounds_in_root(node) {
+        if let Some((unclipped, clipped)) = self.semantics_bounds_shown(node) {
             let layer =
                 self.own_semantics(node).map_or(0, |own: std::rc::Rc<OwnSemantics>| own.layer);
             let measured = self.node(node).layers[layer].measured;
@@ -855,10 +1052,29 @@ impl UiTree {
         (SemanticsBounds { unclipped: bounds, clipped: bounds }, measured)
     }
 
-    /// `node`'s touch bounds: its clipped bounds, with a click action at least the minimum
-    /// touch target around it, clipped by what's around it, the target extending past a clip
-    /// only as far as a parent's own would.
-    pub(crate) fn semantics_touch_bounds(&mut self, node: NodeId) -> Rect {
+    /// `semantics_touch_bounds` both ways, for what's asked of every node of a tree: one without a
+    /// click has no target past its clips.
+    pub(crate) fn semantics_touch_bounds_both(&mut self, node: NodeId) -> (Rect, Rect) {
+        let clicks = self
+            .own_semantics(node)
+            .is_some_and(|own| own.config.contains(&SemanticsActions::ON_CLICK));
+        if clicks {
+            (self.semantics_touch_bounds(node, false), self.semantics_touch_bounds(node, true))
+        } else {
+            let clipped = self.semantics_geometry(node).0.clipped;
+            (clipped, clipped)
+        }
+    }
+
+    /// `node`'s touch bounds: its clipped bounds, with a click action at least the minimum touch
+    /// target around it, each clip around it letting the target past as `rectInParent` does. With
+    /// `clip_to_large_parents`, a clip at least the target's size stops it (`clippedTouchBoundsInRoot`):
+    /// what's covered is decided inside such a clip.
+    pub(crate) fn semantics_touch_bounds(
+        &mut self,
+        node: NodeId,
+        clip_to_large_parents: bool,
+    ) -> Rect {
         let (bounds, size) = self.semantics_geometry(node);
         let clicks = self
             .own_semantics(node)
@@ -868,19 +1084,66 @@ impl UiTree {
         }
         let density = self.density_of(node);
         let minimum = self.view_configuration_of(node).minimum_touch_target_size;
-        let horizontal = ((density.to_px(minimum.width) - size.width as f32) / 2.0).max(0.0);
-        let vertical = ((density.to_px(minimum.height) - size.height as f32) / 2.0).max(0.0);
-        if bounds.clipped.right <= bounds.clipped.left
-            || bounds.clipped.bottom <= bounds.clipped.top
-        {
-            return EMPTY;
-        }
-        Rect::new(
+        let (target_width, target_height) =
+            (density.to_px(minimum.width), density.to_px(minimum.height));
+        let horizontal = ((target_width - size.width as f32) / 2.0).max(0.0);
+        let vertical = ((target_height - size.height as f32) / 2.0).max(0.0);
+        let mut touch = Rect::new(
             bounds.unclipped.left - horizontal,
             bounds.unclipped.top - vertical,
             bounds.unclipped.right + horizontal,
             bounds.unclipped.bottom + vertical,
-        )
+        );
+        for clip in self.clips_around_semantics(node) {
+            let (width, height) = (clip.width(), clip.height());
+            let (x, y) = (touch.left - clip.left, touch.top - clip.top);
+            let (right, bottom) = (touch.right - clip.left, touch.bottom - clip.top);
+            // How far past its start the clip lets the target go.
+            let past = right < 0.0 || x > width || bottom < 0.0 || y > height;
+            let before = |start: f32, end: f32, target: f32| {
+                let under = (target - (end - start)) / 2.0;
+                if past {
+                    0.0
+                } else if under > 0.0 {
+                    start - under
+                } else {
+                    start.max((end - target).min(0.0)).max(-target / 2.0)
+                }
+            };
+            let (from_x, from_y) =
+                (before(x, right, target_width), before(y, bottom, target_height));
+            let to_x = (width + target_width).min(width.max(from_x + target_width));
+            let to_y = (height + target_height).min(height.max(from_y + target_height));
+            let large_across = clip_to_large_parents && width >= target_width;
+            let large_along = clip_to_large_parents && height >= target_height;
+            let left = clip.left + if large_across { 0.0 } else { from_x };
+            let top = clip.top + if large_along { 0.0 } else { from_y };
+            let right = clip.left + if large_across { width } else { to_x };
+            let bottom = clip.top + if large_along { height } else { to_y };
+            touch = Rect::new(
+                touch.left.max(left),
+                touch.top.max(top),
+                touch.right.min(right),
+                touch.bottom.min(bottom),
+            );
+            if touch.right <= touch.left || touch.bottom <= touch.top {
+                return EMPTY;
+            }
+        }
+        touch
+    }
+
+    /// The window `node` is in: the overlay around it, or `None` for the main one.
+    pub(crate) fn overlay_around(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.node(id);
+            if value.overlay {
+                return Some(id);
+            }
+            current = value.parent;
+        }
+        None
     }
 
     /// The one layer of semantics nodes below `node`, in drawing order: a node with nothing to say
@@ -1026,9 +1289,319 @@ impl UiTree {
         hit
     }
 
+    /// `SemanticsOwner::accessibility_hit_test`: each window over the one under it, the top-most first,
+    /// a touch in one being its own, as each is a view of its own in Compose; what a window shutting
+    /// out what's under it doesn't cover isn't anyone's.
+    pub(crate) fn accessibility_hit(&mut self, position: Offset) -> Option<i32> {
+        let shutting_out = self.overlay_shutting_out();
+        for index in (shutting_out.unwrap_or(0)..self.overlays.len()).rev() {
+            let overlay = self.overlays[index];
+            let Some(value) = self.get(overlay).filter(|value| value.overlay && value.placed)
+            else {
+                continue;
+            };
+            let size = value.layers[0].size;
+            let at = position - value.overlay_origin;
+            let inside = contains(Rect::new(0.0, 0.0, size.width as f32, size.height as f32), at);
+            let pass_through = self.overlay_node(overlay).is_some_and(|it| it.pass_through);
+            // A touch target reaches no further than its window: beside it, the touch isn't its.
+            if inside
+                && let Some(found) = self
+                    .accessibility_walk(overlay, position, true, None, false)
+                    .and_then(|hit| hit.found)
+            {
+                return Some(self.node(found).semantics_id);
+            }
+            if inside && !pass_through {
+                return None;
+            }
+        }
+        if shutting_out.is_some() {
+            return None;
+        }
+        let found = self.accessibility_walk(self.root_id(), position, true, None, false)?.found?;
+        Some(self.node(found).semantics_id)
+    }
+
+    /// What's hit at and below `node`, as `NodeCoordinator.hitTest` for `SemanticsSource`, `point`
+    /// being in what's around it and taken down through each layer as `fromParentPosition`: a node a
+    /// service doesn't read isn't hit, so what's under it still can be; every clip stops what's in it,
+    /// past a node's minimum touch target; a hit on a sibling stops what's under that, but one in its
+    /// touch target leaves the search going for something better. `merged_into` is what merges what's
+    /// here, which is what a service knows of it, and `hidden` that it hides it from the service.
+    fn accessibility_walk(
+        &mut self,
+        node: NodeId,
+        point: Offset,
+        in_layer: bool,
+        merged_into: Option<NodeId>,
+        hidden: bool,
+    ) -> Option<AccessibilityHit> {
+        let own = self.own_semantics(node);
+        let walked =
+            self.point_through_chain(node, point, own.as_ref().map(|own| own.bounds_entry));
+        let mut merged_into = merged_into;
+        let mut hidden = hidden;
+        let mut clears = false;
+        let mut hit = None;
+        if let Some(own) = own {
+            let config = &own.config;
+            clears = config.is_clearing_semantics;
+            let merges = config.is_merging_semantics_of_descendants;
+            hidden |= hides_what_it_merges(config);
+            if says_something_important(config) && !self.semantics_is_transparent(node) {
+                let found =
+                    (!hidden).then_some(if merges { node } else { merged_into.unwrap_or(node) });
+                let size = self.node(node).layers[own.layer].measured;
+                let (at, in_clips) = walked.at_entry;
+                let bounds = Rect::new(0.0, 0.0, size.width as f32, size.height as f32);
+                hit =
+                    if in_clips && contains(bounds, at) {
+                        Some(AccessibilityHit { found, distance: -1.0, in_layer })
+                    } else {
+                        self.distance_in_touch_target(node, size, at).map(|distance| {
+                            AccessibilityHit { found, distance, in_layer: in_layer && in_clips }
+                        })
+                    };
+            }
+            if merges {
+                merged_into = Some(node);
+            }
+        }
+        if clears {
+            return hit;
+        }
+        // Past its own clips only where its touch target is.
+        let in_layer = in_layer && {
+            if walked.in_clips {
+                true
+            } else {
+                let size = self
+                    .node(node)
+                    .layers
+                    .last()
+                    .map_or(IntSize::new(0, 0), |layer| layer.measured);
+                if self.distance_in_touch_target(node, size, walked.in_content).is_none() {
+                    return hit;
+                }
+                false
+            }
+        };
+        let mut below: Option<AccessibilityHit> = None;
+        for child in self.z_sorted_children(node).into_iter().rev() {
+            let value = self.node(child);
+            if !value.placed || value.overlay || value.deactivated {
+                continue;
+            }
+            let Some(found) =
+                self.accessibility_walk(child, walked.in_content, in_layer, merged_into, hidden)
+            else {
+                continue;
+            };
+            let stops = found.stops_the_search();
+            if below.as_ref().is_none_or(|best| found.is_better_than(best)) {
+                below = Some(found);
+            }
+            if stops {
+                break;
+            }
+        }
+        match (hit, below) {
+            (Some(hit), Some(below)) => {
+                let found = below.found.or(hit.found);
+                let best = if below.is_better_than(&hit) { below } else { hit };
+                Some(AccessibilityHit { found, ..best })
+            }
+            (hit, below) => below.or(hit),
+        }
+    }
+
+    /// `point`, in what's around `node`, taken down through its chain, each layer's transform undone
+    /// and each clip asked by its outline where it is, as `fromParentPosition` and `isInLayer` do.
+    fn point_through_chain(
+        &mut self,
+        node: NodeId,
+        point: Offset,
+        entry: Option<usize>,
+    ) -> PointInNode {
+        use crate::graphics_layer::GraphicsLayerNode;
+        use crate::node_chain::NodeKinds;
+        let value = self.node(node);
+        // In the node's own coordinates, its first layer's, which a layer's pivot is in.
+        let mut local = if value.overlay {
+            point - value.overlay_origin
+        } else {
+            let placed = value.layers[0].offset;
+            point - Offset::new(placed.x as f32, placed.y as f32)
+        };
+        let (mut layer, mut origin, mut in_clips) = (0, Offset::ZERO, true);
+        let mut at_entry = None;
+        for index in 0..self.node(node).chain.len() {
+            if entry == Some(index) {
+                at_entry = Some((local - origin, in_clips));
+            }
+            let value = self.node(node);
+            if let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() {
+                local = self.properties_of_layer(node, index, graphics).unmap(local);
+            }
+            let value = self.node_mut(node);
+            let measured = value.layers[layer].measured;
+            let (density, direction) = (value.density, value.layout_direction);
+            let bits = value.chain[index].kinds;
+            if bits.any(NodeKinds::DRAW | NodeKinds::DELEGATING)
+                && let Some(clip) = value.chain[index].hit_clip_at(measured.into(), density)
+            {
+                in_clips &=
+                    clip.outline_in(measured.into(), &density, direction).contains(local - origin);
+            }
+            if bits.any(NodeKinds::LAYOUT) && layer + 1 < value.layers.len() {
+                layer += 1;
+                let offset = value.layers[layer].offset;
+                origin = origin + Offset::new(offset.x as f32, offset.y as f32);
+            }
+        }
+        // The chain's walk stops at the content's layer; without it, the layers are added here.
+        let value = self.node(node);
+        for next in layer + 1..value.layers.len() {
+            let offset = value.layers[next].offset;
+            origin = origin + Offset::new(offset.x as f32, offset.y as f32);
+        }
+        PointInNode {
+            at_entry: at_entry.unwrap_or((local - origin, in_clips)),
+            in_clips,
+            in_content: local - origin,
+        }
+    }
+
+    /// As `distanceInMinimumTouchTarget`: the square of how far `point`, in a node measuring `size`'s
+    /// coordinates, is outside it, if that's within its minimum touch target.
+    fn distance_in_touch_target(&self, node: NodeId, size: IntSize, point: Offset) -> Option<f32> {
+        let density = self.density_of(node);
+        let minimum = self.view_configuration_of(node).minimum_touch_target_size;
+        let (width, height) = (density.to_px(minimum.width), density.to_px(minimum.height));
+        if size.width as f32 >= width && size.height as f32 >= height {
+            return None;
+        }
+        let horizontal = ((width - size.width as f32) / 2.0).max(0.0);
+        let vertical = ((height - size.height as f32) / 2.0).max(0.0);
+        let x = (-point.x).max(point.x - size.width as f32).max(0.0);
+        let y = (-point.y).max(point.y - size.height as f32).max(0.0);
+        (x <= horizontal && y <= vertical).then_some(x * x + y * y)
+    }
+
     /// A layer with no alpha around what gives `node` its semantic bounds.
     pub(crate) fn semantics_is_transparent(&mut self, node: NodeId) -> bool {
         let entry = self.own_semantics(node).map_or(0, |own| own.bounds_entry);
         self.alpha_around(node, Some(entry)) <= 0.0
+    }
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    const SIDE: usize = 40;
+
+    /// What `region` holds, cell by cell.
+    fn cells(region: &SemanticsRegion) -> Vec<bool> {
+        let mut out = vec![false; SIDE * SIDE];
+        for band in &region.bands {
+            assert!(band.top < band.bottom);
+            for pair in band.spans.windows(2) {
+                assert!(pair[0].1 < pair[1].0, "apart, in order: {:?}", band.spans);
+            }
+            for &(left, right) in &band.spans {
+                assert!(left < right);
+                for y in band.top as usize..band.bottom as usize {
+                    for x in left as usize..right as usize {
+                        out[y * SIDE + x] = true;
+                    }
+                }
+            }
+        }
+        for pair in region.bands.windows(2) {
+            assert!(pair[0].bottom <= pair[1].top, "from the top: {:?}", region.bands);
+            assert!(
+                pair[0].bottom < pair[1].top || pair[0].spans != pair[1].spans,
+                "joined: {:?}",
+                region.bands
+            );
+        }
+        out
+    }
+
+    fn rect(numbers: &mut u64) -> Rect {
+        let mut next = |bound: u64| {
+            *numbers = numbers.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((*numbers >> 33) % bound) as f32
+        };
+        let (x, y) = (next(SIDE as u64), next(SIDE as u64));
+        Rect::new(x, y, (x + next(12)).min(SIDE as f32), (y + next(12)).min(SIDE as f32))
+    }
+
+    /// Against the cells themselves, through any cuts: what's in it, and its bounds in any rectangle.
+    #[test]
+    fn a_region_holds_what_cuts_left_of_it_whatever_they_are() {
+        let mut numbers = 7u64;
+        for _ in 0..50 {
+            let side = SIDE as f32;
+            let mut region = SemanticsRegion::of(Rect::new(0.0, 0.0, side, side));
+            let mut expected = vec![true; SIDE * SIDE];
+            for _ in 0..60 {
+                let cut = rect(&mut numbers);
+                region.difference(cut);
+                for y in cut.top as usize..cut.bottom as usize {
+                    for x in cut.left as usize..cut.right as usize {
+                        expected[y * SIDE + x] = false;
+                    }
+                }
+                assert_eq!(cells(&region), expected);
+                let within = rect(&mut numbers);
+                let mut bounds: Option<Rect> = None;
+                for y in within.top as usize..within.bottom as usize {
+                    for x in within.left as usize..within.right as usize {
+                        if expected[y * SIDE + x] {
+                            let (x, y) = (x as f32, y as f32);
+                            bounds = Some(match bounds {
+                                None => Rect::new(x, y, x + 1.0, y + 1.0),
+                                Some(it) => Rect::new(
+                                    it.left.min(x),
+                                    it.top.min(y),
+                                    it.right.max(x + 1.0),
+                                    it.bottom.max(y + 1.0),
+                                ),
+                            });
+                        }
+                    }
+                }
+                assert_eq!(region.bounds_within(within), bounds);
+            }
+        }
+    }
+
+    /// The order the walk costs depends on: a column's rows narrower than the window.
+    #[test]
+    fn rows_narrower_than_the_region_leave_few_bands_however_many() {
+        let mut region = SemanticsRegion::of(Rect::new(0.0, 0.0, 100.0, 10_000.0));
+        for row in (0..1000).rev() {
+            let top = row as f32 * 10.0;
+            region.difference(Rect::new(10.0, top, 90.0, top + 10.0));
+            assert!(region.bands.len() <= 2, "{}", region.bands.len());
+        }
+        assert_eq!(region.bands.len(), 1);
+        assert_eq!(&region.bands[0].spans[..], &[(0.0, 10.0), (90.0, 100.0)]);
+    }
+
+    #[test]
+    fn nothing_to_take_out_changes_nothing() {
+        let whole = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let mut region = SemanticsRegion::of(whole);
+        region.difference(Rect::new(5.0, 5.0, 5.0, 8.0));
+        region.difference(Rect::new(20.0, 0.0, 30.0, 10.0));
+        assert_eq!(region.bounds_or(EMPTY), whole);
+        assert_eq!(region.bands.len(), 1);
+        region.difference(whole);
+        assert!(region.is_empty());
+        assert_eq!(region.bounds_or(EMPTY), EMPTY);
     }
 }

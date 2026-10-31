@@ -3524,6 +3524,21 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
             None if self.vertical => compose_ui::CollectionInfo { row_count: -1, column_count: 1 },
             None => compose_ui::CollectionInfo { row_count: 1, column_count: -1 },
         });
+        // The viewport without the content padding, and the padding before and after, as
+        // Compose's `LazyLayoutSemantics`: a page, and what a shown item must clear.
+        {
+            let (state, vertical) = (self.state, self.vertical);
+            config.get_scroll_viewport_length(None, move |out| {
+                let info = state.layout_info_untracked();
+                let size = info.viewport_size;
+                let length = if vertical { size.height } else { size.width };
+                let (before, after) = (info.before_content_padding, info.after_content_padding);
+                out.push((length - before - after) as f32);
+                out.push(before as f32);
+                out.push(after as f32);
+                true
+            });
+        }
         // Not offered with user scrolling off, as Compose's (the range stays).
         if !self.enabled {
             return;

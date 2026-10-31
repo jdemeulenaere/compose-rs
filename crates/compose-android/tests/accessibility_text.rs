@@ -549,3 +549,22 @@ fn what_is_sent_is_cut_to_what_is_safe_a_pair_whole() {
     let fits = format!("{}\u{1f600}", "y".repeat(99_998));
     assert_eq!(parcel_safe(&fits), fits);
 }
+
+#[test]
+fn a_description_read_through_extends_nothing() {
+    let value = state("hello world");
+    let mut scene = Scene::new(move || {
+        BasicTextField!(
+            value.get(),
+            move |new| value.set(new),
+            modifier = Modifier
+                .size((200.dp(), 40.dp()))
+                .test_tag("node")
+                .semantics(|config| config.set_content_description("Long description")),
+        );
+    });
+    assert!(scene.perform(action::NEXT_AT_GRANULARITY, movement::WORD, 0, true, ""));
+    let node = scene.node();
+    let range = node.config.get(&SemanticsProperties::TEXT_SELECTION_RANGE).copied();
+    assert_eq!(range, Some(TextRange::new(4, 4)), "collapsed, at the word's end");
+}

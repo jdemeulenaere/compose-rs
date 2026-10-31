@@ -359,7 +359,7 @@ impl UiTree {
 
     /// The properties of `graphics`, the node of chain entry `index` of `node`, seen from the
     /// node's first layer.
-    fn properties_of_layer(
+    pub(crate) fn properties_of_layer(
         &self,
         node: NodeId,
         index: usize,
@@ -511,11 +511,86 @@ impl UiTree {
     /// `None` if it has no semantics or isn't placed where the root shows it. For tests' bounds
     /// assertions.
     pub fn semantics_bounds_in_root(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
+        let (position, size, clipped) = self.semantics_coordinates(node)?;
+        Some((Rect::from_offset_size(position, size.into()), clipped))
+    }
+
+    /// As `SemanticsNode.unclippedBoundsInRoot` and `boundsInRoot`: where `node`'s semantic bounds
+    /// show, all of them, through the graphics layers around it, and clipped; a service's and a
+    /// touch's, where the tests' bounds assertions go by the top left and the size.
+    pub(crate) fn semantics_bounds_shown(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
+        let (_, size, clipped) = self.semantics_coordinates(node)?;
+        let layer = self.own_semantics(node)?.layer;
+        let entry = self.first_semantics_entry(node, layer);
+        Some((self.rect_in_root(node, layer, Some(entry), size), clipped))
+    }
+
+    /// The chain entry that says where `node`'s semantics on `layer` are.
+    fn first_semantics_entry(&self, node: NodeId, layer: usize) -> usize {
+        let value = self.node(node);
+        let mut layer_of_entry = 0;
+        for (index, bits) in value.chain.iter().map(|entry| entry.kinds).enumerate() {
+            if layer_of_entry == layer && bits.any(NodeKinds::SEMANTICS) {
+                return index;
+            }
+            if bits.any(NodeKinds::LAYOUT) {
+                layer_of_entry += 1;
+            }
+        }
+        0
+    }
+
+    /// Where `node`'s semantic bounds' top left is in the root, their size, and those bounds clipped.
+    fn semantics_coordinates(&mut self, node: NodeId) -> Option<(Offset, IntSize, Rect)> {
         self.get(node)?;
         let layer = self.own_semantics(node)?.layer;
         if !self.is_placed_in_root(node) {
             return None;
         }
+        let entry = self.first_semantics_entry(node, layer);
+        let coordinates = self.coordinates(node, layer, entry);
+        let size = self.node(node).layers[layer].measured;
+        Some((coordinates.position_in_root, size, coordinates.clipped_bounds))
+    }
+
+    /// Where the modifier that set `node`'s `Shape` is in the root, unclipped; its node's outermost
+    /// layer if none of its own did.
+    pub(crate) fn semantics_shape_bounds(&mut self, node: NodeId) -> Rect {
+        let mut layer = 0;
+        for index in 0..self.node(node).chain.len() {
+            let value = self.node_mut(node);
+            let entry = &mut value.chain[index];
+            let is_layout = entry.kinds.any(NodeKinds::LAYOUT);
+            let mut sets_shape = false;
+            if entry.kinds.any(NodeKinds::SEMANTICS) {
+                crate::delegation::dispatch_for_kind(
+                    &mut *entry.node,
+                    entry.own,
+                    NodeKinds::SEMANTICS,
+                    crate::node_chain::EntryId::NO_DELEGATE,
+                    &mut |modifier_node, _| {
+                        let Some(semantics) = modifier_node.as_semantics() else { return };
+                        let mut own = crate::semantics::SemanticsConfiguration::default();
+                        semantics.apply_semantics(&mut own);
+                        sets_shape |= own.contains(&crate::semantics::SemanticsProperties::SHAPE);
+                    },
+                );
+            }
+            if sets_shape {
+                let size = self.node(node).layers[layer].size;
+                return self.rect_in_root(node, layer, Some(index), size);
+            }
+            if is_layout {
+                layer += 1;
+            }
+        }
+        self.outer_bounds_in_root(node)
+    }
+
+    /// The clips around `node`'s semantics in the root, nearest first.
+    pub(crate) fn clips_around_semantics(&mut self, node: NodeId) -> Vec<Rect> {
+        let mut clips = Vec::new();
+        let Some(layer) = self.own_semantics(node).map(|own| own.layer) else { return clips };
         let value = self.node(node);
         let mut layer_of_entry = 0;
         let mut entry = None;
@@ -527,10 +602,38 @@ impl UiTree {
                 layer_of_entry += 1;
             }
         }
-        let coordinates = self.coordinates(node, layer, entry.unwrap_or(0));
-        let size = self.node(node).layers[layer].measured;
-        let unclipped = Rect::from_offset_size(coordinates.position_in_root, size.into());
-        Some((unclipped, coordinates.clipped_bounds))
+        self.clips_of_node(node, entry, &mut clips);
+        let value = self.node(node);
+        let mut current = if value.overlay { None } else { value.parent };
+        while let Some(id) = current {
+            self.clips_of_node(id, None, &mut clips);
+            let value = self.node(id);
+            current = if value.overlay { None } else { value.parent };
+        }
+        clips
+    }
+
+    /// Adds `id`'s clipping modifiers' rectangles to `clips`, innermost first; those before chain
+    /// entry `before_entry` if it's given.
+    fn clips_of_node(&mut self, id: NodeId, before_entry: Option<usize>, clips: &mut Vec<Rect>) {
+        let at = clips.len();
+        let mut layer_of_entry = 0;
+        for index in 0..self.node(id).chain.len() {
+            if before_entry.is_some_and(|before| index >= before) {
+                break;
+            }
+            let value = self.node_mut(id);
+            let size = value.layers[layer_of_entry].size;
+            let density = value.density;
+            let is_layout = value.chain[index].kinds.any(NodeKinds::LAYOUT);
+            if value.chain[index].hit_clip_at(size.into(), density).is_some() {
+                clips.push(self.rect_in_root(id, layer_of_entry, Some(index), size));
+            }
+            if is_layout {
+                layer_of_entry += 1;
+            }
+        }
+        clips[at..].reverse();
     }
 
     /// `node`'s outermost layer in the root, unclipped, through the graphics layers around it.
@@ -629,8 +732,17 @@ impl UiTree {
         size: IntSize,
     ) -> Rect {
         let (width, height) = (size.width as f32, size.height as f32);
-        let corners = [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)]
-            .map(|(x, y)| self.map_to_root(node, layer, before_entry, Offset::new(x, y)));
+        let corners = self.map_all_to_root(
+            node,
+            layer,
+            before_entry,
+            [
+                Offset::new(0.0, 0.0),
+                Offset::new(width, 0.0),
+                Offset::new(0.0, height),
+                Offset::new(width, height),
+            ],
+        );
         let min = |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::INFINITY, f32::min);
         let max =
             |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
@@ -647,11 +759,24 @@ impl UiTree {
         before_entry: Option<usize>,
         point: Offset,
     ) -> Offset {
+        let [point] = self.map_all_to_root(node, layer, before_entry, [point]);
+        point
+    }
+
+    /// `map_to_root` of several points, one walk up for them all.
+    fn map_all_to_root<const N: usize>(
+        &self,
+        node: NodeId,
+        layer: usize,
+        before_entry: Option<usize>,
+        points: [Offset; N],
+    ) -> [Offset; N] {
         let (mut current, mut layer, mut before) = (node, layer, before_entry);
-        let mut point = point;
+        let mut points = points;
         loop {
             let value = self.node(current);
-            point = point + layer_origin(value, layer);
+            let origin = layer_origin(value, layer);
+            points = points.map(|point| point + origin);
             let end = before.unwrap_or(value.chain.len());
             // The innermost first.
             for index in (0..end).rev() {
@@ -661,20 +786,21 @@ impl UiTree {
                 };
                 let properties = self.properties_of_layer(current, index, graphics);
                 graphics.note_transform(&properties, self.position_listeners);
-                point = properties.map(point);
+                points = points.map(|point| properties.map(point));
             }
             if value.overlay {
-                return point + value.overlay_origin;
+                return points.map(|point| point + value.overlay_origin);
             }
             let position = value.layers[0].offset;
-            point = point + Offset::new(position.x as f32, position.y as f32);
+            let moved = Offset::new(position.x as f32, position.y as f32);
+            points = points.map(|point| point + moved);
             match value.parent {
                 Some(parent) => {
                     current = parent;
                     layer = self.node(parent).layers.len() - 1;
                     before = None;
                 }
-                None => return point,
+                None => return points,
             }
         }
     }

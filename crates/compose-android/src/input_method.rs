@@ -156,12 +156,14 @@ pub struct TextInputState {
 }
 
 /// Takes what `ui` asks of the input method after a frame (the events before it having woken
-/// it), `last_options` being the focused field's options the last frame saw.
+/// it), `last_options` being the focused field's options the last frame saw and whether it masked
+/// its text: either changes what `editor_info` says, so restarts the keyboard.
 pub fn take_text_input_state(
     ui: &compose_ui::platform::UiHost,
-    last_options: &mut Option<ImeOptions>,
+    last_options: &mut Option<(ImeOptions, bool)>,
 ) -> TextInputState {
     let options = if ui.text_input_area().is_some() { ui.text_input_options() } else { None };
+    let options = options.map(|options| (options, ui.text_input_masks_password()));
     let changed = options.is_some() && last_options.is_some() && options != *last_options;
     *last_options = options;
     TextInputState {

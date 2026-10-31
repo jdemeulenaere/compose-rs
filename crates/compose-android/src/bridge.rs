@@ -779,7 +779,7 @@ struct Host {
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
-    ime_options: Option<compose_ui::ImeOptions>,
+    ime_options: Option<(compose_ui::ImeOptions, bool)>,
     /// Shown with performance hints enabled: its frames report the RenderThread's work
     /// (`performance_hint.rs`, D390).
     hint: bool,
@@ -1590,16 +1590,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    fn password(node: &compose_ui::platform::SemanticsSnapshot) -> Option<bool> {
-        use compose_ui::SemanticsProperties as P;
-        let config = &node.config;
-        if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {
-            return Some(config.contains(&P::PASSWORD));
-        }
-        node.children.iter().find_map(password)
-    }
     let options = host.ui.text_input_options().unwrap_or_default();
-    let masks_password = password(host.semantics_tree.get(&host.ui)).unwrap_or(false);
+    let masks_password = host.ui.text_input_masks_password();
     crate::input_method::editor_info(options, masks_password).pack()
 }
 
@@ -1876,6 +1868,68 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_characterLocation
     .unwrap_or_default()
 }
 
+/// `ComposeRsNative.semanticsShape(host, id, key)`: virtual view `id`'s shape for what `key` asks
+/// (`accessibility::write_shape_extra`), null with none; read before the next call about semantics.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semanticsShape<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    id: jint,
+    key: jint,
+) -> JByteBuffer<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    let extra = crate::accessibility::find(tree, id)
+        .and_then(|node| crate::accessibility::shape_extra(&host.ui, node));
+    let key = crate::accessibility::ShapeExtraKey::from_code(key);
+    let (Some(extra), Some(key)) = (extra, key) else { return JByteBuffer::default() };
+    crate::accessibility::write_shape_extra(&extra, key, &mut host.semantics);
+    host.semantics.bytes.reserve(1);
+    let bytes = &mut host.semantics.bytes;
+    with_env(&mut env, |env| {
+        // SAFETY: as `semantics`' buffer: read before the next call.
+        unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.len()) }.unwrap_or_default()
+    })
+}
+
+/// `ComposeRsNative.showOnScreen(host, id)`: `accessibility::show_on_screen`: 1 scrolled, 0 not, -1
+/// nothing around it scrolls.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_showOnScreen(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    id: jint,
+) -> jint {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let tree = host.semantics_tree.get(&host.ui);
+    crate::accessibility::show_on_screen(&mut host.ui, tree, id).map_or(-1, i32::from)
+}
+
+/// `ComposeRsNative.rectangleOnScreen(host, id)`: `accessibility::rectangle_on_screen`, left, top,
+/// right and bottom; null if it's gone.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_rectangleOnScreen<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    id: jint,
+) -> JIntArray<'local> {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let rectangle = crate::accessibility::rectangle_on_screen(&host.ui, id);
+    with_env(&mut env, |env| {
+        let Some(rectangle) = rectangle else { return Ok(JIntArray::default()) };
+        let array = env.new_int_array(rectangle.len())?;
+        array.set_region(env, 0, &rectangle)?;
+        Ok::<_, jni::errors::Error>(array)
+    })
+    .unwrap_or_default()
+}
+
 /// `ComposeRsNative.nodeAt(host, x, y)`: the virtual view a touch there finds (`accessibility::
 /// node_at`), -1 for none.
 #[unsafe(no_mangle)]
@@ -1888,8 +1942,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nodeAt(
 ) -> jint {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let tree = host.semantics_tree.get(&host.ui);
-    crate::accessibility::node_at(tree, x, y).unwrap_or(-1)
+    crate::accessibility::node_at(&host.ui, x, y).unwrap_or(-1)
 }
 
 /// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes
