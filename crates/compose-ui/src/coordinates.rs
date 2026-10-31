@@ -163,8 +163,16 @@ impl LayoutCoordinates {
         requests.window.read(|_| ()).is_none() && !peek_tree(self.tree, &mut |_| ())
     }
 
-    /// `read`, with the node and layer it names, for its lookahead results (no position's read
-    /// of the other pass, so nothing's noted as depending on one).
+    /// `read_lookahead` of where it is: a block asking runs again when that moves.
+    #[track_caller]
+    pub(crate) fn read_lookahead_position<R>(
+        &self,
+        read: impl FnOnce(&UiTree, NodeId, usize) -> R,
+    ) -> Option<R> {
+        self.read_position(|tree, place| read(tree, place.node, place.layer))
+    }
+
+    /// `read`, with the node and layer it names, for its lookahead results.
     #[track_caller]
     pub(crate) fn read_lookahead<R>(
         &self,

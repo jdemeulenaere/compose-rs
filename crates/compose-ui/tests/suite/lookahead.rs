@@ -932,3 +932,54 @@ fn ahead_an_approach_is_only_what_s_inside_it() {
     assert_eq!(sizes.borrow()[0], (true, IntSize::new(40, 40)));
     assert!(!sizes.borrow()[1].0);
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, alterPlacementTest
+#[test]
+fn what_starts_being_placed_is_placed_in_both_passes() {
+    let should = mutable_state_of(false);
+    let (total, now) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (sh, t, n) = (should.handle(), total.clone(), now.clone());
+    let mut host = host(move || {
+        let (t, n) = (t.clone(), n.clone());
+        scoped(move |_| {
+            let (t, n) = (t.clone(), n.clone());
+            let policy = measure_policy(move |scope, measurables, constraints| {
+                let placeable = scope.measure(measurables[0], constraints);
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    if sh.get() {
+                        placement.place(&placeable, 0, 0);
+                    }
+                })
+            });
+            Layout(
+                Modifier,
+                policy,
+                callback(move || {
+                    let (t, n) = (t.clone(), n.clone());
+                    let approaching = intermediate(move |scope, content, constraints| {
+                        let placeable = scope.measure(content, constraints);
+                        let n = n.clone();
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            n.set(n.get() + 1);
+                            placement.place(&placeable, 0, 0);
+                        })
+                    });
+                    let counted = Modifier.layout(move |scope, measurable, constraints| {
+                        let placeable = scope.measure(measurable, constraints);
+                        let t = t.clone();
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            t.set(t.get() + 1);
+                            placement.place(&placeable, 0, 0);
+                        })
+                    });
+                    leaf(approaching.then(counted).then(sized(10)));
+                }),
+            );
+        });
+    });
+    assert_eq!((total.get(), now.get()), (0, 0));
+    should.set(true);
+    host.frame();
+    assert_eq!(now.get(), 1);
+    assert_eq!(total.get() - now.get(), 1, "ahead");
+}

@@ -336,14 +336,18 @@ impl UiTree {
         self.note_placement_below(Some(current));
     }
 
-    /// Where `layer` of `node` is from its outermost root's parent's content, ahead, and that
-    /// root: positions summed, as `LookaheadLayoutCoordinates`.
-    fn lookahead_position(&self, node: NodeId, layer: usize) -> (NodeId, IntOffset) {
+    /// Where `layer` of `node` is ahead, in the coordinates it's a position in: its outermost
+    /// root's parent's content, in a scope; out of any, the layer's own. Positions summed, as
+    /// `LookaheadLayoutCoordinates`.
+    fn lookahead_position(&self, node: NodeId, layer: usize) -> (LayoutCoordinates, IntOffset) {
+        let of_layer = |node: NodeId, layer: usize| self.coordinates_of_layer(node, layer);
+        if self.node(node).lookahead.is_none() {
+            return (of_layer(node, layer), IntOffset::ZERO);
+        }
         let (mut current, mut layer) = (node, layer);
         let mut sum = IntOffset::ZERO;
         loop {
             let value = self.node(current);
-            let root = self.is_outermost_lookahead_root(current);
             let layers: &[Layer] = if self.in_lookahead {
                 &value.layers
             } else {
@@ -352,14 +356,19 @@ impl UiTree {
             for entry in layers.iter().take(layer + 1).skip(1) {
                 sum = sum + entry.offset;
             }
-            if root {
+            if self.is_outermost_lookahead_root(current) {
                 // Its position's the other pass's, as `placeSelf`.
-                let main = if self.in_lookahead {
+                let now: &[Layer] = if self.in_lookahead {
                     value.lookahead.as_ref().map_or(&value.layers, |state| &state.layers)
                 } else {
                     &value.layers
                 };
-                return (current, sum + main.first().map_or(IntOffset::ZERO, |it| it.offset));
+                let sum = sum + now.first().map_or(IntOffset::ZERO, |it| it.offset);
+                let frame = match value.parent {
+                    Some(parent) => of_layer(parent, self.node(parent).layers.len() - 1),
+                    None => of_layer(current, 0),
+                };
+                return (frame, sum);
             }
             sum = sum + layers.first().map_or(IntOffset::ZERO, |it| it.offset);
             match value.parent {
@@ -367,7 +376,7 @@ impl UiTree {
                     layer = self.node(parent).layers.len() - 1;
                     current = parent;
                 }
-                _ => return (current, sum),
+                _ => return (of_layer(current, 0), sum),
             }
         }
     }
@@ -432,33 +441,19 @@ impl LookaheadCoordinates {
     /// positions summed, no layer's transform in them; in two scopes, through what's around them.
     #[track_caller]
     pub fn local_position_of(&self, source: LookaheadCoordinates, at: Offset) -> Offset {
-        let this = self.0.read_lookahead(|tree, node, layer| tree.lookahead_position(node, layer));
-        let other =
-            source.0.read_lookahead(|tree, node, layer| tree.lookahead_position(node, layer));
-        let (Some((this_root, this_at)), Some((other_root, other_at))) = (this, other) else {
+        let position = |of: &LayoutCoordinates| {
+            of.read_lookahead_position(|tree, node, layer| tree.lookahead_position(node, layer))
+        };
+        let (Some((this_frame, this_at)), Some((other_frame, other_at))) =
+            (position(&self.0), position(&source.0))
+        else {
             return Offset::ZERO;
         };
         let (this_at, other_at) = (
             Offset::new(this_at.x as f32, this_at.y as f32),
             Offset::new(other_at.x as f32, other_at.y as f32),
         );
-        if this_root == other_root {
-            return other_at + at - this_at;
-        }
-        let parents = self.0.read_lookahead(|tree, _, _| {
-            let parent_of = |root: NodeId| {
-                let parent = tree.node(root).parent?;
-                let last = tree.node(parent).layers.len() - 1;
-                Some(tree.coordinates_of_layer(parent, last))
-            };
-            Some((parent_of(this_root)?, parent_of(other_root)?))
-        });
-        match parents.flatten() {
-            Some((this_parent, other_parent)) => {
-                this_parent.local_position_of(&other_parent, other_at + at) - this_at
-            }
-            None => other_at + at - this_at,
-        }
+        this_frame.local_position_of(&other_frame, other_at + at) - this_at
     }
 }
 

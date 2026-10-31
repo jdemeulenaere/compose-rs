@@ -912,3 +912,81 @@ fn lookahead_positions_in_nested_scopes_are_where_they_are() {
         second.local_position_of(&first, Offset::ZERO)
     );
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, forceMeasureSubtreeWithoutAffectingLookahead
+#[test]
+fn what_s_measured_now_doesn_t_lose_what_s_stale_ahead() {
+    let iterations = mutable_state_of(0);
+    let position = Rc::new(Cell::new(Offset::ZERO));
+    let (it, p) = (iterations.handle(), position.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let p = p.clone();
+        Box!(modifier = Modifier.fill_max_size(), {
+            let p = p.clone();
+            in_a_scope(move |scope| {
+                let p = p.clone();
+                Column!(modifier = Modifier.fill_max_size(), |_| {
+                    // Its own measure asked for by a read, as an animation's.
+                    let first = Modifier.approach_layout(
+                        |_| true,
+                        |_, _| false,
+                        move |measure, content, _| {
+                            let side = 200 + 100 * it.get();
+                            let placeable =
+                                measure.measure(content, Constraints::fixed(side, side));
+                            measure.layout_with(
+                                placeable.width,
+                                placeable.height,
+                                move |placement| {
+                                    placement.place(&placeable, 0, 0);
+                                },
+                            )
+                        },
+                    );
+                    Box!(modifier = first, {
+                        Box!(modifier = Modifier.size(dp(100)), {});
+                    });
+                    // Stale ahead in a composition, while now only measures it from above.
+                    Box!({
+                        Box!({
+                            let side = if it.get() % 2 == 0 { 100 } else { 200 };
+                            Box!(modifier = Modifier.size(dp(side)), {});
+                        });
+                    });
+                    let p = p.clone();
+                    let last = Modifier.size(dp(100)).approach_layout(
+                        |_| true,
+                        |_, _| false,
+                        move |measure, content, constraints| {
+                            let placeable = measure.measure(content, constraints);
+                            let p = p.clone();
+                            measure.layout_with(
+                                placeable.width,
+                                placeable.height,
+                                move |placement| {
+                                    if let (Some(frame), Some(at)) = (
+                                        scope.lookahead_scope_coordinates(placement),
+                                        placement.coordinates(),
+                                    ) {
+                                        p.set(scope.local_lookahead_position_of(
+                                            frame,
+                                            at,
+                                            Offset::ZERO,
+                                        ));
+                                    }
+                                    placement.place(&placeable, 0, 0);
+                                },
+                            )
+                        },
+                    );
+                    Box!(modifier = last, {});
+                });
+            });
+        });
+    });
+    for round in 0..4 {
+        ui.wait_for_idle();
+        assert_eq!(position.get(), Offset::new(0.0, 200.0 + 100.0 * (round % 2) as f32), "{round}");
+        iterations.set(round + 1);
+    }
+}
