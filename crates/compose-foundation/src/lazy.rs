@@ -473,6 +473,14 @@ impl LazyListState {
         self.inner()?.prefetch.cache_window()
     }
 
+    /// Whether an item has had `animate_item`, and how many settled measurements the animator has
+    /// seen, for tests.
+    #[doc(hidden)]
+    pub fn item_animator_passes(&self) -> Option<u64> {
+        let inner = self.inner()?;
+        (!inner.item_animator.idle()).then(|| inner.item_animator.passes())
+    }
+
     /// Measures the list again, as Compose's `Remeasurement.forceRemeasure`, for tests: what the
     /// window let go since the last measurement goes.
     #[doc(hidden)]
@@ -2551,8 +2559,11 @@ impl MeasurePolicy for ItemLayout {
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&measurable| scope.measure(measurable, constraints)).collect();
         // `animate_item` on a child, or had there.
-        let animated = measurables.iter().any(|&child| scope.parent_data_any(child).is_some())
-            || !self.children.is_empty();
+        let animated = measurables.iter().any(|&child| {
+            scope
+                .parent_data_any(child)
+                .is_some_and(|data| data.is::<item_animator::AnimateItemData>())
+        }) || !self.children.is_empty();
         if let (ItemStacking::Along { vertical, reverse }, [_, _, ..]) =
             (self.stacking, placeables.as_slice())
         {
@@ -2769,8 +2780,9 @@ impl MeasurePolicy for LazyListLayout {
         }
         let animator = &state.item_animator;
         // Where a scroll started from, for an item's place not to animate what it moved.
-        let scrolled_from =
-            (!animator.idle() && scrolled != 0.0).then_some((index, (offset - scrolled).round()));
+        let scrolled_from = (!animator.idle() && scrolled != 0.0).then(|| {
+            (index, (offset - scrolled).round(), scrolled - animator.take_scroll_back_left())
+        });
         if count == 0 {
             // Before the first items (data still loading), the initial position waits for
             // them; a list emptied starts again at its top, as Compose's.
@@ -2963,6 +2975,7 @@ impl MeasurePolicy for LazyListLayout {
             laid_end = laid_end.max(end_index);
             // At the end with room left: scrolled back so the last item ends the viewport.
             let gap = (main_max - content_end) as f32;
+            let pending_before_gap = state.pending.get();
             if !missing
                 && end_index == count
                 && gap > 0.0
@@ -2977,6 +2990,9 @@ impl MeasurePolicy for LazyListLayout {
                 let wanted = step_back(&mut index, &mut offset, &mut sizes, measure);
                 wanted_before = wanted_before.max(wanted);
                 if wanted > 0 {
+                    // Left to the next round, and no scroll anyone asked for: what it moves is
+                    // for `animate_item` to animate.
+                    animator.note_scroll_back_left(state.pending.get() - pending_before_gap);
                     // The items before aren't composed: the rest waits for them (pending).
                     break;
                 }
@@ -3453,11 +3469,13 @@ impl MeasurePolicy for LazyListLayout {
         };
         let mut moved_away = Vec::new();
         if let Some(items) = &animated_items {
-            if let Some((from_index, from_offset)) = scrolled_from {
+            if let Some((from_index, from_offset, asked)) = scrolled_from {
                 let moved =
                     sizes.distance((from_index, from_offset), (index, offset.round()), spacing);
-                let consumed = moved.unwrap_or(scrolled - pending);
-                animator.add_consumed_scroll(-(consumed.round() as i32));
+                // Of what's asked, that of it left to the next round isn't done.
+                let asked = asked - animator.pending_asked(pending);
+                let moved = moved.unwrap_or(asked);
+                animator.add_consumed_scroll(item_animator::consumed_scroll(asked, moved));
             }
             let settled = !missing
                 && wanted_before == 0

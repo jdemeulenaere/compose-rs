@@ -669,6 +669,16 @@ impl KeyIndex {
     }
 }
 
+/// What of a scroll isn't a change of place to animate, along the axis in Compose's sign, as
+/// `consumedScroll`: what `moved` (both forward positive) if it's that scroll or less of it, else what
+/// was `asked`: nothing, if nothing was, though the list moved to fill a gap.
+pub(super) fn consumed_scroll(asked: f32, moved: f32) -> i32 {
+    let (asked, moved) = (asked.round() as i32, moved.round() as i32);
+    let consumed =
+        if asked.signum() == moved.signum() && asked.abs() >= moved.abs() { moved } else { asked };
+    -consumed
+}
+
 /// How far past the first visible item the key window goes beyond `KEY_WINDOW`, as Compose's
 /// `NearestItemsSlidingWindowSize`.
 const KEY_SLIDE: usize = 30;
@@ -690,6 +700,11 @@ pub(super) struct ItemAnimator {
     kept: RefCell<Vec<(u64, usize)>>,
     /// The scroll consumed since the last settled measurement, along the axis.
     consumed: Cell<i32>,
+    /// What a measurement scrolling back to fill a gap left to the next round's, in the same terms
+    /// as the list's pending scroll: no scroll asked for.
+    scroll_back_left: Cell<f32>,
+    /// Settled measurements seen, for tests.
+    passes: Cell<u64>,
     /// As `skipItemPlacementAnimation`: an animated scroll to an item is running.
     pub(super) skip_animation: Cell<bool>,
     scope: RefCell<Option<Owned<CoroutineScope>>>,
@@ -709,6 +724,8 @@ impl Default for ItemAnimator {
             disappearing: RefCell::default(),
             kept: RefCell::default(),
             consumed: Cell::new(0),
+            scroll_back_left: Cell::new(0.0),
+            passes: Cell::new(0),
             skip_animation: Cell::new(false),
             scope: RefCell::default(),
             display: RefCell::default(),
@@ -828,6 +845,23 @@ impl ItemAnimator {
         if children.key.replace(key) != key && !children.is_empty() {
             self.register(key, item.this.clone());
         }
+    }
+
+    pub(super) fn passes(&self) -> u64 {
+        self.passes.get()
+    }
+
+    pub(super) fn note_scroll_back_left(&self, left: f32) {
+        self.scroll_back_left.set(self.scroll_back_left.get() + left);
+    }
+
+    /// Of what's left of the list's scroll, `pending`, what was asked for.
+    pub(super) fn pending_asked(&self, pending: f32) -> f32 {
+        pending - self.scroll_back_left.get()
+    }
+
+    pub(super) fn take_scroll_back_left(&self) -> f32 {
+        self.scroll_back_left.replace(0.0)
     }
 
     pub(super) fn add_consumed_scroll(&self, consumed: i32) {
@@ -953,6 +987,7 @@ impl ItemAnimator {
         positioned: &[Positioned],
         measure: &mut dyn FnMut(usize, &MovedItem) -> Option<i32>,
     ) -> Vec<MovedAway> {
+        self.passes.set(self.passes.get() + 1);
         let consumed = self.consumed.replace(0);
         let first = positioned.first().map_or(0, |item| item.index);
         let current = KeyIndex::new(pass.items.clone(), first);
@@ -1125,7 +1160,7 @@ impl ItemAnimator {
         // Those in the map no longer placed: removed, or gone out of view.
         let mut to_start: Vec<Waiting> = Vec::new();
         let mut to_end: Vec<Waiting> = Vec::new();
-        let mut kept = Vec::new();
+        let mut kept: Vec<(u64, usize)> = Vec::new();
         let kept_before = self.kept.borrow().len();
         for key in moving_away {
             let mut info_map = self.info.borrow_mut();
@@ -1219,6 +1254,8 @@ impl ItemAnimator {
         result[..start_count].reverse();
 
         // Those no longer kept leave composition; those newly kept come.
+        // In one order: the map's would differ each time, and each difference is a round.
+        kept.sort_by_key(|entry: &(u64, usize)| entry.1);
         let changed = kept.len() != kept_before
             || kept.iter().zip(self.kept.borrow().iter()).any(|(one, other)| one != other);
         if changed {

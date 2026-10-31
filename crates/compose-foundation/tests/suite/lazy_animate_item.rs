@@ -2399,3 +2399,71 @@ fn a_removal_before_the_last_item_of_a_list_that_fits_ends() {
         &[Color::RED, Color::GREEN],
     );
 }
+
+/// Compose's `LazyListMeasure`: a list scrolling back to fill a gap at its end moves no less for
+/// it, which `animate_item` animates.
+#[test]
+fn a_move_that_makes_a_list_scroll_back_starts_where_the_item_was() {
+    for params in PARAMS {
+        let mut fixture = Fixture::new(params, ListOptions::default(), vec![0, 1, 2, 3]);
+        fixture.set_list(vec![1, 2, 3, 0]);
+        fixture.ui.wait_for_idle();
+        // The frame of the change draws the old place.
+        fixture.ui.advance_time_by_frame();
+        fixture.assert_positions(&[(0, 0.0)], Some(0.0));
+        fixture.ui.advance_time_by_frame();
+        let mut passed = 0.0;
+        for _ in 0..4 {
+            let fraction = passed / DURATION as f32;
+            fixture.assert_positions(&[(0, f(ITEM) * fraction)], Some(fraction));
+            fixture.ui.advance_time_by(std::time::Duration::from_millis(FRAME));
+            passed += FRAME as f32;
+        }
+    }
+}
+
+/// Parent data that isn't `animate_item`'s asks nothing of the animator.
+#[test]
+fn a_layout_id_on_an_item_leaves_the_list_as_it_was() {
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = paused(IntSize::new(1000, 1000), move || {
+        let _ = &state;
+        LazyColumn!(
+            modifier = Modifier.height(dp(ITEM * 2)),
+            state = handle,
+            |scope: LazyListScope| {
+                scope.items(4, |_| {
+                    Box!(modifier = Modifier.layout_id("row").size((dp(ITEM), dp(ITEM))));
+                });
+            }
+        );
+    });
+    ui.wait_for_idle();
+    assert_eq!(handle.item_animator_passes(), None);
+}
+
+/// Many items moved out of view at once settle in a round or two a frame.
+#[test]
+fn several_items_moving_out_of_view_take_few_rounds_a_frame() {
+    let params = PARAMS[0];
+    let options = ListOptions { max_size: ITEM * 12, ..ListOptions::default() };
+    let mut fixture = Fixture::new(params, options, (0..60).collect());
+    // Nine in view go below it.
+    let mut moved: Vec<i32> = vec![0];
+    moved.extend(10..30);
+    moved.extend(1..10);
+    moved.extend(30..60);
+    fixture.set_list(moved);
+    let state = fixture.state;
+    fixture.ui.wait_for_idle();
+    fixture.ui.advance_time_by_frame();
+    fixture.ui.advance_time_by_frame();
+    for _ in 0..3 {
+        let before = state.item_animator_passes().unwrap();
+        fixture.ui.advance_time_by(std::time::Duration::from_millis(FRAME));
+        let passes = state.item_animator_passes().unwrap() - before;
+        // One for the frame, and one more when an item's left and goes from the composition.
+        assert!(passes <= 3, "{passes} measurements in a frame");
+    }
+}

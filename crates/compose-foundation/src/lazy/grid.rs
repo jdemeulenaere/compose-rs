@@ -1815,8 +1815,9 @@ impl MeasurePolicy for LazyGridLayout {
         }
         let animator = state.item_animator.clone();
         // Where a scroll started from, for an item's place not to animate what it moved.
-        let scrolled_from = (!animator.idle() && scrolled != 0.0)
-            .then_some((first_item, (offset - scrolled).round()));
+        let scrolled_from = (!animator.idle() && scrolled != 0.0).then(|| {
+            (first_item, (offset - scrolled).round(), scrolled - animator.take_scroll_back_left())
+        });
         if count == 0 {
             // As a list's: the initial position waits for the first items; a grid emptied
             // starts again at its top.
@@ -1978,7 +1979,12 @@ impl MeasurePolicy for LazyGridLayout {
             {
                 offset -= gap;
                 scrolled_back += gap as i32;
+                let pending_before_gap = state.pending.get();
                 let wanted = step_back(m, state, spacing, &mut index, &mut offset);
+                if wanted > 0 {
+                    // Left to the next round, and no scroll anyone asked for.
+                    animator.note_scroll_back_left(state.pending.get() - pending_before_gap);
+                }
                 wanted_before = wanted_before.max(wanted);
                 if wanted > 0 {
                     break;
@@ -2408,15 +2414,17 @@ impl MeasurePolicy for LazyGridLayout {
         let mut animated_items: Vec<(u64, Placeable, i32, i32)> = Vec::new();
         let (mut moved_to_start, mut moved_to_end) = (Vec::new(), Vec::new());
         if !animator.idle() {
-            if let Some((from_item, from_offset)) = scrolled_from {
+            if let Some((from_item, from_offset, asked)) = scrolled_from {
                 let from_line = m.lines.line_of(from_item.min(count - 1));
                 let moved = m.line_sizes.distance(
                     (from_line, from_offset),
                     (index, offset.round()),
                     spacing,
                 );
-                let consumed = moved.unwrap_or(scrolled - pending);
-                animator.add_consumed_scroll(-(consumed.round() as i32));
+                // Of what's asked, that of it left to the next round isn't done.
+                let asked = asked - animator.pending_asked(pending);
+                let moved = moved.unwrap_or(asked);
+                animator.add_consumed_scroll(item_animator::consumed_scroll(asked, moved));
             }
             let settled = !missing && wanted_before == 0 && !m.lacked_unready.get();
             if settled {
