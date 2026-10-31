@@ -1,6 +1,6 @@
 //! `Modifier.pointer_input`: coroutines handling pointer events, and the gesture detectors.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -108,13 +108,8 @@ fn a_finger_coming_down_beside_another_starts_no_gesture() {
     assert_eq!(*log.borrow(), vec!["down 1"]);
 }
 
-/// A right click is no tap, and a drag of the right button no drag, as Compose's on a desktop: a
-/// detector starts at the primary button (D1657).
-#[test]
-fn the_detectors_start_at_a_mouses_primary_button() {
-    let log: Log = Rc::default();
-    let seen = log.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+fn tappable(seen: Log) -> ComposeTestRule {
+    ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let seen = seen.clone();
         Box!(
             modifier = Modifier.size(100.dp()).pointer_input((), move |scope| {
@@ -129,18 +124,201 @@ fn the_detectors_start_at_a_mouses_primary_button() {
                 }
             })
         );
-    });
+    })
+}
+
+fn right_click(ui: &mut ComposeTestRule) {
     let at = Offset::new(10.0, 10.0);
-    let right = compose_ui::PointerButtons::SECONDARY;
-    ui.host().send_pointer(PointerEvent::press(at).with_buttons(right));
+    ui.host()
+        .send_pointer(PointerEvent::press(at).with_buttons(compose_ui::PointerButtons::SECONDARY));
     ui.wait_for_idle();
     ui.host()
         .send_pointer(PointerEvent::release(at).with_buttons(compose_ui::PointerButtons::NONE));
     ui.wait_for_idle();
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt, firstDownRefersToPrimaryMouseButtonOnly
+/// A desktop's: a right click is no tap.
+#[test]
+fn a_hosts_detectors_start_at_a_mouses_primary_button_by_default() {
+    let log: Log = Rc::default();
+    let mut ui = tappable(log.clone());
+    right_click(&mut ui);
     assert!(log.borrow().is_empty());
     press(&mut ui, 10.0, 10.0);
     release(&mut ui, 10.0, 10.0);
     assert_eq!(*log.borrow(), vec!["tap 10"]);
+}
+
+// Compose: compose/foundation/foundation/src/androidMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.android.kt, firstDownRefersToPrimaryMouseButtonOnly
+/// Android's: any button.
+#[test]
+fn on_android_the_detectors_start_at_any_of_a_mouses_buttons() {
+    let log: Log = Rc::default();
+    let mut ui = tappable(log.clone());
+    ui.host().set_first_down_refers_to_primary_mouse_button_only(false);
+    right_click(&mut ui);
+    assert_eq!(*log.borrow(), vec!["tap 10"]);
+}
+
+fn clickable_counting(clicks: Rc<Cell<u32>>) -> ComposeTestRule {
+    ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let clicks = clicks.clone();
+        Box!(modifier = Modifier.size(100.dp()).clickable(move || clicks.set(clicks.get() + 1)));
+    })
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, isChangedToDown
+#[test]
+fn a_clickable_starts_at_a_mouses_primary_button_or_any_as_the_host_says() {
+    let clicks: Rc<Cell<u32>> = Rc::default();
+    let mut ui = clickable_counting(clicks.clone());
+    right_click(&mut ui);
+    assert_eq!(clicks.get(), 0);
+    ui.host().set_first_down_refers_to_primary_mouse_button_only(false);
+    right_click(&mut ui);
+    assert_eq!(clicks.get(), 1);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/Draggable.kt, isAnyChangedToDown
+#[test]
+fn a_draggable_starts_at_a_mouses_primary_button_or_any_as_the_host_says() {
+    let moved: Rc<Cell<f32>> = Rc::default();
+    let seen = moved.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let seen = seen.clone();
+        let state = remember_draggable_state!(move |delta| seen.set(seen.get() + delta));
+        Box!(
+            modifier = Modifier.size(100.dp()).draggable_with(
+                state,
+                Orientation::Horizontal,
+                DraggableOptions::default()
+            )
+        );
+    });
+    let right = compose_ui::PointerButtons::SECONDARY;
+    let drag = |ui: &mut ComposeTestRule| {
+        ui.host().send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)).with_buttons(right));
+        ui.wait_for_idle();
+        for x in [20.0, 30.0, 40.0] {
+            ui.host()
+                .send_pointer(PointerEvent::moved(Offset::new(x, 10.0), true).with_buttons(right));
+            ui.wait_for_idle();
+        }
+        ui.host().send_pointer(
+            PointerEvent::release(Offset::new(40.0, 10.0))
+                .with_buttons(compose_ui::PointerButtons::NONE),
+        );
+        ui.wait_for_idle();
+    };
+    drag(&mut ui);
+    assert_eq!(moved.get(), 0.0);
+    ui.host().set_first_down_refers_to_primary_mouse_button_only(false);
+    drag(&mut ui);
+    assert!(moved.get() > 0.0);
+}
+
+fn touch(event: PointerEvent, id: u64) -> PointerEvent {
+    event.with_pointer(compose_ui::PointerId(id), compose_ui::PointerType::Touch)
+}
+
+fn at(x: f32) -> Offset {
+    Offset::new(x, 10.0)
+}
+
+fn send(ui: &mut ComposeTestRule, events: &[PointerEvent]) {
+    ui.host().send_pointers(events);
+    ui.wait_for_idle();
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, ClickableNode.onPointerEvent
+/// A click ends with the last finger, not the first.
+#[test]
+fn a_clickable_with_two_fingers_clicks_when_both_are_up() {
+    let clicks: Rc<Cell<u32>> = Rc::default();
+    let mut ui = clickable_counting(clicks.clone());
+    send(
+        &mut ui,
+        &[touch(PointerEvent::press(at(10.0)), 1), touch(PointerEvent::press(at(20.0)), 2)],
+    );
+    send(
+        &mut ui,
+        &[touch(PointerEvent::release(at(10.0)), 1), touch(PointerEvent::moved(at(20.0), true), 2)],
+    );
+    assert_eq!(clicks.get(), 0, "one's still down");
+    send(&mut ui, &[touch(PointerEvent::release(at(20.0)), 2)]);
+    assert_eq!(clicks.get(), 1);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, ClickableNode.onPointerEvent
+/// A finger coming and going while another's down is part of the one click.
+#[test]
+fn a_clickable_with_a_finger_tapping_beside_another_clicks_once() {
+    let clicks: Rc<Cell<u32>> = Rc::default();
+    let mut ui = clickable_counting(clicks.clone());
+    send(
+        &mut ui,
+        &[touch(PointerEvent::press(at(10.0)), 1), touch(PointerEvent::press(at(20.0)), 2)],
+    );
+    send(&mut ui, &[touch(PointerEvent::release(at(10.0)), 1)]);
+    send(&mut ui, &[touch(PointerEvent::press(at(30.0)), 3)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(30.0)), 3)]);
+    assert_eq!(clicks.get(), 0);
+    send(&mut ui, &[touch(PointerEvent::release(at(20.0)), 2)]);
+    assert_eq!(clicks.get(), 1);
+}
+
+// Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt, handleNonUpEventIfNeeded
+/// Any finger leaving cancels it, not only the first's.
+#[test]
+fn a_clickable_with_a_finger_leaving_does_not_click() {
+    let clicks: Rc<Cell<u32>> = Rc::default();
+    let mut ui = clickable_counting(clicks.clone());
+    send(
+        &mut ui,
+        &[touch(PointerEvent::press(at(10.0)), 1), touch(PointerEvent::press(at(20.0)), 2)],
+    );
+    send(&mut ui, &[touch(PointerEvent::moved(at(180.0), true), 2)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(180.0)), 2)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(10.0)), 1)]);
+    assert_eq!(clicks.get(), 0);
+}
+
+/// One finger's cancel takes the node's others with it: what it had is forgotten, and a new tap
+/// clicks.
+#[test]
+fn a_clickable_with_one_finger_of_two_cancelled_forgets_both() {
+    let clicks: Rc<Cell<u32>> = Rc::default();
+    let mut ui = clickable_counting(clicks.clone());
+    send(
+        &mut ui,
+        &[touch(PointerEvent::press(at(10.0)), 1), touch(PointerEvent::press(at(20.0)), 2)],
+    );
+    ui.host().with_tree(|tree| tree.cancel_pointer(compose_ui::PointerId(1)));
+    send(&mut ui, &[touch(PointerEvent::moved(at(180.0), true), 2)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(180.0)), 2)]);
+    assert_eq!(clicks.get(), 0);
+    send(&mut ui, &[touch(PointerEvent::press(at(10.0)), 4)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(10.0)), 4)]);
+    assert_eq!(clicks.get(), 1);
+}
+
+/// `detect_tap_gestures` the same: a block starts over, and a fresh tap is seen.
+#[test]
+fn a_tap_detector_with_one_finger_of_two_cancelled_sees_the_next_tap() {
+    let log: Log = Rc::default();
+    let mut ui = tappable(log.clone());
+    send(
+        &mut ui,
+        &[touch(PointerEvent::press(at(10.0)), 1), touch(PointerEvent::press(at(20.0)), 2)],
+    );
+    ui.host().with_tree(|tree| tree.cancel_pointer(compose_ui::PointerId(1)));
+    send(&mut ui, &[touch(PointerEvent::moved(at(180.0), true), 2)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(180.0)), 2)]);
+    assert!(log.borrow().is_empty());
+    send(&mut ui, &[touch(PointerEvent::press(at(30.0)), 4)]);
+    send(&mut ui, &[touch(PointerEvent::release(at(30.0)), 4)]);
+    assert_eq!(*log.borrow(), vec!["tap 30"]);
 }
 
 // Compose: compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt, awaitDragOrUp

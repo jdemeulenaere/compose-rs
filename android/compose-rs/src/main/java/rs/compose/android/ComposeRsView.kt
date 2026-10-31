@@ -295,6 +295,8 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(sendHoverExit)
+        hoverExitPending = false
         viewTreeObserver.removeOnTouchModeChangeListener(touchModeChangeListener)
         ComposeRsRuntime.detach(this)
         destroy()
@@ -861,6 +863,7 @@ class ComposeRsView @JvmOverloads constructor(
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        settleHoverExit(dropped = false)
         if (accessibilityManager.isTouchExplorationEnabled && accessibility.hover(event)) return true
         return super.dispatchHoverEvent(event)
     }
@@ -922,34 +925,29 @@ class ComposeRsView @JvmOverloads constructor(
 
     // ---- Touch ---------------------------------------------------------------------------
 
-    // What the pointers of a MotionEvent cross JNI in, reused: a move's are per frame's samples.
-    private var touchIds = IntArray(MAX_TOUCHES)
-    private var touchTools = IntArray(MAX_TOUCHES)
-    private var touchXs = FloatArray(MAX_TOUCHES)
-    private var touchYs = FloatArray(MAX_TOUCHES)
-    private var touchPressures = FloatArray(MAX_TOUCHES)
+    // What the pointers of a MotionEvent cross JNI in, reused: each one's id and tool, then x, y
+    // and pressure.
+    private var touchInts = IntArray(MAX_TOUCHES * 2)
+    private var touchFloats = FloatArray(MAX_TOUCHES * 3)
 
     /** `event`'s pointers together: at its historical `sample`, or as it is. */
     private fun sendTouches(event: MotionEvent, action: Int, sample: Int, age: Long) {
         val count = event.pointerCount
-        if (count > touchIds.size) {
-            touchIds = IntArray(count)
-            touchTools = IntArray(count)
-            touchXs = FloatArray(count)
-            touchYs = FloatArray(count)
-            touchPressures = FloatArray(count)
+        if (count * 2 > touchInts.size) {
+            touchInts = IntArray(count * 2)
+            touchFloats = FloatArray(count * 3)
         }
         for (index in 0 until count) {
-            touchIds[index] = event.getPointerId(index)
-            touchTools[index] = event.getToolType(index)
+            touchInts[index * 2] = event.getPointerId(index)
+            touchInts[index * 2 + 1] = event.getToolType(index)
             if (sample < 0) {
-                touchXs[index] = event.getX(index)
-                touchYs[index] = event.getY(index)
-                touchPressures[index] = event.getPressure(index)
+                touchFloats[index * 3] = event.getX(index)
+                touchFloats[index * 3 + 1] = event.getY(index)
+                touchFloats[index * 3 + 2] = event.getPressure(index)
             } else {
-                touchXs[index] = event.getHistoricalX(index, sample)
-                touchYs[index] = event.getHistoricalY(index, sample)
-                touchPressures[index] = event.getHistoricalPressure(index, sample)
+                touchFloats[index * 3] = event.getHistoricalX(index, sample)
+                touchFloats[index * 3 + 1] = event.getHistoricalY(index, sample)
+                touchFloats[index * 3 + 2] = event.getHistoricalPressure(index, sample)
             }
         }
         ComposeRsNative.touches(
@@ -957,15 +955,38 @@ class ComposeRsView @JvmOverloads constructor(
             action,
             event.actionIndex,
             count,
-            touchIds,
-            touchXs,
-            touchYs,
-            touchPressures,
-            touchTools,
+            touchInts,
+            touchFloats,
             event.buttonState,
             event.metaState,
             age,
         )
+    }
+
+    // ---- A mouse's hover exit, as `AndroidComposeView`: a press comes with one -----------------
+
+    /** A hover exit waits this long for what follows, as Compose's one frame at 120 Hz. */
+    private var hoverExitPending = false
+    private val sendHoverExit = Runnable {
+        hoverExitPending = false
+        if (host != 0L) ComposeRsNative.hoverExit(host)
+    }
+
+    /** What came next is what the hover exit was for if [dropped]; else it goes first. */
+    private fun settleHoverExit(dropped: Boolean) {
+        if (!hoverExitPending) return
+        removeCallbacks(sendHoverExit)
+        if (dropped) hoverExitPending = false else sendHoverExit.run()
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        settleHoverExit(event.actionMasked == MotionEvent.ACTION_DOWN)
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        settleHoverExit(event.actionMasked == MotionEvent.ACTION_SCROLL)
+        return super.dispatchGenericMotionEvent(event)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -1005,7 +1026,11 @@ class ComposeRsView @JvmOverloads constructor(
                     return true
                 }
                 MotionEvent.ACTION_HOVER_EXIT -> {
-                    ComposeRsNative.hoverExit(host)
+                    // A button's press caused it: nothing's left.
+                    if (event.buttonState != 0) return true
+                    // A press may follow, or a wheel: only what follows tells.
+                    hoverExitPending = true
+                    postDelayed(sendHoverExit, HOVER_EXIT_DELAY_MILLIS)
                     return true
                 }
             }
@@ -1241,6 +1266,9 @@ class ComposeRsView @JvmOverloads constructor(
     private companion object {
         /** The pointers `sendTouches`'s arrays start with room for. */
         const val MAX_TOUCHES = 10
+
+        /** As `ONE_FRAME_120_HERTZ_IN_MILLISECONDS`. */
+        const val HOVER_EXIT_DELAY_MILLIS = 8L
         const val SUPER_STATE = "rs.compose.android.super"
 
         /** `ComposeRsNative.performAction`'s for a request for the focus. */

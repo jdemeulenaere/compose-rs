@@ -346,6 +346,8 @@ pub struct UiTree {
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
     /// What each pointer's next change is told of its last.
     pub(crate) pointer_states: Vec<(crate::input::PointerId, crate::dispatch::PointerState)>,
+    /// `firstDownRefersToPrimaryMouseButtonOnly`, the platform's: a desktop's, unless a host says.
+    pub(crate) first_down_primary_only: bool,
     /// What the mouse is over: its last hit path.
     pub(crate) hovered: Vec<crate::dispatch::HitEntry>,
     /// Where the mouse is, in the root, while it's in the window and no button is held.
@@ -487,6 +489,7 @@ impl UiTree {
             place_serial: 0,
             captures: Vec::new(),
             pointer_states: Vec::new(),
+            first_down_primary_only: true,
             hovered: Vec::new(),
             mouse: None,
             observer: None,

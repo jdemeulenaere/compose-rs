@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use compose_runtime::{ComposeArg, CoroutineScope, Job};
 
-use crate::input::{EventContext, PointerEventPass, PointerId, PointerType};
+use crate::input::{EventContext, PointerEventPass, PointerId};
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement, PointerInputModifierNode};
 use crate::pointer_event::{PointerEvents, PointerInputChange};
 use crate::unit::{Density, IntSize, Offset, Size};
@@ -43,6 +43,8 @@ struct ScopeInner {
     dispatching: Cell<bool>,
     /// The last event to reach the node, as `currentEvent`.
     current_event: RefCell<Option<PointerEvents>>,
+    /// The host's `firstDownRefersToPrimaryMouseButtonOnly`, as the last event found it.
+    first_down_primary_only: Cell<bool>,
     /// The passes the block has waited for since it was last given an event, as bits (`pass_bit`):
     /// as Compose resumes only what's waiting for a pass, it isn't polled for the others.
     awaited_passes: Cell<u8>,
@@ -138,35 +140,16 @@ impl PointerInputScope {
     }
 
     /// The next time every pointer of an event comes down, as `awaitFirstDown`: unconsumed if
-    /// `require_unconsumed`.
+    /// `require_unconsumed`; a mouse's with its primary button only where the host says so
+    /// (`firstDownRefersToPrimaryMouseButtonOnly`).
     pub async fn await_first_down(&self, require_unconsumed: bool) -> PointerInputChange {
         loop {
             let mut event = self.await_pointer_event(PointerEventPass::Main).await;
-            let all = event.changes.iter().all(|change| {
-                if require_unconsumed {
-                    change.changed_to_down()
-                } else {
-                    change.changed_to_down_ignore_consumed()
-                }
-            });
-            if all {
+            if event
+                .is_changed_to_down(require_unconsumed, self.inner.first_down_primary_only.get())
+            {
                 return event.changes.swap_remove(0);
             }
-        }
-    }
-
-    /// The first press to start a gesture of a detector: a mouse's only with its primary button
-    /// (D1657).
-    async fn await_gesture_down(&self, require_unconsumed: bool) -> PointerInputChange {
-        loop {
-            let down = self.await_first_down(require_unconsumed).await;
-            let primary = self.inner.current_event.borrow().as_ref().is_none_or(|event| {
-                event.buttons.is_primary_pressed() || !event.buttons.are_any_pressed()
-            });
-            if down.pointer_type != PointerType::Mouse || primary {
-                return down;
-            }
-            self.await_all_up().await;
         }
     }
 
@@ -210,7 +193,7 @@ impl PointerInputScope {
     /// A second press after `first_up`, not sooner than 40 ms after it, as `awaitSecondDown`.
     async fn await_second_down(&self, first_up: &PointerInputChange) -> PointerInputChange {
         loop {
-            let down = self.await_gesture_down(true).await;
+            let down = self.await_first_down(true).await;
             if down.uptime_millis
                 >= first_up.uptime_millis + self.view_configuration().double_tap_min_time_millis
             {
@@ -233,7 +216,7 @@ impl PointerInputScope {
     /// indication shows.
     pub(crate) async fn detect_taps(&self, gestures: TapGestures, pressed: &dyn Fn(bool)) {
         loop {
-            let down = self.await_gesture_down(true).await;
+            let down = self.await_first_down(true).await;
             down.consume();
             pressed(true);
             self.call(&gestures.on_press, down.position);
@@ -381,7 +364,7 @@ impl PointerInputScope {
     /// gesture is cancelled from outside). Never returns.
     pub async fn detect_drag_gestures(&self, gestures: DragGestures) {
         loop {
-            let down = self.await_gesture_down(false).await;
+            let down = self.await_first_down(false).await;
             let slop = self.view_configuration().pointer_slop(down.pointer_type);
             let Some((start, over)) = self.await_slop_or_cancellation(&down, None, slop).await
             else {
@@ -630,6 +613,7 @@ impl PointerInputDriver {
         inner.size.set(bounds);
         inner.density.set(context.density());
         inner.view_configuration.set(context.view_configuration());
+        inner.first_down_primary_only.set(context.first_down_primary_only());
         if pass == PointerEventPass::Initial {
             let mut pressed = inner.pressed.borrow_mut();
             for change in &event.changes {

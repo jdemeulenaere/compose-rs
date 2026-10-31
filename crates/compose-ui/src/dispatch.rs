@@ -23,6 +23,8 @@ pub(crate) struct HitEntry {
     pub(crate) delegate: EntryId,
     /// It takes an event's changes together (`takes_whole_events`).
     pub(crate) whole: bool,
+    /// One change at a time, but what starts it goes as `firstDownRefersToPrimaryMouseButtonOnly`.
+    pub(crate) follows_first_down: bool,
 }
 
 impl HitEntry {
@@ -52,6 +54,8 @@ pub(crate) struct PointerState {
     pressed: bool,
     uptime_millis: u64,
     buttons: crate::pointer_event::PointerButtons,
+    /// A mouse's press that said no button: its only one is taken as primary while it's down.
+    primary_presumed: bool,
     pointer_type: crate::input::PointerType,
     pressure: f32,
 }
@@ -116,23 +120,62 @@ impl LiveChange {
         if event.pointer_type != crate::input::PointerType::Mouse {
             return Some(event);
         }
-        let primary = |pressed: bool, buttons: crate::pointer_event::PointerButtons| {
-            // A host that doesn't say which: its only button.
-            buttons.is_primary_pressed() || (pressed && !buttons.are_any_pressed())
-        };
-        let now = primary(event.pressed, event.buttons);
-        let before = self.previous.is_some_and(|it| primary(it.pressed, it.buttons));
-        let kind = match event.kind {
-            PointerEventType::Press | PointerEventType::Release | PointerEventType::Unknown => {
-                match (before, now) {
-                    (false, true) => PointerEventType::Press,
-                    (true, false) => PointerEventType::Release,
-                    _ => return None,
-                }
+        let now = event.buttons.is_primary_pressed() || self.primary_presumed();
+        let before =
+            self.previous.is_some_and(|it| it.buttons.is_primary_pressed() || it.primary_presumed);
+        // The primary button changing is what's a press or a release here, whatever the platform
+        // calls the event it comes in: Android's come as a move or `ACTION_BUTTON_*`.
+        let was_down = self.previous.is_some_and(|it| it.pressed);
+        let kind = match (event.kind, before, now) {
+            (PointerEventType::Press | PointerEventType::Unknown, false, true) => {
+                PointerEventType::Press
             }
-            kind => kind,
+            (PointerEventType::Move, false, true) if was_down => PointerEventType::Press,
+            (
+                PointerEventType::Release | PointerEventType::Unknown | PointerEventType::Move,
+                true,
+                false,
+            ) => PointerEventType::Release,
+            (
+                PointerEventType::Press | PointerEventType::Release | PointerEventType::Unknown,
+                _,
+                _,
+            ) => return None,
+            (kind, _, _) => kind,
         };
         Some(PointerEvent { kind, pressed: now, ..event })
+    }
+}
+
+impl LiveChange {
+    /// A mouse's press that says no button, and what follows of it saying none.
+    fn primary_presumed(&self) -> bool {
+        let event = &self.event;
+        event.pressed
+            && !event.buttons.are_any_pressed()
+            && (event.kind == PointerEventType::Press
+                || self.previous.is_some_and(|it| it.primary_presumed))
+    }
+
+    /// The event for what starts at any of a mouse's buttons, as Compose's on Android: its pointer
+    /// comes down with the first and up with the last.
+    fn as_any_button(&self) -> Option<PointerEvent> {
+        let event = self.event;
+        if event.pointer_type != crate::input::PointerType::Mouse {
+            return Some(event);
+        }
+        let before = self.previous.is_some_and(|it| it.pressed);
+        let kind = match (event.kind, before, event.pressed) {
+            (PointerEventType::Press, false, true) => PointerEventType::Press,
+            (PointerEventType::Release, true, false) => PointerEventType::Release,
+            (
+                PointerEventType::Press | PointerEventType::Release | PointerEventType::Unknown,
+                _,
+                _,
+            ) => return None,
+            (kind, _, _) => kind,
+        };
+        Some(PointerEvent { kind, ..event })
     }
 }
 
@@ -286,6 +329,9 @@ impl UiTree {
                             whole: modifier_node
                                 .as_pointer_input()
                                 .is_some_and(|handler| handler.takes_whole_events()),
+                            follows_first_down: modifier_node
+                                .as_pointer_input()
+                                .is_some_and(|handler| handler.first_down_follows_the_host()),
                         });
                     };
                     if entry.state & entry_state::DELEGATING == 0 {
@@ -342,8 +388,8 @@ impl UiTree {
         crate::nested_scroll::begin_pointer_event();
         let mut actions = Vec::new();
         let mut requests = Requests::default();
-        let all = self.with_resting_fingers(events);
-        let mut live = Vec::with_capacity(all.len());
+        let all = self.with_resting_pointers(events);
+        let mut live: smallvec::SmallVec<[LiveChange; 2]> = smallvec::SmallVec::new();
         let mut branches = HitBranches::default();
         // One pointer's path has nothing to share, and most events are one pointer's.
         let mut alone = None;
@@ -424,23 +470,10 @@ impl UiTree {
             self.deliver_along(&path, &waiting, &mut delivery);
         } else {
             for &root in &branches.roots {
-                self.deliver_before_children(
-                    &branches,
-                    root,
-                    PointerEventPass::Initial,
-                    &mut delivery,
-                );
+                self.deliver_initial_and_main(&branches, root, &mut delivery);
             }
             for &root in &branches.roots {
-                self.deliver_after_children(&branches, root, &mut delivery);
-            }
-            for &root in &branches.roots {
-                self.deliver_before_children(
-                    &branches,
-                    root,
-                    PointerEventPass::Final,
-                    &mut delivery,
-                );
+                self.deliver_final(&branches, root, &mut delivery);
             }
         }
         for change in &live {
@@ -450,31 +483,31 @@ impl UiTree {
         actions
     }
 
-    /// `events` with every other finger down, as an event tells them all (a platform's says them;
-    /// others send a finger at a time), in the order of their ids.
-    fn with_resting_fingers(
+    /// `events` with every other pointer down, as an event tells them all (a platform's says them;
+    /// others send one at a time), in the order of their ids.
+    fn with_resting_pointers(
         &self,
         events: &[PointerEvent],
     ) -> smallvec::SmallVec<[(PointerEvent, bool); 4]> {
-        use crate::input::PointerType;
         let mut all: smallvec::SmallVec<[(PointerEvent, bool); 4]> =
             events.iter().map(|event| (*event, false)).collect();
-        if let Some(first) = events.iter().find(|event| event.pointer_type != PointerType::Mouse) {
-            for &(pointer, state) in &self.pointer_states {
-                let told = events.iter().any(|event| event.pointer == pointer);
-                if state.pressed && state.pointer_type != PointerType::Mouse && !told {
-                    let resting = PointerEvent {
-                        pointer,
-                        pointer_type: state.pointer_type,
-                        pressure: state.pressure,
-                        buttons: first.buttons,
-                        keyboard_modifiers: first.keyboard_modifiers,
-                        time_nanos: first.time_nanos,
-                        ..PointerEvent::moved(state.position, true)
-                    };
-                    all.push((resting, true));
-                }
+        let Some(first) = events.first() else { return all };
+        let before = all.len();
+        for &(pointer, state) in &self.pointer_states {
+            if state.pressed && !events.iter().any(|event| event.pointer == pointer) {
+                let resting = PointerEvent {
+                    pointer,
+                    pointer_type: state.pointer_type,
+                    pressure: state.pressure,
+                    buttons: state.buttons,
+                    keyboard_modifiers: first.keyboard_modifiers,
+                    time_nanos: first.time_nanos,
+                    ..PointerEvent::moved(state.position, true)
+                };
+                all.push((resting, true));
             }
+        }
+        if all.len() > before || before > 1 {
             all.sort_by_key(|it| it.0.pointer.0);
         }
         all
@@ -491,6 +524,7 @@ impl UiTree {
                 pressed: event.pressed,
                 uptime_millis: change.uptime_millis,
                 buttons: event.buttons,
+                primary_presumed: change.primary_presumed(),
                 pointer_type: event.pointer_type,
                 pressure: event.pressure,
             };
@@ -526,24 +560,10 @@ impl UiTree {
         }
     }
 
-    /// `at` and what's below it in the initial or final pass: from the root down.
-    fn deliver_before_children(
-        &mut self,
-        branches: &HitBranches,
-        at: usize,
-        pass: PointerEventPass,
-        delivery: &mut Delivery<'_>,
-    ) {
-        let branch = &branches.all[at];
-        self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
-        for &child in &branch.children {
-            self.deliver_before_children(branches, child, pass, delivery);
-        }
-    }
-
-    /// `at` and what's below it in the main pass: from the inside out; but one node's delegates in
-    /// delegation order, in every pass, as Compose's `dispatchForKind` in its hit path's node.
-    fn deliver_after_children(
+    /// `at` and what's below it, as `Node.dispatchMainEventPass`: the initial pass going in, each child
+    /// whole, and the main pass coming out, so a branch ends before the next starts; one node's
+    /// delegates, each pass, in delegation order.
+    fn deliver_initial_and_main(
         &mut self,
         branches: &HitBranches,
         at: usize,
@@ -555,8 +575,18 @@ impl UiTree {
         {
             last = only;
         }
+        let mut current = at;
+        loop {
+            let branch = &branches.all[current];
+            let pass = PointerEventPass::Initial;
+            self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
+            if current == last {
+                break;
+            }
+            current = branch.children[0];
+        }
         for &child in &branches.all[last].children {
-            self.deliver_after_children(branches, child, delivery);
+            self.deliver_initial_and_main(branches, child, delivery);
         }
         let mut current = at;
         loop {
@@ -570,6 +600,16 @@ impl UiTree {
         }
     }
 
+    /// `at` and what's below it in the final pass: from the root down.
+    fn deliver_final(&mut self, branches: &HitBranches, at: usize, delivery: &mut Delivery<'_>) {
+        let branch = &branches.all[at];
+        let pass = PointerEventPass::Final;
+        self.deliver_changes(&branch.entry, &branch.changes, pass, false, delivery);
+        for &child in &branch.children {
+            self.deliver_final(branches, child, delivery);
+        }
+    }
+
     /// Ends the gesture of `pointer`, without a release: a touch the system cancelled.
     pub fn cancel_pointer(&mut self, pointer: crate::input::PointerId) {
         self.pointer_states.retain(|it| it.0 != pointer);
@@ -579,9 +619,10 @@ impl UiTree {
         };
         let (_, path) = self.captures.remove(index);
         for entry in path {
-            // Told once: when its last pointer's gone.
-            if self.captures.iter().any(|(_, other)| other.contains(&entry)) {
-                continue;
+            // Compose has no cancel of one pointer: a node's pointers go together, and it hears the
+            // others no more until a new press.
+            for (_, other) in &mut self.captures {
+                other.retain(|it| *it != entry);
             }
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
@@ -672,7 +713,12 @@ impl UiTree {
             {
                 continue;
             }
-            let Some(mut event) = change.as_primary_button() else { continue };
+            let view = if entry.follows_first_down && !self.first_down_primary_only {
+                change.as_any_button()
+            } else {
+                change.as_primary_button()
+            };
+            let Some(mut event) = view else { continue };
             let position = event.position;
             event.position = position - origin;
             event.consumed = change.consumed.get();

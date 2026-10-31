@@ -337,6 +337,29 @@ impl PointerEvents {
     }
 }
 
+impl PointerEvents {
+    /// Whether it's every pointer coming down, unconsumed if `require_unconsumed`, as
+    /// `isChangedToDown`; a mouse's only with its primary button if `primary_only`, a press saying no
+    /// button having only that.
+    pub fn is_changed_to_down(&self, require_unconsumed: bool, primary_only: bool) -> bool {
+        let only_mice = self.changes.iter().all(|change| change.pointer_type == PointerType::Mouse);
+        if primary_only
+            && only_mice
+            && !self.buttons.is_primary_pressed()
+            && self.buttons.are_any_pressed()
+        {
+            return false;
+        }
+        self.changes.iter().all(|change| {
+            if require_unconsumed {
+                change.changed_to_down()
+            } else {
+                change.changed_to_down_ignore_consumed()
+            }
+        })
+    }
+}
+
 /// The first of a pointer coming up or down, else a move, as `calculatePointerEventType`.
 fn kind_of(changes: &[PointerInputChange]) -> PointerEventType {
     for change in changes {

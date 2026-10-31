@@ -865,7 +865,7 @@ impl UiHost {
     pub fn send_pointers(&mut self, events: &[PointerEvent]) {
         let _turn = compose_runtime::platform::Turn::begin();
         let now = compose_runtime::platform::now_nanos();
-        let events: Vec<PointerEvent> = events
+        let events: smallvec::SmallVec<[PointerEvent; 4]> = events
             .iter()
             .map(|event| PointerEvent {
                 time_nanos: if event.time_nanos == 0 { now } else { event.time_nanos },
@@ -960,6 +960,13 @@ impl UiHost {
     /// `EditorInfo` in `onCreateInputConnection`; desktop ignores them).
     pub fn text_input_options(&self) -> Option<crate::text_input::ImeOptions> {
         self.with_tree(|tree| tree.text_input_options())
+    }
+
+    /// Whether a mouse's first press starts a gesture of the detectors, `clickable` and `draggable`
+    /// only with its primary button, as `firstDownRefersToPrimaryMouseButtonOnly`: `true` by default,
+    /// as on a desktop, `false` on Android. Text selection goes by the primary button on any.
+    pub fn set_first_down_refers_to_primary_mouse_button_only(&mut self, primary_only: bool) {
+        self.with_tree(|tree| tree.first_down_primary_only = primary_only);
     }
 
     /// Whether the focused node taking text masks it, as a keyboard's type asks.

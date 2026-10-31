@@ -656,6 +656,11 @@ impl PointerInputModifierNode for DragGestureNode {
         self.enabled
     }
 
+    /// As `isAnyChangedToDown`.
+    fn first_down_follows_the_host(&self) -> bool {
+        true
+    }
+
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,

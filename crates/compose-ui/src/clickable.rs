@@ -14,8 +14,7 @@ use smallvec::SmallVec;
 use crate::delegation::Delegates;
 use crate::indication::IndicationNodeFactory;
 use crate::input::{
-    EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass, PointerEventType,
-    PointerId,
+    EventContext, Key, KeyEvent, KeyEventType, PointerEventPass, PointerEventType, PointerId,
 };
 use crate::interaction::{
     Emitter, Focus, FocusInteraction, HoverEnter, HoverInteraction, MutableInteractionSource,
@@ -26,6 +25,7 @@ use crate::modifier::{
     PointerInputModifierNode, SemanticsModifierNode,
 };
 use crate::node_chain::EntryId;
+use crate::pointer_event::{PointerEvents, PointerInputChange};
 use crate::semantics::{Role, SemanticsConfiguration, ToggleableState};
 use crate::text::SharedString;
 use crate::unit::{IntSize, Offset};
@@ -259,6 +259,8 @@ pub(crate) struct ClickableNode {
     /// `LOCAL_INDICATION`'s factory where the node is, as `localIndicationNodeFactory`.
     local_indication: Option<Rc<dyn IndicationNodeFactory>>,
     down: Option<Down>,
+    /// The press went down in the event being delivered.
+    just_pressed: bool,
     hover: Option<HoverEnter>,
     /// The keys held, each with its press.
     key_presses: SmallVec<[(Key, Press); 1]>,
@@ -294,6 +296,7 @@ impl ClickableNode {
             indication: None,
             local_indication: None,
             down: None,
+            just_pressed: false,
             hover: None,
             key_presses: SmallVec::new(),
             focus: None,
@@ -544,9 +547,10 @@ impl ClickableNode {
 
     // ---- Pointer -------------------------------------------------------------------------
 
-    fn handle_down(&mut self, event: &mut PointerEvent, context: &mut EventContext<'_>) {
-        event.consume();
-        self.down = Some(Down { pointer: event.pointer, position: event.position });
+    fn handle_down(&mut self, down: &PointerInputChange, context: &mut EventContext<'_>) {
+        down.consume();
+        self.down = Some(Down { pointer: down.id, position: down.position });
+        self.just_pressed = true;
         if !self.spec.enabled {
             return;
         }
@@ -554,7 +558,7 @@ impl ClickableNode {
         if self.combined.is_some() {
             let tap_waiting = self.shared.borrow().tap_job.is_some_and(|job| job.is_active());
             if tap_waiting {
-                let now = event_nanos(event);
+                let now = down.uptime_millis * 1_000_000;
                 let min_time = configuration.double_tap_min_time_millis * 1_000_000;
                 let soon =
                     self.first_tap_up_nanos.is_some_and(|up| now.saturating_sub(up) < min_time);
@@ -568,7 +572,7 @@ impl ClickableNode {
             }
             self.shared.borrow_mut().long_press_triggered = false;
         }
-        self.press_started(event.position, context.has_waiting_parent());
+        self.press_started(down.position, context.has_waiting_parent());
         let long = self.combined.as_ref().is_some_and(|combined| combined.on_long_click.is_some());
         let scope = self.shared.borrow().scope();
         if long && let Some(scope) = scope {
@@ -598,14 +602,14 @@ impl ClickableNode {
         }
     }
 
-    fn handle_up(&mut self, event: &PointerEvent, context: &mut EventContext<'_>) {
+    fn handle_up(&mut self, up: &PointerInputChange, context: &mut EventContext<'_>) {
         let Some(down) = self.down.take() else { return };
         if self.spec.enabled && !self.ignore_next_up {
             self.press_released(down.position);
             match &self.combined {
                 None => self.spec.action.fire(context),
                 Some(combined) => {
-                    self.first_tap_up_nanos = Some(event_nanos(event));
+                    self.first_tap_up_nanos = Some(up.uptime_millis * 1_000_000);
                     let long_triggered = self.shared.borrow().long_press_triggered;
                     if !long_triggered {
                         if self.is_second_tap {
@@ -655,11 +659,6 @@ impl ClickableNode {
             self.shared.borrow().emit(HoverInteraction::Exit(enter));
         }
     }
-}
-
-/// When `event` happened, in the executor's clock.
-fn event_nanos(event: &PointerEvent) -> u64 {
-    if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::platform::now_nanos() }
 }
 
 impl ModifierNode for ClickableNode {
@@ -763,63 +762,79 @@ impl crate::observer_node::ObserverModifierNode for ClickableNode {
 }
 
 impl PointerInputModifierNode for ClickableNode {
-    fn on_pointer_event(
+    fn takes_whole_events(&self) -> bool {
+        true
+    }
+
+    /// Nothing in the first pass, and the last only while it's pressed.
+    fn hears_pass(&self, pass: PointerEventPass) -> bool {
+        pass == PointerEventPass::Main || (pass == PointerEventPass::Final && self.down.is_some())
+    }
+
+    /// As `ClickableNode.onPointerEvent` and `CombinedClickableNode`'s: every pointer down starts it,
+    /// and every pointer up ends it; meanwhile any consumed or out of it cancels.
+    fn on_pointer_events(
         &mut self,
-        event: &mut PointerEvent,
+        event: &PointerEvents,
         pass: PointerEventPass,
         bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        self.center = Offset::new(bounds.width as f32 / 2.0, bounds.height as f32 / 2.0);
-        self.initialize_indication_in(context);
-        if self.spec.enabled && pass == PointerEventPass::Main {
-            match event.kind {
-                PointerEventType::Enter => self.hover_changed(true),
-                PointerEventType::Exit => self.hover_changed(false),
-                _ => {}
+        if pass == PointerEventPass::Main {
+            self.center = Offset::new(bounds.width as f32 / 2.0, bounds.height as f32 / 2.0);
+            self.initialize_indication_in(context);
+            if self.spec.enabled {
+                match event.kind {
+                    PointerEventType::Enter => self.hover_changed(true),
+                    PointerEventType::Exit => self.hover_changed(false),
+                    _ => {}
+                }
             }
         }
         if matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
             return;
         }
+        let changes = &event.changes;
         match pass {
-            PointerEventPass::Main => match self.down {
-                None => {
-                    if event.kind == PointerEventType::Press && !event.consumed {
-                        self.handle_down(event, context);
+            PointerEventPass::Main => {
+                if self.down.is_none() {
+                    if event.is_changed_to_down(true, context.first_down_primary_only()) {
+                        self.handle_down(&changes[0], context);
                     }
+                    return;
                 }
-                Some(down) if down.pointer == event.pointer => {
-                    let long_triggered = self.shared.borrow().long_press_triggered;
-                    if long_triggered {
-                        // A long click fired: everything is consumed until the release.
-                        event.consume();
-                        if event.kind == PointerEventType::Release {
-                            self.handle_up(event, context);
-                        }
-                        return;
+                if self.shared.borrow().long_press_triggered {
+                    // A long click fired: everything is consumed until the release.
+                    if changes.iter().all(|change| change.changed_to_up_ignore_consumed()) {
+                        changes[0].consume();
+                        self.handle_up(&changes[0], context);
+                    } else {
+                        changes.iter().for_each(|change| change.consume());
                     }
-                    if event.kind == PointerEventType::Release && !event.consumed {
-                        event.consume();
-                        self.handle_up(event, context);
-                    } else if event.consumed
-                        || event.kind == PointerEventType::Release
-                        || context.is_out_of_touch_target(event, bounds)
-                    {
+                    return;
+                }
+                if changes.iter().all(|change| change.changed_to_up()) {
+                    changes[0].consume();
+                    self.handle_up(&changes[0], context);
+                } else {
+                    let padding = context.extended_touch_padding(bounds);
+                    if changes.iter().any(|change| {
+                        change.is_consumed() || change.is_out_of_bounds_with(bounds, padding)
+                    }) {
                         self.cancel_input();
                     }
                 }
-                Some(_) => {}
-            },
+            }
             PointerEventPass::Final => {
-                // A move of its press that something took by the final pass (a drag around
-                // it) cancels the press, as `checkForCancellation`.
+                // Something took a change by the final pass (a drag around it), but the press it
+                // consumed itself: `checkForCancellation`.
+                let just_pressed = std::mem::take(&mut self.just_pressed);
                 let long_triggered = self.shared.borrow().long_press_triggered;
                 if let Some(down) = self.down
-                    && down.pointer == event.pointer
-                    && event.kind == PointerEventType::Move
-                    && event.consumed
                     && !long_triggered
+                    && changes.iter().any(|change| {
+                        change.is_consumed() && !(just_pressed && change.id == down.pointer)
+                    })
                 {
                     self.cancel_input();
                 }

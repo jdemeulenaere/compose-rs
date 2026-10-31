@@ -810,6 +810,8 @@ struct Host {
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
     ime_options: Option<(compose_ui::ImeOptions, bool)>,
+    /// What a `MotionEvent`'s pointers cross in, kept: a move's are per sample.
+    touch_buffers: TouchBuffers,
     /// Shown with performance hints enabled: its frames report the RenderThread's work
     /// (`performance_hint.rs`, D390).
     hint: bool,
@@ -957,6 +959,8 @@ fn create(
     };
     let text = AndroidTextMeasurer::with_fonts(text, Rc::new(fonts));
     let mut ui = UiHost::new(size, density, Box::new(text));
+    // As `firstDownRefersToPrimaryMouseButtonOnly`'s Android `actual`.
+    ui.set_first_down_refers_to_primary_mouse_button_only(false);
     ui.with_tree(|tree| tree.set_clipboard(Rc::new(JniClipboard { view: view_ref.clone() })));
     // Asked for keyboard mode, the view system decides and tells it (`setInputMode`).
     let keyboard_view = view_ref.clone();
@@ -1059,6 +1063,7 @@ fn create(
         custom_actions: Default::default(),
         first: true,
         ime_options: None,
+        touch_buffers: TouchBuffers::default(),
         hint: false,
     });
     Box::into_raw(host) as jlong
@@ -1564,6 +1569,14 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touchCancel(
     host.ui.with_tree(|tree| tree.cancel_pointer(pointer));
 }
 
+/// What `ComposeRsNative.touches` reads a `MotionEvent` into.
+#[derive(Default)]
+struct TouchBuffers {
+    ints: Vec<i32>,
+    floats: Vec<f32>,
+    events: Vec<PointerEvent>,
+}
+
 /// `ComposeRsNative.touches(...)`'s values, kept apart from its arrays.
 struct MotionSample {
     /// 0 down, 1 move, 2 up, 3 a button's press or release, 4 hover.
@@ -1585,45 +1598,40 @@ fn pointer_of(id: i32, tool: i32) -> (PointerId, PointerType) {
     }
 }
 
-/// One `MotionEvent`'s (or one of its historical samples') changes: the pointer of its action
-/// comes down or up, the others are as they are, as `MotionEventAdapter` has them all.
-fn motion_events(
-    sample: &MotionSample,
-    ids: &[i32],
-    xs: &[f32],
-    ys: &[f32],
-    pressures: &[f32],
-    tools: &[i32],
-) -> Vec<PointerEvent> {
-    (0..ids.len())
-        .map(|index| {
-            let position = Offset::new(xs[index], ys[index]);
-            let (pointer, pointer_type) = pointer_of(ids[index], tools[index]);
-            let acting = index == sample.action_index;
-            let mut event = match sample.action {
-                0 if acting => PointerEvent::press(position),
-                2 if acting => PointerEvent::release(position),
-                3 => PointerEvent {
-                    kind: compose_ui::PointerEventType::Unknown,
-                    ..PointerEvent::moved(position, true)
-                },
-                4 => PointerEvent::moved(position, false),
-                _ => PointerEvent::moved(position, true),
-            }
-            .with_pointer(pointer, pointer_type)
-            .with_keyboard_modifiers(compose_ui::PointerKeyboardModifiers(sample.meta))
-            .with_pressure(pressures[index])
-            .at_time(sample.time);
-            event.buttons = compose_ui::PointerButtons(sample.buttons);
-            event
-        })
-        .collect()
+/// One `MotionEvent`'s (or one of its historical samples') changes into `out`: the pointer of its
+/// action comes down or up, the others are as they are, as `MotionEventAdapter` has them all. `ints`
+/// is each pointer's id and tool, `floats` each one's x, y and pressure.
+fn motion_events(sample: &MotionSample, ints: &[i32], floats: &[f32], out: &mut Vec<PointerEvent>) {
+    out.clear();
+    let pointers = ints.as_chunks::<2>().0.iter().zip(floats.as_chunks::<3>().0);
+    for (index, (ints, floats)) in pointers.enumerate() {
+        let position = Offset::new(floats[0], floats[1]);
+        let (pointer, pointer_type) = pointer_of(ints[0], ints[1]);
+        let acting = index == sample.action_index;
+        let mut event = match sample.action {
+            0 if acting => PointerEvent::press(position),
+            2 if acting => PointerEvent::release(position),
+            3 => PointerEvent {
+                kind: compose_ui::PointerEventType::Unknown,
+                ..PointerEvent::moved(position, true)
+            },
+            4 => PointerEvent::moved(position, false),
+            _ => PointerEvent::moved(position, true),
+        }
+        .with_pointer(pointer, pointer_type)
+        .with_keyboard_modifiers(compose_ui::PointerKeyboardModifiers(sample.meta))
+        .with_pressure(floats[2])
+        .at_time(sample.time);
+        event.buttons = compose_ui::PointerButtons(sample.buttons);
+        out.push(event);
+    }
 }
 
-/// `ComposeRsNative.touches(host, action, actionIndex, count, ids, xs, ys, pressures, tools, buttons,
-/// meta, age)`: one `MotionEvent`'s pointers together (`MotionSample.action`); `tools` their
-/// `MotionEvent.TOOL_TYPE`s, `buttons` its `buttonState`, `meta` its `metaState`; the arrays are the
-/// view's, reused, of which the first `count`; `age` as `touch`'s.
+/// `ComposeRsNative.touches(host, action, actionIndex, count, ints, floats, buttons, meta, age)`: one
+/// `MotionEvent`'s pointers together (`MotionSample.action`); of the view's reused arrays, the first
+/// `count` pointers' id and `MotionEvent.TOOL_TYPE` in `ints` and x, y and pressure in `floats`;
+/// `buttons` its `buttonState`, `meta` its `metaState`; `age` how long ago it happened (nanoseconds),
+/// so a batch of samples keeps their times (a fling's velocity comes from them).
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touches<'local>(
@@ -1633,11 +1641,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touches<'local>(
     action: jint,
     action_index: jint,
     count: jint,
-    ids: JIntArray<'local>,
-    xs: JFloatArray<'local>,
-    ys: JFloatArray<'local>,
-    pressures: JFloatArray<'local>,
-    tools: JIntArray<'local>,
+    ints: JIntArray<'local>,
+    floats: JFloatArray<'local>,
     buttons: jint,
     meta: jint,
     age: jlong,
@@ -1647,19 +1652,18 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touches<'local>(
     let count = count.max(0) as usize;
     let time = platform::now_nanos().saturating_sub(age.max(0) as u64).max(1);
     let sample = MotionSample { action, action_index: action_index as usize, buttons, meta, time };
-    let events = with_env(&mut env, |env| {
-        let (mut id, mut tool) = (vec![0; count], vec![0; count]);
-        let (mut x, mut y, mut pressure) = (vec![0.0; count], vec![0.0; count], vec![0.0; count]);
-        let read = ids
-            .get_region(env, 0, &mut id)
-            .and_then(|_| xs.get_region(env, 0, &mut x))
-            .and_then(|_| ys.get_region(env, 0, &mut y))
-            .and_then(|_| pressures.get_region(env, 0, &mut pressure))
-            .and_then(|_| tools.get_region(env, 0, &mut tool));
-        // Only the view's own arrays, as long as `count` says: nothing to tell if not.
-        read.map_or(Vec::new(), |_| motion_events(&sample, &id, &x, &y, &pressure, &tool))
+    let TouchBuffers { ints: int_values, floats: float_values, events } = &mut host.touch_buffers;
+    int_values.resize(count * 2, 0);
+    float_values.resize(count * 3, 0.0);
+    let read = with_env(&mut env, |env| {
+        ints.get_region(env, 0, int_values).and_then(|_| floats.get_region(env, 0, float_values))
     });
-    host.ui.send_pointers(&events);
+    events.clear();
+    // Only the view's own arrays, as long as `count` says: nothing to tell if not.
+    if read.is_ok() {
+        motion_events(&sample, int_values, float_values, events);
+    }
+    host.ui.send_pointers(events);
 }
 
 /// `ComposeRsNative.hoverExit(host)`: the mouse left the view.
@@ -2331,17 +2335,20 @@ mod tests {
         super::MotionSample { action, action_index, buttons, meta: 0x1000, time: 7 }
     }
 
-    // Compose: compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/MotionEventAdapterTest.kt, convertToPointerInputEvent_1pointerActionDown_convertsCorrectly, convertToPointerInputEvent_2pointers1stPointerActionPointerDown_convertsCorrectly, convertToPointerInputEvent_2pointers2ndPointerActionPointerUP_convertsCorrectly
+    fn events_of(
+        sample: &super::MotionSample,
+        ints: &[i32],
+        floats: &[f32],
+    ) -> Vec<compose_ui::PointerEvent> {
+        let mut out = Vec::new();
+        super::motion_events(sample, ints, floats, &mut out);
+        out
+    }
+
+    // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/MotionEventAdapterTest.kt, convertToPointerInputEvent_1pointerActionDown_convertsCorrectly, convertToPointerInputEvent_2pointers1stPointerActionPointerDown_convertsCorrectly, convertToPointerInputEvent_2pointers2ndPointerActionPointerUP_convertsCorrectly
     #[test]
     fn a_motion_events_pointers_go_together_its_action_on_one() {
-        let events = super::motion_events(
-            &sample(0, 1, 0),
-            &[3, 5],
-            &[1.0, 2.0],
-            &[10.0, 20.0],
-            &[0.5, 0.75],
-            &[1, 2],
-        );
+        let events = events_of(&sample(0, 1, 0), &[3, 1, 5, 2], &[1.0, 10.0, 0.5, 2.0, 20.0, 0.75]);
         assert_eq!(events[0].kind, PointerEventType::Move);
         assert_eq!(events[0].pointer, PointerId(4));
         assert_eq!(events[0].pointer_type, PointerType::Touch);
@@ -2352,37 +2359,30 @@ mod tests {
         assert_eq!(events[1].pressure, 0.75);
         assert_eq!(events[1].time_nanos, 7);
         assert!(events[1].keyboard_modifiers.is_ctrl_pressed());
-        let up = super::motion_events(&sample(2, 0, 0), &[3], &[1.0], &[1.0], &[0.0], &[1]);
+        let up = events_of(&sample(2, 0, 0), &[3, 1], &[1.0, 1.0, 0.0]);
         assert_eq!(up[0].kind, PointerEventType::Release);
         assert!(!up[0].pressed);
     }
 
     #[test]
     fn a_mouse_is_the_pointer_of_its_wheel_with_its_buttons_said() {
-        let events = super::motion_events(&sample(0, 0, 2), &[9], &[1.0], &[1.0], &[1.0], &[3]);
+        let events = events_of(&sample(0, 0, 2), &[9, 3], &[1.0, 1.0, 1.0]);
         assert_eq!(events[0].pointer, PointerId(0));
         assert_eq!(events[0].pointer_type, PointerType::Mouse);
         assert!(events[0].buttons.is_secondary_pressed());
         // Another of its buttons: nothing else of it changed, and it's still down.
-        let events = super::motion_events(&sample(3, 0, 3), &[9], &[1.0], &[1.0], &[1.0], &[3]);
+        let events = events_of(&sample(3, 0, 3), &[9, 3], &[1.0, 1.0, 1.0]);
         assert_eq!(events[0].kind, PointerEventType::Unknown);
         assert!(events[0].pressed && events[0].buttons.is_primary_pressed());
         // A hover: nothing down.
-        let events = super::motion_events(&sample(4, 0, 0), &[9], &[1.0], &[1.0], &[0.0], &[3]);
+        let events = events_of(&sample(4, 0, 0), &[9, 3], &[1.0, 1.0, 0.0]);
         assert_eq!(events[0].kind, PointerEventType::Move);
         assert!(!events[0].pressed);
     }
 
     #[test]
     fn other_tools_tell_what_they_are() {
-        let events = super::motion_events(
-            &sample(1, 0, 0),
-            &[0, 1],
-            &[0.0, 0.0],
-            &[0.0, 0.0],
-            &[1.0, 1.0],
-            &[4, 0],
-        );
+        let events = events_of(&sample(1, 0, 0), &[0, 4, 1, 0], &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
         assert_eq!(events[0].pointer_type, PointerType::Eraser);
         assert_eq!(events[1].pointer_type, PointerType::Unknown);
     }

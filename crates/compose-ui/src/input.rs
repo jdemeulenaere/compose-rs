@@ -445,6 +445,21 @@ impl EventContext<'_> {
         self.context.tree.view_configuration_of(self.context.node)
     }
 
+    /// As `firstDownRefersToPrimaryMouseButtonOnly`, the host's.
+    pub fn first_down_primary_only(&self) -> bool {
+        self.context.tree.first_down_primary_only
+    }
+
+    /// How far past a node of `bounds` a touch still counts as on it, as `getExtendedTouchPadding`.
+    pub fn extended_touch_padding(&self, bounds: IntSize) -> crate::unit::Size {
+        let minimum = self.view_configuration().minimum_touch_target_size;
+        let density = self.density();
+        crate::unit::Size::new(
+            ((density.to_px(minimum.width) - bounds.width as f32) / 2.0).max(0.0),
+            ((density.to_px(minimum.height) - bounds.height as f32) / 2.0).max(0.0),
+        )
+    }
+
     /// The handling node's layout direction: a horizontal scroll goes the other way in a
     /// right-to-left layout.
     pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {

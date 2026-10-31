@@ -1458,6 +1458,12 @@ pub trait PointerInputModifierNode {
         _context: &mut EventContext<'_>,
     ) {
     }
+    /// One change at a time, whether what starts it goes by the host's
+    /// `firstDownRefersToPrimaryMouseButtonOnly`: any of a mouse's buttons where that says so, as a
+    /// `draggable`; the others its primary alone.
+    fn first_down_follows_the_host(&self) -> bool {
+        false
+    }
     /// Whether it takes each platform event's changes together, in `on_pointer_events`, and not one
     /// at a time.
     fn takes_whole_events(&self) -> bool {

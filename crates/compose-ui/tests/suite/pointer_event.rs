@@ -114,7 +114,7 @@ fn a_touch_may_be_out_of_bounds_further_than_a_mouse() {
     assert!(mouse.is_out_of_bounds_with(size, padding));
 }
 
-// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/PointerEvent.kt, calculatePointerEventType
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/input/pointer/PointerEvent.android.kt, calculatePointerEventType
 #[test]
 fn an_event_of_changes_finds_its_reason_in_them() {
     let (up, down) = ((0.0, 0.0, false), (0.0, 0.0, true));
@@ -507,10 +507,10 @@ fn two_independent_paths_each_go_through_their_passes_a_path_at_a_time() {
         [
             "outer1 Initial",
             "inner1 Initial",
-            "outer2 Initial",
-            "inner2 Initial",
             "inner1 Main",
             "outer1 Main",
+            "outer2 Initial",
+            "inner2 Initial",
             "inner2 Main",
             "outer2 Main",
             "outer1 Final",
@@ -520,7 +520,9 @@ fn two_independent_paths_each_go_through_their_passes_a_path_at_a_time() {
         ]
     );
     assert_eq!(ids(&presses(&record, "outer1")[0].event), [1]);
-    assert_eq!(ids(&presses(&record, "inner2")[0].event), [2]);
+    let second = presses(&record, "inner2");
+    assert_eq!(ids(&second[0].event), [2]);
+    assert_eq!(second[0].event.changes[0].position, Offset::new(10.0, 10.0));
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/HitPathTrackerTest.kt, dispatchChanges_2BranchesWithSharedParent_eventsSplitCorrectlyAndCallOrderCorrect, dispatchChanges_2BranchesWithSharedParent_changesAreUpdatedCorrectly
@@ -538,8 +540,8 @@ fn a_parent_hears_both_changes_its_branches_one_each() {
         [
             "parent Initial",
             "a Initial",
-            "b Initial",
             "a Main",
+            "b Initial",
             "b Main",
             "parent Main",
             "parent Final",
@@ -673,7 +675,20 @@ fn downs_on_one_node_then_a_cancel_tell_it_each_then_cancel_it_once() {
             _: &mut EventContext<'_>,
         ) {
             if pass == PointerEventPass::Main {
-                self.0.borrow_mut().push(format!("{:?}", ids(event)));
+                let mut log = self.0.borrow_mut();
+                log.push(format!("{:?}", ids(event)));
+                for change in &event.changes {
+                    log.push(format!(
+                        "{} at {},{} from {},{} {}, was {}",
+                        change.id.0,
+                        change.position.x,
+                        change.position.y,
+                        change.previous_position.x,
+                        change.previous_position.y,
+                        if change.pressed { "down" } else { "up" },
+                        if change.previous_pressed { "down" } else { "up" },
+                    ));
+                }
             }
         }
         fn on_cancel_pointer_input(&mut self) {
@@ -686,14 +701,32 @@ fn downs_on_one_node_then_a_cancel_tell_it_each_then_cancel_it_once() {
     host.send_pointer(finger_down(1, 10.0, 10.0));
     host.send_pointers(&[finger(1, 10.0, 10.0), finger_down(2, 20.0, 10.0)]);
     host.with_tree(|tree| tree.cancel_pointers());
-    assert_eq!(*log.borrow(), ["[1]", "[1, 2]", "cancel"]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "[1]",
+            "1 at 10,10 from 10,10 down, was up",
+            "[1, 2]",
+            "1 at 10,10 from 10,10 down, was down",
+            "2 at 20,10 from 20,10 down, was up",
+            "cancel",
+        ]
+    );
     log.borrow_mut().clear();
-    // Finger by finger, as a platform's cancel comes: once, with the last.
+    // Nothing of them is left: the same fingers come down anew.
+    host.send_pointer(finger_down(1, 15.0, 10.0));
+    assert_eq!(*log.borrow(), ["[1]", "1 at 15,10 from 15,10 down, was up"]);
+    host.send_pointer(finger_up(1, 15.0, 10.0));
+    log.borrow_mut().clear();
+    // One finger's cancel is all of a node's, as Compose has no other: the first says it, and it
+    // hears no more of the other.
     host.send_pointers(&[finger_down(1, 10.0, 10.0), finger_down(2, 20.0, 10.0)]);
+    log.borrow_mut().clear();
     host.with_tree(|tree| tree.cancel_pointer(PointerId(1)));
-    assert_eq!(*log.borrow(), ["[1, 2]"]);
+    assert_eq!(*log.borrow(), ["cancel"]);
+    host.send_pointer(finger(2, 22.0, 10.0));
     host.with_tree(|tree| tree.cancel_pointer(PointerId(2)));
-    assert_eq!(*log.borrow(), ["[1, 2]", "cancel"]);
+    assert_eq!(*log.borrow(), ["cancel"]);
 }
 
 // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/PointerInputEventProcessor.kt, process
@@ -779,8 +812,12 @@ fn a_cancelled_finger_is_gone_from_the_events() {
     });
     host.send_pointers(&[finger_down(1, 10.0, 10.0), finger_down(2, 20.0, 10.0)]);
     host.with_tree(|tree| tree.cancel_pointer(PointerId(1)));
+    record.borrow_mut().clear();
+    // The node's two went together: it hears a new press alone, its own.
     host.send_pointer(finger(2, 22.0, 10.0));
-    assert_eq!(ids(&record.borrow().last().unwrap().event), [2]);
+    assert!(record.borrow().is_empty());
+    host.send_pointer(finger_down(3, 30.0, 10.0));
+    assert_eq!(ids(&record.borrow().last().unwrap().event), [3]);
 }
 
 // Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/PointerEvent.kt, PointerInputChange
@@ -894,6 +931,35 @@ fn a_node_taking_changes_one_at_a_time_hears_a_mouses_primary_button_alone() {
     host.send_pointer(PointerEvent::release(at).with_buttons(PointerButtons::NONE));
     assert_eq!(*log.borrow(), ["node Move 0 10 false"]);
     log.borrow_mut().clear();
+    // As Android sends a right click: its pointer's down until `ACTION_UP`, its button up before.
+    let unknown = |buttons| PointerEvent {
+        kind: PointerEventType::Unknown,
+        buttons,
+        ..PointerEvent::moved(at, true)
+    };
+    let held = |buttons| PointerEvent { buttons, ..PointerEvent::moved(at, true) };
+    let right = PointerButtons::SECONDARY;
+    host.send_pointer(PointerEvent { buttons: right, ..PointerEvent::press(at) });
+    host.send_pointer(unknown(right));
+    host.send_pointer(unknown(PointerButtons::NONE));
+    host.send_pointer(PointerEvent::release(at));
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    // The right held, the left comes in a move as Android has it, then its button event: one press.
+    host.send_pointer(PointerEvent { buttons: right, ..PointerEvent::press(at) });
+    host.send_pointer(held(both));
+    host.send_pointer(unknown(both));
+    host.send_pointer(unknown(right));
+    host.send_pointer(PointerEvent::release(at));
+    assert_eq!(*log.borrow(), ["node Press 0 10 true", "node Release 0 10 false"]);
+    log.borrow_mut().clear();
+    // A left click as Android sends it.
+    let left = PointerButtons::PRIMARY;
+    host.send_pointer(PointerEvent { buttons: left, ..PointerEvent::press(at) });
+    host.send_pointer(unknown(left));
+    host.send_pointer(unknown(PointerButtons::NONE));
+    host.send_pointer(PointerEvent::release(at));
+    assert_eq!(*log.borrow(), ["node Press 0 10 true", "node Release 0 10 false"]);
+    log.borrow_mut().clear();
     // The left one, the right one coming and going meanwhile: only the left one's.
     host.send_pointer(PointerEvent::press(at));
     host.send_pointer(PointerEvent::press(at).with_buttons(both));
@@ -904,6 +970,22 @@ fn a_node_taking_changes_one_at_a_time_hears_a_mouses_primary_button_alone() {
         *log.borrow(),
         ["node Press 0 10 true", "node Move 0 10 true", "node Release 0 10 false"]
     );
+}
+
+/// As a text's selection, primary-only on Android too (`awaitPrimaryFirstDown`): what follows the
+/// host's flag says so.
+#[test]
+fn a_node_not_following_the_hosts_flag_hears_the_primary_button_whatever_it_says() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let seen = log.clone();
+    let mut host = host(move || {
+        Leaf(Modifier.size(50.dp()).then_custom(OneAtATime("node", seen.clone())));
+    });
+    host.set_first_down_refers_to_primary_mouse_button_only(false);
+    let at = Offset::new(10.0, 10.0);
+    host.send_pointer(PointerEvent::press(at).with_buttons(PointerButtons::SECONDARY));
+    host.send_pointer(PointerEvent::release(at).with_buttons(PointerButtons::NONE));
+    assert!(log.borrow().is_empty());
 }
 
 #[test]

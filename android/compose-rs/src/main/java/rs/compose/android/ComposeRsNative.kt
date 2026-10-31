@@ -117,17 +117,14 @@ internal object ComposeRsNative {
     /** Gives up drawing ahead the items waiting: the frames placing them draw them. */
     @JvmStatic external fun cancelDrawAhead(host: Long)
 
-    /** Action 0 down, 1 move, 2 up, 3 cancel; [age]: how long ago it happened (ns). */
+    /** Action 0 down, 1 move, 2 up, 3 a mouse's other button, 4 hover; [age]: how long ago (ns). */
     @JvmStatic external fun touches(
         host: Long,
         action: Int,
         actionIndex: Int,
         count: Int,
-        ids: IntArray,
-        xs: FloatArray,
-        ys: FloatArray,
-        pressures: FloatArray,
-        tools: IntArray,
+        ints: IntArray,
+        floats: FloatArray,
         buttons: Int,
         meta: Int,
         age: Long,
