@@ -1,6 +1,6 @@
 //! More of Compose's `AppBarTest`, at density 1 in a 400 by 800 window: what's under `Scaffold`s,
-//! the colors over each kind of scrollable, the rows' places without their baselines (those wait
-//! for `alignment-lines`). `captureToImage().assertContainsColor` reads as the display list holding
+//! the colors over each kind of scrollable, the rows' places with their baselines.
+//! `captureToImage().assertContainsColor` reads as the display list holding
 //! a fill of the color.
 
 use std::cell::{Cell, RefCell};
@@ -14,7 +14,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::platform::DrawOp;
-use compose_ui::{Color, IntSize, Modifier, Offset, PaddingValues, UnitExt};
+use compose_ui::platform::{FixedFontMetrics, FixedTextMeasurer};
+use compose_ui::{Color, Density, IntSize, Modifier, Offset, PaddingValues, UnitExt};
 
 const BAR: &str = "bar";
 const CONTENT: &str = "content";
@@ -1345,6 +1346,87 @@ fn the_title_read_out_is_in_the_row_that_shows_most() {
     assert!(top_of_the_title(&mut ui) > 40.0, "just under half way, still the bottom row");
     collapse(&mut ui, &behavior, 44.0 + 1.0, 0.0);
     assert!(top_of_the_title(&mut ui) < 40.0, "just over half way, the top row");
+}
+
+/// How far up from the bar's bottom the last baseline of the tag's last node is, as the end of
+/// `assertMediumOrLargeDefaultPositioning`.
+fn bottom_baseline_distance(ui: &mut ComposeTestRule, tag: &str) -> f32 {
+    let bar = bounds(ui, BAR);
+    let top =
+        ui.on_all_nodes_unmerged(has_test_tag(tag)).on_last().fetch_semantics_snapshot().bounds.top;
+    let baseline =
+        ui.on_all_nodes_unmerged(has_test_tag(tag)).on_last().get_last_baseline_position();
+    bar.bottom - (top + baseline.0)
+}
+
+/// A bar in Compose's test font: as with Roboto, a medium bar's bottom row has the room for 24 dp
+/// under the baseline, which compose-rs's default font (its baseline lower in the line) hasn't.
+fn in_the_sample_font(bar: Bar, heights: Option<(f32, f32)>) -> ComposeTestRule {
+    let measurer = FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT);
+    compose_test_with(IntSize::new(400, 800), Density::default(), Box::new(measurer), move || {
+        MaterialTheme!({
+            let behavior = TopAppBarDefaults::exit_until_collapsed_scroll_behavior();
+            TwoRowBar!(bar, false, heights, 0.0, behavior);
+        });
+    })
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, mediumTopAppBar_expanded_positioning
+#[test]
+fn a_medium_bars_bottom_title_has_its_baseline_24_dp_up() {
+    let mut ui = in_the_sample_font(Bar::Medium, None);
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 24.0);
+}
+
+/// Less padding where there's no room for it: the title stays in its row, at its top.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/AppBar.kt, placeTopAppBar
+#[test]
+fn with_no_room_for_its_padding_the_title_stays_in_its_row() {
+    let (mut ui, _behavior) = two_row_bar(Bar::Medium, false, None, 0.0);
+    let mut title = ui.on_all_nodes_unmerged(has_test_tag(TITLE)).on_last();
+    assert_eq!(title.fetch_semantics_snapshot().bounds.top, 64.0);
+    assert!(bottom_baseline_distance(&mut ui, TITLE) < 24.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, mediumTopAppBar_customHeight_expanded_positioning
+#[test]
+fn a_medium_bar_of_custom_heights_has_its_baseline_24_dp_up() {
+    let mut ui = in_the_sample_font(Bar::Medium, Some((80.0, 200.0)));
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 24.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, largeTopAppBar_expanded_positioning
+#[test]
+fn a_large_bars_bottom_title_has_its_baseline_28_dp_up() {
+    let (mut ui, _behavior) = two_row_bar(Bar::Large, false, None, 0.0);
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 28.0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, largeTopAppBar_customHeight_expanded_positioning
+#[test]
+fn a_large_bar_of_custom_heights_has_its_baseline_28_dp_up() {
+    let (mut ui, _behavior) = two_row_bar(Bar::Large, false, Some((80.0, 200.0)), 0.0);
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 28.0);
+}
+
+/// With a subtitle the last baseline is the subtitle's: its column's last line, inherited.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/AppBar.kt, TopAppBarMeasurePolicy
+#[test]
+fn a_flexible_bars_subtitle_takes_the_padding_from_the_bottom() {
+    let (mut ui, _behavior) = two_row_bar(Bar::LargeFlexible, true, Some((64.0, 200.0)), 0.0);
+    assert_eq!(bottom_baseline_distance(&mut ui, SUBTITLE), 28.0);
+    // With no subtitle the title's is the last.
+    let (mut ui, _behavior) = two_row_bar(Bar::LargeFlexible, false, Some((64.0, 200.0)), 0.0);
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 28.0);
+}
+
+/// Part way collapsed, the baseline keeps its distance from what shows of the bar's bottom row.
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/AppBarTest.kt, largeTopAppBar_scrolled_positioning
+#[test]
+fn collapsing_keeps_the_bottom_titles_baseline_over_the_bars_bottom() {
+    let (mut ui, behavior) = two_row_bar(Bar::Large, false, None, 0.0);
+    collapse(&mut ui, &behavior, 20.0, 0.0);
+    assert_eq!(bottom_baseline_distance(&mut ui, TITLE), 28.0);
 }
 
 fn expanded_in_place(bar: Bar, heights: Option<(f32, f32)>, expanded: f32) {

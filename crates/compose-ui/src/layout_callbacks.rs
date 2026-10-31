@@ -688,6 +688,19 @@ impl UiTree {
         Some((Rect::from_offset_size(position, size.into()), clipped))
     }
 
+    /// `line`'s position in `node`'s semantics, as `SemanticsNode.getAlignmentLinePosition`, the
+    /// tree as it was last laid out: what the test harness asks.
+    pub fn semantics_alignment_line(
+        &mut self,
+        node: NodeId,
+        line: crate::alignment_line::AlignmentLine,
+    ) -> i32 {
+        match self.own_semantics(node) {
+            Some(own) => self.peek_alignment_line(node, own.layer, line),
+            None => crate::alignment_line::AlignmentLine::UNSPECIFIED,
+        }
+    }
+
     /// As `SemanticsNode.unclippedBoundsInRoot` and `boundsInRoot`: where `node`'s semantic bounds
     /// show, all of them, through the graphics layers around it, and clipped; a service's and a
     /// touch's, where the tests' bounds assertions go by the top left and the size.

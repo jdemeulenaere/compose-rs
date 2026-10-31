@@ -85,6 +85,85 @@ fn an_item_with_two_lines_of_supporting_text_is_88_dp_high() {
     assert_eq!(size, (ROOT_WIDTH, 88.0));
 }
 
+/// A style of `size` sp lines.
+fn lines_of(size: f32) -> compose_ui::TextStyle {
+    compose_ui::TextStyle {
+        font_size: size.sp(),
+        line_height: size.sp(),
+        ..compose_ui::TextStyle::DEFAULT
+    }
+}
+
+/// The baselines say how many lines, not the height: one tall line isn't two.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, InteractiveListItemMeasurePolicy
+#[test]
+fn one_tall_line_of_supporting_text_is_still_one_line() {
+    let size = item_size(|| {
+        ClickableListItem!(
+            || {},
+            supporting_content = Some(|| Text!("Tall", style = lines_of(31.0))),
+            {
+                Text!("Content", style = lines_of(10.0));
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 72.0));
+}
+
+/// The baselines say how many lines, not the height: two short lines are two.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, InteractiveListItemMeasurePolicy
+#[test]
+fn two_short_lines_of_supporting_text_are_two_lines() {
+    let size = item_size(|| {
+        ClickableListItem!(
+            || {},
+            supporting_content = Some(|| Text!("One\nTwo", style = lines_of(10.0))),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 88.0));
+}
+
+/// A supporting slot with no baseline is one line, whatever its height.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, InteractiveListItemMeasurePolicy
+#[test]
+fn a_supporting_slot_with_no_baseline_is_one_line() {
+    let size = item_size(|| {
+        ClickableListItem!(
+            || {},
+            supporting_content = Some(|| {
+                Box!(modifier = Modifier.size(31.dp()), {});
+            }),
+            {
+                Text!("Content", style = lines_of(10.0));
+            }
+        );
+    });
+    assert_eq!(size, (ROOT_WIDTH, 72.0));
+}
+
+/// Asked before it's measured, an intrinsic measurement has no baselines and goes by the height,
+/// as `isSupportingMultilineHeuristic`.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/ListItem.kt, calculateIntrinsicHeight
+#[test]
+fn an_intrinsic_height_goes_by_how_tall_the_supporting_text_is() {
+    let size = item_size(|| {
+        ClickableListItem!(
+            || {},
+            modifier = Modifier.height(compose_ui::IntrinsicSize::Min),
+            supporting_content = Some(|| {
+                Box!(modifier = Modifier.size(31.dp()), {});
+            }),
+            {
+                Text!("Content");
+            }
+        );
+    });
+    assert_eq!(size.1, 88.0);
+}
+
 /// An item `height` dp high with every part tagged, in `direction`, aligned by `alignment`.
 fn positioned(
     height: f32,

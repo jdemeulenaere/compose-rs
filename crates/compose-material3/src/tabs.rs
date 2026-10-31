@@ -805,9 +805,10 @@ fn tab_modifier(
 }
 
 /// A tab, as Compose's `Tab(selected, onClick, …, text, icon, …)`: its text (title small,
-/// centered, 16 dp from its sides) and icon centered, 48 dp high (72 dp with both); its content
-/// in `selected_content_color` when selected, else `unselected_content_color` (by default the
-/// same), animated; clicking it selects it.
+/// centered, 16 dp from its sides) and icon centered, 48 dp high (72 dp with both, the text's
+/// last baseline 14 dp over the indicator, or 6 with two lines, and the icon 20 sp over its first);
+/// its content in `selected_content_color` when selected, else `unselected_content_color` (by
+/// default the same), animated; clicking it selects it.
 #[composable]
 #[allow(non_snake_case)]
 pub fn Tab(
@@ -822,34 +823,34 @@ pub fn Tab(
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
     let style = centered(MaterialTheme::typography().title_small.clone());
-    let height = if text.is_some() && icon.is_some() { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
+    let policy = compose_runtime::remember_keyed((text.is_some(), icon.is_some()), {
+        let (has_text, has_icon) = (text.is_some(), icon.is_some());
+        move || Rc::new(TabBaselineLayout { has_text, has_icon }) as Rc<dyn MeasurePolicy>
+    });
     let content = compose_runtime::callback(move |_: ColumnScope| {
-        let (text, icon) = (text.clone(), icon.clone());
-        // At least the tab's height, the text and icon centered, as `TabBaselineLayout` (which
-        // places a text with an icon by their baselines: compose-rs centers them).
-        Column(
-            Modifier.size_in(SizeSpec::bounds(
-                Dp::UNSPECIFIED,
-                height,
-                Dp::UNSPECIFIED,
-                Dp::UNSPECIFIED,
-            )),
-            Arrangement::CENTER.into(),
-            Alignment::CENTER_HORIZONTALLY,
-            compose_runtime::callback(move |_| {
-                if let Some(icon) = icon.clone() {
-                    icon();
-                }
+        let (text, icon, style) = (text.clone(), icon.clone(), style.clone());
+        Layout(
+            Modifier,
+            policy.clone(),
+            compose_runtime::callback(move || {
                 if let Some(text) = text.clone() {
-                    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+                    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style.clone()), || {
                         let text = text.clone();
                         Box(
                             Modifier.padding((HORIZONTAL_TEXT_PADDING, 0.dp())),
-                            Alignment::CENTER,
+                            Alignment::TOP_START,
                             false,
                             compose_runtime::callback(move |_| text()),
                         );
                     });
+                }
+                if let Some(icon) = icon.clone() {
+                    Box(
+                        Modifier,
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(move |_| icon()),
+                    );
                 }
             }),
         );
@@ -864,6 +865,83 @@ pub fn Tab(
         interaction_source,
         content,
     );
+}
+
+/// Distance from the top of the indicator to the baseline of one line of text with an icon.
+const SINGLE_LINE_TEXT_BASELINE_WITH_ICON: Dp = Dp(14.0);
+/// Distance from the top of the indicator to the last baseline of two lines of text with an icon.
+const DOUBLE_LINE_TEXT_BASELINE_WITH_ICON: Dp = Dp(6.0);
+/// Distance from the first baseline up to the icon's bottom.
+const ICON_DISTANCE_FROM_BASELINE: compose_ui::TextUnit = compose_ui::TextUnit::sp(20.0);
+
+/// A tab's text and icon, as Compose's `TabBaselineLayout`: as wide as the wider, at least the
+/// tab's height; alone, centered down it; both, by the text's baselines. Those are read only with
+/// both, where they say something (Compose reads them for a text alone too); a text slot without
+/// a baseline counts it as 0, where Compose's arithmetic overflows and loses the text.
+struct TabBaselineLayout {
+    has_text: bool,
+    has_icon: bool,
+}
+
+impl MeasurePolicy for TabBaselineLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let mut children = measurables.iter().copied();
+        let text = if self.has_text { children.next() } else { None };
+        let icon = if self.has_icon { children.next() } else { None };
+        // The text no taller than it needs.
+        let mut text_constraints = constraints;
+        text_constraints.min_height = 0;
+        let text = text.map(|text| scope.measure(text, text_constraints));
+        let icon = icon.map(|icon| scope.measure(icon, constraints));
+        let density = scope.density();
+        let width =
+            text.as_ref().map_or(0, |it| it.width).max(icon.as_ref().map_or(0, |it| it.width));
+        let spec =
+            if text.is_some() && icon.is_some() { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
+        let icon_distance = density.sp_to_px(ICON_DISTANCE_FROM_BASELINE).round() as i32;
+        let height = density.round_to_px(spec).max(
+            icon.as_ref().map_or(0, |it| it.height)
+                + text.as_ref().map_or(0, |it| it.height)
+                + icon_distance,
+        );
+        match (&text, &icon) {
+            (Some(text), Some(icon)) => {
+                let specified = |position: i32| match position {
+                    compose_ui::AlignmentLine::UNSPECIFIED => 0,
+                    position => position,
+                };
+                let first = specified(scope.alignment_line(text, compose_ui::FIRST_BASELINE));
+                let last = specified(scope.alignment_line(text, compose_ui::LAST_BASELINE));
+                let baseline_offset = if first == last {
+                    SINGLE_LINE_TEXT_BASELINE_WITH_ICON
+                } else {
+                    DOUBLE_LINE_TEXT_BASELINE_WITH_ICON
+                };
+                // From the last baseline to the tab's bottom.
+                let text_offset = density.round_to_px(baseline_offset)
+                    + density.round_to_px(TabRowDefaults::INDICATOR_HEIGHT);
+                // From the icon's top to the top of the text's box, not its baseline.
+                let icon_offset = icon.height + icon_distance - first;
+                let text_y = height - last - text_offset;
+                scope.place_relative(text, (width - text.width) / 2, text_y);
+                scope.place_relative(icon, (width - icon.width) / 2, text_y - icon_offset);
+            }
+            (Some(alone), None) | (None, Some(alone)) => {
+                scope.place_relative(alone, 0, (height - alone.height) / 2);
+            }
+            (None, None) => {}
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "TabBaselineLayout"
+    }
 }
 
 /// The style centered, as `textAlign = TextAlign.Center`.

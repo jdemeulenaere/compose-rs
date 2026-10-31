@@ -1,6 +1,5 @@
 //! Compose's `TooltipTest.kt`, adapted: `TooltipState::show` from a scope kept by the test, and a
-//! trackpad is a mouse here (`perform_mouse_input`); the baselines of `richTooltip_content_padding`
-//! are 80 % of the styles' lines, as there are no alignment lines yet (D1551).
+//! trackpad is a mouse here (`perform_mouse_input`).
 
 #![allow(non_snake_case)]
 
@@ -214,10 +213,40 @@ fn a_rich_tooltips_parts_are_at_their_baselines() {
     assert_eq!(subhead.left - container.left, 16.0);
     assert_eq!(text.left - container.left, 16.0);
     assert_eq!(action.left - container.left, 16.0);
-    // Lines of 20 sp, baselines at 16: `titleSmall` and `bodyMedium`.
-    assert_eq!(subhead.top - container.top, 28.0 - 16.0);
-    assert_eq!(text.top - subhead.bottom, 24.0 - 16.0);
+    let subhead_baseline = ui.on_node_with_tag_unmerged(SUBHEAD).get_first_baseline_position();
+    let text_baseline = ui.on_node_with_tag_unmerged(TEXT).get_first_baseline_position();
+    assert_eq!(subhead.top - container.top, 28.0 - subhead_baseline.0);
+    assert_eq!(text.top - subhead.bottom, 24.0 - text_baseline.0);
     assert_eq!(action.top - text.bottom, 16.0);
+}
+
+/// The slot's own text says, not the style: a text of another size keeps its baseline 28 dp down.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tooltip.kt, RichTooltip
+#[test]
+fn a_rich_tooltips_title_of_another_size_keeps_its_baseline_in_place() {
+    let (_owned, state) = kept(true);
+    let mut ui = rule(move || {
+        RichBox!(
+            state,
+            title = Some(|| Text!(
+                "Subhead",
+                modifier = Modifier.test_tag(SUBHEAD),
+                style = compose_ui::TextStyle {
+                    font_size: compose_ui::TextUnit::sp(10.0),
+                    line_height: compose_ui::TextUnit::sp(10.0),
+                    ..compose_ui::TextStyle::DEFAULT
+                }
+            )),
+            text = || {
+                Text!("Text", modifier = Modifier.test_tag(TEXT));
+            }
+        );
+    });
+    show(state);
+    advance(&mut ui, FADE);
+    let (container, subhead) = (bounds(&mut ui, CONTAINER), bounds(&mut ui, SUBHEAD));
+    let baseline = ui.on_node_with_tag_unmerged(SUBHEAD).get_first_baseline_position();
+    assert_eq!(subhead.top - container.top + baseline.0, 28.0);
 }
 
 /// With neither a title nor an action, the text has 4 dp above and below, as a plain one.

@@ -955,10 +955,108 @@ struct ListItemLayout {
     supporting: bool,
 }
 
-/// A supporting text taller than this is taken for two lines (Compose compares its first and
-/// last baselines; compose-rs has no alignment lines, so it uses Compose's intrinsic
-/// heuristic, `isSupportingMultilineHeuristic`).
+/// In an intrinsic measurement, with no baselines to compare, a supporting text taller than this
+/// is taken for two lines, as `isSupportingMultilineHeuristic`.
 const MULTILINE_SUPPORTING_HEIGHT: compose_ui::TextUnit = compose_ui::TextUnit::sp(30.0);
+
+impl ListItemLayout {
+    /// The leading, trailing, overline, content and supporting slots.
+    fn slots(&self, measurables: &[Measurable]) -> [Option<Measurable>; 5] {
+        let mut children = measurables.iter().copied();
+        let mut next = |present: bool| if present { children.next() } else { None };
+        [
+            next(self.leading),
+            next(self.trailing),
+            next(self.overline),
+            next(true),
+            next(self.supporting),
+        ]
+    }
+
+    /// The height with `natural` the tallest of the parts: at least the one-, two- or three-line
+    /// height less the vertical padding, or the constraints' minimum.
+    fn height(
+        &self,
+        density: compose_ui::Density,
+        lines: (bool, bool, bool),
+        natural: i32,
+        constraints: Constraints,
+    ) -> i32 {
+        let default_min = match lines {
+            (true, true, _) | (_, _, true) => THREE_LINE_HEIGHT,
+            (true, false, _) | (false, true, _) => TWO_LINE_HEIGHT,
+            (false, false, _) => ONE_LINE_HEIGHT,
+        };
+        let min_height = if constraints.min_height == 0 {
+            density
+                .round_to_px(Dp((default_min.0 - self.vertical_padding.0).max(0.0)))
+                .clamp(0, constraints.max_height)
+        } else {
+            constraints.min_height
+        };
+        natural.clamp(min_height, constraints.max_height.max(min_height))
+    }
+
+    /// As `calculateIntrinsicWidth`.
+    fn intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+        intrinsic: fn(
+            &mut compose_ui::IntrinsicMeasureScope<'_>,
+            compose_ui::IntrinsicMeasurable,
+            i32,
+        ) -> i32,
+    ) -> i32 {
+        let [leading, trailing, overline, content, supporting] =
+            self.slots(measurables).map(|slot| slot.map_or(0, |it| intrinsic(scope, it, height)));
+        leading + content.max(overline).max(supporting) + trailing
+    }
+
+    /// As `calculateIntrinsicHeight`.
+    fn intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+        intrinsic: fn(
+            &mut compose_ui::IntrinsicMeasureScope<'_>,
+            compose_ui::IntrinsicMeasurable,
+            i32,
+        ) -> i32,
+    ) -> i32 {
+        let [leading, trailing, overline, content, supporting] = self.slots(measurables);
+        let mut remaining = width;
+        let mut side = |scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+                        slot: Option<Measurable>| {
+            slot.map_or(0, |slot| {
+                let height = intrinsic(scope, slot, remaining);
+                if remaining != Constraints::INFINITY {
+                    remaining -= scope.max_intrinsic_width(slot, Constraints::INFINITY);
+                }
+                height
+            })
+        };
+        let leading = side(scope, leading);
+        let trailing = side(scope, trailing);
+        let mut part =
+            |slot: Option<Measurable>| slot.map_or(0, |it| intrinsic(scope, it, remaining));
+        let overline = part(overline);
+        let supporting = part(supporting);
+        let content = part(content);
+        let density = scope.density();
+        let multiline = supporting as f32 > density.sp_to_px(MULTILINE_SUPPORTING_HEIGHT).round();
+        let natural = leading.max(overline + supporting + content).max(trailing);
+        let lines = (overline > 0, supporting > 0, multiline);
+        self.height(
+            density,
+            lines,
+            natural,
+            Constraints::new(0, Constraints::INFINITY, 0, Constraints::INFINITY),
+        )
+    }
+}
 
 impl MeasurePolicy for ListItemLayout {
     fn measure(
@@ -967,12 +1065,7 @@ impl MeasurePolicy for ListItemLayout {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let mut children = measurables.iter().copied();
-        let mut next = |present: bool| if present { children.next() } else { None };
-        let (leading, trailing, overline) =
-            (next(self.leading), next(self.trailing), next(self.overline));
-        let content = next(true);
-        let supporting = next(self.supporting);
+        let [leading, trailing, overline, content, supporting] = self.slots(measurables);
         let loose = Constraints::new(0, constraints.max_width, 0, constraints.max_height);
         let mut offset_x = 0;
         let mut offset_y = 0;
@@ -989,16 +1082,11 @@ impl MeasurePolicy for ListItemLayout {
         offset_y += height_or_zero(&content);
         let supporting = measure(supporting, offset_x, offset_y);
         let density = scope.density();
+        // Its baselines say, not its height.
         let multiline = supporting.as_ref().is_some_and(|it| {
-            it.height as f32 > density.sp_to_px(MULTILINE_SUPPORTING_HEIGHT).round()
+            scope.alignment_line(it, compose_ui::FIRST_BASELINE)
+                != scope.alignment_line(it, compose_ui::LAST_BASELINE)
         });
-        let lines = if (overline.is_some() && supporting.is_some()) || multiline {
-            3
-        } else if overline.is_some() || supporting.is_some() {
-            2
-        } else {
-            1
-        };
         let width = if constraints.has_bounded_width() {
             constraints.max_width
         } else {
@@ -1011,19 +1099,8 @@ impl MeasurePolicy for ListItemLayout {
         let stack =
             height_or_zero(&content) + height_or_zero(&overline) + height_or_zero(&supporting);
         let natural = height_or_zero(&leading).max(stack).max(height_or_zero(&trailing));
-        let default_min = match lines {
-            1 => ONE_LINE_HEIGHT,
-            2 => TWO_LINE_HEIGHT,
-            _ => THREE_LINE_HEIGHT,
-        };
-        let min_height = if constraints.min_height == 0 {
-            density
-                .round_to_px(Dp((default_min.0 - self.vertical_padding.0).max(0.0)))
-                .clamp(0, constraints.max_height)
-        } else {
-            constraints.min_height
-        };
-        let height = natural.clamp(min_height, constraints.max_height.max(min_height));
+        let lines = (overline.is_some(), supporting.is_some(), multiline);
+        let height = self.height(density, lines, natural, constraints);
         let align = |size: i32| match self.vertical_alignment {
             Some(alignment) => alignment.align(size, height),
             None => {
@@ -1046,6 +1123,50 @@ impl MeasurePolicy for ListItemLayout {
             scope.place_relative(trailing, width - trailing.width, align(trailing.height));
         }
         scope.layout(width, height)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, height, |scope, slot, height| {
+            scope.min_intrinsic_width(slot, height)
+        })
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, measurables, width, |scope, slot, width| {
+            scope.min_intrinsic_height(slot, width)
+        })
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, height, |scope, slot, height| {
+            scope.max_intrinsic_width(slot, height)
+        })
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, measurables, width, |scope, slot, width| {
+            scope.max_intrinsic_height(slot, width)
+        })
     }
 
     fn debug_name(&self) -> &'static str {

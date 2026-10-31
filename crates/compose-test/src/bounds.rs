@@ -80,6 +80,35 @@ impl SemanticsNodeInteraction<'_> {
         to_dp(clipped, self.rule.density())
     }
 
+    /// `line`'s position in the node, as `getAlignmentLinePosition`, `Dp::UNSPECIFIED` where
+    /// nothing gives it.
+    #[track_caller]
+    pub fn get_alignment_line_position(
+        &mut self,
+        line: impl Into<compose_ui::AlignmentLine>,
+    ) -> Dp {
+        let line = line.into();
+        let node = self.fetch_semantics_snapshot();
+        let position =
+            self.rule.host.with_tree(|tree| tree.semantics_alignment_line(node.id, line));
+        match position {
+            compose_ui::AlignmentLine::UNSPECIFIED => Dp::UNSPECIFIED,
+            position => self.rule.density().to_dp(position as f32),
+        }
+    }
+
+    /// The node's first baseline, as Material's tests' `getFirstBaselinePosition`.
+    #[track_caller]
+    pub fn get_first_baseline_position(&mut self) -> Dp {
+        self.get_alignment_line_position(compose_ui::FIRST_BASELINE)
+    }
+
+    /// The node's last baseline, as Material's tests' `getLastBaselinePosition`.
+    #[track_caller]
+    pub fn get_last_baseline_position(&mut self) -> Dp {
+        self.get_alignment_line_position(compose_ui::LAST_BASELINE)
+    }
+
     /// The node's touch bounds in the root: its bounds, as compose-rs's pointer input has no
     /// minimum touch target yet (Compose widens a small clickable's to 48 dp).
     #[track_caller]

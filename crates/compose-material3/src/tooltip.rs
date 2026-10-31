@@ -1099,14 +1099,6 @@ pub fn PlainTooltip(
     );
 }
 
-/// The top padding that puts a first baseline `top` down, as `paddingFromBaseline(top)` with no
-/// alignment lines here yet: the baseline's taken at 80 % of the style's line.
-fn padding_to_baseline(top: Dp, style: &compose_ui::TextStyle) -> Dp {
-    let density = compose_ui::LOCAL_DENSITY.current();
-    let line = density.sp_to_px(style.line_height);
-    Dp((density.to_px(top) - line * 0.8).max(0.0) / density.density)
-}
-
 /// A tooltip with a title and an action, as Compose's `RichTooltip`.
 #[composable]
 #[allow(non_snake_case)]
@@ -1153,36 +1145,34 @@ pub fn RichTooltip(
                         typography.label_large.clone(),
                     );
                     if let Some(title) = title.clone() {
-                        let top = padding_to_baseline(HEIGHT_TO_SUBHEAD_FIRST_LINE, &subhead);
                         slot(
-                            Modifier.padding(PaddingValues { top, ..PaddingValues::ZERO }),
+                            Modifier.padding_from_baseline(
+                                HEIGHT_TO_SUBHEAD_FIRST_LINE,
+                                Dp::UNSPECIFIED,
+                            ),
                             colors.title_content_color,
                             subhead,
                             title,
                         );
                     }
                     let vertical = if !has_title && !has_action {
-                        PaddingValues {
+                        Modifier.padding(PaddingValues {
                             top: PLAIN_TOOLTIP_VERTICAL_PADDING,
                             bottom: PLAIN_TOOLTIP_VERTICAL_PADDING,
                             ..PaddingValues::ZERO
-                        }
+                        })
                     } else {
-                        PaddingValues {
-                            top: padding_to_baseline(
+                        Modifier
+                            .padding_from_baseline(
                                 HEIGHT_FROM_SUBHEAD_TO_TEXT_FIRST_LINE,
-                                &supporting,
-                            ),
-                            bottom: TEXT_BOTTOM_PADDING,
-                            ..PaddingValues::ZERO
-                        }
+                                Dp::UNSPECIFIED,
+                            )
+                            .padding(PaddingValues {
+                                bottom: TEXT_BOTTOM_PADDING,
+                                ..PaddingValues::ZERO
+                            })
                     };
-                    slot(
-                        Modifier.padding(vertical),
-                        colors.content_color,
-                        supporting,
-                        text.clone(),
-                    );
+                    slot(vertical, colors.content_color, supporting, text.clone());
                     if let Some(action) = action.clone() {
                         slot(
                             Modifier

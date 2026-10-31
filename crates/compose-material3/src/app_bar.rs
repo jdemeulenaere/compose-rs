@@ -1444,8 +1444,8 @@ fn bar_slot(modifier: Modifier, color: Color, style: Option<TextStyle>, content:
 /// `TopAppBarMeasurePolicy`: `height`, or more for the title, plus the paddings and the state's
 /// (negative) height offset, as wide as allowed; the icons centered down it at either end; the
 /// title aligned over the whole width but clear of them, centered down it, or at its bottom, its
-/// baseline `title_bottom_padding` up (a line's baseline taken at 80 % of its height, as the text
-/// measurer puts it, until `alignment-lines` gives the real one).
+/// last baseline (a subtitle's where there's one) `title_bottom_padding` up. The line's read only
+/// where it says something: a bar's title centered asks nothing of it.
 struct TopAppBarLayout {
     height: Dp,
     state: Option<TopAppBarState>,
@@ -1511,7 +1511,10 @@ impl MeasurePolicy for TopAppBarLayout {
         } else if self.title_bottom_padding.0 == 0.0 {
             content_height - title.height
         } else {
-            let baseline = (title.height as f32 * 0.8).round() as i32;
+            let baseline = match scope.alignment_line(&title, compose_ui::LAST_BASELINE) {
+                compose_ui::AlignmentLine::UNSPECIFIED => 0,
+                baseline => baseline,
+            };
             let from_bottom =
                 density.round_to_px(self.title_bottom_padding) - (title.height - baseline);
             // Less when there's no room for it.

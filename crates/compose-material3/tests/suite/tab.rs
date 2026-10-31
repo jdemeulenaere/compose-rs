@@ -389,6 +389,68 @@ fn a_tabs_text_is_centered_vertically() {
     }
 }
 
+/// A tab with `title` and a tagged 24 dp icon in a secondary row.
+fn tab_with_icon(title: &'static str) -> ComposeTestRule {
+    compose_test(move || {
+        MaterialTheme!({
+            Box!({
+                SecondaryTabRow!(0, modifier = Modifier.test_tag("row"), {
+                    Tab!(
+                        true,
+                        || {},
+                        text = Some(move || Text!(
+                            title,
+                            modifier = Modifier.test_tag("text"),
+                            max_lines = 2
+                        )),
+                        icon = Some(|| {
+                            Box!(modifier = Modifier.size(24.dp()).test_tag("icon"), {});
+                        })
+                    );
+                });
+            });
+        });
+    })
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TabTest.kt, singleLineTab_withIcon_textBaseline
+#[test]
+fn one_line_with_an_icon_has_its_baseline_14_dp_over_the_indicator() {
+    let mut ui = tab_with_icon("TAB");
+    let (row, text) = (bounds(&mut ui, "row"), bounds(&mut ui, "text"));
+    let baseline = ui.on_node_with_tag_unmerged("text").get_last_baseline_position();
+    assert_eq!(row.height(), 72.0);
+    assert_eq!(text.top + baseline.0, row.height() - 14.0 - 3.0);
+}
+
+/// Two lines keep theirs lower, 6 dp over the indicator, and the icon's bottom stays 20 sp over
+/// the first baseline.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tab.kt, placeTextAndIcon
+#[test]
+fn two_lines_with_an_icon_have_their_last_baseline_6_dp_over_the_indicator() {
+    let mut ui = tab_with_icon("Two line\ntext");
+    let (row, text, icon) =
+        (bounds(&mut ui, "row"), bounds(&mut ui, "text"), bounds(&mut ui, "icon"));
+    let first = ui.on_node_with_tag_unmerged("text").get_first_baseline_position();
+    let last = ui.on_node_with_tag_unmerged("text").get_last_baseline_position();
+    assert_ne!(first, last);
+    assert_eq!(text.top + last.0, row.height() - 6.0 - 3.0);
+    assert_eq!(text.top + first.0 - icon.bottom, 20.0);
+}
+
+/// One line: the icon's bottom 20 sp over the baseline, both centered across the tab.
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Tab.kt, placeTextAndIcon
+#[test]
+fn the_icon_is_over_the_baseline_and_both_are_centered_across_the_tab() {
+    let mut ui = tab_with_icon("A title");
+    let (row, text, icon) =
+        (bounds(&mut ui, "row"), bounds(&mut ui, "text"), bounds(&mut ui, "icon"));
+    let first = ui.on_node_with_tag_unmerged("text").get_first_baseline_position();
+    assert_eq!(text.top + first.0 - icon.bottom, 20.0);
+    assert!(((text.left + text.right) / 2.0 - (row.left + row.right) / 2.0).abs() <= 0.5);
+    assert!(((icon.left + icon.right) / 2.0 - (row.left + row.right) / 2.0).abs() <= 0.5);
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/TabTest.kt, leadingIconTab_textAndIconPosition
 #[test]
 fn a_leading_icon_tab_centers_its_icon_8_dp_before_its_text() {
