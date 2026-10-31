@@ -292,6 +292,11 @@ pub struct IntrinsicMeasureScope<'a> {
 }
 
 impl IntrinsicMeasureScope<'_> {
+    /// Whether this is the lookahead pass, as `isLookingAhead`.
+    pub fn is_looking_ahead(&self) -> bool {
+        self.tree.in_lookahead
+    }
+
     /// The density where the layout node is composed.
     pub fn density(&self) -> Density {
         self.tree.node(self.node).density
@@ -816,8 +821,14 @@ pub fn emit_layout_node(
     });
     // Where it's composed, which says its hash if a focus target asks (D1277).
     let composite_key = compose_runtime::current_composite_key_token();
+    // Where it's composed, once a scope's been composed at all.
+    let lookahead = crate::lookahead::any_scope_composed()
+        .then(|| anchor.get(&crate::lookahead::LOCAL_LOOKAHEAD_SCOPE));
     composer.with_applier(|tree: &mut UiTree| {
         let id = tree.id_of(node);
+        if let Some(scope) = lookahead {
+            tree.set_lookahead_scope(id, scope);
+        }
         if let Some(resolved) = resolved {
             tree.set_locals(id, resolved);
         }

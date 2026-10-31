@@ -15,6 +15,7 @@ mod font_resolver;
 mod intrinsics;
 mod layout_aware_nodes;
 mod layout_coordinates;
+mod lookahead;
 mod modifier_locals;
 mod modifier_nodes;
 mod mutable_paths;

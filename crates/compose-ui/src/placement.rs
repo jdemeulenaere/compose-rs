@@ -144,6 +144,31 @@ impl PlacementScope<'_> {
         result
     }
 
+    /// Whether this is the lookahead pass, as `isLookingAhead`.
+    pub fn is_looking_ahead(&self) -> bool {
+        self.scope.base.tree.in_lookahead
+    }
+
+    /// The coordinates of what the scope `id` is in, from the node placing: the parent of its
+    /// outermost in that scope.
+    pub(crate) fn lookahead_scope_coordinates(&self, id: u32) -> Option<LayoutCoordinates> {
+        let tree = &*self.scope.base.tree;
+        let mut current = self.scope.base.node;
+        let mut outermost = None;
+        loop {
+            let value = tree.node(current);
+            if value.lookahead.as_ref().is_some_and(|state| state.scope == id) {
+                outermost = Some(current);
+            }
+            match value.parent {
+                Some(parent) if !value.overlay => current = parent,
+                _ => break,
+            }
+        }
+        let parent = tree.node(outermost?).parent?;
+        Some(tree.coordinates_of_layer(parent, tree.node(parent).layers.len() - 1))
+    }
+
     /// `placeable[line]`: its position in the placeable, or `AlignmentLine::UNSPECIFIED`. What it
     /// reads changing places this again.
     pub fn alignment_line(
@@ -325,6 +350,9 @@ impl UiTree {
     /// Runs the blocks waiting in `node`'s subtree, top down: each once its node is placed, the
     /// children it places after it. A child not placed keeps what it waits for until it is.
     pub(crate) fn place_pass(&mut self, node: NodeId) {
+        if self.lookahead_used {
+            self.lookahead_place_first(node);
+        }
         let ran = self.node(node).needs_placement;
         if ran {
             self.run_placement_blocks(node);
@@ -392,6 +420,11 @@ impl UiTree {
         let adding = lines
             && (self.node(node).placements.as_ref())
                 .is_some_and(|it| it.blocks.iter().flatten().any(|block| block.early));
+        let in_lookahead = self.in_lookahead;
+        let key = observation_key(
+            node,
+            if in_lookahead { Observation::LookaheadPlacement } else { Observation::Placement },
+        );
         let observer = self.observer.clone();
         let mut run = || {
             let mut layer = 0;
@@ -407,16 +440,17 @@ impl UiTree {
             again
         };
         let (again, reads) = with_position_reads_of(node, || match &observer {
-            Some(observer) if adding => {
-                observer.observe_adding(observation_key(node, Observation::Placement), run)
-            }
-            Some(observer) => observer.observe(observation_key(node, Observation::Placement), run),
+            Some(observer) if adding => observer.observe_adding(key, run),
+            Some(observer) => observer.observe(key, run),
             None => run(),
         });
-        if reads || self.node(node).reader_at != u32::MAX {
+        if !in_lookahead && (reads || self.node(node).reader_at != u32::MAX) {
             self.note_reader(node, reads, false);
         }
-        if again && self.node(node).kinds.any(crate::node_chain::NodeKinds::ON_PLACED) {
+        if again
+            && !in_lookahead
+            && self.node(node).kinds.any(crate::node_chain::NodeKinds::ON_PLACED)
+        {
             self.placed_layers.push((node, 0));
         }
     }
@@ -568,12 +602,18 @@ impl UiTree {
         let first = std::mem::replace(&mut entry.first, false);
         let (block, measure_run) = (entry.block.clone(), entry.measure_run);
         let observer = self.observer.clone();
+        let key = observation_key(
+            node,
+            if self.in_lookahead {
+                Observation::LookaheadPlacement
+            } else {
+                Observation::Placement
+            },
+        );
         let pass = self.alignment_pass();
         let mut run = || pass.tree.run_placement_block(node, layer, measure_run, first, &block);
         match &observer {
-            Some(observer) => {
-                observer.observe_adding(observation_key(node, Observation::Placement), run)
-            }
+            Some(observer) => observer.observe_adding(key, run),
             None => run(),
         }
         if pass.tree.asked_while_aligning.get()

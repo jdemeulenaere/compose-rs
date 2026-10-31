@@ -295,6 +295,8 @@ impl IntrinsicMeasureScope<'_> {
 
 ## 7. Lookahead
 
+PL-5 was built with changes (D1221): a pass's fields are changed around over a scope's subtree, not read by pass everywhere, and `LookaheadCoordinates` is a type of its own.
+
 ### 7.1 The scope without virtual nodes
 
 compose-rs has no virtual layout nodes, and adding them would touch every walk of the tree (measure, draw, hit test, semantics, focus) or the applier's index arithmetic. Instead:
@@ -454,7 +456,7 @@ Each step ships with its tests, ledger rows, and the benchmark comparison.
 | PL-2 | **Done** but for `on_unplaced` (next), `alignment_line` (3.18), hosts' window origins (D1211–D1213). Live `LayoutCoordinates` (handle, access window, arithmetic, Matrix inverse from ledger 3.1), `PlacementScope::coordinates`, coordinate readers, `require_layout_coordinates`, motion frame of reference; `on_placed`/`on_unplaced`/live `on_globally_positioned` (modifier-nodes MN-11), layer-only changes reported | `PlacementLayoutCoordinatesTest` (main pass), `RequireLayoutCoordinatesTest`, `OnGloballyPositionedTest` (parent-relative queries, `onPositionedCalledWhenLayerChanged`), the coordinate cases of `LayoutNodeTest`, `UnplacedAwareModifierNodeTest`, `PlacementReusableNodeTest`, most of `PlacedChildTest`; with foundation: `PlacementScopeMotionFrameOfReferenceTest` |
 | PL-3 | **Done** (D1200–D1205). Intrinsics (policy and modifier functions, intrinsic mode, usage tracking, probes deleted, size checks); foundation's and text's formulas in their areas | `IntrinsicsMeasurementTest`, `RemeasureWithIntrinsicsTest`, `RemeasureWithIntrinsicsRealClockTest`, `RtlLayoutTest` (intrinsics scope), `MultiContentLayoutTest.customIntrinsics` |
 | PL-4 | Rulers, `RectRulers`, `invalidate_rulers`; `WindowInsetsRulers` with the host's insets | `RulerTest` (main pass), `RectRulerTest`, `WindowInsetsRulersTest` |
-| PL-5 | Lookahead core: `LookaheadScope` and its local, `LookaheadState`, the two passes with pass-through approach, lookahead coordinates, split invalidation | The first part of `LookaheadScopeTest` (`lookaheadLayoutAnimation`, `nestedLookaheadScopeTest`, `noExtraLookaheadTest`, `localLookaheadPositionOf*`, `lookaheadStaysTheSameDuringAnimationTest`, `skipPlacementOnlyPostLookahead`, `testLookaheadPlacementInvalidatedAfterRoot`), `LookaheadDelegatesTest` |
+| PL-5 | **Done** but for what wants approach layouts (D1221). Lookahead core: `LookaheadScope` and its local, `LookaheadState`, the two passes with pass-through approach, lookahead coordinates, split invalidation | The first part of `LookaheadScopeTest` (`lookaheadLayoutAnimation`, `nestedLookaheadScopeTest`, `noExtraLookaheadTest`, `localLookaheadPositionOf*`, `lookaheadStaysTheSameDuringAnimationTest`, `skipPlacementOnlyPostLookahead`, `testLookaheadPlacementInvalidatedAfterRoot`), `LookaheadDelegatesTest` |
 | PL-6 | `ApproachLayoutModifierNode`, `approach_layout`, completion and snapping, approach placement | `ApproachLayoutTest`, `TogglePlacementInLookaheadScopeTest`, the approach cases of `LookaheadScopeTest`; the lookahead cases of `PlacementLayoutCoordinatesTest`, `MeasureInPlacementTest`, `PlacedChildTest` |
 | PL-7 | Lookahead and approach intrinsics | The eight intrinsics cases of `LookaheadScopeTest` and `IntrinsicsMeasurementTest`'s lookahead case |
 | PL-8 | Lazy lists in a scope (union of wanted ranges, lookahead positions), with the foundation area | Foundation's `animateItem`-in-lookahead tests; unblocks animation's `animate_bounds` (`AnimateBoundsTest`) |

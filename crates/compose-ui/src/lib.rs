@@ -53,6 +53,7 @@ mod layout_callbacks;
 mod layout_modifiers;
 mod lifecycle;
 mod logging;
+mod lookahead;
 mod measure;
 mod modifier;
 mod modifier_local;
@@ -250,6 +251,7 @@ pub use layout_callbacks::{
 };
 pub use layout_modifiers::LineSpace;
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
+pub use lookahead::{LookaheadCoordinates, LookaheadScope};
 pub use modifier::AlignByScope;
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,

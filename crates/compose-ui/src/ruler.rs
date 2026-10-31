@@ -282,7 +282,8 @@ pub(crate) enum RulerSource {
 impl UiTree {
     /// `reader` read `ruler`: a change to it tells that reader, once.
     pub(crate) fn note_ruler_reader(&mut self, ruler: &Ruler, reader: NodeId) {
-        self.ruler_readers.entry((ruler.id(), reader)).or_insert_with(|| ruler.clone());
+        let key = (ruler.id(), reader, self.in_lookahead);
+        self.ruler_readers.entry(key).or_insert_with(|| ruler.clone());
     }
 
     /// Those under `provider` reading what `told` says, told: they place again, and read again if
@@ -291,8 +292,11 @@ impl UiTree {
         if self.ruler_readers.is_empty() {
             return;
         }
-        let readers: SmallVec<[(u64, NodeId); 4]> = (self.ruler_readers.iter())
-            .filter(|((_, reader), ruler)| told(ruler) && self.is_at_or_under(*reader, provider))
+        let in_lookahead = self.in_lookahead;
+        let readers: SmallVec<[(u64, NodeId, bool); 4]> = (self.ruler_readers.iter())
+            .filter(|((_, reader, ahead), ruler)| {
+                *ahead == in_lookahead && told(ruler) && self.is_at_or_under(*reader, provider)
+            })
             .map(|(key, _)| *key)
             .collect();
         for key in readers {
@@ -387,8 +391,19 @@ impl UiTree {
         if block {
             self.mark_needs_placement(node);
         }
+        if self.lookahead_used {
+            self.invalidate_rulers_ahead(node);
+        }
         for is_provided in lazily {
             self.tell_ruler_readers(node, |ruler| is_provided(ruler));
+        }
+    }
+
+    /// `invalidate_rulers` for the lookahead pass of what provides them.
+    #[cold]
+    fn invalidate_rulers_ahead(&mut self, node: NodeId) {
+        if self.node(node).lookahead.is_some() {
+            self.invalidate_other_pass_placement(node);
         }
     }
 

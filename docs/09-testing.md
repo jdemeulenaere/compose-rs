@@ -61,13 +61,13 @@ compose-ui's only `unsafe` is its access window (`tree_access.rs`, D1211, D1214)
 ```sh
 MIRIFLAGS=-Zmiri-ignore-leaks cargo +nightly miri test -p compose-ui --lib tree_access
 MIRIFLAGS=-Zmiri-ignore-leaks cargo +nightly miri test -p compose-ui --test suite -- \
-    coordinates_in_passes layout_coordinates delegating_nodes rulers alignment_lines \
+    coordinates_in_passes layout_coordinates delegating_nodes rulers alignment_lines lookahead \
     focus_tests::attaching focus_tests::manager focus_tests::modal focus_tests::nodes \
     focus_tests::ordered focus_tests::owner focus_tests::properties focus_tests::directional \
     focus_tests::requesting focus_tests::restoring focus_tests::states
 MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-tree-borrows" cargo +nightly miri test -p compose-ui --lib tree_access
 MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-tree-borrows" cargo +nightly miri test -p compose-ui --test suite -- \
-    coordinates_in_passes layout_coordinates delegating_nodes rulers alignment_lines \
+    coordinates_in_passes layout_coordinates delegating_nodes rulers alignment_lines lookahead \
     focus_tests::attaching focus_tests::manager focus_tests::modal focus_tests::nodes \
     focus_tests::ordered focus_tests::owner focus_tests::properties focus_tests::directional \
     focus_tests::requesting focus_tests::restoring focus_tests::states

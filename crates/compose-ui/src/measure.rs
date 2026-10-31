@@ -185,6 +185,9 @@ impl UiTree {
     /// Intrinsics don't touch this cache (they measure nothing): a node whose intrinsics were
     /// asked is measured again by the parent that asked (D1201).
     pub(crate) fn measure_node(&mut self, node: NodeId, constraints: Constraints) -> IntSize {
+        if self.lookahead_used {
+            self.lookahead_measure_first(node, constraints);
+        }
         let value = self.node(node);
         if value.constraints == Some(constraints)
             && !value.needs_measure
@@ -454,6 +457,7 @@ impl UiTree {
             let mut modifier_node = mem::replace(&mut value.chain[index].node, Box::new(Taken));
             let custom = value.chain[index].kinds.any(NodeKinds::OBSERVED);
             let run = self.next_measure_run();
+            let self_key = self.measure_key(node);
             let observer = if custom { self.observer.clone() } else { None };
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -468,9 +472,7 @@ impl UiTree {
                         .measure(&mut scope, content, constraints)
                 };
                 let result = match &observer {
-                    Some(observer) => {
-                        observer.observe(observation_key(node, Observation::Measure), measure)
-                    }
+                    Some(observer) => observer.observe(self_key, measure),
                     None => measure(),
                 };
                 relative = scope.relative;
@@ -511,6 +513,7 @@ impl UiTree {
             let measurables: &[Measurable] =
                 if scattered { &filtered } else { &children[..active] };
             let run = self.next_measure_run();
+            let self_key = self.measure_key(node);
             let observer = self.observer.clone();
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -519,9 +522,7 @@ impl UiTree {
                 let _open = scope.base.tree.open();
                 let result = match &observer {
                     Some(observer) => observer
-                        .observe(observation_key(node, Observation::Measure), || {
-                            policy.measure(&mut scope, measurables, constraints)
-                        }),
+                        .observe(self_key, || policy.measure(&mut scope, measurables, constraints)),
                     None => policy.measure(&mut scope, measurables, constraints),
                 };
                 relative = scope.relative;
@@ -550,10 +551,11 @@ impl UiTree {
                 self.alignment_position_changed(node, layer);
             }
         }
-        if resized {
+        // What's told is what's now, not what's ahead.
+        if resized && !self.in_lookahead {
             self.measure_result_changed(node, layer);
         }
-        if layout_aware {
+        if layout_aware && !self.in_lookahead {
             self.layer_measured(node, layer, measured);
         }
         if has_placements {
@@ -685,6 +687,13 @@ impl UiTree {
         }
     }
 
+    fn measure_key(&self, node: NodeId) -> u64 {
+        observation_key(
+            node,
+            if self.in_lookahead { Observation::LookaheadMeasure } else { Observation::Measure },
+        )
+    }
+
     pub(crate) fn next_measure_run(&mut self) -> u64 {
         self.measure_runs += 1;
         self.measure_runs
@@ -737,7 +746,7 @@ impl UiTree {
                 self.alignment_position_changed(node, layer);
             }
         }
-        if told {
+        if told && !self.in_lookahead {
             self.placed_layers.push((node, layer as u32));
         }
         if waiting {

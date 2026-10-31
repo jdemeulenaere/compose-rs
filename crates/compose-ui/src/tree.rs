@@ -37,17 +37,21 @@ pub(crate) enum Observation {
     /// An inner layer's block run ahead of its drawing (`run_new_layers`), apart from what its
     /// recording reads, the drawing taking that run.
     InnerLayerBlock = 7,
+    /// Its measuring in a lookahead pass (D1221): a change dirties both passes.
+    LookaheadMeasure = 8,
+    /// Its placement blocks in a lookahead pass.
+    LookaheadPlacement = 9,
 }
 
-/// The key `node`'s reads for `observation` are observed under: the kind in the top three bits
-/// (the generation's top bits go: a node's 2^29 generations wrap first).
+/// The key `node`'s reads for `observation` are observed under: the kind in the top four bits
+/// (the generation's top bits go: a node's 2^28 generations wrap first).
 pub(crate) fn observation_key(node: NodeId, observation: Observation) -> u64 {
-    node.to_ref().bits() & !(7 << 61) | (observation as u64) << 61
+    node.to_ref().bits() & !(15 << 60) | (observation as u64) << 60
 }
 
 /// The node and the kind of observation `observation_key` made `key` of.
 fn observation_of(key: u64) -> (NodeId, Observation) {
-    let observation = match key >> 61 {
+    let observation = match key >> 60 {
         0 => Observation::Measure,
         1 => Observation::Draw,
         2 => Observation::Layer,
@@ -55,9 +59,11 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
         4 => Observation::Semantics,
         5 => Observation::FocusProperties,
         6 => Observation::Placement,
-        _ => Observation::InnerLayerBlock,
+        7 => Observation::InnerLayerBlock,
+        8 => Observation::LookaheadMeasure,
+        _ => Observation::LookaheadPlacement,
     };
-    (NodeId::from_ref(NodeRef::new(key & !(7 << 61))), observation)
+    (NodeId::from_ref(NodeRef::new(key & !(15 << 60))), observation)
 }
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
@@ -142,6 +148,8 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The placement blocks of its layers (`MeasureScope::layout_with`): most nodes have none.
     pub(crate) placements: Option<Box<crate::placement::NodePlacements>>,
+    /// In a `LookaheadScope`, or under one: the results of the pass not running (D1221).
+    pub(crate) lookahead: Option<Box<crate::lookahead::LookaheadState>>,
     /// Its measurement is running.
     pub(crate) measuring: bool,
     /// Its placement blocks are running.
@@ -239,6 +247,7 @@ impl LayoutNode {
             subtree_needs_measure: false,
             placed: false,
             placements: None,
+            lookahead: None,
             measuring: false,
             laying_out: false,
             needs_placement: false,
@@ -416,6 +425,12 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// A node's in a `LookaheadScope`: measuring and placing look for its roots (D1221).
+    pub(crate) lookahead_used: bool,
+    /// What's invalidated is for the pass not ahead alone: a read made there.
+    pub(crate) one_pass: bool,
+    /// A lookahead pass is running: nodes under its root have that pass's fields.
+    pub(crate) in_lookahead: bool,
     /// A line's been read in this tree: there's someone to tell (D1219).
     pub(crate) alignment_lines_read: bool,
     /// Blocks are running to know a line, not to place: no position or ruler is told.
@@ -425,7 +440,7 @@ pub struct UiTree {
     /// Those a line's change asked of, for the rest of the layout.
     pub(crate) line_requests: Vec<NodeId>,
     /// Who read which ruler, by its id, since its last change (D1218).
-    pub(crate) ruler_readers: std::collections::HashMap<(u64, NodeId), crate::ruler::Ruler>,
+    pub(crate) ruler_readers: std::collections::HashMap<(u64, NodeId, bool), crate::ruler::Ruler>,
     /// The nodes with `UnplacedAwareModifierNode`s, and whether each was placed when last looked
     /// at.
     pub(crate) unplaced_aware: Vec<(NodeId, bool)>,
@@ -556,6 +571,9 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            lookahead_used: false,
+            one_pass: false,
+            in_lookahead: false,
             alignment_lines_read: false,
             placing_for_alignment: false,
             asked_while_aligning: std::cell::Cell::new(false),
@@ -886,6 +904,9 @@ impl UiTree {
         } else {
             self.invalidate_children_draw_of(node);
         }
+        if self.lookahead_used && !self.one_pass {
+            self.invalidate_other_pass_measure(node);
+        }
         let Some(value) = self.get_mut(node) else { return };
         value.needs_measure = true;
         let mut parent = value.parent;
@@ -1040,7 +1061,18 @@ impl UiTree {
         observer.drain_invalidated(|key| {
             let (node, observation) = observation_of(key);
             match observation {
-                Observation::Measure => self.invalidate_layout_of(node),
+                // Read in one pass's measuring, it's that pass's; in lookahead's, both's: what's
+                // ahead moves what's now.
+                Observation::Measure => {
+                    self.one_pass = true;
+                    self.invalidate_layout_of(node);
+                    self.one_pass = false;
+                }
+                Observation::LookaheadMeasure => self.invalidate_layout_of(node),
+                Observation::LookaheadPlacement => {
+                    self.placement_read_changed(node);
+                    self.invalidate_other_pass_placement(node);
+                }
                 Observation::Draw if self.get(node).is_some_and(|value| !value.deactivated) => {
                     // Its reads in its inner layers are theirs (`InnerLayers`).
                     self.invalidate_draw_before_inner_layers(node)
@@ -1780,6 +1812,10 @@ impl UiTree {
                 if value.placements.is_some() {
                     observer.forget(observation_key(id, Observation::Placement));
                 }
+                if value.lookahead.is_some() {
+                    observer.forget(observation_key(id, Observation::LookaheadMeasure));
+                    observer.forget(observation_key(id, Observation::LookaheadPlacement));
+                }
                 if !value.inner_layers.is_empty() {
                     observer.forget(observation_key(id, Observation::InnerLayerBlock));
                 }
@@ -1788,7 +1824,7 @@ impl UiTree {
                 self.inner_layer_owners.remove(&layer.key);
             }
             if !self.ruler_readers.is_empty() {
-                self.ruler_readers.retain(|(_, reader), _| *reader != id);
+                self.ruler_readers.retain(|(_, reader, _), _| *reader != id);
             }
             for entry in &mut value.chain {
                 self.forget_entry_reads(entry.id, entry.state);

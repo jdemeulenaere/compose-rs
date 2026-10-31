@@ -814,3 +814,101 @@ fn a_lazy_item_scrolled_away_hears_it_s_unplaced() {
     ui.wait_for_idle();
     assert_eq!(told.get(), 1);
 }
+
+fn in_a_scope(content: impl Fn(compose_ui::LookaheadScope) + 'static) {
+    compose_ui::LookaheadScope(callback(content));
+}
+
+type Kept = Rc<Cell<Option<LayoutCoordinates>>>;
+
+fn keeping(kept: &Kept) -> Modifier {
+    let kept = kept.clone();
+    Modifier.on_placed(move |coordinates: LayoutCoordinates| kept.set(Some(coordinates)))
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, localLookaheadPositionOfFromDisjointedLookaheadLayoutsTest
+#[test]
+fn lookahead_positions_between_two_scopes_go_through_what_s_around_them() {
+    let (first, second, scope): (Kept, Kept, Rc<Cell<Option<compose_ui::LookaheadScope>>>) =
+        (Rc::default(), Rc::default(), Rc::default());
+    let (f, s, sc) = (first.clone(), second.clone(), scope.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let (f, s, sc) = (f.clone(), s.clone(), sc.clone());
+        Row!(
+            modifier = Modifier.fill_max_size(),
+            horizontal_arrangement = Arrangement::SPACE_AROUND,
+            vertical_alignment = Alignment::CENTER_VERTICALLY,
+            |_| {
+                let f = f.clone();
+                in_a_scope(move |_| {
+                    Box!(modifier = Modifier.size(dp(200)).then(keeping(&f)), {});
+                });
+                let (s, sc) = (s.clone(), sc.clone());
+                Box!(
+                    modifier = Modifier
+                        .padding(PaddingValues::new(dp(70), dp(30), dp(0), dp(0)))
+                        .offset(dp(40), dp(60)),
+                    {
+                        let (s, sc) = (s.clone(), sc.clone());
+                        in_a_scope(move |scope| {
+                            sc.set(Some(scope));
+                            Box!(modifier = Modifier.size((dp(100), dp(50))).then(keeping(&s)), {});
+                        });
+                    }
+                );
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let (first, second) = (first.get().expect("placed"), second.get().expect("placed"));
+    let scope = scope.get().expect("composed");
+    assert_eq!(
+        scope.local_lookahead_position_of(second, first, Offset::ZERO),
+        second.local_position_of(&first, Offset::ZERO)
+    );
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, localLookaheadPositionOfFromNestedLookaheadLayoutsTest
+#[test]
+fn lookahead_positions_in_nested_scopes_are_where_they_are() {
+    let (first, second, scope): (Kept, Kept, Rc<Cell<Option<compose_ui::LookaheadScope>>>) =
+        (Rc::default(), Rc::default(), Rc::default());
+    let (f, s, sc) = (first.clone(), second.clone(), scope.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let (f, s, sc) = (f.clone(), s.clone(), sc.clone());
+        in_a_scope(move |scope| {
+            sc.set(Some(scope));
+            let (f, s) = (f.clone(), s.clone());
+            Row!(
+                modifier = Modifier.fill_max_size().then(keeping(&f)),
+                horizontal_arrangement = Arrangement::SPACE_AROUND,
+                vertical_alignment = Alignment::CENTER_VERTICALLY,
+                |_| {
+                    Box!(modifier = Modifier.size(dp(200)), {});
+                    let s = s.clone();
+                    Box!(
+                        modifier = Modifier
+                            .padding(PaddingValues::new(dp(70), dp(30), dp(0), dp(0)))
+                            .offset(dp(40), dp(60)),
+                        {
+                            let s = s.clone();
+                            in_a_scope(move |_| {
+                                Box!(
+                                    modifier = Modifier.size((dp(100), dp(50))).then(keeping(&s)),
+                                    {}
+                                );
+                            });
+                        }
+                    );
+                }
+            );
+        });
+    });
+    ui.wait_for_idle();
+    let (first, second) = (first.get().expect("placed"), second.get().expect("placed"));
+    let scope = scope.get().expect("composed");
+    assert_eq!(
+        scope.local_lookahead_position_of(second, first, Offset::ZERO),
+        second.local_position_of(&first, Offset::ZERO)
+    );
+}

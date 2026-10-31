@@ -163,6 +163,20 @@ impl LayoutCoordinates {
         requests.window.read(|_| ()).is_none() && !peek_tree(self.tree, &mut |_| ())
     }
 
+    /// `read`, with the node and layer it names, for its lookahead results (no position's read
+    /// of the other pass, so nothing's noted as depending on one).
+    #[track_caller]
+    pub(crate) fn read_lookahead<R>(
+        &self,
+        read: impl FnOnce(&UiTree, NodeId, usize) -> R,
+    ) -> Option<R> {
+        self.read(|tree| {
+            let place = tree.find_place(self)?;
+            Some(read(tree, place.node, place.layer))
+        })
+        .flatten()
+    }
+
     /// Whether what it names is in the tree, as `isAttached`.
     #[track_caller]
     pub fn is_attached(&self) -> bool {
