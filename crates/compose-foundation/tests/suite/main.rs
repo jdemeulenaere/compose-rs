@@ -29,6 +29,7 @@ mod layout_reuse;
 mod lazy;
 mod lazy_animate_grid;
 mod lazy_animate_item;
+mod lazy_animate_staggered;
 mod lazy_animate_support;
 mod lazy_api;
 mod lazy_cache_window;

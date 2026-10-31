@@ -181,9 +181,9 @@ The grid is there, with its cache window (D1469, D1470).
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridContentPaddingTest.kt | 11 | Content padding | ported (`lazy_staggered_grid.rs`, `lazy_staggered_grid_pins.rs`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridCustomKeysTest.kt | 21 | Keys keep state | ported (`lazy_staggered_grid_keys.rs`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridInLookaheadTest.kt | 13 | Positions under lookahead | feature:ui-lookahead |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemAppearanceAnimationTest.kt | 10 | `animateItem` fade-in | feature:animate-item |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemDisappearanceAnimationTest.kt | 12 | `animateItem` fade-out | feature:animate-item |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemPlacementAnimationTest.kt | 49 | `animateItem` placement | feature:animate-item |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemAppearanceAnimationTest.kt | 10 | `animateItem` fade-in | partial (`lazy_animate_staggered.rs`: 3; the rest run through the list's animator, `lazy_animate_item.rs`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemDisappearanceAnimationTest.kt | 12 | `animateItem` fade-out | partial (`lazy_animate_staggered.rs`: 3, `wholeLineRemoved` among them; left: reversed and padded ones, re-adding) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridItemPlacementAnimationTest.kt | 49 | `animateItem` placement | partial (`lazy_animate_staggered.rs`: 19, each orientation, reversed or not; `columnCountChange` reads only the first item, D1472. Left: those the list's file ports the same way, `animateSpacingChange`, the `_differentSpans` ones) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLaneInfoTest.kt | 10 | Lane bookkeeping (internal `LazyStaggeredGridLaneInfo`) | ported (`lazy_staggered_grid.rs`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridLayoutInfoTest.kt | 6 | `layoutInfo` | ported (`lazy_staggered_grid.rs`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/staggeredgrid/LazyStaggeredGridPinnableContainerTest.kt | 13 | Pinning | ported (`lazy_staggered_grid_pins.rs`) |
@@ -378,7 +378,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
 - **lazy-semantics:** `CollectionInfo`, `ScrollToIndex` and `scrollByOffset` are done on lists, grids and pagers (D1468), a traversal group too. Left: `CollectionItemInfo` and `IndexForKey`, for `performScrollToKey`.
 - **pinnable:** (Started, D1282: `LOCAL_PINNABLE_CONTAINER`, `PinnableContainer` and `PinnedHandle` in ui, lazy items pinned one at a time by what's focusable; the rest of this waits.) `LocalPinnableContainer`/`PinnableContainer` (ui) honoured by lazy items, `LazyLayoutPinnableItem`, `LazyLayoutPinnedItemList`.
 - **beyond-bounds-api:** ui's `BeyondBoundsLayout` (`ModifierLocalBeyondBoundsLayout`, `layout(direction) {}`) answered by lazy layouts. compose-rs answers focus searches only.
-- **animate-item:** `Modifier::animate_item` and `animate_item_with(scope, fade_in_spec, placement_spec, fade_out_spec)` (`AnimateItemModifier`), D1472: lists and grids done. Left: staggered grids; lookahead scopes.
+- **animate-item:** `Modifier::animate_item` and `animate_item_with(scope, fade_in_spec, placement_spec, fade_out_spec)` (`AnimateItemModifier`), D1472: lists, grids and staggered grids (`LazyStaggeredGridItemScope`) done. Left: lookahead scopes, the rows' remaining tests.
 - **lazy-layout-public:**
   - layout: `LazyLayout(itemProvider, modifier, prefetchState, measurePolicy)`, `LazyLayoutItemProvider`, `LazyLayoutMeasurePolicy`, `LazyLayoutMeasureScope.compose(index)`;
   - prefetch: `LazyLayoutPrefetchState` (`schedulePrecomposition`, `schedulePrecompositionAndPremeasure`, `PrefetchHandle.cancel`/`markAsUrgent`, `PrefetchResultScope`), the `onNestedPrefetch` constructor (*exp*), `NestedPrefetchScope` (*exp*);
@@ -524,7 +524,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Depends on: ui modifier locals. compose-rs's `lay_out_beyond_bounds` is the mechanism, focus-only.
     - Size: M. Experimental: no.
 25. **animate-item.**
-    - API: `animateItem` for lists and grids (staggered with 27). Lists and grids done (D1472).
+    - API: `animateItem` for lists and grids (staggered with 27). Done for all three (D1472); lookahead scopes aren't told apart yet.
     - Does: fades items in and out and animates moves, keeping items moving out of view composed while they leave; a removed item is drawn from what it last drew, as Compose's.
     - Tests: the 3 list, 3 grid and 3 staggered animation files.
     - Depends on: lazy-layout-info (tests), animation (exists); ui lookahead for the lookahead variants (ui ledger).
@@ -534,7 +534,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: all 25 pager files.
     - Depends on: scrollable, lazy-state-api, snapping, cache-window, bring-into-view, pinnable, lazy-semantics, scroll-indicator-state. Built on compose-rs's lazy list internals.
     - Size: XL. Experimental: no.
-27. **staggered-grid.** The grid and its window are done (D1469, D1470); 192 of the 317 tests ported. `scrollIndicatorState` is in (D1568). Left: the animation files with `animate-item`, and lookahead.
+27. **staggered-grid.** The grid and its window are done (D1469, D1470); 192 of the 317 tests ported. `scrollIndicatorState` is in (D1568), `animate_item` too (D1472). Left: the rest of its animation files, and lookahead.
     - API: `LazyVerticalStaggeredGrid`, `LazyHorizontalStaggeredGrid` and their API.
     - Tests: all 20 staggered files.
     - Depends on: lazy-layout-info, lazy-state-api, cache-window (staggered's default), animate-item, pinnable, beyond-bounds-api, ui lookahead.

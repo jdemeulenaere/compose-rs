@@ -42,10 +42,10 @@ pub use grid::{
 pub use item_animator::{AnimateItemModifier, AnimateItemScope};
 pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, LazyListLayoutInfo};
 pub use staggered::{
-    LazyHorizontalStaggeredGrid, LazyStaggeredGridItemInfo, LazyStaggeredGridLaneInfo,
-    LazyStaggeredGridLayoutInfo, LazyStaggeredGridScope, LazyStaggeredGridState,
-    LazyVerticalStaggeredGrid, NO_SPACING, StaggeredGridCells, StaggeredGridItemSpan,
-    remember_lazy_staggered_grid_state,
+    LazyHorizontalStaggeredGrid, LazyStaggeredGridItemInfo, LazyStaggeredGridItemScope,
+    LazyStaggeredGridLaneInfo, LazyStaggeredGridLayoutInfo, LazyStaggeredGridScope,
+    LazyStaggeredGridState, LazyVerticalStaggeredGrid, NO_SPACING, StaggeredGridCells,
+    StaggeredGridItemSpan, remember_lazy_staggered_grid_state,
 };
 
 use std::cell::{Cell, RefCell};
