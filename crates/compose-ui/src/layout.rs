@@ -176,6 +176,32 @@ impl Placeable {
     }
 }
 
+/// What `Modifier::align_by_block` works out a line from, as Compose's `Measured`.
+pub struct Measured<'s, 'a> {
+    scope: &'s mut MeasureScope<'a>,
+    placeable: &'s Placeable,
+}
+
+impl Measured<'_, '_> {
+    /// Its width as it measured itself, as `measuredWidth`.
+    pub fn measured_width(&self) -> i32 {
+        self.placeable.measured.width
+    }
+
+    /// Its height as it measured itself, as `measuredHeight`.
+    pub fn measured_height(&self) -> i32 {
+        self.placeable.measured.height
+    }
+
+    /// Where `line` is in it, as `get`.
+    pub fn alignment_line(&mut self, line: impl Into<crate::alignment_line::AlignmentLine>) -> i32 {
+        self.scope.alignment_line(self.placeable, line)
+    }
+}
+
+/// `Modifier::align_by_block`'s block.
+pub type AlignByBlock = dyn Fn(&mut Measured<'_, '_>) -> i32;
+
 /// The size a policy or layout modifier measured, from [`MeasureScope::layout`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MeasureResult {
@@ -598,6 +624,22 @@ impl<'a> MeasureScope<'a> {
             self.base.tree.enter().give_alignment_lines(node, layer, lines);
         }
         self
+    }
+
+    /// Where a child given `Modifier::align_by_block` says its line is.
+    #[doc(hidden)]
+    pub fn align_by_block_position(
+        &mut self,
+        measurable: Measurable,
+        placeable: &Placeable,
+    ) -> i32 {
+        let block = (self.base.tree.node(measurable.node).modifier.elements().iter())
+            .find_map(|element| match element {
+                crate::modifier::Element::AlignBlock(block) => Some(block.clone()),
+                _ => None,
+            })
+            .expect("compose-ui: its parent data says it has one");
+        block(&mut Measured { scope: self, placeable })
     }
 
     /// `provide_alignment_lines` of the two baselines: what a text gives, at no cost beyond a store

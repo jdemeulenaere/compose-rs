@@ -230,6 +230,28 @@ impl Modifier {
         self.then_element(Element::Align(S::parent_alignment(alignment)))
     }
 
+    /// Aligns it across its row or column by `line`, as `alignBy(alignmentLine)`: its line and those
+    /// of its siblings aligned by one coincide, as far as that takes. A form of `align`, the
+    /// outermost of them winning.
+    pub fn align_by<S: AlignByScope>(self, _scope: S, line: S::Line) -> Modifier {
+        self.then_element(Element::Align(ParentAlignment::Line(line.into())))
+    }
+
+    /// `align_by` the first baseline, as `RowScope.alignByBaseline`.
+    pub fn align_by_baseline(self, scope: RowScope) -> Modifier {
+        self.align_by(scope, crate::alignment_line::FIRST_BASELINE)
+    }
+
+    /// `align_by` where `block` says it is, as `alignBy(alignmentLineBlock)`: another closure is
+    /// another modifier, as Compose's lambda.
+    pub fn align_by_block<S: AlignByScope>(
+        self,
+        _scope: S,
+        block: impl Fn(&mut crate::layout::Measured<'_, '_>) -> i32 + 'static,
+    ) -> Modifier {
+        self.then_element(Element::AlignBlock(Rc::new(block)))
+    }
+
     /// Parent data filling `fraction` of a flow layout's line across it: what foundation's
     /// `fill_max_row_height` and `fill_max_column_width` give (D1350).
     ///
@@ -745,6 +767,10 @@ pub enum ParentAlignment {
     Box(Alignment),
     Horizontal(HorizontalAlignment),
     Vertical(VerticalAlignment),
+    /// `align_by` a line: its siblings' and its own lines coincide.
+    Line(crate::alignment_line::AlignmentLine),
+    /// `align_by_block`, by which closure: compared, so a new one is told to the parent.
+    Block(usize),
 }
 
 /// The data a child gives its parent's measure policy, as Compose's parent data modifiers.
@@ -765,6 +791,19 @@ pub trait WeightScope: Copy {}
 pub trait AlignScope: Copy {
     type Alignment;
     fn parent_alignment(alignment: Self::Alignment) -> ParentAlignment;
+}
+
+/// A scope whose children take an `align_by`, what kind of line saying which way it aligns.
+pub trait AlignByScope: Copy {
+    type Line: Into<crate::alignment_line::AlignmentLine>;
+}
+
+impl AlignByScope for RowScope {
+    type Line = crate::alignment_line::HorizontalAlignmentLine;
+}
+
+impl AlignByScope for ColumnScope {
+    type Line = crate::alignment_line::VerticalAlignmentLine;
 }
 
 /// The content scope of a `Row`: a token only a `Row` makes, so its scoped modifiers can't be
@@ -849,6 +888,8 @@ pub(crate) enum Element {
     Fill(Fill),
     Weight(f32, bool),
     Align(ParentAlignment),
+    /// `align_by_block`: `Align(Block)` read from the elements, with the block it names.
+    AlignBlock(Rc<crate::layout::AlignByBlock>),
     FillCrossAxis(f32),
     Background(Color, Shape),
     /// A solid border (a brush's is a custom element, as `background_with`'s).
@@ -886,6 +927,7 @@ impl Element {
             | Element::Fill(_) => ANY.with(NodeKinds::LAYOUT),
             Element::Weight(..)
             | Element::Align(_)
+            | Element::AlignBlock(_)
             | Element::ZIndex(_)
             | Element::FillCrossAxis(_) => ANY,
             Element::LazyItemBoundary => ANY.with(NodeKinds::REPAINT_BOUNDARY),
@@ -984,6 +1026,7 @@ impl fmt::Debug for Element {
             },
             Weight(weight, fill) => write!(formatter, "weight({weight}, {fill})"),
             Align(alignment) => write!(formatter, "align({alignment:?})"),
+            AlignBlock(_) => write!(formatter, "align_by_block"),
             FillCrossAxis(fraction) => write!(formatter, "fill_cross_axis({fraction})"),
             Background(color, shape) => write!(formatter, "background({color:?}, {shape:?})"),
             Border(width, color, shape) => {

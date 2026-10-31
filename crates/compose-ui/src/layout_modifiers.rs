@@ -100,6 +100,159 @@ impl Modifier {
     }
 }
 
+/// How far from a line `padding_from` keeps its layout's edges.
+#[derive(Clone, Copy, PartialEq)]
+pub enum LineSpace {
+    Dp(Dp),
+    Sp(crate::unit::TextUnit),
+}
+
+impl LineSpace {
+    /// In pixels, if it's specified.
+    fn resolved(self, density: &crate::unit::Density) -> Option<i32> {
+        match self {
+            LineSpace::Dp(dp) if dp.0.is_nan() => None,
+            LineSpace::Dp(dp) => Some(density.round_to_px(dp)),
+            LineSpace::Sp(sp) if sp.is_unspecified() => None,
+            LineSpace::Sp(sp) => {
+                Some(density.round_to_px(Dp(density.sp_to_px(sp) / density.density)))
+            }
+        }
+    }
+}
+
+impl From<Dp> for LineSpace {
+    fn from(dp: Dp) -> LineSpace {
+        LineSpace::Dp(dp)
+    }
+}
+
+impl From<crate::unit::TextUnit> for LineSpace {
+    fn from(sp: crate::unit::TextUnit) -> LineSpace {
+        LineSpace::Sp(sp)
+    }
+}
+
+impl Modifier {
+    /// Pads it so `line` is `before` from its start and `after` from its end, as
+    /// `Modifier.paddingFrom`, in `Dp` or `sp`: `Dp::UNSPECIFIED` or `TextUnit::UNSPECIFIED` for
+    /// neither. As far as its constraints allow.
+    ///
+    /// # Panics
+    ///
+    /// For a negative `Dp`, as Compose's.
+    pub fn padding_from(
+        self,
+        line: impl Into<crate::alignment_line::AlignmentLine>,
+        before: impl Into<LineSpace>,
+        after: impl Into<LineSpace>,
+    ) -> Modifier {
+        let (before, after) = (before.into(), after.into());
+        for space in [before, after] {
+            if let LineSpace::Dp(dp) = space {
+                assert!(
+                    dp.0 >= 0.0 || dp.0.is_nan(),
+                    "compose-ui: padding from an alignment line must be a non-negative number"
+                );
+            }
+        }
+        self.then_custom(LayoutData(PaddingFrom { line: line.into(), before, after }))
+    }
+
+    /// The first baseline `top` from its top and the last one `bottom` from its bottom, as
+    /// `Modifier.paddingFromBaseline`, in `Dp` or `sp`, those unspecified left out.
+    pub fn padding_from_baseline(
+        self,
+        top: impl Into<LineSpace>,
+        bottom: impl Into<LineSpace>,
+    ) -> Modifier {
+        let (top, bottom) = (top.into(), bottom.into());
+        let specified = |space: LineSpace| match space {
+            LineSpace::Dp(dp) => !dp.0.is_nan(),
+            LineSpace::Sp(sp) => !sp.is_unspecified(),
+        };
+        let mut modifier = self;
+        if specified(top) {
+            modifier =
+                modifier.padding_from(crate::alignment_line::FIRST_BASELINE, top, Dp::UNSPECIFIED);
+        }
+        if specified(bottom) {
+            modifier = modifier.padding_from(
+                crate::alignment_line::LAST_BASELINE,
+                Dp::UNSPECIFIED,
+                bottom,
+            );
+        }
+        modifier
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct PaddingFrom {
+    line: crate::alignment_line::AlignmentLine,
+    before: LineSpace,
+    after: LineSpace,
+}
+
+impl LayoutRule for PaddingFrom {
+    const NAME: &'static str = "padding_from";
+
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let horizontal = self.line.is_horizontal();
+        // Loose across the line, what's pads it.
+        let mut loose = constraints;
+        if horizontal {
+            loose.min_height = 0;
+        } else {
+            loose.min_width = 0;
+        }
+        let placeable = scope.measure(content, loose);
+        let position = scope.alignment_line(&placeable, self.line);
+        let position = if position == crate::alignment_line::AlignmentLine::UNSPECIFIED {
+            0
+        } else {
+            position
+        };
+        let (axis, axis_max) = if horizontal {
+            (placeable.height, constraints.max_height)
+        } else {
+            (placeable.width, constraints.max_width)
+        };
+        let density = scope.density();
+        let before = self.before.resolved(&density);
+        let after = self.after.resolved(&density);
+        let padding_before = (before.unwrap_or(0) - position).clamp(0, (axis_max - axis).max(0));
+        let padding_after = (after.unwrap_or(0) - axis + position)
+            .clamp(0, (axis_max - axis - padding_before).max(0));
+        let (width, height) = if horizontal {
+            (
+                placeable.width,
+                (padding_before + placeable.height + padding_after).max(constraints.min_height),
+            )
+        } else {
+            (
+                (padding_before + placeable.width + padding_after).max(constraints.min_width),
+                placeable.height,
+            )
+        };
+        let along = |size: i32, own: i32| {
+            if before.is_some() { padding_before } else { size - padding_after - own }
+        };
+        let (x, y) = if horizontal {
+            (0, along(height, placeable.height))
+        } else {
+            (along(width, placeable.width), 0)
+        };
+        scope.place_relative(&placeable, x, y);
+        scope.layout(width, height)
+    }
+}
+
 /// What a data-only layout modifier measures with.
 trait LayoutRule: PartialEq + Clone + 'static {
     const NAME: &'static str;

@@ -1567,6 +1567,10 @@ impl UiTree {
                 Element::Align(alignment) if parent_data.alignment.is_none() => {
                     parent_data.alignment = Some(*alignment)
                 }
+                Element::AlignBlock(block) if parent_data.alignment.is_none() => {
+                    let id = Rc::as_ptr(block).cast::<()>() as usize;
+                    parent_data.alignment = Some(crate::modifier::ParentAlignment::Block(id));
+                }
                 Element::FillCrossAxis(fraction)
                     if parent_data.fill_cross_axis_fraction.is_none() =>
                 {

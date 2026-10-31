@@ -238,6 +238,7 @@ pub use interaction::{
     PressInteraction,
 };
 pub use intl::{LOCAL_LOCALE_LIST, Locale, LocaleList};
+pub use layout::{AlignByBlock, Measured};
 pub use layout::{
     EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
@@ -247,7 +248,9 @@ pub use layout_callbacks::{
     GlobalPositionAwareModifierNode, LayoutAwareModifierNode, MeasuredSizeAwareModifierNode,
     UnplacedAwareModifierNode,
 };
+pub use layout_modifiers::LineSpace;
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
+pub use modifier::AlignByScope;
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,
     FocusEventModifierNode, FocusRequesterModifierNode, FocusTargetModifierNode, InspectorInfo,

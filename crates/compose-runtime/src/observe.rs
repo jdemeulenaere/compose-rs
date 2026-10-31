@@ -153,7 +153,13 @@ impl ReadObserver {
         self.observe_inner(key, exclusive, false, f)
     }
 
-    fn observe_inner<R>(&self, key: u64, exclusive: bool, adding: bool, f: impl FnOnce() -> R) -> R {
+    fn observe_inner<R>(
+        &self,
+        key: u64,
+        exclusive: bool,
+        adding: bool,
+        f: impl FnOnce() -> R,
+    ) -> R {
         let previous = with_runtime(|runtime| {
             // Inside an observation of the same key (a node's layout modifiers around its
             // policy), the reads add to it, seen from here: a `without_read_observation` around

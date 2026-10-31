@@ -30,6 +30,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         // doesn't allocate.
         Element::Weight(..)
         | Element::Align(_)
+        | Element::AlignBlock(_)
         | Element::FillCrossAxis(_)
         | Element::ZIndex(_) => Box::new(Inert),
         Element::LazyItemBoundary => Box::new(crate::graphics_layer::RepaintBoundaryNode),
@@ -86,6 +87,7 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::Fill(fill) => set!(FillNode, FillNode(*fill)),
         Element::Weight(..)
         | Element::Align(_)
+        | Element::AlignBlock(_)
         | Element::FillCrossAxis(_)
         | Element::ZIndex(_)
         | Element::LazyItemBoundary => {}
