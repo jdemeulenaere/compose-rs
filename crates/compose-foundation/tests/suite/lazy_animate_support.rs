@@ -27,9 +27,12 @@ pub fn anim_spec() -> AnimationSpec {
     tween(DURATION as u32).easing(LINEAR_EASING).into()
 }
 
-/// Runs the frame that lays out what's asked and the one its animations start at (they're launched
-/// in the first), and then `on_frame` at each `FRAME` of `duration`, with the fraction of it passed,
-/// as Compose's tests' `onAnimationFrame`.
+/// Runs the frame that lays out what's asked and the one its animations start at, then `on_frame`
+/// at each `FRAME` of `duration`, with the fraction of it passed, as Compose's tests'
+/// `onAnimationFrame`, with a frame more: here `items(list)` is read in the content's composition
+/// at the frame, where Compose's is read in measure, and what changes in a composition takes this
+/// frame there too (`animateAlignmentChange` adds it itself, `LazyListItemPlacementAnimationTest.kt`,
+/// lines 831-832). The frame of the change draws the old place.
 pub fn on_animation_frame_of(
     ui: &mut ComposeTestRule,
     duration: u64,

@@ -404,17 +404,17 @@ fn a_small_scroll_animates_nothing() {
 fn a_jump_animates_nothing() {
     for params in PARAMS {
         let options = ListOptions { max_size: ITEM * 3, ..ListOptions::default() };
-        let mut fixture = Fixture::new(params, options, vec![0, 1, 2, 3, 4]);
+        let mut fixture = Fixture::new(params, options, vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let state = fixture.state;
         run(&mut fixture.ui, async move {
-            state.scroll_to_item(1, ITEM / 2).await.ok();
+            state.scroll_to_item(0, ITEM / 2).await.ok();
         });
         on_animation_frame(&mut fixture.ui, |ui, fraction| {
             let half = f(ITEM / 2);
             assert_positions_of(
                 ui,
                 params,
-                &[(1, -half), (2, f(ITEM) - half), (3, f(ITEM * 2) - half)],
+                &[(0, -half), (1, half), (2, half * 3.0), (3, half * 5.0)],
                 Some(fraction),
                 params.reverse,
             );
@@ -426,9 +426,8 @@ fn a_jump_animates_nothing() {
 #[test]
 fn a_scroll_moves_the_items_moving_in_view() {
     for params in PARAMS {
-        let options = ListOptions { max_size: ITEM * 3, ..ListOptions::default() };
-        let mut fixture = Fixture::new(params, options, vec![0, 1, 2, 3]);
-        let scroll = ITEM / 2;
+        let mut fixture = Fixture::new(params, ListOptions::default(), vec![0, 1, 2, 3]);
+        let scroll = SPACING;
         fixture.set_list(vec![0, 2, 1, 3]);
         let state = fixture.state;
         on_animation_frame(&mut fixture.ui, |ui, fraction| {

@@ -326,7 +326,6 @@ fn an_item_of_a_lane_growing_moves_the_next_ones() {
 #[test]
 fn each_child_of_a_staggered_item_moves() {
     for params in PARAMS {
-        // Stacked at the origin here, as a grid's: each goes where the item goes.
         let content = move |scope: &LazyStaggeredGridScope, list: Vec<i32>| {
             scope.items_list_keyed(
                 list,
@@ -338,6 +337,12 @@ fn each_child_of_a_staggered_item_moves() {
             );
         };
         let mut fixture = fixture_of(params, GridOptions::new(1, ITEM * 2), vec![0, 2], content);
+        assert_positions_of(
+            &mut fixture.ui,
+            params,
+            &[(0, 0.0, 0.0), (1, 0.0, 0.0), (2, 0.0, f(ITEM)), (3, 0.0, f(ITEM))],
+            0.0,
+        );
         fixture.set_list(vec![2, 0]);
         on_animation_frame(&mut fixture.ui, |ui, fraction| {
             let (up, down) = (f(ITEM) * fraction, f(ITEM) - f(ITEM) * fraction);
@@ -607,9 +612,10 @@ fn a_change_of_lanes_leaves_the_first_where_it_is() {
     });
     ui.run_on_ui_thread(|_| cells.set(1));
     on_animation_frame(&mut ui, |ui, fraction| {
-        // Item 1's node isn't placed here, as it's out of the one lane; Compose's keeps its last
-        // position, D1472.
+        // Item 1 is out of the one lane: its node is gone here, where Compose's keeps its last
+        // position unplaced (D1472).
         assert_positions_of(ui, params, &[(0, 0.0, 0.0)], fraction);
+        ui.on_node_with_tag("1").assert_does_not_exist();
     });
 }
 
