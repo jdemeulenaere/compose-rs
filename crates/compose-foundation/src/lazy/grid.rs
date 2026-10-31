@@ -20,6 +20,7 @@ use compose_ui::{
     MeasureScope, Modifier, PaddingValues, Placeable, PrefetchScheduler,
 };
 
+use super::item_animator;
 use super::layout_info::{LaidItem, LaidViewport};
 use super::prefetch::{Laid, Policy, Units};
 use super::{
@@ -317,6 +318,8 @@ impl LazyGridState {
                 .inner()
                 .map_or(1, |inner| inner.laid_out.read_untracked(|_, viewport| viewport.max_span));
             let scope = state.lazy_layout_scroll_scope(scope);
+            let animator = state.list.inner().map(|inner| inner.item_animator.clone());
+            let _skipping = animator.map(item_animator::SkipAnimation::new);
             super::animate_scroll::animate_scroll_to_item(
                 &scope,
                 index,
@@ -1219,6 +1222,7 @@ fn LazyGrid(
         })
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
         .focus_group();
+    let modifier = item_animator::displaying(modifier, &list.inner_or_detached(), list);
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).
     let holder = compose_runtime::remember_saveable_state_holder();
@@ -1809,6 +1813,11 @@ impl MeasurePolicy for LazyGridLayout {
         {
             first_item = found;
         }
+        let animator = state.item_animator.clone();
+        // Where a scroll started from, for an item's place not to animate what it moved.
+        let scrolled_from = (!animator.idle() && scrolled != 0.0).then(|| {
+            (first_item, (offset - scrolled).round(), scrolled - animator.take_scroll_back_left())
+        });
         if count == 0 {
             // As a list's: the initial position waits for the first items; a grid emptied
             // starts again at its top.
@@ -1848,6 +1857,28 @@ impl MeasurePolicy for LazyGridLayout {
                 IntSize::new(
                     constraints.constrain_width(main_padding),
                     constraints.constrain_height(cross_padding),
+                )
+            };
+            // Its items gone, what they drew may fade out, and it holds their room for that.
+            let size = if animator.idle() {
+                animator.note_items(&info.items, 0);
+                size
+            } else {
+                let pass = item_animator::Pass {
+                    items: &info.items,
+                    vertical,
+                    reverse,
+                    mirror: (1, 1),
+                    main_size: if vertical { size.height } else { size.width },
+                    lane_count: 1,
+                    layout_min: 0,
+                    layout_max: 0,
+                };
+                animator.on_measured(state, &pass, &[], &mut |_, _| None);
+                let min = animator.min_size_to_fit_disappearing();
+                IntSize::new(
+                    constraints.constrain_width(size.width.max(min.width)),
+                    constraints.constrain_height(size.height.max(min.height)),
                 )
             };
             state.laid_out.begin();
@@ -1948,7 +1979,12 @@ impl MeasurePolicy for LazyGridLayout {
             {
                 offset -= gap;
                 scrolled_back += gap as i32;
+                let pending_before_gap = state.pending.get();
                 let wanted = step_back(m, state, spacing, &mut index, &mut offset);
+                if wanted > 0 {
+                    // Left to the next round, and no scroll anyone asked for.
+                    animator.note_scroll_back_left(state.pending.get() - pending_before_gap);
+                }
                 wanted_before = wanted_before.max(wanted);
                 if wanted > 0 {
                     break;
@@ -2371,20 +2407,133 @@ impl MeasurePolicy for LazyGridLayout {
         if m.sizes.len() > 4 * near {
             m.sizes.retain(|item| item.abs_diff(first_item) <= near);
         }
+        // `animate_item`: where its items are, and those moving out of view.
+        let rtl = m.scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        let mut main_total = main_total;
+        let mut cross_total = cross_max;
+        let mut animated_items: Vec<(u64, Placeable, i32, i32)> = Vec::new();
+        let (mut moved_to_start, mut moved_to_end) = (Vec::new(), Vec::new());
+        if !animator.idle() {
+            if let Some((from_item, from_offset, asked)) = scrolled_from {
+                let from_line = m.lines.line_of(from_item.min(count - 1));
+                let moved = m.line_sizes.distance(
+                    (from_line, from_offset),
+                    (index, offset.round()),
+                    spacing,
+                );
+                // Of what's asked, that of it left to the next round isn't done.
+                let asked = asked - animator.pending_asked(pending);
+                let moved = moved.unwrap_or(asked);
+                animator.add_consumed_scroll(item_animator::consumed_scroll(asked, moved));
+            }
+            let settled = !missing && wanted_before == 0 && !m.lacked_unready.get();
+            if settled {
+                let mut positioned = Vec::new();
+                for &(line, main) in ahead_lines.iter().chain(&placed).chain(&beyond_lines) {
+                    let (first_cell, _, _) = m.measured_line(line).expect("a line measured");
+                    let mut slot = 0;
+                    for (position, item) in
+                        (m.lines.start(line)..m.lines.start(line + 1)).enumerate()
+                    {
+                        let (placeable, cross) = m.cells[first_cell + position];
+                        let span = m.lines.span(item);
+                        let key = info.items.key(item);
+                        let main_size = if vertical { placeable.height } else { placeable.width };
+                        positioned.push(item_animator::Positioned {
+                            index: item,
+                            key,
+                            main: main - before,
+                            cross,
+                            main_size_with_spacing: (main_size + spacing).max(0),
+                            lane: slot,
+                            span,
+                            constraints: None,
+                        });
+                        animated_items.push((key, placeable, main, cross));
+                        slot += span;
+                    }
+                }
+                let layout_min = placed.first().map_or(0, |(_, main)| (before - main).max(0));
+                let layout_max =
+                    placed.iter().map(|(line, _)| (m.size_of(*line) + spacing).max(0)).sum::<i32>()
+                        - layout_min;
+                let pass = item_animator::Pass {
+                    items: &info.items,
+                    vertical,
+                    reverse,
+                    mirror: (
+                        if (vertical && rtl) || (!vertical && reverse != rtl) { -1 } else { 1 },
+                        if vertical && reverse { -1 } else { 1 },
+                    ),
+                    main_size: main_total,
+                    lane_count: slots.count(),
+                    layout_min,
+                    layout_max,
+                };
+                let moved = animator.on_measured(state, &pass, &positioned, &mut |item, moved| {
+                    m.measure(item, moved.lane, moved.span).map(|(placeable, _)| {
+                        let size = if vertical { placeable.height } else { placeable.width };
+                        (size + spacing).max(0)
+                    })
+                });
+                for away in moved {
+                    let lane_cross = away.cross;
+                    if let Some(child) = m.child_of(away.index)
+                        && let Some(placeable) = m.placeables[child]
+                    {
+                        // Placed once, here: the items kept apart were out of the way so far.
+                        pinned.retain(|(other, _, _)| *other != placeable);
+                        let entry = (placeable, away.main + before, lane_cross);
+                        if away.to_start {
+                            moved_to_start.push(entry);
+                        } else {
+                            moved_to_end.push(entry);
+                        }
+                        animated_items.push((away.key, placeable, away.main + before, lane_cross));
+                    }
+                }
+                let min = animator.min_size_to_fit_disappearing();
+                if min != IntSize::ZERO {
+                    let constrain_main = |main: i32| {
+                        if vertical {
+                            constraints.constrain_height(main)
+                        } else {
+                            constraints.constrain_width(main)
+                        }
+                    };
+                    let constrain_cross = |cross: i32| {
+                        if vertical {
+                            constraints.constrain_width(cross)
+                        } else {
+                            constraints.constrain_height(cross)
+                        }
+                    };
+                    let (main_min, cross_min) =
+                        if vertical { (min.height, min.width) } else { (min.width, min.height) };
+                    main_total = constrain_main(main_total.max(main_min));
+                    cross_total = constrain_cross(cross_total.max(cross_min));
+                }
+            }
+        } else if !missing && wanted_before == 0 {
+            animator.note_items(&info.items, first_item);
+        }
         let (width, height) =
-            if vertical { (cross_max, main_total) } else { (main_total, cross_max) };
-        let place = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32, cross: i32| {
+            if vertical { (cross_total, main_total) } else { (main_total, cross_total) };
+        let position_of = |placeable: &Placeable, main: i32, cross: i32| {
             let cross = cross_before + cross;
             let size = if vertical { placeable.height } else { placeable.width };
             let main = if reverse { main_total - main - size } else { main };
-            if vertical {
-                scope.place_relative(placeable, cross, main);
-            } else {
-                scope.place_relative(placeable, main, cross);
-            }
+            if vertical { (cross, main) } else { (main, cross) }
+        };
+        let place = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32, cross: i32| {
+            let (x, y) = position_of(placeable, main, cross);
+            scope.place_relative(placeable, x, y);
         };
         // Under a motion frame of reference, as `LazyGridMeasure`: a scroll isn't a move of its own.
         m.scope.set_motion_frame_of_reference_placement(true);
+        for (placeable, main, cross) in moved_to_start.iter().rev() {
+            place(m.scope, placeable, *main, *cross);
+        }
         for &(line, main) in ahead_lines.iter().chain(&placed).chain(&beyond_lines) {
             let (start, end, _) = m.measured_line(line).expect("a line measured");
             for &(placeable, cross) in &m.cells[start..end] {
@@ -2392,6 +2541,9 @@ impl MeasurePolicy for LazyGridLayout {
                     place(m.scope, &placeable, main, cross);
                 }
             }
+        }
+        for (placeable, main, cross) in &moved_to_end {
+            place(m.scope, placeable, *main, *cross);
         }
         for (placeable, main, cross) in &pinned {
             place(m.scope, placeable, *main, *cross);
@@ -2404,6 +2556,11 @@ impl MeasurePolicy for LazyGridLayout {
             place(m.scope, placeable, *at, 0);
         }
         m.scope.set_motion_frame_of_reference_placement(false);
+        for (key, placeable, main, cross) in &animated_items {
+            let (x, y) = position_of(placeable, *main, *cross);
+            let x = if rtl { width - x - placeable.width } else { x };
+            animator.note_placed(*key, x, y, (-before, main_total + after, vertical));
+        }
         // The items in view for `layout_info`, as Compose's `visibleItemsInfo`: those of the lines
         // laid out from the first under the start padding to the last in view.
         let mut laid = state.laid_out.begin();

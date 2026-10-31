@@ -21,6 +21,7 @@ use compose_ui::{
 };
 
 use super::grid::{CrossAxisCells, GridItemSpan, Slots};
+use super::item_animator;
 use super::layout_info::{LaidItem, LaidViewport};
 use super::prefetch::{Laid, LanesLaid, Policy, Units};
 use super::{
@@ -742,6 +743,8 @@ impl LazyStaggeredGridState {
             let density = state.list.inner().map_or(1.0, |inner| inner.density.get());
             let lanes = state.lane_count().max(1);
             let scope = state.lazy_layout_scroll_scope(scope);
+            let animator = state.list.inner().map(|inner| inner.item_animator.clone());
+            let _skipping = animator.map(item_animator::SkipAnimation::new);
             super::animate_scroll::animate_scroll_to_item(
                 &scope,
                 index,
@@ -940,7 +943,19 @@ impl ComposeArg for LazyStaggeredGridScope {
     }
 }
 
+/// The scope of a staggered grid's items, as Compose's `LazyStaggeredGridItemScope`: what
+/// `Modifier::animate_item` takes.
+#[derive(Clone, Copy, Default)]
+pub struct LazyStaggeredGridItemScope;
+
+impl super::AnimateItemScope for LazyStaggeredGridItemScope {}
+
 impl LazyStaggeredGridScope {
+    /// The scope of this grid's items, for their content.
+    pub fn item_scope(&self) -> LazyStaggeredGridItemScope {
+        LazyStaggeredGridItemScope
+    }
+
     fn push(&self, interval: Interval) {
         self.intervals.borrow_mut().push(interval);
     }
@@ -1370,6 +1385,7 @@ fn LazyStaggeredGrid(
             overscroll: overscroll_effect,
         })
         .focus_group();
+    let modifier = item_animator::displaying(modifier, &list.inner_or_detached(), list);
     let items = ItemsRef(items);
     let holder = compose_runtime::remember_saveable_state_holder();
     // Until it's measured, its items' likely constraints: a lane's, in the space around.
@@ -2282,6 +2298,29 @@ impl MeasurePolicy for StaggeredLayout {
             state.publish_can_scroll();
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
+            // Its items gone, what they drew may fade out, and it holds their room for that.
+            let animator = &state.item_animator;
+            let size = if animator.idle() {
+                animator.note_items(&info.items, 0);
+                size
+            } else {
+                let pass = item_animator::Pass {
+                    items: &info.items,
+                    vertical,
+                    reverse,
+                    mirror: (1, 1),
+                    main_size: if vertical { size.height } else { size.width },
+                    lane_count: lanes.max(1),
+                    layout_min: 0,
+                    layout_max: 0,
+                };
+                animator.on_measured(state, &pass, &[], &mut |_, _| None);
+                let min = animator.min_size_to_fit_disappearing();
+                IntSize::new(
+                    constraints.constrain_width(size.width.max(min.width)),
+                    constraints.constrain_height(size.height.max(min.height)),
+                )
+            };
             state.laid_out.begin();
             // Nothing visible: the window starts over.
             state.prefetch.after_layout(
@@ -2746,10 +2785,99 @@ impl MeasurePolicy for StaggeredLayout {
             let near = MOST_MISSING * lanes;
             c.sizes.retain(|item| item.abs_diff(first_item as usize) <= near);
         }
+        // `animate_item`: where its items are, and those moving out of view.
+        let animator = state.item_animator.clone();
+        let rtl = c.scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        let mut layout_main = layout_main;
+        let mut cross_total = cross_max;
+        let mut placed = placed;
+        let mut animated_items: Vec<(u64, Placeable, i32, i32)> = Vec::new();
+        if animator.idle() {
+            animator.note_items(&info.items, first_item as usize);
+        } else {
+            animator.add_consumed_scroll(done.consumed.round() as i32);
+            let in_view: Vec<item_animator::Positioned> = visible
+                .iter()
+                .map(|at| {
+                    let item = &done.arena[*at];
+                    let key = info.items.key(item.index as usize);
+                    animated_items.push((key, item.placeable, item.main, item.cross));
+                    item_animator::Positioned {
+                        index: item.index as usize,
+                        key,
+                        main: item.main,
+                        cross: item.cross,
+                        main_size_with_spacing: item.size_with_spacing,
+                        lane: item.lane,
+                        span: item.span,
+                        constraints: None,
+                    }
+                })
+                .collect();
+            let pass = item_animator::Pass {
+                items: &info.items,
+                vertical,
+                reverse,
+                mirror: (
+                    if (vertical && rtl) || (!vertical && reverse != rtl) { -1 } else { 1 },
+                    if vertical && reverse { -1 } else { 1 },
+                ),
+                main_size: placed.main_layout_size,
+                lane_count: lanes,
+                layout_min: done.first_offsets.iter().copied().min().unwrap_or(0),
+                layout_max: max_current + content_padding,
+            };
+            let moved = animator.on_measured(state, &pass, &in_view, &mut |item, moved| {
+                c.try_measure(item as i32, (moved.lane, moved.span))
+                    .map(|measured| measured.size_with_spacing)
+            });
+            let mut before_ahead = 0;
+            for away in moved {
+                let Some(child) = c.child_of(away.index) else { continue };
+                let Some(placeable) = c.placeables[child] else { continue };
+                // Placed once, here.
+                positioned.retain(|(other, _, _)| *other != placeable);
+                if away.to_start {
+                    positioned.insert(before_ahead, (placeable, away.main, away.cross));
+                    before_ahead += 1;
+                } else {
+                    positioned.push((placeable, away.main, away.cross));
+                }
+                animated_items.push((away.key, placeable, away.main, away.cross));
+            }
+            let min = animator.min_size_to_fit_disappearing();
+            if min != IntSize::ZERO {
+                let (main_min, cross_min) =
+                    if vertical { (min.height, min.width) } else { (min.width, min.height) };
+                let (constrained_main, constrained_cross) = if vertical {
+                    (
+                        constraints.constrain_height(layout_main.max(main_min)),
+                        constraints.constrain_width(cross_total.max(cross_min)),
+                    )
+                } else {
+                    (
+                        constraints.constrain_width(layout_main.max(main_min)),
+                        constraints.constrain_height(cross_total.max(cross_min)),
+                    )
+                };
+                layout_main = constrained_main;
+                cross_total = constrained_cross;
+                placed.main_layout_size = layout_main.min(available) - before + after;
+            }
+        }
         let (width, height) =
-            if vertical { (cross_max, layout_main) } else { (layout_main, cross_max) };
+            if vertical { (cross_total, layout_main) } else { (layout_main, cross_total) };
         for (placeable, main, cross) in &positioned {
             c.place(&placed, placeable, *main, *cross);
+        }
+        for (key, placeable, main, cross) in &animated_items {
+            let size = if vertical { placeable.height } else { placeable.width };
+            let along = if reverse { placed.main_layout_size - main - size } else { *main };
+            let along = along + before;
+            let across = cross + cross_before;
+            let (x, y) = if vertical { (across, along) } else { (along, across) };
+            let x = if rtl { width - x - placeable.width } else { x };
+            animator.note_placed(*key, x, y, (-before, placed.main_layout_size + after, vertical));
         }
         staggered.last_main.set(Some(layout_main));
         {
