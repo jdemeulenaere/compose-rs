@@ -49,6 +49,8 @@ pub enum ComposeError {
     /// A composition sharing its parent's applier was asked of a context with no place in a
     /// composition that's there.
     NoParentApplier,
+    /// The content was set of a composition whose root, a node of its parent's, is gone.
+    RootNodeGone,
     /// An applier was lent that its composition's holder hadn't borrowed.
     ApplierNotHeld,
     /// A paused composition was started while another of the same composition was in progress,
@@ -69,6 +71,9 @@ impl fmt::Display for ComposeError {
             }
             ComposeError::NoParentApplier => {
                 "a composition sharing its parent's applier needs a context in a live composition"
+            }
+            ComposeError::RootNodeGone => {
+                "the node a subcomposition composes below is gone: it composes nothing more"
             }
             ComposeError::ApplierNotHeld => {
                 "with_lent_applier lends the applier its caller holds from Composition::with_applier"

@@ -16,10 +16,11 @@ use crate::applier::{Applier, ErasedApplier, NodeRef};
 use crate::composition::{Composition, PausableComposition, ReusableComposition};
 use crate::error::{ComposeError, misuse};
 use crate::hash::key_of;
+use crate::local::CompositionLocalMap;
 use crate::recomposer::{CancellationHandle, Recomposer};
 use crate::remember::remember_across_reuse;
 use crate::runtime::{
-    CompositionData, CompositionId, Compositions, try_with_runtime, with_runtime,
+    CompositionData, CompositionId, Compositions, Runtime, try_with_runtime, with_runtime,
 };
 use crate::slot_table::{GroupKind, NONE, SlotTable, SlotValue};
 
@@ -68,6 +69,11 @@ struct ContextEntry {
     /// The composite key hash there, as last composed: what a composition under it starts from,
     /// also when it's gone (Compose's `compositeKeyHashCode`).
     key_hash: u64,
+    /// The nearest provider there, as last composed.
+    provider: u32,
+    /// What it provided when it went, for a composition kept under it (Compose's
+    /// `compositionLocalScope`, which stays as last set).
+    kept_locals: Option<CompositionLocalMap>,
     /// Its group's values were dropped: its place is no more, for good.
     released: bool,
     /// Compositions made under it, still there.
@@ -79,11 +85,13 @@ pub(crate) struct Contexts {
     entries: Vec<ContextEntry>,
     free: Vec<u32>,
     base: u32,
+    /// What freed entries kept, to drop outside the runtime's borrow.
+    dropping: Vec<CompositionLocalMap>,
 }
 
 impl Contexts {
     pub(crate) const fn new() -> Contexts {
-        Contexts { entries: Vec::new(), free: Vec::new(), base: 1 }
+        Contexts { entries: Vec::new(), free: Vec::new(), base: 1, dropping: Vec::new() }
     }
 
     fn alloc(&mut self, composition: CompositionId, group: u32) -> ContextId {
@@ -93,6 +101,7 @@ impl Contexts {
             entry.composition = composition;
             entry.group = group;
             entry.key_hash = 0;
+            entry.provider = NONE;
             entry.released = released;
             entry.children = children;
             ContextId { index, generation: entry.generation }
@@ -104,6 +113,8 @@ impl Contexts {
                 composition,
                 group,
                 key_hash: 0,
+                provider: NONE,
+                kept_locals: None,
                 released,
                 children,
             });
@@ -129,7 +140,9 @@ impl Contexts {
         let Some(entry) = self.get_mut(id) else { return };
         if entry.released && entry.children == 0 {
             entry.generation = entry.generation.wrapping_add(1);
+            let kept = entry.kept_locals.take();
             self.free.push(id.index);
+            self.dropping.extend(kept);
         }
     }
 
@@ -138,6 +151,11 @@ impl Contexts {
             entry.released = true;
         }
         self.free_if_unused(id);
+    }
+
+    /// What's freed, to drop outside the borrow.
+    pub(crate) fn take_dropping(&mut self) -> Vec<CompositionLocalMap> {
+        std::mem::take(&mut self.dropping)
     }
 
     pub(crate) fn live_count(&self) -> usize {
@@ -161,8 +179,31 @@ struct ContextHolder {
 
 impl Drop for ContextHolder {
     fn drop(&mut self) {
-        try_with_runtime(|runtime| runtime.compositions.contexts.release(self.id));
+        let dropping = try_with_runtime(|runtime| {
+            // With a composition kept under it: what it reads, from now on.
+            let kept = kept_locals(runtime, self.id);
+            let contexts = &mut runtime.compositions.contexts;
+            if let Some(entry) = contexts.get_mut(self.id) {
+                entry.kept_locals = kept;
+            }
+            contexts.release(self.id);
+            contexts.take_dropping()
+        });
+        drop(dropping);
     }
+}
+
+fn kept_locals(runtime: &Runtime, id: ContextId) -> Option<CompositionLocalMap> {
+    let compositions = &runtime.compositions;
+    let entry = compositions.contexts.get(id).filter(|entry| entry.children > 0)?;
+    let disposing = runtime.disposing_data.iter().find(|(other, _)| *other == entry.composition);
+    let data = match disposing {
+        Some((_, data)) => data,
+        None => compositions.get(entry.composition)?,
+    };
+    let provider = data.table.groups.get(entry.provider as usize)?;
+    (provider.kind != GroupKind::Free && provider.is_provider())
+        .then(|| crate::local::map_at(compositions, data, entry.provider))
 }
 
 /// Whether `group` of `table` is still the group of context `id`: emptied with its removal, as
@@ -187,6 +228,25 @@ impl Compositions {
         let entry = self.contexts.get(id)?;
         let data = self.get(entry.composition)?;
         holds_context(&data.table, entry.group, id).then_some((data, entry.group))
+    }
+
+    /// The composition `id` is in and the nearest provider there, also in the pass that removes it,
+    /// whose providers are there until its work ran. `None` once it's gone: see
+    /// [`kept_locals_of`](Self::kept_locals_of).
+    pub(crate) fn context_provider(&self, id: ContextId) -> Option<(&CompositionData, u32)> {
+        let entry = self.contexts.get(id).filter(|entry| !entry.released)?;
+        let data = self.get(entry.composition)?;
+        if holds_context(&data.table, entry.group, id) {
+            return Some((data, data.table.provider_at_or_above(entry.group)));
+        }
+        let provider = data.table.groups.get(entry.provider as usize)?;
+        (provider.kind != GroupKind::Free && provider.is_provider())
+            .then_some((data, entry.provider))
+    }
+
+    /// What `id` provided when it went.
+    pub(crate) fn kept_locals_of(&self, id: ContextId) -> Option<&CompositionLocalMap> {
+        self.contexts.get(id)?.kept_locals.as_ref()
     }
 
     /// The composition and group `id` is in, as [`context_place`](Self::context_place), and which
@@ -225,9 +285,9 @@ impl Compositions {
             entry.children += 1;
             let composition = entry.composition;
             match self.get_mut(composition) {
-                Some(data) => data.children.push(id),
+                Some(data) => data.child_count += 1,
                 None => {
-                    self.remove_child(place, id);
+                    self.remove_child(place);
                     return None;
                 }
             }
@@ -239,13 +299,17 @@ impl Compositions {
         }
     }
 
-    /// `id`, made under `place`, is gone.
-    pub(crate) fn remove_child(&mut self, place: ContextId, id: CompositionId) {
+    /// One made under `place` is gone. What's queued of it is told by its id when it's taken.
+    pub(crate) fn remove_child(&mut self, place: ContextId) {
         let Some(entry) = self.contexts.get_mut(place) else { return };
         entry.children -= 1;
         let composition = entry.composition;
         if let Some(data) = self.get_mut(composition) {
-            data.children.retain(|child| *child != id);
+            data.child_count -= 1;
+            // With none left, what's queued is of those that went.
+            if data.child_count == 0 {
+                data.dirty_children.clear();
+            }
         }
         self.contexts.free_if_unused(place);
     }
@@ -259,13 +323,46 @@ impl Compositions {
         !entry.released && self.context_place(place).is_none()
     }
 
-    /// Whether a composition under `data`'s has something for a frame to compose.
+    /// Whether `data` is below the root of the tree a frame is composing.
+    pub(crate) fn is_in_composing_tree(&self, data: &CompositionData) -> bool {
+        let Some(root) = self.composing_tree else { return false };
+        let mut place = data.parent;
+        while let Some(entry) = place.and_then(|place| self.contexts.get(place)) {
+            if entry.composition == root {
+                return true;
+            }
+            place = self.get(entry.composition).and_then(|data| data.parent);
+        }
+        false
+    }
+
+    /// Whether a composition under `data`'s has something for a frame to compose. Only those that
+    /// went pending are looked at, however many there are.
     pub(crate) fn has_work_below(&self, data: &CompositionData) -> bool {
-        data.children.iter().any(|child| {
+        data.dirty_children.iter().any(|child| {
             self.get(*child).is_some_and(|child| {
                 !self.is_going(child) && (child.has_own_work() || self.has_work_below(child))
             })
         })
+    }
+
+    /// `id` went pending: a frame of what it's under looks at it, and at what that's under.
+    pub(crate) fn queue_in_parents(&mut self, id: u32) {
+        let mut child = self.id_at(id);
+        loop {
+            let Some(data) = self.get(child) else { return };
+            if data.queued {
+                return;
+            }
+            let Some(entry) = data.parent.and_then(|place| self.contexts.get(place)) else {
+                return;
+            };
+            let parent = entry.composition;
+            self.get_mut(child).expect("just found").queued = true;
+            let Some(above) = self.get_mut(parent) else { return };
+            above.dirty_children.push(child);
+            child = parent;
+        }
     }
 
     /// Who asks for a frame for it: its own requester, or the nearest above it, a child being
@@ -312,8 +409,10 @@ pub fn remember_composition_context() -> CompositionContext {
         let data = compositions.data(composition);
         let key_hash = crate::saveable::composite_key_hash_at(compositions, data, place);
         let recomposer = data.recomposer;
+        let provider = data.table.provider_at_or_above(place);
         if let Some(entry) = compositions.contexts.get_mut(holder.id) {
             entry.key_hash = key_hash;
+            entry.provider = provider;
         }
         recomposer
     });
@@ -367,6 +466,13 @@ pub(crate) struct Lend {
     cell: Rc<RefCell<dyn ErasedApplier>>,
 }
 
+/// The cell an applier goes to when it's lent, kept for the next lend: one per applier, whatever
+/// compositions share it.
+pub(crate) struct LendingCell {
+    shared: std::rc::Weak<RefCell<dyn ErasedApplier>>,
+    cell: Rc<RefCell<dyn ErasedApplier>>,
+}
+
 /// The applier a composition with `applier` uses now: the same, but while it's lent.
 pub(crate) fn resolve_applier(
     lent: &[Lend],
@@ -390,10 +496,22 @@ pub fn with_lent_applier<A: LendableApplier, R>(
     applier: &mut A,
     f: impl FnOnce() -> R,
 ) -> R {
-    let (shared, cell) = with_runtime(|runtime| {
-        let data = runtime.compositions.get_mut(composition.id).expect("a live composition");
-        (data.applier.clone(), data.lending_cell.take())
+    let (shared, cell, dead) = with_runtime(|runtime| {
+        let data = runtime.compositions.get(composition.id).expect("a live composition");
+        let shared = data.applier.clone();
+        let cells = &mut runtime.lending_cells;
+        let at = cells
+            .iter()
+            .position(|cell| std::ptr::addr_eq(cell.shared.as_ptr(), Rc::as_ptr(&shared)));
+        let cell = at.map(|at| cells.swap_remove(at).cell);
+        // Those of appliers gone meanwhile go at a lend, outside the borrow.
+        let (live, dead) = std::mem::take(cells)
+            .into_iter()
+            .partition(|cell: &LendingCell| cell.shared.strong_count() > 0);
+        *cells = live;
+        (shared, cell, dead)
     });
+    drop::<Vec<LendingCell>>(dead);
     if shared.try_borrow_mut().is_ok() {
         misuse(ComposeError::ApplierNotHeld)
     }
@@ -403,10 +521,11 @@ pub fn with_lent_applier<A: LendableApplier, R>(
         cell
     });
     swap_with_cell(&cell, applier);
+    let weak = Rc::downgrade(&shared);
     with_runtime(|runtime| runtime.lent.push(Lend { shared, cell: cell.clone() }));
 
     struct Lent<'a, A: LendableApplier> {
-        composition: CompositionId,
+        shared: std::rc::Weak<RefCell<dyn ErasedApplier>>,
         applier: &'a mut A,
         cell: Rc<RefCell<dyn ErasedApplier>>,
     }
@@ -414,14 +533,14 @@ pub fn with_lent_applier<A: LendableApplier, R>(
         fn drop(&mut self) {
             try_with_runtime(|runtime| {
                 runtime.lent.pop();
-                if let Some(data) = runtime.compositions.get_mut(self.composition) {
-                    data.lending_cell = Some(self.cell.clone());
-                }
+                runtime
+                    .lending_cells
+                    .push(LendingCell { shared: self.shared.clone(), cell: self.cell.clone() });
             });
             swap_with_cell(&self.cell, self.applier);
         }
     }
-    let _lent = Lent { composition: composition.id, applier, cell };
+    let _lent = Lent { shared: weak, applier, cell };
     f()
 }
 

@@ -130,15 +130,28 @@ impl Composition {
     ///
     /// Once it's disposed, as Compose's.
     pub fn set_content(&self, content: impl Fn() + 'static) {
-        let content: Rc<dyn Fn()> = Rc::new(content);
         with_runtime(|runtime| {
-            if runtime.compositions.get(self.id).is_some_and(|data| data.disposed) {
+            let Some(data) = runtime.compositions.get(self.id) else { return };
+            if data.disposed {
                 misuse(ComposeError::Disposed)
             }
+            if data.parent.is_some() && !data.closed && !root_is_there(runtime, self.id) {
+                misuse(ComposeError::RootNodeGone)
+            }
         });
+        self.compose_content(content);
+    }
+
+    /// [`set_content`](Self::set_content), also below a root that's gone, as what deactivates
+    /// content there has only slots to go through.
+    fn compose_content(&self, content: impl Fn() + 'static) {
+        let content: Rc<dyn Fn()> = Rc::new(content);
+        // Composed in this frame, by a tree whose work's being applied: its work goes first.
+        run_unapplied(self.id);
         // The changes of the turn so far invalidate their readers first (D751), as `recompose`;
-        // those of a pass it's nested in are for that pass's apply.
-        if !with_runtime(|runtime| runtime.is_composing()) {
+        // those of a pass it's nested in are for that pass's apply, and a measurement lending it
+        // the tree sends nothing, as Compose's `composeInitial`.
+        if !with_runtime(|runtime| runtime.is_composing() || !runtime.lent.is_empty()) {
             crate::snapshots::Snapshot::send_apply_notifications();
         }
         // What was asked of the paused composition, if any, first.
@@ -156,7 +169,7 @@ impl Composition {
         // What was asked of the paused composition, if any, first (a cancel during a layout, a
         // completion a layout needs).
         crate::pausable::run_requests(self.id);
-        if with_runtime(|runtime| !self.data(runtime).children.is_empty()) {
+        if with_runtime(|runtime| self.data(runtime).child_count != 0) {
             return recompose_tree(self.id);
         }
         let Some(pass) = Pass::begin(self.id, Mode::Walk) else {
@@ -186,7 +199,8 @@ impl Composition {
     fn invalid_in_tree(&self, runtime: &mut Runtime) -> bool {
         let compositions = &runtime.compositions;
         let data = compositions.get(self.id).expect("a live composition");
-        data.has_invalidations() || (!data.children.is_empty() && compositions.has_work_below(data))
+        data.has_invalidations()
+            || (!data.dirty_children.is_empty() && compositions.has_work_below(data))
     }
 
     /// Sets the function called when a scope of this composition becomes invalid while none
@@ -474,7 +488,7 @@ impl ReusableComposition {
         });
         self.root.active.set(false);
         let root = self.root.content();
-        self.composition.set_content(move || root());
+        self.composition.compose_content(move || root());
     }
 }
 
@@ -541,6 +555,13 @@ impl PausableComposition {
         if cancelled {
             misuse(ComposeError::PausedCompositionState)
         }
+        with_runtime(|runtime| {
+            let id = self.reusable.composition.id;
+            let child = runtime.compositions.get(id).is_some_and(|data| data.parent.is_some());
+            if child && !root_is_there(runtime, id) {
+                misuse(ComposeError::RootNodeGone)
+            }
+        });
         self.reusable.root.set(self.reusable.composition.id, content, reuse);
         let paused = self.reusable.composition.paused_content(self.reusable.root.content());
         *self.last.borrow_mut() = Some(paused.state());
@@ -576,6 +597,19 @@ pub(crate) enum PassKind {
     Pausable,
     /// A paused composition's resume: the walks of its regions.
     Resume,
+}
+
+/// Whether the node `id`, a child composition, composes below is there. It says what's asked again
+/// is pointless: nothing's to compose until its owner disposes it.
+pub(crate) fn root_is_there(runtime: &mut Runtime, id: CompositionId) -> bool {
+    let data = runtime.compositions.get(id).expect("a live composition");
+    let applier = crate::context::resolve_applier(&runtime.lent, &data.applier);
+    let root = data.root_node;
+    let there = applier.try_borrow().map_or(true, |applier| applier.contains(root));
+    if !there {
+        runtime.compositions.get_mut(id).expect("a live composition").root_gone = true;
+    }
+    there
 }
 
 /// Whether what `id`, a child composition, reads above its root moved since its last pass, as
@@ -639,6 +673,9 @@ impl OuterPass {
             scopes: _,
             compositions: _,
             lent: _,
+            lending_cells: _,
+            unapplied: _,
+            tree_frames: _,
             provider_versions: _,
             disposing_data: _,
             frame_requests: _,
@@ -731,8 +768,15 @@ impl Pass {
             if mode == Mode::Walk && !sentinel.dirty && !resume {
                 return None;
             }
+            // Its root, a node of its parent's, gone with what was there: nothing can show.
+            if mode == Mode::Walk && !resume && data.parent.is_some() && !root_is_there(runtime, id)
+            {
+                return None;
+            }
             crate::snapshots::PassSnapshot::check_can_begin(&runtime.snapshots);
-            let providers_changed = data.parent.is_some() && providers_changed(runtime, id, mode);
+            let providers_changed =
+                runtime.compositions.get(id).is_some_and(|data| data.parent.is_some())
+                    && providers_changed(runtime, id, mode);
             let outer = OuterPass::take(runtime);
             let Runtime {
                 compositions,
@@ -917,70 +961,205 @@ impl Pass {
         self.finished = true;
         let finishing = Finishing { id: self.id, freeing };
         let committed = snapshot.commit();
-        Composed { id: self.id, applier, deferred, finishing, committed }
+        Composed { id: self.id, frame: 0, applier, deferred, finishing, committed }
     }
 }
 
-/// Composes what's invalid in `id` and the compositions under it, parents first: each composes,
-/// its snapshot applied, before those under it, its work left in `composed`. A panic poisons the
-/// composition it was composing and comes back: what's composed is for the caller to apply.
-pub(crate) fn compose_tree(
-    id: CompositionId,
-    composed: &mut Vec<Composed>,
-) -> std::thread::Result<()> {
+/// A frame's number, for the work it composes to be told from that of a frame around it.
+pub(crate) fn begin_tree_frame() -> u64 {
+    with_runtime(|runtime| {
+        runtime.tree_frames += 1;
+        runtime.tree_frames
+    })
+}
+
+/// [`compose_tree`] of a tree's root, what's invalidated below it going to this frame.
+pub(crate) fn compose_tree_of(id: CompositionId, frame: u64) -> std::thread::Result<()> {
+    let outer = with_runtime(|runtime| runtime.compositions.composing_tree.replace(id));
+    let composed = compose_tree(id, frame);
+    with_runtime(|runtime| runtime.compositions.composing_tree = outer);
+    composed
+}
+
+/// Composes what's invalid in `id` and in what's queued under it, parents first: each composes, its
+/// snapshot applied, before those under it, its work left in `Runtime::unapplied`, and those it
+/// invalidates are reached too. A panic poisons the composition it was composing and comes back:
+/// what's composed is for the caller to apply.
+fn compose_tree(id: CompositionId, frame: u64) -> std::thread::Result<()> {
+    // Those a later frame looks at again: it wouldn't do more with them in this one.
+    let mut later = Vec::new();
+    let mut panic = None;
     // One whose pass panicked isn't its parent's to report again.
     let poisoned = with_runtime(|runtime| runtime.compositions.get(id).is_none_or(|d| d.poisoned));
     if !poisoned {
-        let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let composed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::pausable::run_requests(id);
             let pass = Pass::begin(id, Mode::Walk)?;
             run_walk(0);
             Some(pass.finish_composing())
-        }))?;
-        composed.extend(pass);
-    }
-    let children = with_runtime(|runtime| {
-        runtime.compositions.get(id).map_or_else(Vec::new, |data| data.children.clone())
-    });
-    for child in children {
-        // What holds it may have just gone, in the parent's pass.
-        let going = with_runtime(|runtime| {
-            let compositions = &runtime.compositions;
-            compositions.get(child).is_none_or(|data| compositions.is_going(data))
-        });
-        if !going {
-            compose_tree(child, composed)?;
+        }));
+        match composed {
+            Ok(Some(mut composed)) => {
+                composed.frame = frame;
+                with_runtime(|runtime| runtime.unapplied.push_back(composed));
+            }
+            Ok(None) => {}
+            Err(caught) => {
+                panic = Some(caught);
+                with_runtime(|runtime| {
+                    for child in take_queued(runtime, id) {
+                        ask_again(runtime, child);
+                        later.push(child);
+                    }
+                });
+            }
         }
     }
-    Ok(())
+    'taking: while panic.is_none() {
+        let queued = with_runtime(|runtime| take_queued(runtime, id));
+        if queued.is_empty() {
+            break;
+        }
+        let mut queued = queued.into_iter();
+        while let Some(child) = queued.next() {
+            // What holds it may have just gone, in the parent's pass.
+            let going = with_runtime(|runtime| {
+                let compositions = &runtime.compositions;
+                compositions.get(child).map(|data| compositions.is_going(data))
+            });
+            match going {
+                None => {}
+                Some(true) => {
+                    with_runtime(|runtime| ask_again(runtime, child));
+                    later.push(child);
+                }
+                Some(false) => {
+                    let composed = compose_tree(child, frame);
+                    // Invalidated while it's finishing, or with those under it left.
+                    with_runtime(|runtime| {
+                        let data = runtime.compositions.get(child);
+                        if data.is_some_and(|d| d.finishing || !d.dirty_children.is_empty()) {
+                            later.push(child);
+                        }
+                    });
+                    if let Err(caught) = composed {
+                        panic = Some(caught);
+                        with_runtime(|runtime| {
+                            for child in queued {
+                                ask_again(runtime, child);
+                                later.push(child);
+                            }
+                        });
+                        break 'taking;
+                    }
+                }
+            }
+        }
+    }
+    with_runtime(|runtime| {
+        let compositions = &mut runtime.compositions;
+        for child in later {
+            let Some(data) = compositions.get_mut(child) else { continue };
+            if !data.queued {
+                data.queued = true;
+                if let Some(data) = compositions.get_mut(id) {
+                    data.dirty_children.push(child);
+                }
+            }
+        }
+    });
+    match panic {
+        Some(panic) => Err(panic),
+        None => Ok(()),
+    }
+}
+
+/// What's queued under `id`, each no longer queued, in the order they were made.
+fn take_queued(runtime: &mut Runtime, id: CompositionId) -> Vec<CompositionId> {
+    let compositions = &mut runtime.compositions;
+    let Some(data) = compositions.get_mut(id) else { return Vec::new() };
+    if data.dirty_children.is_empty() {
+        return Vec::new();
+    }
+    let mut queued = std::mem::take(&mut data.dirty_children);
+    queued.retain(|child| compositions.get(*child).is_some());
+    if queued.len() > 1 {
+        queued
+            .sort_unstable_by_key(|child| compositions.get(*child).map_or(0, |data| data.created));
+    }
+    for child in &queued {
+        compositions.get_mut(*child).expect("just kept").queued = false;
+    }
+    queued
+}
+
+/// A frame left `child` with what it had to do: a later write asks for a frame as any does, and
+/// this one asks for it now.
+fn ask_again(runtime: &mut Runtime, child: CompositionId) {
+    let compositions = &mut runtime.compositions;
+    let Some(data) = compositions.get_mut(child) else { return };
+    data.pending = false;
+    let data = compositions.get(child).expect("just found");
+    if let Some(requester) = compositions.frame_requester_of(data) {
+        runtime.frame_requests.push(requester);
+    }
 }
 
 /// [`Composition::recompose`] of a composition with compositions under it: all of them compose,
 /// then all of their work runs, parents first, as the Recomposer's `toApply`.
 fn recompose_tree(id: CompositionId) -> bool {
-    with_runtime(|runtime| {
-        if runtime.compositions.get(id).is_some_and(|data| data.poisoned) {
-            misuse(ComposeError::Poisoned)
-        }
-    });
-    let mut composed = Vec::new();
-    let mut panic = compose_tree(id, &mut composed).err();
-    let changed = !composed.is_empty();
-    for pass in composed {
-        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply_work(pass)));
-        if let Err(caught) = applied {
-            panic.get_or_insert(caught);
-        }
+    if with_runtime(|runtime| runtime.compositions.get(id).is_some_and(|data| data.poisoned)) {
+        misuse(ComposeError::Poisoned)
     }
+    let frame = begin_tree_frame();
+    let mut panic = compose_tree_of(id, frame).err();
+    let changed = with_runtime(|runtime| runtime.unapplied.iter().any(|work| work.frame == frame));
+    if let Some(caught) = apply_unapplied(frame) {
+        panic.get_or_insert(caught);
+    }
+    request_frames();
     if let Some(panic) = panic {
         std::panic::resume_unwind(panic);
     }
     changed
 }
 
+/// Runs what a frame composed, in order, what's panicking not stopping the rest: the first panic.
+pub(crate) fn apply_unapplied(frame: u64) -> Option<Box<dyn Any + Send>> {
+    let mut panic = None;
+    loop {
+        let composed = with_runtime(|runtime| {
+            let at = runtime.unapplied.iter().position(|work| work.frame == frame)?;
+            runtime.unapplied.remove(at)
+        });
+        let Some(composed) = composed else { return panic };
+        let applied =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply_work(composed)));
+        if let Err(caught) = applied {
+            panic.get_or_insert(caught);
+        }
+    }
+}
+
+/// `id`'s work, if a frame composed it and hasn't applied it.
+pub(crate) fn run_unapplied(id: CompositionId) {
+    let composed = with_runtime(|runtime| {
+        if !runtime.compositions.get(id).is_some_and(|data| data.finishing) {
+            return None;
+        }
+        let at = runtime.unapplied.iter().position(|work| work.id == id)?;
+        runtime.unapplied.remove(at)
+    });
+    if let Some(composed) = composed {
+        apply_work(composed);
+    }
+}
+
 /// A pass that's composed, its snapshot's apply done: what [`apply_work`] needs.
 pub(crate) struct Composed {
-    id: CompositionId,
+    pub(crate) id: CompositionId,
+    /// The frame that composed it, for it to apply this; 0, for a lone pass.
+    pub(crate) frame: u64,
     applier: Rc<RefCell<dyn ErasedApplier>>,
     deferred: Deferred,
     finishing: Finishing,
@@ -991,7 +1170,7 @@ pub(crate) struct Composed {
 /// apply came to.
 pub(crate) fn apply_work(composed: Composed) {
     use crate::snapshots::Committed;
-    let Composed { id, applier, mut deferred, mut finishing, committed } = composed;
+    let Composed { id, applier, mut deferred, mut finishing, committed, .. } = composed;
     // The one it's using now, if it's lent.
     let applier = with_runtime(|runtime| crate::context::resolve_applier(&runtime.lent, &applier));
     let observer_panic = match committed {
@@ -1067,14 +1246,6 @@ impl Drop for Finishing {
             }
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.finishing = false;
-                // Invalidated while it finished: a frame for it.
-                if data.has_invalidations() && !data.pending {
-                    data.pending = true;
-                    let data = runtime.compositions.get(self.id).expect("just found");
-                    if let Some(requester) = runtime.compositions.frame_requester_of(data) {
-                        runtime.frame_requests.push(requester);
-                    }
-                }
             }
         });
     }
@@ -1176,6 +1347,19 @@ fn apply_deferred(
     run_effects: bool,
 ) {
     {
+        // What panics in a release leaves the applier's changes as they'd be after a pass.
+        struct Abandon<'a>(&'a Rc<RefCell<dyn ErasedApplier>>, bool);
+        impl Drop for Abandon<'_> {
+            fn drop(&mut self) {
+                if self.1
+                    && let Ok(mut applier) = self.0.try_borrow_mut()
+                {
+                    applier.abandon_changes();
+                }
+            }
+        }
+        let mut abandon = Abandon(applier, true);
+        let nested = with_runtime(|runtime| runtime.is_composing());
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         // Those of a composition below a node of its parent's may have gone with it.
@@ -1193,7 +1377,8 @@ fn apply_deferred(
                 applier.release(node);
             }
         }
-        applier.on_end_changes();
+        abandon.1 = false;
+        applier.on_end_changes(nested);
     }
     dispatch_forgotten(&deferred.removed_values);
     deferred.removed_values.clear();
@@ -1252,7 +1437,7 @@ impl Disposal {
     fn empty(runtime: &mut Runtime, id: CompositionId, mut data: CompositionData) -> Disposal {
         // It's its parent's no more; those under it compose on, by their owners.
         if let Some(place) = data.parent.take() {
-            runtime.compositions.remove_child(place, id);
+            runtime.compositions.remove_child(place);
         }
         let Runtime { scopes, removal_stack, disposing, lent, .. } = runtime;
         // Counts as live while its values drop: cells they retire wait for the end of the
@@ -1297,6 +1482,8 @@ impl Disposal {
         drop(deferred);
         drop(readable);
         drop(disposing);
+        // What the context it was under kept, if that was what kept it.
+        drop(with_runtime(|runtime| runtime.compositions.contexts.take_dropping()));
         // Free the state cells the disposals retired once none is left, and everything if no
         // composition is left to run the pass that would free them.
         loop {

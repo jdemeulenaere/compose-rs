@@ -638,16 +638,14 @@ pub(crate) fn composite_key_hash_at(
         }
         // Groups of one key under one parent (two calls of a composable: keys here are per
         // composable, where Compose's are per call site) are told apart by their order among
-        // themselves; a `key(…)` group by its key alone.
+        // themselves, whichever branch each is (Compose's `rGroupIndex` counts them all, so
+        // one flipping leaves the others); a `key(…)` group by its key alone.
         let mut ordinal = 0u64;
         if entry.kind != GroupKind::Movable && entry.parent != NONE {
             let mut sibling = table[entry.parent].first_child;
             while sibling != NONE && sibling != group {
                 let other = &table[sibling];
-                if other.key == entry.key
-                    && other.data_key == entry.data_key
-                    && other.kind == entry.kind
-                {
+                if other.key == entry.key && other.kind == entry.kind {
                     ordinal += 1;
                 }
                 sibling = other.next_sibling;

@@ -71,6 +71,8 @@ pub(super) struct OuterPass {
     births: u64,
     read_again: Vec<(StateId, ScopeId)>,
     told_during_pass: Vec<StateId>,
+    /// The barriers it's under: they hide observers from what it reads, not composition.
+    barriers: u32,
 }
 
 /// The thread's snapshot world, in its runtime.
@@ -424,6 +426,7 @@ impl Snapshots {
             births: std::mem::replace(&mut self.pass_births, self.births),
             read_again: std::mem::take(&mut self.read_again),
             told_during_pass: std::mem::take(&mut self.told_during_pass),
+            barriers: std::mem::replace(&mut self.barriers, 0),
         };
         self.update_isolated();
         outer
@@ -449,6 +452,7 @@ impl Snapshots {
         self.pass_tainted = outer.tainted;
         self.pass_not_alone |= outer.not_alone;
         self.pass_births = outer.births;
+        self.barriers = outer.barriers;
         if self.pass.is_none() {
             self.pass_not_alone = false;
         } else {

@@ -94,11 +94,22 @@ pub struct ViewApplier {
     pub changes: u64,
     pub begin_changes: u32,
     pub end_changes: u32,
+    /// Told "begin" and "end" as the changes do, if a test wants their order.
+    pub change_log: Option<Rc<RefCell<Vec<String>>>>,
+    /// Set by a test: a release panics.
+    pub panic_in_release: Rc<Cell<bool>>,
 }
 
 impl ViewApplier {
     pub fn new() -> ViewApplier {
-        ViewApplier { tree: NodeTree::new(), changes: 0, begin_changes: 0, end_changes: 0 }
+        ViewApplier {
+            tree: NodeTree::new(),
+            changes: 0,
+            begin_changes: 0,
+            end_changes: 0,
+            change_log: None,
+            panic_in_release: Rc::default(),
+        }
     }
 
     /// Updates `node`, counting a change.
@@ -123,8 +134,14 @@ impl Default for ViewApplier {
     }
 }
 
+thread_local! {
+    /// How many placeholders the thread's lends made.
+    pub static PLACEHOLDERS: Cell<u32> = const { Cell::new(0) };
+}
+
 impl compose_runtime::platform::LendableApplier for ViewApplier {
     fn placeholder() -> ViewApplier {
+        PLACEHOLDERS.with(|made| made.set(made.get() + 1));
         ViewApplier::new()
     }
 }
@@ -156,6 +173,7 @@ impl Applier for ViewApplier {
     }
 
     fn release(&mut self, node: NodeRef) {
+        assert!(!self.panic_in_release.get(), "in a release");
         self.changes += 1;
         // The node and its subtree: each view hears it, as Compose's `onRelease`.
         let mut stack = vec![node];
@@ -222,22 +240,28 @@ impl Applier for ViewApplier {
 
     fn on_begin_changes(&mut self) {
         self.begin_changes += 1;
+        if let Some(log) = &self.change_log {
+            log.borrow_mut().push("begin".to_string());
+        }
     }
 
     fn on_end_changes(&mut self) {
         self.end_changes += 1;
+        if let Some(log) = &self.change_log {
+            log.borrow_mut().push("end".to_string());
+        }
     }
 }
 
 // ---- Emitters ------------------------------------------------------------------------------
 
 /// A view named `name`, for a node factory.
-fn view(name: &'static str) -> impl FnOnce() -> View {
+pub fn view(name: &'static str) -> impl FnOnce() -> View {
     move || View::new(name)
 }
 
 /// Sets attribute `name` of a view to `value`, as `set(value) { attribute = it }`.
-fn set_attribute(name: &'static str) -> impl FnOnce(&mut View, &String) {
+pub fn set_attribute(name: &'static str) -> impl FnOnce(&mut View, &String) {
     move |view, value| view.set_attribute(name, value.clone())
 }
 

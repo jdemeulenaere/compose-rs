@@ -9,11 +9,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::future::poll_fn;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::resume_unwind;
 use std::rc::Rc;
 use std::task::{Poll, Waker};
 
-use crate::composition::{Composed, apply_work, compose_tree};
+use crate::composition::{apply_unapplied, begin_tree_frame, compose_tree_of};
 use crate::context::CompositionContext;
 use crate::error::{ComposeError, misuse};
 use crate::executor::{Job, finished_job, launch, launch_owned, with_frame_nanos};
@@ -770,7 +770,7 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
     }
     Snapshot::send_apply_notifications();
     let before = with_runtime(|runtime| runtime.changes_made());
-    let mut to_apply: Vec<Composed> = Vec::new();
+    let frame = begin_tree_frame();
     let mut panic = None;
     loop {
         let invalid = recomposer.invalid_compositions();
@@ -779,7 +779,7 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
         }
         for id in invalid {
             // What's composed is applied before a panic goes on.
-            if let Err(caught) = compose_tree(id, &mut to_apply) {
+            if let Err(caught) = compose_tree_of(id, frame) {
                 panic = Some(caught);
                 break;
             }
@@ -789,18 +789,17 @@ pub fn perform_frame(recomposer: Recomposer, frame_time_nanos: u64) -> bool {
         }
         Snapshot::send_apply_notifications();
     }
-    let changed = !to_apply.is_empty();
+    let changed = with_runtime(|runtime| runtime.unapplied.iter().any(|work| work.frame == frame));
     // A pass may have changed nothing, as `recompose` then says, and its work isn't counted on.
     if with_runtime(|runtime| runtime.changes_made()) != before
         && let Some(inner) = recomposer.inner.try_get()
     {
         inner.change_count.set(inner.change_count.get() + 1);
     }
-    for pass in to_apply {
-        if let Err(caught) = catch_unwind(AssertUnwindSafe(|| apply_work(pass))) {
-            panic.get_or_insert(caught);
-        }
+    if let Some(caught) = apply_unapplied(frame) {
+        panic.get_or_insert(caught);
     }
+    crate::runtime::request_frames();
     recomposer.update_state();
     // What the work wrote and made is everybody's, before the frame's end.
     Snapshot::notify_objects_initialized();

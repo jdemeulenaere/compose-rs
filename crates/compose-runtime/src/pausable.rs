@@ -951,6 +951,15 @@ pub(crate) fn finish_pass_regions(id: CompositionId) {
 
 /// Applies `id`'s complete paused composition.
 fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
+    // Below a node of the parent's that went: nowhere to show it, so it goes, as cancelled.
+    let root_gone = with_runtime(|runtime| {
+        let child = runtime.compositions.get(id).is_some_and(|data| data.parent.is_some());
+        child && !crate::composition::root_is_there(runtime, id)
+    });
+    if root_gone {
+        cancel(id, state, false);
+        return;
+    }
     let taken = with_runtime(|runtime| {
         if runtime.active.is_some() {
             misuse(ComposeError::PassInProgress)
@@ -990,13 +999,17 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         }
         // Rule R1's order, as a pass's end.
         for node in deferred.deactivated_nodes.drain(..) {
-            applier.deactivate(node);
+            if applier.contains(node) {
+                applier.deactivate(node);
+            }
         }
         for node in deferred.released_nodes.drain(..) {
-            applier.release(node);
+            if applier.contains(node) {
+                applier.release(node);
+            }
         }
         applier.on_paused_end();
-        applier.on_end_changes();
+        applier.on_end_changes(with_runtime(|runtime| runtime.is_composing()));
     }
     crate::composition::free_retired_providers(id);
     // The segments in order: each paused scope's where it paused.
@@ -1090,7 +1103,7 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
     }
     state.set(PausedState::Cancelled);
     let taken = try_with_runtime(|runtime| {
-        if runtime.active.is_some_and(|active| active.composition == id) {
+        if runtime.compositions.get(id).is_some_and(|data| data.composing) {
             misuse(ComposeError::PassInProgress)
         }
         let Runtime {
@@ -1167,7 +1180,8 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         applier.on_begin_changes();
         for removal in &removals {
-            if removal.attached > 0 {
+            // Below a node of a composition around it, what it holds may have gone with that node.
+            if removal.attached > 0 && applier.contains(removal.node_parent) {
                 applier.remove(
                     removal.node_parent,
                     removal.offset as usize,
@@ -1175,11 +1189,13 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
                 );
             }
             for &node in &removal.release {
-                applier.release(node);
+                if applier.contains(node) {
+                    applier.release(node);
+                }
             }
         }
         applier.on_paused_end();
-        applier.on_end_changes();
+        applier.on_end_changes(with_runtime(|runtime| runtime.is_composing()));
     } else if let Ok(mut applier) = applier.try_borrow_mut() {
         applier.on_paused_end();
     }
@@ -1199,10 +1215,11 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
 /// Cancels `id`'s paused composition, if any, before it's disposed.
 pub(crate) fn cancel_for_disposal(id: CompositionId) {
     let state = try_with_runtime(|runtime| {
-        if runtime.active.is_some_and(|active| active.composition == id) {
+        let data = runtime.compositions.get(id)?;
+        if data.composing {
             return None;
         }
-        runtime.compositions.get(id)?.paused.as_ref().map(|paused| paused.state.clone())
+        data.paused.as_ref().map(|paused| paused.state.clone())
     })
     .flatten();
     if let Some(state) = state {

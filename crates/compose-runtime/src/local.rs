@@ -372,7 +372,10 @@ fn find_from(
             }
             group = table[group].enclosing_provider;
         }
-        (data, group) = above_root(compositions, data)?;
+        match above_root(compositions, data) {
+            Some(above) => (data, group) = above,
+            None => return in_kept_locals(compositions, data, local),
+        }
     }
 }
 
@@ -382,8 +385,26 @@ fn above_root<'a>(
     compositions: &'a Compositions,
     data: &CompositionData,
 ) -> Option<(&'a CompositionData, u32)> {
-    let (parent, place) = compositions.context_place(data.parent?)?;
-    Some((parent, parent.table.provider_at_or_above(place)))
+    compositions.context_provider(data.parent?)
+}
+
+/// The holder of `local` in what `data`'s context provided when it went, as Compose's keeps it.
+fn in_kept_locals(
+    compositions: &Compositions,
+    data: &CompositionData,
+    local: u64,
+) -> Option<Rc<dyn Any>> {
+    let map = compositions.kept_locals_of(data.parent?)?;
+    map.entries.iter().find(|entry| entry.local == local).map(|entry| entry.holder.clone())
+}
+
+/// What's provided at `group`, a provider of `data`, and above it, as a map.
+pub(crate) fn map_at(
+    compositions: &Compositions,
+    data: &CompositionData,
+    group: u32,
+) -> CompositionLocalMap {
+    CompositionLocalMap { entries: entries_visible_from(compositions, data, group).into() }
 }
 
 /// A provider group's entries.
@@ -428,7 +449,16 @@ fn entries_visible_from(
             }
             group = table[group].enclosing_provider;
         }
-        let Some(above) = above_root(compositions, data) else { return visible };
+        let Some(above) = above_root(compositions, data) else {
+            if let Some(map) = data.parent.and_then(|place| compositions.kept_locals_of(place)) {
+                for entry in map.entries.iter() {
+                    if !visible.iter().any(|seen| seen.local == entry.local) {
+                        visible.push(Entry { owned: false, given: false, ..entry.clone() });
+                    }
+                }
+            }
+            return visible;
+        };
         (data, group) = above;
     }
 }

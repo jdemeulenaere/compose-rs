@@ -35,6 +35,13 @@ pub(crate) struct Runtime {
     pub active: Option<ActivePass>,
     /// The shared appliers lent to the passes of the compositions using them (D1304).
     pub lent: Vec<crate::context::Lend>,
+    /// Where a shared applier goes while it's lent, kept, per applier (D1304).
+    pub lending_cells: Vec<crate::context::LendingCell>,
+    /// What the frames of trees composed and haven't applied, in order: another's effect asking for
+    /// one of them to compose again runs its work first.
+    pub unapplied: std::collections::VecDeque<crate::composition::Composed>,
+    /// How many frames of trees began: what tells the work of one from that of another around it.
+    pub tree_frames: u64,
     /// Moves on each time a provider's values change in a way that recomposes its content (a
     /// static local's, an entry added or dropped): what a `CompositionLocalAnchor` is valid for.
     /// The last `Group::provider_version` given.
@@ -115,6 +122,9 @@ impl Runtime {
             disposing_data: Vec::new(),
             active: None,
             lent: Vec::new(),
+            lending_cells: Vec::new(),
+            unapplied: std::collections::VecDeque::new(),
+            tree_frames: 0,
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
@@ -424,12 +434,19 @@ pub(crate) fn invalidate_scope_parts(
     }
     if !data.pending {
         data.pending = true;
-        let requester = if data.parent.is_some() {
-            let data = compositions.data(scope.composition);
-            compositions.frame_requester_of(data)
-        } else {
-            data.frame_requester.clone()
-        };
+        let child = data.parent.is_some();
+        // In a frame of its tree that hasn't composed it, that frame reaches it.
+        let finishing = data.finishing;
+        let data = compositions.data(scope.composition);
+        let reached = child && !finishing && compositions.is_in_composing_tree(data);
+        if child {
+            compositions.queue_in_parents(scope.composition);
+        }
+        if reached {
+            return false;
+        }
+        let data = compositions.data(scope.composition);
+        let requester = compositions.frame_requester_of(data);
         let mut requested = false;
         if let Some(requester) = requester {
             frame_requests.push(requester);
@@ -539,13 +556,19 @@ pub(crate) struct CompositionData {
     pub recomposer: Option<crate::recomposer::Recomposer>,
     /// The place in another composition it's under, if any.
     pub parent: Option<crate::context::ContextId>,
-    /// The compositions under its contexts, in the order they were made: what recomposing it
-    /// goes on to (D1303).
-    pub children: Vec<CompositionId>,
+    /// How many compositions are under its contexts: a frame goes on to those with work (D1303).
+    pub child_count: u32,
+    /// Those under it, or above those, that went pending: what a frame of it looks at.
+    pub dirty_children: Vec<CompositionId>,
+    /// It's in its parent's `dirty_children`.
+    pub queued: bool,
+    /// When it was made, among the thread's: the order those under a composition compose in.
+    pub created: u64,
+    /// The node of its parent's that its root is went: it composes nothing more, as nothing can
+    /// show (D1303).
+    pub root_gone: bool,
     /// What it last read above its root, if it's a child: [`Compositions::provider_epoch`].
     pub provider_epoch: Option<u64>,
-    /// Where its applier goes while it's lent, kept (D1304).
-    pub lending_cell: Option<Rc<RefCell<dyn ErasedApplier>>>,
     pub deferred: Deferred,
     /// The paused composition in progress, if any (Compose's `pendingPausedComposition`).
     pub paused: Option<Box<crate::pausable::Paused>>,
@@ -566,9 +589,12 @@ impl CompositionData {
             frame_requester: None,
             recomposer: None,
             parent: None,
-            children: Vec::new(),
+            child_count: 0,
+            dirty_children: Vec::new(),
+            queued: false,
+            created: 0,
+            root_gone: false,
             provider_epoch: None,
-            lending_cell: None,
             deferred: Deferred::default(),
             paused: None,
         }
@@ -578,6 +604,7 @@ impl CompositionData {
     pub fn closed(data: &CompositionData) -> CompositionData {
         let mut closed = CompositionData::new(data.applier.clone(), data.root_node);
         closed.closed = true;
+        closed.child_count = data.child_count;
         closed
     }
 
@@ -587,7 +614,11 @@ impl CompositionData {
 
     /// Whether a frame has something to compose in it.
     pub fn has_own_work(&self) -> bool {
-        self.has_invalidations() && !self.poisoned && !self.closed && !self.finishing
+        self.has_invalidations()
+            && !self.poisoned
+            && !self.closed
+            && !self.finishing
+            && !self.root_gone
     }
 
     /// Whether a paused composition of it is neither applied nor cancelled.
@@ -610,6 +641,11 @@ pub(crate) struct Compositions {
     /// What an invalidation asks while a recomposer's loop is running.
     pub recomposer_wake: Option<Rc<dyn Fn()>>,
     pub contexts: crate::context::Contexts,
+    /// The root of the tree a frame is composing: what's invalidated under it, not composed yet,
+    /// is reached in that frame.
+    pub composing_tree: Option<CompositionId>,
+    /// How many were made: the next one's `created`.
+    made: u64,
     /// The generation of new entries (odd): after a reset, above every earlier one.
     base: u32,
 }
@@ -623,12 +659,16 @@ impl Compositions {
             closed: 0,
             recomposer_wake: None,
             contexts: crate::context::Contexts::new(),
+            composing_tree: None,
+            made: 0,
             base: 1,
         }
     }
 
-    pub fn alloc(&mut self, data: CompositionData) -> CompositionId {
+    pub fn alloc(&mut self, mut data: CompositionData) -> CompositionId {
         self.live += 1;
+        self.made += 1;
+        data.created = self.made;
         if let Some(index) = self.free.pop() {
             let entry = &mut self.entries[index as usize];
             entry.generation = entry.generation.wrapping_add(1);
@@ -677,6 +717,11 @@ impl Compositions {
     /// only while their composition is alive.
     pub fn data_mut(&mut self, index: u32) -> &mut CompositionData {
         self.entries[index as usize].data.as_mut().expect("composition of a live scope or pass")
+    }
+
+    /// The live composition at `index`.
+    pub fn id_at(&self, index: u32) -> CompositionId {
+        CompositionId { index, generation: self.entries[index as usize].generation }
     }
 
     pub fn data(&self, index: u32) -> &CompositionData {

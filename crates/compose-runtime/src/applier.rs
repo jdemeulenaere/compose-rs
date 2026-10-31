@@ -154,16 +154,18 @@ pub(crate) trait ErasedApplier {
     fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef);
     fn contains(&self, node: NodeRef) -> bool;
     fn on_begin_changes(&mut self);
-    fn on_end_changes(&mut self);
+    /// `nested`: with a pass composing around it, whose changes may be of this tree.
+    fn on_end_changes(&mut self, nested: bool);
     /// A pass that won't end its changes, by a panic.
     fn abandon_changes(&mut self);
     fn on_paused_end(&mut self);
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-/// An applier as compositions share it: what `begin` and `end` mean for the tree is the outermost
-/// pair, as a nested pass's end comes while the pass around it is composing, with its nodes in the
-/// tree (D31), and in a frame the passes composed before any of their work runs.
+/// An applier as compositions share it: a pass nested in another of the tree doesn't end its
+/// changes while that one composes, with its nodes in the tree (D31). With none composing, a pass's
+/// work ends them for real, before its effects (rule R1), beginning them again for the next
+/// composition's work in the frame.
 pub(crate) struct SharedApplier<A> {
     applier: A,
     changing: u32,
@@ -224,17 +226,23 @@ impl<A: Applier> ErasedApplier for SharedApplier<A> {
     }
 
     fn on_begin_changes(&mut self) {
-        self.changing += 1;
-        if self.changing == 1 {
+        if self.changing == 0 {
             Applier::on_begin_changes(&mut self.applier)
         }
+        self.changing += 1;
     }
 
-    fn on_end_changes(&mut self) {
-        self.changing -= 1;
-        if self.changing == 0 {
-            Applier::on_end_changes(&mut self.applier)
+    fn on_end_changes(&mut self, nested: bool) {
+        if nested && self.changing > 1 {
+            self.changing -= 1;
+            return;
         }
+        // What's composed of the frame's others has its work's turn after this.
+        if self.changing == 0 {
+            Applier::on_begin_changes(&mut self.applier)
+        }
+        self.changing = 0;
+        Applier::on_end_changes(&mut self.applier)
     }
 
     fn abandon_changes(&mut self) {

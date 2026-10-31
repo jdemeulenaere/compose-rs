@@ -38,9 +38,8 @@ fn parent_key(_context: CompositionContext) -> i32 {
     0
 }
 
-/// `Composition(ViewApplier(container), ref.value).apply { setContent { block() } }`, for later,
-/// as the file's `testDeferredSubcomposition`: the composable's reader of what it's composed
-/// under, with the place it found.
+/// The place it's in, for a test to compose a child under later, as the file's
+/// `testDeferredSubcomposition` hands back.
 #[composable(non_restartable)]
 fn DeferredSubcomposition(to_compose: Rc<RefCell<Option<CompositionContext>>>) {
     *to_compose.borrow_mut() = Some(remember_composition_context());
@@ -76,7 +75,7 @@ fn what_a_parent_writes_while_composing_reaches_its_child_in_the_frame() {
     test.compose(move || Content!(v, c, o.clone()));
     occurred.set(false);
     value.set(10);
-    test.advance();
+    test.expect_changes();
     assert!(occurred.get());
 }
 
@@ -196,8 +195,8 @@ fn a_branch_of_the_parent_beside_an_empty_child() {
     test.revalidate();
 }
 
-// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testCompositionAndRecomposerDeadlock
-// (no threads, D14: what it runs, in one)
+/// What `testCompositionAndRecomposerDeadlock` sets up, as a smoke test of the teardown, not that
+/// test's point: it's about a deadlock between threads, and there are none here (D14).
 #[test]
 fn an_inner_composition_disposed_with_its_parent_under_a_recomposer() {
     for _ in 0..3 {
@@ -218,6 +217,8 @@ fn an_inner_composition_disposed_with_its_parent_under_a_recomposer() {
 static LOCAL_TEXT: CompositionLocal<String> =
     CompositionLocal::new("subcompose.LocalText", || "Default".into());
 static LOCAL_INT: CompositionLocal<i32> = CompositionLocal::new("subcompose.LocalInt", || 1);
+static LOCAL_RC: CompositionLocal<Rc<()>> =
+    CompositionLocal::new_static("subcompose.LocalRc", Rc::default);
 static STATIC_TEXT: CompositionLocal<String> =
     CompositionLocal::new_static("subcompose.StaticText", || "Default".into());
 static STATIC_INT: CompositionLocal<i32> =
@@ -284,10 +285,12 @@ fn locals_in_a_child_made_later(
     let (t, s, p) = (text.clone(), scope.clone(), place.clone());
     test.compose(move || {
         s.capture();
-        let p = p.clone();
+        let (p, t2) = (p.clone(), t.clone());
         CompositionLocalProvider(
             (text_local.provides(t.borrow().clone()), int_local.provides(0)),
             move || {
+                assert_eq!(*t2.borrow(), text_local.current());
+                assert_eq!(0, int_local.current());
                 Text(&text_local.current());
                 DeferredSubcomposition(p.clone());
             },
@@ -406,9 +409,10 @@ fn a_new_dynamic_value_recomposes_only_the_childs_readers() {
     assert_eq!(others.get(), 1, "the child's root didn't read it");
 }
 
-/// A child of a context whose place went reads the locals of its own: nothing above. (§3.2)
+/// A child kept after its place went reads what the place provided when it went, as Compose's
+/// context keeps its `compositionLocalScope`: no default, and not what's composed there since.
 #[test]
-fn a_child_whose_place_went_reads_defaults() {
+fn a_child_whose_place_went_keeps_what_it_provided() {
     let mut test = composition_test();
     let there = mutable_state_of(true);
     let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
@@ -430,7 +434,58 @@ fn a_child_whose_place_went_reads_defaults() {
     test.advance();
     let s = seen.clone();
     child.set_content(move || s.set(LOCAL_INT.current()));
-    assert_eq!(seen.get(), 1, "the default");
+    assert_eq!(seen.get(), 5, "as it was");
+    let s = seen.clone();
+    child.set_content(move || s.set(current_composition_local_map().get(&LOCAL_INT)));
+    assert_eq!(seen.get(), 5, "in the map too");
+    child.dispose();
+}
+
+/// A child's disposal lets go of what its context kept for it, once that's gone too.
+#[test]
+fn what_a_context_kept_goes_with_its_last_child() {
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let (t, p) = (there.handle(), place.clone());
+    let held = Rc::new(());
+    let h = held.clone();
+    test.compose(move || {
+        if t.get() {
+            let p = p.clone();
+            CompositionLocalProvider(LOCAL_RC.provides(h.clone()), move || {
+                DeferredSubcomposition(p.clone());
+            });
+        }
+    });
+    let child = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    child.set_content(|| {
+        LOCAL_RC.current();
+    });
+    there.set(false);
+    test.advance();
+    let kept = Rc::strong_count(&held);
+    child.dispose();
+    assert_eq!(Rc::strong_count(&held), kept - 1, "the kept map's entry");
+}
+
+/// Kept below a composition disposed: what it reads doesn't come to depend on that one's slots.
+#[test]
+fn a_child_keeps_what_its_disposed_parent_provided() {
+    let parent = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    parent.set_content(move || {
+        let p = p.clone();
+        CompositionLocalProvider(LOCAL_INT.provides(5), move || DeferredSubcomposition(p.clone()));
+    });
+    let child = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    parent.dispose();
+    let seen = Rc::new(Cell::new(0));
+    let s = seen.clone();
+    child.set_content(move || s.set(LOCAL_INT.current()));
+    assert_eq!(seen.get(), 5);
+    child.dispose();
 }
 
 /// What a map, a context of locals and a provider's `provides_default` see goes across. (§3.2)
@@ -1640,4 +1695,1308 @@ fn a_subcomposition_deactivated_after_its_node_was_released() {
     test.advance();
     child.deactivate();
     test.validate(|_| {});
+}
+
+// ---- What a pass nested in others keeps, and a frame with children ---------------------------
+
+/// The views, logging their changes' begins and ends to `log`.
+fn logging_views(log: &Rc<RefCell<Vec<String>>>) -> ViewApplier {
+    let mut views = ViewApplier::new();
+    views.change_log = Some(log.clone());
+    views
+}
+
+fn logger(log: &Rc<RefCell<Vec<String>>>, line: String) -> impl Fn() + use<> {
+    let log = log.clone();
+    move || log.borrow_mut().push(line.clone())
+}
+
+/// A pass under `Snapshot::without_read_observation` hides its reads from the observers around it,
+/// not from composition, as Compose's composition has its own snapshot's observer.
+#[test]
+fn a_pass_under_no_read_observation_follows_what_it_reads() {
+    let composition = Composition::new(empty_applier());
+    let value = mutable_state_of(0);
+    let seen = Rc::new(Cell::new(-1));
+    let (v, s) = (value.handle(), seen.clone());
+    Snapshot::without_read_observation(|| composition.set_content(move || s.set(v.get())));
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    assert!(composition.has_invalidations());
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    composition.dispose();
+}
+
+/// The same for a child, composed so in its parent's body (composition-context.md §3.4), and
+/// the parent's own reads after it.
+#[test]
+fn a_slots_pass_under_no_read_observation_follows_what_it_reads() {
+    let composition = Composition::new(empty_applier());
+    let value = mutable_state_of(0);
+    let after = mutable_state_of(0);
+    let seen = Rc::new(Cell::new(-1));
+    let parents = Rc::new(Cell::new(0));
+    let (v, a, s, c) = (value.handle(), after.handle(), seen.clone(), parents.clone());
+    composition.set_content(move || {
+        let parent = remember_composition_context();
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        let s = s.clone();
+        Snapshot::without_read_observation(|| child.set_content(move || s.set(v.get())));
+        a.get();
+        c.set(c.get() + 1);
+    });
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    assert!(composition.has_invalidations());
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    assert_eq!(parents.get(), 1, "only the child's");
+    after.set(1);
+    composition.recompose();
+    assert_eq!(parents.get(), 2, "the parent's reads go on being its own");
+    composition.dispose();
+}
+
+/// What's hidden stays hidden: an observer below the barrier sees nothing of the pass's reads,
+/// one nested in the pass does.
+#[test]
+fn a_pass_under_no_read_observation_hides_its_reads_from_observers() {
+    let composition = Composition::new(empty_applier());
+    let value = mutable_state_of(0);
+    let told = Rc::new(Cell::new(0));
+    let t = told.clone();
+    let v = value.handle();
+    Snapshot::observe(Some(Rc::new(move |_| t.set(t.get() + 1))), None, || {
+        Snapshot::without_read_observation(|| {
+            composition.set_content(move || {
+                v.get();
+            })
+        })
+    });
+    assert_eq!(told.get(), 0);
+    composition.dispose();
+}
+
+/// A snapshot entered with another read context: the same.
+#[test]
+fn a_pass_in_a_snapshot_with_its_own_observer_follows_what_it_reads() {
+    let composition = Composition::new(empty_applier());
+    let value = mutable_state_of(0);
+    let told = Rc::new(Cell::new(0));
+    let seen = Rc::new(Cell::new(-1));
+    let t = told.clone();
+    let (v, s) = (value.handle(), seen.clone());
+    let snapshot =
+        Snapshot::take_mutable_snapshot(Some(Rc::new(move |_| t.set(t.get() + 1))), None);
+    snapshot.enter(|| composition.set_content(move || s.set(v.get())));
+    snapshot.dispose();
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    assert!(composition.has_invalidations());
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    composition.dispose();
+}
+
+/// Each composition's work ends the tree's changes before its effects, as a plain pass's (D1273),
+/// in a frame where the tree's shared; the nested pass's stays inside its parent's.
+#[test]
+fn a_frames_compositions_end_their_changes_before_each_ones_effects() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let composition = Composition::new(logging_views(&log));
+    let value = mutable_state_of(0);
+    let (v, l) = (value.handle(), log.clone());
+    composition.set_content(move || {
+        let seen = v.get();
+        SideEffect(logger(&l, format!("parent effect {seen}")));
+        let parent = remember_composition_context();
+        let l = l.clone();
+        remember(move || {
+            let child = Rc::new(subcomposition(parent, views_root()));
+            child.set_content(move || {
+                let seen = v.get();
+                SideEffect(logger(&l, format!("child effect {seen}")));
+            });
+            child
+        });
+    });
+    assert_eq!(
+        *log.borrow(),
+        ["begin", "child effect 0", "end", "parent effect 0"],
+        "a nested pass's changes stay inside its parent's"
+    );
+    log.borrow_mut().clear();
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(
+        *log.borrow(),
+        ["begin", "end", "parent effect 1", "begin", "end", "child effect 1"]
+    );
+    composition.dispose();
+}
+
+/// A panic in a release leaves later passes their begin and end, with no child involved.
+#[test]
+fn a_panic_in_a_release_leaves_the_changes_of_later_passes() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let mut views = logging_views(&log);
+    let panics: Rc<Cell<bool>> = Rc::default();
+    views.panic_in_release = panics.clone();
+    let composition = Composition::new(views);
+    let (shown, tick) = (mutable_state_of(true), mutable_state_of(0));
+    let (s, t) = (shown.handle(), tick.handle());
+    composition.set_content(move || {
+        t.get();
+        key(s.get(), || {
+            if s.get() {
+                Text("there");
+            }
+        });
+    });
+    panics.set(true);
+    shown.set(false);
+    Snapshot::send_apply_notifications();
+    assert!(catch_unwind(AssertUnwindSafe(|| composition.recompose())).is_err());
+    panics.set(false);
+    log.borrow_mut().clear();
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(*log.borrow(), ["begin", "end"]);
+    composition.dispose();
+}
+
+/// A parent's effect setting the content of a child composed in the same frame, as `precompose`
+/// from a `LaunchedEffect`: the child's work runs first.
+#[test]
+fn a_parents_effect_sets_the_content_of_a_child_composed_in_the_frame() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let composition = Composition::new(ViewApplier::new());
+    let value = mutable_state_of(0);
+    let (v, l) = (value.handle(), log.clone());
+    composition.set_content(move || {
+        let seen = v.get();
+        let parent = remember_composition_context();
+        let child = {
+            let l = l.clone();
+            remember(move || {
+                let child = Rc::new(subcomposition(parent, views_root()));
+                child.set_content(move || {
+                    let seen = v.get();
+                    SideEffect(logger(&l, format!("child effect {seen}")));
+                });
+                child
+            })
+        };
+        let l = l.clone();
+        SideEffect(move || {
+            if seen == 1 {
+                l.borrow_mut().push("parent effect".to_string());
+                let l = l.clone();
+                child.set_content(move || SideEffect(logger(&l, "new content".to_string())));
+            }
+        });
+    });
+    log.borrow_mut().clear();
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(*log.borrow(), ["parent effect", "child effect 1", "new content"]);
+    composition.dispose();
+}
+
+/// `deactivate` from the same place.
+#[test]
+fn a_parents_effect_deactivates_a_child_composed_in_the_frame() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let composition = Composition::new(ViewApplier::new());
+    let value = mutable_state_of(0);
+    let (v, l) = (value.handle(), log.clone());
+    composition.set_content(move || {
+        let seen = v.get();
+        let parent = remember_composition_context();
+        let child = {
+            let l = l.clone();
+            remember(move || {
+                let child = Rc::new(reusable_subcomposition(parent, views_root()));
+                child.set_content(move || {
+                    let seen = v.get();
+                    SideEffect(logger(&l, format!("child effect {seen}")));
+                });
+                child
+            })
+        };
+        let l = l.clone();
+        SideEffect(move || {
+            if seen == 1 {
+                l.borrow_mut().push("parent effect".to_string());
+                child.deactivate();
+            }
+        });
+    });
+    log.borrow_mut().clear();
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    composition.recompose();
+    assert_eq!(*log.borrow(), ["parent effect", "child effect 1"]);
+    composition.dispose();
+}
+
+/// A composition's own effect has no earlier work to run: it's still the misuse it always was.
+#[test]
+#[should_panic(expected = "pass")]
+fn a_compositions_own_effect_cant_set_its_content() {
+    let composition = Rc::new(Composition::new(empty_applier()));
+    let c = composition.clone();
+    composition.set_content(move || {
+        let c = c.clone();
+        SideEffect(move || c.set_content(|| {}));
+    });
+}
+
+/// A list's item, reused and paused in its precomposition, when the list goes with what it's under:
+/// disposing it asks the tree what's left.
+#[test]
+fn a_paused_reused_child_disposed_after_its_node_went() {
+    #[composable]
+    fn Item() {
+        Text("item");
+    }
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        p.set(Some(remember_composition_context()));
+        if t.get() {
+            Linear!(|| {});
+        }
+    });
+    let host = test.with_views(|views| views.roots()[0]);
+    let child = pausable_subcomposition(place.get().expect("composed"), host);
+    child.set_content(|| {
+        PausableContent(|| Item!());
+    });
+    child.deactivate();
+    let paused = child.set_pausable_content_with_reuse(|| {
+        PausableContent(|| Item!());
+    });
+    assert!(!paused.resume(|| true));
+    there.set(false);
+    test.advance();
+    child.dispose();
+    test.validate(|_| {});
+}
+
+/// Fresh, paused and removed the same way: nothing attached, its nodes made apart go.
+#[test]
+fn a_paused_child_cancelled_after_its_node_went() {
+    #[composable]
+    fn Item() {
+        Text("item");
+    }
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        p.set(Some(remember_composition_context()));
+        if t.get() {
+            Linear!(|| {});
+        }
+    });
+    let host = test.with_views(|views| views.roots()[0]);
+    let child = pausable_subcomposition(place.get().expect("composed"), host);
+    let paused = child.set_pausable_content(|| {
+        PausableContent(|| {
+            Item!();
+            Item!();
+        });
+    });
+    assert!(!paused.resume(|| true));
+    assert!(!paused.resume(|| true));
+    there.set(false);
+    test.advance();
+    paused.cancel();
+    child.dispose();
+    test.validate(|_| {});
+}
+
+/// Applied after its node went: nowhere to show it, so it goes as cancelled.
+#[test]
+fn a_paused_child_applied_after_its_node_went() {
+    #[composable]
+    fn Item() {
+        Text("item");
+    }
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        p.set(Some(remember_composition_context()));
+        if t.get() {
+            Linear!(|| {});
+        }
+    });
+    let host = test.with_views(|views| views.roots()[0]);
+    let child = pausable_subcomposition(place.get().expect("composed"), host);
+    let paused = child.set_pausable_content(|| {
+        PausableContent(|| Item!());
+    });
+    assert!(paused.resume(|| false));
+    there.set(false);
+    test.advance();
+    paused.apply();
+    child.dispose();
+    test.validate(|_| {});
+}
+
+/// A child kept below a node of its parent's that went: its frames compose nothing, nor panic,
+/// as nothing can show; its `set_content` says what's wrong.
+#[test]
+fn a_child_kept_below_a_released_node_composes_nothing() {
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        p.set(Some(remember_composition_context()));
+        if t.get() {
+            Linear!(|| {});
+        }
+    });
+    let host = test.with_views(|views| views.roots()[0]);
+    let child = subcomposition(place.get().expect("composed"), host);
+    let value = mutable_state_of(0);
+    let composed = Rc::new(Cell::new(0));
+    let (v, c) = (value.handle(), composed.clone());
+    child.set_content(move || {
+        Text(&v.get().to_string());
+        c.set(c.get() + 1);
+    });
+    there.set(false);
+    value.set(1);
+    test.advance();
+    // Composed in that frame, parents' releases coming with their work, after all have composed.
+    assert_eq!(composed.get(), 2);
+    value.set(2);
+    test.advance_ignoring_pending_work();
+    assert_eq!(composed.get(), 2);
+    let refused = catch_unwind(AssertUnwindSafe(|| child.set_content(|| {})));
+    let message = *refused.expect_err("a misuse").downcast::<String>().expect("a message");
+    assert!(message.contains("is gone"), "{message}");
+    child.dispose();
+    test.validate(|_| {});
+}
+
+/// A child invalid when its place goes in the frame, kept: it's asked again, and what's written
+/// later asks for a frame as any write does.
+#[test]
+fn a_child_going_in_the_frame_goes_on_asking_for_frames() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || {
+        if t.get() {
+            DeferredSubcomposition(p.clone());
+        }
+    });
+    let child = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    #[composable]
+    fn Inner(value: MutableState<i32>) {
+        value.get();
+    }
+    let (value, other) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (v, o, s) = (value.handle(), other.handle(), seen.clone());
+    child.set_content(move || {
+        s.set(v.get());
+        Inner!(o);
+    });
+    there.set(false);
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(seen.get(), 0, "not in the frame its place goes");
+    assert_eq!(requests.get(), asked + 1, "it's asked again");
+    other.set(1);
+    Snapshot::send_apply_notifications();
+    assert_eq!(seen.get(), 0);
+    assert_eq!(requests.get(), asked + 2, "a write to another scope of it asks, too");
+    value.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(requests.get(), asked + 2, "its scope's invalid: it needs no more");
+    composition.recompose();
+    assert_eq!(seen.get(), 2, "the next one reaches it");
+    value.set(3);
+    Snapshot::send_apply_notifications();
+    assert_eq!(requests.get(), asked + 3);
+    composition.recompose();
+    assert_eq!(seen.get(), 3);
+    child.dispose();
+    composition.dispose();
+}
+
+/// The children a panic left unvisited have their frame asked and are reached by it, and what's
+/// written later asks too.
+#[test]
+fn the_siblings_a_panic_left_are_asked_again() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || DeferredSubcomposition(p.clone()));
+    let context = place.borrow().expect("composed");
+    let first = Composition::with_parent(empty_applier(), context);
+    let second = Composition::with_parent(empty_applier(), context);
+    let (bad, value) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (b, v, s) = (bad.handle(), value.handle(), seen.clone());
+    first.set_content(move || assert_eq!(b.get(), 0, "first"));
+    second.set_content(move || s.set(v.get()));
+    bad.set(1);
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    assert!(catch_unwind(AssertUnwindSafe(|| composition.recompose())).is_err());
+    assert_eq!(seen.get(), 0);
+    assert_eq!(requests.get(), asked + 1, "asked again");
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    value.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(requests.get(), asked + 2);
+    composition.recompose();
+    assert_eq!(seen.get(), 2);
+    assert!(first.is_poisoned());
+    std::mem::forget(first);
+    second.dispose();
+    composition.dispose();
+}
+
+/// A child its parent's pass invalidates is reached in that frame: no second, empty one's asked.
+#[test]
+fn a_child_its_parent_invalidates_asks_no_second_frame() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let (value, copy) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (v, c, s) = (value.handle(), copy.handle(), seen.clone());
+    composition.set_content(move || {
+        c.set(v.get());
+        let parent = remember_composition_context();
+        let s = s.clone();
+        remember(move || {
+            let child = Rc::new(Composition::with_parent(empty_applier(), parent));
+            child.set_content(move || s.set(c.get()));
+            child
+        });
+    });
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    assert_eq!(requests.get(), asked, "the frame reached it");
+    assert!(!composition.has_invalidations());
+    composition.dispose();
+}
+
+/// One composed earlier in the frame, invalidated by a sibling composed after it: the same frame
+/// reaches it only if it hasn't composed; composed, the next.
+#[test]
+fn a_sibling_composed_after_invalidates_the_one_before_for_the_next_frame() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || DeferredSubcomposition(p.clone()));
+    let context = place.borrow().expect("composed");
+    let (first, second) = (
+        Composition::with_parent(empty_applier(), context),
+        Composition::with_parent(empty_applier(), context),
+    );
+    let (tick, value) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (t, v, s) = (tick.handle(), value.handle(), seen.clone());
+    first.set_content(move || {
+        t.get();
+        s.set(v.get());
+    });
+    second.set_content(move || v.set(t.get()));
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(seen.get(), 0, "it composed before the write");
+    assert!(composition.has_invalidations());
+    assert_eq!(requests.get(), asked + 1, "the next frame's asked");
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    assert!(!composition.has_invalidations());
+    first.dispose();
+    second.dispose();
+    composition.dispose();
+}
+
+/// Invalidated by a sibling composed before it, not composed yet: this frame reaches it.
+#[test]
+fn a_sibling_composed_before_invalidates_the_next_for_this_frame() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || DeferredSubcomposition(p.clone()));
+    let context = place.borrow().expect("composed");
+    let (first, second) = (
+        Composition::with_parent(empty_applier(), context),
+        Composition::with_parent(empty_applier(), context),
+    );
+    let (tick, value) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (t, v, s) = (tick.handle(), value.handle(), seen.clone());
+    first.set_content(move || v.set(t.get()));
+    second.set_content(move || s.set(v.get()));
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    assert_eq!(requests.get(), asked);
+    assert!(!composition.has_invalidations());
+    first.dispose();
+    second.dispose();
+    composition.dispose();
+}
+
+/// An effect of a child writing what an earlier sibling, or one composed later reads, is for a
+/// later frame: the composing part of the frame is over.
+#[test]
+fn a_write_in_a_frames_effects_asks_for_the_next_frame() {
+    let composition = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || DeferredSubcomposition(p.clone()));
+    let context = place.borrow().expect("composed");
+    let (first, second) = (
+        Composition::with_parent(empty_applier(), context),
+        Composition::with_parent(empty_applier(), context),
+    );
+    let (tick, value) = (mutable_state_of(0), mutable_state_of(0));
+    let seen = Rc::new(Cell::new(0));
+    let (t, v, s) = (tick.handle(), value.handle(), seen.clone());
+    first.set_content(move || {
+        let ticked = t.get();
+        SideEffect(move || v.set(ticked));
+    });
+    second.set_content(move || s.set(v.get()));
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    composition.recompose();
+    Snapshot::send_apply_notifications();
+    assert_eq!(seen.get(), 0);
+    assert_eq!(requests.get(), asked + 1);
+    composition.recompose();
+    assert_eq!(seen.get(), 1);
+    first.dispose();
+    second.dispose();
+    composition.dispose();
+}
+
+/// A tree's frame goes down only where something went pending, through a composition with nothing
+/// of its own to do.
+#[test]
+fn a_frame_reaches_a_grandchild_through_a_clean_child_many_times() {
+    let root = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    root.set_content(move || DeferredSubcomposition(p.clone()));
+    let middle = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let p = place.clone();
+    middle.set_content(move || DeferredSubcomposition(p.clone()));
+    let leaf = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let value = mutable_state_of(0);
+    let seen = Rc::new(Cell::new(-1));
+    let (v, s) = (value.handle(), seen.clone());
+    leaf.set_content(move || s.set(v.get()));
+    for round in 1..4 {
+        value.set(round);
+        Snapshot::send_apply_notifications();
+        assert!(root.has_invalidations());
+        assert!(root.recompose());
+        assert_eq!(seen.get(), round);
+        assert!(!root.has_invalidations());
+    }
+    leaf.dispose();
+    middle.dispose();
+    root.dispose();
+}
+
+/// Children compose in the order they were made, not the order they went pending.
+#[test]
+fn a_frame_composes_children_in_the_order_they_were_made() {
+    let root = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    root.set_content(move || DeferredSubcomposition(p.clone()));
+    let context = place.borrow().expect("composed");
+    let (a, b) = (mutable_state_of(0), mutable_state_of(0));
+    let order: Rc<RefCell<Vec<&str>>> = Rc::default();
+    let first = Composition::with_parent(empty_applier(), context);
+    let second = Composition::with_parent(empty_applier(), context);
+    let (h, o) = (a.handle(), order.clone());
+    first.set_content(move || {
+        h.get();
+        o.borrow_mut().push("first");
+    });
+    let (h, o) = (b.handle(), order.clone());
+    second.set_content(move || {
+        h.get();
+        o.borrow_mut().push("second");
+    });
+    order.borrow_mut().clear();
+    b.set(1);
+    Snapshot::send_apply_notifications();
+    a.set(1);
+    Snapshot::send_apply_notifications();
+    root.recompose();
+    assert_eq!(*order.borrow(), ["first", "second"]);
+    first.dispose();
+    second.dispose();
+    root.dispose();
+}
+
+/// A static change above a child: the child's own write reaches it whole, however late: nothing
+/// visits it before then.
+#[test]
+fn a_static_change_waits_for_a_clean_childs_own_next_pass() {
+    static LOCAL: CompositionLocal<i32> = CompositionLocal::new_static("clean.child", || 0);
+    let root = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let provided = mutable_state_of(1);
+    let (pr, p) = (provided.handle(), place.clone());
+    root.set_content(move || {
+        let p = p.clone();
+        CompositionLocalProvider(LOCAL.provides(pr.get()), move || {
+            DeferredSubcomposition(p.clone())
+        });
+    });
+    let child = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let (tick, seen, runs) = (mutable_state_of(0), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (t, s, r) = (tick.handle(), seen.clone(), runs.clone());
+    child.set_content(move || {
+        #[composable]
+        fn Reader(seen: Rc<Cell<i32>>) {
+            seen.set(LOCAL.current());
+        }
+        t.get();
+        r.set(r.get() + 1);
+        Reader!(s.clone());
+    });
+    assert_eq!(seen.get(), 1);
+    provided.set(2);
+    Snapshot::send_apply_notifications();
+    root.recompose();
+    assert_eq!(seen.get(), 1, "nothing asked it");
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    root.recompose();
+    assert_eq!(seen.get(), 2, "its next pass, whole");
+    child.dispose();
+    root.dispose();
+}
+
+/// The grandchild's next pass, after its parent's place went, has no epoch to read: composed whole
+/// all the same, as what it was under may be different from what it read.
+#[test]
+fn a_grandchilds_pass_after_its_parents_place_went() {
+    static LOCAL: CompositionLocal<i32> = CompositionLocal::new_static("gone.place", || 0);
+    let mut test = composition_test();
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    test.compose(move || {
+        if t.get() {
+            let p = p.clone();
+            CompositionLocalProvider(LOCAL.provides(1), move || DeferredSubcomposition(p.clone()));
+        }
+    });
+    let child = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let p = place.clone();
+    child.set_content(move || DeferredSubcomposition(p.clone()));
+    let leaf = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let (tick, seen) = (mutable_state_of(0), Rc::new(Cell::new(0)));
+    let runs = Rc::new(Cell::new(0));
+    let (h, s, r) = (tick.handle(), seen.clone(), runs.clone());
+    leaf.set_content(move || {
+        #[composable]
+        fn Reader(seen: Rc<Cell<i32>>, runs: Rc<Cell<i32>>) {
+            seen.set(LOCAL.current());
+            runs.set(runs.get() + 1);
+        }
+        h.get();
+        Reader!(s.clone(), r.clone());
+    });
+    assert_eq!(seen.get(), 1);
+    there.set(false);
+    test.advance();
+    tick.set(1);
+    test.advance();
+    assert_eq!(seen.get(), 1, "what it provided when it went");
+    assert_eq!(runs.get(), 2, "composed whole");
+    leaf.dispose();
+    child.dispose();
+}
+
+/// `set_frame_requester` with only a grandchild invalid: the new requester's told.
+#[test]
+fn a_frame_requester_set_with_a_grandchild_invalid_is_asked() {
+    let root = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    root.set_content(move || DeferredSubcomposition(p.clone()));
+    let middle = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let p = place.clone();
+    middle.set_content(move || DeferredSubcomposition(p.clone()));
+    let leaf = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let value = mutable_state_of(0);
+    let v = value.handle();
+    leaf.set_content(move || {
+        v.get();
+    });
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    root.set_frame_requester(move || r.set(r.get() + 1));
+    assert_eq!(requests.get(), 1);
+    leaf.dispose();
+    middle.dispose();
+    root.dispose();
+}
+
+/// A provider's scope that hasn't composed yet doesn't skip because of a nested pass before it.
+#[test]
+fn a_nested_pass_leaves_the_outers_changed_providers() {
+    static LOCAL: CompositionLocal<i32> = CompositionLocal::new_static("nested.providers", || 0);
+    #[composable]
+    fn Reader(seen: Rc<Cell<i32>>) {
+        seen.set(LOCAL.current());
+    }
+    let composition = Composition::new(empty_applier());
+    let (provided, seen) = (mutable_state_of(1), Rc::new(Cell::new(0)));
+    let (pr, s) = (provided.handle(), seen.clone());
+    composition.set_content(move || {
+        // Above the provider: the child has no change of its own.
+        let parent = remember_composition_context();
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        let s = s.clone();
+        CompositionLocalProvider(LOCAL.provides(pr.get()), move || {
+            child.set_content(|| {});
+            Reader!(s.clone());
+        });
+    });
+    assert_eq!(seen.get(), 1);
+    provided.set(2);
+    composition.recompose();
+    assert_eq!(seen.get(), 2);
+    composition.dispose();
+}
+
+/// Reusing, a nested pass doesn't end it for what's after: `remember` there comes anew.
+#[test]
+fn a_nested_pass_leaves_the_outers_reusing() {
+    let composition = Composition::new(empty_applier());
+    let (reuse_key, made) = (mutable_state_of(0), Rc::new(Cell::new(0)));
+    let (k, m) = (reuse_key.handle(), made.clone());
+    composition.set_content(move || {
+        let m = m.clone();
+        ReusableContent(k.get(), move || {
+            let parent = remember_composition_context();
+            let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+            child.set_content(|| {});
+            remember(|| m.set(m.get() + 1));
+        });
+    });
+    assert_eq!(made.get(), 1);
+    reuse_key.set(1);
+    composition.recompose();
+    assert_eq!(made.get(), 2);
+    composition.dispose();
+}
+
+/// A panic caught in a body abandons its groups: the error it causes says so, whatever nested pass
+/// ran between.
+#[test]
+#[should_panic(expected = "caught")]
+fn a_nested_pass_leaves_what_the_outer_abandoned() {
+    #[composable]
+    fn Panics() {
+        Text("before");
+        panic!("in the body");
+    }
+    let composition = Composition::new(ViewApplier::new());
+    composition.set_content(|| {
+        let parent = remember_composition_context();
+        let caught = catch_unwind(AssertUnwindSafe(|| Panics!()));
+        assert!(caught.is_err());
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        child.set_content(|| {});
+    });
+}
+
+/// The paused composition's pauses go on after a nested pass.
+#[test]
+fn a_nested_pass_leaves_the_outers_pause() {
+    #[composable]
+    fn Item() {}
+    let pausable =
+        Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+    let paused = pausable.set_pausable_content(|| {
+        PausableContent(|| {
+            Item!();
+            let parent = remember_composition_context();
+            let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+            child.set_content(|| {});
+            Item!();
+        });
+    });
+    let asked = Rc::new(Cell::new(0));
+    let a = asked.clone();
+    assert!(paused.resume(move || {
+        a.set(a.get() + 1);
+        false
+    }));
+    assert_eq!(asked.get(), 3, "at its content's start and each item, the nested pass among them");
+    paused.apply();
+    pausable.dispose();
+}
+
+/// A paused scope resuming is resuming from its first group, a nested pass before that (only a
+/// hand-written restart function has one) or no.
+#[test]
+fn a_nested_pass_leaves_the_resume_the_outer_was_about_to_start() {
+    fn Item(child: Rc<Composition>) {
+        let composer = current();
+        composer.start_restart_group(key_of("composition_context::Item"));
+        let changed = composer.update_kept(
+            |kept: &(Rc<Composition>,)| !Rc::ptr_eq(&kept.0, &child),
+            || (child.clone(),),
+        );
+        if !changed && composer.skipping() {
+            composer.skip_to_group_end();
+        }
+        composer.end_restart_group(|kept| {
+            let (child,) = kept.downcast_ref::<(Rc<Composition>,)>().expect("kept").clone();
+            child.set_content(|| {});
+            Item(child)
+        });
+    }
+    let pausable =
+        Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    let child: Rc<RefCell<Option<Rc<Composition>>>> = Rc::default();
+    let c = child.clone();
+    pausable.set_content(move || {
+        p.set(Some(remember_composition_context()));
+        let c = c.clone();
+        let parent = p.get().expect("just set");
+        let held = c.borrow().clone();
+        let held = held.unwrap_or_else(|| {
+            let made = Rc::new(Composition::with_parent(empty_applier(), parent));
+            *c.borrow_mut() = Some(made.clone());
+            made
+        });
+        Item(held);
+    });
+    pausable.deactivate();
+    let (p, c) = (place.clone(), child.clone());
+    let paused = pausable.set_pausable_content_with_reuse(move || {
+        p.set(Some(remember_composition_context()));
+        Item(c.borrow().clone().expect("made"));
+    });
+    let mut resumes = 0;
+    while !paused.resume(|| true) {
+        resumes += 1;
+        assert!(resumes < 8, "it pauses at the start it's resuming, for good");
+    }
+    paused.apply();
+    child.borrow().as_ref().expect("made").dispose();
+    pausable.dispose();
+}
+
+/// A parent, a child nested in its body and the parent again write in order, and each sees the
+/// other's writes: the one thread's passes, nested, see through.
+#[test]
+fn nested_passes_write_in_order_and_read_each_others_writes() {
+    let composition = Composition::new(empty_applier());
+    let (value, tick) = (mutable_state_of(0), mutable_state_of(0));
+    let reads: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let (v, t, r) = (value.handle(), tick.handle(), reads.clone());
+    composition.set_content(move || {
+        t.get();
+        v.set(1);
+        r.borrow_mut().push(v.get());
+        let parent = remember_composition_context();
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        let r2 = r.clone();
+        child.set_content(move || {
+            r2.borrow_mut().push(v.get());
+            v.set(2);
+            r2.borrow_mut().push(v.get());
+        });
+        r.borrow_mut().push(v.get());
+        v.set(3);
+        r.borrow_mut().push(v.get());
+    });
+    assert_eq!(*reads.borrow(), [1, 1, 2, 2, 3]);
+    assert_eq!(value.get(), 3, "applied in order: the last write is the parent's");
+    composition.dispose();
+}
+
+/// A branch flipping in a loop leaves the hash of what comes after it, which a place's goes on from,
+/// as Compose's `rGroupIndex` counts each sibling group whatever its branch.
+#[test]
+fn a_groups_hash_stays_when_a_branch_before_it_flips() {
+    #[composable(non_restartable)]
+    fn Body(shown: MutableState<bool>, hashes: Rc<RefCell<Vec<u64>>>) {
+        for child in 0..2 {
+            if child == 1 || shown.get() {
+                key(child, || hashes.borrow_mut().push(current_composite_key_hash_code()));
+            }
+        }
+    }
+    let composition = Composition::new(empty_applier());
+    let shown = mutable_state_of(true);
+    let hashes: Rc<RefCell<Vec<u64>>> = Rc::default();
+    let (s, h) = (shown.handle(), hashes.clone());
+    composition.set_content(move || Body(s, h.clone()));
+    let second = hashes.borrow()[1];
+    hashes.borrow_mut().clear();
+    shown.set(false);
+    composition.recompose();
+    assert_eq!(hashes.borrow()[0], second);
+    hashes.borrow_mut().clear();
+    shown.set(true);
+    composition.recompose();
+    assert_eq!(hashes.borrow()[1], second);
+    composition.dispose();
+}
+
+/// A shared tree's lends use one cell, whichever of its compositions lends it (§3.3), so a slot's
+/// lend makes no placeholder of the tree: another tree has its own.
+#[test]
+fn a_shared_tree_has_one_cell_to_lend_to() {
+    let composition = Composition::new(ViewApplier::new());
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || p.set(Some(remember_composition_context())));
+    let child = subcomposition(place.get().expect("composed"), views_root());
+    let before = PLACEHOLDERS.with(Cell::get);
+    let lend = |holder: &Composition| {
+        composition.with_applier(|views: &mut ViewApplier| {
+            with_lent_applier(holder, views, || child.set_content(|| Text("lent")));
+        })
+    };
+    lend(&composition);
+    lend(&child);
+    lend(&composition);
+    assert_eq!(PLACEHOLDERS.with(Cell::get), before + 1);
+    let other = Composition::new(ViewApplier::new());
+    other.with_applier(|views: &mut ViewApplier| with_lent_applier(&other, views, || {}));
+    assert_eq!(PLACEHOLDERS.with(Cell::get), before + 2);
+    child.dispose();
+    composition.dispose();
+    other.dispose();
+}
+
+/// A lend's pass sends no apply notifications before it composes, as Compose's `composeInitial`:
+/// what's written before it hasn't invalidated anything by its body, which a measurement's slot
+/// composing is in. The end of its snapshot tells them, as that of any.
+#[test]
+fn a_lends_pass_sends_no_apply_notifications_first() {
+    let composition = Composition::new(ViewApplier::new());
+    let value = mutable_state_of(0);
+    let v = value.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || {
+        p.set(Some(remember_composition_context()));
+        v.get();
+    });
+    let child = subcomposition(place.get().expect("composed"), views_root());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    composition.set_frame_requester(move || r.set(r.get() + 1));
+    value.set(1);
+    let in_the_body = Rc::new(Cell::new(-1));
+    let (seen, r) = (in_the_body.clone(), requests.clone());
+    composition.with_applier(|views: &mut ViewApplier| {
+        with_lent_applier(&composition, views, || child.set_content(move || seen.set(r.get())));
+    });
+    assert_eq!(in_the_body.get(), 0, "not told yet");
+    Snapshot::send_apply_notifications();
+    assert_eq!(requests.get(), 1);
+    child.dispose();
+    composition.dispose();
+}
+
+/// A paused composition's disposal asks whether it's composing, also around a nested pass that
+/// asks for it.
+#[test]
+#[should_panic(expected = "dropped during its own pass")]
+fn a_child_cant_dispose_the_paused_composition_composing_it() {
+    let pausable: Rc<RefCell<Option<Rc<PausableComposition>>>> = Rc::default();
+    let composition =
+        Rc::new(Composition::pausable(empty_applier(), Recomposer::current_thread().as_context()));
+    *pausable.borrow_mut() = Some(composition.clone());
+    let p = pausable.clone();
+    let paused = composition.set_pausable_content(move || {
+        let parent = remember_composition_context();
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        let p = p.clone();
+        child.set_content(move || p.borrow().as_ref().expect("set").dispose());
+    });
+    paused.resume(|| false);
+}
+
+/// A panic in a pass with no child leaves later passes their begin and end, as one in a release.
+#[test]
+fn a_panic_in_a_pass_leaves_the_changes_of_later_passes() {
+    let log: Rc<RefCell<Vec<String>>> = Rc::default();
+    let composition = Composition::new(logging_views(&log));
+    let refused = catch_unwind(AssertUnwindSafe(|| composition.set_content(|| panic!("a pass"))));
+    assert!(refused.is_err());
+    let other = Composition::new(logging_views(&log));
+    other.set_content(|| {});
+    assert_eq!(*log.borrow(), ["begin", "begin", "end"], "the first never ends");
+    composition.with_applier(|views: &mut ViewApplier| {
+        assert_eq!((views.begin_changes, views.end_changes), (1, 0));
+    });
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    log.borrow_mut().clear();
+    other.set_content(move || p.set(Some(remember_composition_context())));
+    let child = subcomposition(place.get().expect("composed"), views_root());
+    assert!(catch_unwind(AssertUnwindSafe(|| child.set_content(|| panic!("a child")))).is_err());
+    std::mem::forget(child);
+    log.borrow_mut().clear();
+    other.set_content(|| {});
+    assert_eq!(*log.borrow(), ["begin", "end"]);
+    other.dispose();
+    std::mem::forget(composition);
+}
+
+/// Under a recomposer: a child below a released node ends its frames, its work not asked again.
+#[test]
+fn a_recomposers_frames_leave_a_child_below_a_released_node() {
+    let recomposer = Recomposer::new();
+    let composition = Composition::with_parent(ViewApplier::new(), recomposer.as_context());
+    let there = mutable_state_of(true);
+    let t = there.handle();
+    let place: Rc<Cell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    composition.set_content(move || {
+        p.set(Some(remember_composition_context()));
+        if t.get() {
+            Linear!(|| {});
+        }
+    });
+    let host = composition.with_applier(|views: &mut ViewApplier| views.roots()[0]);
+    let child = subcomposition(place.get().expect("composed"), host);
+    let value = mutable_state_of(0);
+    let v = value.handle();
+    child.set_content(move || {
+        v.get();
+    });
+    there.set(false);
+    Snapshot::send_apply_notifications();
+    assert!(perform_frame(recomposer.handle(), 0));
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    perform_frame(recomposer.handle(), 0);
+    // On top of its tree now, it's the recomposer's to look at: still nothing to compose.
+    composition.dispose();
+    value.set(2);
+    Snapshot::send_apply_notifications();
+    perform_frame(recomposer.handle(), 0);
+    child.dispose();
+    recomposer.cancel();
+}
+
+/// A composition panicking with a queued child: that one's asked again, and a write to it asks.
+#[test]
+fn a_child_under_one_that_panics_is_asked_again() {
+    let root = Composition::new(empty_applier());
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    root.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    root.set_content(move || DeferredSubcomposition(p.clone()));
+    let middle = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let (bad, value) = (mutable_state_of(0), mutable_state_of(0));
+    let (b, p) = (bad.handle(), place.clone());
+    middle.set_content(move || {
+        assert_eq!(b.get(), 0, "middle");
+        DeferredSubcomposition(p.clone());
+    });
+    let leaf = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let seen = Rc::new(Cell::new(0));
+    let (v, s) = (value.handle(), seen.clone());
+    leaf.set_content(move || s.set(v.get()));
+    bad.set(1);
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    assert!(catch_unwind(AssertUnwindSafe(|| root.recompose())).is_err());
+    assert_eq!(seen.get(), 0);
+    assert_eq!(requests.get(), asked + 1, "asked again");
+    root.recompose();
+    assert_eq!(seen.get(), 1);
+    value.set(2);
+    Snapshot::send_apply_notifications();
+    assert_eq!(requests.get(), asked + 2);
+    root.recompose();
+    assert_eq!(seen.get(), 2);
+    leaf.dispose();
+    std::mem::forget(middle);
+    root.dispose();
+}
+
+/// A frame of one tree reaches what's under it, not what's under another, which asks its own.
+#[test]
+fn a_tree_frame_doesnt_stand_for_another_trees_frame() {
+    let (first, second) = (Composition::new(empty_applier()), Composition::new(empty_applier()));
+    let requests = Rc::new(Cell::new(0));
+    let r = requests.clone();
+    second.set_frame_requester(move || r.set(r.get() + 1));
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let p = place.clone();
+    second.set_content(move || DeferredSubcomposition(p.clone()));
+    let other = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    let p = place.clone();
+    let (value, copy) = (mutable_state_of(0), mutable_state_of(0));
+    let (v, c) = (value.handle(), copy.handle());
+    first.set_content(move || {
+        c.set(v.get());
+        DeferredSubcomposition(p.clone());
+    });
+    let mine = Composition::with_parent(empty_applier(), place.borrow().expect("composed"));
+    mine.set_content(|| {});
+    let (c, seen) = (copy.handle(), Rc::new(Cell::new(0)));
+    let s = seen.clone();
+    other.set_content(move || s.set(c.get()));
+    value.set(1);
+    Snapshot::send_apply_notifications();
+    let asked = requests.get();
+    first.recompose();
+    assert_eq!(requests.get(), asked + 1, "the other tree's frame");
+    second.recompose();
+    assert_eq!(seen.get(), 1);
+    other.dispose();
+    mine.dispose();
+    first.dispose();
+    second.dispose();
+}
+
+/// A static change above a reusable child: its next pass composes it whole, as a plain one's.
+#[test]
+fn a_static_change_reaches_a_reusable_child_at_its_next_pass_whole() {
+    static LOCAL: CompositionLocal<i32> = CompositionLocal::new_static("reusable.child", || 0);
+    #[composable]
+    fn Reader(seen: Rc<Cell<i32>>) {
+        seen.set(LOCAL.current());
+    }
+    #[composable]
+    fn Ticker(tick: MutableState<i32>) {
+        tick.get();
+    }
+    let root = Composition::new(empty_applier());
+    let place: Rc<RefCell<Option<CompositionContext>>> = Rc::default();
+    let provided = mutable_state_of(1);
+    let (pr, p) = (provided.handle(), place.clone());
+    root.set_content(move || {
+        let p = p.clone();
+        CompositionLocalProvider(LOCAL.provides(pr.get()), move || {
+            DeferredSubcomposition(p.clone())
+        });
+    });
+    let child = Composition::reusable(empty_applier(), place.borrow().expect("composed"));
+    let (tick, seen) = (mutable_state_of(0), Rc::new(Cell::new(0)));
+    let (t, s) = (tick.handle(), seen.clone());
+    child.set_content(move || {
+        Reader!(s.clone());
+        Ticker!(t);
+    });
+    assert_eq!(seen.get(), 1);
+    provided.set(2);
+    Snapshot::send_apply_notifications();
+    root.recompose();
+    tick.set(1);
+    Snapshot::send_apply_notifications();
+    root.recompose();
+    assert_eq!(seen.get(), 2);
+    child.dispose();
+    root.dispose();
+}
+
+/// What's told in a pass, in the outer before a nested pass and in that one, reaches readers at the
+/// outer's end.
+#[test]
+fn what_nested_passes_are_told_reaches_readers_at_the_end() {
+    let (before, inside) = (mutable_state_of(0), mutable_state_of(0));
+    let (seen_before, seen_inside) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let reader = Composition::new(empty_applier());
+    let (b, i, sb, si) =
+        (before.handle(), inside.handle(), seen_before.clone(), seen_inside.clone());
+    reader.set_content(move || {
+        sb.set(b.get());
+        si.set(i.get());
+    });
+    let composition = Composition::new(empty_applier());
+    let (b, i) = (before.handle(), inside.handle());
+    composition.set_content(move || {
+        Snapshot::global(|| b.set(1));
+        Snapshot::send_apply_notifications();
+        let parent = remember_composition_context();
+        let child = remember(|| Rc::new(Composition::with_parent(empty_applier(), parent)));
+        child.set_content(move || {
+            Snapshot::global(|| i.set(1));
+            Snapshot::send_apply_notifications();
+        });
+    });
+    Snapshot::send_apply_notifications();
+    assert!(reader.has_invalidations());
+    reader.recompose();
+    assert_eq!((seen_before.get(), seen_inside.get()), (1, 1));
+    composition.dispose();
+    reader.dispose();
 }
