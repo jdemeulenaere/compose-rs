@@ -72,6 +72,7 @@ impl Inputs {
             font_family_resolver: self.resolver.clone(),
             default_locale_list: locale_list(),
             constraints: Constraints::unbounded(),
+            placeholders: None,
         }
     }
 
@@ -162,6 +163,29 @@ fn another_text_is_another_key() {
 #[test]
 fn other_max_lines_are_another_key() {
     assert_key_differs(|input| input.max_lines = 2);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/CacheTextLayoutInputTest.kt, placeholders_should_differ
+#[test]
+fn another_placeholder_is_another_key() {
+    let placeholder = compose_ui::Placeholder::new(
+        1.0.em(),
+        1.0.em(),
+        compose_ui::PlaceholderVerticalAlign::AboveBaseline,
+    );
+    let one = compose_ui::AnnotatedRange::new(placeholder, 0, 1);
+    assert_key_differs(move |input| {
+        input.placeholders = Some(std::rc::Rc::new([one.clone()]));
+    });
+}
+
+#[test]
+fn no_placeholders_and_empty_ones_are_the_same_key() {
+    let inputs = Inputs::new();
+    let none = inputs.input("Hello");
+    let empty =
+        TextLayoutInput { placeholders: Some(std::rc::Rc::new([])), ..inputs.input("Hello") };
+    assert!(CacheTextLayoutInput::new(none) == CacheTextLayoutInput::new(empty));
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/CacheTextLayoutInputTest.kt, softWrap_should_differ

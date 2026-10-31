@@ -82,15 +82,18 @@ impl SkiaFontLoader {
     fn base_of(&self, font: &compose_ui::Font) -> Option<Typeface> {
         let mut bases = self.bases.borrow_mut();
         use compose_ui::FontSource::Bytes;
-        // The very bytes first: a copy of a large font elsewhere in the list costs a comparison
-        // of all of it.
-        let found = bases
-            .iter()
-            .position(|(source, _)| match (source, font.source()) {
-                (Bytes(kept), Bytes(asked)) => kept.is_same_allocation(asked),
-                _ => false,
-            })
-            .or_else(|| bases.iter().position(|(source, _)| source == font.source()))?;
+        let found = match font.source() {
+            // The very bytes first: a copy of a large font elsewhere in the list costs a
+            // comparison of all of it.
+            Bytes(asked) => compose_ui::platform::position_of_bytes(
+                bases.iter().map(|(source, _)| match source {
+                    Bytes(kept) => Some(kept),
+                    _ => None,
+                }),
+                asked,
+            ),
+            source => bases.iter().position(|(kept, _)| kept == source),
+        }?;
         let entry = bases.remove(found);
         let typeface = entry.1.clone();
         bases.push(entry);
@@ -346,12 +349,21 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
         height: paragraph.height(),
         min_intrinsic_width: entry.min_intrinsic_width,
         max_intrinsic_width: entry.max_intrinsic_width,
-        did_exceed_max_lines: paragraph.did_exceed_max_lines(),
+        did_exceed_max_lines: paragraph.did_exceed_max_lines() || entry.ellipsis_start.is_some(),
         ellipsized: entry.ellipsized,
     };
     let mut layout = ParagraphLayout::from_lines(text.clone(), size, lines);
-    layout.placeholder_rects =
+    let mut rects =
         compose_ui::platform::placeholder_rects(&layout, &entry.placeholders, entry.ellipsis_start);
+    // Sideways, where SkParagraph did put it: its own bidi pass orders adjacent placeholders of
+    // right-to-left text its way.
+    for (rect, placeholder) in rects.iter_mut().zip(&entry.placeholders) {
+        if let Some(rect) = rect {
+            let placed = compose_ui::Paragraph::get_bounding_box(&layout, placeholder.start);
+            (rect.left, rect.right) = (placed.left, placed.right);
+        }
+    }
+    layout.placeholder_rects = rects;
     layout
 }
 
@@ -532,7 +544,8 @@ impl TextMeasurer for SkiaTextMeasurer {
     }
 
     fn did_exceed_max_lines(&self, paragraph: ParagraphHandle) -> bool {
-        self.entry(paragraph).paragraph.did_exceed_max_lines()
+        let entry = self.entry(paragraph);
+        entry.paragraph.did_exceed_max_lines() || entry.ellipsis_start.is_some()
     }
 
     fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
@@ -682,7 +695,10 @@ impl SkiaTextMeasurer {
         // The direction from the content, as Compose resolves it: right-to-left when the first
         // strong character is (Hebrew, Arabic and the other right-to-left scripts), else the
         // layout's.
-        let right_to_left = is_rtl_paragraph(text, options);
+        let right_to_left = is_rtl_paragraph(
+            &compose_ui::platform::with_placeholders_neutral(text, placeholders),
+            options,
+        );
         if right_to_left {
             paragraph_style.set_text_direction(skia_safe::textlayout::TextDirection::RTL);
         }
@@ -722,10 +738,12 @@ impl SkiaTextMeasurer {
             run_styles.push(run);
         }
         let collection = &self.collection;
-        // A placeholder's box and how it sits, in the text style around it.
+        // A placeholder's box and how it sits, in the text style around it, by where they start
+        // for the builder.
+        let shown_placeholders = compose_ui::platform::placeholders_in_text_order(placeholders);
         let mut resolved_placeholders = Vec::with_capacity(placeholders.len());
         let mut placeholder_styles = Vec::with_capacity(placeholders.len());
-        for range in placeholders {
+        for (placeholder, range) in placeholders.iter().enumerate() {
             let found = runs.iter().position(|(run, _, _)| run.contains(&range.start));
             let (around, around_style) = match found {
                 Some(index) => (&runs[index].1, &run_styles[index]),
@@ -733,6 +751,7 @@ impl SkiaTextMeasurer {
             };
             let (resolved, placeholder_style) = placeholder_of(
                 range,
+                !shown_placeholders.contains(&placeholder),
                 font_px_of(around, density),
                 around_style,
                 &paragraph_style,
@@ -755,6 +774,7 @@ impl SkiaTextMeasurer {
                     &mut builder,
                     shown,
                     0..text.len(),
+                    &shown_placeholders,
                     &resolved_placeholders,
                     &placeholder_styles,
                 );
@@ -765,6 +785,7 @@ impl SkiaTextMeasurer {
                     &mut builder,
                     shown,
                     range.clone(),
+                    &shown_placeholders,
                     &resolved_placeholders,
                     &placeholder_styles,
                 );
@@ -781,9 +802,9 @@ impl SkiaTextMeasurer {
         paragraph.layout(width);
         let mut min_intrinsic_width = paragraph.min_intrinsic_width();
         let mut max_intrinsic_width = paragraph.max_intrinsic_width();
-        // A word broken for not fitting leaves SkParagraph's intrinsics short by what the width
-        // cut from it. Compose's don't depend on the width: they're read where nothing's cut.
-        if min_intrinsic_width > width {
+        // Lines broken leave SkParagraph's intrinsics short by what the width cut from a word.
+        // Compose's don't depend on the width: they're read where nothing's cut.
+        if paragraph.line_number() > 1 || min_intrinsic_width > width {
             paragraph.layout(f32::INFINITY);
             min_intrinsic_width = paragraph.min_intrinsic_width();
             max_intrinsic_width = paragraph.max_intrinsic_width();
@@ -920,7 +941,7 @@ impl<'a> ShownText<'a> {
             if unit == start {
                 hidden_start = offset;
             }
-            if unit == start + count {
+            if unit >= start + count {
                 hidden_end = offset;
                 break;
             }
@@ -961,16 +982,19 @@ impl<'a> ShownText<'a> {
 }
 
 /// `range` of the text in `builder`, a placeholder for the first character each of `placeholders`
-/// covers and U+FEFF for the others, unit for unit, so a query's offsets are the text's.
+/// (those of `order`, by where they start) covers and U+FEFF for the others, unit for unit, so a
+/// query's offsets are the text's.
 fn add_around_placeholders(
     builder: &mut ParagraphBuilder,
     shown: &ShownText<'_>,
     range: std::ops::Range<usize>,
+    order: &[usize],
     placeholders: &[compose_ui::platform::ResolvedPlaceholder],
     styles: &[skia_safe::textlayout::PlaceholderStyle],
 ) {
     let mut at = range.start;
-    for (placeholder, style) in placeholders.iter().zip(styles) {
+    for &index in order {
+        let (placeholder, style) = (&placeholders[index], &styles[index]);
         let covered = placeholder.start.max(range.start)..placeholder.end.min(range.end);
         if covered.is_empty() || !shown.shows(placeholder.start..placeholder.end) {
             continue;
@@ -993,6 +1017,7 @@ fn add_around_placeholders(
 /// for SkParagraph: a line's own alignments are SkParagraph's, the text's the baseline's offset.
 fn placeholder_of(
     range: &compose_ui::AnnotatedRange<compose_ui::Placeholder>,
+    left_out: bool,
     font_px: f32,
     around: &SkiaTextStyle,
     paragraph_style: &ParagraphStyle,
@@ -1017,15 +1042,6 @@ fn placeholder_of(
             .map_or((0.0, 0.0), |line| (line.ascent.round() as f32, line.descent.round() as f32))
     };
     let align = range.item.placeholder_vertical_align();
-    let (alignment, baseline_offset) = match align {
-        Align::AboveBaseline => (PlaceholderAlignment::AboveBaseline, 0.0),
-        Align::Top => (PlaceholderAlignment::Top, 0.0),
-        Align::Bottom => (PlaceholderAlignment::Bottom, 0.0),
-        Align::Center => (PlaceholderAlignment::Middle, 0.0),
-        Align::TextTop => (PlaceholderAlignment::Baseline, ascent),
-        Align::TextBottom => (PlaceholderAlignment::Baseline, height - descent),
-        Align::TextCenter => (PlaceholderAlignment::Baseline, (height + ascent - descent) / 2.0),
-    };
     let resolved = compose_ui::platform::ResolvedPlaceholder {
         start: range.start,
         end: range.end,
@@ -1034,6 +1050,16 @@ fn placeholder_of(
         align,
         ascent,
         descent,
+        left_out,
+    };
+    let (alignment, baseline_offset) = match align {
+        Align::AboveBaseline => (PlaceholderAlignment::AboveBaseline, 0.0),
+        Align::Top => (PlaceholderAlignment::Top, 0.0),
+        Align::Bottom => (PlaceholderAlignment::Bottom, 0.0),
+        Align::Center => (PlaceholderAlignment::Middle, 0.0),
+        Align::TextTop => (PlaceholderAlignment::Baseline, ascent),
+        Align::TextBottom => (PlaceholderAlignment::Baseline, height - descent),
+        Align::TextCenter => (PlaceholderAlignment::Baseline, resolved.text_center_top()),
     };
     let style =
         PlaceholderStyle::new(width, height, alignment, TextBaseline::Alphabetic, baseline_offset);
@@ -1041,22 +1067,30 @@ fn placeholder_of(
 }
 
 /// The width of each UTF-16 unit of `line`, the start of `paragraph` laid out on a line: all a
-/// cluster's on its first unit.
+/// cluster's on its first unit. SkParagraph has no width for part of a cluster (half a surrogate
+/// pair, a letter without its combining mark), so a range grows until it has some.
 fn unit_widths(paragraph: &Paragraph, line: &str) -> Vec<f32> {
     let units = line.encode_utf16().count();
-    (0..units)
-        .map(|unit| {
-            paragraph
-                .get_rects_for_range(
-                    unit..unit + 1,
-                    skia_safe::textlayout::RectHeightStyle::Tight,
-                    skia_safe::textlayout::RectWidthStyle::Tight,
-                )
-                .iter()
-                .map(|text_box| text_box.rect.width())
-                .sum()
-        })
-        .collect()
+    let mut widths = vec![0.0; units];
+    let mut unit = 0;
+    while unit < units {
+        let mut end = unit + 1;
+        loop {
+            let rects = paragraph.get_rects_for_range(
+                unit..end,
+                skia_safe::textlayout::RectHeightStyle::Tight,
+                skia_safe::textlayout::RectWidthStyle::Tight,
+            );
+            let width: f32 = rects.iter().map(|text_box| text_box.rect.width()).sum();
+            if width > 0.0 || end == units {
+                widths[unit] = width;
+                break;
+            }
+            end += 1;
+        }
+        unit = end;
+    }
+    widths
 }
 
 /// The font size of `style` in pixels (the default size if unset).
@@ -1174,4 +1208,46 @@ fn apply_gradient(
     foreground.set_shader(crate::render::skia_shader(&shader, None));
     text_style.set_foreground_paint(&foreground);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stroke_paints_with_its_width_miter_cap_and_join() {
+        use skia_safe::paint;
+        let style = TextStyle {
+            draw_style: Some(compose_ui::DrawStyle::Stroke(compose_ui::Stroke {
+                width: 3.0,
+                miter: 7.0,
+                cap: compose_ui::StrokeCap::Square,
+                join: compose_ui::StrokeJoin::Bevel,
+            })),
+            ..TextStyle::DEFAULT
+        };
+        let foreground = foreground_paint(&style, compose_ui::Color::RED);
+        assert_eq!(foreground.style(), paint::Style::Stroke);
+        assert_eq!(foreground.stroke_width(), 3.0);
+        assert_eq!(foreground.stroke_miter(), 7.0);
+        assert_eq!(foreground.stroke_cap(), paint::Cap::Square);
+        assert_eq!(foreground.stroke_join(), paint::Join::Bevel);
+        let style = TextStyle {
+            draw_style: Some(compose_ui::DrawStyle::Stroke(compose_ui::Stroke {
+                cap: compose_ui::StrokeCap::Round,
+                join: compose_ui::StrokeJoin::Round,
+                ..compose_ui::Stroke::new(1.0)
+            })),
+            ..TextStyle::DEFAULT
+        };
+        let foreground = foreground_paint(&style, compose_ui::Color::RED);
+        assert_eq!(foreground.stroke_cap(), paint::Cap::Round);
+        assert_eq!(foreground.stroke_join(), paint::Join::Round);
+    }
+
+    #[test]
+    fn a_blur_radius_is_the_sigma_android_makes_of_it() {
+        assert_eq!(blur_sigma(0.0), 0.0);
+        assert!((blur_sigma(10.0) - 6.2735).abs() < 0.0001);
+    }
 }

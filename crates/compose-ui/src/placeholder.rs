@@ -1,6 +1,10 @@
 //! Placeholders, as Compose's `Placeholder`: an empty box in a text, for an inline image or a
 //! custom emoji. A measurer leaves room for one; where it went is `Paragraph::placeholder_rects`.
 
+use std::borrow::Cow;
+use std::rc::Rc;
+
+use crate::annotated::AnnotatedRange;
 use crate::paragraph::Paragraph;
 use crate::text_attributes::ResolvedTextDirection;
 use crate::unit::{Density, Rect, TextUnit};
@@ -66,6 +70,59 @@ impl Placeholder {
     }
 }
 
+/// A text's placeholders, shared by what's laid out from it. Most texts have none, which costs
+/// nothing.
+pub type Placeholders = Option<Rc<[AnnotatedRange<Placeholder>]>>;
+
+/// Panics on a placeholder past the text's end or inside a character, on any stack, as Compose's
+/// `setSpan` throws.
+pub fn check_placeholders(text: &str, placeholders: &[AnnotatedRange<Placeholder>]) {
+    for range in placeholders {
+        assert!(
+            range.end <= text.len()
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end),
+            "placeholder over {}..{} isn't in a text of {} bytes at character boundaries",
+            range.start,
+            range.end,
+            text.len(),
+        );
+    }
+}
+
+/// The indices of `placeholders` a text can show, by where they start: one that starts inside an
+/// earlier one is left out, its characters covered already.
+pub fn placeholders_in_text_order(placeholders: &[AnnotatedRange<Placeholder>]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..placeholders.len()).collect();
+    order.sort_by_key(|index| placeholders[*index].start);
+    let mut covered_to = 0;
+    order.retain(|index| {
+        let range = &placeholders[*index];
+        let kept = range.start >= covered_to && range.start < range.end;
+        if kept {
+            covered_to = range.end;
+        }
+        kept
+    });
+    order
+}
+
+/// `text` as direction resolution sees it: to it a placeholder is a neutral object, whatever it
+/// covers (a neutral per byte here, so offsets stay the text's).
+pub fn with_placeholders_neutral<'a>(
+    text: &'a str,
+    placeholders: &[AnnotatedRange<Placeholder>],
+) -> Cow<'a, str> {
+    if placeholders.is_empty() {
+        return text.into();
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    for range in placeholders {
+        bytes[range.start.min(text.len())..range.end.min(text.len())].fill(b'!');
+    }
+    String::from_utf8_lossy(&bytes).into_owned().into()
+}
+
 /// A placeholder a measurer laid out over `start..end` of its text, in pixels: its size, and the
 /// ascent and descent of the font around it (positive).
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -77,6 +134,8 @@ pub struct ResolvedPlaceholder {
     pub align: PlaceholderVerticalAlign,
     pub ascent: f32,
     pub descent: f32,
+    /// An earlier one covers where it starts: the text doesn't show it.
+    pub left_out: bool,
 }
 
 impl ResolvedPlaceholder {
@@ -90,7 +149,8 @@ impl ResolvedPlaceholder {
             Align::Bottom | Align::TextBottom => ascent = ascent.max(self.height - descent),
             Align::Center | Align::TextCenter => {
                 if ascent + descent < self.height {
-                    ascent += (self.height - (ascent + descent)) / 2.0;
+                    // Whole pixels, as Compose's integers.
+                    ascent += ((self.height - (ascent + descent)) / 2.0).trunc();
                     descent = self.height - ascent;
                 }
             }
@@ -99,10 +159,18 @@ impl ResolvedPlaceholder {
         (ascent, descent)
     }
 
+    /// How far above the baseline a `TextCenter` one's top is: whole pixels, as Compose's integers.
+    pub fn text_center_top(&self) -> f32 {
+        ((self.ascent - self.descent + self.height) / 2.0).trunc()
+    }
+
     /// Where it went in `paragraph`, as Compose's `placeholderRects`: `None` if it was cut by the
     /// maximum lines or an ellipsis (`ellipsis_start`: where a start or middle one hides from).
     fn rect_in(&self, paragraph: &dyn Paragraph, ellipsis_start: Option<usize>) -> Option<Rect> {
         use PlaceholderVerticalAlign as Align;
+        if self.left_out {
+            return None;
+        }
         let line = paragraph.get_line_for_offset(self.start);
         let ellipsized =
             paragraph.is_line_ellipsized(line) && self.end > paragraph.get_line_end(line, true);
@@ -131,7 +199,7 @@ impl ResolvedPlaceholder {
             Align::Center => (line_top + line_bottom - self.height) / 2.0,
             Align::TextTop => baseline - self.ascent,
             Align::TextBottom => baseline + self.descent - self.height,
-            Align::TextCenter => baseline + (self.descent - self.ascent - self.height) / 2.0,
+            Align::TextCenter => baseline - self.text_center_top(),
         };
         Some(Rect::new(left, top, right, top + self.height))
     }

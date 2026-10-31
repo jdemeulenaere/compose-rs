@@ -204,10 +204,10 @@ impl JniFonts {
         bytes: &compose_ui::FontBytes,
     ) -> Arc<Global<JObject<'static>>> {
         let mut buffers = self.buffers.borrow_mut();
-        let found = buffers
-            .iter()
-            .position(|(kept, _)| kept.is_same_allocation(bytes))
-            .or_else(|| buffers.iter().position(|(kept, _)| kept == bytes));
+        let found = compose_ui::platform::position_of_bytes(
+            buffers.iter().map(|(kept, _)| Some(kept)),
+            bytes,
+        );
         if let Some(found) = found {
             let entry = buffers.remove(found);
             let buffer = entry.1.clone();
@@ -392,8 +392,7 @@ impl compose_ui::platform::PlatformFontLoader for JniFonts {
     }
 
     fn release_dropped(&self) {
-        let mut dropped = crate::text::take_dropped_typefaces();
-        dropped.extend(crate::text::take_abandoned_typefaces());
+        let dropped = crate::text::take_typefaces_to_release();
         if dropped.is_empty() {
             return;
         }

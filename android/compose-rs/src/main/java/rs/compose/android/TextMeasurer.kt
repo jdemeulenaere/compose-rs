@@ -175,6 +175,8 @@ internal class TextMeasurer(
         val strokeCap: Paint.Cap,
         val strokeJoin: Paint.Join,
         val hasStroke: Boolean,
+        /** A run's own fill, over a stroked paragraph's paint. */
+        val fill: Boolean,
     ) {
         fun applyTo(paint: TextPaint, width: Float, height: Float) {
             brush?.shaderAt(width, height)?.let { shader ->
@@ -194,6 +196,7 @@ internal class TextMeasurer(
                 paint.strokeCap = strokeCap
                 paint.strokeJoin = strokeJoin
             }
+            if (fill) paint.style = Paint.Style.FILL
         }
 
         fun clearFrom(paint: TextPaint) {
@@ -262,7 +265,7 @@ internal class TextMeasurer(
 
     /** What [flags] (of a style's decoration byte) say follow, as Rust's `encode_paint_extras`. */
     private fun readExtras(request: ByteBuffer, flags: Int): PaintExtras? {
-        if (flags and 0x1C == 0) return null
+        if (flags and 0x3C == 0) return null
         var brush: TextBrush? = null
         if (flags and 4 != 0) {
             val kind = request.get().toInt()
@@ -301,7 +304,7 @@ internal class TextMeasurer(
         }
         return PaintExtras(
             brush, shadowColor, shadowX, shadowY, shadowBlur, hasShadow, strokeWidth, strokeMiter, strokeCap, strokeJoin,
-            hasStroke,
+            hasStroke, fill = flags and 32 != 0,
         )
     }
 
@@ -532,6 +535,9 @@ internal class TextMeasurer(
         /** The placeholders in [content], in the order they were given. */
         var placeholders: Array<PlaceholderSpan>? = null
 
+        /** A run in [content] has a gradient, over the paragraph's size. */
+        var runBrush = false
+
         /**
          * The width of the widest segment of [content] between line break opportunities, as
          * Compose's `LayoutIntrinsics.minIntrinsicWidth`: measured when first asked.
@@ -552,6 +558,7 @@ internal class TextMeasurer(
                 softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
             )
             painted.placeholders = placeholders
+            painted.runBrush = runBrush
             return painted
         }
 
@@ -587,6 +594,7 @@ internal class TextMeasurer(
         val paint = paint(base.paint)
         val runCount = request.getInt()
         var letterSpaced = paint.letterSpacing != 0f
+        var runBrush = false
         val content: CharSequence = if (runCount == 0 && !hasPlaceholders) {
             text
         } else {
@@ -602,6 +610,7 @@ internal class TextMeasurer(
                     )
                     spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
+                    if (style.extras?.brush != null) runBrush = true
                     if (style.background != 0) {
                         spannable.setSpan(
                             BackgroundColorSpan(style.background),
@@ -650,6 +659,7 @@ internal class TextMeasurer(
         )
         kept.extras = base.extras
         kept.placeholders = placeholders
+        kept.runBrush = runBrush
         layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = !probe)
     }
 
@@ -748,7 +758,8 @@ internal class TextMeasurer(
         var layout = textLayout(kept, width, maxLines)
         // Below API 35 the characters hidden by a start or middle ellipsis keep their letter
         // spacing, as they do for Compose's `AndroidParagraph`, which lays out without them.
-        if (Build.VERSION.SDK_INT < 35 && kept.letterSpaced && layout.lineCount > 0 && layout.getEllipsisCount(0) > 0 &&
+        if (Build.VERSION.SDK_INT < 35 && kept.paint.letterSpacing != 0f && layout.lineCount > 0 &&
+            layout.getEllipsisCount(0) > 0 &&
             kept.ellipsis != TextUtils.TruncateAt.END
         ) {
             val before = layout.getEllipsisStart(0)
@@ -783,14 +794,17 @@ internal class TextMeasurer(
         results.putInt(8, lineBaseline(layout, 0, lines, lastLine).toRawBits())
         results.putInt(12, lineBaseline(layout, lines - 1, lines, lastLine).toRawBits())
         results.putInt(16, lines.toFloat().toRawBits())
-        // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
-        // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
-        val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
-        val exceeded = layout.lineCount > maxLines || lastEllipsized
-        results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
+        results.putInt(20, (if (exceededLines(layout, lines)) 1f else 0f).toRawBits())
         // The text's own width, from which Rust can tell another width would lay it out the same.
         results.putInt(24, kept.maxIntrinsicWidth.toRawBits())
     }
+
+    /**
+     * Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines` of
+     * [lines] laid out: its last ellipsized, or not ending where the text does.
+     */
+    private fun exceededLines(layout: Layout, lines: Int): Boolean =
+        layout.getEllipsisCount(lines - 1) > 0 || layout.getLineEnd(lines - 1) != layout.text.length
 
     /** As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else a `StaticLayout`. */
     private fun textLayout(kept: Intrinsics, width: Int, maxLines: Int): Layout {
@@ -1104,7 +1118,7 @@ internal class TextMeasurer(
         // Compose's `minIntrinsicWidth` (its line breaker's segments), as the intrinsics measure it.
         out[4] = kept?.minIntrinsicWidth ?: layout.width.toFloat()
         out[5] = kept?.maxIntrinsicWidth ?: layout.width.toFloat()
-        out[6] = if (layout.lineCount > lines || lastEllipsized) 1f else 0f
+        out[6] = if (exceededLines(layout, lines)) 1f else 0f
         out[7] = if (lastEllipsized) 1f else 0f
         for (line in 0 until lines) {
             val at = PARAGRAPH_HEADER + line * PARAGRAPH_LINE
@@ -1168,7 +1182,8 @@ internal class TextMeasurer(
             3 -> (lineTop + bottom - height) / 2f
             4 -> span.fontAscent + baseline
             5 -> span.fontDescent + baseline - height
-            6 -> (span.fontAscent + span.fontDescent - height) / 2f + baseline
+            // Integers, as Compose's.
+            6 -> (span.fontAscent + span.fontDescent - span.heightPx) / 2 + baseline
             else -> baseline - height
         }
         out[at] = 1f
@@ -1256,14 +1271,32 @@ internal class TextMeasurer(
      * whatever [target]'s clip, through [textCanvas] (D646).
      */
     private fun drawInPaint(handle: Int, layout: Layout, target: Canvas) {
+        // A `StaticLayout` has lines past its maximum unless it ellipsizes, and draws them: cut
+        // here, as Compose's `AndroidParagraph.paint`.
+        val lines = layout.lineCount.coerceIn(1, intrinsics.get(handle)?.maxLines?.coerceAtLeast(1) ?: Int.MAX_VALUE)
+        if (!exceededLines(layout, lines)) {
+            drawLines(handle, layout, target)
+            return
+        }
+        target.save()
+        target.clipRect(0f, 0f, layout.width.toFloat(), lineBottom(layout, lines - 1, lines, lastLines.get(handle)))
+        drawLines(handle, layout, target)
+        target.restore()
+    }
+
+    private fun drawLines(handle: Int, layout: Layout, target: Canvas) {
         textCanvas.setCanvas(target)
         val canvas: Canvas = textCanvas
-        drawingWidth = layout.width.toFloat()
-        drawingHeight = layout.height.toFloat()
         val kept = intrinsics.get(handle)
         val wanted = kept?.paint ?: layout.paint
         val extras = kept?.extras
         val held = layout.paint
+        // A gradient's size: the lines kept, as the paragraph's height says.
+        if (extras != null || kept?.runBrush == true) {
+            val lines = layout.lineCount.coerceIn(1, kept?.maxLines?.coerceAtLeast(1) ?: Int.MAX_VALUE)
+            drawingWidth = layout.width.toFloat()
+            drawingHeight = lineBottom(layout, lines - 1, lines, lastLines.get(handle))
+        }
         if (wanted === held && extras == null) {
             layout.draw(canvas)
             return
@@ -1274,8 +1307,8 @@ internal class TextMeasurer(
         held.color = wanted.color
         held.isUnderlineText = wanted.isUnderlineText
         held.isStrikeThruText = wanted.isStrikeThruText
-        extras?.applyTo(held, drawingWidth, drawingHeight)
         try {
+            extras?.applyTo(held, drawingWidth, drawingHeight)
             layout.draw(canvas)
         } finally {
             extras?.clearFrom(held)

@@ -236,6 +236,47 @@ fn a_gradient_runs_across_the_paragraph_not_a_glyph() {
     assert!(at_right.blue() > 200 && at_right.red() < 60, "{at_right:?}");
 }
 
+/// `abcd` in 100 by 100 at 50 pixels, wrapped to two lines, top to bottom red to blue.
+fn vertical_gradient_picture(max_lines: u32) -> Picture {
+    let style = sample(50.0)
+        .with_brush(Some(Brush::vertical_gradient([Color::RED, Color::BLUE])), f32::NAN);
+    draw_with((100, 100), (100, 100), 1.0, 0, move |scope, measurer| {
+        let options =
+            DrawTextOptions { style: style.clone(), max_lines, ..DrawTextOptions::default() };
+        scope.draw_text(measurer, "abcd", options);
+    })
+}
+
+#[test]
+fn a_vertical_gradient_runs_down_all_the_lines() {
+    let drawn = vertical_gradient_picture(u32::MAX);
+    let near_the_top = drawn.pixel(2, 3);
+    assert!(near_the_top.red() > 220 && near_the_top.blue() < 30, "{near_the_top:?}");
+    let in_the_middle = drawn.pixel(2, 48);
+    assert!(in_the_middle.red() > 100 && in_the_middle.blue() > 100, "{in_the_middle:?}");
+    let near_the_bottom = drawn.pixel(2, 96);
+    assert!(near_the_bottom.blue() > 220 && near_the_bottom.red() < 30, "{near_the_bottom:?}");
+}
+
+#[test]
+fn a_vertical_gradient_runs_down_the_lines_left_after_a_cut() {
+    let drawn = vertical_gradient_picture(1);
+    let near_its_bottom = drawn.pixel(2, 46);
+    assert!(near_its_bottom.blue() > 200 && near_its_bottom.red() < 50, "{near_its_bottom:?}");
+}
+
+#[test]
+fn a_shadows_blur_spreads_it() {
+    let at = |blur_radius: f32| {
+        let shadow = Shadow { color: Color::GREEN, offset: Offset::new(0.0, 60.0), blur_radius };
+        let style = TextStyle { color: Color::RED, shadow: Some(shadow), ..sample(50.0) };
+        picture("a", style, 100, 120)
+    };
+    // Just outside the shadow's triangle: nothing sharp, something blurred.
+    assert_eq!(at(0.0).pixel(45, 62), Color::WHITE);
+    assert_ne!(at(16.0).pixel(45, 62), Color::WHITE);
+}
+
 #[test]
 fn a_gradient_stays_with_a_text_drawn_elsewhere() {
     let style = sample(100.0).with_brush(Some(left_to_right()), f32::NAN);

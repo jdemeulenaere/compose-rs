@@ -80,6 +80,7 @@ fn the_sample_fonts_metrics_are_those_compose_expects() {
     assert_eq!(u16_at(hhea, 4) as i16, 800, "ascent");
     assert_eq!(u16_at(hhea, 6) as i16, -200, "descent");
     assert_eq!(u16_at(hhea, 8) as i16, 0, "line gap");
+    assert_eq!(table(bytes, "maxp").len(), 32, "version 1.0's size");
     let glyphs = u16_at(table(bytes, "maxp"), 4);
     assert_eq!(u16_at(hhea, 34), glyphs, "a metric for each glyph");
     assert_eq!(table(bytes, "hmtx").len(), usize::from(glyphs) * 4);

@@ -16,7 +16,10 @@ use crate::font_resolver::{PlatformFonts, ResolvedFonts};
 use crate::paragraph::{
     GlyphBox, LaidOutLine, LineLayout, Paragraph, ParagraphLayout, ParagraphSize,
 };
-use crate::placeholder::{Placeholder, ResolvedPlaceholder, placeholder_rects};
+use crate::placeholder::{
+    Placeholder, ResolvedPlaceholder, placeholder_rects, placeholders_in_text_order,
+    with_placeholders_neutral,
+};
 use crate::text::{
     ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition,
     resolve_font_size_px, resolve_text_unit_px,
@@ -442,10 +445,10 @@ impl FixedTextMeasurer {
         }
         // A placeholder is its first character's advance and leaves its line the height it needs;
         // the others it covers are hidden.
+        let shown_placeholders = placeholders_in_text_order(placeholders);
         let mut resolved_placeholders = Vec::with_capacity(placeholders.len());
-        for range in placeholders {
+        for (placeholder, range) in placeholders.iter().enumerate() {
             let first = glyphs.partition_point(|glyph| glyph.offset < range.start);
-            let last = glyphs.partition_point(|glyph| glyph.offset < range.end);
             let font_px = glyphs.get(first).map_or(base_px, |glyph| {
                 if metrics.ascent > 0.0 { glyph.ascent / metrics.ascent } else { base_px }
             });
@@ -458,14 +461,22 @@ impl FixedTextMeasurer {
                 align: range.item.placeholder_vertical_align(),
                 ascent: font_px * metrics.ascent,
                 descent: font_px * metrics.descent,
+                left_out: !shown_placeholders.contains(&placeholder),
             };
+            resolved_placeholders.push(resolved);
+        }
+        // In text order: what one covers another may be asked to as well.
+        for &placeholder in &shown_placeholders {
+            let (range, resolved) =
+                (&placeholders[placeholder], resolved_placeholders[placeholder]);
+            let first = glyphs.partition_point(|glyph| glyph.offset < range.start);
+            let last = glyphs.partition_point(|glyph| glyph.offset < range.end);
             let (ascent, descent) = resolved.line_metrics();
             for (index, glyph) in glyphs[first..last].iter_mut().enumerate() {
-                glyph.advance = if index == 0 { width } else { 0.0 };
+                glyph.advance = if index == 0 { resolved.width } else { 0.0 };
                 glyph.ascent = if index == 0 { ascent } else { glyph.ascent };
                 glyph.descent = if index == 0 { descent } else { glyph.descent };
             }
-            resolved_placeholders.push(resolved);
         }
         // The hard paragraphs: glyph ranges without their line feeds.
         let mut start = 0;
@@ -558,8 +569,29 @@ impl FixedTextMeasurer {
             glyphs[index].advance =
                 if index == hidden.start { base_px * metrics.advance } else { 0.0 };
         }
-        let width_of = |range: Range<usize>| glyphs[range].iter().map(|g| g.advance).sum::<f32>();
+        // An ellipsis at the end: the last line is all that's left of its paragraph, as
+        // `StaticLayout` makes it, up to what fits before its "…", the rest hidden.
         let at_end = options.overflow == TextOverflow::Ellipsis;
+        let mut shown_to_ellipsis = None;
+        if at_end && lines.len() > max_lines {
+            let (index, range) = lines[max_lines - 1].clone();
+            let paragraph = paragraphs[index].clone();
+            lines[max_lines - 1].1 =
+                range.start..paragraph.end + usize::from(paragraph.end < glyphs.len());
+            let margin = if range.start == paragraph.start { indent.0 } else { indent.1 };
+            let ellipsis = base_px * metrics.advance;
+            let room = width - margin - ellipsis;
+            let (mut used, mut shown) = (0.0, range.start);
+            while shown < paragraph.end && used + glyphs[shown].advance <= room + 0.001 {
+                used += glyphs[shown].advance;
+                shown += 1;
+            }
+            for (index, glyph) in glyphs[shown..paragraph.end].iter_mut().enumerate() {
+                glyph.advance = if index == 0 { ellipsis } else { 0.0 };
+            }
+            shown_to_ellipsis = Some(shown);
+        }
+        let width_of = |range: Range<usize>| glyphs[range].iter().map(|g| g.advance).sum::<f32>();
         let exceeded = lines.len() > max_lines || !hidden.is_empty();
         let ellipsized = (lines.len() > max_lines && at_end) || !hidden.is_empty();
         lines.truncate(max_lines);
@@ -573,15 +605,7 @@ impl FixedTextMeasurer {
         let mut top = 0.0;
         // To the bidi algorithm a placeholder is a neutral object, whatever it covers: here a
         // neutral per byte, so the offsets stay the text's.
-        let bidi_string: std::borrow::Cow<'_, str> = if placeholders.is_empty() {
-            string.into()
-        } else {
-            let mut bytes = string.as_bytes().to_vec();
-            for range in placeholders {
-                bytes[range.start..range.end.min(string.len())].fill(b'!');
-            }
-            String::from_utf8_lossy(&bytes).into_owned().into()
-        };
+        let bidi_string = with_placeholders_neutral(string, placeholders);
         // The current hard paragraph's index, bidi levels (none when all left to right) and
         // direction.
         let mut bidi: Option<(usize, Option<ParagraphBidiInfo<'_>>, bool)> = None;
@@ -598,18 +622,12 @@ impl FixedTextMeasurer {
                 .map_or(range.start, |index| index + 1);
             // An ellipsized last line shows what fits before its "…" (one advance of the
             // style's font), as Android's ellipsis start (D1110).
-            let shown_end = if ellipsized && hidden.is_empty() && number + 1 == lines.len() {
-                let margin = if range.start == paragraph.start { indent.0 } else { indent.1 };
-                let room = width - margin - base_px * metrics.advance;
-                let (mut used, mut index) = (0.0, range.start);
-                while index < visible_end && used + glyphs[index].advance <= room + 0.001 {
-                    used += glyphs[index].advance;
-                    index += 1;
+            let shown_end = match shown_to_ellipsis {
+                Some(shown) if number + 1 == lines.len() => {
+                    shown_visible_end = Some(offset_of(shown));
+                    shown
                 }
-                shown_visible_end = Some(offset_of(index));
-                index
-            } else {
-                visible_end
+                _ => visible_end,
             };
             let line_glyphs = &glyphs[range.start..content_end.max(range.start)];
             let (ascent, descent) = if line_glyphs.is_empty() {
@@ -667,10 +685,9 @@ impl FixedTextMeasurer {
                 top += height;
                 continue;
             }
-            let paragraph_text = &string[offset_of(paragraph.start)..offset_of(paragraph.end)];
             let bidi_text = &bidi_string[offset_of(paragraph.start)..offset_of(paragraph.end)];
             if bidi.as_ref().is_none_or(|(index, _, _)| index != paragraph_index) {
-                let rtl = paragraph_is_rtl(paragraph_text, direction);
+                let rtl = paragraph_is_rtl(bidi_text, direction);
                 let level = if rtl { Level::rtl() } else { Level::ltr() };
                 let info = (rtl || needs_bidi(bidi_text))
                     .then(|| ParagraphBidiInfo::new(bidi_text, Some(level)));

@@ -26,7 +26,7 @@ use compose_android::serialize::{
 };
 use compose_android::text::{
     AndroidTextMeasurer, AndroidTypeface, LaidOut, LoadedTypeface, TextBackend,
-    take_abandoned_typefaces, take_dropped_typefaces,
+    take_dropped_typefaces, take_typefaces_to_release,
 };
 use compose_foundation::layout::*;
 use compose_foundation::*;
@@ -519,16 +519,16 @@ fn a_typeface_loaded_for_nobody_is_given_back() {
     // The channel closes after the worker's closure; its result is dropped just after.
     let _ = has_ended.recv();
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut given_back = take_abandoned_typefaces();
+    let mut given_back = take_typefaces_to_release();
     while given_back.is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
-        given_back = take_abandoned_typefaces();
+        given_back = take_typefaces_to_release();
     }
     assert_eq!(given_back, [7001]);
 
     // Awaited, it's the main thread's typeface.
     assert_eq!(LoadedTypeface(7002).into_number(), 7002);
-    assert!(take_abandoned_typefaces().is_empty());
+    assert!(take_typefaces_to_release().is_empty());
 }
 
 /// A lazy list's items drawing with a shared measurer, scrolled with prefetching between frames:

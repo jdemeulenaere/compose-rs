@@ -402,3 +402,245 @@ fn a_placeholder_in_sp_is_that_size_whatever_the_font_size() {
         near(rect.bottom - rect.top, 10.0, "height", stack);
     });
 }
+
+fn square(
+    align: PlaceholderVerticalAlign,
+    start: usize,
+    end: usize,
+) -> AnnotatedRange<Placeholder> {
+    over(align, 1.0.em(), start, end)
+}
+
+#[test]
+fn placeholders_out_of_order_keep_theirs() {
+    let align = PlaceholderVerticalAlign::Bottom;
+    let setup = Setup::with(vec![square(align, 5, 6), square(align, 1, 2)]);
+    setup.on_each_stack("abcdefgh", |stack, paragraph| {
+        let rects = paragraph.placeholder_rects();
+        near(rects[0].expect("the first").left, 5.0 * FONT_SIZE, "the first given", stack);
+        near(rects[1].expect("the second").left, FONT_SIZE, "the second given", stack);
+    });
+}
+
+#[test]
+fn a_placeholder_starting_inside_another_is_left_out() {
+    let align = PlaceholderVerticalAlign::Bottom;
+    let setup = Setup::with(vec![square(align, 1, 3), square(align, 2, 4)]);
+    setup.on_each_stack("abcdefgh", |stack, paragraph| {
+        let rects = paragraph.placeholder_rects();
+        near(rects[0].expect("the first").left, FONT_SIZE, "the first", stack);
+        assert!(rects[1].is_none(), "{stack}");
+        near(paragraph.max_intrinsic_width(), 7.0 * FONT_SIZE, "own width", stack);
+    });
+}
+
+#[test]
+fn a_run_ending_inside_a_placeholder_adds_it_once() {
+    // A span over `ab`, a placeholder over `bc`.
+    let text = AnnotatedString::build(|builder| {
+        let span = SpanStyle { letter_spacing: 0.0.sp(), ..SpanStyle::DEFAULT };
+        builder.with_style(span, |builder| {
+            builder.append("ab");
+        });
+        builder.append("cd");
+    });
+    let setup = Setup::with(vec![square(PlaceholderVerticalAlign::Bottom, 1, 3)]);
+    setup.on_each_stack(text, |stack, paragraph| {
+        // `a`, the placeholder, `d`.
+        near(paragraph.max_intrinsic_width(), 3.0 * FONT_SIZE, "own width", stack);
+        near(paragraph.get_bounding_box(3).left, 2.0 * FONT_SIZE, "d", stack);
+    });
+}
+
+#[test]
+fn a_placeholder_a_start_ellipsis_hides_takes_no_room() {
+    let mut setup = Setup::with(vec![square(PlaceholderVerticalAlign::Bottom, 1, 2)]);
+    setup.width = Some(3.0 * FONT_SIZE);
+    setup.options = TextLayoutOptions {
+        max_lines: 1,
+        overflow: TextOverflow::StartEllipsis,
+        ..TextLayoutOptions::default()
+    };
+    setup.on_each_stack("abcde", |stack, paragraph| {
+        assert_eq!(paragraph.placeholder_rects(), vec![None], "{stack}");
+        near(paragraph.get_line_width(0), 3.0 * FONT_SIZE, "line", stack);
+        near(paragraph.get_bounding_box(4).right, 3.0 * FONT_SIZE, "e", stack);
+    });
+}
+
+#[test]
+fn a_placeholder_over_the_first_strong_character_does_not_set_the_direction() {
+    let setup = Setup::with(vec![square(PlaceholderVerticalAlign::Bottom, 0, 2)]);
+    setup.on_each_stack("\u{5D0}abc", |stack, paragraph| {
+        assert_eq!(
+            paragraph.get_paragraph_direction(0),
+            compose::ui::ResolvedTextDirection::Ltr,
+            "{stack}"
+        );
+        near(only_rect(paragraph, stack).left, 0.0, "left", stack);
+    });
+}
+
+#[test]
+fn a_tall_placeholder_moves_the_baseline_as_its_alignment_says() {
+    use PlaceholderVerticalAlign as Align;
+    for (align, baseline) in [
+        (Align::AboveBaseline, 2.0),
+        (Align::Top, 0.8),
+        (Align::Bottom, 1.8),
+        (Align::Center, 1.3),
+        (Align::TextTop, 0.8),
+        (Align::TextBottom, 1.8),
+        (Align::TextCenter, 1.3),
+    ] {
+        after_one_character(align, 2.0.em(), |stack, paragraph, _| {
+            near(paragraph.first_baseline(), baseline * FONT_SIZE, "baseline", stack);
+        });
+    }
+}
+
+/// Where SkParagraph itself left each placeholder of `text`, left to right.
+fn placed_by_skia(text: &AnnotatedString, setup: &Setup) -> (Vec<Rect>, Vec<Option<Rect>>) {
+    let mut skia = SkiaTextMeasurer::new();
+    let handle = skia.layout_with_placeholders(
+        text,
+        &style(),
+        &setup.placeholders,
+        setup.options,
+        Constraints::new(0, setup.width.unwrap_or(1000.0) as i32, 0, Constraints::INFINITY),
+        &Density::new(1.0),
+    );
+    let placed = skia
+        .skia_paragraph(handle)
+        .expect("a live paragraph")
+        .get_rects_for_placeholders()
+        .iter()
+        .map(|text_box| {
+            let rect = text_box.rect;
+            Rect::new(rect.left, rect.top, rect.right, rect.bottom)
+        })
+        .collect();
+    let answered = skia.paragraph(handle).placeholder_rects();
+    skia.release(handle);
+    (placed, answered)
+}
+
+#[test]
+fn a_placeholders_rect_is_where_skparagraph_left_it() {
+    use PlaceholderVerticalAlign as Align;
+    let plain = AnnotatedString::from("AAA");
+    for align in [
+        Align::AboveBaseline,
+        Align::Top,
+        Align::Bottom,
+        Align::Center,
+        Align::TextTop,
+        Align::TextBottom,
+        Align::TextCenter,
+    ] {
+        for height in [0.5, 0.75, 1.0, 2.0] {
+            let setup = Setup::with(vec![over(align, height.em(), 1, 2)]);
+            let (placed, answered) = placed_by_skia(&plain, &setup);
+            assert_rect(answered[0].expect("a rect"), placed[0], &format!("{align:?} {height}"));
+        }
+    }
+}
+
+#[test]
+fn beside_a_larger_character_the_text_s_alignments_are_where_skparagraph_left_them() {
+    use PlaceholderVerticalAlign as Align;
+    let beside = AnnotatedString::build(|builder| {
+        builder.append("AA");
+        let span = SpanStyle { font_size: 30.0.sp(), ..SpanStyle::DEFAULT };
+        builder.with_style(span, |builder| {
+            builder.append("B");
+        });
+    });
+    // A line's own alignments are about its whole height in Compose's rects, and about the font
+    // around them in SkParagraph's, which draws nothing there (D1127).
+    for align in [Align::AboveBaseline, Align::TextTop, Align::TextBottom, Align::TextCenter] {
+        for height in [0.5, 0.75, 1.0] {
+            let setup = Setup::with(vec![over(align, height.em(), 1, 2)]);
+            let (placed, answered) = placed_by_skia(&beside, &setup);
+            assert_rect(answered[0].expect("a rect"), placed[0], &format!("{align:?} {height}"));
+        }
+    }
+}
+
+#[test]
+fn adjacent_placeholders_right_to_left_are_where_skparagraph_left_them() {
+    let align = PlaceholderVerticalAlign::Bottom;
+    let mut setup = Setup::with(vec![square(align, 2, 4), square(align, 4, 6)]);
+    setup.width = Some(5.0 * FONT_SIZE);
+    let (mut placed, answered) =
+        placed_by_skia(&AnnotatedString::from("\u{5D0}\u{5D0}\u{5D0}\u{5D0}"), &setup);
+    let mut lefts: Vec<f32> = answered.iter().map(|rect| rect.expect("a rect").left).collect();
+    lefts.sort_by(f32::total_cmp);
+    placed.sort_by(|first, second| first.left.total_cmp(&second.left));
+    near(lefts[0], placed[0].left, "the first's", "SkParagraph");
+    near(lefts[1], placed[1].left, "the second's", "SkParagraph");
+}
+
+const HELLOS: &str = "Hello World Hello World Hello World\u{FFFD}";
+
+fn at_the_end_of_hellos() -> Setup {
+    let placeholder =
+        Placeholder::new(10.0.sp(), 10.0.sp(), PlaceholderVerticalAlign::AboveBaseline);
+    let start = HELLOS.len() - '\u{FFFD}'.len_utf8();
+    Setup::with(vec![AnnotatedRange::new(placeholder, start, HELLOS.len())])
+}
+
+/// `setup`'s text at 20 pixels' font as 10 pixels' would be: at `ems` of the 20 em wide.
+fn two_lines(mut setup: Setup, ems: f32, overflow: TextOverflow) -> Setup {
+    setup.width = Some(ems * FONT_SIZE);
+    setup.options = TextLayoutOptions { max_lines: 2, overflow, ..TextLayoutOptions::default() };
+    setup
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, placeholder_onEllipsizedLastLine_isNotNull
+#[test]
+fn a_placeholder_on_a_last_line_with_room_has_a_rect() {
+    two_lines(at_the_end_of_hellos(), 20.0, TextOverflow::Ellipsis)
+        .on_each_stack(HELLOS.to_string(), |stack, paragraph| {
+            assert!(only_rect_or_none(paragraph, stack).is_some(), "{stack}")
+        });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, placeholder_fullyEllipsizedAway_isNull
+#[test]
+fn a_placeholder_ellipsized_away_has_no_rect() {
+    two_lines(at_the_end_of_hellos(), 15.0, TextOverflow::Ellipsis)
+        .on_each_stack(HELLOS.to_string(), |stack, paragraph| {
+            assert!(only_rect_or_none(paragraph, stack).is_none(), "{stack}")
+        });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, placeholder_onLastLine_withOverflowClip_isNotNull
+#[test]
+fn a_clipped_placeholder_on_a_last_line_with_room_has_a_rect() {
+    two_lines(at_the_end_of_hellos(), 20.0, TextOverflow::Clip)
+        .on_each_stack(HELLOS.to_string(), |stack, paragraph| {
+            assert!(only_rect_or_none(paragraph, stack).is_some(), "{stack}")
+        });
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, placeholder_onNonEllipsizedLine_isNotNull
+#[test]
+fn a_placeholder_before_the_ellipsis_has_a_rect() {
+    let before = "Hello ";
+    let text = format!("{before}\u{FFFD} World Hello World Hello World");
+    let placeholder =
+        Placeholder::new(10.0.sp(), 10.0.sp(), PlaceholderVerticalAlign::AboveBaseline);
+    let range =
+        AnnotatedRange::new(placeholder, before.len(), before.len() + '\u{FFFD}'.len_utf8());
+    two_lines(Setup::with(vec![range]), 15.0, TextOverflow::Ellipsis)
+        .on_each_stack(text, |stack, paragraph| {
+            assert!(only_rect_or_none(paragraph, stack).is_some(), "{stack}")
+        });
+}
+
+fn only_rect_or_none(paragraph: &dyn Paragraph, stack: &str) -> Option<Rect> {
+    let rects = paragraph.placeholder_rects();
+    assert_eq!(rects.len(), 1, "{stack}");
+    rects[0]
+}

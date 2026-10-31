@@ -74,6 +74,21 @@ fn bytes_are_the_same_allocation_only_where_they_are_shared() {
 }
 
 #[test]
+fn a_cache_finds_the_very_allocation_before_a_copy_of_it() {
+    let bytes: std::sync::Arc<[u8]> = vec![1u8, 2, 3].into();
+    let copy: std::sync::Arc<[u8]> = vec![1u8, 2, 3].into();
+    let kept = [FontBytes::Shared(copy), FontBytes::Shared(bytes.clone())];
+    let asked = FontBytes::Shared(bytes);
+    let found = compose_ui::platform::position_of_bytes(kept.iter().map(Some), &asked);
+    assert_eq!(found, Some(1));
+    // A copy is found when it's all there is, past an entry of no bytes.
+    let found = compose_ui::platform::position_of_bytes([None, Some(&kept[0])].into_iter(), &asked);
+    assert_eq!(found, Some(1));
+    let other = FontBytes::Static(b"other");
+    assert_eq!(compose_ui::platform::position_of_bytes(kept.iter().map(Some), &other), None);
+}
+
+#[test]
 fn the_same_bytes_elsewhere_are_the_same_font() {
     let copy: std::sync::Arc<[u8]> = std::sync::Arc::from(RESOURCE);
     let shared = Font::from_shared_bytes(copy, FontOptions::default());

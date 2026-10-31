@@ -307,6 +307,7 @@ fn a_start_ellipsis_shows_the_end_of_the_line() {
         assert_eq!(paragraph.get_bounding_box(3), a_box(1.0, 1.0), "{stack}");
         assert_eq!(paragraph.get_bounding_box(4), a_box(2.0, 1.0), "{stack}");
         assert_eq!(paragraph.max_intrinsic_width(), 5.0 * FONT_SIZE, "{stack}");
+        assert!(paragraph.did_exceed_max_lines(), "{stack}");
     });
 }
 
@@ -374,4 +375,83 @@ fn a_start_ellipsis_falls_back_to_a_clip_on_many_lines() {
             assert!(!paragraph.is_line_ellipsized(1), "{stack}");
         });
     }
+}
+
+const SIX_EMOJI: &str = "\u{1F600}\u{1F600}\u{1F600}\u{1F600}\u{1F600}\u{1F600}";
+
+#[test]
+fn a_start_ellipsis_counts_a_surrogate_pair_as_one_character() {
+    let options = ellipsized(TextOverflow::StartEllipsis, 1);
+    on_each_stack(SIX_EMOJI, options, 4.0 * FONT_SIZE, |stack, paragraph| {
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(0), a_box(0.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(4).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(8).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(12), a_box(1.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(20), a_box(3.0, 1.0), "{stack}");
+    });
+}
+
+#[test]
+fn a_middle_ellipsis_counts_a_surrogate_pair_as_one_character() {
+    let options = ellipsized(TextOverflow::MiddleEllipsis, 1);
+    on_each_stack(SIX_EMOJI, options, 4.0 * FONT_SIZE, |stack, paragraph| {
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(4), a_box(1.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(8), a_box(2.0, 1.0), "{stack}");
+        assert_eq!(paragraph.get_bounding_box(12).width(), 0.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(20), a_box(3.0, 1.0), "{stack}");
+    });
+}
+
+#[test]
+fn an_inner_ellipsis_keeps_a_letter_with_its_combining_mark() {
+    // Twenty: a letter with a mark the font hasn't falls back to one of the system's, narrower.
+    let text = "e\u{301}".repeat(20);
+    for overflow in [TextOverflow::StartEllipsis, TextOverflow::MiddleEllipsis] {
+        on_each_stack(&text, ellipsized(overflow, 1), 4.0 * FONT_SIZE, |stack, paragraph| {
+            assert!(paragraph.is_line_ellipsized(0), "{stack}: {overflow:?}");
+            // None measured as nothing, none cut from its mark: it fills the width.
+            let width = paragraph.get_line_width(0);
+            assert!(width <= 4.0 * FONT_SIZE + 0.01, "{stack}: {overflow:?}: {width}");
+            assert!(width >= 3.0 * FONT_SIZE, "{stack}: {overflow:?}: {width}");
+        });
+    }
+}
+
+#[test]
+fn a_texts_intrinsics_do_not_depend_on_the_width_breaking_it() {
+    // Ten letters in nine and a half: the broken word's rest is shorter than the width.
+    plain("abcdefghij", 9.5 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert_eq!(paragraph.min_intrinsic_width(), 10.0 * FONT_SIZE, "{stack}");
+        assert_eq!(paragraph.max_intrinsic_width(), 10.0 * FONT_SIZE, "{stack}");
+    });
+}
+
+#[test]
+fn a_height_exactly_a_number_of_lines_has_room_for_them() {
+    let options = ellipsized(TextOverflow::Ellipsis, u32::MAX);
+    // Two lines in two lines' height: nothing to end.
+    at_height("abcdefgh", options, 4.0 * FONT_SIZE, 2.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert!(!paragraph.is_line_ellipsized(1), "{stack}");
+        assert!(!paragraph.did_exceed_max_lines(), "{stack}");
+    });
+    // Three, in two: the second ends them.
+    at_height("abcdefghijkl", options, 4.0 * FONT_SIZE, 2.0 * FONT_SIZE, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 2, "{stack}");
+        assert!(paragraph.is_line_ellipsized(1), "{stack}");
+        assert_eq!(paragraph.height(), 2.0 * FONT_SIZE, "{stack}");
+    });
+    // A pixel short of two: the first.
+    at_height("abcdefgh", options, 4.0 * FONT_SIZE, 2.0 * FONT_SIZE - 1.0, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+        assert!(paragraph.is_line_ellipsized(0), "{stack}");
+    });
+    // One line's height with one line's maximum isn't asked twice.
+    let one = ellipsized(TextOverflow::Ellipsis, 1);
+    at_height("abcdefgh", one, 4.0 * FONT_SIZE, FONT_SIZE / 4.0, |stack, paragraph| {
+        assert_eq!(paragraph.line_count(), 1, "{stack}");
+    });
 }

@@ -254,6 +254,18 @@ impl FontBytes {
     }
 }
 
+/// Which of `kept` holds `asked`, for a cache of fonts by their bytes: first the very allocation
+/// among all of them, then what's equal, a comparison of all of a large font if it's a copy.
+/// `None` in `kept` is an entry of no bytes.
+pub fn position_of_bytes<'a>(
+    kept: impl Iterator<Item = Option<&'a FontBytes>> + Clone,
+    asked: &FontBytes,
+) -> Option<usize> {
+    kept.clone()
+        .position(|bytes| bytes.is_some_and(|bytes| bytes.is_same_allocation(asked)))
+        .or_else(|| kept.clone().position(|bytes| bytes == Some(asked)))
+}
+
 impl PartialEq for FontBytes {
     /// Comparing the same bytes costs nothing, which is nearly always the comparison asked.
     fn eq(&self, other: &Self) -> bool {

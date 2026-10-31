@@ -175,6 +175,17 @@ pub struct TextLayoutInput {
     pub font_family_resolver: crate::font::FontFamilyResolver,
     pub default_locale_list: crate::intl::LocaleList,
     pub constraints: crate::constraints::Constraints,
+    /// The boxes it leaves room for, over ranges of the text.
+    pub placeholders: crate::placeholder::Placeholders,
+}
+
+impl TextLayoutInput {
+    /// Its placeholders, none as much as empty ones.
+    pub fn placeholder_ranges(
+        &self,
+    ) -> &[crate::annotated::AnnotatedRange<crate::placeholder::Placeholder>] {
+        self.placeholders.as_deref().unwrap_or_default()
+    }
 }
 
 /// Whether a line's visible end leaves `c` out, as Compose's `LayoutHelper.isLineEndSpace`:
