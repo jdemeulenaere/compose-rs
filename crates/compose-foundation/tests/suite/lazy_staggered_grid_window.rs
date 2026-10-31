@@ -428,3 +428,19 @@ fn a_full_line_is_prefetched_across_the_lanes() {
         assert_eq!(across, 60, "{constraints:?}");
     }
 }
+
+/// Lanes known from before, the shorter asking first for an item past the next: composed across
+/// that next one, and kept with it.
+#[test]
+fn a_request_past_the_next_item_is_kept() {
+    for lazy in orientations() {
+        let mut window = plain(lazy, 100, 150, 0, window(100, 0), varied);
+        window.scroll(400);
+        window.scroll(-400);
+        window.scroll(30);
+        let shown: Vec<usize> =
+            window.state.layout_info().visible_items_info.iter().map(|it| it.index).collect();
+        let last = *shown.last().expect("items");
+        window.assert_exist(&[last + 1, last + 2]);
+    }
+}

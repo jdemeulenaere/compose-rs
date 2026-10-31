@@ -61,15 +61,39 @@ fn grid(
     padding: (i32, i32),
     main: impl Fn(usize) -> i32 + Clone + 'static,
 ) -> Grid {
+    spanned_from(0, lanes, size, count, padding, main, |_| false)
+}
+
+fn spanned(
+    lanes: usize,
+    size: (i32, i32),
+    count: usize,
+    padding: (i32, i32),
+    main: impl Fn(usize) -> i32 + Clone + 'static,
+    full: impl Fn(usize) -> bool + Clone + 'static,
+) -> Grid {
+    spanned_from(0, lanes, size, count, padding, main, full)
+}
+
+/// `grid` at item `first`, with some items full lines.
+fn spanned_from(
+    first: usize,
+    lanes: usize,
+    size: (i32, i32),
+    count: usize,
+    padding: (i32, i32),
+    main: impl Fn(usize) -> i32 + Clone + 'static,
+    full: impl Fn(usize) -> bool + Clone + 'static,
+) -> Grid {
     use_optimizations(Optimizations::NONE);
-    let owned = LazyStaggeredGridState::new(0, 0);
+    let owned = LazyStaggeredGridState::new(first, 0);
     let state = *owned;
     std::mem::forget(owned);
     state.set_prefetching_enabled(false);
     let live: Live = Rc::default();
     let noted = live.clone();
     let ui = ComposeTestRule::sized(IntSize::new(2000, 2000), move || {
-        let (noted, main) = (noted.clone(), main.clone());
+        let (noted, main, full) = (noted.clone(), main.clone(), full.clone());
         LazyVerticalStaggeredGrid!(
             StaggeredGridCells::Fixed(lanes),
             modifier = Modifier.size((Dp(size.0 as f32), Dp(size.1 as f32))),
@@ -80,10 +104,18 @@ fn grid(
                 ..PaddingValues::ZERO
             },
             move |scope: LazyStaggeredGridScope| {
-                let (noted, main) = (noted.clone(), main.clone());
-                scope.items_keyed(
+                let (noted, main, full) = (noted.clone(), main.clone(), full.clone());
+                scope.items_keyed_with_span(
                     count,
                     |index| index,
+                    |_| (),
+                    move |index| {
+                        if full(index) {
+                            StaggeredGridItemSpan::FullLine
+                        } else {
+                            StaggeredGridItemSpan::SingleLane
+                        }
+                    },
                     move |index| {
                         Box!(
                             modifier = Modifier
@@ -131,9 +163,10 @@ impl Rand {
 /// Measuring with stops gives what measuring with everything composed gives, for jumps and scrolls.
 fn stops_change_nothing(trims: bool) {
     let main = |index: usize| 20 + (index as i32 * 37) % 160;
-    for seed in 1..=8u32 {
-        let mut stopping = grid(3, (600, 1000), 300, (30, 15), main);
-        let mut whole = grid(3, (600, 1000), 300, (30, 15), main);
+    let full = |index: usize| index % 23 == 7;
+    for seed in 1..=12u32 {
+        let mut stopping = spanned(3, (600, 1000), 300, (30, 15), main, full);
+        let mut whole = spanned(3, (600, 1000), 300, (30, 15), main, full);
         whole.state.compose_items(0, 300);
         whole.ui.wait_for_idle();
         stopping.ui.wait_for_idle();
@@ -204,10 +237,15 @@ fn no_frame_is_blank(mut grid: Grid, frames: usize, delta: f32) {
     grid.ui.wait_for_idle();
     grid.ui.set_auto_advance(false);
     assert!(drawn(&mut grid.ui) > 0, "the first frame shows nothing");
+    let mut before = laid(grid.state);
     for frame in 0..frames {
         let _ = grid.state.dispatch_raw_delta(delta);
-        grid.ui.advance_time_by_frame();
+        grid.ui.host().frame();
         assert!(drawn(&mut grid.ui) > 0, "frame {frame} shows nothing");
+        // Its rounds were enough: laid out, not a stop's partial view.
+        let now = laid(grid.state);
+        assert_ne!(now, before, "frame {frame} didn't finish");
+        before = now;
     }
 }
 
@@ -495,4 +533,166 @@ fn reading_layout_info_where_the_grid_is_called_goes_idle() {
     });
     ui.wait_for_idle();
     assert!(reads.get() < 8, "{} compositions", reads.get());
+}
+
+/// Going back over many items is composed a few at first, then more, in the frame's rounds.
+#[test]
+fn a_long_scroll_back_finishes_in_a_frame() {
+    let mut grid = grid(2, (400, 400), 2000, (0, 0), |_| 50);
+    grid.ui.wait_for_idle();
+    scroll_to(&mut grid, 1000, 0);
+    idle(&mut grid.ui);
+    let state = grid.state;
+    grid.ui.set_auto_advance(false);
+    let _ = state.dispatch_raw_delta(-5000.0);
+    grid.ui.host().frame();
+    assert_eq!(state.first_visible_item_index(), 800);
+}
+
+/// A jump where lanes are far apart: what's far comes apart from the items composed, or each lane
+/// would replace the other's for ever.
+#[test]
+fn a_jump_with_lanes_far_apart_settles() {
+    let mut grid =
+        grid(4, (400, 800), 12_000, (0, 0), |index| if index == 0 { 60_000 } else { 40 });
+    grid.ui.wait_for_idle();
+    let state = grid.state;
+    // Past the long item, which leaves: its lane's known, and nothing's composed near it.
+    let _ = run(&mut grid.ui, async move { state.scroll_by(70_000.0).await });
+    idle(&mut grid.ui);
+    assert!(!grid.live.borrow().contains(&0));
+    // Back into it: the first lane's first is item 0, the others' far from it.
+    scroll_to(&mut grid, 2000, 30_000);
+    idle(&mut grid.ui);
+    assert!(grid.live.borrow().contains(&0), "{:?}", laid(state).first());
+    assert!(grid.live.borrow().len() < 150, "{} composed", grid.live.borrow().len());
+}
+
+/// Item 0 of no size going to the second lane on the way back, the lanes starting together: only
+/// that it's in the wrong lane starts them again (`misalignedStart`'s case 3).
+#[test]
+fn a_first_item_of_no_size_in_the_second_lane_is_put_back() {
+    // At item 1 from the first, so item 0's lane isn't known.
+    let main = |index: usize| if index == 0 { 0 } else { 50 };
+    let mut grid = spanned_from(1, 2, (200, 200), 40, (0, 0), main, |_| false);
+    grid.ui.wait_for_idle();
+    let state = grid.state;
+    let _ = run(&mut grid.ui, async move { state.scroll_by(-50.0).await });
+    assert_eq!(laid(state)[0].1, 0, "{:?}", laid(state));
+}
+
+/// Fewer items under lanes scrolled unevenly: the scroll back at the end finds them off and gives
+/// the lanes out again.
+#[test]
+fn fewer_items_under_uneven_lanes_give_the_lanes_out_again() {
+    let count = mutable_state_of(60usize);
+    let read = count.handle();
+    let owned = LazyStaggeredGridState::new(0, 0);
+    let state = *owned;
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        LazyVerticalStaggeredGrid!(
+            StaggeredGridCells::Fixed(2),
+            modifier = Modifier.size((200.dp(), 300.dp())),
+            state = state,
+            move |scope: LazyStaggeredGridScope| {
+                scope.items(read.get(), |index| {
+                    Spacer(Modifier.height(Dp((40 + (index * 29) % 90) as f32)));
+                });
+            }
+        );
+    });
+    let _ = run(&mut ui, async move { state.scroll_by(1500.0).await });
+    let first = state.first_visible_item_index();
+    count.set(first + 3);
+    ui.wait_for_idle();
+    let laid_now = laid(state);
+    // The last ends the grid.
+    let info = state.layout_info();
+    let last = info.visible_items_info.iter().map(|it| it.offset.y + it.size.height).max();
+    assert_eq!(last, Some(300), "{laid_now:?}");
+    let _ = run(&mut ui, async move { state.scroll_by(-1_000_000.0).await });
+    assert_eq!(laid(state)[0], (0, 0, 0));
+    assert_eq!(laid(state)[1], (1, 1, 0));
+}
+
+/// However the items went, each lane's are one after the other: a lane found off is given out again
+/// (`gapDetected`).
+#[test]
+fn fewer_items_leave_no_gap_in_a_lane() {
+    for shrunk_by in 0..24usize {
+        let count = mutable_state_of(60usize);
+        let read = count.handle();
+        let owned = LazyStaggeredGridState::new(0, 0);
+        let state = *owned;
+        let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+            LazyVerticalStaggeredGrid!(
+                StaggeredGridCells::Fixed(2),
+                modifier = Modifier.size((200.dp(), 300.dp())),
+                state = state,
+                move |scope: LazyStaggeredGridScope| {
+                    scope.items(read.get(), |index| {
+                        Spacer(Modifier.height(Dp((40 + (index * 29) % 90) as f32)));
+                    });
+                }
+            );
+        });
+        let _ =
+            run(&mut ui, async move { state.scroll_by(1000.0 + 13.0 * shrunk_by as f32).await });
+        let shown = state.layout_info().visible_items_info;
+        let last = shown.last().expect("items").index;
+        count.set(last);
+        ui.wait_for_idle();
+        let info = state.layout_info().visible_items_info;
+        for lane in 0..2 {
+            let in_lane: Vec<_> = info.iter().filter(|item| item.lane == lane).collect();
+            for pair in in_lane.windows(2) {
+                assert_eq!(
+                    pair[0].offset.y + pair[0].size.height,
+                    pair[1].offset.y,
+                    "{shrunk_by}: {info:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lane_info_goes_back_to_what_it_was() {
+    let mut info = LazyStaggeredGridLaneInfo::new();
+    info.set_lane(3, 1);
+    info.set_gaps(3, Some(vec![1, 2]));
+    let check = |info: &LazyStaggeredGridLaneInfo| {
+        assert_eq!(info.get_lane(3), 1);
+        assert_eq!(info.get_lane(4), LazyStaggeredGridLaneInfo::LANE_UNSET);
+        assert_eq!(info.get_gaps(3), Some(&[1, 2][..]));
+        assert_eq!(info.get_gaps(5), None);
+        assert_eq!(info.upper_bound(), 16);
+        assert_eq!(info.lower_bound(), 0);
+    };
+    // Writes.
+    info.begin_pass();
+    info.set_lane(3, 0);
+    info.set_lane(4, 1);
+    info.set_gaps(3, None);
+    info.set_gaps(5, Some(vec![7, 8]));
+    info.roll_back();
+    check(&info);
+    // A reset, with writes before and after.
+    info.begin_pass();
+    info.set_lane(4, 1);
+    info.reset();
+    info.set_lane(3, 0);
+    info.roll_back();
+    check(&info);
+    // Growing, and the window moving.
+    info.begin_pass();
+    info.set_lane(100, 1);
+    info.set_lane(300_000, 1);
+    info.roll_back();
+    check(&info);
+    // Kept when it ends.
+    info.begin_pass();
+    info.set_lane(4, 0);
+    info.commit_pass();
+    assert_eq!(info.get_lane(4), 0);
 }

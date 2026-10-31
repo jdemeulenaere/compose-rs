@@ -251,17 +251,20 @@ impl LazyStaggeredGridLaneInfo {
     }
 
     /// A measurement that may stop starts: `roll_back` undoes what it changes from here.
-    fn begin_pass(&mut self) {
+    #[doc(hidden)]
+    pub fn begin_pass(&mut self) {
         self.journal = Some(LaneJournal { size: self.lanes.len(), ..LaneJournal::default() });
     }
 
     /// What it changed stays.
-    fn commit_pass(&mut self) {
+    #[doc(hidden)]
+    pub fn commit_pass(&mut self) {
         self.journal = None;
     }
 
     /// It stopped: as it was when it began, so the next round measures from the same place.
-    fn roll_back(&mut self) {
+    #[doc(hidden)]
+    pub fn roll_back(&mut self) {
         let Some(journal) = self.journal.take() else { return };
         if let Some((anchor, lanes, spanned)) = journal.replaced {
             self.anchor = anchor;
