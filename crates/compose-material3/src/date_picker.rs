@@ -43,6 +43,7 @@ use crate::components::{
     LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE, SelectableSurface, Surface, Text, TextFieldColors,
 };
 use crate::date_input::DateInputContent;
+use crate::date_range_picker::{SelectedRangeInfo, draw_range_background};
 use crate::dialog::{BasicAlertDialog, alert_dialog_flow_row};
 use crate::icon::{Icon, IconButton, icons};
 use crate::scaffold::{DividerDefaults, HorizontalDivider};
@@ -716,6 +717,8 @@ pub fn DatePicker(
             colors,
             MaterialTheme::typography().headline_large.clone(),
             Dp(120.0),
+            None,
+            None,
             {
                 SwitchableDateEntryContent!(
                     state.selected_date_millis(),
@@ -762,8 +765,11 @@ pub(crate) fn DateEntryContainer(
     colors: DatePickerColors,
     headline_text_style: TextStyle,
     header_min_height: Dp,
+    range_picker_top_focus_target_focus_requester: Option<FocusRequester>,
+    range_picker_bottom_focus_target_focus_requester: Option<FocusRequester>,
     content: impl Fn() + 'static,
 ) {
+    let focus_manager = LOCAL_FOCUS_MANAGER.current();
     Column!(
         modifier = modifier
             .size_in(SizeSpec::bounds(
@@ -813,8 +819,40 @@ pub(crate) fn DateEntryContainer(
                     });
                 }
             );
+            // The range picker's targets around its content: Tab from a day goes through them, so
+            // the focus isn't trapped among the months.
+            if let Some(requester) = range_picker_top_focus_target_focus_requester {
+                InvisibleDivider!(requester, focus_manager.clone());
+            }
             content();
+            if let Some(requester) = range_picker_bottom_focus_target_focus_requester {
+                InvisibleDivider!(requester, focus_manager.clone());
+            }
         }
+    );
+}
+
+/// As Compose's `InvisibleDivider`: a target with no size that passes the focus on.
+#[composable]
+fn InvisibleDivider(focus_requester: FocusRequester, focus_manager: FocusManager) {
+    HorizontalDivider!(
+        modifier = Modifier
+            .size((Dp(0.0), Dp(0.0)))
+            .focus_requester(focus_requester)
+            .on_key_event(move |event: KeyEvent| {
+                if event.key == Key::DirectionUp || (event.modifiers.shift && event.key == Key::Tab)
+                {
+                    focus_manager.move_focus(FocusDirection::Previous);
+                    true
+                } else if event.key == Key::DirectionDown || event.key == Key::Tab {
+                    focus_manager.move_focus(FocusDirection::Next);
+                    true
+                } else {
+                    false
+                }
+            })
+            .focus_target(),
+        color = Color::TRANSPARENT
     );
 }
 
@@ -1168,7 +1206,7 @@ fn HorizontalMonthsList(
                             today_millis,
                             selected_date_millis,
                             None,
-                            false,
+                            None,
                             date_formatter,
                             selectable_dates,
                             colors,
@@ -1253,8 +1291,9 @@ fn day_bounds() -> SizeSpec {
     SizeSpec::bounds(DATE_CONTAINER_SIZE, DATE_CONTAINER_SIZE, Dp::UNSPECIFIED, Dp::UNSPECIFIED)
 }
 
-/// As Compose's `Month`: six rows of seven cells, a spacer around its days. `range_selection`
-/// says the two dates are a range's (the date range picker's).
+/// As Compose's `Month`: six rows of seven cells, a spacer around its days. A
+/// `range_selection_info` says the two dates are a range's that touches this month (the date range
+/// picker's), drawn behind them.
 #[composable]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn Month(
@@ -1263,7 +1302,7 @@ pub(crate) fn Month(
     today_millis: i64,
     start_date_millis: Option<i64>,
     end_date_millis: Option<i64>,
-    range_selection: bool,
+    range_selection_info: Option<SelectedRangeInfo>,
     date_formatter: Rc<dyn DatePickerFormatter>,
     selectable_dates: Rc<dyn SelectableDates>,
     colors: DatePickerColors,
@@ -1278,9 +1317,17 @@ pub(crate) fn Month(
     let last_enabled = last_enabled_day(&month, &*selectable_dates);
     let first_cell = month.days_from_start_of_week_to_first_of_month;
     let end_cell = first_cell + month.number_of_days;
+    let range_selection = range_selection_info.is_some();
+    let range_selection_draw_modifier = match range_selection_info {
+        Some(info) => Modifier.draw_behind(move |scope| {
+            draw_range_background(scope, &info, colors.day_in_selection_range_container_color);
+        }),
+        None => Modifier,
+    };
     Column!(
         modifier = Modifier
-            .required_height(Dp(RECOMMENDED_SIZE_FOR_ACCESSIBILITY.0 * MAX_CALENDAR_ROWS as f32)),
+            .required_height(Dp(RECOMMENDED_SIZE_FOR_ACCESSIBILITY.0 * MAX_CALENDAR_ROWS as f32))
+            .then(range_selection_draw_modifier),
         vertical_arrangement = Arrangement::SPACE_EVENLY,
         {
             for week in 0..MAX_CALENDAR_ROWS {

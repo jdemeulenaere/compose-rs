@@ -19,6 +19,8 @@ mod components;
 mod content_description;
 mod date_input;
 mod date_picker;
+mod date_range_input;
+mod date_range_picker;
 mod dismissible_permanent_drawer;
 mod divider;
 mod drag_handle;

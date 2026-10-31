@@ -27,9 +27,7 @@ use crate::text_field::OutlinedTextField;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum InputIdentifier {
     Single,
-    #[allow(dead_code)]
     Start,
-    #[allow(dead_code)]
     End,
 }
 

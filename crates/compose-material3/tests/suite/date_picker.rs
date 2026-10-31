@@ -594,9 +594,9 @@ fn the_buttons_days_and_headline_read_as_they_should() {
 }
 
 /// A text measurer recording the color of each text it lays out.
-struct RecordingColors {
-    inner: compose_ui::platform::FixedTextMeasurer,
-    log: Rc<RefCell<Vec<(String, Color)>>>,
+pub(crate) struct RecordingColors {
+    pub(crate) inner: compose_ui::platform::FixedTextMeasurer,
+    pub(crate) log: Rc<RefCell<Vec<(String, Color)>>>,
 }
 
 impl compose_ui::platform::TextMeasurer for RecordingColors {

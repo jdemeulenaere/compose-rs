@@ -24,6 +24,7 @@ mod chips;
 mod components;
 mod date_input;
 mod date_picker;
+mod date_range_picker;
 mod dialog;
 mod drag_handle;
 mod drawer;
@@ -85,6 +86,11 @@ pub use date_picker::{
     DatePicker, DatePickerColors, DatePickerDefaults, DatePickerDialog, DatePickerFormatter,
     DatePickerState, DisplayMode, SelectableDates, default_date_picker_focus_requester,
     default_date_picker_headline, default_date_picker_title, remember_date_picker_state,
+};
+pub use date_range_picker::{
+    DateRangePicker, DateRangePickerDefaults, DateRangePickerState,
+    default_date_range_picker_headline, default_date_range_picker_title,
+    remember_date_range_picker_state,
 };
 pub use dialog::{
     AlertDialog, AlertDialogDefaults, BasicAlertDialog, DropdownMenu, DropdownMenuItem,
