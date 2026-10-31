@@ -945,6 +945,11 @@ impl UiHost {
         self.with_tree(|tree| tree.text_input_options())
     }
 
+    /// Whether the focused node taking text masks it, as a keyboard's type asks.
+    pub fn text_input_masks_password(&self) -> bool {
+        self.with_tree(|tree| tree.text_input_masks_password())
+    }
+
     /// The input method's action key (Android's `performEditorAction`): the focused field runs
     /// its `KeyboardActions`. Returns whether it was taken.
     pub fn perform_ime_action(&mut self, action: crate::text_input::ImeAction) -> bool {

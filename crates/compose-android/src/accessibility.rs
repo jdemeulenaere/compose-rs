@@ -135,9 +135,6 @@ pub struct KeptSemanticsTree {
     tree: Option<SemanticsSnapshot>,
     /// What's covered was taken out of it: only a service's asking pays for that.
     pruned: bool,
-    /// Whether the focused field masks its text, found before anything's taken out: a field
-    /// scrolled away is what a keyboard still types a password in.
-    focused_password: Option<bool>,
 }
 
 impl KeptSemanticsTree {
@@ -162,38 +159,15 @@ impl KeptSemanticsTree {
         tree
     }
 
-    /// Whether the focused field masks its text, if a field is focused, as a keyboard's options ask
-    /// (`bridge.rs`): the whole tree's answer, what's covered or scrolled away too, for no pruning.
-    pub fn focused_password(&mut self, ui: &UiHost) -> Option<bool> {
-        self.build(ui);
-        self.focused_password
-    }
-
-    /// Whether what's kept has what's covered taken out.
-    pub fn is_pruned(&self) -> bool {
-        self.pruned
-    }
-
     fn build(&mut self, ui: &UiHost) {
         if ui.semantics_changed_since_frame() {
             self.tree = None;
         }
         if self.tree.is_none() {
-            let tree = ui.accessibility_tree_with_covered();
-            self.focused_password = focused_field_masks(&tree);
             self.pruned = false;
-            self.tree = Some(tree);
+            self.tree = Some(ui.accessibility_tree_with_covered());
         }
     }
-}
-
-/// Whether the focused field in `node` masks its text.
-fn focused_field_masks(node: &SemanticsSnapshot) -> Option<bool> {
-    let config = &node.config;
-    if config.get(&P::FOCUSED) == Some(&true) && config.contains(&P::EDITABLE_TEXT) {
-        return Some(config.contains(&P::PASSWORD));
-    }
-    node.children.iter().find_map(focused_field_masks)
 }
 
 /// A node's virtual view id: its semantics id, which no other node or content had (D1262).

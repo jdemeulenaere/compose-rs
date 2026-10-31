@@ -779,7 +779,7 @@ struct Host {
     /// Nothing has been drawn yet.
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
-    ime_options: Option<compose_ui::ImeOptions>,
+    ime_options: Option<(compose_ui::ImeOptions, bool)>,
     /// Shown with performance hints enabled: its frames report the RenderThread's work
     /// (`performance_hint.rs`, D390).
     hint: bool,
@@ -1591,7 +1591,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let options = host.ui.text_input_options().unwrap_or_default();
-    let masks_password = host.semantics_tree.focused_password(&host.ui).unwrap_or(false);
+    let masks_password = host.ui.text_input_masks_password();
     crate::input_method::editor_info(options, masks_password).pack()
 }
 

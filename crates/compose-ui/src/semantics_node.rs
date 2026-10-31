@@ -1006,6 +1006,16 @@ impl AccessibilityHit {
     }
 }
 
+/// A touch taken down through a node's chain (`UiTree::point_through_chain`).
+struct PointInNode {
+    /// At its semantics entry: where it is there, and whether in the clips before that.
+    at_entry: (Offset, bool),
+    /// Whether it's in all of the chain's clips.
+    in_clips: bool,
+    /// Where it is in what the children are placed in.
+    in_content: Offset,
+}
+
 /// Bounds of a semantics node in the root.
 pub(crate) struct SemanticsBounds {
     pub(crate) unclipped: Rect,
@@ -1029,7 +1039,7 @@ impl UiTree {
     /// Where `node`'s semantic bounds are, and its size: the root's, or with no modifier saying
     /// so, its innermost layer's.
     pub(crate) fn semantics_geometry(&mut self, node: NodeId) -> (SemanticsBounds, IntSize) {
-        if let Some((unclipped, clipped)) = self.semantics_bounds_in_root(node) {
+        if let Some((unclipped, clipped)) = self.semantics_bounds_shown(node) {
             let layer =
                 self.own_semantics(node).map_or(0, |own: std::rc::Rc<OwnSemantics>| own.layer);
             let measured = self.node(node).layers[layer].measured;
@@ -1294,8 +1304,12 @@ impl UiTree {
             let at = position - value.overlay_origin;
             let inside = contains(Rect::new(0.0, 0.0, size.width as f32, size.height as f32), at);
             let pass_through = self.overlay_node(overlay).is_some_and(|it| it.pass_through);
-            let hit = self.accessibility_walk(overlay, position, true, None, false);
-            if let Some(found) = hit.and_then(|hit| hit.found) {
+            // A touch target reaches no further than its window: beside it, the touch isn't its.
+            if inside
+                && let Some(found) = self
+                    .accessibility_walk(overlay, position, true, None, false)
+                    .and_then(|hit| hit.found)
+            {
                 return Some(self.node(found).semantics_id);
             }
             if inside && !pass_through {
@@ -1309,7 +1323,8 @@ impl UiTree {
         Some(self.node(found).semantics_id)
     }
 
-    /// What's hit at and below `node`, as `NodeCoordinator.hitTest` for `SemanticsSource`: a node a
+    /// What's hit at and below `node`, as `NodeCoordinator.hitTest` for `SemanticsSource`, `point`
+    /// being in what's around it and taken down through each layer as `fromParentPosition`: a node a
     /// service doesn't read isn't hit, so what's under it still can be; every clip stops what's in it,
     /// past a node's minimum touch target; a hit on a sibling stops what's under that, but one in its
     /// touch target leaves the search going for something better. `merged_into` is what merges what's
@@ -1317,12 +1332,14 @@ impl UiTree {
     fn accessibility_walk(
         &mut self,
         node: NodeId,
-        position: Offset,
+        point: Offset,
         in_layer: bool,
         merged_into: Option<NodeId>,
         hidden: bool,
     ) -> Option<AccessibilityHit> {
         let own = self.own_semantics(node);
+        let walked =
+            self.point_through_chain(node, point, own.as_ref().map(|own| own.bounds_entry));
         let mut merged_into = merged_into;
         let mut hidden = hidden;
         let mut clears = false;
@@ -1335,16 +1352,17 @@ impl UiTree {
             if says_something_important(config) && !self.semantics_is_transparent(node) {
                 let found =
                     (!hidden).then_some(if merges { node } else { merged_into.unwrap_or(node) });
-                let (bounds, size) = self.semantics_geometry(node);
-                let unclipped = bounds.unclipped;
-                let in_clips = self.clips_contain(node, Some(own.bounds_entry), position);
-                hit = if in_clips && contains(unclipped, position) {
-                    Some(AccessibilityHit { found, distance: -1.0, in_layer })
-                } else {
-                    self.distance_in_touch_target(node, unclipped, size, position).map(|distance| {
-                        AccessibilityHit { found, distance, in_layer: in_layer && in_clips }
-                    })
-                };
+                let size = self.node(node).layers[own.layer].measured;
+                let (at, in_clips) = walked.at_entry;
+                let bounds = Rect::new(0.0, 0.0, size.width as f32, size.height as f32);
+                hit =
+                    if in_clips && contains(bounds, at) {
+                        Some(AccessibilityHit { found, distance: -1.0, in_layer })
+                    } else {
+                        self.distance_in_touch_target(node, size, at).map(|distance| {
+                            AccessibilityHit { found, distance, in_layer: in_layer && in_clips }
+                        })
+                    };
             }
             if merges {
                 merged_into = Some(node);
@@ -1355,13 +1373,15 @@ impl UiTree {
         }
         // Past its own clips only where its touch target is.
         let in_layer = in_layer && {
-            if self.clips_contain(node, None, position) {
+            if walked.in_clips {
                 true
             } else {
-                let value = self.node(node);
-                let size = value.layers.last().map_or(IntSize::new(0, 0), |layer| layer.measured);
-                let content = self.bounds_in_root(node);
-                if self.distance_in_touch_target(node, content, size, position).is_none() {
+                let size = self
+                    .node(node)
+                    .layers
+                    .last()
+                    .map_or(IntSize::new(0, 0), |layer| layer.measured);
+                if self.distance_in_touch_target(node, size, walked.in_content).is_none() {
                     return hit;
                 }
                 false
@@ -1374,7 +1394,7 @@ impl UiTree {
                 continue;
             }
             let Some(found) =
-                self.accessibility_walk(child, position, in_layer, merged_into, hidden)
+                self.accessibility_walk(child, walked.in_content, in_layer, merged_into, hidden)
             else {
                 continue;
             };
@@ -1396,60 +1416,77 @@ impl UiTree {
         }
     }
 
-    /// As `distanceInMinimumTouchTarget`: the square of how far `position` is outside `bounds`, of a
-    /// node measuring `size`, if that's within its minimum touch target.
-    fn distance_in_touch_target(
-        &self,
-        node: NodeId,
-        bounds: Rect,
-        size: IntSize,
-        position: Offset,
-    ) -> Option<f32> {
-        let density = self.density_of(node);
-        let minimum = self.view_configuration_of(node).minimum_touch_target_size;
-        let (width, height) = (density.to_px(minimum.width), density.to_px(minimum.height));
-        let horizontal = ((width - size.width as f32) / 2.0).max(0.0);
-        let vertical = ((height - size.height as f32) / 2.0).max(0.0);
-        if horizontal <= 0.0 && vertical <= 0.0 {
-            return None;
-        }
-        let x = (bounds.left - position.x).max(position.x - bounds.right).max(0.0);
-        let y = (bounds.top - position.y).max(position.y - bounds.bottom).max(0.0);
-        (x <= horizontal && y <= vertical).then_some(x * x + y * y)
-    }
-
-    /// Whether `position` in the root is in each clip of `node`'s chain, those before chain entry
-    /// `before_entry` if it's given, by its outline.
-    fn clips_contain(
+    /// `point`, in what's around `node`, taken down through its chain, each layer's transform undone
+    /// and each clip asked by its outline where it is, as `fromParentPosition` and `isInLayer` do.
+    fn point_through_chain(
         &mut self,
         node: NodeId,
-        before_entry: Option<usize>,
-        position: Offset,
-    ) -> bool {
-        let mut layer = 0;
+        point: Offset,
+        entry: Option<usize>,
+    ) -> PointInNode {
+        use crate::graphics_layer::GraphicsLayerNode;
+        use crate::node_chain::NodeKinds;
+        let value = self.node(node);
+        // In the node's own coordinates, its first layer's, which a layer's pivot is in.
+        let mut local = if value.overlay {
+            point - value.overlay_origin
+        } else {
+            let placed = value.layers[0].offset;
+            point - Offset::new(placed.x as f32, placed.y as f32)
+        };
+        let (mut layer, mut origin, mut in_clips) = (0, Offset::ZERO, true);
+        let mut at_entry = None;
         for index in 0..self.node(node).chain.len() {
-            if before_entry.is_some_and(|before| index >= before) {
-                break;
+            if entry == Some(index) {
+                at_entry = Some((local - origin, in_clips));
+            }
+            let value = self.node(node);
+            if let Some(graphics) = value.chain[index].node.downcast_ref::<GraphicsLayerNode>() {
+                local = self.properties_of_layer(node, index, graphics).unmap(local);
             }
             let value = self.node_mut(node);
             let measured = value.layers[layer].measured;
             let (density, direction) = (value.density, value.layout_direction);
             let bits = value.chain[index].kinds;
-            use crate::node_chain::NodeKinds;
             if bits.any(NodeKinds::DRAW | NodeKinds::DELEGATING)
                 && let Some(clip) = value.chain[index].hit_clip_at(measured.into(), density)
             {
-                let origin = self.rect_in_root(node, layer, Some(index), measured);
-                let local = position - Offset::new(origin.left, origin.top);
-                if !clip.outline_in(measured.into(), &density, direction).contains(local) {
-                    return false;
-                }
+                in_clips &=
+                    clip.outline_in(measured.into(), &density, direction).contains(local - origin);
             }
-            if bits.any(NodeKinds::LAYOUT) {
+            if bits.any(NodeKinds::LAYOUT) && layer + 1 < value.layers.len() {
                 layer += 1;
+                let offset = value.layers[layer].offset;
+                origin = origin + Offset::new(offset.x as f32, offset.y as f32);
             }
         }
-        true
+        // The chain's walk stops at the content's layer; without it, the layers are added here.
+        let value = self.node(node);
+        for next in layer + 1..value.layers.len() {
+            let offset = value.layers[next].offset;
+            origin = origin + Offset::new(offset.x as f32, offset.y as f32);
+        }
+        PointInNode {
+            at_entry: at_entry.unwrap_or((local - origin, in_clips)),
+            in_clips,
+            in_content: local - origin,
+        }
+    }
+
+    /// As `distanceInMinimumTouchTarget`: the square of how far `point`, in a node measuring `size`'s
+    /// coordinates, is outside it, if that's within its minimum touch target.
+    fn distance_in_touch_target(&self, node: NodeId, size: IntSize, point: Offset) -> Option<f32> {
+        let density = self.density_of(node);
+        let minimum = self.view_configuration_of(node).minimum_touch_target_size;
+        let (width, height) = (density.to_px(minimum.width), density.to_px(minimum.height));
+        if size.width as f32 >= width && size.height as f32 >= height {
+            return None;
+        }
+        let horizontal = ((width - size.width as f32) / 2.0).max(0.0);
+        let vertical = ((height - size.height as f32) / 2.0).max(0.0);
+        let x = (-point.x).max(point.x - size.width as f32).max(0.0);
+        let y = (-point.y).max(point.y - size.height as f32).max(0.0);
+        (x <= horizontal && y <= vertical).then_some(x * x + y * y)
     }
 
     /// A layer with no alpha around what gives `node` its semantic bounds.

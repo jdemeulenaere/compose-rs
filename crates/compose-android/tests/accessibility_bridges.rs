@@ -1547,6 +1547,166 @@ impl PopupPositionProvider for AtTheCorner {
     }
 }
 
+/// A touch target reaches no further than its window: beside it, what's under finds the touch.
+#[test]
+fn a_touch_target_stops_at_its_window() {
+    let host = stacked(|| {
+        BasicText!("under", modifier = Modifier.test_tag("under").size(300.dp()));
+        Popup!(properties = PopupProperties::default(), {
+            Box!(modifier = Modifier.size(10.dp()).clickable(|| {}).test_tag("small"));
+        });
+    });
+    assert_eq!(touched(&host, 20.0, 5.0), Some(id_of(&host, "under")));
+    assert_eq!(touched(&host, 5.0, 5.0), Some(id_of(&host, "small")));
+}
+
+// ---- Through a layer's transform ---------------------------------------------------------------------
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, unclippedBoundsInRoot
+/// Turned about its centre, a button at (0,0) is at (0,0): nothing's where its top left has gone.
+#[test]
+fn a_node_turned_right_round_is_where_it_shows_not_where_its_corner_went() {
+    let host = stacked(|| {
+        BasicText!(
+            "beyond",
+            modifier = Modifier.offset(100.dp(), 100.dp()).test_tag("beyond").size(100.dp())
+        );
+        Box!(
+            modifier = Modifier
+                .graphics_layer(|layer| layer.rotation_z = 180.0)
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("button")
+        );
+    });
+    let root = host.accessibility_tree();
+    let button = by_tag(&root, "button").expect("there");
+    assert_eq!(button.uncovered_bounds, Some(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    assert!(by_tag(&root, "beyond").is_some(), "nothing covers it");
+    assert_eq!(touched(&host, 50.0, 50.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 150.0, 150.0), Some(id_of(&host, "beyond")));
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsNode.kt, unclippedBoundsInRoot
+#[test]
+fn a_node_scaled_up_is_as_big_as_it_shows() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(100.dp(), 100.dp())
+                .graphics_layer(|layer| {
+                    layer.scale_x = 1.5;
+                    layer.scale_y = 1.5;
+                })
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("button")
+        );
+    });
+    let button = uncovered(&host, "button");
+    assert_eq!(button.uncovered_bounds, Some(Rect::new(75.0, 75.0, 225.0, 225.0)));
+    assert_eq!(touched(&host, 220.0, 220.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 80.0, 80.0), Some(id_of(&host, "button")));
+    assert_eq!(touched(&host, 240.0, 240.0), None);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+/// A clip is asked where it is: in what's scaled, its outline is scaled with it.
+#[test]
+fn a_rounded_clip_is_asked_in_its_own_coordinates_under_a_scale() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .graphics_layer(|layer| {
+                    layer.scale_x = 2.0;
+                    layer.scale_y = 2.0;
+                    layer.transform_origin =
+                        TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+                })
+                .size(100.dp())
+                .clip(RoundedCornerShape(50.dp()))
+                .clickable(|| {})
+                .test_tag("round")
+        );
+    });
+    assert_eq!(touched(&host, 180.0, 180.0), None, "(90, 90) of it is past its corner");
+    // (85, 85) of it is just in the circle.
+    assert_eq!(touched(&host, 170.0, 170.0), Some(id_of(&host, "round")));
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "round")));
+    assert_eq!(touched(&host, 100.0, 195.0), Some(id_of(&host, "round")));
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+/// What's in a scaled parent is asked in the parent's scale.
+#[test]
+fn a_rounded_clip_in_a_scaled_parent_is_asked_where_it_is() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier.graphics_layer(|layer| {
+                layer.scale_x = 1.25;
+                layer.scale_y = 1.25;
+                layer.transform_origin =
+                    TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+            }),
+            {
+                Box!(
+                    modifier = Modifier
+                        .size(200.dp())
+                        .clip(RoundedCornerShape(100.dp()))
+                        .clickable(|| {})
+                        .test_tag("round")
+                );
+            }
+        );
+    });
+    // (176, 80) of the 200 circle: in it. Without the scale, (220, 100) would be past it.
+    assert_eq!(touched(&host, 220.0, 100.0), Some(id_of(&host, "round")));
+    // (192, 16): past its corner, though in its bounds.
+    assert_eq!(touched(&host, 240.0, 20.0), None);
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, fromParentPosition
+#[test]
+fn a_clip_turned_a_quarter_is_asked_turned() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(100.dp(), 100.dp())
+                .graphics_layer(|layer| {
+                    layer.rotation_z = 90.0;
+                    layer.transform_origin =
+                        TransformOrigin { pivot_fraction_x: 0.0, pivot_fraction_y: 0.0 };
+                })
+                .size((100.dp(), 50.dp()))
+                .clip_to_bounds()
+                .clickable(|| {})
+                .test_tag("turned")
+        );
+    });
+    // (95, 25) of it: 90 degrees about its top left, at (100 - 25, 100 + 95).
+    assert_eq!(touched(&host, 75.0, 195.0), Some(id_of(&host, "turned")));
+    assert_eq!(touched(&host, 120.0, 120.0), None, "where it'd be unturned");
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeCoordinator.kt, isPointerInBounds
+/// A diamond's bounding box isn't it.
+#[test]
+fn a_node_turned_an_eighth_is_hit_only_on_it_not_its_bounding_box() {
+    let host = stacked(|| {
+        Box!(
+            modifier = Modifier
+                .offset(50.dp(), 50.dp())
+                .graphics_layer(|layer| layer.rotation_z = 45.0)
+                .size(100.dp())
+                .clickable(|| {})
+                .test_tag("diamond")
+        );
+    });
+    assert_eq!(touched(&host, 100.0, 100.0), Some(id_of(&host, "diamond")));
+    // Its bounding box reaches about 29..171: this corner's in that and nowhere near it.
+    assert_eq!(touched(&host, 35.0, 35.0), None);
+}
+
 /// An overlay's own window takes a touch in it, as a view of its own in Compose, whatever's there.
 #[test]
 fn a_touch_in_a_window_finds_nothing_under_it_and_beside_it_goes_on() {
@@ -2677,7 +2837,7 @@ fn one_window_over_another_covers_nothing_in_it() {
 }
 
 #[test]
-fn a_keyboards_question_pays_for_no_pruning_and_a_service_gets_it_pruned() {
+fn a_service_gets_each_tree_pruned() {
     let two = Box::leak(Box::new(mutable_state_of(String::from("Two")))).handle();
     let mut host = host_of(move || {
         Box!({
@@ -2686,10 +2846,7 @@ fn a_keyboards_question_pays_for_no_pruning_and_a_service_gets_it_pruned() {
         });
     });
     let mut kept = compose_android::accessibility::KeptSemanticsTree::default();
-    assert_eq!(kept.focused_password(&host), None);
-    assert!(!kept.is_pruned(), "nothing's taken out for it");
     assert_eq!(kept.get(&host).children.len(), 1);
-    assert!(kept.is_pruned());
     assert_eq!(texts_of(&host), ["One"]);
     // A new tree is pruned anew.
     two.set(String::from("Three"));
@@ -2718,7 +2875,7 @@ fn a_field_scrolled_away_is_still_a_password_for_the_keyboard() {
     requester.request_focus();
     frames(&mut host);
     let mut kept = compose_android::accessibility::KeptSemanticsTree::default();
-    assert_eq!(kept.focused_password(&host), Some(true));
+    assert!(host.text_input_masks_password());
     let tree = host.accessibility_tree();
     let scroller = by_tag(&tree, "scroller").expect("there").semantics_id;
     let custom = KeptCustomActions::default();
@@ -2727,7 +2884,76 @@ fn a_field_scrolled_away_is_still_a_password_for_the_keyboard() {
     frames(&mut host);
     assert!(kept.after_frame(&stats), "it moved");
     assert!(by_tag(kept.get(&host), "field").is_none(), "gone for a service");
-    assert_eq!(kept.focused_password(&host), Some(true));
+    assert!(host.text_input_masks_password());
+}
+
+/// What's around it clearing its semantics, as `clear_and_set_semantics`, hides nothing from a
+/// keyboard.
+#[test]
+fn a_field_with_its_semantics_cleared_around_it_is_still_a_password_for_the_keyboard() {
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        Box!(modifier = Modifier.clear_and_set_semantics(|_| {}), {
+            BasicTextField!(
+                String::from("secret"),
+                |_| {},
+                modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester),
+                visual_transformation = PasswordVisualTransformation::new()
+            );
+        });
+    });
+    requester.request_focus();
+    frames(&mut host);
+    assert!(host.text_input_options().is_some());
+    assert!(host.text_input_masks_password());
+}
+
+#[test]
+fn a_field_not_masking_is_no_password_for_the_keyboard_and_no_field_none() {
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        BasicTextField!(
+            String::from("plain"),
+            |_| {},
+            modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester)
+        );
+    });
+    assert!(!host.text_input_masks_password(), "nothing focused");
+    requester.request_focus();
+    frames(&mut host);
+    assert!(host.text_input_options().is_some());
+    assert!(!host.text_input_masks_password());
+}
+
+/// A field that starts or stops masking: another keyboard, so it restarts.
+#[test]
+fn a_focused_field_starting_to_mask_restarts_the_keyboard() {
+    let masked = Box::leak(Box::new(mutable_state_of(false))).handle();
+    let requester = FocusRequester::new();
+    let mut host = host_of(move || {
+        let transformation = if masked.get() {
+            PasswordVisualTransformation::new().into()
+        } else {
+            VisualTransformation::NONE
+        };
+        BasicTextField!(
+            String::from("secret"),
+            |_| {},
+            modifier = Modifier.size((100.dp(), 40.dp())).focus_requester(requester),
+            visual_transformation = transformation
+        );
+    });
+    requester.request_focus();
+    frames(&mut host);
+    let mut last = None;
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+    host.frame();
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
+    masked.set(true);
+    frames(&mut host);
+    let state = compose_android::input_method::take_text_input_state(&host, &mut last);
+    assert!(state.active && state.restart, "{state:?}");
+    assert!(!compose_android::input_method::take_text_input_state(&host, &mut last).restart);
 }
 
 #[test]
