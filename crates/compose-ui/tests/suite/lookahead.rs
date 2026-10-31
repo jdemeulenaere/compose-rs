@@ -1113,3 +1113,71 @@ fn a_lookahead_block_asking_where_it_is_runs_again_when_that_moves() {
     host.frame();
     assert_eq!((asking.get(), not_asking.get()), (2, 1));
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedLookaheadScopeTest
+#[test]
+fn nested_scopes_go_ahead_then_now_measuring_then_placing() {
+    type Order = Rc<RefCell<Vec<&'static str>>>;
+    let order: Order = Rc::default();
+    let note = |order: &Order,
+                ahead: &'static str,
+                now: &'static str,
+                place_ahead: &'static str,
+                place_now: &'static str| {
+        let order = order.clone();
+        Modifier.layout(move |scope, measurable, constraints| {
+            order.borrow_mut().push(if scope.is_looking_ahead() { ahead } else { now });
+            let placeable = scope.measure(measurable, constraints);
+            let order = order.clone();
+            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                order.borrow_mut().push(if placement.is_looking_ahead() {
+                    place_ahead
+                } else {
+                    place_now
+                });
+                placement.place(&placeable, 0, 0);
+            })
+        })
+    };
+    let o = order.clone();
+    let _host = host(move || {
+        let o = o.clone();
+        wrap_at_root(note(&o, "?", "root measure", "?", "root place"), move || {
+            let o = o.clone();
+            scoped(move |_| {
+                let o = o.clone();
+                let parent =
+                    note(&o, "parent ahead", "parent", "parent placed ahead", "parent placed");
+                Stack!(modifier = parent, {
+                    let o = o.clone();
+                    scoped(move |_| {
+                        let child =
+                            note(&o, "child ahead", "child", "child placed ahead", "child placed");
+                        leaf(child.then(sized(10)));
+                    });
+                });
+            });
+        });
+    });
+    assert_eq!(
+        *order.borrow(),
+        [
+            "root measure",
+            "parent ahead",
+            "child ahead",
+            "parent",
+            "child",
+            "root place",
+            "parent placed ahead",
+            "child placed ahead",
+            "parent placed",
+            "child placed",
+        ]
+    );
+}
+
+fn wrap_at_root(modifier: Modifier, content: impl Fn() + 'static) {
+    Stack!(modifier = modifier, {
+        content();
+    });
+}
