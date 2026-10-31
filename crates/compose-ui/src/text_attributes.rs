@@ -156,6 +156,21 @@ pub enum TextOverflow {
     Ellipsis,
     /// Drawn past the bounds.
     Visible,
+    /// One line that doesn't fit starts with "…", as Compose's: on many lines, a clip.
+    StartEllipsis,
+    /// One line that doesn't fit has "…" in its middle, as Compose's: on many lines, a clip.
+    MiddleEllipsis,
+}
+
+impl TextOverflow {
+    /// Whether it ellipsizes, as Compose's `isEllipsis`: the width matters without soft wrapping,
+    /// which makes it one line.
+    pub fn is_ellipsis(self) -> bool {
+        matches!(
+            self,
+            TextOverflow::Ellipsis | TextOverflow::StartEllipsis | TextOverflow::MiddleEllipsis
+        )
+    }
 }
 
 /// Where a line's extra height goes, as `LineHeightStyle.Alignment`: the share of it above the

@@ -101,6 +101,11 @@ pub trait Paragraph {
     }
     /// The area of `start..end`'s selection, as Android's `Layout.getSelectionPath`.
     fn get_path_for_range(&self, start: usize, end: usize) -> Path;
+    /// Where each placeholder went, `None` for one cut by the maximum lines or an ellipsis, as
+    /// Compose's `placeholderRects`.
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        Vec::new()
+    }
 }
 
 impl fmt::Debug for dyn Paragraph {
@@ -113,6 +118,48 @@ impl fmt::Debug for dyn Paragraph {
             .field("line_count", &self.line_count())
             .finish()
     }
+}
+
+/// Where a single line of `widths` (each UTF-16 unit's, or each glyph's: 0 for all but a cluster's
+/// first) loses characters to a start or middle ellipsis of `ellipsis_width` in `available`, as
+/// Android's `StaticLayout.calculateEllipsis`: the first hidden and how many. The first shows the
+/// "…", the others nothing. None hidden when they all fit beside the ellipsis.
+pub fn start_or_middle_ellipsis(
+    widths: &[f32],
+    ellipsis_width: f32,
+    available: f32,
+    middle: bool,
+) -> (usize, usize) {
+    // From the end, what fits in `room`; a cluster stays whole.
+    let fitting_from_end = |room: f32| {
+        let mut used = 0.0;
+        let mut right = widths.len();
+        while right > 0 {
+            let width = widths[right - 1];
+            if used + width > room {
+                while right < widths.len() && widths[right] == 0.0 {
+                    right += 1;
+                }
+                break;
+            }
+            used += width;
+            right -= 1;
+        }
+        (right, used)
+    };
+    if !middle {
+        let (right, _) = fitting_from_end(available - ellipsis_width);
+        return (0, right);
+    }
+    let (right, used) = fitting_from_end((available - ellipsis_width) / 2.0);
+    let room = available - ellipsis_width - used;
+    let mut left = 0;
+    let mut filled = 0.0;
+    while left < right && filled + widths[left] <= room {
+        filled += widths[left];
+        left += 1;
+    }
+    (left, right - left)
 }
 
 /// What a text was laid out from, as Compose's `TextLayoutInput`.
@@ -128,6 +175,17 @@ pub struct TextLayoutInput {
     pub font_family_resolver: crate::font::FontFamilyResolver,
     pub default_locale_list: crate::intl::LocaleList,
     pub constraints: crate::constraints::Constraints,
+    /// The boxes it leaves room for, over ranges of the text.
+    pub placeholders: crate::placeholder::Placeholders,
+}
+
+impl TextLayoutInput {
+    /// Its placeholders, none as much as empty ones.
+    pub fn placeholder_ranges(
+        &self,
+    ) -> &[crate::annotated::AnnotatedRange<crate::placeholder::Placeholder>] {
+        self.placeholders.as_deref().unwrap_or_default()
+    }
 }
 
 /// Whether a line's visible end leaves `c` out, as Compose's `LayoutHelper.isLineEndSpace`:
@@ -197,6 +255,8 @@ pub struct ParagraphLayout {
     pub lines: Vec<LineLayout>,
     /// One per character boundary, in order, the text's end included.
     pub positions: Vec<CharPosition>,
+    /// Where each placeholder went.
+    pub placeholder_rects: Vec<Option<Rect>>,
 }
 
 impl ParagraphLayout {
@@ -308,6 +368,10 @@ impl ParagraphLayout {
 }
 
 impl Paragraph for ParagraphLayout {
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        self.placeholder_rects.clone()
+    }
+
     fn text(&self) -> &str {
         &self.text
     }
@@ -578,6 +642,7 @@ pub fn sampled_paragraph<M: crate::text::TextMeasurer + ?Sized>(
         text,
         lines,
         positions,
+        placeholder_rects: Vec::new(),
     }
 }
 
@@ -767,6 +832,7 @@ impl ParagraphLayout {
             did_exceed_max_lines: size.did_exceed_max_lines,
             lines: layout_lines,
             positions,
+            placeholder_rects: Vec::new(),
         }
     }
 }

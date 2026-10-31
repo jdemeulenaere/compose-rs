@@ -25,7 +25,8 @@ use compose_android::serialize::{
     write_display_list, write_groups_ahead,
 };
 use compose_android::text::{
-    AndroidTextMeasurer, AndroidTypeface, LaidOut, TextBackend, take_dropped_typefaces,
+    AndroidTextMeasurer, AndroidTypeface, LaidOut, LoadedTypeface, TextBackend,
+    take_dropped_typefaces, take_typefaces_to_release,
 };
 use compose_foundation::layout::*;
 use compose_foundation::*;
@@ -491,6 +492,43 @@ fn an_animated_variation_holds_a_bounded_number_of_typefaces() {
     }
     // The fonts' and the requests' caches, the paragraph's.
     assert!(live.borrow().len() <= 34, "{} typefaces", live.borrow().len());
+}
+
+/// A load past its timeout: the future is gone when the worker finishes, its number is still in
+/// Kotlin's table, and it's given back. One awaited isn't.
+#[test]
+fn a_typeface_loaded_for_nobody_is_given_back() {
+    let (finish, finished) = std::sync::mpsc::channel::<()>();
+    let (started, has_started) = std::sync::mpsc::channel::<()>();
+    let (ended, has_ended) = std::sync::mpsc::channel::<()>();
+    struct Ended(std::sync::mpsc::Sender<()>);
+    impl Drop for Ended {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    let load = compose_runtime::spawn_background(move || {
+        let _ended = Ended(ended);
+        started.send(()).unwrap();
+        finished.recv().unwrap();
+        LoadedTypeface(7001)
+    });
+    has_started.recv().unwrap();
+    drop(load);
+    finish.send(()).unwrap();
+    // The channel closes after the worker's closure; its result is dropped just after.
+    let _ = has_ended.recv();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut given_back = take_typefaces_to_release();
+    while given_back.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+        given_back = take_typefaces_to_release();
+    }
+    assert_eq!(given_back, [7001]);
+
+    // Awaited, it's the main thread's typeface.
+    assert_eq!(LoadedTypeface(7002).into_number(), 7002);
+    assert!(take_typefaces_to_release().is_empty());
 }
 
 /// A lazy list's items drawing with a shared measurer, scrolled with prefetching between frames:

@@ -204,7 +204,11 @@ impl JniFonts {
         bytes: &compose_ui::FontBytes,
     ) -> Arc<Global<JObject<'static>>> {
         let mut buffers = self.buffers.borrow_mut();
-        if let Some(found) = buffers.iter().position(|(kept, _)| kept == bytes) {
+        let found = compose_ui::platform::position_of_bytes(
+            buffers.iter().map(|(kept, _)| Some(kept)),
+            bytes,
+        );
+        if let Some(found) = found {
             let entry = buffers.remove(found);
             let buffer = entry.1.clone();
             buffers.push(entry);
@@ -372,20 +376,23 @@ impl compose_ui::platform::PlatformFontLoader for JniFonts {
             let Some(request) = request else {
                 return Err("a font of an application's loader".to_string());
             };
-            let number = compose_runtime::spawn_background(move || {
+            let loaded = compose_runtime::spawn_background(move || {
                 vm().attach_current_thread(|env| -> jni::errors::Result<jint> {
                     Ok(JniFonts::load(env, &measurer, &request, &settings))
                 })
-                .unwrap_or(-1)
+                .ok()
+                .filter(|number| *number >= 0)
+                .map(|number| crate::text::LoadedTypeface(number as u32))
             })
             .await;
             self.release_dropped();
+            let number = loaded.map_or(-1, |loaded| loaded.into_number() as jint);
             JniFonts::result_of(number, &font)
         })
     }
 
     fn release_dropped(&self) {
-        let dropped = crate::text::take_dropped_typefaces();
+        let dropped = crate::text::take_typefaces_to_release();
         if dropped.is_empty() {
             return;
         }
@@ -517,10 +524,11 @@ impl TextBackend for JniText {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        max_height: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
         let relaid = with_main_env(|env| {
-            // SAFETY: the method's signature is `(IIII)Z`.
+            // SAFETY: the method's signature is `(IIIII)Z`.
             let relaid = unsafe {
                 env.call_method_unchecked(
                     &*self.measurer,
@@ -531,6 +539,7 @@ impl TextBackend for JniText {
                         JValue::Int(handle as jint).as_jni(),
                         JValue::Int(min_width).as_jni(),
                         JValue::Int(max_width).as_jni(),
+                        JValue::Int(max_height).as_jni(),
                     ],
                 )
             };
@@ -547,10 +556,11 @@ impl TextBackend for JniText {
         handle: u32,
         min_width: i32,
         max_width: i32,
+        max_height: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
         let laid = with_main_env(|env| {
-            // SAFETY: the method's signature is `(IIII)Z`.
+            // SAFETY: the method's signature is `(IIIII)Z`.
             let laid = unsafe {
                 env.call_method_unchecked(
                     &*self.measurer,
@@ -561,6 +571,7 @@ impl TextBackend for JniText {
                         JValue::Int(handle as jint).as_jni(),
                         JValue::Int(min_width).as_jni(),
                         JValue::Int(max_width).as_jni(),
+                        JValue::Int(max_height).as_jni(),
                     ],
                 )
             };
@@ -610,6 +621,25 @@ impl TextBackend for JniText {
             check(env, "TextMeasurer.painted");
             painted.and_then(|value| value.z()).unwrap_or(false)
         })
+    }
+
+    fn paint_extras(&mut self, handle: u32, extras: &[u8]) {
+        with_main_env(|env| {
+            let _ = env.with_local_frame(2, |env| -> jni::errors::Result<()> {
+                // SAFETY: Kotlin only reads the buffer, during the call.
+                let extras = unsafe {
+                    env.new_direct_byte_buffer(extras.as_ptr() as *mut u8, extras.len())?
+                };
+                env.call_method(
+                    &*self.measurer,
+                    jni_str!("paintExtras"),
+                    jni_sig!("(ILjava/nio/ByteBuffer;)V"),
+                    &[JValue::Int(handle as jint), (&extras).into()],
+                )?;
+                Ok(())
+            });
+            check(env, "TextMeasurer.paintExtras");
+        });
     }
 
     fn min_intrinsic_width(&self, handle: u32) -> Option<f32> {
@@ -907,10 +937,10 @@ fn create(
             jni_str!("layout"),
             jni_sig!("(ILjava/lang/String;Ljava/nio/ByteBuffer;)V"),
         ),
-        relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIII)Z")),
+        relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIIII)Z")),
         restyle: method(env, measurer, jni_str!("restyle"), jni_sig!("(IIII)Z")),
         painted: method(env, measurer, jni_str!("painted"), jni_sig!("(IIII)Z")),
-        probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIII)Z")),
+        probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIIII)Z")),
         min_intrinsic_width: method(env, measurer, jni_str!("minIntrinsicWidth"), jni_sig!("(I)F")),
         hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),
         cursor: method(env, measurer, jni_str!("cursor"), jni_sig!("(II)V")),

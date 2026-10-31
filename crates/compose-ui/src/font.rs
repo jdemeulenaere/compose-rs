@@ -246,13 +246,30 @@ impl FontBytes {
             FontBytes::Shared(bytes) => bytes,
         }
     }
+
+    /// Whether these are the very bytes of `other`, not a copy of them: a question that costs
+    /// nothing, for a cache to ask of all it holds before comparing any contents.
+    pub fn is_same_allocation(&self, other: &FontBytes) -> bool {
+        std::ptr::eq(self.as_slice(), other.as_slice())
+    }
+}
+
+/// Which of `kept` holds `asked`, for a cache of fonts by their bytes: first the very allocation
+/// among all of them, then what's equal, a comparison of all of a large font if it's a copy.
+/// `None` in `kept` is an entry of no bytes.
+pub fn position_of_bytes<'a>(
+    kept: impl Iterator<Item = Option<&'a FontBytes>> + Clone,
+    asked: &FontBytes,
+) -> Option<usize> {
+    kept.clone()
+        .position(|bytes| bytes.is_some_and(|bytes| bytes.is_same_allocation(asked)))
+        .or_else(|| kept.clone().position(|bytes| bytes == Some(asked)))
 }
 
 impl PartialEq for FontBytes {
     /// Comparing the same bytes costs nothing, which is nearly always the comparison asked.
     fn eq(&self, other: &Self) -> bool {
-        let (first, second) = (self.as_slice(), other.as_slice());
-        std::ptr::eq(first, second) || first == second
+        self.is_same_allocation(other) || self.as_slice() == other.as_slice()
     }
 }
 

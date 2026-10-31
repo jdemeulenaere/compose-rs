@@ -1890,6 +1890,7 @@ impl SemanticsModifierNode for TextFieldNode {
             font_family_resolver: context.current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
             default_locale_list: context.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
             constraints,
+            placeholders: None,
         };
         let measurer = context.text_measurer();
         let size = constraints.constrain(measurer.metrics(paragraph).size);

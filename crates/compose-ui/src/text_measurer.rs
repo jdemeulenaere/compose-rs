@@ -21,6 +21,7 @@ use crate::graphics::{Color, DrawStyle, Shadow};
 use crate::intl::LocaleList;
 use crate::paragraph::{Paragraph, TextLayoutInput};
 use crate::path::Path;
+use crate::placeholder::{Placeholders, check_placeholders};
 use crate::text::{
     ParagraphHandle, ParagraphKeeper, ParagraphMetrics, SharedTextMeasurer, TextLayoutOptions,
     TextLayoutResult,
@@ -58,6 +59,8 @@ pub struct TextMeasureOptions {
     pub skip_cache: bool,
     /// The locales of a style naming none.
     pub default_locale_list: Option<LocaleList>,
+    /// The boxes to leave room for, over ranges of the text (`TextLayoutResult::placeholder_rects`).
+    pub placeholders: Placeholders,
 }
 
 impl Default for TextMeasureOptions {
@@ -73,6 +76,7 @@ impl Default for TextMeasureOptions {
             font_family_resolver: None,
             skip_cache: false,
             default_locale_list: None,
+            placeholders: None,
         }
     }
 }
@@ -143,6 +147,7 @@ impl TextMeasurer {
                 .default_locale_list
                 .unwrap_or_else(|| inner.default_locale_list.clone()),
             constraints: options.constraints,
+            placeholders: options.placeholders,
         };
         let cache = inner.cache.as_ref();
         if !options.skip_cache
@@ -296,13 +301,26 @@ impl LaidOutParagraph {
         // As Compose's: a direction left unspecified is the layout's.
         let style = TextStyle::resolve_defaults(style, input.layout_direction);
         let mut measurer = platform.borrow_mut();
-        let handle = measurer.layout_annotated(
-            &input.text,
-            &style,
-            options,
-            input.constraints,
-            &input.density,
-        );
+        let placeholders = input.placeholder_ranges();
+        check_placeholders(input.text.as_str(), placeholders);
+        let handle = if placeholders.is_empty() {
+            measurer.layout_annotated(
+                &input.text,
+                &style,
+                options,
+                input.constraints,
+                &input.density,
+            )
+        } else {
+            measurer.layout_with_placeholders(
+                &input.text,
+                &style,
+                placeholders,
+                options,
+                input.constraints,
+                &input.density,
+            )
+        };
         LaidOutParagraph::of_handle(platform, &mut *measurer, handle, paint)
     }
 
@@ -499,6 +517,9 @@ impl Paragraph for MeasuredParagraph {
     fn get_path_for_range(&self, start: usize, end: usize) -> Path {
         self.queries().get_path_for_range(start, end)
     }
+    fn placeholder_rects(&self) -> Vec<Option<Rect>> {
+        self.queries().placeholder_rects()
+    }
 }
 
 /// The cache's key, as Compose's `CacheTextLayoutInput`: an input, compared by what affects its
@@ -534,6 +555,7 @@ fn same_layout(first: &TextLayoutInput, second: &TextLayoutInput) -> bool {
         && first.font_family_resolver == second.font_family_resolver
         && first.default_locale_list == second.default_locale_list
         && first.constraints == second.constraints
+        && first.placeholder_ranges() == second.placeholder_ranges()
 }
 
 /// The layouts kept, as Compose's `TextLayoutCache`: the last `capacity` used. A cache is small

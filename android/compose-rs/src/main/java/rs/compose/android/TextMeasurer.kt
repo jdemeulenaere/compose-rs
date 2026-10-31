@@ -3,8 +3,12 @@ package rs.compose.android
 import android.annotation.TargetApi
 import android.content.res.AssetManager
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RenderNode
+import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
 import android.os.Build
@@ -21,6 +25,7 @@ import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.text.style.LineHeightSpan
 import android.text.style.MetricAffectingSpan
+import android.text.style.ReplacementSpan
 import android.util.Log
 import android.util.SparseArray
 import java.nio.ByteBuffer
@@ -28,6 +33,7 @@ import java.nio.ByteOrder
 import java.text.BreakIterator
 import java.util.PriorityQueue
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 /**
  * Paragraphs laid out for compose-rs (`crates/compose-android/src/text.rs`), as Compose's
@@ -70,6 +76,9 @@ internal class TextMeasurer(
      * draws all its lines, not only those within a recording's size when it was recorded (D646).
      */
     private val textCanvas = TextAndroidCanvas()
+    /** The size of the layout being drawn, which a run's gradient is over ([RunSpan]). */
+    private var drawingWidth = 0f
+    private var drawingHeight = 0f
 
     /** What of a text style its paint holds: the key of [paints]. */
     private data class PaintStyle(
@@ -98,7 +107,206 @@ internal class TextMeasurer(
         val lineHeightPx: Float,
         val lineHeightStyle: LineHeightStyle,
         val background: Int,
+        val extras: PaintExtras?,
     )
+
+    /**
+     * A gradient over a paragraph, as Compose's `ShaderBrush` over its `Size`: its positions are
+     * resolved at the size it's drawn at, its shader kept while that stays.
+     */
+    private class TextBrush(
+        private val kind: Int,
+        private val tile: Shader.TileMode,
+        val alpha: Float,
+        colors: IntArray,
+        stops: FloatArray?,
+        private val first: Float,
+        private val second: Float,
+        private val third: Float,
+        private val fourth: Float,
+    ) {
+        // A gradient needs two colors: one is a solid color.
+        private val colors = if (colors.size == 1) intArrayOf(colors[0], colors[0]) else colors
+        private val stops = stops?.takeIf { it.size == this.colors.size }
+        private var shader: Shader? = null
+        private var resolvedWidth = -1f
+        private var resolvedHeight = -1f
+
+        fun shaderAt(width: Float, height: Float): Shader? {
+            if (width != resolvedWidth || height != resolvedHeight) {
+                shader = make(width, height)
+                resolvedWidth = width
+                resolvedHeight = height
+            }
+            return shader
+        }
+
+        private fun make(width: Float, height: Float): Shader? {
+            if (colors.isEmpty()) return null
+            val x = { value: Float -> if (value.isInfinite()) width else value }
+            val y = { value: Float -> if (value.isInfinite()) height else value }
+            val centerX = if (first.isNaN()) width / 2f else x(first)
+            val centerY = if (second.isNaN()) height / 2f else y(second)
+            return when (kind) {
+                0 -> LinearGradient(x(first), y(second), x(third), y(fourth), colors, stops, tile)
+                1 -> {
+                    val radius = if (third.isInfinite()) minOf(width, height) / 2f else third
+                    // Android refuses it, and there's nothing to spread the colors over.
+                    if (radius > 0f) RadialGradient(centerX, centerY, radius, colors, stops, tile) else null
+                }
+                else -> SweepGradient(centerX, centerY, colors, stops)
+            }
+        }
+    }
+
+    /**
+     * What a paint has beyond its color and decoration, set on it only while it draws, as
+     * Compose's `AndroidTextPaint.setBrush`, `setShadow` and `setDrawStyle`.
+     */
+    private class PaintExtras(
+        val brush: TextBrush?,
+        val shadowColor: Int,
+        val shadowX: Float,
+        val shadowY: Float,
+        val shadowBlur: Float,
+        val hasShadow: Boolean,
+        val strokeWidth: Float,
+        val strokeMiter: Float,
+        val strokeCap: Paint.Cap,
+        val strokeJoin: Paint.Join,
+        val hasStroke: Boolean,
+        /** A run's own fill, over a stroked paragraph's paint. */
+        val fill: Boolean,
+    ) {
+        fun applyTo(paint: TextPaint, width: Float, height: Float) {
+            brush?.shaderAt(width, height)?.let { shader ->
+                paint.color = 0xFF000000.toInt()
+                paint.alpha = (brush.alpha * 255f).roundToInt()
+                paint.shader = shader
+            }
+            if (hasShadow) {
+                // As Compose's `correctBlurRadius`: a radius of 0 would remove the shadow.
+                val blur = if (shadowBlur == 0f) Float.MIN_VALUE else shadowBlur
+                paint.setShadowLayer(blur, shadowX, shadowY, shadowColor)
+            }
+            if (hasStroke) {
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = strokeWidth
+                paint.strokeMiter = strokeMiter
+                paint.strokeCap = strokeCap
+                paint.strokeJoin = strokeJoin
+            }
+            if (fill) paint.style = Paint.Style.FILL
+        }
+
+        fun clearFrom(paint: TextPaint) {
+            if (brush != null) paint.shader = null
+            if (hasShadow) paint.clearShadowLayer()
+            if (hasStroke) paint.style = Paint.Style.FILL
+        }
+    }
+
+    /**
+     * The room for a placeholder, as Compose's `PlaceholderSpan`: nothing drawn, its size in the
+     * font around it, and the line's ascent and descent as it needs them.
+     */
+    private class PlaceholderSpan(
+        private val width: Float,
+        private val widthInEm: Boolean,
+        private val height: Float,
+        private val heightInEm: Boolean,
+        val align: Int,
+    ) : ReplacementSpan() {
+        var widthPx = 0
+        var heightPx = 0
+        var fontAscent = 0
+        var fontDescent = 0
+
+        override fun getSize(paint: Paint, text: CharSequence?, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
+            val font = paint.fontMetricsInt
+            fontAscent = font.ascent
+            fontDescent = font.descent
+            widthPx = ceil(if (widthInEm) width * paint.textSize else width).toInt()
+            heightPx = ceil(if (heightInEm) height * paint.textSize else height).toInt()
+            if (fm != null) {
+                fm.ascent = font.ascent
+                fm.descent = font.descent
+                fm.leading = font.leading
+                when (align) {
+                    // Top and the text's: too tall, it goes down.
+                    1, 4 -> if (fm.ascent + heightPx > fm.descent) fm.descent = fm.ascent + heightPx
+                    // Bottom and the text's: too tall, it goes up.
+                    2, 5 -> if (fm.ascent > fm.descent - heightPx) fm.ascent = fm.descent - heightPx
+                    // Center and the text's: too tall, both ways.
+                    3, 6 -> if (fm.descent - fm.ascent < heightPx) {
+                        fm.ascent -= (heightPx - (fm.descent - fm.ascent)) / 2
+                        fm.descent = fm.ascent + heightPx
+                    }
+                    else -> if (fm.ascent > -heightPx) fm.ascent = -heightPx
+                }
+                fm.top = minOf(font.top, fm.ascent)
+                fm.bottom = maxOf(font.bottom, fm.descent)
+            }
+            return widthPx
+        }
+
+        override fun draw(
+            canvas: Canvas,
+            text: CharSequence?,
+            start: Int,
+            end: Int,
+            x: Float,
+            top: Int,
+            y: Int,
+            bottom: Int,
+            paint: Paint,
+        ) {}
+    }
+
+    /** What [flags] (of a style's decoration byte) say follow, as Rust's `encode_paint_extras`. */
+    private fun readExtras(request: ByteBuffer, flags: Int): PaintExtras? {
+        if (flags and 0x3C == 0) return null
+        var brush: TextBrush? = null
+        if (flags and 4 != 0) {
+            val kind = request.get().toInt()
+            val tile = when (request.get().toInt()) {
+                1 -> Shader.TileMode.REPEAT
+                2 -> Shader.TileMode.MIRROR
+                // Transparent past the ends: API 31+, clamped below.
+                3 -> if (Build.VERSION.SDK_INT >= 31) Shader.TileMode.DECAL else Shader.TileMode.CLAMP
+                else -> Shader.TileMode.CLAMP
+            }
+            val alpha = request.float()
+            val colors = IntArray(request.getInt()) { request.getInt() }
+            val stopCount = request.getInt()
+            val stops = if (stopCount == 0) null else FloatArray(stopCount) { request.float() }
+            brush = TextBrush(
+                kind, tile, alpha, colors, stops, request.float(), request.float(), request.float(), request.float(),
+            )
+        }
+        val hasShadow = flags and 8 != 0
+        val shadowColor = if (hasShadow) request.getInt() else 0
+        val shadowX = if (hasShadow) request.float() else 0f
+        val shadowY = if (hasShadow) request.float() else 0f
+        val shadowBlur = if (hasShadow) request.float() else 0f
+        val hasStroke = flags and 16 != 0
+        val strokeWidth = if (hasStroke) request.float() else 0f
+        val strokeMiter = if (hasStroke) request.float() else 0f
+        val strokeCap = if (!hasStroke) Paint.Cap.BUTT else when (request.get().toInt()) {
+            1 -> Paint.Cap.ROUND
+            2 -> Paint.Cap.SQUARE
+            else -> Paint.Cap.BUTT
+        }
+        val strokeJoin = if (!hasStroke) Paint.Join.MITER else when (request.get().toInt()) {
+            1 -> Paint.Join.ROUND
+            2 -> Paint.Join.BEVEL
+            else -> Paint.Join.MITER
+        }
+        return PaintExtras(
+            brush, shadowColor, shadowX, shadowY, shadowBlur, hasShadow, strokeWidth, strokeMiter, strokeCap, strokeJoin,
+            hasStroke, fill = flags and 32 != 0,
+        )
+    }
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
@@ -113,6 +321,8 @@ internal class TextMeasurer(
             name = String(bytes, Charsets.UTF_8)
         }
         val typeface = if (family == 5) request.getInt() else -1
+        val letterSpacingPx = request.float()
+        val decoration = request.get().toInt()
         val paint = PaintStyle(
             color = color,
             fontPx = fontPx,
@@ -121,14 +331,15 @@ internal class TextMeasurer(
             family = family,
             familyName = name,
             typeface = typeface,
-            letterSpacingPx = request.float(),
-            decoration = request.get().toInt(),
+            letterSpacingPx = letterSpacingPx,
+            decoration = decoration and 3,
         )
         val lineHeightPx = request.float()
         val topRatio = request.float()
         val trim = request.get().toInt()
         val lineHeightStyle = LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
-        return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
+        val background = request.getInt()
+        return Style(paint, lineHeightPx, lineHeightStyle, background, readExtras(request, decoration))
     }
 
     /** Applies a font's variation settings, as Compose's `setFontVariationSettings`. */
@@ -261,8 +472,13 @@ internal class TextMeasurer(
         private val style: PaintStyle,
         private val ownColor: Boolean,
         private val ownDecoration: Boolean,
+        private val extras: PaintExtras?,
     ) : MetricAffectingSpan() {
-        override fun updateDrawState(paint: TextPaint) = applyRun(paint)
+        override fun updateDrawState(paint: TextPaint) {
+            applyRun(paint)
+            // Over the paragraph's size, as Compose's `ShaderBrushSpan`.
+            extras?.applyTo(paint, drawingWidth, drawingHeight)
+        }
 
         override fun updateMeasureState(paint: TextPaint) = applyRun(paint)
 
@@ -299,7 +515,8 @@ internal class TextMeasurer(
         val letterSpaced: Boolean,
         val softWrap: Boolean,
         val maxLines: Int,
-        val ellipsis: Boolean,
+        /** Where it ellipsizes, as Compose's `TextOverflow`: a start or a middle on one line only. */
+        val ellipsis: TextUtils.TruncateAt?,
         /** 0 normal, 1 opposite, 2 center, 3 justify. */
         val align: Int,
         /** The boring line's width, as Compose's `maxIntrinsicWidth` takes it. */
@@ -312,6 +529,15 @@ internal class TextMeasurer(
          */
         val maxIntrinsicWidth: Float,
     ) {
+        /** What the paint has beyond its color and decoration, for the drawing. */
+        var extras: PaintExtras? = null
+
+        /** The placeholders in [content], in the order they were given. */
+        var placeholders: Array<PlaceholderSpan>? = null
+
+        /** A run in [content] has a gradient, over the paragraph's size. */
+        var runBrush = false
+
         /**
          * The width of the widest segment of [content] between line break opportunities, as
          * Compose's `LayoutIntrinsics.minIntrinsicWidth`: measured when first asked.
@@ -327,10 +553,13 @@ internal class TextMeasurer(
          */
         fun inPaint(color: Int, decoration: Int): Intrinsics {
             val style = paintStyle.copy(color = color, decoration = decoration)
-            return Intrinsics(
+            val painted = Intrinsics(
                 content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, lineHeightStyle, letterSpaced,
                 softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
             )
+            painted.placeholders = placeholders
+            painted.runBrush = runBrush
+            return painted
         }
 
         val alignment = when (align) {
@@ -347,10 +576,16 @@ internal class TextMeasurer(
         request.order(ByteOrder.LITTLE_ENDIAN)
         val flags = request.get().toInt()
         val softWrap = flags and 1 != 0
+        val hasPlaceholders = flags and 4 != 0
         // For an intrinsic probe only: measured, never drawn, so not recorded ahead (D556).
         val probe = flags and 2 != 0
         val maxLines = request.getInt()
-        val ellipsis = request.get().toInt() != 0
+        val ellipsis = when (request.get().toInt()) {
+            1 -> TextUtils.TruncateAt.END
+            2 -> TextUtils.TruncateAt.START
+            3 -> TextUtils.TruncateAt.MIDDLE
+            else -> null
+        }
         val align = request.get().toInt()
         val rtl = request.get().toInt() != 0
         val minWidth = request.getInt()
@@ -359,7 +594,8 @@ internal class TextMeasurer(
         val paint = paint(base.paint)
         val runCount = request.getInt()
         var letterSpaced = paint.letterSpacing != 0f
-        val content: CharSequence = if (runCount == 0) {
+        var runBrush = false
+        val content: CharSequence = if (runCount == 0 && !hasPlaceholders) {
             text
         } else {
             val spannable = SpannableString(text)
@@ -369,9 +605,12 @@ internal class TextMeasurer(
                 val inherits = request.get().toInt()
                 val style = readStyle(request)
                 if (start < end) {
-                    val span = RunSpan(style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0)
+                    val span = RunSpan(
+                        style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0, style.extras,
+                    )
                     spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
+                    if (style.extras?.brush != null) runBrush = true
                     if (style.background != 0) {
                         spannable.setSpan(
                             BackgroundColorSpan(style.background),
@@ -383,6 +622,22 @@ internal class TextMeasurer(
                 }
             }
             spannable
+        }
+        val maxHeight = request.getInt()
+        var placeholders: Array<PlaceholderSpan>? = null
+        if (hasPlaceholders) {
+            val spannable = content as SpannableString
+            placeholders = Array(request.getInt()) {
+                val start = request.getInt()
+                val end = request.getInt()
+                val width = request.float()
+                val widthInEm = request.get().toInt() != 0
+                val height = request.float()
+                val heightInEm = request.get().toInt() != 0
+                val span = PlaceholderSpan(width, widthInEm, height, heightInEm, request.get().toInt())
+                spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                span
+            }
         }
         // A line height over every line (Compose's span, [StyledLineHeightSpan]), an empty text's
         // included (its line takes it from [lastLineMetrics], as Compose's).
@@ -402,7 +657,10 @@ internal class TextMeasurer(
             content, base.paint, paint, direction, boring, lineHeight, base.lineHeightStyle, letterSpaced, softWrap,
             maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
         )
-        layoutAt(handle, kept, minWidth, maxWidth, drawn = !probe)
+        kept.extras = base.extras
+        kept.placeholders = placeholders
+        kept.runBrush = runBrush
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = !probe)
     }
 
     /**
@@ -410,9 +668,9 @@ internal class TextMeasurer(
      * [relayout] does but keeping [previous]: measured from what [previous] kept, never drawn, so
      * not recorded ahead (D556). False (nothing changed) when [previous] kept nothing.
      */
-    fun probeLayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+    fun probeLayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int, maxHeight: Int): Boolean {
         val kept = intrinsics.get(previous) ?: return false
-        layoutAt(handle, kept, minWidth, maxWidth, drawn = false)
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight, drawn = false)
         return true
     }
 
@@ -453,52 +711,74 @@ internal class TextMeasurer(
     }
 
     /**
+     * Gives paragraph [handle], just [restyle]d or [painted], the gradient, shadow and stroke in
+     * [extras] (a flags byte, then what they say), as Rust's `encode_paint_extras`.
+     */
+    fun paintExtras(handle: Int, extras: ByteBuffer) {
+        extras.order(ByteOrder.LITTLE_ENDIAN)
+        val flags = extras.get().toInt()
+        intrinsics.get(handle)?.extras = readExtras(extras, flags)
+    }
+
+    /**
      * Lays out paragraph [previous]'s text again as paragraph [handle], between [minWidth] and
-     * [maxWidth] (`Int.MAX_VALUE`: unbounded), from what [previous] kept of it ([Intrinsics]: no
+     * [maxWidth] (`Int.MAX_VALUE`: unbounded) and at most [maxHeight] high if it's ellipsized, from
+     * what [previous] kept of it ([Intrinsics]: no
      * measure of the text), as Compose's new `Paragraph` from the `ParagraphIntrinsics` its cache
      * keeps when only the constraints change; then releases [previous]. False (nothing changed,
      * [results] untouched) when [previous] kept nothing.
      */
-    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int, maxHeight: Int): Boolean {
         // Rust lays the text out anew (nothing kept: a paragraph cleared or never laid out).
         val kept = intrinsics.get(previous) ?: return false
         release(previous)
-        layoutAt(handle, kept, minWidth, maxWidth)
+        layoutAt(handle, kept, minWidth, maxWidth, maxHeight)
         return true
     }
 
     /** Lays out [kept]'s text as paragraph [handle] at the constraints' width, writing [results]. */
-    private fun layoutAt(handle: Int, kept: Intrinsics, minWidth: Int, maxWidth: Int, drawn: Boolean = true) {
+    private fun layoutAt(
+        handle: Int,
+        kept: Intrinsics,
+        minWidth: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        drawn: Boolean = true,
+    ) {
         // The width to break lines at, as Compose's `finalMaxWidth`: the constraint when wrapping
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
-        val available = if ((kept.softWrap || kept.ellipsis) && bounded) maxWidth else Int.MAX_VALUE
+        val available = if ((kept.softWrap || kept.ellipsis != null) && bounded) maxWidth else Int.MAX_VALUE
         val width = if (minWidth == available) {
             available
         } else {
             ceil(kept.maxIntrinsicWidth).toInt().coerceIn(minWidth, available)
         }
-        val maxLines = kept.maxLines
-        // As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else
-        // a `StaticLayout`.
-        val boring = kept.boring
-        val layout = if (Build.VERSION.SDK_INT >= 33 && boring != null && kept.boringWidth <= width) {
-            val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
-            if (checkBoring) {
-                val static = staticLayout(
-                    kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis,
-                    kept.align,
-                )
-                // A difference is logged, and the StaticLayout kept (as before D330).
-                if (sameLayout(layout, static, kept.paint)) layout else static
-            } else {
-                layout
-            }
-        } else {
-            staticLayout(
-                kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
-                kept.ellipsis, kept.align,
+        var maxLines = kept.maxLines
+        var layout = textLayout(kept, width, maxLines)
+        // Below API 35 the characters hidden by a start or middle ellipsis keep their letter
+        // spacing, as they do for Compose's `AndroidParagraph`, which lays out without them.
+        if (Build.VERSION.SDK_INT < 35 && kept.paint.letterSpacing != 0f && layout.lineCount > 0 &&
+            layout.getEllipsisCount(0) > 0 &&
+            kept.ellipsis != TextUtils.TruncateAt.END
+        ) {
+            val before = layout.getEllipsisStart(0)
+            val after = before + layout.getEllipsisCount(0)
+            val text = kept.staticText
+            val shown = TextUtils.concat(text.subSequence(0, before), "\u2026", text.subSequence(after, text.length))
+            layout = staticLayout(
+                shown, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
             )
+        }
+        // As Compose's: an ellipsis ends the last line the height has room for (one, if it has
+        // room for none).
+        if (kept.ellipsis == TextUtils.TruncateAt.END && maxLines > 1 && layout.height > maxHeight) {
+            var fitting = 0
+            while (fitting < layout.lineCount && layout.getLineBottom(fitting) <= maxHeight) fitting++
+            if (fitting != maxLines) {
+                maxLines = fitting.coerceAtLeast(1)
+                layout = textLayout(kept, width, maxLines)
+            }
         }
         layouts.put(handle, layout)
         intrinsics.put(handle, kept)
@@ -514,13 +794,34 @@ internal class TextMeasurer(
         results.putInt(8, lineBaseline(layout, 0, lines, lastLine).toRawBits())
         results.putInt(12, lineBaseline(layout, lines - 1, lines, lastLine).toRawBits())
         results.putInt(16, lines.toFloat().toRawBits())
-        // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
-        // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
-        val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
-        val exceeded = layout.lineCount > maxLines || lastEllipsized
-        results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
+        results.putInt(20, (if (exceededLines(layout, lines)) 1f else 0f).toRawBits())
         // The text's own width, from which Rust can tell another width would lay it out the same.
         results.putInt(24, kept.maxIntrinsicWidth.toRawBits())
+    }
+
+    /**
+     * Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines` of
+     * [lines] laid out: its last ellipsized, or not ending where the text does.
+     */
+    private fun exceededLines(layout: Layout, lines: Int): Boolean =
+        layout.getEllipsisCount(lines - 1) > 0 || layout.getLineEnd(lines - 1) != layout.text.length
+
+    /** As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else a `StaticLayout`. */
+    private fun textLayout(kept: Intrinsics, width: Int, maxLines: Int): Layout {
+        val boring = kept.boring
+        if (Build.VERSION.SDK_INT < 33 || boring == null || kept.boringWidth > width) {
+            return staticLayout(
+                kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
+                kept.ellipsis, kept.align,
+            )
+        }
+        val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
+        if (!checkBoring) return layout
+        val static = staticLayout(
+            kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis, kept.align,
+        )
+        // A difference is logged, and the StaticLayout kept (as before D330).
+        return if (sameLayout(layout, static, kept.paint)) layout else static
     }
 
     /**
@@ -702,7 +1003,7 @@ internal class TextMeasurer(
         alignment: Layout.Alignment,
         direction: TextDirectionHeuristic,
         maxLines: Int,
-        ellipsis: Boolean,
+        ellipsis: TextUtils.TruncateAt?,
         align: Int,
     ): Layout {
         val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
@@ -713,7 +1014,7 @@ internal class TextMeasurer(
             .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .setMaxLines(maxLines)
-        if (ellipsis) builder.setEllipsize(TextUtils.TruncateAt.END)
+        if (ellipsis != null) builder.setEllipsize(ellipsis)
         if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
         return builder.build()
     }
@@ -806,7 +1107,10 @@ internal class TextMeasurer(
         val lines = (kept?.maxLines ?: layout.lineCount).coerceIn(1, layout.lineCount.coerceAtLeast(1))
         val lastLine = lastLines.get(handle)
         val lastEllipsized = layout.getEllipsisCount(lines - 1) > 0
-        val out = FloatArray(PARAGRAPH_HEADER + lines * PARAGRAPH_LINE + (length + 1) * PARAGRAPH_OFFSET)
+        val placeholders = kept?.placeholders ?: emptyArray()
+        val out = FloatArray(
+            PARAGRAPH_HEADER + lines * PARAGRAPH_LINE + (length + 1) * PARAGRAPH_OFFSET + placeholders.size * PARAGRAPH_PLACEHOLDER,
+        )
         out[0] = lines.toFloat()
         out[1] = length.toFloat()
         out[2] = layout.width.toFloat()
@@ -814,11 +1118,12 @@ internal class TextMeasurer(
         // Compose's `minIntrinsicWidth` (its line breaker's segments), as the intrinsics measure it.
         out[4] = kept?.minIntrinsicWidth ?: layout.width.toFloat()
         out[5] = kept?.maxIntrinsicWidth ?: layout.width.toFloat()
-        out[6] = if (layout.lineCount > lines || lastEllipsized) 1f else 0f
+        out[6] = if (exceededLines(layout, lines)) 1f else 0f
         out[7] = if (lastEllipsized) 1f else 0f
         for (line in 0 until lines) {
             val at = PARAGRAPH_HEADER + line * PARAGRAPH_LINE
-            val ellipsized = line == lines - 1 && lastEllipsized
+            // Compose's `getLineEnd` and `getLineVisibleEnd`: a start or a middle one leaves them.
+            val ellipsized = line == lines - 1 && lastEllipsized && kept?.ellipsis == TextUtils.TruncateAt.END
             out[at] = layout.getLineStart(line).toFloat()
             out[at + 1] = (if (ellipsized) length else layout.getLineEnd(line)).toFloat()
             out[at + 2] = (if (ellipsized) layout.getLineStart(line) + layout.getEllipsisStart(line) else lineVisibleEnd(layout, line)).toFloat()
@@ -837,7 +1142,55 @@ internal class TextMeasurer(
             out[at + 1] = layout.getSecondaryHorizontal(offset)
             out[at + 2] = if (offset < length && layout.isRtlCharAt(offset)) 1f else 0f
         }
+        val boxes = offsets + (length + 1) * PARAGRAPH_OFFSET
+        for ((index, span) in placeholders.withIndex()) {
+            placeholderBox(layout, span, lines, lastLine, out, boxes + index * PARAGRAPH_PLACEHOLDER)
+        }
         return out
+    }
+
+    /**
+     * Where placeholder [span] went in [layout], at [at] in [out], as Compose's `placeholderRects`:
+     * nothing written for one cut by the maximum lines or an ellipsis.
+     */
+    private fun placeholderBox(
+        layout: Layout,
+        span: PlaceholderSpan,
+        lines: Int,
+        lastLine: Paint.FontMetricsInt?,
+        out: FloatArray,
+        at: Int,
+    ) {
+        val text = layout.text as? Spanned ?: return
+        val start = text.getSpanStart(span)
+        val end = text.getSpanEnd(span)
+        if (start < 0) return
+        val line = layout.getLineForOffset(start)
+        val ellipsized = layout.getEllipsisCount(line) > 0 && end > layout.getLineStart(line) + layout.getEllipsisStart(line)
+        if (line >= lines || ellipsized || end > layout.getLineEnd(line)) return
+        val leftToRightLine = layout.getParagraphDirection(line) == Layout.DIR_LEFT_TO_RIGHT
+        val rightToLeftCharacter = layout.isRtlCharAt(start)
+        val edge = if (leftToRightLine != rightToLeftCharacter) layout.getPrimaryHorizontal(start) else layout.getSecondaryHorizontal(start)
+        val left = if (rightToLeftCharacter) edge - span.widthPx else edge
+        val baseline = lineBaseline(layout, line, lines, lastLine)
+        val lineTop = layout.getLineTop(line).toFloat()
+        val bottom = lineBottom(layout, line, lines, lastLine)
+        val height = span.heightPx.toFloat()
+        val top = when (span.align) {
+            1 -> lineTop
+            2 -> bottom - height
+            3 -> (lineTop + bottom - height) / 2f
+            4 -> span.fontAscent + baseline
+            5 -> span.fontDescent + baseline - height
+            // Integers, as Compose's.
+            6 -> (span.fontAscent + span.fontDescent - span.heightPx) / 2 + baseline
+            else -> baseline - height
+        }
+        out[at] = 1f
+        out[at + 1] = left
+        out[at + 2] = top
+        out[at + 3] = left + span.widthPx
+        out[at + 4] = top + height
     }
 
     /**
@@ -918,11 +1271,33 @@ internal class TextMeasurer(
      * whatever [target]'s clip, through [textCanvas] (D646).
      */
     private fun drawInPaint(handle: Int, layout: Layout, target: Canvas) {
+        // A `StaticLayout` has lines past its maximum unless it ellipsizes, and draws them: cut
+        // here, as Compose's `AndroidParagraph.paint`.
+        val lines = layout.lineCount.coerceIn(1, intrinsics.get(handle)?.maxLines?.coerceAtLeast(1) ?: Int.MAX_VALUE)
+        if (!exceededLines(layout, lines)) {
+            drawLines(handle, layout, target)
+            return
+        }
+        target.save()
+        target.clipRect(0f, 0f, layout.width.toFloat(), lineBottom(layout, lines - 1, lines, lastLines.get(handle)))
+        drawLines(handle, layout, target)
+        target.restore()
+    }
+
+    private fun drawLines(handle: Int, layout: Layout, target: Canvas) {
         textCanvas.setCanvas(target)
         val canvas: Canvas = textCanvas
-        val wanted = intrinsics.get(handle)?.paint
+        val kept = intrinsics.get(handle)
+        val wanted = kept?.paint ?: layout.paint
+        val extras = kept?.extras
         val held = layout.paint
-        if (wanted == null || wanted === held) {
+        // A gradient's size: the lines kept, as the paragraph's height says.
+        if (extras != null || kept?.runBrush == true) {
+            val lines = layout.lineCount.coerceIn(1, kept?.maxLines?.coerceAtLeast(1) ?: Int.MAX_VALUE)
+            drawingWidth = layout.width.toFloat()
+            drawingHeight = lineBottom(layout, lines - 1, lines, lastLines.get(handle))
+        }
+        if (wanted === held && extras == null) {
             layout.draw(canvas)
             return
         }
@@ -933,8 +1308,10 @@ internal class TextMeasurer(
         held.isUnderlineText = wanted.isUnderlineText
         held.isStrikeThruText = wanted.isStrikeThruText
         try {
+            extras?.applyTo(held, drawingWidth, drawingHeight)
             layout.draw(canvas)
         } finally {
+            extras?.clearFrom(held)
             held.color = color
             held.isUnderlineText = underline
             held.isStrikeThruText = strike
@@ -1050,6 +1427,7 @@ internal class TextMeasurer(
         const val PARAGRAPH_HEADER = 8
         const val PARAGRAPH_LINE = 10
         const val PARAGRAPH_OFFSET = 3
+        const val PARAGRAPH_PLACEHOLDER = 5
     }
 }
 

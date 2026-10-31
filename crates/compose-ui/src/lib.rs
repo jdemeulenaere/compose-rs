@@ -67,6 +67,7 @@ mod paragraph_style;
 mod parent_data;
 mod path;
 mod pinnable;
+mod placeholder;
 mod placement;
 mod platform_services;
 mod platform_text_style;
@@ -117,6 +118,7 @@ pub mod platform {
         single_drawing, single_drawing_extent,
     };
     pub use crate::fixed_text::{FixedFontMetrics, FixedTextMeasurer};
+    pub use crate::font::position_of_bytes;
     pub use crate::font::{FontMatcher, PlatformFontLoader};
     pub use crate::font_resolver::{NoFontLoader, PlatformFonts, ResolvedFonts};
     pub use crate::graphics_layer::LayerProperties;
@@ -133,9 +135,13 @@ pub mod platform {
     pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::paragraph::{
         CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,
-        is_line_end_space, sampled_paragraph,
+        is_line_end_space, sampled_paragraph, start_or_middle_ellipsis,
     };
     pub use crate::path::{PathOperator, set_path_operator};
+    pub use crate::placeholder::{
+        ResolvedPlaceholder, check_placeholders, placeholder_rects, placeholders_in_text_order,
+        with_placeholders_neutral,
+    };
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
     /// A semantics value of an application's own type, as `ValueSlot` holds it: not for apps.
@@ -260,6 +266,7 @@ pub use path::{
     PathFillType, PathOperation, PathStep, RoundRect,
 };
 pub use pinnable::{FocusPin, LOCAL_PINNABLE_CONTAINER, PinnableContainer, PinnedHandle};
+pub use placeholder::{Placeholder, PlaceholderVerticalAlign, Placeholders};
 pub use placement::PlacementScope;
 pub use platform_services::{
     DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,

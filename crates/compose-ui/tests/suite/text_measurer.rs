@@ -72,6 +72,7 @@ impl Inputs {
             font_family_resolver: self.resolver.clone(),
             default_locale_list: locale_list(),
             constraints: Constraints::unbounded(),
+            placeholders: None,
         }
     }
 
@@ -162,6 +163,29 @@ fn another_text_is_another_key() {
 #[test]
 fn other_max_lines_are_another_key() {
     assert_key_differs(|input| input.max_lines = 2);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/CacheTextLayoutInputTest.kt, placeholders_should_differ
+#[test]
+fn another_placeholder_is_another_key() {
+    let placeholder = compose_ui::Placeholder::new(
+        1.0.em(),
+        1.0.em(),
+        compose_ui::PlaceholderVerticalAlign::AboveBaseline,
+    );
+    let one = compose_ui::AnnotatedRange::new(placeholder, 0, 1);
+    assert_key_differs(move |input| {
+        input.placeholders = Some(std::rc::Rc::new([one.clone()]));
+    });
+}
+
+#[test]
+fn no_placeholders_and_empty_ones_are_the_same_key() {
+    let inputs = Inputs::new();
+    let none = inputs.input("Hello");
+    let empty =
+        TextLayoutInput { placeholders: Some(std::rc::Rc::new([])), ..inputs.input("Hello") };
+    assert!(CacheTextLayoutInput::new(none) == CacheTextLayoutInput::new(empty));
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/CacheTextLayoutInputTest.kt, softWrap_should_differ
@@ -462,6 +486,63 @@ fn a_wrapping_text_is_laid_out_at_the_maximum_width() {
         },
     );
     assert_eq!(result.multi_paragraph.width(), 200.0);
+}
+
+/// With soft wrap off, `overflow` is one line at most, and at the width given.
+fn assert_width_and_lines_matter(overflow: TextOverflow) {
+    let result = text_measurer(0).measure(
+        LONG_TEXT,
+        TextMeasureOptions {
+            soft_wrap: false,
+            overflow,
+            max_lines: 4,
+            constraints: Constraints::new(0, 200, 0, Constraints::INFINITY),
+            ..TextMeasureOptions::default()
+        },
+    );
+    assert_eq!(result.multi_paragraph.width(), 200.0);
+    assert_eq!(result.line_count, 1);
+}
+
+/// With soft wrap on, the maximum lines stay.
+fn assert_max_lines_stay(overflow: TextOverflow) {
+    let result = text_measurer(0).measure(
+        LONG_TEXT,
+        TextMeasureOptions {
+            overflow,
+            max_lines: 2,
+            constraints: Constraints::new(0, 100, 0, Constraints::INFINITY),
+            ..TextMeasureOptions::default()
+        },
+    );
+    assert_eq!(result.layout_input.max_lines, 2);
+    assert!(result.line_count <= 2, "{}", result.line_count);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, width_shouldMatter_ifSoftwrapIsDisabled_butOverflowIsStartEllipsis
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, overwriteMaxLines_ifSoftwrapIsDisabled_andTextOverflowIsStartEllipsis
+#[test]
+fn a_start_ellipsis_is_one_line_at_the_width_without_soft_wrap() {
+    assert_width_and_lines_matter(TextOverflow::StartEllipsis);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, width_shouldMatter_ifSoftwrapIsDisabled_butOverflowIsMiddleEllipsis
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, overwriteMaxLines_ifSoftwrapIsDisabled_andTextOverflowIsMiddleEllipsis
+#[test]
+fn a_middle_ellipsis_is_one_line_at_the_width_without_soft_wrap() {
+    assert_width_and_lines_matter(TextOverflow::MiddleEllipsis);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, dontOverwriteMaxLines_startEllipsis_ifSoftwrapIsEnabled
+#[test]
+fn a_start_ellipsis_keeps_the_maximum_lines_with_soft_wrap() {
+    assert_max_lines_stay(TextOverflow::StartEllipsis);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, dontOverwriteMaxLines_middleEllipsis_ifSoftwrapIsEnabled
+#[test]
+fn a_middle_ellipsis_keeps_the_maximum_lines_with_soft_wrap() {
+    assert_max_lines_stay(TextOverflow::MiddleEllipsis);
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/TextMeasurerTest.kt, width_shouldMatter_ifSoftwrapIsDisabled_butOverflowIsEllipsis

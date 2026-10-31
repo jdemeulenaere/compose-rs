@@ -230,7 +230,7 @@ pub(crate) fn new_layout_will_be_different(
 /// The widest a paragraph's lines may be at `constraints`: the maximum width when wrapping or
 /// ellipsizing, else unbounded, as in Compose's `finalMaxWidth`.
 fn line_width_limit(constraints: Constraints, options: TextLayoutOptions) -> i32 {
-    let width_matters = options.soft_wrap || options.overflow == compose_ui::TextOverflow::Ellipsis;
+    let width_matters = options.soft_wrap || options.overflow.is_ellipsis();
     if width_matters && constraints.has_bounded_width() {
         constraints.max_width
     } else {
@@ -653,6 +653,7 @@ impl LayoutModifierNode for TextNode {
                         .current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
                     default_locale_list: scope.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
                     constraints,
+                    placeholders: None,
                 };
                 let result =
                     TextLayoutResult::new(input, scope.text_measurer().paragraph(paragraph), size);
@@ -813,6 +814,7 @@ impl SemanticsModifierNode for TextNode {
             font_family_resolver: context.current_value_of(&compose_ui::LOCAL_FONT_FAMILY_RESOLVER),
             default_locale_list: context.current_value_of(&compose_ui::LOCAL_LOCALE_LIST),
             constraints,
+            placeholders: None,
         };
         let measurer = context.text_measurer();
         let size = constraints.constrain(measurer.metrics(paragraph).size);

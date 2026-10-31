@@ -124,7 +124,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D91 | [api-and-tooling](decisions/api-and-tooling.md#d91) | current |
 | D92 | [runtime](decisions/runtime.md#d92) | current |
 | D93 | [desktop](decisions/desktop.md#d93) | current |
-| D94 | [text](decisions/text.md#d94) | current |
+| D94 | [text](decisions/text.md#d94) | revised by D1124 |
 | D95 | [ui-and-layout](decisions/ui-and-layout.md#d95) | current |
 | D96 | [text](decisions/text.md#d96) | current |
 | D97 | [runtime](decisions/runtime.md#d97) | revised by [D713](decisions/runtime.md#d713) |
@@ -359,7 +359,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D540 | [benchmarks](decisions/benchmarks.md#d540) | revised by [D622](decisions/api-and-tooling.md#d622) |
 | D550 | [text](decisions/text.md#d550) | revised by [D554](decisions/text.md#d554), [D555](decisions/text.md#d555) |
 | D551 | [text](decisions/text.md#d551) | current |
-| D552 | [text](decisions/text.md#d552) | current |
+| D552 | [text](decisions/text.md#d552) | revised by D1126 |
 | D553 | [benchmarks](decisions/benchmarks.md#d553) | current |
 | D554 | [text](decisions/text.md#d554) | revised by [D556](decisions/text.md#d556), [D1200](decisions/ui-and-layout.md#d1200) |
 | D555 | [text](decisions/text.md#d555) | current |
@@ -663,7 +663,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |
-| D1103 | [text](decisions/text.md#d1103) | current |
+| D1103 | [text](decisions/text.md#d1103) | revised by D1125 |
 | D1104 | [text](decisions/text.md#d1104) | current |
 | D1105 | [text](decisions/text.md#d1105) | revised by [D1108](decisions/text.md#d1108), [D1109](decisions/text.md#d1109), [D1110](decisions/text.md#d1110), [D1111](decisions/text.md#d1111) |
 | D1106 | [text](decisions/text.md#d1106) | revised by [D1107](decisions/text.md#d1107) |
@@ -683,6 +683,11 @@ The log is split by area into the files below, one table each, rows in number or
 | D1120 | [text](decisions/text.md#d1120) | current |
 | D1121 | [text](decisions/text.md#d1121) | current |
 | D1122 | [text](decisions/text.md#d1122) | current |
+| D1123 | [text](decisions/text.md#d1123) | current |
+| D1124 | [text](decisions/text.md#d1124) | current |
+| D1125 | [text](decisions/text.md#d1125) | current |
+| D1126 | [text](decisions/text.md#d1126) | current |
+| D1127 | [text](decisions/text.md#d1127) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |
