@@ -2328,3 +2328,32 @@ fn an_item_removed_while_fading_in_fades_out_from_where_it_was() {
         }
     });
 }
+
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListItemAppearanceAnimationTest.kt, snapToPosition_noAnimation
+#[test]
+fn an_item_jumped_to_far_away_shows_at_once() {
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let mut ui = paused(IntSize::new(1000, 1000), move || {
+        let _ = &state;
+        LazyColumn!(
+            modifier = Modifier.size((dp(ITEM), dp(ITEM))),
+            state = handle,
+            move |scope: LazyListScope| {
+                let item_scope = scope.item_scope();
+                scope.items_keyed(
+                    200,
+                    |index| index,
+                    move |_| {
+                        colored_item(&item_scope, true, Color::BLACK, Some(anim_spec()), None);
+                    },
+                );
+            }
+        );
+    });
+    ui.run_on_ui_thread(move |_| handle.request_scroll_to_item(200, 0));
+    ui.wait_for_idle();
+    ui.advance_time_by_frame();
+    assert_eq!(handle.first_visible_item_index(), 199);
+    assert_slots(&mut ui, true, 0.0, &[Some((Color::BLACK, 1.0))]);
+}
