@@ -776,6 +776,7 @@ dependencies = [
  "compose-runtime",
  "compose-test",
  "compose-ui",
+ "libc",
 ]
 
 [[package]]

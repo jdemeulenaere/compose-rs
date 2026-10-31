@@ -3,7 +3,8 @@
 //! navigation, sheets, selection controls and text fields, with Compose's parameter names, order
 //! and defaults (docs/06-ui.md).
 
-#![forbid(unsafe_code)]
+// Denied, not forbidden: the one exception is `localtime_r`, in `calendar_model`.
+#![deny(unsafe_code)]
 // Every type reachable from the public API can be named (D260): a type in a private
 // module that a public signature uses must be re-exported.
 #![deny(unnameable_types)]

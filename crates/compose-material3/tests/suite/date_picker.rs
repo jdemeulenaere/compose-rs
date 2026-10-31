@@ -53,7 +53,7 @@ fn picker_in_dialog(direction: LayoutDirection) -> ComposeTestRule {
                 || {
                     let state = remember_date_picker_state!(
                         initial_selected_date_millis = Some(day_in_utc_millis(2010, 1, 11)),
-                        initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 1, 1)))
+                        initial_displayed_month_millis = Some(day_in_utc_millis(2010, 1, 1))
                     );
                     DatePickerDialog!(
                         || {},
@@ -109,7 +109,7 @@ fn the_initial_date_is_selected_and_in_the_headline() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
             initial_selected_date_millis = Some(day_in_utc_millis(2010, 5, 11)),
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 5, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2010, 5, 1))
         )
     });
     ui.on_node(day("11")).assert_is_selected();
@@ -121,7 +121,7 @@ fn the_initial_date_is_selected_and_in_the_headline() {
 fn a_click_selects_a_day() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1))
         )
     });
     ui.on_node_with_text("Selected date").assert_exists();
@@ -139,7 +139,7 @@ fn a_click_selects_a_day() {
 fn a_blocked_date_is_not_selected() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
             selectable_dates = remember(|| Rc::new(NoDates) as Rc<dyn SelectableDates>)
         )
     });
@@ -155,7 +155,7 @@ fn a_blocked_date_is_not_selected() {
 fn a_blocked_year_is_disabled() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
             selectable_dates = remember(|| Rc::new(NoYears) as Rc<dyn SelectableDates>)
         )
     });
@@ -183,7 +183,7 @@ fn new_selectable_dates_take_effect() {
             });
             Column!({
                 let state = remember_date_picker_state!(
-                    initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+                    initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
                     selectable_dates = dates.clone()
                 );
                 DatePicker!(state);
@@ -208,7 +208,7 @@ fn new_selectable_dates_take_effect() {
 fn a_year_is_picked_in_the_grid() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1))
         )
     });
     ui.on_node_with_text("January 2019").perform_click();
@@ -228,7 +228,7 @@ fn a_year_is_picked_in_the_grid() {
 fn the_grid_has_the_years_of_the_range() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
             year_range = 2018..=2023
         )
     });
@@ -258,7 +258,7 @@ fn a_range_after_today_shows_its_first_january() {
 fn the_arrows_go_through_the_months() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 1, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 1, 1))
         )
     });
     ui.on_node_with_text("January 2018").assert_exists();
@@ -277,7 +277,7 @@ fn the_arrows_go_through_the_months() {
 fn the_arrows_stop_at_the_ends_of_the_range() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 1, 1)),
             year_range = 2018..=2018
         )
     });
@@ -300,7 +300,7 @@ fn the_arrows_stop_at_the_ends_of_the_range() {
 fn the_arrows_follow_a_month_set_on_the_state() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 12, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 12, 1)),
             year_range = 2018..=2018
         )
     });
@@ -326,7 +326,7 @@ fn the_arrows_go_by_the_range_not_the_selectable_dates() {
     }
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 12, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 12, 1)),
             year_range = 2018..=2019,
             selectable_dates = remember(|| Rc::new(Only2019) as Rc<dyn SelectableDates>)
         )
@@ -348,7 +348,7 @@ fn the_arrows_go_by_the_range_not_the_selectable_dates() {
 fn the_arrows_cross_a_year() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 12, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 12, 1)),
             year_range = 2018..=2019
         )
     });
@@ -364,7 +364,7 @@ fn the_arrows_cross_a_year() {
 fn switching_modes_keeps_where_the_arrows_are() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 1, 1)),
             year_range = 2018..=2018
         )
     });
@@ -453,7 +453,7 @@ fn no_displayed_month_is_the_current_one() {
     let _ui = picker(|| {
         remember_date_picker_state!(
             initial_selected_date_millis = Some(1649721600000),
-            initial_displayed_month_millis = Some(None)
+            initial_displayed_month_millis = Some(model().today().utc_time_millis)
         )
     });
     let model = model();
@@ -470,7 +470,7 @@ fn no_date_and_no_month_are_the_current_month() {
     let _ui = picker(|| {
         remember_date_picker_state!(
             initial_selected_date_millis = None,
-            initial_displayed_month_millis = Some(None)
+            initial_displayed_month_millis = None
         )
     });
     let model = model();
@@ -523,7 +523,7 @@ fn a_state_is_saved_and_restored() {
 fn setting_the_displayed_month_moves_the_calendar() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2020, 1, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2020, 1, 1))
         )
     });
     ui.on_node_with_text("January 2020").assert_exists();
@@ -563,7 +563,7 @@ fn an_initial_date_out_of_the_years_is_none() {
 fn an_initial_month_out_of_the_years_is_the_current_one() {
     let _ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(1999, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(1999, 1, 1)),
             year_range = 2000..=2050
         )
     });
@@ -580,7 +580,7 @@ fn the_buttons_days_and_headline_read_as_they_should() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
             initial_selected_date_millis = Some(day_in_utc_millis(2010, 5, 11)),
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 5, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2010, 5, 1))
         )
     });
     let full_date = "Tuesday, May 11, 2010";
@@ -660,7 +660,7 @@ fn custom_colors_win_over_the_typographys() {
                 {
                     let state = remember_date_picker_state!(
                         initial_selected_date_millis = Some(day_in_utc_millis(2010, 5, 11)),
-                        initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 5, 1)))
+                        initial_displayed_month_millis = Some(day_in_utc_millis(2010, 5, 1))
                     );
                     DatePicker!(
                         state,
@@ -690,7 +690,7 @@ fn the_navigation_color_tints_the_year_buttons_icon() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             let state = remember_date_picker_state!(
-                initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 5, 1)))
+                initial_displayed_month_millis = Some(day_in_utc_millis(2010, 5, 1))
             );
             DatePicker!(
                 state,
@@ -836,7 +836,7 @@ fn through_the_days(direction: LayoutDirection, forward: Key) {
                 || {
                     DatePicker!(remember_date_picker_state!(
                         initial_selected_date_millis = Some(day_in_utc_millis(2010, 1, 11)),
-                        initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 1, 1)))
+                        initial_displayed_month_millis = Some(day_in_utc_millis(2010, 1, 1))
                     ));
                 },
             );
@@ -877,7 +877,7 @@ fn a_picker_is_its_header_its_navigation_its_weekdays_and_six_rows() {
             Box!({
                 DatePicker!(
                     remember_date_picker_state!(
-                        initial_displayed_month_millis = Some(Some(day_in_utc_millis(2021, 1, 1)))
+                        initial_displayed_month_millis = Some(day_in_utc_millis(2021, 1, 1))
                     ),
                     modifier = Modifier.test_tag("picker")
                 );
@@ -901,6 +901,7 @@ fn a_picker_is_its_header_its_navigation_its_weekdays_and_six_rows() {
     assert_eq!(last.top, first.top + 5.0 * 48.0);
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DatePickerScreenshotTest.kt, datePicker_customLocale
 #[test]
 fn a_regions_week_starts_on_its_first_day() {
     STATE.with(|cell| cell.set(None));
@@ -965,7 +966,7 @@ fn no_slots_leave_no_header() {
         MaterialTheme!({
             DatePicker!(
                 remember_date_picker_state!(
-                    initial_displayed_month_millis = Some(Some(day_in_utc_millis(2021, 1, 1)))
+                    initial_displayed_month_millis = Some(day_in_utc_millis(2021, 1, 1))
                 ),
                 modifier = Modifier.test_tag("picker"),
                 title = None::<fn()>,
@@ -1029,9 +1030,7 @@ fn today_is_told_of_and_in_its_color() {
     thread_local! { static TODAY: Cell<i64> = const { Cell::new(0) }; }
     TODAY.with(|cell| cell.set(today.utc_time_millis));
     let mut ui = picker(|| {
-        remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(TODAY.with(Cell::get)))
-        )
+        remember_date_picker_state!(initial_displayed_month_millis = Some(TODAY.with(Cell::get)))
     });
     let full = compose_material3::calendar_model::format_with_skeleton(
         today.utc_time_millis,
@@ -1104,6 +1103,7 @@ impl SelectableDates for OnlyEvenDays {
     }
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DatePickerScreenshotTest.kt, datePicker_invalidDateSelection
 #[test]
 fn the_days_take_their_states_colors() {
     let (mut ui, log) = colors_log(|| {
@@ -1129,6 +1129,7 @@ fn the_days_take_their_states_colors() {
     assert_eq!(last_color(&log, "11"), Some(DAY_CONTENT_COLOR));
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DatePickerScreenshotTest.kt, datePicker_todayMarker
 #[test]
 fn today_takes_its_color() {
     let (mut ui, log) = colors_log(|| {
@@ -1147,7 +1148,7 @@ fn the_years_take_their_states_colors() {
     let (mut ui, log) = colors_log(|| {
         MaterialTheme!({
             let state = remember_date_picker_state!(
-                initial_displayed_month_millis = Some(Some(day_in_utc_millis(2010, 1, 1))),
+                initial_displayed_month_millis = Some(day_in_utc_millis(2010, 1, 1)),
                 selectable_dates = remember(|| Rc::new(OnlyEvenDays) as Rc<dyn SelectableDates>)
             );
             STATE.with(|cell| cell.set(Some(state)));
@@ -1185,7 +1186,7 @@ fn a_fast_swipe_goes_one_month_and_the_state_follows() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             let state = remember_date_picker_state!(
-                initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 1, 1))),
+                initial_displayed_month_millis = Some(day_in_utc_millis(2018, 1, 1)),
                 year_range = 2016..=2019
             );
             STATE.with(|cell| cell.set(Some(state)));
@@ -1206,7 +1207,7 @@ fn a_fast_swipe_goes_one_month_and_the_state_follows() {
 fn a_month_out_of_the_years_is_ignored() {
     let _ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 1, 1)),
             year_range = 2016..=2019
         )
     });
@@ -1219,7 +1220,7 @@ fn switching_modes_shows_the_selected_dates_month() {
     let _ui = picker(|| {
         remember_date_picker_state!(
             initial_selected_date_millis = Some(day_in_utc_millis(2018, 5, 11)),
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2018, 7, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2018, 7, 1))
         )
     });
     assert_eq!(state().displayed_month_millis(), day_in_utc_millis(2018, 7, 1));
@@ -1247,7 +1248,7 @@ fn a_dialog_is_360_wide_its_buttons_at_the_end() {
 fn a_blocked_years_days_are_disabled() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
             selectable_dates = remember(|| Rc::new(NoYears) as Rc<dyn SelectableDates>)
         )
     });
@@ -1258,7 +1259,7 @@ fn a_blocked_years_days_are_disabled() {
 fn a_year_picked_keeps_the_month() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 3, 1)))
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 3, 1))
         )
     });
     ui.on_node_with_text("March 2019").perform_click();
@@ -1286,8 +1287,7 @@ fn the_current_year_takes_its_color() {
         MaterialTheme!({
             let today = model().today();
             let state = remember_date_picker_state!(
-                initial_displayed_month_millis =
-                    Some(Some(day_in_utc_millis(today.year + 1, 1, 1)))
+                initial_displayed_month_millis = Some(day_in_utc_millis(today.year + 1, 1, 1))
             );
             DatePicker!(state, colors = custom_colors());
         });
@@ -1350,7 +1350,7 @@ fn without_a_touch_target_the_cells_are_40_wide() {
                 LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.provides(compose_ui::Dp::UNSPECIFIED),
                 || {
                     DatePicker!(remember_date_picker_state!(
-                        initial_displayed_month_millis = Some(Some(day_in_utc_millis(2021, 1, 1)))
+                        initial_displayed_month_millis = Some(day_in_utc_millis(2021, 1, 1))
                     ));
                 },
             );

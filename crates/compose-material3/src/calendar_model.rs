@@ -3,7 +3,7 @@
 //!
 //! The calendar's arithmetic is proleptic Gregorian, as java.time's. What's the locale's comes
 //! from the small tables at the end of this file: the languages Compose's tests read, and English
-//! for the others (D1562). The platforms' real data, Android's ICU and a desktop crate, are
+//! for the others (D1562). Its one `unsafe` is the local zone, `localtime_r`. The platforms' real data, Android's ICU and a desktop crate, are
 //! `calendar-model (platforms)` in docs/parity/material3.md.
 
 use std::cmp::Ordering;
@@ -59,12 +59,14 @@ pub struct CalendarMonth {
 impl CalendarMonth {
     /// The last millisecond of the month, as `endUtcTimeMillis`.
     pub fn end_utc_time_millis(&self) -> i64 {
-        self.start_utc_time_millis + i64::from(self.number_of_days) * MILLISECONDS_IN_24_HOURS - 1
+        self.start_utc_time_millis
+            .saturating_add(i64::from(self.number_of_days) * MILLISECONDS_IN_24_HOURS - 1)
     }
 
     /// Its place among the months of `years`, January of the first being 0, as `indexIn`.
     pub fn index_in(&self, years: &RangeInclusive<i32>) -> i32 {
-        (self.year - *years.start()) * 12 + self.month - 1
+        let months = (i64::from(self.year) - i64::from(*years.start())) * 12;
+        (months + i64::from(self.month) - 1).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     }
 
     /// As `format(calendarModel, skeleton)`.
@@ -106,11 +108,11 @@ impl CalendarModel {
         &self.locale
     }
 
-    /// Today, as `today`: the date at the UTC clock, the local zone being the platforms'
-    /// (`calendar-model (platforms)`).
+    /// Today in the local zone, as `today`: a UTC day holding the local date. In UTC where the zone
+    /// isn't known (see [`local_offset_seconds`]).
     pub fn today(&self) -> CalendarDate {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
-        self.get_canonical_date(now)
+        self.get_canonical_date(now + local_offset_seconds(now / 1000) * 1000)
     }
 
     /// The week's first day, 1 being Monday, as `firstDayOfWeek`.
@@ -133,7 +135,9 @@ impl CalendarModel {
     pub fn get_canonical_date(&self, millis: i64) -> CalendarDate {
         let days = millis.div_euclid(MILLISECONDS_IN_24_HOURS);
         let (year, month, day_of_month) = civil_from_days(days);
-        CalendarDate { year, month, day_of_month, utc_time_millis: days * MILLISECONDS_IN_24_HOURS }
+        // The start of `i64::MIN`'s day is before what millis can say: Java's throws.
+        let utc_time_millis = days.saturating_mul(MILLISECONDS_IN_24_HOURS);
+        CalendarDate { year, month, day_of_month, utc_time_millis }
     }
 
     /// The month `millis` falls in, as `getMonth(timeInMillis)`.
@@ -157,7 +161,7 @@ impl CalendarModel {
             month,
             number_of_days: length_of_month(year, month),
             days_from_start_of_week_to_first_of_month: days_from_start,
-            start_utc_time_millis: days * MILLISECONDS_IN_24_HOURS,
+            start_utc_time_millis: days.saturating_mul(MILLISECONDS_IN_24_HOURS),
         }
     }
 
@@ -171,8 +175,8 @@ impl CalendarModel {
         if count <= 0 {
             return *from;
         }
-        let months = from.year * 12 + from.month - 1 + count;
-        self.get_month(months.div_euclid(12), months.rem_euclid(12) + 1)
+        let months = i64::from(from.year) * 12 + i64::from(from.month) - 1 + i64::from(count);
+        self.get_month(months.div_euclid(12) as i32, months.rem_euclid(12) as i32 + 1)
     }
 
     /// `count` months before `from`, `from` for a count that isn't positive, as `minusMonths`.
@@ -180,8 +184,8 @@ impl CalendarModel {
         if count <= 0 {
             return *from;
         }
-        let months = from.year * 12 + from.month - 1 - count;
-        self.get_month(months.div_euclid(12), months.rem_euclid(12) + 1)
+        let months = i64::from(from.year) * 12 + i64::from(from.month) - 1 - i64::from(count);
+        self.get_month(months.div_euclid(12) as i32, months.rem_euclid(12) as i32 + 1)
     }
 
     /// As `formatWithSkeleton(date, skeleton)`, in the model's locale.
@@ -206,12 +210,24 @@ impl CalendarModel {
         let data = language_data(locale);
         let mut text: &str = date;
         let (mut year, mut month, mut day) = (None, None, None);
-        for field in pattern_fields(pattern) {
+        let fields = pattern_fields(pattern);
+        for (index, field) in fields.iter().enumerate() {
             match field {
                 PatternField::Literal(literal) => text = text.strip_prefix(literal.as_str())?,
-                PatternField::Letter(letter, width) => match letter {
+                &PatternField::Letter(letter, width) => match letter {
                     'y' | 'Y' => {
-                        let max = if width == 2 { 2 } else { usize::MAX };
+                        // As java.time's adjacent values: the numeric fields right after it keep
+                        // their digits, so `yyyyMMdd` reads.
+                        let reserved: usize = fields[index + 1..]
+                            .iter()
+                            .map_while(|field| match *field {
+                                PatternField::Letter('y' | 'Y' | 'd', width) => Some(width),
+                                PatternField::Letter('M' | 'L', width) if width < 3 => Some(width),
+                                _ => None,
+                            })
+                            .sum();
+                        let digits = text.chars().take_while(|c| is_digit(*c, zero)).count();
+                        let max = if width == 2 { 2 } else { digits.saturating_sub(reserved) };
                         let (value, rest) = parse_number(text, zero, width, max)?;
                         // Two letters are a year of 2000 to 2099, as java.time's `yy`.
                         year = Some(if width == 2 { 2000 + value } else { value });
@@ -240,7 +256,8 @@ impl CalendarModel {
         if !text.is_empty() {
             return None;
         }
-        let year = i32::try_from(year?).ok()?;
+        // `y` is the year of the era: from 1, as java.time's, and no further than it goes.
+        let year = i32::try_from(year?).ok().filter(|year| (1..=999_999_999).contains(year))?;
         let month = i32::try_from(month?).ok()?;
         let day = i32::try_from(day?).ok()?;
         if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
@@ -251,7 +268,8 @@ impl CalendarModel {
             year,
             month,
             day_of_month: day,
-            utc_time_millis: days_from_civil(year, month, day) * MILLISECONDS_IN_24_HOURS,
+            utc_time_millis: days_from_civil(year, month, day)
+                .checked_mul(MILLISECONDS_IN_24_HOURS)?,
         })
     }
 }
@@ -277,6 +295,38 @@ impl compose_runtime::ComposeArg for CalendarMonth {
 /// One letter asks for at least a digit; two or more for exactly as many.
 fn fixed_max(width: usize) -> usize {
     if width == 1 { usize::MAX } else { width }
+}
+
+fn is_digit(character: char, zero: char) -> bool {
+    (character as u32).wrapping_sub(zero as u32) <= 9
+}
+
+/// Whether a date field takes this character: an ASCII digit or one of the locale's ten.
+pub fn is_date_digit(character: char, locale: &Locale) -> bool {
+    character.is_ascii_digit() || is_digit(character, zero_digit(locale))
+}
+
+/// The local zone's offset from UTC at `seconds` from the epoch, by `localtime_r`. On Android
+/// that's bionic's reading of the system's zone, not yet seen on a phone (docs/parity/material3.md,
+/// `calendar-model (platforms)`). 0 where there's no `localtime_r`, and under Miri, which has none.
+#[cfg(all(unix, not(miri)))]
+#[allow(unsafe_code)]
+pub fn local_offset_seconds(seconds: i64) -> i64 {
+    let time = seconds as libc::time_t;
+    // SAFETY: an all-zero `tm` is valid (its one pointer, `tm_zone`, null); `localtime_r` reads
+    // `time` and writes `local`, both alive across the call, and keeps neither.
+    let (result, local) = unsafe {
+        let mut local: libc::tm = std::mem::zeroed();
+        let result = libc::localtime_r(&time, &mut local);
+        (result, local)
+    };
+    if result.is_null() { 0 } else { i64::from(local.tm_gmtoff as i32) }
+}
+
+/// The local zone's offset from UTC: unknown here, so none.
+#[cfg(not(all(unix, not(miri))))]
+pub fn local_offset_seconds(_seconds: i64) -> i64 {
+    0
 }
 
 /// A number in the locale's digits: at least `min` of them, at most `max`.
@@ -355,6 +405,7 @@ pub fn format_with_pattern(millis: i64, pattern: &str, locale: &Locale) -> Strin
     let (year, month, day) = civil_from_days(days);
     let month_index = (month - 1) as usize;
     let weekday_index = (day_of_week_of_days(days) - 1) as usize;
+    let year_of_era = if year >= 1 { year } else { 1i32.saturating_sub(year) };
     let mut result = String::new();
     let number = |result: &mut String, value: i32, width: usize| {
         for digit in format!("{value:0width$}").bytes() {
@@ -368,8 +419,9 @@ pub fn format_with_pattern(millis: i64, pattern: &str, locale: &Locale) -> Strin
         match field {
             PatternField::Literal(literal) => result.push_str(&literal),
             PatternField::Letter(letter, width) => match letter {
-                'y' | 'Y' if width == 2 => number(&mut result, year.rem_euclid(100), 2),
-                'y' | 'Y' => number(&mut result, year, width),
+                // The year of the era, as java.time's `y`: year 0 is 1 BC.
+                'y' | 'Y' if width == 2 => number(&mut result, year_of_era.rem_euclid(100), 2),
+                'y' | 'Y' => number(&mut result, year_of_era, width),
                 'M' | 'L' if width >= 4 => result.push_str(data.months[month_index]),
                 'M' | 'L' if width == 3 => result.push_str(data.months_short[month_index]),
                 'M' | 'L' => number(&mut result, month, width),
@@ -441,7 +493,15 @@ fn best_pattern(skeleton: &str, locale: &Locale) -> String {
             // All numbers: the short date, with its whole year.
             return short_date_pattern(locale).replace("yy", "y");
         }
-        // Fields no table has: in the skeleton's order, apart.
+        // Fewer fields than a table has: its longest pattern without the others.
+        _ if months != 1
+            && months != 2
+            && [months, days, weekdays].iter().filter(|width| **width > 0).count() >= 2
+            && skeleton.chars().all(|c| matches!(c, 'M' | 'L' | 'd' | 'E')) =>
+        {
+            return some_fields_of(data.year_month_weekday_day, months, days, weekdays);
+        }
+        // Fields no table has: as the skeleton gives them.
         _ => {
             let parts: Vec<String> = pattern_fields(skeleton)
                 .into_iter()
@@ -471,6 +531,54 @@ fn best_pattern(skeleton: &str, locale: &Locale) -> String {
         }
     }
     pattern
+}
+
+/// `pattern` with only the month, day and weekday asked for: what's between two of them stays, and
+/// what ends a field in a language that writes one so (`日`, `일`).
+fn some_fields_of(pattern: &str, months: usize, days: usize, weekdays: usize) -> String {
+    let wanted = |letter: char| match letter {
+        'M' => months > 0,
+        'd' => days > 0,
+        'E' => weekdays > 0,
+        _ => false,
+    };
+    let fields = pattern_fields(pattern);
+    let mut result = String::new();
+    for (index, field) in fields.iter().enumerate() {
+        match field {
+            &PatternField::Letter(letter, width) if wanted(letter) => {
+                let width = match letter {
+                    'M' if width >= 3 => months,
+                    'E' => weekdays,
+                    _ => width,
+                };
+                result.push_str(&letter.to_string().repeat(width));
+            }
+            PatternField::Literal(literal) if index > 0 => {
+                let after_a_kept = matches!(
+                    fields[index - 1],
+                    PatternField::Letter(letter, _) if wanted(letter)
+                );
+                let before_a_kept = fields[index + 1..].iter().any(
+                    |field| matches!(field, PatternField::Letter(letter, _) if wanted(*letter)),
+                );
+                let quoted = |text: &str| format!("'{}'", text.replace('\'', "''"));
+                if after_a_kept && before_a_kept {
+                    result.push_str(&quoted(literal));
+                } else if after_a_kept {
+                    let ending: String = literal
+                        .chars()
+                        .take_while(|c| c.is_alphabetic() && !c.is_ascii())
+                        .collect();
+                    if !ending.is_empty() {
+                        result.push_str(&quoted(&ending));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 /// The input format of a locale's date pattern, as `datePatternAsInputFormat`: its fields and
@@ -561,6 +669,12 @@ fn unicode_extension(locale: &Locale, key: &str) -> Option<String> {
     subtags.next().map(str::to_string)
 }
 
+/// A locale's language, by its current name: `iw` is `he`.
+fn language_of(locale: &Locale) -> String {
+    let language = locale.language();
+    if language == "iw" { "he".to_string() } else { language }
+}
+
 /// The digit 0 of a locale's numbers: its `-u-nu-`, or the language's and region's own.
 fn zero_digit(locale: &Locale) -> char {
     match unicode_extension(locale, "nu").as_deref() {
@@ -569,8 +683,8 @@ fn zero_digit(locale: &Locale) -> char {
         Some("deva") => '\u{0966}',
         Some("beng") => '\u{09E6}',
         Some(_) => '0',
-        None if locale.language() == "ar"
-            && !matches!(locale.region().as_str(), "AE" | "DZ" | "LY" | "MA" | "TN") =>
+        None if language_of(locale) == "ar"
+            && !matches!(locale.region().as_str(), "AE" | "DZ" | "EH" | "LY" | "MA" | "TN") =>
         {
             '\u{0660}'
         }
@@ -578,46 +692,57 @@ fn zero_digit(locale: &Locale) -> char {
     }
 }
 
-/// The region a tag names, or the one its language is most spoken in.
+/// The region a tag names, or the one its language is most spoken in, as ICU's likely subtags: from
+/// memory of CLDR's table, where the JDK's `WeekFields` takes the US for a bare language.
 fn region_or_likely(locale: &Locale) -> String {
     let region = locale.region();
     if !region.is_empty() {
         return region;
     }
-    match locale.language().as_str() {
+    match language_of(locale).as_str() {
         "en" => "US",
         "es" => "ES",
         "da" => "DK",
         "zh" => "CN",
         "ko" => "KR",
         "ar" => "EG",
+        "he" => "IL",
+        "hi" => "IN",
+        "ja" => "JP",
+        "pt" => "BR",
+        "th" => "TH",
         _ => "",
     }
     .to_string()
 }
 
-/// CLDR's first day of the week by region, 1 being Monday.
+/// CLDR's first day of the week by region, 1 being Monday: the JDK 21's, all of its regions.
 fn first_day_of_week(locale: &Locale) -> i32 {
     match region_or_likely(locale).as_str() {
-        "AG" | "AS" | "AU" | "BD" | "BR" | "BS" | "BT" | "BW" | "BZ" | "CA" | "CN" | "CO"
-        | "DM" | "DO" | "ET" | "GT" | "GU" | "HK" | "HN" | "ID" | "IL" | "IN" | "JM" | "JP"
-        | "KE" | "KH" | "KR" | "LA" | "MH" | "MM" | "MO" | "MT" | "MX" | "MZ" | "NI" | "NP"
-        | "PA" | "PE" | "PH" | "PK" | "PR" | "PT" | "PY" | "SA" | "SG" | "SV" | "TH" | "TT"
-        | "TW" | "UM" | "US" | "VE" | "VI" | "WS" | "YE" | "ZA" | "ZW" => 7,
+        "AG" | "AS" | "BD" | "BR" | "BS" | "BT" | "BW" | "BZ" | "CA" | "CO" | "DM" | "DO"
+        | "ET" | "GT" | "GU" | "HK" | "HN" | "ID" | "IL" | "IN" | "JM" | "JP" | "KE" | "KH"
+        | "KR" | "LA" | "MH" | "MM" | "MO" | "MT" | "MX" | "MZ" | "NI" | "NP" | "PA" | "PE"
+        | "PH" | "PK" | "PR" | "PT" | "PY" | "SA" | "SG" | "SV" | "TH" | "TT" | "TW" | "UM"
+        | "US" | "VE" | "VI" | "WS" | "YE" | "ZA" | "ZW" => 7,
         "AE" | "AF" | "BH" | "DJ" | "DZ" | "EG" | "IQ" | "IR" | "JO" | "KW" | "LY" | "OM"
         | "QA" | "SD" | "SY" => 6,
+        "MV" => 5,
         _ => 1,
     }
 }
 
-/// A locale's short date, as `getLocalizedDateTimePattern(SHORT, …)`.
+/// A locale's short date, as `getLocalizedDateTimePattern(SHORT, …)`; those told apart by the input
+/// format they give, the JDK's for those named.
 fn short_date_pattern(locale: &Locale) -> &'static str {
     let region = locale.region();
-    match (locale.language().as_str(), region.as_str()) {
-        ("en", "GB" | "AU" | "IE" | "IN" | "NZ") => "dd/MM/y",
+    match (language_of(locale).as_str(), region.as_str()) {
+        ("en", "GB" | "AU" | "IE" | "IN" | "NZ" | "SG" | "HK") => "dd/MM/y",
+        ("en", "CA") => "y-MM-dd",
+        ("en", "ZA") => "y/MM/dd",
         ("es", "CL") => "dd-MM-yy",
         ("es", _) => "d/M/yy",
         ("da", _) => "dd.MM.y",
+        ("zh", "HK") => "d/M/y",
         ("zh", _) => "y/M/d",
         ("ko", _) => "yy. M. d.",
         ("ar", _) => "d\u{200f}/M\u{200f}/y",
@@ -643,8 +768,8 @@ struct LanguageData {
 }
 
 fn language_data(locale: &Locale) -> &'static LanguageData {
-    match (locale.language().as_str(), locale.region().as_str()) {
-        ("en", "GB" | "AU" | "IE" | "IN" | "NZ") => &ENGLISH_DAY_FIRST,
+    match (language_of(locale).as_str(), locale.region().as_str()) {
+        ("en", "GB" | "AU" | "IE" | "IN" | "NZ" | "HK" | "SG" | "ZA") => &ENGLISH_DAY_FIRST,
         ("es", _) => &SPANISH,
         ("da", _) => &DANISH,
         ("zh", _) => &CHINESE,

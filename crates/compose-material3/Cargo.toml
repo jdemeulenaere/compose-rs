@@ -12,6 +12,10 @@ compose-ui.workspace = true
 compose-foundation.workspace = true
 compose-animation.workspace = true
 
+# The local zone's offset, for what day it is (D1562).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 compose-test.workspace = true
 

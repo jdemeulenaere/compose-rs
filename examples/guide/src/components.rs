@@ -46,7 +46,7 @@ pub fn DeleteNote(on_delete: impl Fn() + 'static) {
 // ANCHOR: date_picker
 #[composable]
 pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
-    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(month));
     DatePickerDialog!(
         on_dismiss,
         confirm_button = {

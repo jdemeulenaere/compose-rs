@@ -16,7 +16,9 @@ use compose_runtime::{
 };
 use compose_ui::{Dp, FocusRequester, Locale, Modifier};
 
-use crate::calendar_model::{CalendarDate, CalendarModel, DateInputFormat, to_local_string};
+use crate::calendar_model::{
+    CalendarDate, CalendarModel, DateInputFormat, is_date_digit, to_local_string,
+};
 use crate::components::Text;
 use crate::date_picker::{DatePickerColors, DatePickerFormatter, SelectableDates, YearRange};
 use crate::text_field::OutlinedTextField;
@@ -204,7 +206,8 @@ pub(crate) fn DateInputTextField(
     let on_value_change = {
         let (validator, locale) = (date_input_validator.clone(), locale.clone());
         compose_runtime::callback(move |new_text: String| {
-            if new_text.chars().count() > pattern_length || !new_text.chars().all(char::is_numeric)
+            if new_text.chars().count() > pattern_length
+                || !new_text.chars().all(|character| is_date_digit(character, &locale))
             {
                 return;
             }

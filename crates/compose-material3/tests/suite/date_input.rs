@@ -57,7 +57,7 @@ impl SelectableDates for NoDates {
 fn a_typed_date_is_selected() {
     let mut ui = picker(|| {
         remember_date_picker_state!(
-            initial_displayed_month_millis = Some(Some(day_in_utc_millis(2019, 1, 1))),
+            initial_displayed_month_millis = Some(day_in_utc_millis(2019, 1, 1)),
             initial_display_mode = DisplayMode::Input
         )
     });
@@ -315,4 +315,61 @@ fn a_date_cut_short_is_no_selection() {
     ui.wait_for_idle();
     assert_eq!(state().selected_date_millis(), None);
     ui.on_node_with_text("01/27/20").assert_exists();
+}
+
+fn in_locale(tag: &'static str, initial: Option<i64>) -> (ComposeTestRule, DatePickerState) {
+    let owned = DatePickerState::new(
+        Locale::new(tag),
+        initial,
+        initial,
+        DatePickerDefaults::YEAR_RANGE,
+        DisplayMode::Input,
+        DatePickerDefaults::all_dates(),
+    );
+    let handle = *owned;
+    let keep = Rc::new(owned);
+    let ui = compose_test(move || {
+        let _ = &keep;
+        MaterialTheme!({
+            DatePicker!(handle);
+        });
+    });
+    (ui, handle)
+}
+
+fn year_first_locale(tag: &'static str, shown: &str, typing: &str) {
+    let february_fifteenth = day_in_utc_millis(2024, 2, 15);
+    // A date given shows, with no error.
+    let (mut ui, state) = in_locale(tag, Some(february_fifteenth));
+    ui.on_node_with_text(shown).assert_exists();
+    let config = ui.on_node_with_text(shown).fetch_semantics_snapshot().config;
+    assert!(!config.contains(&SemanticsProperties::ERROR), "{tag}: an error for a good date");
+    assert_eq!(state.selected_date_millis(), Some(february_fifteenth));
+    // One typed is selected.
+    let (mut ui, state) = in_locale(tag, None);
+    ui.on_node_with_text("Date").perform_click().perform_text_input(typing);
+    ui.wait_for_idle();
+    assert_eq!(state.selected_date_millis(), Some(february_fifteenth), "{tag}");
+    ui.on_node_with_text(shown).assert_exists();
+}
+
+/// The year first and all digits, which Compose's test has no locale for.
+#[test]
+fn a_year_first_locale_shows_and_takes_its_dates() {
+    year_first_locale("zh-CN", "2024/02/15", "20240215");
+    year_first_locale("ko-KR", "2024.02.15", "20240215");
+}
+
+/// What Kotlin's `isDigit` refuses doesn't go in, nor another script's digits (D1562).
+#[test]
+fn only_ascii_and_the_locales_digits_go_in() {
+    let (mut ui, _state) = in_locale("en-US", None);
+    ui.on_node_with_text("Date").perform_click().perform_text_input("01");
+    for refused in ["½", "Ⅷ", "𝟏", "٢"] {
+        ui.on_node_with_text("01/").perform_text_input(refused);
+        ui.on_node_with_text("01/").assert_exists();
+    }
+    let (mut ui, _state) = in_locale("ar-u-nu-arab", None);
+    ui.on_node_with_text("Date").perform_click().perform_text_input("٠");
+    ui.on_node_with_text("٠").assert_exists();
 }

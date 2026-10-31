@@ -1702,7 +1702,7 @@ DatePickerDialog(
 ```rust
 #[composable]
 pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
-    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(month));
     DatePickerDialog!(
         on_dismiss,
         confirm_button = {
@@ -1717,7 +1717,7 @@ pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn
 }
 ```
 
-`initial_displayed_month_millis` is doubly optional: left out, it's the selected date's month; `Some(None)` is Compose's `null`, the current month. `SelectableDates` is a trait, given as `Rc<dyn SelectableDates>`: remember it, as a new one replaces the old.
+`initial_displayed_month_millis` left out is the selected date's month, or else the current one. Compose's `null`, the current month with a date selected, is today's millis given here. `SelectableDates` is a trait, given as `Rc<dyn SelectableDates>`: remember it, as a new one replaces the old.
 
 ## Selectable lists
 
@@ -1737,7 +1737,7 @@ Column(Modifier.selectableGroup()) {
 ```rust
 #[composable]
 pub fn PickDate(month: i64, on_dismiss: impl Fn() + 'static, on_confirm: impl Fn() + 'static) {
-    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(Some(month)));
+    let state = remember_date_picker_state!(initial_displayed_month_millis = Some(month));
     DatePickerDialog!(
         on_dismiss,
         confirm_button = {

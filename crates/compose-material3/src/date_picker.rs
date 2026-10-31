@@ -2,6 +2,7 @@
 //! `DatePickerFormatter`, `DisplayMode`, `DatePickerColors`, `DatePickerDefaults`, the months and
 //! the years; `DatePickerDialog`. The date input is in `date_input.rs`.
 
+use std::cell::Cell;
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 
@@ -166,8 +167,9 @@ impl DatePickerState {
         self.object.get()
     }
 
-    /// As `DatePickerState(locale, …)`: a selected date out of `year_range` is none, a displayed
-    /// month out of it (or none) is the current month.
+    /// As `DatePickerState(locale, …)`: a selected date out of `year_range` is none; no displayed
+    /// month is the selected date's month, and a month out of `year_range`, or none at all, the
+    /// current one.
     #[track_caller]
     pub fn new(
         locale: Locale,
@@ -179,7 +181,7 @@ impl DatePickerState {
     ) -> Owned<DatePickerState> {
         let base = BaseDatePickerState::new(
             locale,
-            initial_displayed_month_millis,
+            initial_displayed_month_millis.or(initial_selected_date_millis),
             year_range,
             selectable_dates,
         );
@@ -320,13 +322,13 @@ impl ComposeArg for DatePickerState {
 }
 
 /// A date picker state remembered here and saved, in the default locale, as
-/// `rememberDatePickerState`. Rust having no way to default a parameter to another,
-/// `initial_displayed_month_millis` is `None` for Compose's default, the selected date's month, and
-/// `Some(None)` for its `null`, the current month.
+/// `rememberDatePickerState`. `initial_displayed_month_millis` left out is the selected date's
+/// month, as Compose's default, or else the current one; Compose's `null`, the current month with
+/// a date selected, is today's millis given here.
 #[composable(non_restartable)]
 pub fn remember_date_picker_state(
     #[default(None)] initial_selected_date_millis: Option<i64>,
-    #[default(None)] initial_displayed_month_millis: Option<Option<i64>>,
+    #[default(None)] initial_displayed_month_millis: Option<i64>,
     #[default(crate::DatePickerDefaults::YEAR_RANGE)] year_range: RangeInclusive<i32>,
     #[default(crate::DisplayMode::Picker)] initial_display_mode: DisplayMode,
     #[default(crate::DatePickerDefaults::all_dates())] selectable_dates: Rc<dyn SelectableDates>,
@@ -338,7 +340,7 @@ pub fn remember_date_picker_state(
         DatePickerState::new(
             locale.clone(),
             initial_selected_date_millis,
-            initial_displayed_month_millis.unwrap_or(initial_selected_date_millis),
+            initial_displayed_month_millis,
             year_range.clone(),
             initial_display_mode,
             initial_selectable_dates.clone(),
@@ -1563,6 +1565,7 @@ fn YearPicker(
     let displayed_year = calendar_model.get_month_of_millis(displayed_month_millis).year;
     let first_year = *year_range.0.start();
     let count = year_range.0.clone().count();
+    let focus_asked = remember(|| Rc::new(Cell::new(false)));
     let grid_state = remember_lazy_grid_state(
         (displayed_year - first_year - YEARS_IN_ROW as i32).max(0) as usize,
         0,
@@ -1580,6 +1583,7 @@ fn YearPicker(
                 let selectable_dates = selectable_dates.clone();
                 let on_year_shift_tab_pressed = on_year_shift_tab_pressed.clone();
                 let on_year_tab_pressed = on_year_tab_pressed.clone();
+                let focus_asked = focus_asked.clone();
                 scope.items(count, move |index| {
                     let year = index as i32 + first_year;
                     let localized = to_local_string(year, 1, 40, calendar_model.locale());
@@ -1610,17 +1614,23 @@ fn YearPicker(
                         format!("Navigate to year {localized}"),
                         colors
                     );
+                    if year == displayed_year {
+                        FocusDisplayedYear!(current_year_focus_requester, focus_asked.clone());
+                    }
                 });
             }
         );
     });
-    LaunchedEffect(current_year_focus_requester, async move {
-        // The grid composes its items as it measures, a frame or two after this starts here.
-        for _ in 0..4 {
-            if current_year_focus_requester.request_focus() {
-                break;
-            }
-            compose_runtime::with_frame_nanos(|_| ()).await;
+}
+
+/// The displayed year takes the focus once the grid has composed it, the first time only: as
+/// Compose's `LaunchedEffect` beside the grid, but here a grid entering with an animation composes
+/// its items after that would run (docs/parity/foundation-layout-lazy.md).
+#[composable]
+fn FocusDisplayedYear(requester: FocusRequester, asked: Rc<Cell<bool>>) {
+    LaunchedEffect((), async move {
+        if !asked.replace(true) {
+            requester.request_focus();
         }
     });
 }

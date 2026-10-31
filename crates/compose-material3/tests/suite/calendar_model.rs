@@ -218,9 +218,14 @@ fn numbers_read_in_the_locales_digits() {
 
 #[test]
 fn the_first_day_of_the_week_is_the_regions() {
-    for (tag, first_day, cells) in
-        [("en-US", 7, 6), ("en-GB", 1, 5), ("zh-CN", 7, 6), ("ar-EG", 6, 0)]
-    {
+    for (tag, first_day, cells) in [
+        ("en-US", 7, 6),
+        ("en-GB", 1, 5),
+        ("zh-CN", 1, 5),
+        ("en-AU", 1, 5),
+        ("ar-EG", 6, 0),
+        ("dv-MV", 5, 1),
+    ] {
         let model = CalendarModel::new(Locale::new(tag));
         assert_eq!(model.first_day_of_week(), first_day, "{tag}");
         assert_eq!(
@@ -263,4 +268,142 @@ fn a_pattern_formats_in_the_locale() {
         model.format_with_pattern(JANUARY_2022_MILLIS, "d/M/yy", &Locale::new("ar-u-nu-arab")),
         "١/١/٢٢"
     );
+}
+
+/// A year first and nothing between: `yyyy` leaves the fields after it their digits, as java.time's
+/// adjacent values.
+#[test]
+fn a_date_parses_year_first_without_delimiters() {
+    let en = Locale::new("en");
+    let parsed = model().parse("20240215", "yyyyMMdd", &en).unwrap();
+    assert_eq!((parsed.year, parsed.month, parsed.day_of_month), (2024, 2, 15));
+    // Past the month's end is its last, 2024 being a leap year.
+    let parsed = model().parse("20240231", "yyyyMMdd", &en).unwrap();
+    assert_eq!((parsed.year, parsed.month, parsed.day_of_month), (2024, 2, 29));
+    // Too short for the fields after it.
+    assert_eq!(model().parse("202402", "yyyyMMdd", &en), None);
+    assert_eq!(model().parse("2024021", "yyyyMMdd", &en), None);
+    // In the locale's digits.
+    let parsed = model().parse("٢٠٢٤٠٢١٥", "yyyyMMdd", &Locale::new("ar-u-nu-arab")).unwrap();
+    assert_eq!((parsed.year, parsed.month, parsed.day_of_month), (2024, 2, 15));
+}
+
+/// `y` is the year of the era, as java.time's: there's no year 0 to read, and years before 1 write
+/// as what they are before Christ.
+#[test]
+fn years_before_the_first_are_of_their_era() {
+    let en = Locale::new("en");
+    assert_eq!(model().parse("00000101", "yyyyMMdd", &en), None);
+    let millis = |year| model().get_month(year, 1).start_utc_time_millis;
+    assert_eq!(model().format_with_pattern(millis(0), "yyyy", &en), "0001");
+    assert_eq!(model().format_with_pattern(millis(-1), "yyyy", &en), "0002");
+    assert_eq!(model().format_with_pattern(millis(-1), "yy", &en), "02");
+    assert_eq!(model().format_with_pattern(millis(2022), "yyyy", &en), "2022");
+}
+
+/// What millis can't say doesn't panic: a year past them doesn't parse, and a month from the very
+/// ends stops at the ends.
+#[test]
+fn extreme_values_dont_panic() {
+    let en = Locale::new("en");
+    assert_eq!(model().parse("1/1/2147483647", "M/d/yyyy", &en), None);
+    assert_eq!(model().parse("1/1/999999999", "M/d/yyyy", &en), None);
+    for millis in [i64::MIN, i64::MAX] {
+        let month = model().get_month_of_millis(millis);
+        let _ = month.end_utc_time_millis();
+        let _ = month.index_in(&(1900..=2100));
+        let _ = model().plus_months(&month, 1);
+        let _ = model().minus_months(&month, 1);
+        let _ = model().get_canonical_date(millis);
+    }
+}
+
+/// The input formats of the regions a language's others differ from: the JDK's, of its CLDR.
+#[test]
+fn a_regions_input_format_is_its_own() {
+    for (tag, pattern, delimiter) in [
+        ("en-CA", "yyyy-MM-dd", '-'),
+        ("en-ZA", "yyyy/MM/dd", '/'),
+        ("en-SG", "dd/MM/yyyy", '/'),
+        ("en-HK", "dd/MM/yyyy", '/'),
+        ("zh-HK", "dd/MM/yyyy", '/'),
+        ("zh-TW", "yyyy/MM/dd", '/'),
+        ("he", "dd.MM.yyyy", '.'),
+        ("iw-IL", "dd.MM.yyyy", '.'),
+    ] {
+        let format = CalendarModel::new(Locale::new(tag)).get_date_input_format();
+        assert_eq!(format.pattern_with_delimiters, pattern, "{tag}");
+        assert_eq!(format.delimiter, delimiter, "{tag}");
+    }
+}
+
+/// A bare language goes by the region it's most spoken in, as ICU's likely subtags.
+#[test]
+fn a_bare_languages_week_is_its_likely_regions() {
+    for (tag, first_day) in
+        [("he", 7), ("iw-IL", 7), ("ja", 7), ("pt", 7), ("hi", 7), ("th", 7), ("de", 1), ("en", 7)]
+    {
+        assert_eq!(CalendarModel::new(Locale::new(tag)).first_day_of_week(), first_day, "{tag}");
+    }
+}
+
+/// Arabic's digits are Latin in the regions CLDR says, Arabic-Indic elsewhere.
+#[test]
+fn arabics_digits_go_by_the_region() {
+    for (tag, two) in [
+        ("ar-EG", "٢"),
+        ("ar-SA", "٢"),
+        ("ar", "٢"),
+        ("ar-AE", "2"),
+        ("ar-DZ", "2"),
+        ("ar-EH", "2"),
+        ("ar-LY", "2"),
+        ("ar-MA", "2"),
+        ("ar-TN", "2"),
+    ] {
+        assert_eq!(to_local_string(2, 1, 40, &Locale::new(tag)), two, "{tag}");
+    }
+}
+
+/// Fewer fields than a table has keep the table's order, not the skeleton's.
+#[test]
+fn a_skeleton_of_some_fields_goes_in_the_locales_order() {
+    let february_fifth = model().get_month(2024, 2).start_utc_time_millis + 4 * 86_400_000;
+    let format = |skeleton, tag| format_with_skeleton(february_fifth, skeleton, &Locale::new(tag));
+    assert_eq!(format("MMMMEEEEd", "en-US"), "Monday, February 5");
+    assert_eq!(format("EEEEdMMMM", "en-US"), "Monday, February 5");
+    assert_eq!(format("MMMMd", "en-US"), "February 5");
+    assert_eq!(format("MMMd", "en-GB"), "5 Feb");
+    assert_eq!(format("MMMMEEEEd", "zh-CN"), "2月5日星期一");
+    assert_eq!(format("MMMMd", "ko-KR"), "2월 5일");
+    assert_eq!(format("YY", "en-US"), "24");
+}
+
+/// The zones the review saw wrong by hours, each in a process of its own: a zone is read once.
+#[cfg(unix)]
+#[test]
+fn today_is_the_local_date() {
+    use compose_material3::calendar_model::local_offset_seconds;
+    if let Ok(expected) = std::env::var("CALENDAR_MODEL_TEST_OFFSET") {
+        // Neither Phoenix nor Tokyo keeps daylight time, whatever the date.
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
+                as i64;
+        let offset = local_offset_seconds(now / 1000);
+        assert_eq!(offset, expected.parse::<i64>().unwrap());
+        let before = model().today().utc_time_millis;
+        let local_day = (now + offset * 1000).div_euclid(86_400_000) * 86_400_000;
+        let after = model().today().utc_time_millis;
+        assert!(before == local_day || after == local_day, "{before} {after} {local_day}");
+        return;
+    }
+    for (zone, offset) in [("Asia/Tokyo", 32400), ("America/Phoenix", -25200), ("UTC", 0)] {
+        let done = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "calendar_model::today_is_the_local_date"])
+            .env("TZ", zone)
+            .env("CALENDAR_MODEL_TEST_OFFSET", offset.to_string())
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{zone}: {}", String::from_utf8_lossy(&done.stdout));
+    }
 }

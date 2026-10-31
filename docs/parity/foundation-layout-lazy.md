@@ -577,6 +577,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 35. **movable-content** (runtime ledger's).
     - API: `movableContentOf`.
     - Tests: LazyListMovableContentTest.
+36. **feature:lazy-rounds-with-animation.** `host.rs` runs a frame's lazy rounds only if `!invalid_before_layout`, so a lazy list entering in the same pass as an animation (an `AnimatedVisibility`, say) draws only its anchor item for that frame, by reading of the host's order, no frame captured. `YearPicker`'s focus went round it (D1562). Nothing's planned for it yet.
 
 **lazy-list-params** (`flingBehavior` and `overscrollEffect` on `LazyColumn`/`LazyRow`) has no entry of its own: each parameter comes with the feature it carries (scrollable, overscroll). Size S each.
 
