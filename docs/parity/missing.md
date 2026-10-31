@@ -10,7 +10,6 @@ These are on local branches, so they're not lost, but each still has to finish i
 
 | Work | Branch | State |
 |---|---|---|
-| Lookahead: `LookaheadScope`, `approach_layout`, intrinsics in a scope | `worktree-agent-a6e1d41d0641ba30a` | Reviewed and fixed, waiting for Miri. Lazy items' lookahead positions and most of `LookaheadScopeTest` are left. |
 | `SubcomposeLayout`, `BoxWithConstraints` on it | `worktree-agent-a12dfd51d71063a72` | Review found a blocker: reused content panics. Being fixed. Paused precomposition is left. |
 | Stretch and glow overscroll | `worktree-agent-ad25708f190fdec81` | Being built, not reviewed. Design: [stretch-overscroll.md](design/stretch-overscroll.md). |
 
@@ -22,6 +21,7 @@ These are on local branches, so they're not lost, but each still has to finish i
 - **Text context menu** (about 290), **magnifier** (about 80), **handwriting** (about 85), **autofill** (about 165), **text links** (about 55).
 
 ### 2. Layout and composition foundations
+- **The rest of lookahead:** lazy items' lookahead positions, the `SubcomposeLayout` cases, and most of `LookaheadScopeTest`. The scope, the pass and `approach_layout` are in.
 - **After `SubcomposeLayout`:** lazy layouts moved onto subcomposition (C8), so items compose during measure as in Compose. Today they compose in rounds, the root of several differences.
 - **Place-with-layer** in compose-ui (`placeWithLayer`, what `offset_with` wants too). Until it lands, `animate_item` has a visible bug: modifiers before it in the chain neither move nor fade (D1472), and lookahead scopes aren't told apart; its grid and staggered tests are partly ported.
 - **Shared elements and `animateBounds`** (about 95), which wait on lookahead.
