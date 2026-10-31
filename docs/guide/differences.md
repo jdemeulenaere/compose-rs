@@ -97,5 +97,5 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
 - **Missing foundation pieces**: no `movableContentOf`.
-- **Staggered grids** have no prefetch yet (their `cacheWindow`), `animateItem` or `scrollIndicatorState` (D1469).
+- **Staggered grids** compose in rounds of a frame, about 2,250 items a frame at most, and keep what's in view and each lane's first, items a round composed too many of leaving in idle time (D1470). They have no `animateItem` or `scrollIndicatorState` (D1469).
 - **Pagers** don't settle a page that focus brings into view (`PagerDefaults.bringIntoViewSpec` isn't ported), and have no `scrollIndicatorState` (D1467).

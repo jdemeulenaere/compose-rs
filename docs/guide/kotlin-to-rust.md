@@ -942,7 +942,7 @@ pub fn Pinboard(heights: ImmutableList<f32>) {
 }
 ```
 
-`LazyVerticalStaggeredGrid` and `LazyHorizontalStaggeredGrid` take a `LazyStaggeredGridScope` with the list's forms; the `_with_span` forms take Compose's `contentType` and `span`. Each item goes in the lane that ends first, so which lane it's in depends on the sizes of those before it. `remember_lazy_staggered_grid_state` keeps the position per lane. What's different: it has no prefetch yet, so a scroll composes in the frame what it reaches (D1469).
+`LazyVerticalStaggeredGrid` and `LazyHorizontalStaggeredGrid` take a `LazyStaggeredGridScope` with the list's forms; the `_with_span` forms take Compose's `contentType` and `span`. Each item goes in the lane that ends first, so which lane it's in depends on the sizes of those before it. `remember_lazy_staggered_grid_state` keeps the position per lane. What's different: items are composed in rounds of the frame rather than as it measures, about 2,250 in a frame at most (D1470), and there's no `animateItem` yet.
 
 ### Pagers
 
