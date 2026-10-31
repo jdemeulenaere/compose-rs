@@ -142,6 +142,10 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The placement blocks of its layers (`MeasureScope::layout_with`): most nodes have none.
     pub(crate) placements: Option<Box<crate::placement::NodePlacements>>,
+    /// Its measurement is running.
+    pub(crate) measuring: bool,
+    /// Its placement blocks are running.
+    pub(crate) laying_out: bool,
     /// A placement block of it must run.
     pub(crate) needs_placement: bool,
     /// One of a descendant must.
@@ -235,6 +239,8 @@ impl LayoutNode {
             subtree_needs_measure: false,
             placed: false,
             placements: None,
+            measuring: false,
+            laying_out: false,
             needs_placement: false,
             content_placed_in: 0,
             reader_at: u32::MAX,
@@ -410,6 +416,19 @@ pub struct UiTree {
     /// The nodes whose placing code last asked where they are: it runs again once they aren't
     /// there (D1212).
     pub(crate) coordinate_readers: Vec<crate::placement::CoordinateReader>,
+    /// A line's been read in this tree: there's someone to tell (D1219).
+    pub(crate) alignment_lines_read: bool,
+    /// Blocks are running to know a line, not to place: no position or ruler is told.
+    pub(crate) placing_for_alignment: bool,
+    /// They asked one, and run again when it's placed.
+    pub(crate) asked_while_aligning: std::cell::Cell<bool>,
+    /// Those a line's change asked of, for the rest of the layout.
+    pub(crate) line_requests: Vec<NodeId>,
+    /// Who read which ruler, by its id, since its last change (D1218).
+    pub(crate) ruler_readers: std::collections::HashMap<(u64, NodeId), crate::ruler::Ruler>,
+    /// The nodes with `UnplacedAwareModifierNode`s, and whether each was placed when last looked
+    /// at.
+    pub(crate) unplaced_aware: Vec<(NodeId, bool)>,
     /// Nodes whose graphics layers came or were updated since the last draw (`run_new_layers`).
     pub(crate) new_layers: Vec<NodeId>,
     /// Where the host's root is on the screen (`UiHost::set_window_origin`).
@@ -537,6 +556,12 @@ impl UiTree {
             layers_moved: Vec::new(),
             position_listeners: 0,
             coordinate_readers: Vec::new(),
+            alignment_lines_read: false,
+            placing_for_alignment: false,
+            asked_while_aligning: std::cell::Cell::new(false),
+            line_requests: Vec::new(),
+            ruler_readers: Default::default(),
+            unplaced_aware: Vec::new(),
             new_layers: Vec::new(),
             window_origin: Offset::ZERO,
             next_entry: 0,
@@ -1507,11 +1532,16 @@ impl UiTree {
         if positioned {
             self.register_positioned(node);
         }
+        if self.node(node).kinds.any(NodeKinds::UNPLACED) {
+            self.register_unplaced_aware(node);
+        }
         let value = self.node_mut(node);
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
         // Those of layers gone: the rest measure again, whatever they were.
         if let Some(placements) = &mut value.placements {
             placements.blocks.truncate(value.layers.len());
+            let layers = value.layers.len();
+            self.rulers_of_layers_gone(node, layers);
         }
         self.refresh_parent_data(node)
     }
@@ -1528,6 +1558,9 @@ impl UiTree {
                 }
                 Element::Align(alignment) if parent_data.alignment.is_none() => {
                     parent_data.alignment = Some(*alignment)
+                }
+                Element::AlignBlock(block) if parent_data.alignment.is_none() => {
+                    parent_data.alignment = Some(crate::modifier::ParentAlignment::Block(block.0));
                 }
                 Element::FillCrossAxis(fraction)
                     if parent_data.fill_cross_axis_fraction.is_none() =>
@@ -1754,6 +1787,9 @@ impl UiTree {
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
             }
+            if !self.ruler_readers.is_empty() {
+                self.ruler_readers.retain(|(_, reader), _| *reader != id);
+            }
             for entry in &mut value.chain {
                 self.forget_entry_reads(entry.id, entry.state);
                 if entry.state & entry_state::DELEGATING != 0 {
@@ -1930,6 +1966,8 @@ impl Applier for UiTree {
         }
         value.placed = false;
         value.subtree_needs_measure = false;
+        self.tell_unplaced_going(node);
+        let Some(value) = self.get_mut(node) else { return };
         // The outermost deactivated node: its parent lays out and draws without it.
         if let Some(parent) = value.parent
             && self.get(parent).is_some_and(|parent| !parent.deactivated)

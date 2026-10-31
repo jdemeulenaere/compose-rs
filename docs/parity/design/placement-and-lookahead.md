@@ -248,6 +248,8 @@ The handle names the entry ending its coordinator, not a layer index, so it foll
 
 ## 5. Rulers
 
+Built with changes (D1218): a `Ruler` is an `Rc`d value, lazily provided values aren't cached, and there's no node bit.
+
 ```rust
 pub struct Ruler { name: &'static str, kind: RulerKind /* Vertical | Horizontal */, derivation: Option<fn(&mut PlacementScope<'_>, f32) -> f32> }
 // VerticalRuler, HorizontalRuler as Compose's, with `derived`, `min_of`, `max_of`; declared as statics.

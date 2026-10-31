@@ -1,7 +1,7 @@
 //! `ExposedDropdownMenuBox` and `ExposedDropdownMenu`, as Compose's Material 3: a menu at a text
 //! field (or another anchor) that opens it, and takes the focus unless the anchor is typed in.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_animation::MutableTransitionState;
@@ -557,7 +557,7 @@ pub fn ExposedDropdownMenu(
 pub struct ExposedDropdownMenuPositionProvider {
     top_window_insets: i32,
     vertical_margin: i32,
-    transform_origin: Cell<TransformOrigin>,
+    transform_origin: compose_runtime::OwnedState<TransformOrigin>,
 }
 
 impl ExposedDropdownMenuPositionProvider {
@@ -565,7 +565,7 @@ impl ExposedDropdownMenuPositionProvider {
         ExposedDropdownMenuPositionProvider {
             top_window_insets,
             vertical_margin: density.round_to_px(MENU_VERTICAL_MARGIN),
-            transform_origin: Cell::new(TransformOrigin::CENTER),
+            transform_origin: compose_runtime::mutable_state_of(TransformOrigin::CENTER),
         }
     }
 }

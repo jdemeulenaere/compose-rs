@@ -315,3 +315,43 @@ fn a_dragged_sheet_follows_the_finger() {
         PointerEvent::release(Offset::new(200.0, 550.0)).with_pointer(FINGER, PointerType::Touch),
     );
 }
+
+// A frame of a drag places what follows the finger and measures what's in the sheet not at all.
+// The sheet's column does measure, its `window_insets_padding` reading how far down the sheet is
+// (`SheetWindowInsets`, as Compose's: `ModalBottomSheet.kt`), its content cached.
+#[test]
+fn a_dragged_sheet_measures_nothing() {
+    use compose_ui::{Layout, measure_policy};
+    let measures = Rc::new(std::cell::Cell::new(0));
+    let m = measures.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 800), move || {
+        let m = m.clone();
+        ModalBottomSheet!(|| {}, {
+            let m = m.clone();
+            let policy = measure_policy(move |scope, _, constraints| {
+                m.set(m.get() + 1);
+                scope.layout(constraints.max_width, 400)
+            });
+            Layout(Modifier.test_tag("in the sheet"), policy, callback(|| {}));
+        });
+    });
+    ui.advance_time_by(Duration::from_millis(2000));
+    let before = measures.get();
+    assert!(before > 0);
+    let top = bounds(&mut ui, "in the sheet").top;
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(200.0, 650.0)).with_pointer(FINGER, PointerType::Touch),
+    );
+    for y in [670.0, 680.0, 690.0, 700.0] {
+        ui.host().send_pointer(
+            PointerEvent::moved(Offset::new(200.0, y), true)
+                .with_pointer(FINGER, PointerType::Touch),
+        );
+        ui.advance_time_by(Duration::from_millis(100));
+    }
+    assert!(bounds(&mut ui, "in the sheet").top > top, "it followed");
+    assert_eq!(measures.get(), before, "what's in the sheet");
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(200.0, 700.0)).with_pointer(FINGER, PointerType::Touch),
+    );
+}

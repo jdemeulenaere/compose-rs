@@ -1,7 +1,6 @@
 //! `AlertDialog`, `BasicAlertDialog`, `DropdownMenu` and `DropdownMenuItem`, as Compose's
 //! Material 3.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_animation::{MutableTransitionState, remember_transition};
@@ -382,7 +381,7 @@ struct DropdownMenuPosition {
     offset: IntOffset,
     vertical_margin: i32,
     /// Where the menu grows from, set as it's placed, as the provider's `transformOrigin`.
-    transform_origin: Cell<TransformOrigin>,
+    transform_origin: compose_runtime::OwnedState<TransformOrigin>,
 }
 
 /// The point of the menu nearest its anchor, as fractions of its size, as Compose's
@@ -638,7 +637,7 @@ pub fn DropdownMenu(
             Rc::new(DropdownMenuPosition {
                 offset,
                 vertical_margin,
-                transform_origin: Cell::new(TransformOrigin::CENTER),
+                transform_origin: compose_runtime::mutable_state_of(TransformOrigin::CENTER),
             })
         });
         let provider = position.clone() as Rc<dyn PopupPositionProvider>;

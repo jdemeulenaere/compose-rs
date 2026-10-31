@@ -83,6 +83,7 @@ impl NodeKinds {
             | NodeKinds::ON_REMEASURED.0
             | NodeKinds::ON_PLACED.0
             | NodeKinds::GLOBAL_POSITION_AWARE.0
+            | NodeKinds::UNPLACED.0
             | NodeKinds::FOCUS_TARGET.0
             | NodeKinds::FOCUS_PROPERTIES.0
             | NodeKinds::FOCUS_EVENT.0
@@ -156,6 +157,7 @@ impl NodeKinds {
         add(node.as_focus_event().is_some(), NodeKinds::FOCUS_EVENT);
         add(node.as_key_input().is_some(), NodeKinds::KEY_INPUT);
         add(node.as_global_position_aware().is_some(), NodeKinds::GLOBAL_POSITION_AWARE);
+        add(node.as_unplaced_aware().is_some(), NodeKinds::UNPLACED);
         add(node.as_parent_data().is_some(), NodeKinds::PARENT_DATA);
         // Not `SELECTABLE`: a text answers `as_selectable` by its element's `selectable`, which
         // an update changes, so the selection walks ask each node.

@@ -1274,8 +1274,7 @@ impl MeasurePolicy for SheetLayout {
             }
             return scope.layout(width, height);
         };
-        // Measured again at each frame of a slide (the offset is read below): new anchors only for
-        // a new size, as Compose's `draggableAnchors`, measured for one.
+        // New anchors only for a new size, as Compose's `draggableAnchors`, measured for one.
         if self.anchored_for.replace(Some((full, sheet_height))) != Some((full, sheet_height)) {
             // Hidden below the window; half way when it can rest there (Compose's
             // `isPartiallyExpandedAnchorAvailable` and `calculatePartiallyExpandedOffset`); expanded
@@ -1314,14 +1313,16 @@ impl MeasurePolicy for SheetLayout {
             });
             self.state.update_anchors(new_anchors, retarget);
         }
-        // Read while measuring: a frame of the slide places the sheet again only.
-        let offset = inner.anchored.offset();
-        let top = if offset.is_nan() { full } else { offset };
-        if let Some(scrim) = &scrim {
-            scope.place(scrim, 0, 0);
-        }
-        scope.place(&sheet, (width - sheet.width) / 2, top.round() as i32);
-        scope.layout(width, height)
+        let state = self.state;
+        scope.layout_with(width, height, move |placement| {
+            // Read while placing: a frame of the slide places the sheet again only.
+            let offset = state.inner().map_or(f32::NAN, |inner| inner.anchored.offset());
+            let top = if offset.is_nan() { full } else { offset };
+            if let Some(scrim) = &scrim {
+                placement.place(scrim, 0, 0);
+            }
+            placement.place(&sheet, (width - sheet.width) / 2, top.round() as i32);
+        })
     }
 
     fn debug_name(&self) -> &'static str {

@@ -258,3 +258,76 @@ fn a_plain_sheet_leaves_back_alone() {
     ui.wait_for_idle();
     assert!(state.is_open());
 }
+
+/// Counts its layer's measurements.
+struct Measures(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNode for Measures {
+    fn as_layout_aware(&mut self) -> Option<&mut dyn compose_ui::LayoutAwareModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::LayoutAwareModifierNode for Measures {
+    fn on_remeasured(&mut self, _: IntSize, _: &mut compose_ui::NodeContext<'_>) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct MeasuresElement(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl compose_ui::ModifierNodeElement for MeasuresElement {
+    type Node = Measures;
+    fn create(&self) -> Measures {
+        Measures(self.0.clone())
+    }
+    fn update(&self, _: &mut Measures) {}
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+// Compose: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/NavigationDrawer.kt, the sheet's offset read in `layout { }`
+#[test]
+fn a_drawer_sliding_places_the_sheet_and_measures_nothing() {
+    let measures = std::rc::Rc::new(std::cell::Cell::new(0));
+    let m = measures.clone();
+    let shown: std::rc::Rc<std::cell::Cell<Option<DrawerState>>> = Default::default();
+    let s = shown.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let drawer = remember_drawer_state!(DrawerValue::Closed);
+        s.set(Some(drawer));
+        let m = m.clone();
+        MaterialTheme!({
+            ModalNavigationDrawer!(
+                {
+                    ModalDrawerSheet!(
+                        drawer_state = Some(drawer),
+                        modifier = Modifier.test_tag("sheet"),
+                        {
+                            Box!(modifier = Modifier.height(compose_ui::Dp(10.0)));
+                        }
+                    );
+                },
+                drawer_state = drawer,
+                modifier = Modifier.then_custom(MeasuresElement(m.clone())),
+                {
+                    Box!(modifier = Modifier.fill_max_size());
+                }
+            );
+        });
+    });
+    // Open, its scrim and sheet are there: a drag only slides them.
+    shown.get().expect("composed").snap_to(DrawerValue::Open);
+    ui.wait_for_idle();
+    let measured = measures.get();
+    let left = ui.on_node_with_tag("sheet").fetch_semantics_snapshot().bounds.left;
+    let at = |x: f32| Offset::new(x, 100.0);
+    ui.host().send_pointer(PointerEvent::press(at(200.0)));
+    ui.host().send_pointer(PointerEvent::moved(at(150.0), true));
+    ui.wait_for_idle();
+    ui.host().send_pointer(PointerEvent::moved(at(100.0), true));
+    ui.wait_for_idle();
+    assert!(ui.on_node_with_tag("sheet").fetch_semantics_snapshot().bounds.left < left);
+    assert_eq!(measures.get(), measured);
+}

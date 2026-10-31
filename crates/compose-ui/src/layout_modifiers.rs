@@ -2,13 +2,15 @@
 //! `width`/`height`/`requiredWidth`/`requiredHeight(IntrinsicSize)` and
 //! `Modifier.layout { measurable, constraints -> … }`.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::alignment::{Alignment, HorizontalAlignment, VerticalAlignment};
 use crate::constraints::Constraints;
 use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
-use crate::unit::{Dp, IntSize};
+use crate::node_context::{NodeContext, NodeHandle};
+use crate::unit::{Density, Dp, IntOffset, IntSize};
 
 impl Modifier {
     /// Sizes the content to `ratio` (width / height), as `Modifier.aspectRatio`: the largest
@@ -95,6 +97,159 @@ impl Modifier {
         measure: impl Fn(&mut MeasureScope<'_>, Measurable, Constraints) -> MeasureResult + 'static,
     ) -> Modifier {
         self.then_custom(LayoutElement(Rc::new(measure)))
+    }
+}
+
+/// How far from a line `padding_from` keeps its layout's edges.
+#[derive(Clone, Copy, PartialEq)]
+pub enum LineSpace {
+    Dp(Dp),
+    Sp(crate::unit::TextUnit),
+}
+
+impl LineSpace {
+    /// In pixels, if it's specified.
+    fn resolved(self, density: &crate::unit::Density) -> Option<i32> {
+        match self {
+            LineSpace::Dp(dp) if dp.0.is_nan() => None,
+            LineSpace::Dp(dp) => Some(density.round_to_px(dp)),
+            LineSpace::Sp(sp) if sp.is_unspecified() => None,
+            LineSpace::Sp(sp) => {
+                Some(density.round_to_px(Dp(density.sp_to_px(sp) / density.density)))
+            }
+        }
+    }
+}
+
+impl From<Dp> for LineSpace {
+    fn from(dp: Dp) -> LineSpace {
+        LineSpace::Dp(dp)
+    }
+}
+
+impl From<crate::unit::TextUnit> for LineSpace {
+    fn from(sp: crate::unit::TextUnit) -> LineSpace {
+        LineSpace::Sp(sp)
+    }
+}
+
+impl Modifier {
+    /// Pads it so `line` is `before` from its start and `after` from its end, as
+    /// `Modifier.paddingFrom`, in `Dp` or `sp`: `Dp::UNSPECIFIED` or `TextUnit::UNSPECIFIED` for
+    /// neither. As far as its constraints allow.
+    ///
+    /// # Panics
+    ///
+    /// For a negative `Dp`, as Compose's.
+    pub fn padding_from(
+        self,
+        line: impl Into<crate::alignment_line::AlignmentLine>,
+        before: impl Into<LineSpace>,
+        after: impl Into<LineSpace>,
+    ) -> Modifier {
+        let (before, after) = (before.into(), after.into());
+        for space in [before, after] {
+            if let LineSpace::Dp(dp) = space {
+                assert!(
+                    dp.0 >= 0.0 || dp.0.is_nan(),
+                    "compose-ui: padding from an alignment line must be a non-negative number"
+                );
+            }
+        }
+        self.then_custom(LayoutData(PaddingFrom { line: line.into(), before, after }))
+    }
+
+    /// The first baseline `top` from its top and the last one `bottom` from its bottom, as
+    /// `Modifier.paddingFromBaseline`, in `Dp` or `sp`, those unspecified left out.
+    pub fn padding_from_baseline(
+        self,
+        top: impl Into<LineSpace>,
+        bottom: impl Into<LineSpace>,
+    ) -> Modifier {
+        let (top, bottom) = (top.into(), bottom.into());
+        let specified = |space: LineSpace| match space {
+            LineSpace::Dp(dp) => !dp.0.is_nan(),
+            LineSpace::Sp(sp) => !sp.is_unspecified(),
+        };
+        let mut modifier = self;
+        if specified(top) {
+            modifier =
+                modifier.padding_from(crate::alignment_line::FIRST_BASELINE, top, Dp::UNSPECIFIED);
+        }
+        if specified(bottom) {
+            modifier = modifier.padding_from(
+                crate::alignment_line::LAST_BASELINE,
+                Dp::UNSPECIFIED,
+                bottom,
+            );
+        }
+        modifier
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct PaddingFrom {
+    line: crate::alignment_line::AlignmentLine,
+    before: LineSpace,
+    after: LineSpace,
+}
+
+impl LayoutRule for PaddingFrom {
+    const NAME: &'static str = "padding_from";
+
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let horizontal = self.line.is_horizontal();
+        // Loose across the line, what's pads it.
+        let mut loose = constraints;
+        if horizontal {
+            loose.min_height = 0;
+        } else {
+            loose.min_width = 0;
+        }
+        let placeable = scope.measure(content, loose);
+        let position = scope.alignment_line(&placeable, self.line);
+        let position = if position == crate::alignment_line::AlignmentLine::UNSPECIFIED {
+            0
+        } else {
+            position
+        };
+        let (axis, axis_max) = if horizontal {
+            (placeable.height, constraints.max_height)
+        } else {
+            (placeable.width, constraints.max_width)
+        };
+        let density = scope.density();
+        let before = self.before.resolved(&density);
+        let after = self.after.resolved(&density);
+        let padding_before = (before.unwrap_or(0) - position).clamp(0, (axis_max - axis).max(0));
+        let padding_after = (after.unwrap_or(0) - axis + position)
+            .clamp(0, (axis_max - axis - padding_before).max(0));
+        let (width, height) = if horizontal {
+            (
+                placeable.width,
+                (padding_before + placeable.height + padding_after).max(constraints.min_height),
+            )
+        } else {
+            (
+                (padding_before + placeable.width + padding_after).max(constraints.min_width),
+                placeable.height,
+            )
+        };
+        let along = |size: i32, own: i32| {
+            if before.is_some() { padding_before } else { size - padding_after - own }
+        };
+        let (x, y) = if horizontal {
+            (0, along(height, placeable.height))
+        } else {
+            (along(width, placeable.width), 0)
+        };
+        scope.place_relative(&placeable, x, y);
+        scope.layout(width, height)
     }
 }
 
@@ -554,5 +709,106 @@ impl LayoutModifierNode for LayoutElement {
         constraints: Constraints,
     ) -> MeasureResult {
         (self.0)(scope, content, constraints)
+    }
+}
+
+/// What an offset moves by: fixed, or read while placing.
+#[derive(Clone)]
+enum OffsetBy {
+    Dp(Dp, Dp),
+    Px(Rc<dyn Fn(Density) -> IntOffset>),
+}
+
+/// `Modifier.offset` and its kinds, as Compose's `OffsetNode` and `OffsetPxNode`: placed in a block,
+/// so a new offset, or what its block reads, places it again and measures nothing.
+pub(crate) struct OffsetElement {
+    by: OffsetBy,
+    rtl_aware: bool,
+}
+
+impl OffsetElement {
+    pub(crate) fn dp(x: Dp, y: Dp, rtl_aware: bool) -> OffsetElement {
+        OffsetElement { by: OffsetBy::Dp(x, y), rtl_aware }
+    }
+
+    pub(crate) fn px(by: Rc<dyn Fn(Density) -> IntOffset>, rtl_aware: bool) -> OffsetElement {
+        OffsetElement { by: OffsetBy::Px(by), rtl_aware }
+    }
+}
+
+pub(crate) struct OffsetNode {
+    /// What its block reads, its update changing it.
+    by: Rc<RefCell<(OffsetBy, bool)>>,
+    handle: Option<NodeHandle>,
+}
+
+impl ModifierNodeElement for OffsetElement {
+    type Node = OffsetNode;
+
+    fn create(&self) -> OffsetNode {
+        OffsetNode { by: Rc::new(RefCell::new((self.by.clone(), self.rtl_aware))), handle: None }
+    }
+
+    fn update(&self, node: &mut OffsetNode) {
+        *node.by.borrow_mut() = (self.by.clone(), self.rtl_aware);
+        if let Some(handle) = node.handle {
+            handle.invalidate_placement();
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.rtl_aware == other.rtl_aware
+            && match (&self.by, &other.by) {
+                (OffsetBy::Dp(a, b), OffsetBy::Dp(c, d)) => a == c && b == d,
+                (OffsetBy::Px(a), OffsetBy::Px(b)) => Rc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+
+    fn name(&self) -> &'static str {
+        "offset"
+    }
+}
+
+impl ModifierNode for OffsetNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.handle = Some(context.handle());
+    }
+
+    /// Its update asks for what it needs: a placing.
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+}
+
+impl LayoutModifierNode for OffsetNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        let by = self.by.clone();
+        scope.layout_with(placeable.width, placeable.height, move |placement| {
+            let (offset, rtl_aware) = by.borrow().clone();
+            let density = placement.density();
+            let (x, y) = match offset {
+                OffsetBy::Dp(x, y) => (density.round_to_px(x), density.round_to_px(y)),
+                OffsetBy::Px(offset) => {
+                    let at = offset(density);
+                    (at.x, at.y)
+                }
+            };
+            if rtl_aware {
+                placement.place_relative(&placeable, x, y);
+            } else {
+                placement.place(&placeable, x, y);
+            }
+        })
     }
 }

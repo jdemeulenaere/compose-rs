@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod alignment_lines;
 mod annotated_string;
 mod annotated_string_builder;
 mod coordinates_in_passes;
@@ -21,6 +22,7 @@ mod node_invalidation;
 mod node_locals;
 mod node_traversal;
 mod observer_nodes;
+mod offset;
 mod only_unsafe_module;
 mod paragraph;
 mod paragraph_style;
@@ -43,6 +45,7 @@ mod review_d_panic_poisoned;
 mod review_d_support;
 mod review_groups;
 mod review_retained;
+mod rulers;
 mod single_drawing_extent;
 mod span_style;
 #[path = "../support/mod.rs"]
@@ -55,6 +58,7 @@ mod text_style_attributes;
 mod text_style_values;
 mod text_unit;
 mod ui;
+mod unplaced_aware;
 mod velocity_data;
 mod velocity_tracker;
 mod word_boundary;

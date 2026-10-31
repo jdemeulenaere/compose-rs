@@ -33,6 +33,10 @@ impl UiTree {
         }
         self.window = size;
         self.focus_requests.container_size.set(size);
+        if self.focus_requests.alignment_was_asked.get() {
+            self.focus_requests.alignment_was_asked.set(false);
+            self.note_alignment_asked_by_coordinates();
+        }
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);
@@ -49,6 +53,9 @@ impl UiTree {
         let value = self.node(root);
         if value.needs_placement || value.subtree_needs_placement {
             self.place_pass(root);
+        }
+        if !self.line_requests.is_empty() {
+            self.settle_line_requests(root, constraints);
         }
         if !self.coordinate_readers.is_empty() {
             self.place_readers_moved(root);
@@ -200,11 +207,19 @@ impl UiTree {
         if value.children_intrinsics_asked && !value.intrinsics_asked {
             self.clear_intrinsics_usage_below(node);
         }
+        // Only a line's change asks if it's measuring, and only who read one can be told of one.
+        if self.alignment_lines_read {
+            self.alignment_measure_starts(node);
+        }
         let value = self.node_mut(node);
         if value.inner_layers.is_empty() {
             // Measured, it draws again.
             self.invalidate_draw_of(node);
-            return self.measure_layer(node, 0, constraints);
+            let size = self.measure_layer(node, 0, constraints);
+            if self.alignment_lines_read {
+                self.node_mut(node).measuring = false;
+            }
+            return size;
         }
         // With inner layers, what it lays out (its children) is theirs: what's before them draws
         // again only if a layer's size changed (a moved layer draws it again: `place`), as
@@ -213,7 +228,8 @@ impl UiTree {
             value.layers.iter().map(|layer| layer.measured).collect();
         self.invalidate_inner_layers(node);
         let size = self.measure_layer(node, 0, constraints);
-        let value = self.node(node);
+        let value = self.node_mut(node);
+        value.measuring = false;
         if value.layers.len() != sizes.len()
             || value.layers.iter().zip(&sizes).any(|(layer, size)| layer.measured != *size)
         {
@@ -303,6 +319,10 @@ impl UiTree {
                     return true;
                 }
                 self.invalidate_placement_of(node);
+            }
+            // It read a line that changed.
+            if self.alignment_lines_read && self.node(node).needs_measure {
+                return true;
             }
         }
         false
@@ -416,8 +436,14 @@ impl UiTree {
     ) -> IntSize {
         let value = self.node_mut(node);
         // Its last measurement's block is over, whatever this one does. Dropped with nothing of
-        // the tree in hand: what it captured is application code's.
-        let earlier = value.placements.as_mut().and_then(|it| it.blocks.get_mut(layer)?.take());
+        // the tree in hand: what it captured is application code's. Most nodes have neither.
+        let (earlier, earlier_rulers) = match &mut value.placements {
+            Some(placements) => (
+                placements.blocks.get_mut(layer).and_then(Option::take),
+                placements.rulers.get_mut(layer).and_then(Option::take),
+            ),
+            None => (None, None),
+        };
         drop(earlier);
         let value = self.node_mut(node);
         let result = if layer < value.layout_indices.len() {
@@ -509,6 +535,7 @@ impl UiTree {
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
         let value = self.node_mut(node);
+        let has_placements = value.placements.is_some();
         let layout_aware = value.kinds.any(NodeKinds::LAYOUT_AWARE);
         let value = &mut value.layers[layer];
         let resized = value.measured != measured;
@@ -519,12 +546,19 @@ impl UiTree {
         if value.offset != offset {
             value.offset = offset;
             self.invalidate_position(node, layer);
+            if self.alignment_lines_read {
+                self.alignment_position_changed(node, layer);
+            }
         }
         if resized {
             self.measure_result_changed(node, layer);
         }
         if layout_aware {
             self.layer_measured(node, layer, measured);
+        }
+        if has_placements {
+            self.rulers_measured(node, layer, earlier_rulers);
+            self.alignment_lines_measured(node, layer);
         }
         size
     }
@@ -619,7 +653,9 @@ impl UiTree {
         match result {
             Ok(result) => result,
             Err(panic) => {
-                self.node_mut(node).constraints = None;
+                let value = self.node_mut(node);
+                value.constraints = None;
+                value.measuring = false;
                 self.invalidate_measure(node);
                 panic::resume_unwind(panic)
             }
@@ -642,6 +678,9 @@ impl UiTree {
             if entry.offset != offset {
                 entry.offset = offset;
                 self.invalidate_position(measurable.node, measurable.layer as usize);
+                if self.alignment_lines_read {
+                    self.alignment_position_changed(measurable.node, measurable.layer as usize);
+                }
             }
         }
     }
@@ -694,6 +733,9 @@ impl UiTree {
         }
         if moved {
             self.invalidate_position(node, layer);
+            if self.alignment_lines_read {
+                self.alignment_position_changed(node, layer);
+            }
         }
         if told {
             self.placed_layers.push((node, layer as u32));
@@ -705,7 +747,7 @@ impl UiTree {
 }
 
 /// The offset centering a layer measured outside its constraints in the size its parent sees.
-fn centering(layer: &Layer) -> IntOffset {
+pub(crate) fn centering(layer: &Layer) -> IntOffset {
     IntOffset::new(
         (layer.size.width - layer.measured.width) / 2,
         (layer.size.height - layer.measured.height) / 2,

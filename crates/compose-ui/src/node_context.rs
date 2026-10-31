@@ -27,6 +27,8 @@ pub(crate) enum Invalidation {
     Measurement,
     /// `LayoutModifierNode.invalidatePlacement`: its blocks run; a node with none is measured.
     Placement,
+    /// `invalidateRulers`.
+    Rulers,
     /// `LayoutModifierNode.invalidateLayer`: the graphics layer's properties.
     Layer,
     /// `SemanticsModifierNode.invalidateSemantics`.
@@ -286,6 +288,12 @@ impl NodeContext<'_> {
     /// Measures the node's layout node again, as `invalidateMeasurement`.
     pub fn invalidate_measurement(&mut self) {
         self.invalidate(Invalidation::Measurement);
+    }
+
+    /// Works out again the rulers its layout node provides, as `invalidateRulers`: who read one
+    /// that changed places again.
+    pub fn invalidate_rulers(&mut self) {
+        self.invalidate(Invalidation::Rulers);
     }
 
     /// Places the node's layout node again, as `invalidatePlacement`: its placement blocks run,
@@ -593,6 +601,11 @@ impl NodeHandle {
     /// As `LayoutModifierNode.invalidatePlacement`.
     pub fn invalidate_placement(&self) {
         self.request(Invalidation::Placement);
+    }
+
+    /// As `invalidateRulers`.
+    pub fn invalidate_rulers(&self) {
+        self.request(Invalidation::Rulers);
     }
 
     /// As `LayoutModifierNode.invalidateLayer`.

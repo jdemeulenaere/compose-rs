@@ -137,6 +137,12 @@ impl ReadObserver {
         self.observe_with(key, false, f)
     }
 
+    /// Like [`observe`](Self::observe), keeping what earlier runs under `key` read: code that runs
+    /// a part of what's observed there, ahead of the rest.
+    pub fn observe_adding<R>(&self, key: u64, f: impl FnOnce() -> R) -> R {
+        self.observe_inner(key, false, true, f)
+    }
+
     /// Like [`observe`](Self::observe), recording reads made during composition too, instead of
     /// registering them with the composing scope: a derived state's calculation.
     pub(crate) fn observe_exclusive<R>(&self, key: u64, f: impl FnOnce() -> R) -> R {
@@ -144,6 +150,16 @@ impl ReadObserver {
     }
 
     fn observe_with<R>(&self, key: u64, exclusive: bool, f: impl FnOnce() -> R) -> R {
+        self.observe_inner(key, exclusive, false, f)
+    }
+
+    fn observe_inner<R>(
+        &self,
+        key: u64,
+        exclusive: bool,
+        adding: bool,
+        f: impl FnOnce() -> R,
+    ) -> R {
         let previous = with_runtime(|runtime| {
             // Inside an observation of the same key (a node's layout modifiers around its
             // policy), the reads add to it, seen from here: a `without_read_observation` around
@@ -160,7 +176,9 @@ impl ReadObserver {
             let epoch = match runtime.observers.entry(self.index, self.serial) {
                 Some(entry) => {
                     let epoch = entry.epochs.entry(key).or_insert(0);
-                    *epoch = epoch.wrapping_add(1);
+                    if !adding {
+                        *epoch = epoch.wrapping_add(1);
+                    }
                     *epoch
                 }
                 None => return runtime.observing,

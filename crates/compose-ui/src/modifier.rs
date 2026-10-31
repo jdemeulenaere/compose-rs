@@ -81,7 +81,30 @@ impl Modifier {
 
     /// Moves the content by `x`, `y` without changing its size, as `Modifier.offset`.
     pub fn offset(self, x: Dp, y: Dp) -> Modifier {
-        self.then_element(Element::Offset(x, y))
+        self.then_custom(crate::layout_modifiers::OffsetElement::dp(x, y, true))
+    }
+
+    /// Moves the content by `x`, `y` to the right and down, whatever the layout's direction, as
+    /// `Modifier.absoluteOffset`.
+    pub fn absolute_offset(self, x: Dp, y: Dp) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::dp(x, y, false))
+    }
+
+    /// Moves the content by what `offset` says, as `Modifier.offset { }`: read while placing, so
+    /// what it reads places it again and measures nothing.
+    pub fn offset_with(
+        self,
+        offset: impl Fn(crate::unit::Density) -> crate::unit::IntOffset + 'static,
+    ) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::px(Rc::new(offset), true))
+    }
+
+    /// `offset_with`, whatever the layout's direction, as `Modifier.absoluteOffset { }`.
+    pub fn absolute_offset_with(
+        self,
+        offset: impl Fn(crate::unit::Density) -> crate::unit::IntOffset + 'static,
+    ) -> Modifier {
+        self.then_custom(crate::layout_modifiers::OffsetElement::px(Rc::new(offset), false))
     }
 
     /// A size within the incoming constraints, as `Modifier.size`'s overloads: `size(40.dp())`
@@ -205,6 +228,30 @@ impl Modifier {
     /// `VerticalAlignment`, a `ColumnScope` a `HorizontalAlignment`.
     pub fn align<S: AlignScope>(self, _scope: S, alignment: S::Alignment) -> Modifier {
         self.then_element(Element::Align(S::parent_alignment(alignment)))
+    }
+
+    /// Aligns it across its row or column by `line`, as `alignBy(alignmentLine)`: its line and those
+    /// of its siblings aligned by one coincide, as far as that takes. A form of `align`, the
+    /// outermost of them winning.
+    pub fn align_by<S: AlignByScope>(self, _scope: S, line: S::Line) -> Modifier {
+        self.then_element(Element::Align(ParentAlignment::Line(line.into())))
+    }
+
+    /// `align_by` the first baseline, as `RowScope.alignByBaseline`.
+    pub fn align_by_baseline(self, scope: RowScope) -> Modifier {
+        self.align_by(scope, crate::alignment_line::FIRST_BASELINE)
+    }
+
+    /// `align_by` where `block` says it is, as `alignBy(alignmentLineBlock)`: another closure is
+    /// another modifier, as Compose's lambda.
+    pub fn align_by_block<S: AlignByScope>(
+        self,
+        _scope: S,
+        block: impl Fn(&mut crate::layout::Measured<'_, '_>) -> i32 + 'static,
+    ) -> Modifier {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.then_element(Element::AlignBlock(Rc::new((id, Box::new(block)))))
     }
 
     /// Parent data filling `fraction` of a flow layout's line across it: what foundation's
@@ -722,6 +769,10 @@ pub enum ParentAlignment {
     Box(Alignment),
     Horizontal(HorizontalAlignment),
     Vertical(VerticalAlignment),
+    /// `align_by` a line: its siblings' and its own lines coincide.
+    Line(crate::alignment_line::AlignmentLine),
+    /// `align_by_block`, by which closure: compared, so a new one is told to the parent.
+    Block(u32),
 }
 
 /// The data a child gives its parent's measure policy, as Compose's parent data modifiers.
@@ -742,6 +793,19 @@ pub trait WeightScope: Copy {}
 pub trait AlignScope: Copy {
     type Alignment;
     fn parent_alignment(alignment: Self::Alignment) -> ParentAlignment;
+}
+
+/// A scope whose children take an `align_by`, what kind of line saying which way it aligns.
+pub trait AlignByScope: Copy {
+    type Line: Into<crate::alignment_line::AlignmentLine>;
+}
+
+impl AlignByScope for RowScope {
+    type Line = crate::alignment_line::HorizontalAlignmentLine;
+}
+
+impl AlignByScope for ColumnScope {
+    type Line = crate::alignment_line::VerticalAlignmentLine;
 }
 
 /// The content scope of a `Row`: a token only a `Row` makes, so its scoped modifiers can't be
@@ -821,12 +885,13 @@ pub(crate) use crate::clickable::Clickable;
 #[derive(Clone)]
 pub(crate) enum Element {
     Padding(PaddingValues),
-    Offset(Dp, Dp),
     MinimumTouchTarget(Dp),
     Size(SizeSpec),
     Fill(Fill),
     Weight(f32, bool),
     Align(ParentAlignment),
+    /// `align_by_block`: `Align(Block)` read from the elements, with the block it names.
+    AlignBlock(Rc<(u32, crate::layout::AlignBlockFn)>),
     FillCrossAxis(f32),
     Background(Color, Shape),
     /// A solid border (a brush's is a custom element, as `background_with`'s).
@@ -859,12 +924,12 @@ impl Element {
         const ANY: NodeKinds = NodeKinds::ANY;
         Some(match self {
             Element::Padding(_)
-            | Element::Offset(..)
             | Element::MinimumTouchTarget(_)
             | Element::Size(_)
             | Element::Fill(_) => ANY.with(NodeKinds::LAYOUT),
             Element::Weight(..)
             | Element::Align(_)
+            | Element::AlignBlock(_)
             | Element::ZIndex(_)
             | Element::FillCrossAxis(_) => ANY,
             Element::LazyItemBoundary => ANY.with(NodeKinds::REPAINT_BOUNDARY),
@@ -904,7 +969,6 @@ impl Element {
         use Element::*;
         match (self, other) {
             (Padding(a), Padding(b)) => a == b,
-            (Offset(a, b), Offset(c, d)) => a == c && b == d,
             (MinimumTouchTarget(a), MinimumTouchTarget(b)) => a == b,
             (Size(a), Size(b)) => a == b,
             (Fill(a), Fill(b)) => a == b,
@@ -937,7 +1001,6 @@ impl fmt::Debug for Element {
                 "padding({:?}, {:?}, {:?}, {:?})",
                 padding.start, padding.top, padding.end, padding.bottom
             ),
-            Offset(x, y) => write!(formatter, "offset({x:?}, {y:?})"),
             MinimumTouchTarget(size) => write!(formatter, "minimum_touch_target({size:?})"),
             Size(spec) => {
                 let bound =
@@ -965,6 +1028,7 @@ impl fmt::Debug for Element {
             },
             Weight(weight, fill) => write!(formatter, "weight({weight}, {fill})"),
             Align(alignment) => write!(formatter, "align({alignment:?})"),
+            AlignBlock(_) => write!(formatter, "align_by_block"),
             FillCrossAxis(fraction) => write!(formatter, "fill_cross_axis({fraction})"),
             Background(color, shape) => write!(formatter, "background({color:?}, {shape:?})"),
             Border(width, color, shape) => {
@@ -1154,7 +1218,20 @@ pub trait ModifierNode: Any {
         None
     }
 
+    /// A text's first and last baselines in its layer, if this node's a layout that has them:
+    /// asked only by who reads one, so a text keeps nothing for it in the tree. A change is told
+    /// with `MeasureScope::baselines_changed`.
+    fn baselines(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     /// `GlobalPositionAwareModifierNode` (`on_globally_positioned`).
+    fn as_unplaced_aware(
+        &mut self,
+    ) -> Option<&mut dyn crate::layout_callbacks::UnplacedAwareModifierNode> {
+        None
+    }
+
     fn as_global_position_aware(
         &mut self,
     ) -> Option<&mut dyn crate::layout_callbacks::GlobalPositionAwareModifierNode> {

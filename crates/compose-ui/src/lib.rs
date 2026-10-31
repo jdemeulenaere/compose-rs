@@ -13,6 +13,7 @@
 extern crate compose_runtime as compose;
 
 mod alignment;
+mod alignment_line;
 mod annotated;
 mod back;
 mod border;
@@ -78,6 +79,7 @@ mod prefetch;
 mod remeasurement;
 mod render;
 pub mod retained_values;
+mod ruler;
 mod semantics;
 mod semantics_node;
 mod semantics_properties;
@@ -172,6 +174,9 @@ pub mod platform {
 pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
+pub use alignment_line::{
+    AlignmentLine, FIRST_BASELINE, HorizontalAlignmentLine, LAST_BASELINE, VerticalAlignmentLine,
+};
 pub use annotated::{
     AnnotatedRange, AnnotatedString, AnnotatedStringBuilder, Annotation, Bullet, LinkAnnotation,
     LinkInteractionListener, SpanRange, StringAnnotation, TextLinkStyles, TtsAnnotation,
@@ -233,6 +238,7 @@ pub use interaction::{
     PressInteraction,
 };
 pub use intl::{LOCAL_LOCALE_LIST, Locale, LocaleList};
+pub use layout::{AlignByBlock, Measured};
 pub use layout::{
     EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
@@ -240,8 +246,11 @@ pub use layout::{
 };
 pub use layout_callbacks::{
     GlobalPositionAwareModifierNode, LayoutAwareModifierNode, MeasuredSizeAwareModifierNode,
+    UnplacedAwareModifierNode,
 };
+pub use layout_modifiers::LineSpace;
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
+pub use modifier::AlignByScope;
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,
     FocusEventModifierNode, FocusRequesterModifierNode, FocusTargetModifierNode, InspectorInfo,
@@ -289,6 +298,7 @@ pub use prefetch::{
     PrefetchScheduler, prefetch_now,
 };
 pub use remeasurement::{Remeasurement, RemeasurementModifier};
+pub use ruler::{HorizontalRuler, RectRulers, Ruler, RulerScope, VerticalRuler};
 pub use semantics::{
     AccessibilityAction, ActionFn, AnySemanticsPropertyKey, CollectionInfo, CollectionItemInfo,
     ColorProducer, CustomAccessibilityAction, GetScrollViewportLengthFn, GetTextLayoutResultFn,

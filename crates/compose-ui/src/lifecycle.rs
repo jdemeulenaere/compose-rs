@@ -362,6 +362,7 @@ impl UiTree {
 
     /// Marks `node`'s entries detached, as `markAsDetached`.
     fn mark_detached(&mut self, node: NodeId) {
+        self.reset_alignment_lines(node);
         self.forget_semantics(node);
         let count = self.get(node).map_or(0, |value| value.chain.len());
         for index in 0..count {
@@ -429,6 +430,11 @@ impl UiTree {
     pub(crate) fn detach_subtree(&mut self, root: NodeId) {
         self.focus_subtree_detaching(root);
         let nodes = self.subtree(root);
+        if !self.unplaced_aware.is_empty() {
+            for &node in &nodes {
+                self.tell_unplaced_going(node);
+            }
+        }
         for &node in &nodes {
             self.for_custom_entries(node, entry_state::ATTACH_RAN, true, detach_with_delegates);
         }
@@ -746,6 +752,7 @@ impl UiTree {
         match what {
             Invalidation::Draw => self.invalidate_draw_of_entry(node, index),
             Invalidation::Placement => self.invalidate_placement_of(node),
+            Invalidation::Rulers => self.invalidate_rulers_of(node),
             Invalidation::Measurement => self.invalidate_layout_of(node),
             Invalidation::Layer => self.invalidate_layer_of_entry(node, index),
             // Computed again when next asked; the frame says they may have changed.

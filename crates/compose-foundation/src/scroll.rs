@@ -419,7 +419,7 @@ impl ModifierNodeElement for ScrollElement {
             overscroll: self.overscroll.clone(),
             local_overscroll: None,
             drag: DragScroller::along(self.vertical),
-            laid_out: 0,
+            laid_out: Rc::default(),
             rtl: false,
         }
     }
@@ -545,8 +545,8 @@ pub(crate) struct ScrollNode {
     local_overscroll: Option<(Rc<dyn OverscrollFactory>, Rc<dyn OverscrollEffect>)>,
     reverse_scrolling: bool,
     drag: DragScroller,
-    /// The offset the last layout used.
-    laid_out: i32,
+    /// The offset the last placing used.
+    laid_out: Rc<Cell<i32>>,
     /// Horizontal in a right-to-left layout: its content starts at the right.
     rtl: bool,
 }
@@ -703,7 +703,7 @@ impl ModifierNode for ScrollNode {
         let mirrored = self.mirrored(self.rtl);
         let (start, end, length) = scroll_axis(rect, viewport, self.vertical, mirrored);
         // Where it will be once the scrolling asked for (not yet laid out) is.
-        let pending = (self.state.value() - self.laid_out) as f32;
+        let pending = (self.state.value() - self.laid_out.get()) as f32;
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch_raw_delta(delta) };
         Some(scrolled_rect(rect, used, self.vertical, mirrored))
@@ -827,35 +827,43 @@ impl LayoutModifierNode for ScrollNode {
         let height = constraints.constrain_height(placeable.height);
         let max =
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
-        // Before placing: the value is coerced into the new range at once, as Compose's.
-        self.state.set_max_value(max);
-        if let Some(states) = self.state.object.try_get() {
-            states.reverse_scrolling.set(self.reverse_scrolling);
-        }
-        let viewport = if self.vertical { height } else { width };
-        if self.state.viewport_size() != viewport {
-            self.state.write(self.state.viewport, viewport);
-        }
-        if let Some(states) = self.state.object.try_get() {
-            let content = if self.vertical { placeable.height } else { placeable.width };
-            if states.content_size.try_get() != Some(content) {
-                let _ = states.content_size.try_set(content);
+        // Before placing: the value is coerced into the new range at once, as Compose's. Unobserved,
+        // as its `maxValue` setter: what it reads here is what it writes, not what measures it.
+        compose_runtime::snapshots::Snapshot::without_read_observation(|| {
+            self.state.set_max_value(max);
+            if let Some(states) = self.state.object.try_get() {
+                states.reverse_scrolling.set(self.reverse_scrolling);
             }
-        }
-        let value = self.state.value().clamp(0, max);
-        self.laid_out = value;
-        // Scrolled from the end when reversed, as Compose's `ScrollNode`.
-        let offset = if self.reverse_scrolling { value - max } else { -value };
-        // Relatively: a horizontal scroll's content starts at the right in a right-to-left
-        // layout, and scrolls toward the left.
-        scope.with_motion_frame_of_reference_placement(|scope| {
-            if self.vertical {
-                scope.place_relative(&placeable, 0, offset);
-            } else {
-                scope.place_relative(&placeable, offset, 0);
+            let viewport = if self.vertical { height } else { width };
+            if self.state.viewport_size() != viewport {
+                self.state.write(self.state.viewport, viewport);
+            }
+            if let Some(states) = self.state.object.try_get() {
+                let content = if self.vertical { placeable.height } else { placeable.width };
+                if states.content_size.try_get() != Some(content) {
+                    let _ = states.content_size.try_set(content);
+                }
             }
         });
-        scope.layout(width, height)
+        let (state, laid_out) = (self.state, self.laid_out.clone());
+        let (vertical, reverse_scrolling) = (self.vertical, self.reverse_scrolling);
+        // Read while placing: a scroll places the content again and measures nothing, as Compose's
+        // `ScrollNode`.
+        scope.layout_with(width, height, move |placement| {
+            let value = state.value().clamp(0, max);
+            laid_out.set(value);
+            // Scrolled from the end when reversed.
+            let offset = if reverse_scrolling { value - max } else { -value };
+            // Relatively: a horizontal scroll's content starts at the right in a right-to-left
+            // layout, and scrolls toward the left.
+            placement.with_motion_frame_of_reference_placement(|placement| {
+                if vertical {
+                    placement.place_relative(&placeable, 0, offset);
+                } else {
+                    placement.place_relative(&placeable, offset, 0);
+                }
+            });
+        })
     }
 }
 

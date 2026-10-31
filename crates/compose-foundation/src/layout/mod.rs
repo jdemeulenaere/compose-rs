@@ -12,9 +12,9 @@ use std::rc::Rc;
 use compose_runtime::{composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    Alignment, Constraints, HorizontalAlignment, IntrinsicMeasurable, IntrinsicMeasureScope,
-    Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier, ParentAlignment,
-    Placeable, VerticalAlignment, empty_measure_policy,
+    Alignment, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
+    IntrinsicMeasureScope, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
+    Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
 };
 use smallvec_free::Buffer;
 
@@ -166,8 +166,11 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         let mut fixed_space = 0i32;
         let mut cross_size = 0i32;
         let mut space_after_last = 0i32;
+        let mut any_align_by = false;
         for (index, &measurable) in measurables.iter().enumerate() {
-            if let Some((weight, _)) = scope.parent_data(measurable).weight {
+            let data = scope.parent_data(measurable);
+            any_align_by |= is_align_by(data.alignment);
+            if let Some((weight, _)) = data.weight {
                 total_weight += weight;
                 weighted += 1;
                 continue;
@@ -226,8 +229,30 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
             weighted_space = (weighted_space + weighted_gaps).clamp(0, room.max(0));
         }
 
+        // Those aligned by a line, what's before and after the line they share.
+        let mut before_line = 0;
+        let mut after_line = 0;
+        if any_align_by {
+            for (index, &measurable) in measurables.iter().enumerate() {
+                let Some(placeable) = placeables[index] else { continue };
+                let Some(position) = line_position(scope, measurable, &placeable) else { continue };
+                let size = self.cross(&placeable);
+                if position == AlignmentLine::UNSPECIFIED {
+                    after_line = after_line.max(0);
+                } else {
+                    before_line = before_line.max(position);
+                    after_line = after_line.max(size - position);
+                }
+            }
+        }
+
         let main_size = (fixed_space + weighted_space).max(0).max(axis.main_min).min(axis.main_max);
-        let cross_size = cross_size.max(axis.cross_min).min(axis.cross_max);
+        let cross_size = if any_align_by {
+            // As Compose's: what they take, what doesn't fit left to the constraints.
+            cross_size.max(axis.cross_min).max(before_line + after_line)
+        } else {
+            cross_size.max(axis.cross_min).min(axis.cross_max)
+        };
 
         // Main-axis positions from the arrangement, cross-axis ones from the alignments.
         let mut sizes: Buffer<i32> = Buffer::new(count);
@@ -245,14 +270,27 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         self.arrangement.arrange(main_size, sizes, direction, &density, positions);
         for (index, &measurable) in measurables.iter().enumerate() {
             let Some(placeable) = placeables[index] else { continue };
-            let mut bias = self.cross_bias_of(scope, measurable);
-            // A column's start is on the right in a right-to-left layout.
-            if self.orientation == Orientation::Vertical
-                && scope.layout_direction() == compose_ui::LayoutDirection::Rtl
-            {
-                bias = -bias;
-            }
-            let cross = VerticalAlignment { bias }.align(self.cross(&placeable), cross_size);
+            let rtl_column = self.orientation == Orientation::Vertical
+                && scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
+            let by_line =
+                if any_align_by { line_position(scope, measurable, &placeable) } else { None };
+            let cross = if let Some(position) = by_line {
+                // As Compose's `AlignmentLineCrossAxisAlignment`.
+                if position == AlignmentLine::UNSPECIFIED {
+                    0
+                } else if rtl_column {
+                    cross_size - self.cross(&placeable) - (before_line - position)
+                } else {
+                    before_line - position
+                }
+            } else {
+                let mut bias = self.cross_bias_of(scope, measurable);
+                // A column's start is on the right in a right-to-left layout.
+                if rtl_column {
+                    bias = -bias;
+                }
+                VerticalAlignment { bias }.align(self.cross(&placeable), cross_size)
+            };
             match self.orientation {
                 Orientation::Horizontal => scope.place(&placeable, positions[index], cross),
                 Orientation::Vertical => scope.place(&placeable, cross, positions[index]),
@@ -336,6 +374,26 @@ impl RowColumnMeasurePolicy {
                 |scope, child, main| child_intrinsic(scope, child, max, width, main),
             )
         }
+    }
+}
+
+/// Whether it's aligned by a line, as Compose's `isRelative`.
+fn is_align_by(alignment: Option<ParentAlignment>) -> bool {
+    matches!(alignment, Some(ParentAlignment::Line(_) | ParentAlignment::Block(_)))
+}
+
+/// Where its line is, if it's aligned by one.
+fn line_position(
+    scope: &mut MeasureScope<'_>,
+    measurable: Measurable,
+    placeable: &Placeable,
+) -> Option<i32> {
+    match scope.parent_data(measurable).alignment {
+        Some(ParentAlignment::Line(line)) => Some(scope.alignment_line(placeable, line)),
+        Some(ParentAlignment::Block(_)) => {
+            Some(scope.align_by_block_position(measurable, placeable))
+        }
+        _ => None,
     }
 }
 

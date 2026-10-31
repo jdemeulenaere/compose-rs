@@ -176,6 +176,33 @@ impl Placeable {
     }
 }
 
+/// What `Modifier::align_by_block` works out a line from, as Compose's `Measured`.
+pub struct Measured<'s, 'a> {
+    scope: &'s mut MeasureScope<'a>,
+    placeable: &'s Placeable,
+}
+
+impl Measured<'_, '_> {
+    /// Its width as it measured itself, as `measuredWidth`.
+    pub fn measured_width(&self) -> i32 {
+        self.placeable.measured.width
+    }
+
+    /// Its height as it measured itself, as `measuredHeight`.
+    pub fn measured_height(&self) -> i32 {
+        self.placeable.measured.height
+    }
+
+    /// Where `line` is in it, as `get`.
+    pub fn alignment_line(&mut self, line: impl Into<crate::alignment_line::AlignmentLine>) -> i32 {
+        self.scope.alignment_line(self.placeable, line)
+    }
+}
+
+/// `Modifier::align_by_block`'s block.
+pub type AlignByBlock = dyn Fn(&mut Measured<'_, '_>) -> i32;
+pub(crate) type AlignBlockFn = Box<AlignByBlock>;
+
 /// The size a policy or layout modifier measured, from [`MeasureScope::layout`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MeasureResult {
@@ -584,6 +611,96 @@ impl<'a> MeasureScope<'a> {
             drop(earlier);
         }
         result
+    }
+
+    /// Gives what's returned next alignment lines, as `layout(width, height, alignmentLines)`.
+    /// Called before [`layout`](Self::layout) or one of its kinds; another call replaces them.
+    pub fn provide_alignment_lines<L: Into<crate::alignment_line::AlignmentLine>>(
+        &mut self,
+        lines: impl IntoIterator<Item = (L, i32)>,
+    ) -> &mut Self {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            // Application code's iterator, before the tree's taken.
+            let lines: smallvec::SmallVec<[(crate::alignment_line::AlignmentLine, i32); 4]> =
+                lines.into_iter().map(|(line, position)| (line.into(), position)).collect();
+            self.base.tree.enter().give_alignment_lines(node, layer, lines);
+        }
+        self
+    }
+
+    /// Where a child given `Modifier::align_by_block` says its line is.
+    #[doc(hidden)]
+    pub fn align_by_block_position(
+        &mut self,
+        measurable: Measurable,
+        placeable: &Placeable,
+    ) -> i32 {
+        let block = (self.base.tree.node(measurable.node).modifier.elements().iter())
+            .find_map(|element| match element {
+                crate::modifier::Element::AlignBlock(block) => Some(block.clone()),
+                _ => None,
+            })
+            .expect("compose-ui: its parent data says it has one");
+        (block.1)(&mut Measured { scope: self, placeable })
+    }
+
+    /// `ModifierNode::baselines` of the node measuring changed, or came: who read one hears.
+    pub fn baselines_changed(&mut self) {
+        if self.base.tree.alignment_lines_read {
+            let node = self.base.node;
+            self.base.tree.enter().baselines_changed(node);
+        }
+    }
+
+    /// `placeable[line]`: its position in the placeable, or `AlignmentLine::UNSPECIFIED` where
+    /// nothing placed gives it. Blocks waiting below it run now, not again. What it reads changing
+    /// measures this again. In an intrinsic measurement, unspecified.
+    pub fn alignment_line(
+        &mut self,
+        placeable: &Placeable,
+        line: impl Into<crate::alignment_line::AlignmentLine>,
+    ) -> i32 {
+        if self.intrinsic.is_some() {
+            return crate::alignment_line::AlignmentLine::UNSPECIFIED;
+        }
+        let (reader, measurable) = (self.base.node, placeable.measurable);
+        self.base.tree.enter().read_alignment_line(reader, measurable, line.into(), false)
+    }
+
+    /// `layout_with`, giving `rulers` to what's in it, as `layout(width, height, rulers = …) { … }`:
+    /// worked out each time it's placed, what they read placing it again.
+    pub fn layout_with_rulers(
+        &mut self,
+        width: i32,
+        height: i32,
+        rulers: impl Fn(&mut crate::ruler::RulerScope) + 'static,
+        block: impl Fn(&mut crate::placement::PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            let source = crate::ruler::RulerSource::Block(Rc::new(rulers));
+            self.base.tree.enter().set_rulers(node, layer, source);
+        }
+        self.layout_with(width, height, block)
+    }
+
+    /// `layout_with`, giving rulers one at a time as they're read, as `layout(width, height,
+    /// isRulerProvided = …, rulerProvider = …) { … }`.
+    pub fn layout_with_ruler_provider(
+        &mut self,
+        width: i32,
+        height: i32,
+        is_provided: impl Fn(&crate::ruler::Ruler) -> bool + 'static,
+        provider: impl Fn(&mut crate::ruler::RulerScope, &crate::ruler::Ruler) + 'static,
+        block: impl Fn(&mut crate::placement::PlacementScope<'_>) + 'static,
+    ) -> MeasureResult {
+        if self.intrinsic.is_none() {
+            let (node, layer) = (self.base.node, self.layer);
+            let source = crate::ruler::RulerSource::Lazily(Rc::new(is_provided), Rc::new(provider));
+            self.base.tree.enter().set_rulers(node, layer, source);
+        }
+        self.layout_with(width, height, block)
     }
 
     /// The result of a measurement of `width` by `height`, as `MeasureScope.layout`.

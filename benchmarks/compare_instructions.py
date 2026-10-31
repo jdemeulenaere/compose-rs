@@ -40,6 +40,7 @@ SCENARIOS = {
     "first_frame_clickables": 10,
     "first_frame_scrollables": 30,
     "list_scroll": 3000,
+    "column_scroll": 3000,
     "feed_pixel": 5000,
     "feed_step": 1000,
     "stress_pixel": 3000,
