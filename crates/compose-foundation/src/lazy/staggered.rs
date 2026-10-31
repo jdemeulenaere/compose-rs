@@ -1385,6 +1385,7 @@ fn LazyStaggeredGrid(
             overscroll: overscroll_effect,
         })
         .focus_group();
+    let modifier = item_animator::displaying(modifier, &list.inner_or_detached(), list);
     let items = ItemsRef(items);
     let holder = compose_runtime::remember_saveable_state_holder();
     // Until it's measured, its items' likely constraints: a lane's, in the space around.

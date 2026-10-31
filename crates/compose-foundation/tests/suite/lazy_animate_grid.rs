@@ -829,3 +829,36 @@ fn a_shorter_cell_doesnt_stop_a_cell_of_its_line_from_moving() {
         });
     }
 }
+
+/// Right to left, a vertical grid's cells go the other way across it, and moves with them.
+#[test]
+fn cells_right_to_left_swap_on_screen() {
+    let list = mutable_state_of(vec![0, 1]);
+    let handle = list.handle();
+    let params = PARAMS[0];
+    let state = LazyGridState::new(0, 0);
+    let state_handle = *state;
+    let mut ui = paused(IntSize::new(1000, 1000), move || {
+        let _ = &state;
+        let items = handle.get();
+        compose_runtime::CompositionLocalProvider(
+            compose_ui::LOCAL_LAYOUT_DIRECTION.provides(compose_ui::LayoutDirection::Rtl),
+            || {
+                let items = items.clone();
+                lazy_grid(params, GridOptions::new(2, ITEM), state_handle, move |scope| {
+                    plain_items(params)(&scope, items.clone());
+                });
+            },
+        );
+    });
+    assert_positions_of(&mut ui, params, &[(0, f(ITEM), 0.0), (1, 0.0, 0.0)], 0.0);
+    ui.run_on_ui_thread(|_| list.set(vec![1, 0]));
+    on_animation_frame(&mut ui, |ui, fraction| {
+        assert_positions_of(
+            ui,
+            params,
+            &[(0, f(ITEM) - f(ITEM) * fraction, 0.0), (1, f(ITEM) * fraction, 0.0)],
+            fraction,
+        );
+    });
+}

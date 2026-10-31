@@ -16,7 +16,8 @@
 //!   a placement as Compose's: animating, an item is neither composed nor measured again, and the
 //!   list only when an animation that it read ends.
 //! - An item removed from the data goes at once, as Compose's: what fades out is what it last
-//!   drew, drawn after the list's content ([`ItemAnimator::draw_disappearing`]).
+//!   drew, drawn after the list's content ([`ItemAnimator::draw_disappearing`]), by a node the list
+//!   has only once an item has had the modifier ([`displaying`]).
 //!
 //! All of this keeps to keys and offsets, not to how an item got composed: subcomposition (C8)
 //! takes `kept` away and little else.
@@ -673,10 +674,11 @@ impl KeyIndex {
 const KEY_SLIDE: usize = 30;
 
 /// The animator of a list, a grid or a staggered grid, as `LazyLayoutItemAnimator`.
-#[derive(Default)]
 pub(super) struct ItemAnimator {
     /// A child with the modifier has been measured.
     any_specs: Cell<bool>,
+    /// The same as state, for the list's composition: it draws what's removed from then on.
+    displays: OwnedState<bool>,
     info: RefCell<HashMap<u64, ItemInfo>>,
     /// Each item with the modifier's node, by key.
     items: RefCell<HashMap<u64, Weak<ItemLayout>>>,
@@ -694,9 +696,92 @@ pub(super) struct ItemAnimator {
     display: RefCell<Option<NodeHandle>>,
 }
 
+impl Default for ItemAnimator {
+    fn default() -> ItemAnimator {
+        ItemAnimator {
+            any_specs: Cell::new(false),
+            displays: mutable_state_of(false),
+            info: RefCell::default(),
+            items: RefCell::default(),
+            previous: RefCell::default(),
+            first_visible: Cell::new(0),
+            previous_main_size: Cell::new(None),
+            disappearing: RefCell::default(),
+            kept: RefCell::default(),
+            consumed: Cell::new(0),
+            skip_animation: Cell::new(false),
+            scope: RefCell::default(),
+            display: RefCell::default(),
+        }
+    }
+}
+
+/// `modifier` for a list's layout, with what draws its items removed once one of them has
+/// `animate_item`: the list's last modifier, so no other node moves for it. As
+/// `DisplayingDisappearingItemsElement`, which every list has in Compose; a drawing node costs a list
+/// on each frame, so none has it here until it's of use.
+pub(super) fn displaying(
+    modifier: Modifier,
+    inner: &LazyListInner,
+    state: super::LazyListState,
+) -> Modifier {
+    if inner.item_animator.displays.get() {
+        modifier.then_custom(DisplayingElement { state })
+    } else {
+        modifier
+    }
+}
+
+struct DisplayingElement {
+    state: super::LazyListState,
+}
+
+struct DisplayingNode {
+    state: super::LazyListState,
+}
+
+impl ModifierNodeElement for DisplayingElement {
+    type Node = DisplayingNode;
+
+    fn create(&self) -> DisplayingNode {
+        DisplayingNode { state: self.state }
+    }
+
+    fn update(&self, node: &mut DisplayingNode) {
+        node.state = self.state;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.state == other.state
+    }
+
+    fn name(&self) -> &'static str {
+        "displaying_disappearing_items"
+    }
+}
+
+impl ModifierNode for DisplayingNode {
+    fn as_draw(&mut self) -> Option<&mut dyn compose_ui::DrawModifierNode> {
+        Some(self)
+    }
+
+    fn on_attach(&mut self, context: &mut compose_ui::NodeContext<'_>) {
+        if let Some(inner) = self.state.inner() {
+            inner.item_animator.set_display(Some(context.handle()));
+        }
+    }
+}
+
+impl compose_ui::DrawModifierNode for DisplayingNode {
+    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        if let Some(inner) = self.state.inner() {
+            inner.item_animator.draw_disappearing(scope);
+        }
+    }
+}
+
 impl ItemAnimator {
-    /// Whether no item has ever had the modifier, nor any animation left: what a list pays for
-    /// this feature is this branch.
+    /// Whether no item has ever had the modifier: what a list without it pays is this branch.
     #[inline]
     pub(super) fn idle(&self) -> bool {
         !self.any_specs.get()
@@ -725,7 +810,9 @@ impl ItemAnimator {
 
     /// An item's node measured, having the modifier or having had it.
     pub(super) fn register(&self, key: u64, item: Weak<ItemLayout>) {
-        self.any_specs.set(true);
+        if !self.any_specs.replace(true) {
+            self.displays.set(true);
+        }
         let mut items = self.items.borrow_mut();
         // Those of slots gone, now and then.
         if items.len() >= STALE_ITEMS_CHECK {
@@ -776,6 +863,7 @@ impl ItemAnimator {
             scope.cancel();
         }
         self.previous_main_size.set(None);
+        *self.previous.borrow_mut() = None;
         *self.display.borrow_mut() = None;
     }
 
@@ -794,7 +882,9 @@ impl ItemAnimator {
     }
 
     fn children_of(&self, key: u64) -> Option<Rc<ItemLayout>> {
-        self.items.borrow().get(&key).and_then(Weak::upgrade)
+        // Its node may hold another item by now, reused.
+        let item = self.items.borrow().get(&key).and_then(Weak::upgrade)?;
+        (item.children.key() == key).then_some(item)
     }
 
     fn has_animations(&self, key: u64) -> bool {
@@ -1015,7 +1105,7 @@ impl ItemAnimator {
 
         let mut lanes = vec![0; pass.lane_count.max(1)];
         if previous.is_some() && run {
-            from_start.sort_by(|one, other| other.1.cmp(&one.1));
+            from_start.sort_by_key(|entry| std::cmp::Reverse(entry.1));
             for &(position, _) in &from_start {
                 let item = &positioned[position];
                 let accumulated = add_to_lanes(&mut lanes, item.lane, item.span, item);
@@ -1098,7 +1188,7 @@ impl ItemAnimator {
         }
 
         let mut result = Vec::with_capacity(to_start.len() + to_end.len());
-        to_start.sort_by(|one, other| other.index.cmp(&one.index));
+        to_start.sort_by_key(|waiting| std::cmp::Reverse(waiting.index));
         for waiting in &to_start {
             let main = {
                 let info_map = self.info.borrow();

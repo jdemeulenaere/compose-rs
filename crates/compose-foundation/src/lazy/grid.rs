@@ -1222,6 +1222,7 @@ fn LazyGrid(
         })
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
         .focus_group();
+    let modifier = item_animator::displaying(modifier, &list.inner_or_detached(), list);
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).
     let holder = compose_runtime::remember_saveable_state_holder();

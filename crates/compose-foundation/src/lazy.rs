@@ -2117,6 +2117,7 @@ fn LazyList(
         // Its items a group for focus searches, as Compose's `scrollingContainer`.
         .focus_group()
         .then(inner_modifier);
+    let modifier = item_animator::displaying(modifier, &inner, state);
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away, as Compose's
     // `LazySaveableStateHolder` (D290).
@@ -2309,14 +2310,15 @@ fn LazyItem(
     stacking: ItemStacking,
 ) {
     let inner = state.inner_or_detached();
-    let policy = compose_runtime::remember_keyed((stacking, state), || {
+    let policy = compose_runtime::remember_keyed(stacking, || {
         Rc::new_cyclic(|this| ItemLayout {
             this: this.clone(),
             stacking,
-            animator: inner.item_animator.clone(),
+            state: Cell::new(state),
             children: ItemChildren::new(),
         })
     });
+    policy.state.set(state);
     let item_key = items.0.key(index);
     inner.item_animator.item_composed(&policy, item_key);
     // The lazy lists composing in the item note themselves in this list under its key, whoever
@@ -2475,7 +2477,8 @@ struct ItemLayout {
     /// What the animator looks its children up through.
     this: Weak<ItemLayout>,
     stacking: ItemStacking,
-    animator: Rc<ItemAnimator>,
+    /// Its list's: an item's node stays when the list is another's.
+    state: Cell<LazyListState>,
     children: ItemChildren,
 }
 
@@ -2532,7 +2535,9 @@ impl ItemLayout {
             });
         }
         self.children.set(children);
-        self.animator.register(self.children.key(), self.this.clone());
+        if let Some(inner) = self.state.get().inner() {
+            inner.item_animator.register(self.children.key(), self.this.clone());
+        }
     }
 }
 
@@ -3363,9 +3368,11 @@ impl MeasurePolicy for LazyListLayout {
         });
         // Those laid out in view, as Compose's `currentFirstItemScrollOffset` and
         // `currentMainAxisOffset`: where those moving out of view go.
-        let layout_min = placed.first().map_or(0, |(_, main)| (before - main).max(0));
-        let layout_max =
-            placed.iter().map(|(it, _)| (main_of(it) + spacing).max(0)).sum::<i32>() - layout_min;
+        let layout_bounds = animated_items.is_some().then(|| {
+            let min = placed.first().map_or(0, |(_, main)| (before - main).max(0));
+            let sum = placed.iter().map(|(it, _)| (main_of(it) + spacing).max(0)).sum::<i32>();
+            (min, sum - min)
+        });
         let mut sticky = None;
         if let Some((header, next)) = headers
             && let Some((_, placeable, _)) = sticking
@@ -3486,8 +3493,8 @@ impl MeasurePolicy for LazyListLayout {
                     ),
                     main_size: main_total,
                     lane_count: 1,
-                    layout_min,
-                    layout_max,
+                    layout_min: layout_bounds.map_or(0, |bounds| bounds.0),
+                    layout_max: layout_bounds.map_or(0, |bounds| bounds.1),
                 };
                 let moved = animator.on_measured(state, &pass, &positioned, &mut |item, _| {
                     measure(item, &mut sizes).map(|it| (main_of(&it) + spacing).max(0))
@@ -3983,30 +3990,7 @@ impl compose_ui::TraversableNode for LazyScrollNode {
     }
 }
 
-/// What items removed last drew fades out over the list's content, as
-/// `DisplayingDisappearingItemsNode`: this list's node, so a list with no such item has a node to
-/// ask, and no other.
-impl compose_ui::DrawModifierNode for LazyScrollNode {
-    fn draw_after(&mut self, scope: &mut compose_ui::DrawScope<'_>) {
-        if let Some(inner) = self.state.inner()
-            && !inner.item_animator.idle()
-        {
-            inner.item_animator.draw_disappearing(scope);
-        }
-    }
-}
-
 impl ModifierNode for LazyScrollNode {
-    fn as_draw(&mut self) -> Option<&mut dyn compose_ui::DrawModifierNode> {
-        Some(self)
-    }
-
-    fn on_attach(&mut self, context: &mut compose_ui::NodeContext<'_>) {
-        if let Some(inner) = self.state.inner() {
-            inner.item_animator.set_display(Some(context.handle()));
-        }
-    }
-
     fn as_key_input(&mut self) -> Option<&mut dyn compose_ui::KeyInputModifierNode> {
         Some(self)
     }
@@ -4030,6 +4014,9 @@ impl ModifierNode for LazyScrollNode {
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag.cancel_leaving();
         self.drag.detach();
+        if let Some(inner) = self.state.inner() {
+            inner.item_animator.on_list_left();
+        }
     }
 
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
