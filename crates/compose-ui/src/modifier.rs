@@ -238,7 +238,10 @@ impl Modifier {
     }
 
     /// `align_by` the first baseline, as `RowScope.alignByBaseline`.
-    pub fn align_by_baseline(self, scope: RowScope) -> Modifier {
+    pub fn align_by_baseline<S>(self, scope: S) -> Modifier
+    where
+        S: AlignByScope<Line = crate::alignment_line::HorizontalAlignmentLine>,
+    {
         self.align_by(scope, crate::alignment_line::FIRST_BASELINE)
     }
 

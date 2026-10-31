@@ -9,9 +9,9 @@ use std::rc::Rc;
 use compose_runtime::{ComposeArg, composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    AlignScope, Constraints, HorizontalAlignment, IntrinsicMeasurable, IntrinsicMeasureScope,
-    Layout, LayoutDirection, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
-    ParentAlignment, Placeable, VerticalAlignment, WeightScope,
+    AlignByScope, AlignScope, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
+    IntrinsicMeasureScope, Layout, LayoutDirection, Measurable, MeasurePolicy, MeasureResult,
+    MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, WeightScope,
 };
 
 use super::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
@@ -40,6 +40,14 @@ impl AlignScope for FlowColumnScope {
     fn parent_alignment(alignment: HorizontalAlignment) -> ParentAlignment {
         ParentAlignment::Horizontal(alignment)
     }
+}
+
+impl AlignByScope for FlowRowScope {
+    type Line = compose_ui::HorizontalAlignmentLine;
+}
+
+impl AlignByScope for FlowColumnScope {
+    type Line = compose_ui::VerticalAlignmentLine;
 }
 
 impl ComposeArg for FlowRowScope {
@@ -438,7 +446,23 @@ impl FlowMeasurePolicy {
                 (weighted_space + spacing_total).clamp(0, (main_max as i64 - fixed as i64).max(0));
         }
         let main = ((fixed as i64 + weighted_space).max(0) as i32).max(main_min);
-        let cross = cross_space;
+        // Those aligned by a line, what's before and after the line they share, as a row's.
+        let any_align_by = range
+            .clone()
+            .any(|index| super::is_align_by(scope.parent_data(measurables[index]).alignment));
+        let (mut before_line, mut after_line) = (0, 0);
+        if any_align_by {
+            for index in range.clone() {
+                let placeable = placeables[index].expect("measured");
+                let by_line = super::line_position(scope, measurables[index], &placeable);
+                let Some(position) = by_line else { continue };
+                if position != AlignmentLine::UNSPECIFIED {
+                    before_line = before_line.max(position);
+                    after_line = after_line.max(self.sizes(&placeable).1 - position);
+                }
+            }
+        }
+        let cross = cross_space.max(before_line + after_line);
         let mut positions = vec![0; count];
         let density = scope.density();
         let direction =
@@ -449,6 +473,24 @@ impl FlowMeasurePolicy {
             .map(|index| {
                 let placeable = placeables[index].expect("measured");
                 let (_, item_cross) = self.sizes(&placeable);
+                let by_line = if any_align_by {
+                    super::line_position(scope, measurables[index], &placeable)
+                } else {
+                    None
+                };
+                if let Some(position) = by_line {
+                    // As `AlignmentLineCrossAxisAlignment`.
+                    let rtl_column =
+                        !self.horizontal && scope.layout_direction() == LayoutDirection::Rtl;
+                    let cross = if position == AlignmentLine::UNSPECIFIED {
+                        0
+                    } else if rtl_column {
+                        cross - item_cross - (before_line - position)
+                    } else {
+                        before_line - position
+                    };
+                    return Placed { index, main: positions[index - start], cross };
+                }
                 let own = match scope.parent_data(measurables[index]).alignment {
                     Some(ParentAlignment::Vertical(alignment)) if self.horizontal => alignment.bias,
                     Some(ParentAlignment::Horizontal(alignment)) if !self.horizontal => {

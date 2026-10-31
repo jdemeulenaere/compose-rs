@@ -334,7 +334,7 @@ From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundat
   - `PaddingValues.Absolute`, `PaddingValues.plus`/`minus`, `calculateStartPadding`/`calculateEndPadding` (check compose-rs's `PaddingValues` for the `calculate*` methods);
   - `BoxScope.matchParentSize`, `Arrangement.Absolute` (Left, Right, Center, SpaceBetween/Around/Evenly, `spacedBy`, `aligned`), `Modifier.visible`.
 - **intrinsics:** done (D1200–D1205): `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and Compose's intrinsics on every layout here. Flow layouts, `FlexBox` and `Grid` bring theirs.
-- **alignment-lines:** done (D1220): `paddingFrom` (Dp and TextUnit), `paddingFromBaseline`, `RowScope.alignBy` (line or lambda), `alignByBaseline`, `ColumnScope.alignBy`. Unblocked and not yet moved to them: `RichTooltip` (D1551), which takes a first baseline at 80 % of its style's line (`padding_to_baseline` in `crates/compose-material3/src/tooltip.rs`, its test in `suite/tooltip.rs`), and M3's `ListItem`, `Tab` and `TopAppBar` (material3.md).
+- **alignment-lines:** done (D1220): `paddingFrom` (Dp and TextUnit), `paddingFromBaseline`, `RowScope.alignBy` (line or lambda), `alignByBaseline`, `ColumnScope.alignBy`. `RichTooltip` and M3's `ListItem`, `Tab` and `TopAppBar` read them (D1567); `FlowRowScope` and `FlowColumnScope` take `alignBy` (D1569); `FlexBox`'s wait on `flexbox`.
 - **flow-layout:** done (D1350–D1353; `flow_layout.rs`): `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*). The `overflow` overloads and `ContextualFlow*` are deprecated, and `FlowRowOverflowScope`/`FlowColumnOverflowScope` go with them: not here.
 - **flexbox:** `FlexBox`, `FlexBoxConfig`/`FlexBoxConfigScope`, `FlexConfig`/`FlexConfigScope`, `FlexBoxScope.flex`, `FlexDirection`, `FlexWrap`, `FlexJustifyContent`, `FlexAlignItems`, `FlexAlignSelf`, `FlexAlignContent`, `FlexBasis`. They are stable at tip, added 2025-12-08, after 1.12.
 - **grid-layout:** `Grid`, `GridConfigurationScope` (`row`/`column` by Dp, % or `Fr`, `gap`s, `area`, `minmax`), `GridScope.gridItem` (index, area, ranges), `GridTrackSize` (Fixed, Flex, MinMax, Percentage, Auto, MinContent, MaxContent), `Fr`, `GridFlow`, `columns`/`rows`. Stable, added 2025-12-09. Don't confuse it with lazy grids.
@@ -493,7 +493,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 18. **intrinsics.** Done (PL-3, D1200–D1205; `crates/compose-foundation/tests/suite/intrinsics.rs`).
     - API: `IntrinsicSize`, the intrinsic modifiers, min and max intrinsics on every layout.
     - Tests: IntrinsicTest, parts of RowColumnTest, SizeTest, BoxTest, AspectRatioTest, PaddingTest and ScrollTest are ported; FlowRowColumnTest's and FlexBoxTest's come with those layouts.
-19. **alignment-lines.** Done (D1220), flow and flex ones with those.
+19. **alignment-lines.** Done (D1220), the flow ones too (D1569); the flex ones with `flexbox`, which isn't here yet.
     - API: `paddingFrom`, `paddingFromBaseline`, `alignBy`, `alignByBaseline`.
     - Tests: AlignmentLineTest, RowColumnModifierTest, parts of RowColumnTest and FlexBoxTest.
     - Depends on: ui's alignment lines (`AlignmentLine`, `FirstBaseline`/`LastBaseline` in measure results, text reporting baselines; ui and text ledgers).

@@ -476,6 +476,168 @@ fn items_align_across_their_line_by_their_own_alignment_or_the_flows() {
     }
 }
 
+// ---- Aligned by a line ---------------------------------------------------------------------
+
+/// A layout `size` long along the flow and `across` across, giving `line` at `at`.
+fn with_a_line(
+    width: i32,
+    height: i32,
+    line: impl Into<compose_ui::AlignmentLine>,
+    at: i32,
+    modifier: Modifier,
+) {
+    let line = line.into();
+    let policy = compose_ui::measure_policy(move |scope, _, _| {
+        scope.provide_alignment_lines([(line, at)]);
+        scope.layout(width, height)
+    });
+    compose_ui::Layout(modifier, policy, callback(|| {}));
+}
+
+/// Each line's items share a line of their own, and each line of the flow's as long across as
+/// what's before and after it takes.
+// Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/FlowLayout.kt, FlowRow
+#[test]
+fn a_flow_rows_items_align_by_a_line_in_their_row() {
+    let placed = recorded(4);
+    let recorded = placed.clone();
+    let size = size_cell();
+    let measured = size.clone();
+    let line = compose_ui::HorizontalAlignmentLine::new(i32::min);
+    let _ui = rule(400, move || {
+        let recorded = recorded.clone();
+        let flow = size_into(&measured);
+        FlowRow!(modifier = flow, max_items_in_each_row = 2, |scope| {
+            let at = |index| Modifier.align_by(scope, line).then(bounds_into(&recorded, index));
+            with_a_line(10, 30, line, 25, at(0));
+            with_a_line(10, 30, line, 5, at(1));
+            with_a_line(10, 20, line, 15, at(2));
+            with_a_line(10, 20, line, 10, at(3));
+        });
+    });
+    // The first row: 25 before its line, 25 after it, past the 30 either takes.
+    assert_eq!((rect(&placed, 0).top, rect(&placed, 1).top), (0.0, 20.0));
+    // The second, 15 before and 10 after, below the first.
+    assert_eq!((rect(&placed, 2).top, rect(&placed, 3).top), (50.0, 55.0));
+    assert_eq!(size.get().height, 50 + 25);
+}
+
+/// `align_by_baseline`, `align_by_block` and an item with no line, which goes at the line's start.
+// Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/FlowLayout.kt, FlowRow
+#[test]
+fn a_flow_row_mixes_baselines_blocks_and_its_own_alignment() {
+    let placed = recorded(4);
+    let recorded = placed.clone();
+    let line = compose_ui::HorizontalAlignmentLine::new(i32::min);
+    let _ui = rule(400, move || {
+        let recorded = recorded.clone();
+        FlowRow!(item_vertical_alignment = Alignment::BOTTOM, |scope| {
+            with_a_line(
+                10,
+                20,
+                compose_ui::FIRST_BASELINE,
+                16,
+                Modifier.align_by_baseline(scope).then(bounds_into(&recorded, 0)),
+            );
+            Box!(
+                modifier = Modifier
+                    .align_by_block(scope, |measured| measured.measured_height() / 2)
+                    .size(10.dp())
+                    .then(bounds_into(&recorded, 1))
+            );
+            // Asked for a line it doesn't give.
+            Box!(
+                modifier =
+                    Modifier.align_by(scope, line).size(10.dp()).then(bounds_into(&recorded, 2))
+            );
+            // None asked: the flow's alignment, in the row those make.
+            Box!(modifier = Modifier.size(10.dp()).then(bounds_into(&recorded, 3)));
+        });
+    });
+    assert_eq!(rect(&placed, 0).top, 0.0);
+    assert_eq!(rect(&placed, 1).top, 16.0 - 5.0);
+    assert_eq!(rect(&placed, 2).top, 0.0);
+    // 16 before the line and 5 after it.
+    assert_eq!(rect(&placed, 3).top, 21.0 - 10.0);
+}
+
+/// Across a column, a vertical line; right to left, from the right edge of the column's width.
+// Compose: compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/FlowLayout.kt, FlowColumn
+#[test]
+fn a_flow_columns_items_align_by_a_line_in_their_column_either_way() {
+    for direction in [LayoutDirection::Ltr, LayoutDirection::Rtl] {
+        let placed = recorded(2);
+        let recorded = placed.clone();
+        let size = size_cell();
+        let measured = size.clone();
+        let line = compose_ui::VerticalAlignmentLine::new(i32::min);
+        let _ui = rule(400, move || {
+            let (recorded, measured) = (recorded.clone(), measured.clone());
+            CompositionLocalProvider(
+                compose_ui::LOCAL_LAYOUT_DIRECTION.provides(direction),
+                || {
+                    let recorded = recorded.clone();
+                    let flow = size_into(&measured);
+                    FlowColumn!(modifier = flow, |scope| {
+                        let at = |index| {
+                            Modifier.align_by(scope, line).then(bounds_into(&recorded, index))
+                        };
+                        with_a_line(30, 10, line, 25, at(0));
+                        with_a_line(30, 10, line, 5, at(1));
+                    });
+                },
+            );
+        });
+        // 25 before the line, 25 after it.
+        assert_eq!(size.get().width, 50);
+        let (first, second) = if direction == LayoutDirection::Ltr {
+            (0.0, 20.0)
+        } else {
+            (50.0 - 30.0, 50.0 - 30.0 - 20.0)
+        };
+        assert_eq!(rect(&placed, 0).left, first);
+        assert_eq!(rect(&placed, 1).left, second);
+    }
+}
+
+/// A line's move places what's aligned by it again, without anything else changing.
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/RowColumnModifierTest.kt, row_alignByModifierChange
+#[test]
+fn a_flow_row_follows_a_change_of_a_line() {
+    let placed = recorded(2);
+    let recorded = placed.clone();
+    let position = Rc::new(mutable_state_of(5));
+    let changed = position.clone();
+    let line = compose_ui::HorizontalAlignmentLine::new(i32::min);
+    let mut ui = rule(400, move || {
+        let (recorded, position) = (recorded.clone(), position.clone());
+        FlowRow!(|scope| {
+            let position = position.clone();
+            with_a_line(
+                10,
+                30,
+                line,
+                25,
+                Modifier.align_by(scope, line).then(bounds_into(&recorded, 0)),
+            );
+            let policy = compose_ui::measure_policy(move |scope, _, _| {
+                scope.provide_alignment_lines([(line, position.get())]);
+                scope.layout(10, 30)
+            });
+            compose_ui::Layout(
+                Modifier.align_by(scope, line).then(bounds_into(&recorded, 1)),
+                policy,
+                callback(|| {}),
+            );
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(rect(&placed, 1).top, 20.0);
+    changed.set(15);
+    ui.wait_for_idle();
+    assert_eq!(rect(&placed, 1).top, 10.0);
+}
+
 // ---- Arrangements, right to left, clipping and intrinsics ---------------------------------------
 
 /// A flow layout scene: a flow row (or column) in `container`, with its arrangements, maxima
