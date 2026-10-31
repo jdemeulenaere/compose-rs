@@ -729,6 +729,10 @@ fn a_jump_stopped_before_its_first_item_shows_what_was_placed() {
     frames_show(&mut grid(4, (400, 1990), 40_000, (0, 0), |_| 1), 8, |state| {
         state.request_scroll_to_item(19_999, 0);
     });
+    // Going up past a frame's rounds: it ends stopped before its first item.
+    frames_show(&mut grid(4, (400, 1990), 40_000, (0, 0), |_| 1), 8, |state| {
+        state.request_scroll_to_item(19_999, -20_000);
+    });
 }
 
 /// Each item's composition, by id: more than one is a state lost.
@@ -783,8 +787,12 @@ fn remembering(
 fn a_jump_keeps_the_state_of_an_item_in_view_before_and_after() {
     let long = |id: i32| if id == 4 { 100_000 } else { 50 };
     let (mut ui, state, _list, seen) = remembering(2, (0..2000).collect(), long);
+    // Far and back, so the lanes are known and item 4 is among the items composed in a row.
     let _ = run(&mut ui, async move { state.scroll_by(26_000.0).await });
     idle(&mut ui);
+    let _ = run(&mut ui, async move { state.scroll_by(-25_900.0).await });
+    idle(&mut ui);
+    assert!(laid(state).iter().any(|item| item.0 == 4));
     assert_eq!(seen.borrow()[&4], 1);
     state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
@@ -813,8 +821,8 @@ fn a_prepend_with_lanes_far_apart_follows_the_first_item() {
 /// Two long items, each lane's first far from the items composed and from each other: going back
 /// among them composes each apart, or the jump would replace one by the other for ever.
 fn two_long_items() -> (ComposeTestRule, LazyStaggeredGridState, usize) {
-    let long = |id: i32| if id == 4 || id == 1000 { 100_000 } else { 40 };
-    let (mut ui, state, _list, _seen) = remembering(3, (0..12_000).collect(), long);
+    let long = |id: i32| if id == 4 || id == 1000 { 100_000 } else { 10 };
+    let (mut ui, state, _list, _seen) = remembering(3, (0..14_000).collect(), long);
     // Into both.
     let _ = run(&mut ui, async move { state.scroll_by(40_000.0).await });
     idle(&mut ui);
@@ -836,7 +844,8 @@ fn a_jump_to_lanes_far_apart_settles_and_finishes_soon() {
     while !laid(state).iter().any(|item| item.0 == target) {
         ui.host().frame();
         frames += 1;
-        assert!(frames < 3, "{frames} frames for the jump");
+        // More in view than a frame's rounds, which each take as many as they ask for.
+        assert!(frames < 2, "{frames} frames for the jump");
     }
     let first = state.first_visible_item_index();
     assert!(first <= 4 || first == target, "{first}");
@@ -849,7 +858,7 @@ fn sizes_of(count: usize, item: i32, most: i32) -> Vec<i32> {
     let mut ui = ComposeTestRule::sized(IntSize::new(1000, 2000), move || {
         let noted = noted.clone();
         LazyVerticalStaggeredGrid!(
-            StaggeredGridCells::Fixed(1),
+            StaggeredGridCells::Fixed(2),
             modifier = Modifier
                 .height_in(0.dp(), Dp(most as f32))
                 .on_size_changed(move |size: IntSize| noted.borrow_mut().push(size.height)),
@@ -859,15 +868,15 @@ fn sizes_of(count: usize, item: i32, most: i32) -> Vec<i32> {
         );
     });
     ui.wait_for_idle();
-    let sizes = sizes.borrow().clone();
-    sizes
+    sizes.borrow().clone()
 }
 
 /// As large as what's measured so far, as a list's, never as large as it may be.
 #[test]
 fn a_stop_doesnt_say_a_false_size() {
-    assert_eq!(*sizes_of(3, 50, 800).last().expect("sizes"), 150);
-    assert!(sizes_of(3, 50, 800).iter().all(|size| *size <= 150), "{:?}", sizes_of(3, 50, 800));
+    let sizes = sizes_of(6, 50, 800);
+    assert_eq!(*sizes.last().expect("sizes"), 150);
+    assert!(sizes.iter().all(|size| *size <= 150), "{sizes:?}");
 }
 
 /// A first measurement taking frames says one size until it's whole.
