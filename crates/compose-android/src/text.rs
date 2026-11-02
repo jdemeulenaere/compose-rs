@@ -23,6 +23,496 @@ use std::sync::Mutex;
 
 use crate::serialize::Writer;
 
+/// Per-paragraph native draw metadata shared between `JniText`, `NativeText`, and `HwuiRecorder`.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) struct ParagraphSlot {
+    pub inline_chars: [u16; 64],
+    pub overflow_chars: Vec<u16>,
+    pub char_len: u32,
+    /// Native `android::Paint*` (`0` when drawing uses `complex_draw` or `drawLayoutDirect`).
+    pub paint_ptr: i64,
+    /// Optional RAII owner keeping `paint_ptr` alive while this slot holds it.
+    pub paint_owner: Option<Rc<dyn std::any::Any>>,
+    pub baseline: f32,
+    /// Precomputed native draw plan for non-simple paragraphs (`NativeText`).
+    pub complex_draw: Option<Rc<crate::text_layout::ComplexParagraphDraw>>,
+    /// True when laid out by `NativeText` (never delegates to Kotlin `TextMeasurer`).
+    pub native_owned: bool,
+    pub width: i32,
+    pub height: i32,
+    pub min_same_width: i32,
+    pub max_same_width: i32,
+    /// Native `RenderNode*` owned by `HwuiRecorder` (`0` when unrecorded).
+    pub node_ptr: i64,
+    pub alt_min_same_width: i32,
+    pub alt_max_same_width: i32,
+    pub alt_node_ptr: i64,
+    pub drawn_once: bool,
+}
+
+impl ParagraphSlot {
+    fn new() -> Self {
+        Self {
+            inline_chars: [0; 64],
+            overflow_chars: Vec::new(),
+            char_len: 0,
+            paint_ptr: 0,
+            paint_owner: None,
+            baseline: 0.0,
+            complex_draw: None,
+            native_owned: false,
+            width: 0,
+            height: 0,
+            min_same_width: -1,
+            max_same_width: -2,
+            node_ptr: 0,
+            alt_min_same_width: -1,
+            alt_max_same_width: -2,
+            alt_node_ptr: 0,
+            drawn_once: false,
+        }
+    }
+
+    #[inline]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn chars(&self) -> &[u16] {
+        let len = self.char_len as usize;
+        if len <= 64 { &self.inline_chars[..len] } else { &self.overflow_chars[..len] }
+    }
+
+    fn set_ascii(&mut self, bytes: &[u8]) {
+        let len = bytes.len();
+        self.char_len = len as u32;
+        if len <= 64 {
+            for (dst, &b) in self.inline_chars[..len].iter_mut().zip(bytes) {
+                *dst = u16::from(b);
+            }
+        } else {
+            self.overflow_chars.clear();
+            self.overflow_chars.reserve(len);
+            self.overflow_chars.extend(bytes.iter().map(|&b| u16::from(b)));
+        }
+    }
+
+    fn set_str(&mut self, text: &str) {
+        if text.is_ascii() {
+            self.set_ascii(text.as_bytes());
+            return;
+        }
+        let mut count = 0usize;
+        let mut spilled = false;
+        for unit in text.encode_utf16() {
+            if !spilled {
+                if count < 64 {
+                    self.inline_chars[count] = unit;
+                    count += 1;
+                } else {
+                    self.overflow_chars.clear();
+                    self.overflow_chars.extend_from_slice(&self.inline_chars);
+                    self.overflow_chars.push(unit);
+                    count += 1;
+                    spilled = true;
+                }
+            } else {
+                self.overflow_chars.push(unit);
+                count += 1;
+            }
+        }
+        self.char_len = count as u32;
+    }
+}
+
+const PARA_DIRECT_BUCKETS: usize = 8192;
+const PARA_DIRECT_MASK: usize = PARA_DIRECT_BUCKETS - 1;
+
+/// Pooled, direct-mapped paragraph table shared between `JniText`, `NativeText`, and `HwuiRecorder`.
+pub(crate) struct SharedParagraphTable {
+    slots: Vec<ParagraphSlot>,
+    free_slots: Vec<u32>,
+    direct_idx: Box<[u32; PARA_DIRECT_BUCKETS]>,
+    direct_handle: Box<[u32; PARA_DIRECT_BUCKETS]>,
+    overflow: HashMap<u32, u32>,
+    pub retired_nodes: Vec<i64>,
+    pub laid_out_ahead: Vec<u32>,
+    pub collecting_ahead: bool,
+}
+
+pub(crate) type SharedParagraphs = Rc<RefCell<SharedParagraphTable>>;
+
+impl SharedParagraphTable {
+    pub fn new_shared() -> SharedParagraphs {
+        Rc::new(RefCell::new(Self {
+            slots: Vec::with_capacity(256),
+            free_slots: Vec::with_capacity(128),
+            direct_idx: vec![u32::MAX; PARA_DIRECT_BUCKETS]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap_or_else(|_| unreachable!()),
+            direct_handle: vec![u32::MAX; PARA_DIRECT_BUCKETS]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap_or_else(|_| unreachable!()),
+            overflow: HashMap::new(),
+            retired_nodes: Vec::new(),
+            laid_out_ahead: Vec::new(),
+            collecting_ahead: false,
+        }))
+    }
+
+    #[inline]
+    fn slot_index(&self, handle: u32) -> Option<usize> {
+        let bucket = (handle as usize) & PARA_DIRECT_MASK;
+        if self.direct_handle[bucket] == handle {
+            let idx = self.direct_idx[bucket];
+            if idx != u32::MAX {
+                return Some(idx as usize);
+            }
+        }
+        self.overflow.get(&handle).map(|&idx| idx as usize)
+    }
+
+    #[inline]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn get(&self, handle: u32) -> Option<&ParagraphSlot> {
+        let idx = self.slot_index(handle)?;
+        self.slots.get(idx)
+    }
+
+    #[inline]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn get_mut(&mut self, handle: u32) -> Option<&mut ParagraphSlot> {
+        let idx = self.slot_index(handle)?;
+        self.slots.get_mut(idx)
+    }
+
+    fn acquire_for(&mut self, handle: u32) -> &mut ParagraphSlot {
+        if let Some(existing_idx) = self.slot_index(handle) {
+            let old_node = self.slots[existing_idx].node_ptr;
+            if old_node != 0 {
+                self.slots[existing_idx].node_ptr = 0;
+                self.retired_nodes.push(old_node);
+            }
+            let old_alt = self.slots[existing_idx].alt_node_ptr;
+            if old_alt != 0 {
+                self.slots[existing_idx].alt_node_ptr = 0;
+                self.retired_nodes.push(old_alt);
+            }
+            return &mut self.slots[existing_idx];
+        }
+        let new_idx = if let Some(reused) = self.free_slots.pop() {
+            reused
+        } else {
+            let idx = self.slots.len() as u32;
+            self.slots.push(ParagraphSlot::new());
+            idx
+        };
+        let bucket = (handle as usize) & PARA_DIRECT_MASK;
+        let prev_handle = self.direct_handle[bucket];
+        if prev_handle != u32::MAX && prev_handle != handle {
+            let prev_idx = self.direct_idx[bucket];
+            if prev_idx != u32::MAX {
+                self.overflow.insert(prev_handle, prev_idx);
+            }
+        }
+        self.direct_handle[bucket] = handle;
+        self.direct_idx[bucket] = new_idx;
+        &mut self.slots[new_idx as usize]
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_str(
+        &mut self,
+        handle: u32,
+        text: &str,
+        paint_ptr: i64,
+        baseline: f32,
+        width: i32,
+        height: i32,
+        min_same_width: i32,
+        max_same_width: i32,
+        drawn: bool,
+    ) {
+        let collecting = self.collecting_ahead && drawn;
+        let slot = self.acquire_for(handle);
+        if paint_ptr != 0 {
+            slot.set_str(text);
+        } else {
+            slot.char_len = 0;
+        }
+        slot.paint_ptr = paint_ptr;
+        slot.paint_owner = None;
+        slot.baseline = baseline;
+        slot.complex_draw = None;
+        slot.native_owned = false;
+        slot.width = width;
+        slot.height = height;
+        slot.min_same_width = min_same_width;
+        slot.max_same_width = max_same_width;
+        slot.node_ptr = 0;
+        slot.alt_min_same_width = -1;
+        slot.alt_max_same_width = -2;
+        slot.alt_node_ptr = 0;
+        slot.drawn_once = false;
+        if collecting {
+            self.laid_out_ahead.push(handle);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn insert_native(
+        &mut self,
+        handle: u32,
+        text: &str,
+        simple_paint_ptr: i64,
+        simple_paint_owner: Option<Rc<dyn std::any::Any>>,
+        simple_baseline: f32,
+        complex_draw: Option<Rc<crate::text_layout::ComplexParagraphDraw>>,
+        width: i32,
+        height: i32,
+        min_same_width: i32,
+        max_same_width: i32,
+        drawn: bool,
+    ) {
+        let has_content = simple_paint_ptr != 0 || complex_draw.is_some();
+        let collecting = self.collecting_ahead && drawn && has_content;
+        let slot = self.acquire_for(handle);
+        if simple_paint_ptr != 0 {
+            slot.set_str(text);
+        } else {
+            slot.char_len = 0;
+        }
+        slot.paint_ptr = simple_paint_ptr;
+        slot.paint_owner = simple_paint_owner;
+        slot.baseline = simple_baseline;
+        slot.complex_draw = complex_draw;
+        slot.native_owned = true;
+        slot.width = width;
+        slot.height = height;
+        slot.min_same_width = min_same_width;
+        slot.max_same_width = max_same_width;
+        slot.node_ptr = 0;
+        slot.alt_min_same_width = -1;
+        slot.alt_max_same_width = -2;
+        slot.alt_node_ptr = 0;
+        slot.drawn_once = false;
+        if collecting {
+            self.laid_out_ahead.push(handle);
+        }
+    }
+
+    fn take_slot_for_relayout(
+        &mut self,
+        handle: u32,
+    ) -> Option<(i32, i32, i64, i32, i32, i64, bool)> {
+        let bucket = (handle as usize) & PARA_DIRECT_MASK;
+        let removed_idx = if self.direct_handle[bucket] == handle {
+            let idx = self.direct_idx[bucket];
+            self.direct_handle[bucket] = u32::MAX;
+            self.direct_idx[bucket] = u32::MAX;
+            (idx != u32::MAX).then_some(idx)
+        } else {
+            self.overflow.remove(&handle)
+        }?;
+        let slot = &mut self.slots[removed_idx as usize];
+        let state = (
+            slot.min_same_width,
+            slot.max_same_width,
+            slot.node_ptr,
+            slot.alt_min_same_width,
+            slot.alt_max_same_width,
+            slot.alt_node_ptr,
+            slot.drawn_once,
+        );
+        slot.node_ptr = 0;
+        slot.alt_node_ptr = 0;
+        slot.char_len = 0;
+        slot.paint_ptr = 0;
+        slot.paint_owner = None;
+        slot.complex_draw = None;
+        slot.native_owned = false;
+        slot.drawn_once = false;
+        self.free_slots.push(removed_idx);
+        Some(state)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn relayout_from(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        text: &str,
+        paint_ptr: i64,
+        baseline: f32,
+        width: i32,
+        height: i32,
+        min_same_width: i32,
+        max_same_width: i32,
+    ) {
+        let prev = self.take_slot_for_relayout(previous);
+        let (node_ptr, alt_min, alt_max, alt_node, drawn_once, to_retire) = match prev {
+            Some((p_min, p_max, p_node, a_min, a_max, a_node, p_drawn)) => {
+                if width >= p_min && width <= p_max {
+                    (p_node, a_min, a_max, a_node, p_node != 0 || p_drawn, 0)
+                } else if a_node != 0 && width >= a_min && width <= a_max {
+                    (a_node, p_min, p_max, p_node, true, 0)
+                } else if p_node != 0 {
+                    (0, p_min, p_max, p_node, false, a_node)
+                } else {
+                    (0, a_min, a_max, a_node, false, 0)
+                }
+            }
+            None => (0, -1, -2, 0, false, 0),
+        };
+        if to_retire != 0 {
+            self.retired_nodes.push(to_retire);
+        }
+        let collecting = self.collecting_ahead && node_ptr == 0;
+        let slot = self.acquire_for(handle);
+        if paint_ptr != 0 {
+            slot.set_str(text);
+        } else {
+            slot.char_len = 0;
+        }
+        slot.paint_ptr = paint_ptr;
+        slot.paint_owner = None;
+        slot.baseline = baseline;
+        slot.complex_draw = None;
+        slot.native_owned = false;
+        slot.width = width;
+        slot.height = height;
+        slot.min_same_width = min_same_width;
+        slot.max_same_width = max_same_width;
+        slot.node_ptr = node_ptr;
+        slot.alt_min_same_width = alt_min;
+        slot.alt_max_same_width = alt_max;
+        slot.alt_node_ptr = alt_node;
+        slot.drawn_once = drawn_once;
+        if collecting {
+            self.laid_out_ahead.push(handle);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn relayout_native_from(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        text: &str,
+        simple_paint_ptr: i64,
+        simple_paint_owner: Option<Rc<dyn std::any::Any>>,
+        simple_baseline: f32,
+        complex_draw: Option<Rc<crate::text_layout::ComplexParagraphDraw>>,
+        width: i32,
+        height: i32,
+        min_same_width: i32,
+        max_same_width: i32,
+    ) {
+        let prev = self.take_slot_for_relayout(previous);
+        let (node_ptr, alt_min, alt_max, alt_node, drawn_once, to_retire) = match prev {
+            Some((p_min, p_max, p_node, a_min, a_max, a_node, p_drawn)) => {
+                if width >= p_min && width <= p_max {
+                    (p_node, a_min, a_max, a_node, p_node != 0 || p_drawn, 0)
+                } else if a_node != 0 && width >= a_min && width <= a_max {
+                    (a_node, p_min, p_max, p_node, true, 0)
+                } else if p_node != 0 {
+                    (0, p_min, p_max, p_node, false, a_node)
+                } else {
+                    (0, a_min, a_max, a_node, false, 0)
+                }
+            }
+            None => (0, -1, -2, 0, false, 0),
+        };
+        if to_retire != 0 {
+            self.retired_nodes.push(to_retire);
+        }
+        let has_content = simple_paint_ptr != 0 || complex_draw.is_some();
+        let collecting = self.collecting_ahead && node_ptr == 0 && has_content;
+        let slot = self.acquire_for(handle);
+        if simple_paint_ptr != 0 {
+            slot.set_str(text);
+        } else {
+            slot.char_len = 0;
+        }
+        slot.paint_ptr = simple_paint_ptr;
+        slot.paint_owner = simple_paint_owner;
+        slot.baseline = simple_baseline;
+        slot.complex_draw = complex_draw;
+        slot.native_owned = true;
+        slot.width = width;
+        slot.height = height;
+        slot.min_same_width = min_same_width;
+        slot.max_same_width = max_same_width;
+        slot.node_ptr = node_ptr;
+        slot.alt_min_same_width = alt_min;
+        slot.alt_max_same_width = alt_max;
+        slot.alt_node_ptr = alt_node;
+        slot.drawn_once = drawn_once;
+        if collecting {
+            self.laid_out_ahead.push(handle);
+        }
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn update_width_in_place(&mut self, handle: u32, width: i32) {
+        let Some(idx) = self.slot_index(handle) else { return };
+        self.slots[idx].width = width;
+    }
+
+    pub fn remove(&mut self, handle: u32) {
+        let bucket = (handle as usize) & PARA_DIRECT_MASK;
+        let removed_idx = if self.direct_handle[bucket] == handle {
+            let idx = self.direct_idx[bucket];
+            self.direct_handle[bucket] = u32::MAX;
+            self.direct_idx[bucket] = u32::MAX;
+            (idx != u32::MAX).then_some(idx)
+        } else {
+            self.overflow.remove(&handle)
+        };
+        if let Some(idx) = removed_idx {
+            let slot = &mut self.slots[idx as usize];
+            if slot.node_ptr != 0 {
+                self.retired_nodes.push(slot.node_ptr);
+                slot.node_ptr = 0;
+            }
+            if slot.alt_node_ptr != 0 {
+                self.retired_nodes.push(slot.alt_node_ptr);
+                slot.alt_node_ptr = 0;
+            }
+            slot.char_len = 0;
+            slot.paint_ptr = 0;
+            slot.paint_owner = None;
+            slot.complex_draw = None;
+            slot.native_owned = false;
+            slot.drawn_once = false;
+            self.free_slots.push(idx);
+        }
+    }
+
+    /// Collects all live paragraph `RenderNode` pointers (resetting them to `0`) plus any
+    /// `retired_nodes`, for cleanup when `HwuiRecorder` clears or drops.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn drain_all_nodes(&mut self, mut f: impl FnMut(i64)) {
+        for node in self.retired_nodes.drain(..) {
+            if node != 0 {
+                f(node);
+            }
+        }
+        for slot in &mut self.slots {
+            if slot.node_ptr != 0 {
+                f(slot.node_ptr);
+                slot.node_ptr = 0;
+            }
+            if slot.alt_node_ptr != 0 {
+                f(slot.alt_node_ptr);
+                slot.alt_node_ptr = 0;
+            }
+        }
+        self.laid_out_ahead.clear();
+    }
+}
+
 /// The Kotlin side of text: `TextMeasurer.kt`, through JNI (or a fake, in tests).
 pub trait TextBackend: 'static {
     /// Lays out paragraph `handle` (replacing one of the same handle): `text` with `request`
@@ -36,11 +526,27 @@ pub trait TextBackend: 'static {
         &mut self,
         _previous: u32,
         _handle: u32,
+        _text: &str,
         _min_width: i32,
         _max_width: i32,
         _max_height: i32,
     ) -> Option<LaidOut> {
         None
+    }
+    /// Updates paragraph `handle` in place when a new width between `min_width` and `max_width`
+    /// keeps the exact same backend layout.
+    fn relayout_in_place(
+        &mut self,
+        _handle: u32,
+        _min_width: i32,
+        _max_width: i32,
+        _max_height: i32,
+    ) -> Option<LaidOut> {
+        None
+    }
+    /// Whether released paragraphs with unchanged requests should be cached for reuse.
+    fn caches_released(&self) -> bool {
+        false
     }
     /// Lays out paragraph `previous`'s text again as paragraph `handle`, as `relayout` does,
     /// for its intrinsic sizes: `previous` is kept, and `handle` isn't recorded ahead. `None`
@@ -58,7 +564,15 @@ pub trait TextBackend: 'static {
     /// Gives paragraph `previous`'s layout, as paragraph `handle`, the paint of `color` (ARGB)
     /// and `decoration` (1 underline, 2 line through), and releases `previous`. False (the
     /// default: a backend keeping nothing) leaves `previous` as it was.
-    fn restyle(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
+    fn restyle(
+        &mut self,
+        _previous: u32,
+        _handle: u32,
+        _text: &str,
+        _color: u32,
+        _decoration: u8,
+        _has_extras: bool,
+    ) -> bool {
         false
     }
     /// Gives paragraph `handle`, just restyled or painted, what `extras` encodes
@@ -167,6 +681,28 @@ struct Entry {
     text: String,
     laid_out: LaidOut,
     right_to_left: bool,
+    request: Vec<u8>,
+}
+
+struct ReleasedEntry {
+    handle: u32,
+    seq: u64,
+    entry: Entry,
+}
+
+fn request_hash(text: &str, request: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for &b in text.as_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h ^= 0xff;
+    h = h.wrapping_mul(0x100000001b3);
+    for &b in request {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 /// A `TextMeasurer` over a `TextBackend`.
@@ -175,6 +711,11 @@ pub struct AndroidTextMeasurer<B: TextBackend> {
     /// By handle. A handle isn't reused: a frame's bytes naming the same paragraphs draw the
     /// same text, so the replayer can keep a group's recording by its bytes.
     paragraphs: HashMap<u32, Entry>,
+    released_cache: HashMap<u64, Vec<ReleasedEntry>>,
+    released_order: std::collections::VecDeque<(u64, u32, u64)>,
+    released_count: usize,
+    release_seq: u64,
+    spare_buffers: Vec<(String, Vec<u8>)>,
     next: u32,
     request: Writer,
     fonts: Rc<PlatformFonts>,
@@ -191,9 +732,23 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         AndroidTextMeasurer {
             backend,
             paragraphs: HashMap::new(),
+            released_cache: HashMap::new(),
+            released_order: std::collections::VecDeque::new(),
+            released_count: 0,
+            release_seq: 0,
+            spare_buffers: Vec::with_capacity(64),
             next: 0,
             request: Writer::default(),
             fonts: PlatformFonts::new(loader),
+        }
+    }
+
+    #[inline]
+    fn recycle_entry_buffers(&mut self, mut text: String, mut request: Vec<u8>) {
+        if self.spare_buffers.len() < 64 && text.capacity() <= 256 && request.capacity() <= 256 {
+            text.clear();
+            request.clear();
+            self.spare_buffers.push((text, request));
         }
     }
 
@@ -241,12 +796,15 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         density: &Density,
         probe: bool,
     ) -> ParagraphHandle {
-        let handle = self.next_handle();
         // To the direction a placeholder is a neutral object, whatever it covers.
-        let right_to_left = first_strong_is_rtl(&compose_ui::platform::with_placeholders_neutral(
-            text,
-            placeholders,
-        ))
+        let right_to_left = if placeholders.is_empty() {
+            first_strong_is_rtl(text)
+        } else {
+            first_strong_is_rtl(&compose_ui::platform::with_placeholders_neutral(
+                text,
+                placeholders,
+            ))
+        }
         .unwrap_or(options.direction == LayoutDirection::Rtl);
         let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
         let mut resolved_fonts = ResolvedFonts::default();
@@ -264,10 +822,34 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             probe,
             &mut fonts,
         );
+        let caches = !probe
+            && self.backend.caches_released()
+            && placeholders.is_empty()
+            && resolved_fonts.is_empty();
+        if caches {
+            let hash = request_hash(text, &self.request.bytes);
+            if let Some(bucket) = self.released_cache.get_mut(&hash)
+                && let Some(pos) = bucket.iter().position(|item| {
+                    item.entry.text == text && item.entry.request == self.request.bytes
+                })
+            {
+                let cached = bucket.swap_remove(pos);
+                self.released_count = self.released_count.saturating_sub(1);
+                let handle = cached.handle;
+                self.paragraphs.insert(handle, cached.entry);
+                return ParagraphHandle(handle as u64);
+            }
+        }
+        let handle = self.next_handle();
         let laid_out = self.backend.layout(handle, text, &self.request.bytes);
+        let (mut text_buf, mut req_vec) = self.spare_buffers.pop().unwrap_or_default();
+        text_buf.push_str(text);
+        if caches {
+            req_vec.extend_from_slice(&self.request.bytes);
+        }
         self.paragraphs.insert(
             handle,
-            Entry { resolved_fonts, text: text.to_string(), laid_out, right_to_left },
+            Entry { resolved_fonts, text: text_buf, laid_out, right_to_left, request: req_vec },
         );
         ParagraphHandle(handle as u64)
     }
@@ -337,6 +919,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
                     text: entry.text.clone(),
                     laid_out,
                     right_to_left: entry.right_to_left,
+                    request: Vec::new(),
                 };
                 self.paragraphs.insert(handle, entry);
                 return ParagraphHandle(handle as u64);
@@ -386,12 +969,15 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             return None;
         }
         let handle = self.next_handle();
+        let text_ref = self.paragraphs.get(&previous)?.text.as_str();
         let (color, decoration) = paint_of(style);
-        if !self.backend.restyle(previous, handle, color, decoration) {
+        let has_extras = paragraph_paint_flags(style) != 0;
+        if !self.backend.restyle(previous, handle, text_ref, color, decoration, has_extras) {
             return None;
         }
         self.send_paint_extras(handle, style);
-        let entry = self.paragraphs.remove(&previous).expect("checked above");
+        let mut entry = self.paragraphs.remove(&previous).expect("checked above");
+        entry.request.clear();
         self.paragraphs.insert(handle, entry);
         Some(ParagraphHandle(handle as u64))
     }
@@ -410,6 +996,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             text: entry.text.clone(),
             laid_out: entry.laid_out,
             right_to_left: entry.right_to_left,
+            request: Vec::new(),
         };
         let handle = self.next_handle();
         let (color, decoration) = paint_of(style);
@@ -432,12 +1019,33 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         if !self.paragraphs.contains_key(&previous) {
             return None;
         }
-        let handle = self.next_handle();
-        let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
         let (min_width, max_width) = width_bounds(constraints);
         let max_height = constraints.max_height;
-        let laid_out = self.backend.relayout(previous, handle, min_width, max_width, max_height)?;
-        let entry = self.paragraphs.remove(&previous).expect("checked above");
+        if let Some(laid_out) =
+            self.backend.relayout_in_place(previous, min_width, max_width, max_height)
+        {
+            let entry = self.paragraphs.get_mut(&previous).expect("checked above");
+            entry.laid_out = laid_out;
+            let rlen = entry.request.len();
+            if rlen >= 20 {
+                entry.request[8..12].copy_from_slice(&(min_width as u32).to_le_bytes());
+                entry.request[12..16].copy_from_slice(&(max_width as u32).to_le_bytes());
+                entry.request[rlen - 4..rlen].copy_from_slice(&(max_height as u32).to_le_bytes());
+            }
+            return Some(paragraph);
+        }
+        let handle = self.next_handle();
+        let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
+        let text_ref = self.paragraphs.get(&previous)?.text.as_str();
+        let laid_out =
+            self.backend.relayout(previous, handle, text_ref, min_width, max_width, max_height)?;
+        let mut entry = self.paragraphs.remove(&previous).expect("checked above");
+        let rlen = entry.request.len();
+        if rlen >= 20 {
+            entry.request[8..12].copy_from_slice(&(min_width as u32).to_le_bytes());
+            entry.request[12..16].copy_from_slice(&(max_width as u32).to_le_bytes());
+            entry.request[rlen - 4..rlen].copy_from_slice(&(max_height as u32).to_le_bytes());
+        }
         self.paragraphs.insert(handle, Entry { laid_out, ..entry });
         Some(ParagraphHandle(handle as u64))
     }
@@ -498,11 +1106,51 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
     fn release(&mut self, paragraph: ParagraphHandle) {
         let handle = paragraph.0 as u32;
         if let Some(entry) = self.paragraphs.remove(&handle) {
-            self.backend.release(handle);
-            // It may have been the last to hold its typefaces.
-            if !entry.resolved_fonts.is_empty() {
-                drop(entry);
-                self.fonts.release_dropped();
+            if self.backend.caches_released()
+                && !entry.request.is_empty()
+                && entry.resolved_fonts.is_empty()
+            {
+                while self.released_count >= 512 && !self.released_order.is_empty() {
+                    if let Some((old_hash, old_handle, old_seq)) = self.released_order.pop_front()
+                        && let Some(bucket) = self.released_cache.get_mut(&old_hash)
+                        && let Some(pos) = bucket
+                            .iter()
+                            .position(|item| item.handle == old_handle && item.seq == old_seq)
+                    {
+                        let evicted = bucket.swap_remove(pos);
+                        self.released_count = self.released_count.saturating_sub(1);
+                        self.backend.release(old_handle);
+                        self.recycle_entry_buffers(evicted.entry.text, evicted.entry.request);
+                    }
+                }
+                if self.released_order.len() >= 1024 {
+                    let cache = &self.released_cache;
+                    self.released_order.retain(|&(h, hdl, s)| {
+                        cache
+                            .get(&h)
+                            .is_some_and(|b| b.iter().any(|i| i.handle == hdl && i.seq == s))
+                    });
+                }
+                self.release_seq = self.release_seq.wrapping_add(1);
+                let seq = self.release_seq;
+                let hash = request_hash(&entry.text, &entry.request);
+                self.released_cache.entry(hash).or_default().push(ReleasedEntry {
+                    handle,
+                    seq,
+                    entry,
+                });
+                self.released_order.push_back((hash, handle, seq));
+                self.released_count += 1;
+            } else {
+                self.backend.release(handle);
+                let has_fonts = !entry.resolved_fonts.is_empty();
+                let Entry { resolved_fonts, text, request, .. } = entry;
+                self.recycle_entry_buffers(text, request);
+                // It may have been the last to hold its typefaces.
+                if has_fonts {
+                    drop(resolved_fonts);
+                    self.fonts.release_dropped();
+                }
             }
         }
     }
@@ -511,7 +1159,22 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 /// Whether `text`'s first strong character is right to left (`None` without one), as the
 /// desktop measurer decides a paragraph's direction.
 fn first_strong_is_rtl(text: &str) -> Option<bool> {
-    for c in text.chars() {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b >= 0x80 {
+            break;
+        }
+        if b.is_ascii_alphabetic() {
+            return Some(false);
+        }
+        i += 1;
+    }
+    if i == bytes.len() {
+        return None;
+    }
+    for c in text[i..].chars() {
         let code = c as u32;
         if matches!(code, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
             return Some(true);
@@ -986,7 +1649,15 @@ mod tests {
                 max_intrinsic_width: Some(units as f32 * 10.0),
             }
         }
-        fn restyle(&mut self, previous: u32, handle: u32, _color: u32, _decoration: u8) -> bool {
+        fn restyle(
+            &mut self,
+            previous: u32,
+            handle: u32,
+            _text: &str,
+            _color: u32,
+            _decoration: u8,
+            _has_extras: bool,
+        ) -> bool {
             self.live.remove(&previous);
             self.live.insert(handle);
             true

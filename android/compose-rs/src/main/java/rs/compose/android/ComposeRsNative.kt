@@ -1,5 +1,6 @@
 package rs.compose.android
 
+import android.graphics.Canvas
 import java.nio.ByteBuffer
 
 /** The Rust side (`crates/compose-android/src/bridge.rs`), in the app's compose-rs library. */
@@ -291,6 +292,26 @@ internal object ComposeRsNative {
 
     /** Runs the timers due and the tasks woken: the next timer, and whether frames are wanted. */
     @JvmStatic external fun tick(): Long
+
+    @JvmStatic external fun hasDirectHwui(): Boolean
+
+    @JvmStatic external fun setCollectingParagraphsAhead(host: Long, collecting: Boolean)
+
+    @JvmStatic external fun recordParagraphsAhead(host: Long, deadlineNanos: Long): Int
+
+    @JvmStatic external fun drawHardware(host: Long, canvas: Canvas): Boolean
+
+    @JvmStatic external fun drawAheadHardware(host: Long): Int
+
+    @JvmStatic
+    external fun drawNativeParagraph(
+        host: Long,
+        canvas: Canvas,
+        hardware: Boolean,
+        handle: Int,
+        x: Float,
+        y: Float,
+    ): Boolean
 
     /** An animation's first read of the setting (`bridge.rs`): it's watched from then on. */
     @JvmStatic

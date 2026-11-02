@@ -119,30 +119,44 @@ pub struct Writer {
 }
 
 impl Writer {
+    #[inline]
     pub fn u8(&mut self, value: u8) {
         self.bytes.push(value);
     }
+    #[inline]
     pub fn u32(&mut self, value: u32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
+    #[inline]
     pub fn f32(&mut self, value: f32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
+    #[inline]
     fn offset(&mut self, offset: Offset) {
-        self.f32(offset.x);
-        self.f32(offset.y);
+        let mut buf = [0u8; 8];
+        buf[0..4].copy_from_slice(&offset.x.to_le_bytes());
+        buf[4..8].copy_from_slice(&offset.y.to_le_bytes());
+        self.bytes.extend_from_slice(&buf);
     }
+    #[inline]
     fn rect(&mut self, rect: &Rect) {
-        self.f32(rect.left);
-        self.f32(rect.top);
-        self.f32(rect.right);
-        self.f32(rect.bottom);
+        let mut buf = [0u8; 16];
+        buf[0..4].copy_from_slice(&rect.left.to_le_bytes());
+        buf[4..8].copy_from_slice(&rect.top.to_le_bytes());
+        buf[8..12].copy_from_slice(&rect.right.to_le_bytes());
+        buf[12..16].copy_from_slice(&rect.bottom.to_le_bytes());
+        self.bytes.extend_from_slice(&buf);
     }
+    #[inline]
     fn radii(&mut self, radii: &[f32; 4]) {
-        for radius in radii {
-            self.f32(*radius);
-        }
+        let mut buf = [0u8; 16];
+        buf[0..4].copy_from_slice(&radii[0].to_le_bytes());
+        buf[4..8].copy_from_slice(&radii[1].to_le_bytes());
+        buf[8..12].copy_from_slice(&radii[2].to_le_bytes());
+        buf[12..16].copy_from_slice(&radii[3].to_le_bytes());
+        self.bytes.extend_from_slice(&buf);
     }
+    #[inline]
     fn color(&mut self, color: Color) {
         self.u32(color.argb());
     }
@@ -150,6 +164,7 @@ impl Writer {
     /// its shader (from `shaders`): see [`Writer::shader`]. Faded by `alpha` (folded layers'):
     /// its color's alpha, or its shader's. A gradient that is a solid color (see [`shading`])
     /// is that color at the shader's alpha, with no shader.
+    #[inline]
     fn paint(&mut self, paint: &Paint, shaders: &[Shader], alpha: f32) {
         let shading = paint
             .shader()
@@ -161,27 +176,35 @@ impl Writer {
             }
             Shading::Color | Shading::Gradient(_) => paint.color,
         };
-        self.color(faded(color, alpha));
-        match paint.style {
-            PaintStyle::Fill => {
-                self.u8(0);
-                self.f32(0.0);
-            }
-            PaintStyle::Stroke(width) => {
-                self.u8(1);
-                self.f32(width);
-            }
-        }
-        self.u8(match paint.cap {
+        let faded_argb = faded(color, alpha).argb();
+        let (style_byte, width) = match paint.style {
+            PaintStyle::Fill => (0u8, 0.0f32),
+            PaintStyle::Stroke(width) => (1u8, width),
+        };
+        let cap_byte = match paint.cap {
             StrokeCap::Butt => 0,
             StrokeCap::Round => 1,
             StrokeCap::Square => 2,
-        });
+        };
         match shading {
             Shading::Gradient(shader) => {
+                let mut hdr = [0u8; 10];
+                hdr[0..4].copy_from_slice(&faded_argb.to_le_bytes());
+                hdr[4] = style_byte;
+                hdr[5..9].copy_from_slice(&width.to_le_bytes());
+                hdr[9] = cap_byte;
+                self.bytes.extend_from_slice(&hdr);
                 self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0));
             }
-            Shading::Color | Shading::Solid(..) => self.u8(shader::NONE),
+            Shading::Color | Shading::Solid(..) => {
+                let mut buf = [0u8; 11];
+                buf[0..4].copy_from_slice(&faded_argb.to_le_bytes());
+                buf[4] = style_byte;
+                buf[5..9].copy_from_slice(&width.to_le_bytes());
+                buf[9] = cap_byte;
+                buf[10] = shader::NONE;
+                self.bytes.extend_from_slice(&buf);
+            }
         }
     }
     /// A shader's definition, then its alpha: its kind (a [`shader`] constant), tile mode (0
@@ -238,29 +261,43 @@ impl Writer {
     }
     /// Kind (0 rectangle, 1 rounded), bounds, radii. A path's outline is its bounds' rectangle
     /// (the replayer skips flattened shadows, which a render node draws).
+    #[inline]
     fn outline(&mut self, outline: &Outline) {
+        let mut buf = [0u8; 33];
         match outline {
             Outline::Rectangle(rect) => {
-                self.u8(0);
-                self.rect(rect);
-                self.radii(&[0.0; 4]);
+                buf[0] = 0;
+                buf[1..5].copy_from_slice(&rect.left.to_le_bytes());
+                buf[5..9].copy_from_slice(&rect.top.to_le_bytes());
+                buf[9..13].copy_from_slice(&rect.right.to_le_bytes());
+                buf[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
             }
             Outline::Generic(..) => {
-                self.u8(0);
-                self.rect(&outline.bounds());
-                self.radii(&[0.0; 4]);
+                let rect = outline.bounds();
+                buf[0] = 0;
+                buf[1..5].copy_from_slice(&rect.left.to_le_bytes());
+                buf[5..9].copy_from_slice(&rect.top.to_le_bytes());
+                buf[9..13].copy_from_slice(&rect.right.to_le_bytes());
+                buf[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
             }
             Outline::Rounded(rect, radii) => {
-                self.u8(1);
-                self.rect(rect);
-                self.radii(radii);
+                buf[0] = 1;
+                buf[1..5].copy_from_slice(&rect.left.to_le_bytes());
+                buf[5..9].copy_from_slice(&rect.top.to_le_bytes());
+                buf[9..13].copy_from_slice(&rect.right.to_le_bytes());
+                buf[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
+                buf[17..21].copy_from_slice(&radii[0].to_le_bytes());
+                buf[21..25].copy_from_slice(&radii[1].to_le_bytes());
+                buf[25..29].copy_from_slice(&radii[2].to_le_bytes());
+                buf[29..33].copy_from_slice(&radii[3].to_le_bytes());
             }
         }
+        self.bytes.extend_from_slice(&buf);
     }
 }
 
 /// What paints a paint with a shader on Android.
-enum Shading<'a> {
+pub(crate) enum Shading<'a> {
     /// The paint's color (no shader, or one Skia doesn't make: the gradient's average, D175).
     Color,
     /// The gradient.
@@ -276,7 +313,7 @@ const DEGENERATE_RADIUS: f32 = 1.0 / (1 << 15) as f32;
 /// negative radius make no shader (the paint's color paints); a radius of (nearly) 0, which
 /// Android's `RadialGradient` refuses, is Skia's degenerate gradient: its last color when
 /// clamped, its average when repeated or mirrored, nothing with decal.
-fn shading(shader: &Shader) -> Shading<'_> {
+pub(crate) fn shading(shader: &Shader) -> Shading<'_> {
     let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
     let gradient = shader.gradient();
     if gradient.colors.is_empty() {
@@ -732,14 +769,14 @@ fn write_commands(writer: &mut Writer, commands: &[PathCommand]) {
 /// alpha can go into that fill's paint (its color's, or its gradient's: [`Writer::paint`]),
 /// without an offscreen layer (a GPU pass each frame on Android), the same coverage (D648).
 /// Returns the index of its closing `Restore` if so.
-fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
+pub(crate) fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
     let layer = &ops[start + 1..];
     let end = single_drawing(layer).map(|end| start + 1 + end).filter(|end| *end < ops.len())?;
     single_drawing_extent(layer).is_some_and(|extent| fits_in(extent, bounds)).then_some(end)
 }
 
 /// `color` with its alpha multiplied by `alpha`.
-fn faded(color: Color, alpha: f32) -> Color {
+pub(crate) fn faded(color: Color, alpha: f32) -> Color {
     if alpha >= 1.0 {
         return color;
     }
@@ -1359,62 +1396,116 @@ fn write_op(
         DrawOp::Save => out.u8(tag::SAVE),
         DrawOp::Restore => out.u8(tag::RESTORE),
         DrawOp::Translate(offset) => {
-            out.u8(tag::TRANSLATE);
-            out.offset(*offset);
+            let mut buf = [0u8; 9];
+            buf[0] = tag::TRANSLATE;
+            buf[1..5].copy_from_slice(&offset.x.to_le_bytes());
+            buf[5..9].copy_from_slice(&offset.y.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::ClipRect(rect) => {
-            out.u8(tag::CLIP_RECT);
-            out.rect(rect);
+            let mut buf = [0u8; 17];
+            buf[0] = tag::CLIP_RECT;
+            buf[1..5].copy_from_slice(&rect.left.to_le_bytes());
+            buf[5..9].copy_from_slice(&rect.top.to_le_bytes());
+            buf[9..13].copy_from_slice(&rect.right.to_le_bytes());
+            buf[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::ClipRoundRect(rect, radii) => {
-            out.u8(tag::CLIP_ROUND_RECT);
-            out.rect(rect);
-            out.radii(radii);
+            let mut buf = [0u8; 33];
+            buf[0] = tag::CLIP_ROUND_RECT;
+            buf[1..5].copy_from_slice(&rect.left.to_le_bytes());
+            buf[5..9].copy_from_slice(&rect.top.to_le_bytes());
+            buf[9..13].copy_from_slice(&rect.right.to_le_bytes());
+            buf[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
+            buf[17..21].copy_from_slice(&radii[0].to_le_bytes());
+            buf[21..25].copy_from_slice(&radii[1].to_le_bytes());
+            buf[25..29].copy_from_slice(&radii[2].to_le_bytes());
+            buf[29..33].copy_from_slice(&radii[3].to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::DrawRect(rect, paint) => {
-            out.u8(tag::DRAW_RECT);
-            out.rect(rect);
+            let mut hdr = [0u8; 17];
+            hdr[0] = tag::DRAW_RECT;
+            hdr[1..5].copy_from_slice(&rect.left.to_le_bytes());
+            hdr[5..9].copy_from_slice(&rect.top.to_le_bytes());
+            hdr[9..13].copy_from_slice(&rect.right.to_le_bytes());
+            hdr[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
+            out.bytes.extend_from_slice(&hdr);
             out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawRoundRect(rect, radii, paint) => {
-            out.u8(tag::DRAW_ROUND_RECT);
-            out.rect(rect);
-            out.radii(radii);
+            let mut hdr = [0u8; 33];
+            hdr[0] = tag::DRAW_ROUND_RECT;
+            hdr[1..5].copy_from_slice(&rect.left.to_le_bytes());
+            hdr[5..9].copy_from_slice(&rect.top.to_le_bytes());
+            hdr[9..13].copy_from_slice(&rect.right.to_le_bytes());
+            hdr[13..17].copy_from_slice(&rect.bottom.to_le_bytes());
+            hdr[17..21].copy_from_slice(&radii[0].to_le_bytes());
+            hdr[21..25].copy_from_slice(&radii[1].to_le_bytes());
+            hdr[25..29].copy_from_slice(&radii[2].to_le_bytes());
+            hdr[29..33].copy_from_slice(&radii[3].to_le_bytes());
+            out.bytes.extend_from_slice(&hdr);
             out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawLine(from, to, paint) => {
-            out.u8(tag::DRAW_LINE);
-            out.offset(*from);
-            out.offset(*to);
+            let mut hdr = [0u8; 17];
+            hdr[0] = tag::DRAW_LINE;
+            hdr[1..5].copy_from_slice(&from.x.to_le_bytes());
+            hdr[5..9].copy_from_slice(&from.y.to_le_bytes());
+            hdr[9..13].copy_from_slice(&to.x.to_le_bytes());
+            hdr[13..17].copy_from_slice(&to.y.to_le_bytes());
+            out.bytes.extend_from_slice(&hdr);
             out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawParagraph(handle, offset) => {
-            out.u8(tag::DRAW_PARAGRAPH);
-            out.u32(handle.0 as u32);
-            out.offset(*offset);
+            let mut buf = [0u8; 13];
+            buf[0] = tag::DRAW_PARAGRAPH;
+            buf[1..5].copy_from_slice(&(handle.0 as u32).to_le_bytes());
+            buf[5..9].copy_from_slice(&offset.x.to_le_bytes());
+            buf[9..13].copy_from_slice(&offset.y.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::SaveLayerAlpha { bounds, alpha } => {
-            out.u8(tag::SAVE_LAYER_ALPHA);
-            out.rect(bounds);
-            out.f32(*alpha);
+            let mut buf = [0u8; 21];
+            buf[0] = tag::SAVE_LAYER_ALPHA;
+            buf[1..5].copy_from_slice(&bounds.left.to_le_bytes());
+            buf[5..9].copy_from_slice(&bounds.top.to_le_bytes());
+            buf[9..13].copy_from_slice(&bounds.right.to_le_bytes());
+            buf[13..17].copy_from_slice(&bounds.bottom.to_le_bytes());
+            buf[17..21].copy_from_slice(&alpha.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::Transform { pivot, scale, rotation, translation } => {
-            out.u8(tag::TRANSFORM);
-            out.offset(*pivot);
-            out.f32(scale.0);
-            out.f32(scale.1);
-            out.f32(*rotation);
-            out.offset(*translation);
+            let mut buf = [0u8; 29];
+            buf[0] = tag::TRANSFORM;
+            buf[1..5].copy_from_slice(&pivot.x.to_le_bytes());
+            buf[5..9].copy_from_slice(&pivot.y.to_le_bytes());
+            buf[9..13].copy_from_slice(&scale.0.to_le_bytes());
+            buf[13..17].copy_from_slice(&scale.1.to_le_bytes());
+            buf[17..21].copy_from_slice(&rotation.to_le_bytes());
+            buf[21..25].copy_from_slice(&translation.x.to_le_bytes());
+            buf[25..29].copy_from_slice(&translation.y.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::DrawImage { image, src, dst, alpha, tint } => {
             let id = resources.image_id(image);
-            out.u8(tag::DRAW_IMAGE);
-            out.u32(id);
-            out.rect(src);
-            out.rect(dst);
-            out.f32(*alpha);
             // 0, a transparent tint, is none: `draw_image_tinted` leaves those out.
-            out.color(tint.unwrap_or(Color::TRANSPARENT));
+            let tint_argb = tint.unwrap_or(Color::TRANSPARENT).argb();
+            let mut buf = [0u8; 45];
+            buf[0] = tag::DRAW_IMAGE;
+            buf[1..5].copy_from_slice(&id.to_le_bytes());
+            buf[5..9].copy_from_slice(&src.left.to_le_bytes());
+            buf[9..13].copy_from_slice(&src.top.to_le_bytes());
+            buf[13..17].copy_from_slice(&src.right.to_le_bytes());
+            buf[17..21].copy_from_slice(&src.bottom.to_le_bytes());
+            buf[21..25].copy_from_slice(&dst.left.to_le_bytes());
+            buf[25..29].copy_from_slice(&dst.top.to_le_bytes());
+            buf[29..33].copy_from_slice(&dst.right.to_le_bytes());
+            buf[33..37].copy_from_slice(&dst.bottom.to_le_bytes());
+            buf[37..41].copy_from_slice(&alpha.to_le_bytes());
+            buf[41..45].copy_from_slice(&tint_argb.to_le_bytes());
+            out.bytes.extend_from_slice(&buf);
         }
         DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot, .. } => {
             out.u8(tag::DRAW_SHADOW);

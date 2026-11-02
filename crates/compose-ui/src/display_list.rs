@@ -150,6 +150,8 @@ pub struct DisplayList {
     /// What `draw_text` drew: kept as long as this recording, which names their handles in `ops`
     /// (D1116).
     pub(crate) laid_out_paragraphs: Vec<crate::text::ParagraphKeeper>,
+    /// Monotonic generation bumped whenever this list's own operations are cleared and redrawn.
+    pub content_generation: u64,
 }
 
 /// Where a recording draws a repaint boundary's group: before its operation `at`. `key` is the
@@ -223,6 +225,8 @@ pub struct FlatGroup {
 
 impl DisplayList {
     pub fn clear(&mut self) {
+        static NEXT_CONTENT_GENERATION: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
         self.ops.clear();
         self.groups.clear();
         self.kept.clear();
@@ -230,6 +234,8 @@ impl DisplayList {
         self.boundaries.clear();
         self.shaders.clear();
         self.laid_out_paragraphs.clear();
+        self.content_generation =
+            NEXT_CONTENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn push(&mut self, op: DrawOp) {

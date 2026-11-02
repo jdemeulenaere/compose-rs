@@ -1416,6 +1416,10 @@ pub trait ModifierNode: Any {
     }
     /// The focus search is over: what was laid out beyond the bounds for it goes.
     fn end_beyond_bounds(&mut self) {}
+    /// Whether measuring or drawing this node can read compose state.
+    fn reads_state(&self) -> bool {
+        true
+    }
 }
 
 impl dyn ModifierNode {

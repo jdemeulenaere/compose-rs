@@ -5,6 +5,7 @@
 //! A host is a `Box` whose pointer Kotlin keeps as a `long`.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -26,7 +27,9 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, Outcome, jni_sig, jni_str};
 
 use crate::input_method::InputConnection;
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
-use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
+use crate::text::{
+    AndroidTextMeasurer, LaidOut, SharedParagraphTable, SharedParagraphs, TextBackend,
+};
 use compose_ui::platform::Optimizations;
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
@@ -38,7 +41,9 @@ static READ_ANIMATOR_SCALE: OnceLock<JStaticMethodID> = OnceLock::new();
 pub(crate) fn set_vm(vm: JavaVM) {
     install_panic_hook();
     #[cfg(target_os = "android")]
-    compose_ui::platform::trace::set_tracer(trace_begin, trace_end);
+    if unsafe { ATrace_isEnabled() } {
+        compose_ui::platform::trace::set_tracer(trace_begin, trace_end);
+    }
     let _ = VM.set(vm);
     // `JNI_OnLoad` runs with the app's class loader: the decoder's class is found now, for
     // decodes on any thread later.
@@ -54,6 +59,7 @@ pub(crate) fn set_vm(vm: JavaVM) {
 unsafe extern "C" {
     fn ATrace_beginSection(name: *const std::ffi::c_char);
     fn ATrace_endSection();
+    fn ATrace_isEnabled() -> bool;
 }
 
 #[cfg(target_os = "android")]
@@ -151,6 +157,7 @@ struct JniText {
     cursor: JMethodID,
     paragraph_layout: JMethodID,
     release: JMethodID,
+    paragraphs: SharedParagraphs,
 }
 
 /// What a font's load calls `TextMeasurer.kt` with: `Send`, a load being a worker's when it's
@@ -516,13 +523,27 @@ impl TextBackend for JniText {
             });
             check(env, "TextMeasurer.layout");
         });
-        self.laid_out()
+        let laid = self.laid_out();
+        let probe = request.first().is_some_and(|&f| (f & 2) != 0);
+        self.paragraphs.borrow_mut().insert_str(
+            handle,
+            "",
+            0,
+            0.0,
+            laid.metrics.size.width,
+            laid.metrics.size.height,
+            -1,
+            -2,
+            !probe,
+        );
+        laid
     }
 
     fn relayout(
         &mut self,
         previous: u32,
         handle: u32,
+        _text: &str,
         min_width: i32,
         max_width: i32,
         max_height: i32,
@@ -548,7 +569,22 @@ impl TextBackend for JniText {
             relaid.and_then(|value| value.z()).unwrap_or(false)
         });
         // False (nothing kept) or an exception: Rust lays the text out anew.
-        relaid.then(|| self.laid_out())
+        if !relaid {
+            return None;
+        }
+        let laid = self.laid_out();
+        self.paragraphs.borrow_mut().relayout_from(
+            previous,
+            handle,
+            "",
+            0,
+            0.0,
+            laid.metrics.size.width,
+            laid.metrics.size.height,
+            -1,
+            -2,
+        );
+        Some(laid)
     }
 
     fn probe_layout(
@@ -582,8 +618,16 @@ impl TextBackend for JniText {
         laid.then(|| self.laid_out())
     }
 
-    fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
-        with_main_env(|env| {
+    fn restyle(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        _text: &str,
+        color: u32,
+        decoration: u8,
+        _has_extras: bool,
+    ) -> bool {
+        let restyled = with_main_env(|env| {
             // SAFETY: the method's signature is `(IIII)Z`.
             let restyled = unsafe {
                 env.call_method_unchecked(
@@ -600,11 +644,18 @@ impl TextBackend for JniText {
             };
             check(env, "TextMeasurer.restyle");
             restyled.and_then(|value| value.z()).unwrap_or(false)
-        })
+        });
+        if restyled {
+            let mut paras = self.paragraphs.borrow_mut();
+            let (w, h) = paras.get(previous).map_or((0, 0), |s| (s.width, s.height));
+            paras.remove(previous);
+            paras.insert_str(handle, "", 0, 0.0, w, h, -1, -2, true);
+        }
+        restyled
     }
 
     fn painted(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
-        with_main_env(|env| {
+        let painted = with_main_env(|env| {
             // SAFETY: the method's signature is `(IIII)Z`.
             let painted = unsafe {
                 env.call_method_unchecked(
@@ -621,7 +672,13 @@ impl TextBackend for JniText {
             };
             check(env, "TextMeasurer.painted");
             painted.and_then(|value| value.z()).unwrap_or(false)
-        })
+        });
+        if painted {
+            let mut paras = self.paragraphs.borrow_mut();
+            let (w, h) = paras.get(previous).map_or((0, 0), |s| (s.width, s.height));
+            paras.insert_str(handle, "", 0, 0.0, w, h, -1, -2, true);
+        }
+        painted
     }
 
     fn paint_extras(&mut self, handle: u32, extras: &[u8]) {
@@ -737,6 +794,191 @@ impl TextBackend for JniText {
             };
             check(env, "TextMeasurer.release");
         });
+        self.paragraphs.borrow_mut().remove(handle);
+    }
+}
+
+/// Hybrid Android `TextBackend`: lays out supported paragraphs directly in Rust via `NativeText`
+/// (`Minikin` / `ICU`) and delegates custom fonts, placeholders, paint extras, and non-end
+/// ellipses to `JniText` (`TextMeasurer.kt`).
+struct AndroidTextBackend {
+    #[cfg(target_os = "android")]
+    native: Option<crate::native_text::NativeText>,
+    jni: Box<JniText>,
+    jni_handles: HashSet<u32>,
+}
+
+impl TextBackend for AndroidTextBackend {
+    fn caches_released(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            self.native.is_some()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            false
+        }
+    }
+
+    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut {
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_mut()
+            && let Some(laid) = native.try_layout(handle, text, request)
+        {
+            self.jni_handles.remove(&handle);
+            return laid;
+        }
+        self.jni_handles.insert(handle);
+        self.jni.layout(handle, text, request)
+    }
+
+    fn relayout(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        text: &str,
+        min_width: i32,
+        max_width: i32,
+        max_height: i32,
+    ) -> Option<LaidOut> {
+        if self.jni_handles.contains(&previous) {
+            let out =
+                self.jni.relayout(previous, handle, text, min_width, max_width, max_height)?;
+            self.jni_handles.remove(&previous);
+            self.jni_handles.insert(handle);
+            return Some(out);
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_mut() {
+            return native.relayout(previous, handle, text, min_width, max_width, max_height);
+        }
+        None
+    }
+
+    #[allow(unused_variables)]
+    fn relayout_in_place(
+        &mut self,
+        handle: u32,
+        min_width: i32,
+        max_width: i32,
+        max_height: i32,
+    ) -> Option<LaidOut> {
+        if self.jni_handles.contains(&handle) {
+            return None;
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_mut() {
+            return native.relayout_in_place(handle, min_width, max_width, max_height);
+        }
+        None
+    }
+
+    fn probe_layout(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        min_width: i32,
+        max_width: i32,
+        max_height: i32,
+    ) -> Option<LaidOut> {
+        if self.jni_handles.contains(&previous) {
+            let out = self.jni.probe_layout(previous, handle, min_width, max_width, max_height)?;
+            self.jni_handles.insert(handle);
+            return Some(out);
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_mut() {
+            return native.probe_layout(previous, handle, min_width, max_width, max_height);
+        }
+        None
+    }
+
+    fn restyle(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        text: &str,
+        color: u32,
+        decoration: u8,
+        has_extras: bool,
+    ) -> bool {
+        if self.jni_handles.contains(&previous) {
+            if self.jni.restyle(previous, handle, text, color, decoration, has_extras) {
+                self.jni_handles.remove(&previous);
+                self.jni_handles.insert(handle);
+                return true;
+            }
+            return false;
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_mut() {
+            return native.restyle(previous, handle, text, color, decoration, has_extras);
+        }
+        false
+    }
+
+    fn paint_extras(&mut self, handle: u32, extras: &[u8]) {
+        if self.jni_handles.contains(&handle) {
+            self.jni.paint_extras(handle, extras);
+        }
+    }
+
+    fn painted(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
+        if self.jni_handles.contains(&previous) {
+            if self.jni.painted(previous, handle, color, decoration) {
+                self.jni_handles.insert(handle);
+                return true;
+            }
+            return false;
+        }
+        false
+    }
+
+    fn min_intrinsic_width(&self, handle: u32) -> Option<f32> {
+        if self.jni_handles.contains(&handle) {
+            return self.jni.min_intrinsic_width(handle);
+        }
+        None
+    }
+
+    fn hit_test(&self, handle: u32, position: Offset) -> usize {
+        if self.jni_handles.contains(&handle) {
+            return self.jni.hit_test(handle, position);
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_ref() {
+            return native.hit_test(handle, position);
+        }
+        0
+    }
+
+    fn cursor(&self, handle: u32, offset: usize) -> Rect {
+        if self.jni_handles.contains(&handle) {
+            return self.jni.cursor(handle, offset);
+        }
+        #[cfg(target_os = "android")]
+        if let Some(native) = self.native.as_ref() {
+            return native.cursor(handle, offset);
+        }
+        Rect::new(0.0, 0.0, 0.0, 0.0)
+    }
+
+    fn paragraph_layout(&self, handle: u32) -> Option<Vec<f32>> {
+        if self.jni_handles.contains(&handle) {
+            return self.jni.paragraph_layout(handle);
+        }
+        None
+    }
+
+    fn release(&mut self, handle: u32) {
+        if self.jni_handles.remove(&handle) {
+            self.jni.release(handle);
+        } else {
+            #[cfg(target_os = "android")]
+            if let Some(native) = self.native.as_mut() {
+                native.release(handle);
+            }
+        }
     }
 }
 
@@ -818,6 +1060,10 @@ struct Host {
     /// Shown with performance hints enabled: its frames report the RenderThread's work
     /// (`performance_hint.rs`, D390).
     hint: bool,
+    paragraphs: SharedParagraphs,
+    #[cfg(target_os = "android")]
+    hwui: Option<crate::hwui_recorder::HwuiRecorder>,
+    serialized_current: bool,
 }
 
 /// The host behind a pointer Kotlin keeps.
@@ -935,7 +1181,8 @@ fn create(
         || {}
     });
     let results = env.get_direct_buffer_address(results).expect("compose-android: a direct buffer");
-    let text = JniText {
+    let paragraphs = SharedParagraphTable::new_shared();
+    let jni_text = JniText {
         layout: method(
             env,
             measurer,
@@ -953,6 +1200,15 @@ fn create(
         release: method(env, measurer, jni_str!("release"), jni_sig!("(I)V")),
         measurer: env.new_global_ref(measurer).expect("compose-android: a global ref"),
         results: results as *const f32,
+        paragraphs: paragraphs.clone(),
+    };
+    #[cfg(target_os = "android")]
+    let native_text = crate::native_text::NativeText::try_new(env, paragraphs.clone());
+    let backend = AndroidTextBackend {
+        #[cfg(target_os = "android")]
+        native: native_text,
+        jni: Box::new(jni_text),
+        jni_handles: HashSet::new(),
     };
     let view_ref = Rc::new(env.new_global_ref(view).expect("compose-android: a global ref"));
     let fonts = JniFonts {
@@ -960,7 +1216,7 @@ fn create(
         density,
         buffers: RefCell::default(),
     };
-    let text = AndroidTextMeasurer::with_fonts(text, Rc::new(fonts));
+    let text = AndroidTextMeasurer::with_fonts(backend, Rc::new(fonts));
     let mut ui = UiHost::new(size, density, Box::new(text));
     // As `firstDownRefersToPrimaryMouseButtonOnly`'s Android `actual`.
     ui.set_first_down_refers_to_primary_mouse_button_only(false);
@@ -1070,6 +1326,13 @@ fn create(
         }
         None => ui.set_content(content),
     }
+    #[cfg(target_os = "android")]
+    let hwui = crate::hwui_recorder::HwuiRecorder::try_new(
+        env,
+        measurer,
+        paragraphs.clone(),
+        optimizations,
+    );
     let host = Box::new(Host {
         input_mode,
         ui,
@@ -1088,6 +1351,10 @@ fn create(
         input_connections: Default::default(),
         touch_buffers: TouchBuffers::default(),
         hint: false,
+        paragraphs,
+        #[cfg(target_os = "android")]
+        hwui,
+        serialized_current: false,
     });
     Box::into_raw(host) as jlong
 }
@@ -1095,13 +1362,18 @@ fn create(
 /// `ComposeRsNative.destroy(host)`: the composition goes (its effects disposed).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_destroy(
-    _env: EnvUnowned,
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) {
     if host != 0 {
         // SAFETY: `host` came from `create`, and Kotlin forgets it now.
-        let host = unsafe { Box::from_raw(host as *mut Host) };
+        #[allow(unused_mut)]
+        let mut host = unsafe { Box::from_raw(host as *mut Host) };
+        #[cfg(target_os = "android")]
+        if let Some(rec) = host.hwui.as_mut() {
+            with_env(&mut env, |env| rec.clear(env));
+        }
         if host.hint {
             crate::performance_hint::hide();
         }
@@ -1143,6 +1415,10 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
     let host = unsafe { self::host(host) };
     let optimizations = Optimizations::from_bits(bits as u64);
     host.groups.set_optimizations(optimizations);
+    #[cfg(target_os = "android")]
+    if let Some(hwui) = host.hwui.as_mut() {
+        hwui.set_optimizations(optimizations);
+    }
     host.ui.set_optimizations(optimizations);
 }
 
@@ -1390,11 +1666,21 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     let stats = host.ui.frame();
     let mut result = 0;
     if stats.drew || host.first {
-        let _serialize = compose_ui::platform::trace::section(c"compose-rs: serialize");
         host.first = false;
-        let (list, resources, groups) = (&mut host.list, &mut host.resources, &mut host.groups);
-        host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, groups, list));
-        host.resources.collect();
+        #[cfg(target_os = "android")]
+        let has_hwui = host.hwui.is_some();
+        #[cfg(not(target_os = "android"))]
+        let has_hwui = false;
+        if has_hwui {
+            host.serialized_current = false;
+        } else {
+            let _serialize = compose_ui::platform::trace::section(c"compose-rs: serialize");
+            let (list, resources, groups) = (&mut host.list, &mut host.resources, &mut host.groups);
+            host.ui
+                .with_tree(|tree| write_display_list(tree.display_list(), resources, groups, list));
+            host.resources.collect();
+            host.serialized_current = true;
+        }
         result |= flags::DREW;
     }
     if host.ui.has_pending_work() || platform::has_frame_awaiters() {
@@ -1541,6 +1827,12 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let _take = compose_ui::platform::trace::section(c"compose-rs: take drawing");
+    if !host.serialized_current {
+        let (list, resources, groups) = (&mut host.list, &mut host.resources, &mut host.groups);
+        host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, groups, list));
+        host.resources.collect();
+        host.serialized_current = true;
+    }
     host.drawing.bytes.clear();
     host.resources.write_pending(&mut host.drawing);
     host.drawing.bytes.extend_from_slice(&host.list.bytes);
@@ -2660,6 +2952,124 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
         _ => None,
     };
     host.ui.props().set(&name, value);
+}
+
+// ---- Direct HWUI recording (`hwui.rs` / `hwui_recorder.rs`) ----------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_hasDirectHwui<'local>(
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    #[cfg(target_os = "android")]
+    {
+        with_env(&mut env, |env| crate::hwui::get(env).is_some())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setCollectingParagraphsAhead(
+    _env: EnvUnowned,
+    _class: JClass,
+    host: jlong,
+    collecting: jboolean,
+) {
+    let host = unsafe { self::host(host) };
+    host.paragraphs.borrow_mut().collecting_ahead = collecting;
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_recordParagraphsAhead<'local>(
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    #[allow(unused_variables)] deadline_nanos: jlong,
+) -> jint {
+    let host = unsafe { self::host(host) };
+    #[cfg(target_os = "android")]
+    if let Some(hwui) = host.hwui.as_mut() {
+        return with_env(&mut env, |env| {
+            let left = hwui.record_paragraphs_ahead(env, deadline_nanos);
+            let recorded = hwui.recorded_paragraphs_last().min(0x3fff_ffff) as i32;
+            i32::from(left) | (recorded << 1)
+        });
+    }
+    host.paragraphs.borrow_mut().laid_out_ahead.clear();
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawHardware<'local>(
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    #[allow(unused_variables)] canvas: JObject<'local>,
+) -> jboolean {
+    let host = unsafe { self::host(host) };
+    #[cfg(target_os = "android")]
+    if let Some(hwui) = host.hwui.as_mut() {
+        let _draw = compose_ui::platform::trace::section(c"compose-rs: hwui record");
+        let ui = &host.ui;
+        return with_env(&mut env, |env| {
+            ui.with_tree(|tree| hwui.record_to_canvas(env, &canvas, tree.display_list()))
+        });
+    }
+    let _ = host;
+    false
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawAheadHardware<'local>(
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+) -> jint {
+    let host = unsafe { self::host(host) };
+    #[cfg(target_os = "android")]
+    if host.hwui.is_some() {
+        let Some(groups) = host.ui.draw_ahead() else { return 0 };
+        let recorded = if let Some(hwui) = host.hwui.as_mut() {
+            let _ahead = compose_ui::platform::trace::section(c"compose-rs: hwui ahead");
+            with_env(&mut env, |env| hwui.record_groups_ahead(env, &groups))
+        } else {
+            false
+        };
+        drop(groups);
+        let more = host.ui.has_draw_ahead_work();
+        return i32::from(recorded) | (i32::from(more) << 1);
+    }
+    let _ = host;
+    0
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawNativeParagraph<'local>(
+    #[allow(unused_variables, unused_mut)] mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    #[allow(unused_variables)] canvas: JObject<'local>,
+    #[allow(unused_variables)] hardware: jboolean,
+    #[allow(unused_variables)] handle: jint,
+    #[allow(unused_variables)] x: jfloat,
+    #[allow(unused_variables)] y: jfloat,
+) -> jboolean {
+    if host == 0 {
+        return false;
+    }
+    let host = unsafe { self::host(host) };
+    #[cfg(target_os = "android")]
+    if let Some(hwui) = host.hwui.as_mut() {
+        return with_env(&mut env, |env| {
+            hwui.draw_paragraph_to_java_canvas(env, &canvas, hardware, handle as u32, x, y)
+        });
+    }
+    let _ = host;
+    false
 }
 
 #[cfg(test)]

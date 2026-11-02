@@ -70,6 +70,7 @@ internal class TextMeasurer(
      * ([restyle]), and puts them back.
      */
     private val paints = HashMap<PaintStyle, TextPaint>()
+    var host: Long = 0L
     /**
      * The canvas layouts draw on ([drawInPaint]), around the one they're drawn into, as
      * Compose's shared `TextAndroidCanvas`: its clip bounds reach past the bottom, so a layout
@@ -1223,6 +1224,7 @@ internal class TextMeasurer(
      * a result the host's content kept (D1118): they go with this object when those do.
      */
     fun clearDrawing() {
+        host = 0L
         laidOut.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()
@@ -1246,6 +1248,9 @@ internal class TextMeasurer(
      * render node, recorded the first time (a paragraph never changes once laid out).
      */
     fun draw(canvas: Canvas, hardware: Boolean, handle: Int, x: Float, y: Float) {
+        if (host != 0L && ComposeRsNative.drawNativeParagraph(host, canvas, hardware, handle, x, y)) {
+            return
+        }
         val layout = layouts.get(handle) ?: return
         // Without render nodes of their own, drawn into the recording around them, as Compose's.
         if (!hardware || !paragraphNodes) {
@@ -1262,6 +1267,23 @@ internal class TextMeasurer(
         canvas.translate(x, y)
         canvas.drawRenderNode(node)
         canvas.restore()
+    }
+
+    /**
+     * Draws paragraph [handle]'s `Layout` directly onto [canvas] (a [NativeCanvasProxy] wrapping a
+     * native `RecordingCanvas*` from `hwui_recorder.rs`), without creating a second Java
+     * `RenderNode` wrapper.
+     */
+    fun drawLayoutDirect(canvas: Canvas, handle: Int, x: Float, y: Float) {
+        val layout = layouts.get(handle) ?: return
+        if (x == 0f && y == 0f) {
+            drawInPaint(handle, layout, canvas)
+        } else {
+            canvas.save()
+            canvas.translate(x, y)
+            drawInPaint(handle, layout, canvas)
+            canvas.restore()
+        }
     }
 
     /**
@@ -1417,8 +1439,8 @@ internal class TextMeasurer(
         }
 
         /** About ten list items' paragraphs: what a fling releases before composing more. */
-        const val NODE_POOL_CAPACITY = 64
-        const val PAINT_CACHE_CAPACITY = 64
+        const val NODE_POOL_CAPACITY = 512
+        const val PAINT_CACHE_CAPACITY = 256
         /** A paragraph's recording before any was timed: a short one's, on a big core. */
         const val INITIAL_RECORD_NANOS = 30_000L
         /** The most one recording counts for in [recordNanos]. */
@@ -1488,4 +1510,12 @@ internal class IntList {
     fun clear() {
         size = 0
     }
+}
+
+/**
+ * Lightweight hardware-accelerated [Canvas] shell whose `mNativeCanvasWrapper` field is
+ * temporarily bound to an active `RecordingCanvas*` during [TextMeasurer.drawLayoutDirect].
+ */
+internal class NativeCanvasProxy : Canvas() {
+    override fun isHardwareAccelerated(): Boolean = true
 }
