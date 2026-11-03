@@ -82,6 +82,7 @@ class ComposeRsView @JvmOverloads constructor(
      */
     private var measurer = newMeasurer()
     private val replayer = Replayer(measurer)
+    private val directHwui: Boolean by lazy(LazyThreadSafetyMode.NONE) { ComposeRsNative.hasDirectHwui() }
     /** Over the Rust host's drawing (see [ComposeRsNative.takeDrawing]). */
     private var drawing: java.nio.ByteBuffer? = null
     private var host = 0L
@@ -354,6 +355,7 @@ class ComposeRsView @JvmOverloads constructor(
             lifecycle.state,
             HostViewModels.tokenOf(this),
         )
+        measurer.host = host
         savedState = null
         ComposeRsNative.setInputMode(host, isInTouchMode)
         sendConfiguration(resources.configuration)
@@ -775,10 +777,15 @@ class ComposeRsView @JvmOverloads constructor(
         val recordDeadline = nextFrameNanos - RECORD_MARGIN_NANOS
         // Paragraphs the last idle time laid out but had no time to record go first, then the
         // groups of the items it measured: their item is the next one shown.
-        var workLeft = ahead && (
+        var workLeft = if (!ahead) {
+            false
+        } else if (directHwui) {
+            val pRes = ComposeRsNative.recordParagraphsAhead(host, recordDeadline)
+            (pRes and 1 != 0) || recordAhead(recordDeadline, firstInIdleTime = (pRes ushr 1) == 0)
+        } else {
             measurer.recordLaidOut(recordDeadline) ||
                 recordAhead(recordDeadline, firstInIdleTime = measurer.recordedLast == 0)
-            )
+        }
         if (!workLeft) {
             val available = nextFrameNanos - System.nanoTime()
             workLeft = available <= RECORD_MARGIN_NANOS ||
@@ -806,13 +813,19 @@ class ComposeRsView @JvmOverloads constructor(
         val idle = now > drawn + 2 * interval
         val nextFrameNanos = maxOf(prefetchFrameTimeNanos, drawn) + interval
         val available = (nextFrameNanos - now).coerceAtLeast(0L)
-        var workLeft = ahead && (
-            measurer.recordLaidOut(nextFrameNanos - RECORD_MARGIN_NANOS) ||
-                recordAhead(nextFrameNanos - RECORD_MARGIN_NANOS, firstInIdleTime = measurer.recordedLast == 0)
-            )
+        val deadline = nextFrameNanos - RECORD_MARGIN_NANOS
+        var workLeft = if (!ahead) {
+            false
+        } else if (directHwui) {
+            val pRes = ComposeRsNative.recordParagraphsAhead(host, deadline)
+            (pRes and 1 != 0) || recordAhead(deadline, firstInIdleTime = (pRes ushr 1) == 0)
+        } else {
+            measurer.recordLaidOut(deadline) ||
+                recordAhead(deadline, firstInIdleTime = measurer.recordedLast == 0)
+        }
         if (!workLeft) {
             workLeft = if (available > 0 || idle) {
-                prefetchAndRecord(available, nextFrameNanos - RECORD_MARGIN_NANOS, idle, ahead)
+                prefetchAndRecord(available, deadline, idle, ahead)
             } else {
                 true
             }
@@ -831,6 +844,18 @@ class ComposeRsView @JvmOverloads constructor(
      * whether work is left (prefetching, or paragraphs or groups to record).
      */
     private fun prefetchAndRecord(available: Long, deadlineNanos: Long, unboundedFirst: Boolean, ahead: Boolean): Boolean {
+        if (directHwui) {
+            ComposeRsNative.setCollectingParagraphsAhead(host, ahead)
+            val prefetchLeft = try {
+                ComposeRsNative.prefetch(host, available, unboundedFirst)
+            } finally {
+                ComposeRsNative.setCollectingParagraphsAhead(host, false)
+            }
+            if (!ahead) return prefetchLeft
+            val pRes = ComposeRsNative.recordParagraphsAhead(host, deadlineNanos)
+            val recordingLeft = (pRes and 1 != 0) || recordAhead(deadlineNanos, firstInIdleTime = false)
+            return prefetchLeft || recordingLeft
+        }
         measurer.collectingLaidOut = ahead
         val prefetchLeft = try {
             ComposeRsNative.prefetch(host, available, unboundedFirst)
@@ -867,18 +892,24 @@ class ComposeRsView @JvmOverloads constructor(
                     return false
                 }
                 first = false
-                val taken = ComposeRsNative.drawAhead(host)
-                val length = (taken and 0xFFFFFFFFL).toInt()
-                if (length > 0) {
-                    if (taken and ComposeRsNative.NEW_DRAWING_BUFFER != 0L || drawing == null) {
-                        drawing = ComposeRsNative.drawingBuffer(host)
+                if (directHwui) {
+                    val res = ComposeRsNative.drawAheadHardware(host)
+                    if (res and 1 != 0) drawAheadCost.timed(System.nanoTime() - start)
+                    if (res and 2 == 0) return false
+                } else {
+                    val taken = ComposeRsNative.drawAhead(host)
+                    val length = (taken and 0xFFFFFFFFL).toInt()
+                    if (length > 0) {
+                        if (taken and ComposeRsNative.NEW_DRAWING_BUFFER != 0L || drawing == null) {
+                            drawing = ComposeRsNative.drawingBuffer(host)
+                        }
+                        val buffer = drawing ?: return false
+                        buffer.limit(length)
+                        // Timed only when recorded: a step with nothing recorded is no sample.
+                        if (replayer.recordAhead(buffer)) drawAheadCost.timed(System.nanoTime() - start)
                     }
-                    val buffer = drawing ?: return false
-                    buffer.limit(length)
-                    // Timed only when recorded: a step with nothing recorded is no sample.
-                    if (replayer.recordAhead(buffer)) drawAheadCost.timed(System.nanoTime() - start)
+                    if (taken and ComposeRsNative.MORE_AHEAD == 0L) return false
                 }
-                if (taken and ComposeRsNative.MORE_AHEAD == 0L) return false
             }
         } finally {
             Trace.endSection()
@@ -939,6 +970,9 @@ class ComposeRsView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         if (host == 0L) return
+        if (directHwui && canvas.isHardwareAccelerated && ComposeRsNative.drawHardware(host, canvas)) {
+            return
+        }
         val taken = ComposeRsNative.takeDrawing(host)
         if (taken and ComposeRsNative.NEW_DRAWING_BUFFER != 0L || drawing == null) {
             drawing = ComposeRsNative.drawingBuffer(host)

@@ -462,7 +462,8 @@ impl UiTree {
             let own = value.chain[index].own;
             let delegating = value.chain[index].state & entry_state::DELEGATING != 0;
             let mut modifier_node = mem::replace(&mut value.chain[index].node, Box::new(Taken));
-            let custom = value.chain[index].kinds.any(NodeKinds::OBSERVED);
+            let custom = value.chain[index].kinds.any(NodeKinds::OBSERVED)
+                && (delegating || modifier_node.reads_state());
             let run = self.next_measure_run();
             let self_key = self.measure_key(node);
             let observer = if custom { self.observer.clone() } else { None };
@@ -499,14 +500,24 @@ impl UiTree {
             // the end, as a lazy list keeps them, the others are a prefix; anywhere else, a copy.
             let mut active = children.len();
             let mut scattered = false;
+            let mut has_align_by = false;
             for (index, child) in children.iter().enumerate() {
                 let child = self.node_mut(child.node);
                 child.placed = false;
                 child.measured_in_block = false;
                 if child.deactivated {
                     active = active.min(index);
-                } else if active < index {
-                    scattered = true;
+                } else {
+                    has_align_by |= matches!(
+                        child.parent_data.alignment,
+                        Some(
+                            crate::modifier::ParentAlignment::Line(_)
+                                | crate::modifier::ParentAlignment::Block(_)
+                        )
+                    );
+                    if active < index {
+                        scattered = true;
+                    }
                 }
             }
             let filtered: Vec<Measurable> = if scattered {
@@ -521,7 +532,8 @@ impl UiTree {
                 if scattered { &filtered } else { &children[..active] };
             let run = self.next_measure_run();
             let self_key = self.measure_key(node);
-            let observer = self.observer.clone();
+            let observer =
+                if policy.reads_state() || has_align_by { self.observer.clone() } else { None };
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope::new(&mut *self, node, run);

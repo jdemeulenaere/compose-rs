@@ -23,11 +23,18 @@ mod image;
 pub mod input_method;
 pub mod serialize;
 pub mod text;
+pub mod text_layout;
 pub mod text_segments;
 
 mod bridge;
 mod frame_time;
+#[cfg(target_os = "android")]
+pub(crate) mod hwui;
+#[cfg(target_os = "android")]
+pub(crate) mod hwui_recorder;
 mod logging;
+#[cfg(target_os = "android")]
+pub(crate) mod native_text;
 mod performance_hint;
 mod services;
 
