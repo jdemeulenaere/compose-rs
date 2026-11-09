@@ -795,9 +795,12 @@ impl UiTree {
         }
         for &at in which {
             let change = &live[at];
-            // A pointer resting while another moves, comes down or up isn't a change to hear alone.
+            // A pointer resting while another moves, comes down or up isn't a change to hear alone;
+            // one that moved in the same event is (D2130).
             if change.resting
-                || (change.event.kind == PointerEventType::Move && *kind != PointerEventType::Move)
+                || (change.event.kind == PointerEventType::Move
+                    && *kind != PointerEventType::Move
+                    && change.previous.is_some_and(|it| it.position == change.event.position))
             {
                 continue;
             }
@@ -1035,12 +1038,21 @@ impl UiTree {
 
     /// The mouse left the window: what it was over hears `Exit`.
     pub fn pointer_left(&mut self) -> Vec<Action> {
+        self.pointer_left_with(crate::pointer_event::PointerKeyboardModifiers::default())
+    }
+
+    /// As [`pointer_left`](Self::pointer_left), the exit telling `keyboard_modifiers` (D2131).
+    pub fn pointer_left_with(
+        &mut self,
+        keyboard_modifiers: crate::pointer_event::PointerKeyboardModifiers,
+    ) -> Vec<Action> {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         self.mouse = None;
         self.panning = false;
         self.pointer_states.retain(|it| it.1.pressed);
-        let mut event = PointerEvent::moved(Offset::new(-1.0, -1.0), false);
+        let mut event = PointerEvent::moved(Offset::new(-1.0, -1.0), false)
+            .with_keyboard_modifiers(keyboard_modifiers);
         event.kind = PointerEventType::Exit;
         self.update_hover(Vec::new(), event, false, &mut actions, &mut requests);
         self.apply_requests(requests, &mut actions);

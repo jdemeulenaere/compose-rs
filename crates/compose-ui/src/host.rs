@@ -975,8 +975,17 @@ impl UiHost {
 
     /// The mouse left the window: what it was over hears `Exit` (hover states end).
     pub fn send_pointer_left(&mut self) {
+        self.send_pointer_left_with(crate::pointer_event::PointerKeyboardModifiers::default());
+    }
+
+    /// As [`send_pointer_left`](Self::send_pointer_left), the exit telling `keyboard_modifiers`
+    /// (D2131).
+    pub fn send_pointer_left_with(
+        &mut self,
+        keyboard_modifiers: crate::pointer_event::PointerKeyboardModifiers,
+    ) {
         let _turn = compose_runtime::platform::Turn::begin();
-        let actions = self.with_tree(|tree| tree.pointer_left());
+        let actions = self.with_tree(|tree| tree.pointer_left_with(keyboard_modifiers));
         Self::run(actions);
         self.wake_if_dirty();
     }

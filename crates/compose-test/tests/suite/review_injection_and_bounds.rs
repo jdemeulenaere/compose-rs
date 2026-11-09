@@ -84,7 +84,6 @@ fn an_up_flushes_updated_staying_and_lifted_pointers_in_one_release_event() {
 /// and flushed by another finger's `up_pointer` (D2075, D2130): single-change handlers still hear
 /// the staying finger's move in the release event.
 #[test]
-#[ignore = "review: single-change handlers skip a staying finger's move carried in another finger's release"]
 fn an_up_carrying_another_fingers_move_drags_a_single_pointer_handler() {
     let dragged = mutable_state_of(Offset::ZERO);
     let handle = dragged.handle();
@@ -252,7 +251,6 @@ impl PointerInputModifierNode for ModifiersRecorderNode {
 }
 
 #[test]
-#[ignore = "review: window hover exits drop active lock and modifier keys"]
 fn mouse_enter_move_press_scroll_release_and_exit_all_carry_lock_keys() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let recorder = seen.clone();
@@ -300,7 +298,6 @@ fn mouse_enter_move_press_scroll_release_and_exit_all_carry_lock_keys() {
 }
 
 #[test]
-#[ignore = "review: window hover exit on touch down drops active lock keys"]
 fn touch_down_move_and_up_carry_lock_keys_and_hover_exit_does_too() {
     let (mut ui, log) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -333,7 +330,6 @@ fn touch_down_move_and_up_carry_lock_keys_and_hover_exit_does_too() {
 }
 
 #[test]
-#[ignore = "review: trackpad window hover exit drops active lock keys"]
 fn trackpad_enter_press_release_pan_scale_and_exit_carry_lock_keys() {
     let (mut ui, log) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -443,7 +439,6 @@ fn nested_local_density_converts_root_pixels_and_touch_bounds_with_the_nodes_own
 // ---- D2079: Panic safety in with_keys_down and with_keys_toggled -------------------------------
 
 #[test]
-#[ignore = "review: with_keys_down leaks earlier keys when a later key_down panics"]
 fn with_keys_down_duplicate_key_panics_and_releases_the_first_key() {
     let (mut ui, _) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -460,7 +455,6 @@ fn with_keys_down_duplicate_key_panics_and_releases_the_first_key() {
 }
 
 #[test]
-#[ignore = "review: with_keys_down leaks keys pressed before a pre-held key panics"]
 fn with_keys_down_panicking_on_already_held_second_key_releases_only_what_it_pressed() {
     let (mut ui, _) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -481,7 +475,6 @@ fn with_keys_down_panicking_on_already_held_second_key_releases_only_what_it_pre
 }
 
 #[test]
-#[ignore = "review: with_keys_down panics in cleanup if block released a key before panicking"]
 fn with_keys_down_panicking_after_block_released_a_key_releases_the_rest_and_keeps_panic() {
     let (mut ui, _) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -508,7 +501,6 @@ fn with_keys_down_panicking_after_block_released_a_key_releases_the_rest_and_kee
 }
 
 #[test]
-#[ignore = "review: with_keys_toggled leaves earlier keys toggled when setup panics partway"]
 fn with_keys_toggled_panicking_mid_setup_toggles_back_earlier_keys_only() {
     let (mut ui, _) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {
@@ -531,7 +523,6 @@ fn with_keys_toggled_panicking_mid_setup_toggles_back_earlier_keys_only() {
 }
 
 #[test]
-#[ignore = "review: with_keys_toggled panics in cleanup if block left a key down before panicking"]
 fn with_keys_toggled_panicking_with_key_left_down_finishes_toggle_and_keeps_panic() {
     let (mut ui, _) = recording_root_with_keys();
     ui.on_node_with_tag(ROOT).perform_key_input(|keys| {

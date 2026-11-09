@@ -25,7 +25,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 76 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 79 |
 
 ## Index by number
 
@@ -1130,9 +1130,12 @@ The log is split by area into the files below, one table each, rows in number or
 | D2072 | [text](decisions/text.md#d2072) | current |
 | D2073 | [text](decisions/text.md#d2073) | current |
 | D2074 | [text](decisions/text.md#d2074) | current |
-| D2075 | [api-and-tooling](decisions/api-and-tooling.md#d2075) | current |
-| D2076 | [api-and-tooling](decisions/api-and-tooling.md#d2076) | current |
+| D2075 | [api-and-tooling](decisions/api-and-tooling.md#d2075) | revised by [D2130](decisions/api-and-tooling.md#d2130) |
+| D2076 | [api-and-tooling](decisions/api-and-tooling.md#d2076) | revised by [D2131](decisions/api-and-tooling.md#d2131) |
 | D2077 | [text](decisions/text.md#d2077) | current |
 | D2078 | [api-and-tooling](decisions/api-and-tooling.md#d2078) | current |
-| D2079 | [api-and-tooling](decisions/api-and-tooling.md#d2079) | current |
+| D2079 | [api-and-tooling](decisions/api-and-tooling.md#d2079) | revised by [D2132](decisions/api-and-tooling.md#d2132) |
 | D2080 | [api-and-tooling](decisions/api-and-tooling.md#d2080) | current |
+| D2130 | [api-and-tooling](decisions/api-and-tooling.md#d2130) | current |
+| D2131 | [api-and-tooling](decisions/api-and-tooling.md#d2131) | current |
+| D2132 | [api-and-tooling](decisions/api-and-tooling.md#d2132) | current |

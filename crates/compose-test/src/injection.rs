@@ -421,7 +421,7 @@ impl TouchInjectionScope<'_> {
             self.0.rule.host.with_tree(|tree| tree.cancel_pointer(PointerId(0)));
         } else if self.input().mouse_entered {
             self.0.rule.input.mouse_entered = false;
-            self.0.rule.host.send_pointer_left();
+            self.0.send_cursor_left();
         }
         if self.input().touch_updated {
             self.send_move();
@@ -963,12 +963,19 @@ impl InjectionScope<'_> {
         self.send(event.with_pointer(PointerId(0), PointerType::Mouse));
     }
 
+    /// The cursor left the window's hover, telling the modifiers held and locks on (D2131).
+    fn send_cursor_left(&mut self) {
+        let modifiers = self.pointer_modifiers();
+        self.rule.host.send_pointer_left_with(modifiers);
+    }
+
     /// Ends a touch gesture in progress: the cursor's events cancel it, as Compose's dispatcher.
     fn cancel_touch(&mut self) {
         if self.rule.input.touches.is_empty() {
             return;
         }
         let ids: Vec<u64> = std::mem::take(&mut self.rule.input.touches).into_keys().collect();
+        self.rule.input.touch_updated = false;
         for id in ids {
             self.rule.host.with_tree(|tree| tree.cancel_pointer(touch_pointer(id)));
         }
@@ -1005,7 +1012,7 @@ impl InjectionScope<'_> {
         // Leaving the window: the exit, then the move, as Compose's `enqueueMouseMove`.
         if !inside && self.rule.input.mouse_entered {
             self.rule.input.mouse_entered = false;
-            self.rule.host.send_pointer_left();
+            self.send_cursor_left();
         }
         let buttons = self.rule.input.mouse_buttons;
         if inside && !buttons.are_any_pressed() {
@@ -1125,7 +1132,7 @@ impl InjectionScope<'_> {
         self.rule.input.mouse = root;
         self.rule.input.mouse_entered = false;
         self.rule.input.cursor_source = None;
-        self.rule.host.send_pointer_left();
+        self.send_cursor_left();
         self.rule.run_current();
     }
 
@@ -1948,18 +1955,46 @@ impl KeyInjectionScope<'_> {
         self.with_keys_down(&[key], block);
     }
 
-    /// Runs `block` with `keys` held, as `withKeysDown`: they go up after it, a panic in it
-    /// too (Compose's `try … finally`, D2079).
+    /// Runs `block` with `keys` held, as `withKeysDown`: they go up after it, a panic in setup or
+    /// in `block` too, releasing only what was pressed and still down (Compose's `try … finally`,
+    /// D2079, D2132).
     pub fn with_keys_down(&mut self, keys: &[Key], block: impl FnOnce(&mut Self)) {
-        for key in keys {
-            self.key_down(*key);
+        let mut pressed = 0;
+        let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for &key in keys {
+                let was_down = self.is_key_down(key);
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.key_down(key);
+                }));
+                if !was_down && self.is_key_down(key) {
+                    pressed += 1;
+                }
+                if let Err(panic) = res {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        }));
+        if let Err(panic) = setup {
+            self.release_keys_quietly(&keys[..pressed]);
+            std::panic::resume_unwind(panic);
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| block(self)));
+        if let Err(panic) = result {
+            self.release_keys_quietly(keys);
+            std::panic::resume_unwind(panic);
+        }
         for key in keys {
             self.key_up(*key);
         }
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
+    }
+
+    fn release_keys_quietly(&mut self, keys: &[Key]) {
+        for &key in keys {
+            if self.is_key_down(key) {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.key_up(key);
+                }));
+            }
         }
     }
 
@@ -1968,13 +2003,57 @@ impl KeyInjectionScope<'_> {
         self.with_keys_toggled(&[key], block);
     }
 
-    /// As `withKeysToggled`: toggled back after `block`, a panic in it too (D2079).
+    /// As `withKeysToggled`: toggled back after `block`, a panic in setup or in `block` too
+    /// (D2079, D2132).
     pub fn with_keys_toggled(&mut self, keys: &[Key], block: impl FnOnce(&mut Self)) {
-        self.press_keys(keys);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| block(self)));
-        self.press_keys(keys);
-        if let Err(panic) = result {
+        let mut toggled = 0;
+        let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for (index, &key) in keys.iter().enumerate() {
+                if index > 0 {
+                    self.0.advance_event_time(DEFAULT_KEY_PRESS_MILLIS);
+                }
+                let was_down = self.is_key_down(key);
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.press_key(key);
+                }));
+                if let Err(panic) = res {
+                    if !was_down && self.is_key_down(key) {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.key_up(key);
+                        }));
+                        toggled += 1;
+                    }
+                    std::panic::resume_unwind(panic);
+                }
+                toggled += 1;
+            }
+        }));
+        if let Err(panic) = setup {
+            self.toggle_keys_quietly(&keys[..toggled]);
             std::panic::resume_unwind(panic);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| block(self)));
+        if let Err(panic) = result {
+            self.toggle_keys_quietly(keys);
+            std::panic::resume_unwind(panic);
+        }
+        self.press_keys(keys);
+    }
+
+    fn toggle_keys_quietly(&mut self, keys: &[Key]) {
+        for (index, &key) in keys.iter().enumerate() {
+            if index > 0 {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.0.advance_event_time(DEFAULT_KEY_PRESS_MILLIS);
+                }));
+            }
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if self.is_key_down(key) {
+                    self.key_up(key);
+                } else {
+                    self.press_key(key);
+                }
+            }));
         }
     }
 
