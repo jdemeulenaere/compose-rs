@@ -1,6 +1,6 @@
 //! Lifecycle-aware streams and state collection, as AndroidX's `Lifecycle.eventFlow`,
 //! `Flow.flowWithLifecycle` (`lifecycle-runtime`) and `collectAsStateWithLifecycle`
-//! (`lifecycle-runtime-compose`), D2150.
+//! (`lifecycle-runtime-compose`), D2150, D2160.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -45,6 +45,15 @@ impl Lifecycle {
     }
 }
 
+fn replace_waker(slot: &RefCell<Option<Waker>>, waker: &Waker) {
+    if slot.borrow().as_ref().is_some_and(|current| current.will_wake(waker)) {
+        return;
+    }
+    let new_waker = waker.clone();
+    let previous = slot.borrow_mut().replace(new_waker);
+    drop(previous);
+}
+
 impl Stream for EventFlow {
     type Item = LifecycleEvent;
 
@@ -84,7 +93,7 @@ impl Stream for EventFlow {
             this.observer = None;
             return Poll::Ready(None);
         }
-        *this.queue.waker.borrow_mut() = Some(context.waker().clone());
+        replace_waker(&this.queue.waker, context.waker());
         Poll::Pending
     }
 }
@@ -94,6 +103,8 @@ impl Drop for EventFlow {
         if let Some(observer) = self.observer.take() {
             self.lifecycle.remove_observer(&observer);
         }
+        let waker = self.queue.waker.borrow_mut().take();
+        drop(waker);
     }
 }
 
@@ -240,12 +251,18 @@ impl<F: Flow> Stream for FlowWithLifecycle<F> {
                     inner.generation.set(generation);
                     inner.active.set(true);
                     let stream = Box::pin(inner.flow.subscribe_flow());
-                    if inner.generation.get() == generation && inner.active.get() {
-                        *inner.active_stream.borrow_mut() = Some(stream);
-                    }
-                    let waker = inner.waker.borrow_mut().take();
-                    if let Some(waker) = waker {
-                        waker.wake();
+                    let alive = inner.generation.get() == generation && inner.active.get();
+                    let previous = if alive {
+                        inner.active_stream.borrow_mut().replace(stream)
+                    } else {
+                        Some(stream)
+                    };
+                    drop(previous);
+                    if alive {
+                        let waker = inner.waker.borrow_mut().take();
+                        if let Some(waker) = waker {
+                            waker.wake();
+                        }
                     }
                     return;
                 }
@@ -287,7 +304,8 @@ impl<F: Flow> Stream for FlowWithLifecycle<F> {
             match stream.as_mut().poll_next(context) {
                 Poll::Ready(Some(item)) => {
                     if this.inner.generation.get() == generation && this.inner.active.get() {
-                        *this.inner.active_stream.borrow_mut() = Some(stream);
+                        let previous = this.inner.active_stream.borrow_mut().replace(stream);
+                        drop(previous);
                         return Poll::Ready(Some(item));
                     }
                     drop(stream);
@@ -301,7 +319,8 @@ impl<F: Flow> Stream for FlowWithLifecycle<F> {
                 }
                 Poll::Pending => {
                     if this.inner.generation.get() == generation && this.inner.active.get() {
-                        *this.inner.active_stream.borrow_mut() = Some(stream);
+                        let previous = this.inner.active_stream.borrow_mut().replace(stream);
+                        drop(previous);
                         break;
                     }
                     drop(stream);
@@ -317,7 +336,7 @@ impl<F: Flow> Stream for FlowWithLifecycle<F> {
             this.observer = None;
             return Poll::Ready(None);
         }
-        *this.inner.waker.borrow_mut() = Some(context.waker().clone());
+        replace_waker(&this.inner.waker, context.waker());
         Poll::Pending
     }
 }
@@ -327,9 +346,12 @@ impl<F: Flow> Drop for FlowWithLifecycle<F> {
         if let Some(observer) = self.observer.take() {
             self.lifecycle.remove_observer(&observer);
         }
+        self.inner.generation.set(self.inner.generation.get().wrapping_add(1));
         self.inner.active.set(false);
         let previous = self.inner.active_stream.borrow_mut().take();
+        let waker = self.inner.waker.borrow_mut().take();
         drop(previous);
+        drop(waker);
     }
 }
 

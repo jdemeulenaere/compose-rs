@@ -1,6 +1,6 @@
 //! Lifecycles, as AndroidX's `androidx.lifecycle` (`lifecycle-common`, `lifecycle-runtime`,
 //! `lifecycle-runtime-compose`, `lifecycle-runtime-testing`), and ViewModels, as its
-//! `lifecycle-viewmodel` and `lifecycle-viewmodel-compose`, D704, D837, D838, D2150.
+//! `lifecycle-viewmodel` and `lifecycle-viewmodel-compose`, D704, D837, D838, D2150, D2160.
 //!
 //! A [`Lifecycle`] moves through [`LifecycleState`]s and tells its observers of each
 //! [`LifecycleEvent`]; a [`LifecycleRegistry`] is what moves it. Hosts provide theirs in
