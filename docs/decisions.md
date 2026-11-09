@@ -19,7 +19,7 @@ The log is split by area into the files below, one table each, rows in number or
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 182 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 468 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 152 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 155 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 121 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
@@ -1136,3 +1136,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D2078 | [api-and-tooling](decisions/api-and-tooling.md#d2078) | current |
 | D2079 | [api-and-tooling](decisions/api-and-tooling.md#d2079) | current |
 | D2080 | [api-and-tooling](decisions/api-and-tooling.md#d2080) | current |
+| D2180 | [text](decisions/text.md#d2180) | current |
+| D2181 | [text](decisions/text.md#d2181) | current |
+| D2182 | [text](decisions/text.md#d2182) | current |

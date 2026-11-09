@@ -1734,3 +1734,195 @@ fn the_offset_for_a_position_is_a_cluster_boundary() {
     assert_eq!(lines.get_offset_for_position(Offset::new(100.0, 5.0)), text.find('\n').unwrap());
     assert_eq!(lines.get_offset_for_position(Offset::new(21.0, 5.0)), text.find('\n').unwrap());
 }
+
+// ---- `AndroidParagraphTest` queries, ellipsis, preconditions and runs ----
+
+fn constructed_paragraph(
+    text: &str,
+    style: TextStyle,
+    spans: &[compose_ui::AnnotatedRange<SpanStyle>],
+    constraints: Constraints,
+    max_lines: u32,
+    overflow: TextOverflow,
+) -> Rc<dyn Paragraph> {
+    let platform = compose_ui::platform::SharedTextMeasurer::new(Box::new(
+        FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT),
+    ));
+    let resolver = compose_ui::create_font_family_resolver(&platform);
+    compose_ui::paragraph_of_text(
+        text,
+        &style,
+        constraints,
+        Density::new(1.0),
+        resolver,
+        compose_ui::LocaleList::from_language_tags("en"),
+        spans,
+        &[],
+        max_lines,
+        overflow,
+    )
+}
+
+fn at_width(width: f32) -> Constraints {
+    Constraints::new(0, width.ceil() as i32, 0, Constraints::INFINITY)
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, setMinWidthConstraints_notSupported
+#[test]
+#[should_panic(
+    expected = "Setting Constraints.minWidth and Constraints.minHeight is not supported"
+)]
+fn a_paragraph_refuses_a_minimum_width() {
+    constructed_paragraph(
+        "",
+        TextStyle::DEFAULT,
+        &[],
+        Constraints::new(100, Constraints::INFINITY, 0, Constraints::INFINITY),
+        u32::MAX,
+        TextOverflow::Ellipsis,
+    );
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, setMinHeightConstraints_notSupported
+#[test]
+#[should_panic(
+    expected = "Setting Constraints.minWidth and Constraints.minHeight is not supported"
+)]
+fn a_paragraph_refuses_a_minimum_height() {
+    constructed_paragraph(
+        "",
+        TextStyle::DEFAULT,
+        &[],
+        Constraints::new(0, Constraints::INFINITY, 100, Constraints::INFINITY),
+        u32::MAX,
+        TextOverflow::Ellipsis,
+    );
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLineEqualsNull_doesNotEllipsis
+#[test]
+fn an_ellipsis_with_unbounded_lines_leaves_wrapped_lines_unellipsized() {
+    let paragraph = constructed_paragraph(
+        "abc",
+        sized(20.0),
+        &[],
+        at_width(40.0),
+        u32::MAX,
+        TextOverflow::Ellipsis,
+    );
+    assert_eq!(paragraph.line_count(), 2);
+    for line in 0..paragraph.line_count() {
+        assert!(!paragraph.is_line_ellipsized(line), "line {line}");
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesLessThanTextLines_doesEllipsis
+#[test]
+fn an_ellipsis_with_fewer_maximum_lines_than_wrapped_lines_ellipsizes() {
+    let paragraph = constructed_paragraph(
+        "abcde",
+        sized(100.0),
+        &[],
+        at_width(350.0),
+        1,
+        TextOverflow::Ellipsis,
+    );
+    assert!(paragraph.is_line_ellipsized(0));
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withMaxLinesMoreThanTextLines_doesNotEllipsis
+#[test]
+fn an_ellipsis_with_enough_maximum_lines_leaves_every_line_unellipsized() {
+    let paragraph =
+        constructed_paragraph("abc", sized(100.0), &[], at_width(200.0), 2, TextOverflow::Ellipsis);
+    assert_eq!(paragraph.line_count(), 2);
+    for line in 0..paragraph.line_count() {
+        assert!(!paragraph.is_line_ellipsized(line), "line {line}");
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testEllipsis_withSpans_withLimitedHeight_doesEllipsis
+#[test]
+fn a_taller_span_reduces_the_lines_that_fit_before_the_ellipsis() {
+    let larger = SpanStyle { font_size: 60.sp(), ..SpanStyle::DEFAULT };
+    let spans = [compose_ui::AnnotatedRange::new(larger, 0, 2)];
+    let constraints = Constraints::new(0, 120, 0, 66);
+    let paragraph = constructed_paragraph(
+        "This is a text",
+        sized(30.0),
+        &spans,
+        constraints,
+        u32::MAX,
+        TextOverflow::Ellipsis,
+    );
+    assert_eq!(paragraph.line_count(), 1);
+    assert!(paragraph.is_line_ellipsized(0));
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, getLineForOffset_singleLine_longText
+#[test]
+fn the_line_of_the_end_of_a_long_text_cut_to_one_line_is_the_first() {
+    let long = "A".repeat(100_000);
+    let paragraph =
+        constructed_paragraph(&long, sized(10.0), &[], at_width(1000.0), 1, TextOverflow::Clip);
+    assert_eq!(paragraph.line_count(), 1);
+    assert_eq!(paragraph.get_line_for_offset(100_000), 0);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, getLineForVerticalPosition_singleLine_longText
+#[test]
+fn below_a_long_text_cut_to_one_line_the_line_is_the_first() {
+    let long = "A".repeat(100_000);
+    let paragraph =
+        constructed_paragraph(&long, sized(10.0), &[], at_width(1000.0), 1, TextOverflow::Clip);
+    assert_eq!(paragraph.line_count(), 1);
+    assert_eq!(paragraph.get_line_for_vertical_position(100.0), 0);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, getOffsetForPosition_singleLine_longText_beforeAPI26
+#[test]
+fn below_a_long_text_cut_to_one_line_the_offset_is_on_that_line() {
+    let long = "A".repeat(100_000);
+    let paragraph =
+        constructed_paragraph(&long, sized(10.0), &[], at_width(1000.0), 1, TextOverflow::Clip);
+    assert_eq!(paragraph.line_count(), 1);
+    assert_eq!(paragraph.get_offset_for_position(Offset::new(10.0, 100.0)), 1);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, textIndent_onWholeParagraph
+#[test]
+fn an_indent_moves_each_paragraph_s_first_line_and_its_wrapped_lines_by_their_own_offsets() {
+    // As Android's leading margin over the whole text: a line after a line feed starts a
+    // paragraph, so it's a first line.
+    let paragraph = paragraph("abcde\nfgh", indented(40.sp(), 20.sp()), Some(100.0));
+    assert_eq!(paragraph.line_count(), 3);
+    assert_eq!(paragraph.get_line_end(0, false), 3);
+    for (line, start, left) in [(0, 0, 40.0), (1, 3, 20.0), (2, 6, 40.0)] {
+        assert_eq!(paragraph.get_horizontal_position(start, true), left, "{line}");
+        assert_eq!(paragraph.get_line_left(line), left, "{line}");
+    }
+}
+
+// D2180: a text style's background is the runs' background wherever no span sets its own, as
+// Compose's Android paragraph puts it in a span under the others.
+#[test]
+fn a_text_styles_background_carries_into_its_runs_until_a_span_replaces_it() {
+    let blue = compose_ui::Color::from_argb(0xFF00_00FF);
+    let green = compose_ui::Color::from_argb(0xFF00_FF00);
+    let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
+    let text = AnnotatedString::build(|builder| {
+        builder.with_style(
+            SpanStyle { font_weight: Some(compose_ui::FontWeight::BOLD), ..SpanStyle::DEFAULT },
+            |builder| {
+                builder.append("ab");
+            },
+        );
+        builder.with_style(SpanStyle { background: green, ..SpanStyle::DEFAULT }, |builder| {
+            builder.append("cd");
+        });
+        builder.append("ef");
+    });
+    let backgrounds: Vec<_> =
+        text.runs(&style).into_iter().map(|(range, _, bg)| (range, bg)).collect();
+    assert_eq!(backgrounds, vec![(0..2, blue), (2..4, green), (4..6, blue)]);
+}

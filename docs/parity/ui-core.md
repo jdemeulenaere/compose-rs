@@ -612,7 +612,7 @@ One entry per feature, in the suggested order (below, after the entries). Sizes:
 
 **3.40 `color-spaces`** — L. **Done** (D1911, D1912; [design note](design/color-spaces.md)): `Color` as Compose's 64 bits with its color space, the `colorspace` package, connectors cached between named spaces; Skia draws wide colors converted to extended sRGB, Android's replayer sets them as color longs. Tests: ColorSpaceTest, ColorModelTest, ColorTest ported; PaintTest's and AndroidColorTest's color longs in the serializer's tests; AndroidColorSpaceTest n/a. **Left:** wide colors in Android's gradients, shadow colors and color filters (ARGB there), `Color.VectorConverter(colorSpace)`, bitmaps with a color space (3.36).
 
-**3.41 `brush-extras`** — S to M. `Brush.intrinsicSize`, `applyTo`, `ShaderBrush` (custom shaders), the gradient types, `SolidColor`, `Interpolatable` and brush `lerp`, the `*Shader` functions. Tests: BrushInterpolationTests, InterpolatableTests; completes ShaderTest. Depends on 3.30 (`composite`).
+**3.41 `brush-extras`** — S to M. `Brush.intrinsicSize`, `applyTo`, `ShaderBrush` (custom shaders), the gradient types, `SolidColor`, `Interpolatable` and brush `lerp`, the `*Shader` functions. Tests: BrushInterpolationTests, InterpolatableTests; completes ShaderTest; AndroidParagraphTest's `shaderBrushSpan_createsShaderOnlyOnce` (ui-text) waits on a custom `ShaderBrush` too. Depends on 3.30 (`composite`).
 
 **3.42 `mesh-gradient`** — M. `MeshGradientPainter`, `MeshGradientScope`. Tests: MeshGradientTest, MeshGradientRendererTest. Depends on 3.31, 3.36 (`drawVertices`) or Skia's mesh.
 

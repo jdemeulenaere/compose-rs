@@ -790,15 +790,9 @@ impl SkiaTextMeasurer {
         }
         // Each run in its style, as SkParagraph's styled runs.
         let mut run_styles: Vec<SkiaTextStyle> = Vec::with_capacity(runs.len());
-        for (_, run_style, background) in runs {
+        for (_, run_style, _) in runs {
             let alias = self.alias_of(&mut resolved_fonts, run_style);
-            let mut run = skia_text_style(run_style, density, alias.as_deref(), blend_mode);
-            if background.is_specified() {
-                let mut paint = skia_safe::Paint::default();
-                paint.set_color(skia_safe::Color::new(background.to_argb()));
-                run.set_background_paint(&paint);
-            }
-            run_styles.push(run);
+            run_styles.push(skia_text_style(run_style, density, alias.as_deref(), blend_mode));
         }
         let collection = &self.collection;
         // A placeholder's box and how it sits, in the text style around it, by where they start
@@ -1216,15 +1210,22 @@ fn skia_text_style(
         let centered = alignment == compose_ui::LineHeightAlignment::CENTER;
         text_style.set_half_leading(centered);
     }
+    if style.background.is_specified() && style.background != compose_ui::Color::TRANSPARENT {
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color(skia_safe::Color::new(style.background.to_argb()));
+        text_style.set_background_paint(&paint);
+    }
     let stroked = matches!(style.draw_style, Some(compose_ui::DrawStyle::Stroke(_)));
     if stroked || blend_mode != SRC_OVER {
         text_style.set_foreground_paint(&blended(foreground_paint(style, color), blend_mode));
     }
-    if let Some(shadow) = style.shadow {
+    if let Some(shadow) = style.shadow
+        && shadow != compose_ui::Shadow::NONE
+    {
         text_style.add_shadow(skia_safe::textlayout::TextShadow::new(
             skia_safe::Color::new(shadow.color.to_argb()),
             (shadow.offset.x, shadow.offset.y),
-            blur_sigma(shadow.blur_radius),
+            blur_sigma(corrected_blur_radius(shadow.blur_radius)),
         ));
     }
     text_style
@@ -1233,6 +1234,12 @@ fn skia_text_style(
 /// The sigma of a blur of `radius`, as Skia converts the radius Android's `setShadowLayer` takes.
 fn blur_sigma(radius: f32) -> f64 {
     if radius > 0.0 { f64::from(radius) * 0.57735 + 0.5 } else { 0.0 }
+}
+
+/// A shadow's blur radius as Compose's `correctBlurRadius` gives it to Android's paint: none is
+/// the least one (`Float.MIN_VALUE`), since the paint drops a shadow of none (D2181).
+fn corrected_blur_radius(radius: f32) -> f32 {
+    if radius == 0.0 { f32::from_bits(1) } else { radius }
 }
 
 /// A text's paint for `color` and `style`'s draw style.
@@ -1328,5 +1335,12 @@ mod tests {
     fn a_blur_radius_is_the_sigma_android_makes_of_it() {
         assert_eq!(blur_sigma(0.0), 0.0);
         assert!((blur_sigma(10.0) - 6.2735).abs() < 0.0001);
+    }
+
+    #[test]
+    fn no_blur_is_corrected_to_the_least_as_compose_gives_it_to_android() {
+        assert_eq!(corrected_blur_radius(0.0), f32::from_bits(1));
+        assert_eq!(blur_sigma(corrected_blur_radius(0.0)), 0.5);
+        assert_eq!(corrected_blur_radius(3.0), 3.0);
     }
 }

@@ -782,7 +782,7 @@ fn encode_request(
     let (min_width, max_width) = width_bounds(constraints);
     out.u32(min_width as u32);
     out.u32(max_width as u32);
-    encode_style(out, style, paragraph_paint_flags(style), Color::TRANSPARENT, density, fonts);
+    encode_style(out, style, paragraph_paint_flags(style), style.background, density, fonts);
     out.u32(runs.len() as u32);
     for (range, run_style, background) in runs {
         out.u32(utf16_index(text, range.start) as u32);
@@ -1550,5 +1550,31 @@ mod tests {
         let requests = &measurer.backend.requests;
         assert_eq!(requests[0][0], 1, "soft wrap, to be drawn");
         assert_eq!(requests[1][0], 0b11, "soft wrap, for a probe only");
+    }
+
+    #[test]
+    fn a_paragraph_s_background_is_encoded_on_the_base_style_and_inherited_runs() {
+        let blue = Color::from_argb(0x1234_5678);
+        let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
+        let request = request_of(&style);
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
+        assert_eq!(u32_at(&request_of(&TextStyle::DEFAULT), PLAIN_REQUEST - 12), 0);
+
+        let spanned = AnnotatedString::build(|builder| {
+            builder.with_style(
+                compose_ui::SpanStyle {
+                    font_weight: Some(compose_ui::FontWeight::BOLD),
+                    ..compose_ui::SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.append("ab");
+                },
+            );
+            builder.append("cd");
+        });
+        let runs = paint_free_runs(&spanned, &style);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].2, blue);
+        assert_eq!(runs[1].2, blue);
     }
 }

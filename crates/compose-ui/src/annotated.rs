@@ -719,9 +719,7 @@ impl AnnotatedString {
                 let style = covering().fold(style.clone(), |style, (span, _, _)| {
                     style.merge_span_style(&relative_to(span, &style))
                 });
-                let background = covering().fold(Color::UNSPECIFIED, |background, (span, _, _)| {
-                    span.background.or(background)
-                });
+                let background = style.background;
                 (range, style, background)
             })
             .collect()
