@@ -23,7 +23,7 @@ The inventory of Compose's animation and navigation tests and public API against
   `ExperimentalAnimationApi`, `ExperimentalSharedTransitionApi`, `ExperimentalTransitionApi` and `ExperimentalAnimationGraphicsApi` still exist but annotate nothing public. Shared transitions, `SeekableTransitionState`, `animateBounds` and the new `Deferred*` APIs are all stable.
 - **compose-rs side:**
   - `crates/compose-animation`: 28 source files; 505 tests in 51 files of `tests/suite` (nine of them `review_*.rs`), as of the audit of 2026-11-08;
-  - `crates/compose-navigation`: Navigation 3, 484 tests in `tests/suite/nav_*.rs`;
+  - `crates/compose-navigation`: Navigation 3, 509 tests in `tests/suite/nav_*.rs`;
   - the harness: `crates/compose-test`.
 
 ## Totals
@@ -33,10 +33,10 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 0 | 0 |
-| `ported` | 76 | 910 |
+| `ported` | 82 | 978 |
 | `port` | 0 | 0 |
-| `partial` | 8 | 97 |
-| `feature:<name>` | 10 | 58 |
+| `partial` | 6 | 49 |
+| `feature:<name>` | 6 | 38 |
 | `n/a` | 14 | 154 |
 
 By module:
@@ -48,22 +48,20 @@ By module:
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 0 | 0 | 0 | 0 | 0 | 9 / 121 |
 | navigation3-runtime | 21 | 307 | 0 | 20 / 300 | 0 | 0 | 0 | 1 / 7 |
-| navigation3-ui | 15 | 121 | 0 | 9 / 53 | 0 | 2 / 48 | 4 / 20 | 0 |
+| navigation3-ui | 15 | 121 | 0 | 15 / 121 | 0 | 0 | 0 | 0 |
 | navigationevent, activity-compose's back | 13 | 198 | 0 | 8 / 163 | 0 | 1 / 9 | 0 | 4 / 26 |
 
-`@Test` methods by missing feature (a file counts under its main blocker; the notes name the others). Audit of 2026-11-08: the runtime and ui features these once waited on (shared elements, movable content, lookahead, a full `ImageVector`) are built; what is left is `compose-navigation` adopting them (`nav3-*`), `LookaheadAnimationVisualDebugging` and the animated image vector itself, none blocked on anything else:
+`@Test` methods by missing feature (a file counts under its main blocker; the notes name the others). Navigation 3 (`nav3-movable-entries`, `nav3-shared-elements`) is complete (D2170, D2171); what is left is `LookaheadAnimationVisualDebugging` and the animated image vector itself, neither blocked on anything else:
 
 | Feature | Files | @Test |
 |---|---|---|
-| nav3-shared-elements | 1 | 1 |
-| nav3-movable-entries | 3 | 19 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
 
 Four parts:
 
 - **Animation** (50 files, 472 tests): 39 files `ported` (394 tests), 5 `partial` (40), 6 waiting on features (38), of which what's left is `LookaheadAnimationVisualDebugging` (lookahead-visual-debug, 16) and the animated image vector (animated-image-vector, 22; the full `ImageVector` it needed exists since D1902). The 5 `partial` files' other gaps are `n/a` ones and lookahead in `AnimatedContent`, `animate_content_size` and `CapturedAnimatedVisibility` (6 tests, unblocked).
-- **Navigation 3** (36 files, 428 tests): 29 files `ported` (353 tests), 2 `partial` (48), 4 waiting on features (20: `nav3-movable-entries` 19, `nav3-shared-elements` 1), 1 `n/a` (7). It's what compose-rs models (D704).
+- **Navigation 3** (36 files, 428 tests): 35 files `ported` (421 tests), 1 `n/a` (7). Complete: every portable file and `@Test` method is ported (D704, D1400–D1415, D2170, D2171).
 - **Navigation events and back** (13 files, 198 tests), what Navigation 3's back is built on: 8 files `ported` (163 tests), 1 `partial` (9), 4 `n/a` (26), in `compose-navigation-event` (D845).
 - **Navigation Compose** (9 files, 121 tests): all `n/a: replaced by Navigation 3 (D704)`. Their notes say which Navigation 3 tests check the same behaviour.
 
@@ -163,17 +161,17 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 80 | `navigation3/navigation3-runtime/src/commonTest/kotlin/androidx/navigation3/runtime/result/ResultEventBusTest.kt` | 2 | `ResultEventBus` results flow and removal | ported | `nav_results.rs`, by what's heard: `channelMap` isn't public |
 | 81 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/NavDisplayInfoTest.kt` | 1 | a predictive back swipe fills `SceneInfo` for the navigation event | ported | `nav_scene.rs` |
 | 82 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/NavigationBackHandlerTest.kt` | 3 | `NavigationBackHandler`: single pop, multi pop, cancelled back | ported | `nav_scene.rs` |
-| 83 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/OverlaySceneTest.kt` | 1 | shared transition with a dialog scene | `feature:nav3-shared-elements` | audit: shared elements are built (D1329–D1341), but `compose-navigation` has no `sharedTransitionScope` for `NavDisplay`/`rememberSceneState` nor `SharedEntryInSceneNavEntryDecorator` (display.rs and state.rs say "comes with shared elements") |
+| 83 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/OverlaySceneTest.kt` | 1 | shared transition with a dialog scene | ported | `nav_scene.rs` (`shared_transition_scope` and `SharedEntryInSceneNavEntryDecorator` skipping overlay scenes, D2171) |
 | 84 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/RememberNavigationEventStateTest.kt` | 1 | `rememberNavigationEventState` follows the scene state | ported | `nav_scene.rs` |
 | 85 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/SceneStateTest.kt` | 8 | `rememberSceneState`: scene changes, previous scenes, strategy chaining, recalculation | ported | `nav_scene.rs`; `testSceneStrategyThen*` are of a deprecated operator, and a list of strategies is `nav_display.rs`'s |
 | 86 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/AnimateOverlaySceneTest.kt` | 2 | overlay scene exit animation, nested bottom sheet | ported | `nav_scene.rs`, with an overlay leaving by a delay for Material's sheet |
-| 87 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/BottomNavSceneDecoratorTest.kt` | 7 | a bottom-nav scene decorator with dialogs and list-detail | `feature:nav3-movable-entries` | an entry moving between panes keeps its state (D1404). Audit: movable content is built (D1305, D1308, D1511) but `compose-navigation`'s scene-setup decorator doesn't use it yet (`scene_setup_decorator` in `src/ui/state.rs` still says "no movable content yet"); none of the 7 is ported |
-| 88 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/HierarchicalSceneTest.kt` | 7 | multi-column hierarchical scene: content, back, state, predictive back | `feature:nav3-movable-entries` | the same (D1404; audit: none ported, the decorator not moved onto movable content yet) |
-| 89 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/ListDetailSceneTest.kt` | 5 | list-detail scene: second detail, replace, full screen, back | `feature:nav3-movable-entries` | the same (D1404; audit: none ported, the decorator not moved onto movable content yet) |
-| 90 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/AnimatedTest.kt` | 26 | NavDisplay transitions: navigate/pop/interrupted, custom specs, centre pops, duplicates, shared elements, lifecycle | partial | `nav_animated.rs` and `nav_card_stack.rs`, 25 of 26: `testSharedElement` waits for `NavDisplay`'s `sharedTransitionScope` (audit: shared elements are built, D1329–D1341; the navigation side isn't) |
+| 87 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/BottomNavSceneDecoratorTest.kt` | 7 | a bottom-nav scene decorator with dialogs and list-detail | ported | `nav_bottom_nav.rs`, all 7 (D2170) |
+| 88 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/HierarchicalSceneTest.kt` | 7 | multi-column hierarchical scene: content, back, state, predictive back | ported | `nav_hierarchical.rs`, all 7 and a plain-`remember` column-shift check (D2170) |
+| 89 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/usecases/ListDetailSceneTest.kt` | 5 | list-detail scene: second detail, replace, full screen, back | ported | `nav_list_detail.rs`, all 5 and a plain-`remember` pane-move check (D2170) |
+| 90 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/AnimatedTest.kt` | 26 | NavDisplay transitions: navigate/pop/interrupted, custom specs, centre pops, duplicates, shared elements, lifecycle | ported | `nav_animated.rs` and `nav_card_stack.rs`, all 26 (`testSharedElement` in `nav_animated.rs`, D2171) |
 | 91 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayLifecycleTest.kt` | 8 | entry lifecycle order across navigation, panes, dialogs, overlays | ported | `nav_lifecycle.rs` |
 | 92 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayPredictiveBackTest.kt` | 5 | state restored after predictive back, z-index, back during forward animation, hand-off | ported | `nav_predictive_back.rs` |
-| 93 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt` | 22 | z-order and frames of predictive back, pops, duplicates, scenes (screenshots) | partial | 21 of 22: `nav_z_index.rs`, the 9 z-index tests by clicks on the overlap, and 4 of scenes and a swapped stack by bounds (D1410); `nav_predictive_back.rs`, its 3 frames of a gesture, and `nav_card_stack.rs`, its 5 of a scene with its own transitions, by bounds (D1411); the default fade and scale by the display list. `testSharedElementCorrectlyDisplayedOnPredictiveBack` waits for `NavDisplay`'s `sharedTransitionScope` (audit: shared elements are built, D1329–D1341; the navigation side isn't) |
+| 93 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt` | 22 | z-order and frames of predictive back, pops, duplicates, scenes (screenshots) | ported | all 22: `nav_z_index.rs`, the 9 z-index tests by clicks on the overlap, and 4 of scenes and a swapped stack by bounds (D1410); `nav_predictive_back.rs`, its 3 frames of a gesture, `testSharedElementCorrectlyDisplayedOnPredictiveBack` (unscaled shared entry in the overlay during predictive back and bounds hand-off on completion, D2171), and `nav_card_stack.rs`, its 5 of a scene with its own transitions, by bounds (D1411); the default fade and scale by the display list |
 | 94 | `navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayTest.kt` | 21 | NavDisplay: content, dialogs, back, saved state per entry, back stack swaps, duplicates, multi-pane | ported | `nav_display.rs` |
 | 95 | `navigation3/navigation3-ui/src/commonTest/kotlin/androidx/navigation3/scene/SceneInfoTest.kt` | 4 | `SceneInfo` title/url metadata | ported | `nav_scene.rs` |
 | 96 | `navigationevent/navigationevent/src/commonTest/kotlin/androidx/navigationevent/NavigationEventDispatcherTest.kt` | 102 | the dispatcher: gestures, priorities, trees, fallbacks, disposal, transition state and history | ported | `dispatcher.rs` of `compose-navigation-event`'s suite |
@@ -347,9 +345,9 @@ What compose-rs is to model (D704): a list of typed keys the app owns, mapped to
 
 | API | Feature |
 |---|---|
-| `NavDisplay(backStack, modifier, contentAlignment, onBack, entryDecorators, sceneStrategies, sceneDecoratorStrategies, sharedTransitionScope, sizeTransform, transitionSpec, popTransitionSpec, predictivePopTransitionSpec, entryProvider)`, `NavDisplay(entries, …)`, `NavDisplay(sceneState, navigationEventState, …)` | present: `NavDisplay`, `NavDisplayOfEntries`, `NavDisplayOfState`, restartable, their lists `NavListArg`s (D1408); `sharedTransitionScope` with shared elements (D1405) |
+| `NavDisplay(backStack, modifier, contentAlignment, onBack, entryDecorators, sceneStrategies, sceneDecoratorStrategies, sharedTransitionScope, sizeTransform, transitionSpec, popTransitionSpec, predictivePopTransitionSpec, entryProvider)`, `NavDisplay(entries, …)`, `NavDisplay(sceneState, navigationEventState, …)` | present: `NavDisplay`, `NavDisplayOfEntries`, `NavDisplayOfState`, restartable, their lists `NavListArg`s (D1405, D1408, D2171) |
 | `NavDisplay.transitionSpec/popTransitionSpec/predictivePopTransitionSpec` metadata (`TransitionKey`, `PopTransitionKey`, `PredictivePopTransitionKey`), `defaultTransitionSpec`, `defaultPopTransitionSpec`, `defaultPredictivePopTransitionSpec`, `LocalNavAnimatedContentScope` | present: `TransitionKey`, `PopTransitionKey`, `PredictivePopTransitionKey`, `LOCAL_NAV_ANIMATED_CONTENT_SCOPE` (D1405) |
-| `Scene` (`key`, `entries`, `previousEntries`, `content`, `metadata`), `OverlayScene` (`overlaidEntries`, `onRemove`), `SceneStrategy`, `SceneStrategyScope` (`onBack`), `SinglePaneSceneStrategy`, `DialogSceneStrategy` (+`dialog(properties)`, `DialogKey`), `SceneDecoratorStrategy`, `SceneDecoratorStrategyScope`, `SceneState` (`currentScene`, `previousScenes`, `overlayScenes`, `entries`), `rememberSceneState`, `SceneInfo` (`title`, `url`), `TitleMetadataKey`, `UrlMetadataKey` | present (D1405) |
+| `Scene` (`key`, `entries`, `previousEntries`, `content`, `metadata`), `OverlayScene` (`overlaidEntries`, `onRemove`), `SceneStrategy`, `SceneStrategyScope` (`onBack`), `SinglePaneSceneStrategy`, `DialogSceneStrategy` (+`dialog(properties)`, `DialogKey`), `SceneDecoratorStrategy`, `SceneDecoratorStrategyScope`, `SceneState` (`currentScene`, `previousScenes`, `overlayScenes`, `entries`), `rememberSceneState`, `SceneInfo` (`title`, `url`), `TitleMetadataKey`, `UrlMetadataKey` | present (`remember_scene_state` with `shared_transition_scope`, D1405, D2170, D2171) |
 | `NavigationBackHandler(sceneState, state, onBackCancelled, onBackCompleted)`, `rememberNavigationEventState(sceneState)` | present: `SceneNavigationBackHandler`, `remember_scene_navigation_event_state` (D1405) |
 
 ## Missing features
@@ -582,10 +580,10 @@ One entry per feature. Sizes:
   - recording a subtree and drawing it later: `DrawCapture`, the part of `GraphicsLayer` it needs, the object itself being ui-core's graphics-layer-object;
   - enter-exit-params and transition-state; ui lookahead for 2 tests.
 
-#### shared-transition (XL, not exp.)
+#### shared-transition (XL, not exp.): done (D1329, D1340, D2171)
 
-- **Done (D1329):** the scope, the shared modifiers, the state machine, the overlay of recorded `GraphicsLayer`s, `skipToLookaheadSize` and `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`, the momentum of an initial velocity ([design](design/shared-elements.md)); all of `SharedTransitionTest` (D1332 to D1338) and `DeferredSharedElementTest`: the deferred transitions' manual transforms and their hand-off (D1340). **Left:** visual debugging, Navigation 3's shared-element tests.
-- **Done, without lookahead (D829):** `BoundsTransform`, `SharedTransitionDefaults`, `PlaceholderSize`, `ResizeMode` (`ContentScale` moved to compose-ui, as Compose's is in ui), the state-free part of `SharedContentConfig`. From deferred-transition (D828): `pending_target_state`, the manual transforms' state machine, forced initial values on deferred animations. **Left:** everything with a `SharedContentState` or a scope.
+- **Done (D1329, D1340, D2171):** the scope, the shared modifiers, the state machine, the overlay of recorded `GraphicsLayer`s, `skipToLookaheadSize` and `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`, the momentum of an initial velocity ([design](design/shared-elements.md)); all of `SharedTransitionTest` (D1332 to D1338), `DeferredSharedElementTest` (the deferred transitions' manual transforms and their hand-off, D1340), and Navigation 3's `shared_transition_scope` and `SharedEntryInSceneNavEntryDecorator` (`OverlaySceneTest`, `AnimatedTest.testSharedElement`, `NavDisplayScreenshotTest.testSharedElementCorrectlyDisplayedOnPredictiveBack`, D2171). **Left:** visual debugging (`feature:lookahead-visual-debug`).
+- **Done, without lookahead (D829):** `BoundsTransform`, `SharedTransitionDefaults`, `PlaceholderSize`, `ResizeMode` (`ContentScale` moved to compose-ui, as Compose's is in ui), the state-free part of `SharedContentConfig`. From deferred-transition (D828): `pending_target_state`, the manual transforms' state machine, forced initial values on deferred animations.
 - **API:** `SharedTransitionLayout`, `SharedTransitionScope` and its whole surface (see the API table), `BoundsTransform`, `SharedTransitionDefaults`.
 - **What it does:** matches elements across content changes and animates their bounds in an overlay.
 - **Tests:** `SharedTransitionTest` (71), `DeferredSharedElementTest` (15), `OverlaySceneTest`, `AnimatedTest.testSharedElement`, `NavDisplayScreenshotTest` (1).
@@ -594,7 +592,6 @@ One entry per feature. Sizes:
   - movable content (tests use `movableContentOf`): built (D1305, D1308, D1511);
   - an overlay with z-ordering: its `LayerRenderer`s draw `GraphicsLayer`s recorded in place: built (D1329);
   - animated-visibility-scope, transition-state, and lazy layouts (present).
-  - Left (audit 2026-11-08): Navigation 3's side, `NavDisplay`'s `sharedTransitionScope` and `SharedEntryInSceneNavEntryDecorator` (`OverlaySceneTest`, `AnimatedTest.testSharedElement`, `NavDisplayScreenshotTest`'s 1: `feature:nav3-shared-elements`).
 
 #### animate-bounds (L, not exp.)
 
@@ -638,16 +635,15 @@ One entry per feature. Sizes:
 nav-transitions, nav-controller-extras, nav-dialog-destinations, nav-graphs and nav-entry-owners were this ledger's features for extending `compose-navigation`. They're `n/a: replaced by Navigation 3 (D704)`: their behaviours come back as Navigation 3's, derived from its own tests, `NavDisplay`'s transition metadata and z-order (`AnimatedTest`, `NavDisplayScreenshotTest`), `DialogSceneStrategy` (`NavDisplayTest`), and entry lifecycles and view models through decorators (`NavDisplayLifecycleTest`, `lifecycle-viewmodel-navigation3`, on `compose-lifecycle`: D837, D838). The local branch `parked/nav-compose-extras`, not merged, is reference for a seekable transition's mechanism and its back-interrupt fix, not a source of behaviours.
 
 <a id="navigation3"></a>
-#### navigation3: four features (D704, after S3)
+#### navigation3: four features (D704, after S3): done (D1400, D1401, D1405, D1414, D2170, D2171)
 
 - **nav3-runtime (L): done (D1400).** `NavEntry`, `entryProvider`, decorators and `rememberDecoratedNavEntries`, the saveable-state decorator, `NavKey`/`NavBackStack`/`rememberNavBackStack` over `Saveable`, metadata keys.
   - Tests: 8 runtime files (79 tests), `ported` but for the 4 of serializer configuration, which have no analogue.
-- **nav3-ui (L): done but what follows (D1405).** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`. Left: what needs shared elements (`NavDisplay`'s `sharedTransitionScope`, built on shared elements that now exist, D1329–D1341) and the scene-setup decorator moving entries between panes on movable content (built, D1305, D1308, D1511).
-  - Tests: 15 ui files (121 tests), and `ResultEventBusNavEntryDecoratorTest` (5).
-  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (3 tests), the entry decorators over `compose-lifecycle` (lifecycle test), and movable content (`SceneSetupNavEntryDecorator`'s `movableContentOf`); shared-transition and movable content are built now (audit 2026-11-08), compose-navigation hasn't adopted either.
-  - Without movable content (D1404): single-pane scenes, dialogs and overlays ship first, the decorator keeping its shape. An entry moving between panes waited for it (`feature:nav3-movable-entries`, now unblocked), with the tests of `ListDetailSceneTest`, `HierarchicalSceneTest`, `BottomNavSceneDecoratorTest`'s list-detail, and the two-pane cases of `SceneStateTest`, `NavDisplayTest`, `NavDisplayLifecycleTest` and `NavDisplayScreenshotTest`.
-- **nav3-results (S): done but its decorator's tests (D1401).** `ResultEventBus`, `ResultEffect` and the decorator.
-  - Tests: 3 files (5 tests) `ported`; `ResultEventBusNavEntryDecoratorTest` (5) needs `NavDisplay`, under nav3-ui.
+- **nav3-ui (L): done (D1405, D2170, D2171).** `NavDisplay`, scenes and strategies, dialog and overlay scenes, scene decorators, transition metadata, `LocalNavAnimatedContentScope`, `NavigationBackHandler`, `SceneSetupNavEntryDecorator` over movable content (D2170), and `shared_transition_scope` with `SharedEntryInSceneNavEntryDecorator` (D2171).
+  - Tests: all 15 ui files (121 tests) `ported`, and `ResultEventBusNavEntryDecoratorTest` (5).
+  - Dependencies: nav3-runtime, animated-content-scope, predictive-back, shared-transition (3 tests, D2171), the entry decorators over `compose-lifecycle` (lifecycle test), and movable content (`SceneSetupNavEntryDecorator`'s `movableContentOf`, D2170): all built and adopted.
+- **nav3-results (S): done (D1401).** `ResultEventBus`, `ResultEffect` and the decorator.
+  - Tests: all 4 files (10 tests, `ResultEventBusNavEntryDecoratorTest` included) `ported`.
 - **nav3-deep-links (L), last of Navigation 3 (D1404): done (D1414).** URI patterns, matchers, argument decoding and synthetic back stacks.
   - Tests: 8 files (211 tests).
   - A platform's link reaches it as a string: on Android, what Kotlin takes from its `Intent`.
@@ -672,7 +668,7 @@ Navigation 3 has replaced `compose-navigation`'s model (D704): its `NavControlle
 9. **The remaining specs:** keyframes-with-spline (M, done), path-easing (S–M, done), arc-animation (M, experimental, done).
 10. **predictive-back (L)**, in the form Navigation 3 needs, with the platform back-progress work: the host's side done (D845), `NavDisplay`'s with nav3-ui.
 11. **veil (S–M)**, then **deferred-transition (XL)**.
-12. **Navigation 3 (D704), after S3 (the runtime's state collections):** nav3-runtime, then nav3-ui with the entry decorators over `compose-lifecycle`, nav3-results, and nav3-deep-links last: all done but `NavDisplay`'s shared elements and the scene-setup decorator's movable content, both now buildable (audit 2026-11-08).
+12. **Navigation 3 (D704), after S3 (the runtime's state collections): done (D1400–D1415, D2170, D2171).** nav3-runtime, nav3-ui with the entry decorators over `compose-lifecycle`, movable entries and shared elements, nav3-results, and nav3-deep-links.
 13. **After ui lookahead (and movable content) lands in its own area:**
     - lookahead in animations (S–M);
     - animate-bounds (L), done (D1328);

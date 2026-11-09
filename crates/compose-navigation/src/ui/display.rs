@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use compose_animation::{
     AnimatedContentScope, AnimatedContentTransitionScope, ContentKey as AnimationContentKey,
-    ContentTransform, DeferredTransition, DeferredTransitionState, SizeTransform,
-    default_scale_spec, fade_in_with, fade_out_with, remember_deferred_transition, scale_out_with,
-    spring_with, tween,
+    ContentTransform, DeferredTransition, DeferredTransitionState, SharedTransitionScope,
+    SizeTransform, default_scale_spec, fade_in_with, fade_out_with, remember_deferred_transition,
+    scale_out_with, spring_with, tween,
 };
 use compose_lifecycle::{LOCAL_LIFECYCLE_OWNER, LifecycleState, remember_lifecycle_owner};
 use compose_navigation_event::{
@@ -27,7 +27,8 @@ use super::info::{SceneInfo, SceneNavigationBackHandler, remember_scene_navigati
 use super::predictive::to_mutable_transform;
 use super::scene::{SceneDecoratorStrategyRef, SceneRef, SceneStrategyRef};
 use super::state::{
-    EqualList, ExcludedEntries, LOCAL_ENTRIES_TO_EXCLUDE, SceneState, remember_scene_state,
+    CurrentScene, EqualList, ExcludedEntries, LOCAL_CURRENT_SCENE, LOCAL_ENTRIES_TO_EXCLUDE,
+    SceneState, remember_scene_state,
 };
 use crate::runtime::{
     ContentKey, NavEntry, NavEntryDecorator, NavList, NavListArg, NavMetadata, NavMetadataKey,
@@ -162,7 +163,8 @@ pub fn default_predictive_pop_transition_spec<T: Clone + PartialEq + 'static>()
 /// Shows the entries of `back_stack`, as `NavDisplay(backStack, …)`: its scenes, made by
 /// `scene_strategies` or else a single pane, animating into one another. `on_back` is what a back
 /// gesture calls, by default taking the last key off a stack that can. A scene's entry is shown once,
-/// in the topmost scene it's in. Compose's `sharedTransitionScope` comes with shared elements.
+/// in the topmost scene it's in; with `shared_transition_scope`, entries moving between scenes
+/// animate their bounds across the display.
 #[composable]
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn NavDisplay<T: Clone + PartialEq + 'static>(
@@ -178,6 +180,7 @@ pub fn NavDisplay<T: Clone + PartialEq + 'static>(
     #[default(Vec::new())] scene_decorator_strategies: impl Into<
         NavListArg<SceneDecoratorStrategyRef<T>>,
     >,
+    #[default(None)] shared_transition_scope: Option<SharedTransitionScope>,
     #[default(None)] size_transform: Option<SizeTransform>,
     #[default(crate::default_transition_spec())] transition_spec: impl Fn(Scope<T>) -> ContentTransform
     + 'static,
@@ -206,6 +209,7 @@ pub fn NavDisplay<T: Clone + PartialEq + 'static>(
         content_alignment,
         scene_strategies,
         scene_decorator_strategies,
+        shared_transition_scope,
         size_transform,
         transition_spec,
         pop_transition_spec,
@@ -228,6 +232,7 @@ pub fn NavDisplayOfEntries<T: Clone + PartialEq + 'static>(
     #[default(Vec::new())] scene_decorator_strategies: impl Into<
         NavListArg<SceneDecoratorStrategyRef<T>>,
     >,
+    #[default(None)] shared_transition_scope: Option<SharedTransitionScope>,
     #[default(None)] size_transform: Option<SizeTransform>,
     #[default(crate::default_transition_spec())] transition_spec: impl Fn(Scope<T>) -> ContentTransform
     + 'static,
@@ -246,6 +251,7 @@ pub fn NavDisplayOfEntries<T: Clone + PartialEq + 'static>(
         entries,
         scene_strategies,
         scene_decorator_strategies,
+        shared_transition_scope,
         on_back = on_back.clone()
     );
     let navigation_event_state = remember_scene_navigation_event_state(scene_state.clone());
@@ -480,11 +486,13 @@ pub fn NavDisplayOfState<T: Clone + PartialEq + 'static>(
                 Some(LOCAL_LIFECYCLE_OWNER.current()),
             );
             *content_scope.borrow_mut() = Some(content.clone());
+            let current_scene = CurrentScene::of(&target);
             let excluded = content_excluded.get(&scene_key(&target)).cloned().unwrap_or_default();
             CompositionLocalProvider(
                 (
                     LOCAL_LIFECYCLE_OWNER.provides(lifecycle_owner),
                     LOCAL_NAV_ANIMATED_CONTENT_SCOPE.provides(content),
+                    LOCAL_CURRENT_SCENE.provides(Some(current_scene)),
                     LOCAL_ENTRIES_TO_EXCLUDE.provides(excluded),
                 ),
                 move || target.content(),
@@ -536,6 +544,7 @@ fn ShowOverlay<T: Clone + PartialEq + 'static>(
         if topmost { LifecycleState::Resumed } else { LifecycleState::Started },
         Some(LOCAL_LIFECYCLE_OWNER.current()),
     );
+    let current_scene = CurrentScene::of(&overlay);
     let excluded = excluded.get(&scene_key(&overlay)).cloned().unwrap_or_default();
     let shown = overlay.clone();
     let scope = animated_content_scope.borrow().clone();
@@ -544,6 +553,7 @@ fn ShowOverlay<T: Clone + PartialEq + 'static>(
             (
                 LOCAL_LIFECYCLE_OWNER.provides(lifecycle_owner.clone()),
                 LOCAL_ENTRIES_TO_EXCLUDE.provides(excluded.clone()),
+                LOCAL_CURRENT_SCENE.provides(Some(current_scene)),
             ),
             || shown.content(),
         );
