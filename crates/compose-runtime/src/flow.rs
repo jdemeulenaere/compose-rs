@@ -306,6 +306,26 @@ impl<T> Clone for MutableStateFlow<T> {
     }
 }
 
+impl<T> PartialEq for MutableStateFlow<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+}
+
+impl<T> Eq for MutableStateFlow<T> {}
+
+impl<T: 'static> ComposeArg for MutableStateFlow<T> {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for MutableStateFlow<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("MutableStateFlow").field(&lock(&self.shared).value).finish()
+    }
+}
+
 /// The read-only view of a [`MutableStateFlow`], as kotlinx's `StateFlow`.
 pub struct StateFlow<T> {
     shared: Arc<Mutex<FlowShared<T>>>,
@@ -314,6 +334,26 @@ pub struct StateFlow<T> {
 impl<T> Clone for StateFlow<T> {
     fn clone(&self) -> Self {
         StateFlow { shared: self.shared.clone() }
+    }
+}
+
+impl<T> PartialEq for StateFlow<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+}
+
+impl<T> Eq for StateFlow<T> {}
+
+impl<T: 'static> ComposeArg for StateFlow<T> {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for StateFlow<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("StateFlow").field(&lock(&self.shared).value).finish()
     }
 }
 

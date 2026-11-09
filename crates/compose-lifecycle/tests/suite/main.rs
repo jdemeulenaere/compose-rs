@@ -3,8 +3,10 @@
 
 extern crate compose_runtime as compose;
 
+mod collect_as_state_with_lifecycle;
 mod drop_unless;
 mod effects;
+mod flow_with_lifecycle;
 mod observers;
 mod owner;
 mod registry;

@@ -724,6 +724,26 @@ fn a_state_flow_collected_as_state_clones_its_value_once() {
     assert_eq!(clones.get(), at_first, "a recomposition looks at nothing");
 }
 
+/// `StateFlow` and `MutableStateFlow` compare by identity, as Kotlin's references.
+#[test]
+fn state_flows_compare_by_identity() {
+    let first = MutableStateFlow::new(1);
+    let same_first = first.clone();
+    let second = MutableStateFlow::new(1);
+    assert_eq!(first, same_first);
+    assert_ne!(first, second);
+    assert!(first.same(&same_first));
+    assert!(!first.same(&second));
+
+    let view1 = first.as_state_flow();
+    let same_view1 = first.as_state_flow();
+    let view2 = second.as_state_flow();
+    assert_eq!(view1, same_view1);
+    assert_ne!(view1, view2);
+    assert!(view1.same(&same_view1));
+    assert!(!view1.same(&view2));
+}
+
 /// A person with a car that changes, as the Kotlin test's classes; compared by name.
 #[derive(Clone)]
 struct Person {

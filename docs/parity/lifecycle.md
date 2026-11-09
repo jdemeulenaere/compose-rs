@@ -8,7 +8,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 - **Modules:** `lifecycle-common`, `lifecycle-runtime`, `lifecycle-runtime-compose`, `lifecycle-runtime-testing`, `lifecycle-viewmodel`, `lifecycle-viewmodel-compose`, `lifecycle-viewmodel-navigation3` (in `compose-navigation`, D1409). `lifecycle-viewmodel-savedstate`: its `ViewModelStoreProvider` is ported (D838); `SavedStateHandle` and the saved-state parameters with the saved-state work.
 - **Left out, n/a:** LiveData, `lifecycle-service`, `lifecycle-process`, the reflective and generated observers (`lifecycle-compiler`, annotations: deprecated in AndroidX too), the lint modules, `ViewTree*` (Android's view tree: `ComposeRsView` reads it in Kotlin).
 
-**Rust-shaped** (D837): an owner is the `Lifecycle` handle itself, so `LOCAL_LIFECYCLE_OWNER` and the effects take a `Lifecycle`, and `LifecycleOwner` says how to get one. `currentStateFlow` and `currentStateAsState()` are `Lifecycle::as_state`; `eventFlow`, `flowWithLifecycle` and `collectAsStateWithLifecycle` are not built yet. The runtime's flows exist (`snapshot_flow`, `collect_as_state`, `StateFlow`, `futures_core::Stream`, D768), so nothing blocks building them (audit 2026-11-08).
+**Rust-shaped** (D837, D2150): an owner is the `Lifecycle` handle itself, so `LOCAL_LIFECYCLE_OWNER` and the effects take a `Lifecycle`, and `LifecycleOwner` says how to get one (`&T` and `Rc<T>` too). `currentStateFlow` and `currentStateAsState()` are `Lifecycle::as_state`; `eventFlow`, `flowWithLifecycle` and `collectAsStateWithLifecycle` are `Lifecycle::event_flow`, `flow_with_lifecycle` (`_with`, `FlowWithLifecycleExt`) and `collect_as_state_with_lifecycle` (`_with`, `StateFlowLifecycleExt`), over `futures_core::Stream` and `StateFlow` (D768, D2150).
 
 ## Test files
 
@@ -18,7 +18,8 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/FastSafeIterableMapTest.kt` | 8 | n/a | an internal map: the registry's list walks by order of addition, checked by the registry's tests |
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/WithLifecycleStateTest.kt` | 4 | ported | `with_state.rs`, with the observer gone before the block and its failure the waiter's |
 | `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/RepeatOnLifecycleTest.kt` | 15 | partial | 12 ported, `repeat_on_lifecycle.rs` (the `NonCancellable` tear-down: a dropped future has none to wait for); n/a: the 3 with a `withContext(customJob)` or a dispatcher, no such things here |
-| `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/FlowWithLifecycleTest.kt` | 12 | `feature:lifecycle-flows` | audit: `flowWithLifecycle` is not built; the runtime's flows are (`compose-runtime/src/flow.rs`, D768), so nothing blocks it |
+| `lifecycle-runtime/src/commonTest/kotlin/androidx/lifecycle/FlowWithLifecycleTest.kt` | 12 | ported | `flow_with_lifecycle.rs` |
+| `lifecycle-runtime-testing/src/commonTest/kotlin/androidx/lifecycle/testing/LifecycleEventFlowTest.kt` | 3 | ported | `flow_with_lifecycle.rs` |
 | `lifecycle-runtime/src/androidDeviceTest/kotlin/androidx/lifecycle/PausingDispatcherTest.kt` | 24 | n/a | deprecated `launchWhen*` and its dispatcher |
 | `lifecycle-runtime/src/androidDeviceTest/kotlin/androidx/lifecycle/LaunchWhenTest.kt` | 1 | n/a | deprecated `launchWhen*` |
 | `lifecycle-runtime/src/androidDeviceTest/kotlin/androidx/lifecycle/ViewTreeLifecycleOwnerTest.kt` | 5 | n/a | Android's view tree |
@@ -29,7 +30,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `lifecycle-runtime-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/compose/DropUnlessLifecycleTest.kt` | 10 | ported | `drop_unless.rs` |
 | `lifecycle-runtime-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/compose/LifecycleOwnerTest.kt` | 11 | ported | `owner.rs` |
 | `lifecycle-runtime-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/compose/LifecycleExtTest.kt` | 1 | ported | `owner.rs`, with the change Compose's leaves commented out |
-| `lifecycle-runtime-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/compose/CollectAsStateWithLifecycleTests.kt` | 9 | `feature:lifecycle-flows` | audit: `collectAsStateWithLifecycle` is not built; the runtime's `collect_as_state` and `StateFlow` are (D768), so nothing blocks it |
+| `lifecycle-runtime-compose/src/androidDeviceTest/kotlin/androidx/lifecycle/compose/CollectAsStateWithLifecycleTests.kt` | 9 | ported | `collect_as_state_with_lifecycle.rs` |
 | `lifecycle-viewmodel/src/commonTest/kotlin/androidx/lifecycle/ViewModelTest.kt` | 12 | ported | `view_model.rs` |
 | `lifecycle-viewmodel/src/commonTest/kotlin/androidx/lifecycle/ViewModelStoreTest.kt` | 6 | ported | `view_model.rs` |
 | `lifecycle-viewmodel/src/commonTest/kotlin/androidx/lifecycle/ViewModelProviderTest.kt` | 8 | partial | 7 ported, `view_model.rs`; n/a: `localViewModel`, a local Kotlin class |
@@ -60,7 +61,7 @@ The inventory of AndroidX's lifecycle libraries against compose-rs's `compose-li
 | `Lifecycle.coroutineScope`, `lifecycleScope`, `repeatOnLifecycle`, `withStateAtLeast`, `withCreated`, `withStarted`, `withResumed`, `LifecycleDestroyedException` | present, the last a result's error `LifecycleDestroyed` | D837 |
 | `LocalLifecycleOwner`, `LifecycleEventEffect`, `LifecycleStartEffect`, `LifecycleResumeEffect`, their scopes and results, `dropUnlessStarted`, `dropUnlessResumed`, `rememberLifecycleOwner`, `currentStateAsState` | present; keys are one `ComposeArg` (a tuple for several); `drop_unless_*` take the owner (`&LOCAL_LIFECYCLE_OWNER.current()` for Compose's default) | D837 |
 | `TestLifecycleOwner` | present | D837 |
-| `currentStateFlow`, `eventFlow`, `flowWithLifecycle`, `collectAsStateWithLifecycle` | missing (`currentStateFlow` is `Lifecycle::as_state`); the runtime's flows exist (D768) | feature:lifecycle-flows |
+| `currentStateFlow`, `eventFlow`, `flowWithLifecycle`, `collectAsStateWithLifecycle` | present: `Lifecycle::as_state` for `currentStateFlow`; `Lifecycle::event_flow`, `flow_with_lifecycle` (`_with`, `FlowWithLifecycleExt`), `collect_as_state_with_lifecycle` (`_with`, `StateFlowLifecycleExt`), without `CoroutineContext` (D768) | D837, D2150 |
 | `LifecycleCoroutineScope.launchWhen*`, `LifecycleRegistry.markState`, `LifecycleRegistryOwner` | n/a | deprecated |
 | `ViewModel` (`onCleared`, `addCloseable`, keyed, `getCloseable`), `AutoCloseable`, `viewModelScope` | present: a trait over `ViewModelBase` | D838 |
 | `ViewModelStore`, `ViewModelStoreOwner`, `HasDefaultViewModelProviderFactory` (its methods are the owner's, by default the same) | present | D838 |

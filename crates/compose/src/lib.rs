@@ -33,7 +33,7 @@ pub mod foundation {
 }
 
 /// `androidx.lifecycle`: `Lifecycle`, `LifecycleRegistry`, `LOCAL_LIFECYCLE_OWNER`, the lifecycle
-/// effects.
+/// effects and flow adapters (`flow_with_lifecycle`, `collect_as_state_with_lifecycle`).
 pub mod lifecycle {
     pub use compose_lifecycle::*;
 }
