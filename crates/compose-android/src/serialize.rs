@@ -389,7 +389,7 @@ fn tile_mode_byte(tile_mode: TileMode) -> u8 {
 }
 
 /// What paints a paint with a shader on Android.
-enum Shading<'a> {
+pub(crate) enum Shading<'a> {
     /// The paint's color (no shader, or one Skia doesn't make: the gradient's average, D175).
     Color,
     /// The gradient.
@@ -405,7 +405,7 @@ const DEGENERATE_RADIUS: f32 = 1.0 / (1 << 15) as f32;
 /// negative radius make no shader (the paint's color paints); a radius of (nearly) 0, which
 /// Android's `RadialGradient` refuses, is Skia's degenerate gradient: its last color when
 /// clamped, its average when repeated or mirrored, nothing with decal.
-fn shading(shader: &Shader) -> Shading<'_> {
+pub(crate) fn shading(shader: &Shader) -> Shading<'_> {
     let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
     let gradient = shader.gradient();
     if gradient.colors.is_empty() {
@@ -907,7 +907,7 @@ fn write_commands(writer: &mut Writer, commands: &[PathCommand]) {
 /// alpha can go into that fill's paint (its color's, or its gradient's: [`Writer::paint`]),
 /// without an offscreen layer (a GPU pass each frame on Android), the same coverage (D648).
 /// Returns the index of its closing `Restore` if so.
-fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
+pub(crate) fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
     let layer = &ops[start + 1..];
     let end = single_drawing(layer).map(|end| start + 1 + end).filter(|end| *end < ops.len())?;
     single_drawing_extent(layer).is_some_and(|extent| fits_in(extent, bounds)).then_some(end)
@@ -953,7 +953,7 @@ fn faded_wide(color: Color, alpha: f32) -> Color {
 }
 
 /// `color` with its alpha multiplied by `alpha`.
-fn faded(color: Color, alpha: f32) -> Color {
+pub(crate) fn faded(color: Color, alpha: f32) -> Color {
     if alpha >= 1.0 {
         return color;
     }

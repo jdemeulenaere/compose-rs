@@ -100,6 +100,11 @@ pub trait MeasurePolicy: Any {
     fn debug_name(&self) -> &'static str {
         crate::tree::short_type_name(std::any::type_name::<Self>())
     }
+
+    /// Whether measuring with this policy can read compose state.
+    fn reads_state(&self) -> bool {
+        true
+    }
 }
 
 /// A closure measures as a policy, as a Kotlin lambda converts to the `MeasurePolicy` fun
@@ -915,6 +920,10 @@ impl MeasurePolicy for StackMeasurePolicy {
         }
         scope.layout(width, height)
     }
+
+    fn reads_state(&self) -> bool {
+        false
+    }
 }
 
 /// A policy for a node without children: the smallest size the constraints allow.
@@ -928,6 +937,10 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         scope.layout(constraints.min_width, constraints.min_height)
+    }
+
+    fn reads_state(&self) -> bool {
+        false
     }
 }
 

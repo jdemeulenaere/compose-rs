@@ -16,9 +16,23 @@ use crate::display_list::{Boundary, DisplayList, DrawGroup, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
 use crate::lifecycle::EntryOut;
+use crate::modifier::ModifierNode;
 use crate::node_chain::{EntryId, NodeKinds, entry_state};
-use crate::tree::{NodeId, Observation, UiTree, observation_key};
+use crate::tree::{LayoutNode, NodeId, Observation, UiTree, observation_key};
 use crate::unit::Offset;
+
+fn node_draw_reads_state(node: &LayoutNode) -> bool {
+    if !node.kinds.any(NodeKinds::DRAW) || !node.kinds.any(NodeKinds::OBSERVED) {
+        return false;
+    }
+    let lifted = node.retained.as_ref().and_then(|retained| retained.layer_entry);
+    node.chain.iter().enumerate().any(|(index, entry)| {
+        lifted != Some(index as u16)
+            && entry.kinds.any(NodeKinds::DRAW)
+            && entry.kinds.any(NodeKinds::OBSERVED)
+            && (entry.state & entry_state::DELEGATING != 0 || entry.node.reads_state())
+    })
+}
 
 /// The most repaint boundaries composed and not placed whose groups the frames keep listing
 /// ([`DisplayList::kept`]), the oldest dropped first: a lazy list's items kept on each side of
@@ -485,7 +499,7 @@ impl UiTree {
             return;
         }
         // One observation for the node's drawing, before and after its children.
-        let custom = value.kinds.any(NodeKinds::OBSERVED);
+        let custom = node_draw_reads_state(value);
         match observer.filter(|_| custom) {
             Some(observer) => observer.observe(observation_key(node, Observation::Draw), || {
                 self.draw_node_observed::<P>(node, list, Some(observer))
@@ -584,7 +598,7 @@ impl UiTree {
             let mut recording =
                 Arc::get_mut(&mut retained.recording).map(mem::take).unwrap_or_default();
             recording.clear();
-            let custom = self.node(node).kinds.any(NodeKinds::OBSERVED);
+            let custom = node_draw_reads_state(self.node(node));
             match observer.filter(|_| custom) {
                 Some(observer) => observer
                     .observe(observation_key(node, Observation::Draw), || {
@@ -1011,9 +1025,10 @@ impl UiTree {
         let size = value.layers[layer].measured.into();
         let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()?;
         let (density, direction) = (value.density, value.layout_direction);
+        let reads_state = graphics.reads_state();
         let _open = self.focus_requests.window.open_to_read(self);
         let properties = || graphics.properties(density, direction, origin, size);
-        Some(match observer {
+        Some(match observer.filter(|_| reads_state) {
             Some(observer) => {
                 observer.observe(observation_key(node, Observation::Layer), properties)
             }
@@ -1094,7 +1109,9 @@ impl UiTree {
                     let layout_direction = value.layout_direction;
                     // A built-in one (a background, a border) runs no application code but what a
                     // shape does, which finds the tree busy: most of what's drawn, it stays put.
-                    if !bits.any(NodeKinds::OBSERVED) && !draws_content {
+                    if (!bits.any(NodeKinds::OBSERVED) || !value.chain[index].node.reads_state())
+                        && !draws_content
+                    {
                         let mut scope = DrawScope {
                             list,
                             origin: origins[layer],

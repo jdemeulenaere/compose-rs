@@ -14,6 +14,13 @@ compose-ui.workspace = true
 jni = "0.22"
 unicode-segmentation = "1"
 
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+unicode-bidi = "0.3"
+unicode-linebreak = "0.1"
+
 [dev-dependencies]
 compose-navigation-event.workspace = true
 compose-animation.workspace = true

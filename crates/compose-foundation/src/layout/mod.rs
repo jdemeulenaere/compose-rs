@@ -41,17 +41,17 @@ pub use window_insets::{
     WindowInsetsProvider, WindowInsetsSides, consumed_insets_walks,
 };
 
-/// Scratch space for a policy's children, without allocating for up to 16 of them.
+/// Scratch space for a policy's children, without allocating for up to 64 of them.
 mod smallvec_free {
     pub(crate) enum Buffer<T: Copy + Default> {
-        Inline([T; 16], usize),
+        Inline([T; 64], usize),
         Heap(Vec<T>),
     }
 
     impl<T: Copy + Default> Buffer<T> {
         pub(crate) fn new(len: usize) -> Buffer<T> {
-            if len <= 16 {
-                Buffer::Inline([T::default(); 16], len)
+            if len <= 64 {
+                Buffer::Inline([T::default(); 64], len)
             } else {
                 Buffer::Heap(vec![T::default(); len])
             }
@@ -356,6 +356,13 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         width: i32,
     ) -> i32 {
         self.intrinsic(scope, measurables, width, true, false)
+    }
+
+    fn reads_state(&self) -> bool {
+        matches!(
+            self.arrangement,
+            MainAxisArrangement::Horizontal(_) | MainAxisArrangement::Vertical(_)
+        )
     }
 }
 
@@ -781,6 +788,10 @@ impl MeasurePolicy for BoxMeasurePolicy {
             scope.place_at(&placeable, position);
         }
         scope.layout(width, height)
+    }
+
+    fn reads_state(&self) -> bool {
+        false
     }
 }
 

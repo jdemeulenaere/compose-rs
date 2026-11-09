@@ -233,7 +233,12 @@ fn a_disabled_text_field_takes_no_input() {
 }
 
 fn shortcut(ui: &mut ComposeTestRule, key: Key, shift: bool, command: bool) {
-    let modifiers = compose_ui::KeyModifiers { shift, meta: command, ..Default::default() };
+    let modifiers = compose_ui::KeyModifiers {
+        shift,
+        ctrl: command && !cfg!(target_os = "macos"),
+        meta: command && cfg!(target_os = "macos"),
+        ..Default::default()
+    };
     ui.host().send_key(compose_ui::KeyEvent {
         key,
         kind: compose_ui::KeyEventType::KeyDown,

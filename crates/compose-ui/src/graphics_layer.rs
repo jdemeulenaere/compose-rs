@@ -888,6 +888,13 @@ impl ModifierNode for GraphicsLayerNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
+    fn reads_state(&self) -> bool {
+        match &self.layer {
+            Layer::Block(_) => true,
+            Layer::Fixed(layer) => matches!(layer.shape, Shape::Custom(_)),
+            Layer::Shadow(shadow) => matches!(shadow.shape, Shape::Custom(_)),
+        }
+    }
     /// Its clip, for hit testing, as Compose's layer's `isInLayer`: what's outside its shape
     /// isn't hit (its block run for the layer's size and density).
     /// As a query's: its last block's, which a press doesn't run. One no frame drew runs now.
@@ -925,6 +932,9 @@ impl crate::modifier::ModifierNodeElement for RepaintBoundaryElement {
 impl ModifierNode for RepaintBoundaryNode {
     fn is_repaint_boundary(&self) -> bool {
         true
+    }
+    fn reads_state(&self) -> bool {
+        false
     }
 }
 

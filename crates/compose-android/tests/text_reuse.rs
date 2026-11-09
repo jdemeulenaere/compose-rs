@@ -186,6 +186,7 @@ impl TextBackend for Model {
         &mut self,
         previous: u32,
         handle: u32,
+        _text: &str,
         min_width: i32,
         max_width: i32,
         _max_height: i32,
@@ -208,7 +209,15 @@ impl TextBackend for Model {
     }
 
     /// The same lines in a new paint, as Kotlin keeps the `Layout`: nothing measured.
-    fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
+    fn restyle(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        _text: &str,
+        color: u32,
+        decoration: u8,
+        _has_extras: bool,
+    ) -> bool {
         let mut paragraphs = self.paragraphs.borrow_mut();
         let Some(mut laid) = paragraphs.remove(&previous) else { return false };
         laid.kept.paint = (color, decoration);

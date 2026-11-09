@@ -2,6 +2,7 @@
 -keep class rs.compose.android.ComposeRsNative { *; }
 -keep class rs.compose.android.ComposeRsView { *; }
 -keep class rs.compose.android.TextMeasurer { *; }
+-keep class rs.compose.android.NativeCanvasProxy { *; }
 -keep class rs.compose.android.ComposeRsImages { *; }
 -keep class rs.compose.android.ComposeRsEdgeEffect { *; }
 -keep class rs.compose.android.ComposeRsMagnifier { *; }

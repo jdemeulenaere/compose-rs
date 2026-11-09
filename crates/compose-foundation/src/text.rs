@@ -588,6 +588,10 @@ impl ModifierNode for TextNode {
     fn as_selectable(&mut self) -> Option<&mut dyn compose_ui::Selectable> {
         if self.selectable { Some(self) } else { None }
     }
+    fn reads_state(&self) -> bool {
+        self.text.has_span_styles()
+            || matches!(self.style.font_family, Some(compose_ui::FontFamily::FontList(_)))
+    }
     fn on_release(&mut self, context: &mut ReleaseContext<'_>) {
         let probe = self.probe.take().map(|probe| probe.paragraph);
         let paragraphs = self.paragraph.take().into_iter().chain(self.stale.drain(..));
