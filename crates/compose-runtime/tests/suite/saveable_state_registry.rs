@@ -262,3 +262,23 @@ fn a_map_saver_saves_none_items() {
     let saved = saver.save(&None).expect("saved");
     assert_eq!(saver.restore(&saved), Some(Some(NullableSize { x: None, y: None })));
 }
+
+#[test]
+fn null_provider_among_multiple_under_one_key_keeps_positions_across_bytes() {
+    let registry =
+        SaveableStateRegistry::with_can_be_saved(None, |value| matches!(value, SavedValue::Int(_)));
+    registry.register_provider(KEY, || None);
+    registry.register_provider(KEY, || Some(int(42)));
+    registry.register_provider(KEY, || None);
+    let encoded = registry.perform_save().to_bytes();
+    let decoded = SavedState::from_bytes(&encoded).expect("valid saved state bytes");
+    let restored = SaveableStateRegistry::new(Some(decoded));
+    assert_eq!(restored.consume_restored(KEY), None);
+    assert_eq!(restored.consume_restored(KEY), Some(int(42)));
+    assert_eq!(restored.consume_restored(KEY), None);
+
+    let all_none = SaveableStateRegistry::new(None);
+    all_none.register_provider(KEY, || None);
+    all_none.register_provider(KEY, || None);
+    assert!(all_none.perform_save().is_empty());
+}

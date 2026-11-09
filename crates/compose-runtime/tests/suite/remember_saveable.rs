@@ -318,3 +318,133 @@ fn a_value_replaced_when_inputs_change_goes_at_the_end_of_the_pass() {
         vec![vec![SavedValue::Int(11)]]
     );
 }
+
+// ---- RememberSaveableWithMutableStateTest ---------------------------------------------------
+
+/// Compose's `Holder` (`data class Holder(var value: Int)`): mutated in place, equal by value.
+#[derive(Clone, Debug)]
+struct MutableHolder(Rc<Cell<i32>>);
+
+impl MutableHolder {
+    fn new(value: i32) -> Self {
+        Self(Rc::new(Cell::new(value)))
+    }
+}
+
+impl PartialEq for MutableHolder {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.get() == other.0.get()
+    }
+}
+
+fn mutable_holder_saver() -> impl Saver<MutableHolder> {
+    saver(
+        |holder: &MutableHolder| Some(SavedValue::Int(i64::from(holder.0.get()))),
+        |saved| match saved {
+            SavedValue::Int(value) => Some(MutableHolder::new(*value as i32)),
+            _ => None,
+        },
+    )
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, restoreWithSaver
+#[test]
+fn a_mutable_state_comes_back_through_its_state_saver() {
+    let state_cell: Rc<Cell<Option<MutableState<MutableHolder>>>> = Rc::default();
+    let s = state_cell.clone();
+    let mut tester = RestorationTester::set_content(move || {
+        s.set(Some(remember_saveable_with(mutable_holder_saver(), || {
+            mutable_state_of(MutableHolder::new(0))
+        })));
+    });
+    tester.run_on_idle();
+    let state = state_cell.take().expect("composed");
+    assert_eq!(state.get(), MutableHolder::new(0));
+    state.get().0.set(1);
+    tester.emulate_saved_instance_state_restore();
+    tester.run_on_idle();
+    assert_eq!(state_cell.take().map(|s| s.get()), Some(MutableHolder::new(1)));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, nullableStateRestoresNonNullValue
+#[test]
+fn an_optional_state_set_to_some_comes_back_with_its_value() {
+    let state_cell: Rc<Cell<Option<MutableState<Option<String>>>>> = Rc::default();
+    let s = state_cell.clone();
+    let mut tester = RestorationTester::set_content(move || {
+        s.set(Some(remember_saveable(|| mutable_state_of(None))));
+    });
+    let state = state_cell.take().expect("composed");
+    assert_eq!(state.get(), None);
+    state.set(Some(String::from("value")));
+    tester.emulate_saved_instance_state_restore();
+    assert_eq!(state_cell.take().map(|s| s.get()), Some(Some(String::from("value"))));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, nullableStateRestoresNullValue
+#[test]
+fn an_optional_state_set_to_none_comes_back_as_none() {
+    let state_cell: Rc<Cell<Option<MutableState<Option<String>>>>> = Rc::default();
+    let s = state_cell.clone();
+    let mut tester = RestorationTester::set_content(move || {
+        s.set(Some(remember_saveable(|| mutable_state_of(Some(String::from("initial"))))));
+    });
+    let state = state_cell.take().expect("composed");
+    assert_eq!(state.get().as_deref(), Some("initial"));
+    state.set(None);
+    tester.emulate_saved_instance_state_restore();
+    assert_eq!(state_cell.take().map(|s| s.get()), Some(None));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/RememberSaveableWithMutableStateTest.kt, stateSaverReturnsNull
+#[test]
+fn a_state_whose_saver_saves_nothing_runs_init_again() {
+    let state_cell: Rc<Cell<Option<MutableState<String>>>> = Rc::default();
+    let s = state_cell.clone();
+    let never_saves = || {
+        saver(
+            |_: &String| None,
+            |saved| match saved {
+                SavedValue::Text(value) => Some(value.clone()),
+                _ => None,
+            },
+        )
+    };
+    let mut tester = RestorationTester::set_content(move || {
+        s.set(Some(remember_saveable_with(never_saves(), || {
+            mutable_state_of(String::from("value"))
+        })));
+    });
+    let state = state_cell.take().expect("composed");
+    assert_eq!(state.get(), "value");
+    state.set(String::from("unsaved"));
+    tester.emulate_saved_instance_state_restore();
+    assert_eq!(state_cell.take().map(|s| s.get()), Some(String::from("value")));
+}
+
+#[test]
+fn a_saver_returning_none_keeps_the_order_of_siblings_under_the_same_key() {
+    let first_cell: Rc<Cell<Option<MutableState<String>>>> = Rc::default();
+    let second_cell: Rc<Cell<Option<MutableState<String>>>> = Rc::default();
+    let (f, s) = (first_cell.clone(), second_cell.clone());
+    let never_saves = || {
+        saver(
+            |_: &String| None,
+            |saved| match saved {
+                SavedValue::Text(value) => Some(value.clone()),
+                _ => None,
+            },
+        )
+    };
+    let mut tester = RestorationTester::set_content(move || {
+        f.set(Some(remember_saveable_with(never_saves(), || {
+            mutable_state_of(String::from("first-init"))
+        })));
+        s.set(Some(remember_saveable(|| mutable_state_of(String::from("second-init")))));
+    });
+    first_cell.take().expect("composed").set(String::from("first-edited"));
+    second_cell.take().expect("composed").set(String::from("second-saved"));
+    tester.emulate_saved_instance_state_restore();
+    assert_eq!(first_cell.take().map(|st| st.get()), Some(String::from("first-init")));
+    assert_eq!(second_cell.take().map(|st| st.get()), Some(String::from("second-saved")));
+}

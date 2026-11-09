@@ -157,3 +157,170 @@ fn states_saved_through_a_list_saver_and_a_map_saver_come_back() {
     let _ui = recreate(ui, content);
     assert_eq!((state().get(), STATE_AS_MAP.get().expect("composed").get()), (1, 2));
 }
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/ActivityRecreationTest.kt, valueStoredInTwoViewsBothRestored
+#[test]
+fn values_in_two_hosts_both_come_back() {
+    thread_local! {
+        static ARRAY1: Cell<Option<Rc<Cell<i32>>>> = const { Cell::new(None) };
+        static ARRAY2: Cell<Option<Rc<Cell<i32>>>> = const { Cell::new(None) };
+    }
+    let content1 =
+        || ARRAY1.set(Some(remember_saveable_with(array_saver(), || Rc::new(Cell::new(0)))));
+    let content2 =
+        || ARRAY2.set(Some(remember_saveable_with(array_saver(), || Rc::new(Cell::new(0)))));
+
+    let mut host1 = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
+    let mut host2 = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
+    host1.set_content(content1);
+    host2.set_content(content2);
+    let _ = host1.frame();
+    let _ = host2.frame();
+
+    let take1 = || {
+        let a = ARRAY1.take().expect("composed 1");
+        ARRAY1.set(Some(a.clone()));
+        a
+    };
+    let take2 = || {
+        let a = ARRAY2.take().expect("composed 2");
+        ARRAY2.set(Some(a.clone()));
+        a
+    };
+    assert_eq!((take1().get(), take2().get()), (0, 0));
+    take1().set(1);
+    take2().set(2);
+
+    let bytes1 = host1.save_state().to_bytes();
+    let bytes2 = host2.save_state().to_bytes();
+    drop(host1);
+    drop(host2);
+    ARRAY1.set(None);
+    ARRAY2.set(None);
+
+    let mut restored1 = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
+    let mut restored2 = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
+    restored1.restore_state(SavedState::from_bytes(&bytes1).expect("saved state 1"));
+    restored2.restore_state(SavedState::from_bytes(&bytes2).expect("saved state 2"));
+    restored1.set_content(content1);
+    restored2.set_content(content2);
+    let _ = restored1.frame();
+    let _ = restored2.frame();
+
+    assert_eq!((take1().get(), take2().get()), (1, 2));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/ActivityRecreationTest.kt, stateInsidePopupIsRestored
+#[test]
+fn state_inside_popups_comes_back() {
+    use compose_ui::Popup;
+    thread_local! {
+        static NEXT: Cell<i32> = const { Cell::new(10) };
+        static POPUP1: Cell<Option<i32>> = const { Cell::new(None) };
+        static POPUP2: Cell<Option<i32>> = const { Cell::new(None) };
+    }
+    let next_int = || {
+        let value = NEXT.get();
+        NEXT.set(value + 1);
+        value
+    };
+    let content = move || {
+        Popup!({
+            POPUP1.set(Some(remember_saveable(next_int)));
+        });
+        Popup!({
+            POPUP2.set(Some(remember_saveable(next_int)));
+        });
+    };
+    let ui = compose_test(content);
+    let initial1 = POPUP1.take().expect("popup 1 composed");
+    let initial2 = POPUP2.take().expect("popup 2 composed");
+    assert_ne!(initial1, initial2);
+
+    let _ui = recreate(ui, content);
+    assert_eq!(POPUP1.take(), Some(initial1));
+    assert_eq!(POPUP2.take(), Some(initial2));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/ActivityRecreationTest.kt, stateInsideDialogIsRestored
+#[test]
+fn state_inside_dialogs_comes_back() {
+    use compose_ui::Dialog;
+    thread_local! {
+        static NEXT: Cell<i32> = const { Cell::new(100) };
+        static DIALOG1: Cell<Option<i32>> = const { Cell::new(None) };
+        static DIALOG2: Cell<Option<i32>> = const { Cell::new(None) };
+    }
+    let next_int = || {
+        let value = NEXT.get();
+        NEXT.set(value + 1);
+        value
+    };
+    let content = move || {
+        Dialog!(on_dismiss_request = || {}, {
+            DIALOG1.set(Some(remember_saveable(next_int)));
+        });
+        Dialog!(on_dismiss_request = || {}, {
+            DIALOG2.set(Some(remember_saveable(next_int)));
+        });
+    };
+    let ui = compose_test(content);
+    let initial1 = DIALOG1.take().expect("dialog 1 composed");
+    let initial2 = DIALOG2.take().expect("dialog 2 composed");
+    assert_ne!(initial1, initial2);
+
+    let _ui = recreate(ui, content);
+    assert_eq!(DIALOG1.take(), Some(initial1));
+    assert_eq!(DIALOG2.take(), Some(initial2));
+}
+
+// Compose: compose/runtime/runtime-saveable/src/androidDeviceTest/kotlin/androidx/compose/runtime/saveable/ActivityRecreationTest.kt, movableContentInAdaptiveLayoutUseCaseIsRestored
+#[test]
+fn movable_content_in_an_adaptive_layout_comes_back() {
+    use compose_foundation::BasicText;
+    use compose_foundation::layout::*;
+    use compose_ui::Modifier;
+
+    thread_local! {
+        static IS_TABLET: Cell<bool> = const { Cell::new(false) };
+        static COMPOSED_AS_TABLET: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[composable]
+    fn AdaptiveScreen() {
+        let list_content = remember(|| {
+            movable_content_of(|| {
+                ARRAY.set(Some(remember_saveable_with(array_saver(), || Rc::new(Cell::new(0)))));
+                BasicText!("List screen");
+            })
+        });
+        if !IS_TABLET.get() {
+            COMPOSED_AS_TABLET.set(false);
+            list_content();
+        } else {
+            COMPOSED_AS_TABLET.set(true);
+            Row!(|scope: RowScope| {
+                let list_content = list_content.clone();
+                Box!(modifier = Modifier.weight(scope, 1.0).fill_max_height(), {
+                    list_content();
+                });
+                Box!(modifier = Modifier.weight(scope, 1.0).fill_max_height(), {
+                    BasicText!("Details screen");
+                });
+            });
+        }
+    }
+
+    IS_TABLET.set(false);
+    let ui = compose_test(AdaptiveScreen);
+    assert!(!COMPOSED_AS_TABLET.get());
+    assert_eq!(array().get(), 0);
+    array().set(1);
+
+    IS_TABLET.set(true);
+    let mut ui = recreate(ui, AdaptiveScreen);
+    assert!(COMPOSED_AS_TABLET.get());
+    assert_eq!(array().get(), 1);
+    ui.on_node_with_text("List screen").assert_exists();
+    ui.on_node_with_text("Details screen").assert_exists();
+}

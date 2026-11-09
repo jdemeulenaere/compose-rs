@@ -1,13 +1,16 @@
 //! The composables a panic unwound through, as Compose's diagnostic stack traces
-//! (`tooling.ComposeStackTraceMode`, D1507).
+//! (`tooling.ComposeStackTraceMode`, D1507, D2141).
 //!
 //! When a panic unwinds through a pass, the pass's open groups say where it was: the trace is made
 //! then, from them, innermost first, and a pass nested in another adds the outer pass's when the
-//! panic reaches it. A Rust panic's payload can't carry it (Compose attaches a suppressed
-//! exception): [`take_compose_stack_trace`] gives the last one made on the thread, which belongs
-//! to the last panic that unwound a pass, not necessarily to the panic a caller just caught (one
-//! outside any pass makes none); [`compose_stack_trace_sequence`], read before, tells them apart. A
-//! pass that doesn't panic does nothing for it.
+//! panic reaches it. Deferred callbacks run at the end of a pass or in a paused composition's
+//! `apply` (node deactivations, remember observers' `on_remembered`, side effects, replayed node
+//! callbacks) keep only their target on the stack and walk the live slot table if one unwinds. A
+//! Rust panic's payload can't carry it (Compose attaches a suppressed exception):
+//! [`take_compose_stack_trace`] gives the last one made on the thread, which belongs to the last
+//! panic that unwound a pass or deferred callback, not necessarily to the panic a caller just
+//! caught (one outside any pass makes none); [`compose_stack_trace_sequence`], read before, tells
+//! them apart. A pass or apply that doesn't panic does nothing for it.
 //!
 //! Frames name the composables `#[composable]` made, by their function's path, or give their
 //! groups' keys ([`ComposeStackTraceMode::GroupKeys`]). Compose's frames carry a file and line from
@@ -16,9 +19,10 @@
 
 use std::fmt;
 
+use crate::applier::NodeRef;
 use crate::composer::Identity;
-use crate::runtime::{CompositionId, Runtime, with_runtime};
-use crate::slot_table::SENTINEL;
+use crate::runtime::{CompositionId, Compositions, Runtime, try_with_runtime, with_runtime};
+use crate::slot_table::{GroupKind, NONE, SENTINEL, SlotTable};
 
 /// What a diagnostic stack trace says, as Compose's `ComposeStackTraceMode`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -121,7 +125,7 @@ fn path_of(full: &'static str) -> &'static str {
 fn push_frame(
     frames: &mut Vec<ComposeStackFrame>,
     mode: ComposeStackTraceMode,
-    table: &crate::slot_table::SlotTable,
+    table: &SlotTable,
     group: u32,
 ) {
     if group == SENTINEL {
@@ -140,6 +144,44 @@ fn push_frame(
     let path = if mode == ComposeStackTraceMode::GroupKeys { None } else { named };
     let name = path.map(|path| path.rsplit("::").next().unwrap_or(path));
     frames.push(ComposeStackFrame { key: group.key, name, path });
+}
+
+fn push_parent_frames(
+    frames: &mut Vec<ComposeStackFrame>,
+    mode: ComposeStackTraceMode,
+    compositions: &Compositions,
+    mut parent: Option<crate::context::ContextId>,
+) {
+    while let Some((_, data, group)) = parent.and_then(|context| compositions.context_at(context)) {
+        let mut group = group;
+        while group != SENTINEL && group != NONE {
+            push_frame(frames, mode, &data.table, group);
+            group = data.table[group].parent;
+        }
+        parent = data.parent;
+    }
+}
+
+fn store_trace(
+    runtime: &mut Runtime,
+    id: CompositionId,
+    outer: Option<CompositionId>,
+    frames: Vec<ComposeStackFrame>,
+) {
+    match &mut runtime.stack_trace {
+        Some(pending) if pending.extended_by == Some(id) => {
+            pending.trace.frames.extend(frames);
+            pending.extended_by = outer;
+        }
+        slot => {
+            runtime.stack_trace_sequence += 1;
+            let sequence = runtime.stack_trace_sequence;
+            *slot = Some(Box::new(PendingTrace {
+                trace: ComposeStackTrace { frames, sequence },
+                extended_by: outer,
+            }));
+        }
+    }
 }
 
 /// A pass of `id`, nested in a pass of `outer` if any, is unwound by a panic: its open groups go
@@ -161,30 +203,105 @@ pub(crate) fn record(runtime: &mut Runtime, id: CompositionId, outer: Option<Com
     // while its place is there. A place removed leaves a freed group, or one another composable
     // has since, with a stale parent link: the walk stops there.
     if outer.is_none() {
-        let mut parent = data.parent;
-        while let Some((_, data, group)) =
-            parent.and_then(|context| runtime.compositions.context_at(context))
+        push_parent_frames(&mut frames, mode, &runtime.compositions, data.parent);
+    }
+    store_trace(runtime, id, outer, frames);
+}
+
+/// What a deferred callback at the end of a pass (or in a paused composition's `apply`) belongs
+/// to in the slot table, kept on the stack so the normal path only writes registers (D2141).
+#[derive(Clone, Copy)]
+pub(crate) enum TraceTarget {
+    None,
+    Node(NodeRef),
+    Slot(*const ()),
+    Group(u32),
+}
+
+/// Guards deferred callbacks of a composition: if one unwinds, locates `target` in its live slot
+/// table and records the diagnostic trace from there.
+pub(crate) struct DeferredTrace {
+    context: Option<(CompositionId, u64)>,
+    target: TraceTarget,
+}
+
+impl DeferredTrace {
+    #[inline]
+    pub fn new(context: Option<(CompositionId, u64)>) -> Self {
+        Self { context, target: TraceTarget::None }
+    }
+
+    #[inline]
+    pub fn set(&mut self, target: TraceTarget) {
+        self.target = target;
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.target = TraceTarget::None;
+    }
+}
+
+impl Drop for DeferredTrace {
+    #[inline]
+    fn drop(&mut self) {
+        if !matches!(self.target, TraceTarget::None)
+            && let Some((id, after)) = self.context
+            && std::thread::panicking()
         {
-            let mut group = group;
-            while group != SENTINEL && group != crate::slot_table::NONE {
-                push_frame(&mut frames, mode, &data.table, group);
-                group = data.table[group].parent;
+            record_deferred(id, after, self.target);
+        }
+    }
+}
+
+fn find_group(table: &SlotTable, target: TraceTarget) -> Option<u32> {
+    let mut stack = vec![table[SENTINEL].first_child];
+    while let Some(mut index) = stack.pop() {
+        while index != NONE {
+            let entry = &table[index];
+            let matched = match target {
+                TraceTarget::None => false,
+                TraceTarget::Node(node) => entry.kind == GroupKind::Node && entry.node == node,
+                TraceTarget::Slot(ptr) => {
+                    entry.slots.iter().any(|slot| slot.value.data_ptr() == Some(ptr))
+                }
+                TraceTarget::Group(group) => index == group,
+            };
+            if matched {
+                return Some(index);
             }
-            parent = data.parent;
+            if entry.next_sibling != NONE {
+                stack.push(entry.next_sibling);
+            }
+            index = entry.first_child;
         }
     }
-    match &mut runtime.stack_trace {
-        Some(pending) if pending.extended_by == Some(id) => {
-            pending.trace.frames.extend(frames);
-            pending.extended_by = outer;
+    None
+}
+
+#[cold]
+fn record_deferred(id: CompositionId, after: u64, target: TraceTarget) {
+    let _ = try_with_runtime(|runtime| {
+        let mode = runtime.stack_trace_mode;
+        if mode == ComposeStackTraceMode::None {
+            runtime.stack_trace = None;
+            return;
         }
-        slot => {
-            runtime.stack_trace_sequence += 1;
-            let sequence = runtime.stack_trace_sequence;
-            *slot = Some(Box::new(PendingTrace {
-                trace: ComposeStackTrace { frames, sequence },
-                extended_by: outer,
-            }))
+        // An inner pass or child composition's deferred work already recorded this panic's trace.
+        if runtime.stack_trace_sequence > after {
+            return;
         }
-    }
+        let Some(data) = runtime.compositions.get(id) else { return };
+        let Some(mut group) = find_group(&data.table, target) else { return };
+        let mut frames = Vec::new();
+        while group != SENTINEL && group != NONE {
+            push_frame(&mut frames, mode, &data.table, group);
+            group = data.table[group].parent;
+        }
+        let outer = runtime.active.map(|active| active.composition);
+        if outer.is_none() {
+            push_parent_frames(&mut frames, mode, &runtime.compositions, data.parent);
+        }
+        store_trace(runtime, id, outer, frames);
+    });
 }

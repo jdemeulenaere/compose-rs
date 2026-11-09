@@ -974,11 +974,16 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         data.finishing = true;
         runtime.finishing += 1;
         let applier = data.applier.clone();
-        Some((paused, crate::context::resolve_applier(&runtime.lent, &applier)))
+        Some((
+            paused,
+            crate::context::resolve_applier(&runtime.lent, &applier),
+            runtime.stack_trace_sequence,
+        ))
     });
     state.set(PausedState::Applied);
-    let Some((mut paused, applier)) = taken else { return };
+    let Some((mut paused, applier, trace_after)) = taken else { return };
     let finishing = Finishing { id, freeing: Vec::new() };
+    let mut trace = crate::stack_trace::DeferredTrace::new(Some((id, trace_after)));
     let mut deferred = Deferred::default();
     {
         let mut applier =
@@ -991,7 +996,7 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
                 let table = &runtime.compositions.get(id).expect("a live composition").table;
                 node_offset(table, region.root)
             });
-            replay(&mut *applier, region, offset);
+            replay(&mut *applier, region, offset, &mut trace);
             with_runtime(|runtime| {
                 let table = &mut runtime.compositions.get_mut(id).expect("live").table;
                 set_node_count(table, region.root, region.nodes);
@@ -1005,9 +1010,11 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         // Rule R1's order, as a pass's end.
         for node in deferred.deactivated_nodes.drain(..) {
             if applier.contains(node) {
+                trace.set(crate::stack_trace::TraceTarget::Node(node));
                 applier.deactivate(node);
             }
         }
+        trace.clear();
         for node in deferred.released_nodes.drain(..) {
             if applier.contains(node) {
                 applier.release(node);
@@ -1029,11 +1036,15 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
     dispatch_forgotten(&forgotten);
     drop(forgotten);
     for observer in flat.observers {
+        trace.set(crate::stack_trace::TraceTarget::Slot(Rc::as_ptr(&observer) as *const ()));
         observer.dispatch_remembered();
     }
+    trace.clear();
     for effect in flat.effects {
+        trace.set(effect.target());
         effect.run();
     }
+    trace.clear();
     dispatch_forgotten(&abandoned);
     drop(abandoned);
     drop(paused);
@@ -1064,9 +1075,14 @@ struct Flat {
 
 /// Plays `region`'s recorded node changes to `applier`; `offset` is where its nodes start in its
 /// node parent.
-fn replay(applier: &mut dyn ErasedApplier, region: &mut Region, offset: u32) {
+fn replay(
+    applier: &mut dyn ErasedApplier,
+    region: &mut Region,
+    offset: u32,
+    trace: &mut crate::stack_trace::DeferredTrace,
+) {
     let top = region.node_parent;
-    replay_ops(applier, &mut region.ops, top, offset);
+    replay_ops(applier, &mut region.ops, top, offset, trace);
 }
 
 /// Plays `ops`, those of a region whose nodes start at `offset` in `top`.
@@ -1075,24 +1091,36 @@ fn replay_ops(
     ops: &mut Vec<RecordedOp>,
     top: NodeRef,
     offset: u32,
+    trace: &mut crate::stack_trace::DeferredTrace,
 ) {
+    use crate::stack_trace::TraceTarget;
     let at =
         |parent: NodeRef, index: u32| (index + if parent == top { offset } else { 0 }) as usize;
     for op in ops.drain(..) {
         match op {
             RecordedOp::Attach { parent, index, node } => {
-                applier.attach(parent, at(parent, index), node)
+                trace.set(TraceTarget::Node(node));
+                applier.attach(parent, at(parent, index), node);
             }
             RecordedOp::Move { parent, from, to, count } => {
-                applier.move_nodes(parent, at(parent, from), at(parent, to), count as usize)
+                trace.clear();
+                applier.move_nodes(parent, at(parent, from), at(parent, to), count as usize);
             }
             RecordedOp::Remove { parent, index, count } => {
-                applier.remove(parent, at(parent, index), count as usize)
+                trace.clear();
+                applier.remove(parent, at(parent, index), count as usize);
             }
-            RecordedOp::Reuse { node } => applier.reuse(node),
-            RecordedOp::Deactivate { node } => applier.deactivate(node),
+            RecordedOp::Reuse { node } => {
+                trace.set(TraceTarget::Node(node));
+                applier.reuse(node);
+            }
+            RecordedOp::Deactivate { node } => {
+                trace.set(TraceTarget::Node(node));
+                applier.deactivate(node);
+            }
         }
     }
+    trace.clear();
 }
 
 /// Discards `id`'s paused composition: removes its regions (their groups and content), releases

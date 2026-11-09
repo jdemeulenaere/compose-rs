@@ -494,3 +494,355 @@ fn a_removed_place_is_not_traced() {
 fn a_removed_place_reused_by_another_composable_is_not_traced() {
     assert_eq!(kept_composition_trace(true, true), Vec::<&str>::new());
 }
+
+#[composable]
+fn NodeWithCallbacks(
+    #[default(nothing())] on_attach: Action,
+    #[default(nothing())] on_reuse: Action,
+    #[default(nothing())] on_deactivate: Action,
+) {
+    ReusableComposeNode::<ViewApplier>(
+        move || {
+            let mut view = View::new("node_w_callbacks");
+            view.callbacks = Some(Rc::new(ViewCallbacks {
+                on_attach: Some(Box::new(move || on_attach())),
+                on_reuse: Some(Box::new(move || on_reuse())),
+                on_deactivate: Some(Box::new(move || on_deactivate())),
+                on_release: None,
+            }));
+            view
+        },
+        |_| {},
+    );
+}
+
+type MovableBool = Callback<dyn Fn(bool)>;
+
+#[composable]
+fn WrappedMovableContent(content: Rc<dyn Fn(bool)>, wrap: Rc<dyn Fn(MovableBool)>) {
+    let movable = remember(move || movable_content_of_with(move |flag| content(flag)));
+    wrap(movable);
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, setContentRememberObserver
+#[test]
+fn set_content_remember_observer() {
+    exception_test(&[], 1, || {
+        composition_test().compose(|| {
+            DisposableEffect((), |_| throw_test_panic());
+        })
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, recomposeRememberObserver
+#[test]
+fn recompose_remember_observer() {
+    exception_test(
+        &[],
+        1,
+        compose_then(|state| {
+            DisposableEffect(state.get(), move |scope| {
+                if state.get() {
+                    throw_test_panic();
+                }
+                scope.on_dispose(|| {})
+            });
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, nodeReuse_gapBuffer, nodeReuse_linkBuffer
+#[test]
+fn node_reuse() {
+    exception_test(
+        &["NodeWithCallbacks"],
+        4,
+        compose_then(|state| {
+            ReusableContent(state.get(), || {
+                NodeWithCallbacks!(on_reuse = Rc::new(|| throw_test_panic()));
+            })
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, nodeDeactivate
+#[test]
+fn node_deactivate() {
+    exception_test(&["NodeWithCallbacks"], 4, || {
+        let mut test = composition_test();
+        let active = mutable_state_of(true);
+        let a = active.handle();
+        test.compose(move || {
+            ReusableContentHost(a.get(), || {
+                NodeWithCallbacks!(on_deactivate = Rc::new(|| throw_test_panic()));
+            });
+        });
+        active.set(false);
+        test.advance();
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, setContentNodeAttach
+#[test]
+fn set_content_node_attach() {
+    exception_test(&["NodeWithCallbacks", "InlineWrapper"], 4, || {
+        composition_test().compose(|| {
+            InlineWrapper(|| {
+                NodeWithCallbacks!(on_attach = Rc::new(|| throw_test_panic()));
+            })
+        })
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, recomposeNodeAttach
+#[test]
+fn recompose_node_attach() {
+    exception_test(
+        &["NodeWithCallbacks", "Wrapper"],
+        4,
+        compose_then(|state| {
+            Wrapper!(move || {
+                if state.get() {
+                    NodeWithCallbacks!(on_attach = Rc::new(|| throw_test_panic()));
+                }
+            })
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, recomposeNodeAttachInlineWrapper
+#[test]
+fn recompose_node_attach_inline_wrapper() {
+    exception_test(
+        &["NodeWithCallbacks", "InlineWrapper"],
+        4,
+        compose_then(|state| {
+            InlineWrapper(|| {
+                if state.get() {
+                    NodeWithCallbacks!(on_attach = Rc::new(|| throw_test_panic()));
+                }
+            })
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, moveMovableContentOf
+#[test]
+fn move_movable_content_of() {
+    exception_test(
+        &["Wrapper", "WrappedMovableContent"],
+        5,
+        compose_then(|state| {
+            WrappedMovableContent(
+                Rc::new(|flag| {
+                    if flag {
+                        throw_test_panic();
+                    }
+                }),
+                Rc::new(move |movable| {
+                    if !state.get() {
+                        movable(false);
+                    } else {
+                        Wrapper!(move || movable(true));
+                    }
+                }),
+            );
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, moveMovableContentOfStateRead
+#[test]
+fn move_movable_content_of_state_read() {
+    exception_test(
+        &["Wrapper", "WrappedMovableContent"],
+        5,
+        compose_then(|state| {
+            WrappedMovableContent(
+                Rc::new(move |_| {
+                    if state.get() {
+                        throw_test_panic();
+                    }
+                }),
+                Rc::new(move |movable| {
+                    let s = state.get();
+                    if !s {
+                        movable(s);
+                    } else {
+                        Wrapper!(move || movable(s));
+                    }
+                }),
+            );
+        }),
+    );
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorJvmTest/kotlin/androidx/compose/runtime/tooling/ErrorTraceTests.kt, moveMovableContentOfReverse
+#[test]
+fn move_movable_content_of_reverse() {
+    exception_test(&["Wrapper", "WrappedMovableContent"], 5, || {
+        let mut test = composition_test();
+        let state = mutable_state_of(true);
+        let s = state.handle();
+        test.compose(move || {
+            WrappedMovableContent(
+                Rc::new(|flag| {
+                    if flag {
+                        throw_test_panic();
+                    }
+                }),
+                Rc::new(move |movable| {
+                    if !s.get() {
+                        movable(false);
+                    } else {
+                        Wrapper!(move || movable(true));
+                    }
+                }),
+            );
+        });
+        state.set(false);
+        test.advance();
+    });
+}
+
+#[test]
+fn move_movable_content_out_of_wrapper() {
+    exception_test(&["WrappedMovableContent"], 4, || {
+        let mut test = composition_test();
+        let state = mutable_state_of(true);
+        let s = state.handle();
+        test.compose(move || {
+            WrappedMovableContent(
+                Rc::new(|flag| {
+                    if !flag {
+                        throw_test_panic();
+                    }
+                }),
+                Rc::new(move |movable| {
+                    if !s.get() {
+                        movable(false);
+                    } else {
+                        Wrapper!(move || movable(true));
+                    }
+                }),
+            );
+        });
+        state.set(false);
+        test.advance();
+    });
+}
+
+#[test]
+fn deferred_effects_and_subcomposition_through_disposable_effect_trace_ancestors() {
+    // Remember observer inside nested composables.
+    exception_test(&["Linear", "Wrapper"], 5, || {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                Linear!(|| {
+                    DisposableEffect((), |_| throw_test_panic());
+                })
+            })
+        })
+    });
+    // SideEffect and KeyedSideEffect after the pass.
+    exception_test(&["Wrapper"], 2, || {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                SideEffect(|| throw_test_panic());
+            })
+        })
+    });
+    exception_test(&["Wrapper"], 2, || {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                KeyedSideEffect(1, || throw_test_panic());
+            })
+        })
+    });
+    // Compose's real Subcompose sets its child's content inside DisposableEffect: an inner pass
+    // panic keeps the child's frames plus its parent's place, not clobbered by the outer effect.
+    #[composable]
+    fn DeferredSubcompose(content: Rc<dyn Fn()>) {
+        let context = remember_composition_context();
+        let child =
+            remember(move || Rc::new(Composition::with_parent(ViewApplier::new(), context)));
+        let current = remember_updated_state(content);
+        let c = child.clone();
+        DisposableEffect(child, move |scope| {
+            c.set_content(move || (current.get())());
+            let c = c.clone();
+            scope.on_dispose(move || c.dispose())
+        });
+    }
+    exception_test(&["InlineWrapper", "DeferredSubcompose", "Wrapper"], 6, || {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                DeferredSubcompose(Rc::new(|| InlineWrapper(|| throw_test_panic())));
+            })
+        })
+    });
+    // Deferred panic in a child composition set synchronously inside a parent pass extends onto
+    // the parent's open frames (`extended_by`).
+    exception_test(&["InlineWrapper", "Subcompose", "Wrapper"], 6, || {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                Subcompose(Rc::new(|| {
+                    InlineWrapper(|| {
+                        DisposableEffect((), |_| throw_test_panic());
+                    })
+                }));
+            })
+        })
+    });
+}
+
+#[test]
+fn deferred_panic_in_none_mode_clears_earlier_trace() {
+    set_diagnostic_stack_trace_mode(ComposeStackTraceMode::Auto);
+    let _ = take_compose_stack_trace();
+    let traced = catch_unwind(AssertUnwindSafe(|| {
+        composition_test().compose(|| Linear!(|| throw_test_panic()))
+    }));
+    assert!(traced.is_err());
+    set_diagnostic_stack_trace_mode(ComposeStackTraceMode::None);
+    let untraced = catch_unwind(AssertUnwindSafe(|| {
+        composition_test().compose(|| {
+            Wrapper!(|| {
+                DisposableEffect((), |_| throw_test_panic());
+            })
+        })
+    }));
+    set_diagnostic_stack_trace_mode(ComposeStackTraceMode::Auto);
+    assert!(untraced.is_err());
+    assert!(take_compose_stack_trace().is_none());
+}
+
+#[test]
+fn paused_composition_apply_traces_deferred_callbacks() {
+    exception_test(&["NodeWithCallbacks", "Wrapper"], 8, || {
+        let composition =
+            Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+        let paused = composition.set_pausable_content(|| {
+            Wrapper!(|| {
+                NodeWithCallbacks!(on_attach = Rc::new(|| throw_test_panic()));
+            })
+        });
+        while !paused.is_complete() {
+            paused.resume(|| false);
+        }
+        paused.apply();
+    });
+    exception_test(&["Wrapper"], 6, || {
+        let composition =
+            Composition::pausable(ViewApplier::new(), Recomposer::current_thread().as_context());
+        let paused = composition.set_pausable_content(|| {
+            Wrapper!(|| {
+                DisposableEffect((), |_| throw_test_panic());
+            })
+        });
+        while !paused.is_complete() {
+            paused.resume(|| false);
+        }
+        paused.apply();
+    });
+}

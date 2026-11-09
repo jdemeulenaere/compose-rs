@@ -1640,7 +1640,7 @@ pub(crate) fn discard_unused_movable_content() {
                     .try_borrow_mut()
                     .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
                     .on_begin_changes();
-                apply_deferred(&applier, &mut removed, false, None);
+                apply_deferred(&applier, &mut removed, false, None, None);
             }));
             if let Err(caught) = applied {
                 panic.get_or_insert(caught);
@@ -1719,10 +1719,13 @@ pub(crate) fn apply_work(composed: Composed) {
         }
     };
     // Disposed by another's work in this frame: its changes are cleared, as `dispose` clears them.
-    let disposed = with_runtime(|runtime| {
-        runtime.compositions.get(id).is_none_or(|data| data.disposed || data.closed)
+    let (disposed, trace_after) = with_runtime(|runtime| {
+        (
+            runtime.compositions.get(id).is_none_or(|data| data.disposed || data.closed),
+            runtime.stack_trace_sequence,
+        )
     });
-    apply_deferred(&applier, &mut deferred, !disposed, removed_content);
+    apply_deferred(&applier, &mut deferred, !disposed, removed_content, Some((id, trace_after)));
     // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
     let freeing = std::mem::take(&mut finishing.freeing);
     let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));
@@ -1916,7 +1919,10 @@ fn apply_deferred(
     deferred: &mut Deferred,
     run_effects: bool,
     removed_content: Option<Box<Deferred>>,
+    trace_context: Option<(CompositionId, u64)>,
 ) {
+    use crate::stack_trace::{DeferredTrace, TraceTarget};
+    let mut trace = DeferredTrace::new(trace_context);
     {
         // What panics in a release leaves the applier's changes as they'd be after a pass.
         struct Abandon<'a>(&'a Rc<RefCell<dyn ErasedApplier>>, bool);
@@ -1936,9 +1942,11 @@ fn apply_deferred(
         // Those of a composition below a node of its parent's may have gone with it.
         for node in deferred.deactivated_nodes.drain(..) {
             if applier.contains(node) {
+                trace.set(TraceTarget::Node(node));
                 applier.deactivate(node);
             }
         }
+        trace.clear();
         if std::mem::take(&mut deferred.repeated_releases) {
             let mut released = std::collections::HashSet::new();
             deferred.released_nodes.retain(|node| released.insert(node.bits()));
@@ -1954,8 +1962,10 @@ fn apply_deferred(
     dispatch_forgotten(&deferred.removed_values);
     deferred.removed_values.clear();
     for observer in deferred.remembered.drain(..) {
+        trace.set(TraceTarget::Slot(Rc::as_ptr(&observer) as *const ()));
         observer.dispatch_remembered();
     }
+    trace.clear();
     // Discarded movable content goes after what the pass remembered, as Compose's, and before any
     // effect can panic and lose it.
     if let Some(mut removed) = removed_content {
@@ -1963,12 +1973,14 @@ fn apply_deferred(
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
             .on_begin_changes();
-        apply_deferred(applier, &mut removed, false, None);
+        apply_deferred(applier, &mut removed, false, None, None);
     }
     if run_effects {
         for effect in deferred.side_effects.drain(..) {
+            trace.set(effect.target());
             effect.run();
         }
+        trace.clear();
     } else {
         deferred.side_effects.clear();
     }
@@ -2118,7 +2130,7 @@ impl Disposal {
         if let Some(data) = self.data.take() {
             with_runtime(|runtime| runtime.disposing_data.push((self.id, data)));
         }
-        apply_deferred(&applier, &mut self.deferred, false, None);
+        apply_deferred(&applier, &mut self.deferred, false, None, None);
         drop(applier);
         let Disposal { deferred, .. } = self;
         drop(deferred);

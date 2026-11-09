@@ -1553,6 +1553,21 @@ pub(crate) fn record_effect(effect: DeferredEffect) {
     }
 }
 
+pub(crate) fn record_boxed_effect(effect: Box<dyn FnOnce()>) {
+    let rejected = with_runtime(|runtime| {
+        if !runtime.is_composing() {
+            return Some(effect);
+        }
+        let group = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        runtime.record_side_effect(DeferredEffect::Boxed(group, effect));
+        None
+    });
+    if rejected.is_some() {
+        drop(rejected);
+        misuse(ComposeError::NotComposing)
+    }
+}
+
 /// The composer of the pass in progress on this thread. Generated code, and hand-written
 /// primitives such as `remember` and `key`, are its only users; applications never see it.
 ///
@@ -1792,7 +1807,7 @@ impl Composer {
 
     /// Runs `effect` after the pass applies its changes, as Compose's `recordSideEffect`.
     pub fn record_side_effect(&self, effect: impl FnOnce() + 'static) {
-        record_effect(DeferredEffect::Boxed(Box::new(effect)));
+        record_boxed_effect(Box::new(effect));
     }
 }
 

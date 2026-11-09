@@ -1,12 +1,11 @@
 //! Effects, written on remember observers as in Compose.
 
 use std::cell::Cell;
-use std::rc::Rc;
 
 use crate::compose_arg::ComposeArg;
-use crate::composer::record_effect;
+use crate::composer::{record_boxed_effect, record_effect};
 use crate::executor::{CoroutineScope, Job};
-use crate::remember::{RememberObserver, remember, remember_observer, remember_observer_keyed};
+use crate::remember::{RememberObserver, remember_observer, remember_observer_keyed, remember_rc};
 use crate::runtime::{DeferredEffect, RunEffect};
 use crate::state::Owned;
 
@@ -25,7 +24,7 @@ impl<F: FnOnce()> RunEffect for EffectSlot<F> {
 /// Runs `effect` after every successful pass that ran this call, as Compose's `SideEffect`.
 #[allow(non_snake_case)]
 pub fn SideEffect<F: FnOnce() + 'static>(effect: F) {
-    let slot = remember(|| Rc::new(EffectSlot::<F>(Cell::new(None))));
+    let slot = remember_rc(|| EffectSlot::<F>(Cell::new(None)));
     // Normally empty: the previous run's effect ran at the end of its pass.
     let previous = slot.0.replace(Some(effect));
     drop(previous);
@@ -42,7 +41,7 @@ pub fn KeyedSideEffect<K: ComposeArg, F: FnOnce() + 'static>(keys: K, effect: F)
     if crate::remember::remember_keys(keys) {
         return;
     }
-    record_effect(DeferredEffect::Boxed(Box::new(effect)));
+    record_boxed_effect(Box::new(effect));
 }
 
 /// The receiver of a [`DisposableEffect`]'s body, as Compose's `DisposableEffectScope`.

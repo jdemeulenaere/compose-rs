@@ -73,6 +73,16 @@ impl SlotValue {
             SlotValue::Empty => None,
         }
     }
+
+    pub fn data_ptr(&self) -> Option<*const ()> {
+        match self {
+            SlotValue::Plain(value) | SlotValue::KeptOnReuse(value) => {
+                Some(Rc::as_ptr(value) as *const ())
+            }
+            SlotValue::Observer(observer) => Some(Rc::as_ptr(observer) as *const ()),
+            SlotValue::Empty => None,
+        }
+    }
 }
 
 pub(crate) struct Slot {
