@@ -25,7 +25,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 31 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 35 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 76 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 78 |
 
 ## Index by number
 
@@ -906,8 +906,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D1401 | [api-and-tooling](decisions/api-and-tooling.md#d1401) | current |
 | D1402 | [api-and-tooling](decisions/api-and-tooling.md#d1402) | current |
 | D1403 | [api-and-tooling](decisions/api-and-tooling.md#d1403) | current |
-| D1404 | [api-and-tooling](decisions/api-and-tooling.md#d1404) | current |
-| D1405 | [api-and-tooling](decisions/api-and-tooling.md#d1405) | revised by [D1408](api-and-tooling.md#d1408) |
+| D1404 | [api-and-tooling](decisions/api-and-tooling.md#d1404) | revised by [D2170](decisions/api-and-tooling.md#d2170) |
+| D1405 | [api-and-tooling](decisions/api-and-tooling.md#d1405) | revised by [D1408](decisions/api-and-tooling.md#d1408), [D2170](decisions/api-and-tooling.md#d2170), [D2171](decisions/api-and-tooling.md#d2171) |
 | D1406 | [api-and-tooling](decisions/api-and-tooling.md#d1406) | revised by [D1407](api-and-tooling.md#d1407), [D1410](api-and-tooling.md#d1410) |
 | D1407 | [api-and-tooling](decisions/api-and-tooling.md#d1407) | current |
 | D1408 | [api-and-tooling](decisions/api-and-tooling.md#d1408) | current |
@@ -1136,3 +1136,5 @@ The log is split by area into the files below, one table each, rows in number or
 | D2078 | [api-and-tooling](decisions/api-and-tooling.md#d2078) | current |
 | D2079 | [api-and-tooling](decisions/api-and-tooling.md#d2079) | current |
 | D2080 | [api-and-tooling](decisions/api-and-tooling.md#d2080) | current |
+| D2170 | [api-and-tooling](decisions/api-and-tooling.md#d2170) | current |
+| D2171 | [api-and-tooling](decisions/api-and-tooling.md#d2171) | current |

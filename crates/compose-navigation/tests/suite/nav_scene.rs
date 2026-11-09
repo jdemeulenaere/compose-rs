@@ -1,6 +1,7 @@
-//! Scenes, against Navigation 3's `SceneStateTest`, `SceneInfoTest` and `NavigationBackHandlerTest`.
-//! `testSceneStrategyThenFirstStrategy` and `testSceneStrategyThenChainedStrategy` are of a deprecated
-//! operator, out of scope, and what they show is `nav_display.rs`'s, of a list of strategies.
+//! Scenes, against Navigation 3's `SceneStateTest`, `SceneInfoTest`, `NavigationBackHandlerTest`
+//! and `OverlaySceneTest`. `testSceneStrategyThenFirstStrategy` and
+//! `testSceneStrategyThenChainedStrategy` are of a deprecated operator, out of scope, and what they
+//! show is `nav_display.rs`'s, of a list of strategies.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -812,4 +813,71 @@ fn scenes_of_other_types_animate_even_with_one_key() {
     ui.set_auto_advance(true);
     ui.wait_for_idle();
     ui.on_node_with_text("one").assert_does_not_exist();
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/scene/OverlaySceneTest.kt, testSharedTransitionWithDialogScene
+#[test]
+fn a_shared_transition_display_shows_a_dialog_over_the_scene_under_it() {
+    use compose_animation::{SharedTransitionLayout, SharedTransitionScope};
+    use compose_foundation::layout::Box;
+    use compose_ui::Modifier;
+
+    #[composable]
+    fn ClickToPush(stack: compose_runtime::snapshots::SnapshotStateList<&'static str>) {
+        Box!(modifier = Modifier.clickable(move || stack.push(SECOND)), { Shown!(FIRST) });
+    }
+
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let mut ui = compose_test(move || {
+        SharedTransitionLayout!(move |scope: SharedTransitionScope| {
+            let back_stack = stack;
+            NavDisplay!(
+                back_stack,
+                on_back = Some(move || {
+                    back_stack.remove(back_stack.len() - 1);
+                }),
+                scene_strategies = vec![scene_strategy(DialogSceneStrategy)],
+                shared_transition_scope = Some(scope),
+                entry_provider = move |key: &'static str| match key {
+                    FIRST => NavEntry::new(FIRST, move |_| ClickToPush!(back_stack)),
+                    SECOND => text_entry(SECOND)
+                        .with_metadata(DialogSceneStrategy::dialog(DialogProperties::default())),
+                    other => panic!("Invalid key passed: {other}"),
+                }
+            );
+        });
+    });
+
+    ui.wait_for_idle();
+    ui.on_node_with_text(FIRST).assert_is_displayed();
+    ui.on_node_with_text(FIRST).perform_click();
+    ui.wait_for_idle();
+
+    // Both `FIRST` and `SECOND` are shown when `SECOND` is in a dialog overlay.
+    ui.on_node_with_text(FIRST).assert_is_displayed();
+    ui.on_node_with_text(SECOND).assert_is_displayed();
+}
+
+/// `remember_scene_state` with `shared_transition_scope` outside a `NavDisplay` leaves entries
+/// unwrapped (`LocalCurrentScene` is `None`) so composing a scene standalone doesn't panic reading
+/// `LOCAL_NAV_ANIMATED_CONTENT_SCOPE`.
+#[test]
+fn scene_state_with_shared_scope_outside_a_display_renders_without_animated_scope() {
+    use compose_animation::{SharedTransitionLayout, SharedTransitionScope};
+
+    let mut ui = compose_test(|| {
+        SharedTransitionLayout!(|scope: SharedTransitionScope| {
+            let entries = remember_decorated_nav_entries!(vec![FIRST], entry_provider = text_entry);
+            let state = remember_scene_state!(
+                entries,
+                vec![scene_strategy(SinglePaneSceneStrategy)],
+                shared_transition_scope = Some(scope),
+                on_back = || {}
+            );
+            state.current_scene().content();
+        });
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_text(FIRST).assert_is_displayed();
 }

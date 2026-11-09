@@ -585,3 +585,119 @@ fn an_entry_s_gesture_slides_by_its_metadata_from_the_edge() {
     half_a_gesture(&mut ui, NavigationEvent::EDGE_LEFT);
     assert_eq!((left_of(&mut ui, FIRST), left_of(&mut ui, SECOND)), (0.0, 270.0));
 }
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/NavDisplayScreenshotTest.kt, testSharedElementCorrectlyDisplayedOnPredictiveBack
+#[test]
+fn a_shared_entry_stays_unscaled_in_the_overlay_on_predictive_back_and_expands_on_pop() {
+    const RED_FILL: Color = Color::from_rgba(255, 77, 77, 255);
+    const BLUE_FILL: Color = Color::from_rgba(51, 51, 255, 255);
+
+    #[composable]
+    fn ColoredBox(text: &'static str, fill: Color) {
+        Box!(
+            modifier = Modifier.fill_max_size().background(fill).test_tag(text),
+            content_alignment = Alignment::CENTER,
+            { BasicText!(text, modifier = Modifier.size(50.dp())) }
+        );
+    }
+
+    let owner = mutable_state_list_from([FIRST, SECOND]);
+    let stack = owner.handle();
+    let seen_scope: Rc<std::cell::RefCell<Option<SharedTransitionScope>>> = Rc::default();
+    let scope_in = seen_scope.clone();
+
+    let mut ui = ComposeTestRule::sized(IntSize::new(1280, 800), move || {
+        let scope_out = scope_in.clone();
+        SharedTransitionLayout!(move |scope: SharedTransitionScope| {
+            *scope_out.borrow_mut() = Some(scope.clone());
+            let back_stack = stack;
+            let list_detail = remember_list_detail_scene_strategy();
+            NavDisplay!(
+                back_stack,
+                modifier = Modifier.test_tag("NavHostTag"),
+                on_back = Some(move || {
+                    back_stack.remove(back_stack.len() - 1);
+                }),
+                scene_strategies = vec![list_detail],
+                shared_transition_scope = Some(scope),
+                entry_provider =
+                    entry_provider(|provider: &mut EntryProviderScope<&'static str>| {
+                        provider
+                            .entry(FIRST, |_| ColoredBox!(FIRST, RED_FILL))
+                            .with_metadata(ListDetailScene::list_pane());
+                        provider
+                            .entry(SECOND, |_| ColoredBox!(SECOND, BLUE_FILL))
+                            .with_metadata(ListDetailScene::detail_pane());
+                    })
+            );
+        });
+    });
+
+    ui.wait_for_idle();
+    // Before predictive back: 40/60 split across 1280x800 (`FIRST` 0..512, `SECOND` 512..1280).
+    let first_before = ui.on_node_with_tag(FIRST).fetch_semantics_node().bounds_in_root();
+    let second_before = ui.on_node_with_tag(SECOND).fetch_semantics_node().bounds_in_root();
+    assert_eq!(first_before, Rect::new(0.0, 0.0, 512.0, 800.0));
+    assert_eq!(second_before, Rect::new(512.0, 0.0, 1280.0, 800.0));
+
+    // Start predictive back to progress 0.2 (outgoing scene scales by 1.0 - 0.2 * 0.3 = 0.94
+    // around center (640, 400), while `FIRST`'s `SharedEntryInSceneNavEntryDecorator` sets
+    // `permitTransformDuringDeferredTransition = false` so `FIRST` renders in the overlay unscaled).
+    ui.host().on_back_started(event(0.1));
+    ui.host().on_back_progressed(event(0.2));
+    ui.wait_for_idle();
+
+    ui.on_node_with_text(FIRST).assert_is_displayed();
+    ui.on_node_with_text(SECOND).assert_is_displayed();
+
+    // `SECOND` (no match in `SinglePaneScene`) stays in `ListDetailScene` and is scaled by 0.94
+    // around (640, 400): width = 768 * 0.94 = 721.92, height = 800 * 0.94 = 752.0.
+    let second_during = ui.on_node_with_tag(SECOND).fetch_semantics_node().bounds_in_root();
+    assert!((second_during.width() - 768.0 * 0.94).abs() < 1.5, "{second_during:?}");
+    assert!((second_during.height() - 800.0 * 0.94).abs() < 1.5, "{second_during:?}");
+
+    // Check the display list: `RED_FILL` (`FIRST`) is drawn last in the `SharedTransitionLayout`
+    // overlay at full 512x800 (unscaled), while `ListDetailScene` has a 0.94 scale transform.
+    let ops = ui.host().display_list().ops;
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            compose_ui::platform::DrawOp::Transform { scale: (sx, sy), .. }
+                if (*sx - 0.94).abs() < 0.01 && (*sy - 0.94).abs() < 0.01
+        )),
+        "outgoing scene scaled by 0.94: {ops:?}"
+    );
+    let red_rects: Vec<Rect> = ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawRect(rect, paint) if paint.color == RED_FILL => {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        red_rects,
+        vec![Rect::new(0.0, 0.0, 512.0, 800.0)],
+        "shared entry drawn once in overlay at unscaled 512x800"
+    );
+
+    // Completing predictive back hands `FIRST` off to `SinglePaneScene` and animates its bounds
+    // from 512x800 out to the full 1280x800 display.
+    ui.set_auto_advance(false);
+    ui.host().on_back_pressed();
+    ui.advance_time_by_frame();
+    ui.advance_time_by(Duration::from_millis(80));
+    ui.wait_for_idle();
+    assert!(seen_scope.borrow().as_ref().unwrap().is_transition_active());
+    let first_mid = ui.on_node_with_tag(FIRST).fetch_semantics_node().bounds_in_root();
+    assert!(
+        first_mid.width() > 512.0 && first_mid.width() < 1280.0,
+        "animating between 512 and 1280: {first_mid:?}"
+    );
+
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    let first_after = ui.on_node_with_tag(FIRST).fetch_semantics_node().bounds_in_root();
+    assert_eq!(first_after, Rect::new(0.0, 0.0, 1280.0, 800.0));
+}

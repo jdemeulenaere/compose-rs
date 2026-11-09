@@ -1,15 +1,19 @@
-//! `SceneState.kt`, with the decorators it wraps entries in: `SceneSetupNavEntryDecorator.kt` and
-//! `BackStackAwareLifecycleNavEntryDecorator.kt`.
+//! `SceneState.kt`, with the decorators it wraps entries in: `SharedEntryInSceneNavEntryDecorator.kt`,
+//! `SceneSetupNavEntryDecorator.kt` and `BackStackAwareLifecycleNavEntryDecorator.kt`.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use compose_animation::SharedTransitionScope;
 use compose_lifecycle::{LOCAL_LIFECYCLE_OWNER, LifecycleState, remember_lifecycle_owner};
 use compose_runtime::{
-    ComposeArg, CompositionLocal, CompositionLocalProvider, composable, key, remember,
-    remember_keyed, remember_updated_state,
+    Callback, ComposeArg, CompositionLocal, CompositionLocalProvider, composable, key,
+    movable_content_of_with, remember, remember_keyed, remember_updated_state,
 };
+use compose_ui::{Constraints, IntSize, Measurable, MeasurePolicy, MeasureResult, MeasureScope};
 
+use super::display::LOCAL_NAV_ANIMATED_CONTENT_SCOPE;
 use super::scene::{
     SceneDecoratorStrategyRef, SceneRef, SceneStrategyRef, SceneStrategyScope,
     calculate_scene_with_single_pane_fallback,
@@ -17,6 +21,32 @@ use super::scene::{
 use crate::runtime::{
     ContentKey, NavEntry, NavEntryDecorator, NavList, remember_decorated_nav_entries_from,
 };
+
+/// Which scene is composing its content, and whether it's an overlay, as `LocalCurrentScene`:
+/// `None` outside a display.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CurrentScene {
+    ptr: usize,
+    is_overlay: bool,
+}
+
+impl CurrentScene {
+    pub(crate) fn of<T: Clone + PartialEq + 'static>(scene: &SceneRef<T>) -> Self {
+        CurrentScene {
+            ptr: Rc::as_ptr(scene).cast::<()>() as usize,
+            is_overlay: scene.as_overlay().is_some(),
+        }
+    }
+}
+
+impl ComposeArg for CurrentScene {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+pub(crate) static LOCAL_CURRENT_SCENE: CompositionLocal<Option<CurrentScene>> =
+    CompositionLocal::new("LocalCurrentScene", || None);
 
 /// The keys of entries another scene is showing, to skip here, as
 /// `LocalEntriesToExcludeFromCurrentScene`: an entry is shown once, in the topmost scene.
@@ -32,16 +62,106 @@ impl ComposeArg for ExcludedEntries {
 pub(crate) static LOCAL_ENTRIES_TO_EXCLUDE: CompositionLocal<ExcludedEntries> =
     CompositionLocal::new("LocalEntriesToExcludeFromCurrentScene", ExcludedEntries::default);
 
-/// `rememberSceneSetupNavEntryDecorator`, but for what a scene shows moving to another keeping its
-/// state, as there's no movable content yet (D1404): it keeps its shape, and an entry showing in a
-/// scene after another starts anew there.
-fn scene_setup_decorator<T: Clone + 'static>() -> NavEntryDecorator<T> {
-    NavEntryDecorator::new(|entry: NavEntry<T>| {
-        let excluded = LOCAL_ENTRIES_TO_EXCLUDE.current();
-        if !excluded.0.contains(entry.content_key()) {
-            key(entry.content_key().clone(), || entry.Content());
-        }
+/// A `Box`'s layout for [`DecorateSharedEntry`], so `compose-navigation` stays independent of
+/// `compose-foundation` (D292).
+struct SharedEntryBox;
+
+impl MeasurePolicy for SharedEntryBox {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let loose = constraints.loosen();
+        let placeables: Vec<_> =
+            measurables.iter().map(|&measurable| scope.measure(measurable, loose)).collect();
+        let size = placeables.iter().fold(
+            IntSize::new(constraints.min_width, constraints.min_height),
+            |size, placeable| {
+                IntSize::new(size.width.max(placeable.width), size.height.max(placeable.height))
+            },
+        );
+        scope.layout_with(size.width, size.height, move |placement| {
+            for placeable in &placeables {
+                placement.place_relative(placeable, 0, 0);
+            }
+        })
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "SharedEntryInScene"
+    }
+}
+
+#[composable(non_restartable)]
+#[allow(non_snake_case)]
+fn DecorateSharedEntry<T: Clone + 'static>(scope: SharedTransitionScope, entry: NavEntry<T>) {
+    let in_scene = LOCAL_CURRENT_SCENE.current().is_some_and(|scene| !scene.is_overlay);
+    if in_scene {
+        let state = scope.remember_shared_content_state_with(
+            entry.content_key().clone(),
+            scope.shared_content_config_with(false),
+        );
+        let animated = LOCAL_NAV_ANIMATED_CONTENT_SCOPE.current();
+        let modifier = scope.shared_element(&state, &animated);
+        let policy = remember(|| Rc::new(SharedEntryBox) as Rc<dyn MeasurePolicy>);
+        compose_ui::Layout!(
+            modifier = modifier,
+            measure_policy = policy,
+            content = move || entry.Content(),
+        );
+    } else {
+        entry.Content();
+    }
+}
+
+/// `rememberSharedEntryInSceneNavEntryDecorator`: wraps each entry shown in a non-overlay scene in
+/// a `shared_element` of its content key, kept out of a predictive gesture's container transform,
+/// so an entry moving between scenes animates its bounds across the display.
+#[composable(non_restartable)]
+fn remember_shared_entry_in_scene_decorator<T: Clone + 'static>(
+    scope: SharedTransitionScope,
+) -> NavEntryDecorator<T> {
+    let kept = scope.clone();
+    remember_keyed(kept, move || {
+        NavEntryDecorator::new(move |entry: NavEntry<T>| {
+            DecorateSharedEntry(scope.clone(), entry);
+        })
     })
+}
+
+type MovableEntry<T> = Callback<dyn Fn(NavEntry<T>)>;
+
+/// `rememberSceneSetupNavEntryDecorator`: wraps each entry in a `movable_content_of_with` by its
+/// content key so an entry moving between scenes or panes keeps its state and nodes, and skips it
+/// where another scene claims it (`LOCAL_ENTRIES_TO_EXCLUDE`).
+fn scene_setup_decorator<T: Clone + 'static>() -> NavEntryDecorator<T> {
+    let map: Rc<RefCell<HashMap<ContentKey, MovableEntry<T>>>> = Rc::default();
+    let popped = map.clone();
+    NavEntryDecorator::with_on_pop(
+        move |content_key| {
+            popped.borrow_mut().remove(&content_key);
+        },
+        move |entry: NavEntry<T>| {
+            let content_key = entry.content_key().clone();
+            let excluded = LOCAL_ENTRIES_TO_EXCLUDE.current();
+            if !excluded.0.contains(&content_key) {
+                let map = map.clone();
+                key(content_key.clone(), move || {
+                    let movable = remember(move || {
+                        map.borrow_mut()
+                            .entry(content_key)
+                            .or_insert_with(|| {
+                                movable_content_of_with(|entry: NavEntry<T>| entry.Content())
+                            })
+                            .clone()
+                    });
+                    movable(entry);
+                });
+            }
+        },
+    )
 }
 
 /// The keys of a back stack, for what's shown of it to read, as a state.
@@ -152,21 +272,30 @@ impl<T: ComposeArg> ComposeArg for SameList<T> {
 }
 
 /// The scenes of `entries` by `scene_strategies`, as `rememberSceneState`: made again when those or
-/// the strategies change, not when `on_back` does, which they're given the latest of. Compose's
-/// `sharedTransitionScope` comes with shared elements.
+/// the strategies change, not when `on_back` does, which they're given the latest of. With
+/// `shared_transition_scope`, each entry in a non-overlay scene is wrapped in a shared element of
+/// its content key, which reads [`LOCAL_NAV_ANIMATED_CONTENT_SCOPE`].
 #[composable(non_restartable)]
 pub fn remember_scene_state<T: Clone + PartialEq + 'static>(
     entries: impl NavList<NavEntry<T>>,
     scene_strategies: impl NavList<SceneStrategyRef<T>>,
     #[default(Vec::new())] scene_decorator_strategies: impl NavList<SceneDecoratorStrategyRef<T>>,
+    #[default(None)] shared_transition_scope: Option<SharedTransitionScope>,
     on_back: impl Fn() + 'static,
 ) -> SceneState<T> {
     let current_on_back = remember_updated_state(on_back);
     let entries = entries.to_nav_list();
+    let shared = if let Some(scope) = shared_transition_scope {
+        Some(remember_shared_entry_in_scene_decorator(scope))
+    } else {
+        None
+    };
     let setup = remember(scene_setup_decorator::<T>);
     let lifecycle = remember_back_stack_aware_lifecycle_decorator(entries.clone());
+    let entry_decorators: Vec<NavEntryDecorator<T>> =
+        shared.into_iter().chain([setup, lifecycle]).collect();
     let decorated: Vec<NavEntry<T>> =
-        remember_decorated_nav_entries_from!(entries, vec![setup, lifecycle]);
+        remember_decorated_nav_entries_from!(entries, entry_decorators);
     let strategies = scene_strategies.to_nav_list();
     let decorators = scene_decorator_strategies.to_nav_list();
     let kept = (SameList(strategies.clone()), EqualList(decorated.clone()));

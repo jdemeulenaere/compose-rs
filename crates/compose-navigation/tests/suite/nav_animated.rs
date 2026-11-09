@@ -1,6 +1,5 @@
-//! A display's transitions, against Navigation 3's `AnimatedTest`. `testSharedElement` waits for
-//! shared elements, and `testNestedPredictiveBackAnimations` for its `CardStackSceneStrategy`, a
-//! scene seeking its own transitions: `nav_predictive_back.rs` has a display's own.
+//! A display's transitions, against Navigation 3's `AnimatedTest` (`nav_card_stack.rs` holds the
+//! `CardStackSceneStrategy` cases).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -607,4 +606,67 @@ fn a_pop_interrupted_by_another_stays_a_pop() {
     ui.wait_for_idle();
     assert_eq!(forward.get(), 0, "not a transition forward");
     assert!(pop.get() >= 2, "{}", pop.get());
+}
+
+// Compose: navigation3/navigation3-ui/src/androidDeviceTest/kotlin/androidx/navigation3/ui/AnimatedTest.kt, testSharedElement
+#[test]
+fn shared_elements_match_and_animate_across_a_display() {
+    use compose_foundation::BasicText;
+
+    const SHARED_TEXT: &str = "shared text";
+    const SHARED_KEY: i32 = 1;
+
+    #[composable]
+    fn SharedText(scope: SharedTransitionScope, states: Rc<RefCell<Vec<SharedContentState>>>) {
+        let state = scope.remember_shared_content_state(SHARED_KEY);
+        if !states.borrow().contains(&state) {
+            states.borrow_mut().push(state.clone());
+        }
+        let animated = LOCAL_NAV_ANIMATED_CONTENT_SCOPE.current();
+        BasicText!(SHARED_TEXT, modifier = scope.shared_element(&state, &animated));
+    }
+
+    let owner = mutable_state_list_from([FIRST]);
+    let stack = owner.handle();
+    let seen_scope: Rc<RefCell<Option<SharedTransitionScope>>> = Rc::default();
+    let shared_states: Rc<RefCell<Vec<SharedContentState>>> = Rc::default();
+    let (scope_in, states_in) = (seen_scope.clone(), shared_states.clone());
+
+    let mut ui = compose_test(move || {
+        let (scope_out, states_out) = (scope_in.clone(), states_in.clone());
+        SharedTransitionLayout!(move |scope: SharedTransitionScope| {
+            *scope_out.borrow_mut() = Some(scope.clone());
+            let states = states_out.clone();
+            NavDisplay!(
+                stack,
+                entry_provider = move |key: &'static str| match key {
+                    FIRST | SECOND => {
+                        let (scope, states) = (scope.clone(), states.clone());
+                        NavEntry::new(key, move |_| SharedText!(scope.clone(), states.clone()))
+                    }
+                    other => panic!("Invalid key passed: {other}"),
+                }
+            );
+        });
+    });
+
+    ui.wait_for_idle();
+    ui.on_node_with_text(SHARED_TEXT).assert_is_displayed();
+    assert!(!shared_states.borrow().is_empty());
+    for state in shared_states.borrow().iter() {
+        assert!(!state.is_match_found());
+    }
+
+    shared_states.borrow_mut().clear();
+
+    ui.set_auto_advance(false);
+    stack.push(SECOND);
+    ui.advance_time_by(millis(DEFAULT / 4));
+
+    ui.on_all_nodes_with_text(SHARED_TEXT).assert_count_equals(2);
+    assert!(seen_scope.borrow().as_ref().is_some_and(SharedTransitionScope::is_transition_active));
+    assert_eq!(shared_states.borrow().len(), 2);
+    for state in shared_states.borrow().iter() {
+        assert!(state.is_match_found());
+    }
 }

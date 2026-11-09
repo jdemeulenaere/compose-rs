@@ -7,6 +7,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use compose_animation::{
+    AnimatedContent, AnimatedContentScope, AnimatedContentTransitionScope, ExitTransition,
+    SlideDirection, tween,
+};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_navigation::*;
@@ -98,4 +102,98 @@ pub fn two_pane_strategy() -> SceneStrategyRef<&'static str> {
         });
         Some(scene)
     })
+}
+
+pub const LIST_KEY: &str = "ListDetailScene-List";
+pub const DETAIL_KEY: &str = "ListDetailScene-Detail";
+
+/// `ListDetailScene` from `ListDetailSceneTest.kt`: a 40/60 split with `AnimatedContent` on the
+/// detail pane, keyed by the list entry's content key.
+pub struct ListDetailScene<T: 'static> {
+    key: ContentKey,
+    entries: [NavEntry<T>; 2],
+    previous_entries: Vec<NavEntry<T>>,
+}
+
+impl ListDetailScene<()> {
+    pub fn list_pane() -> NavMetadata {
+        NavMetadata::new().with(LIST_KEY, true)
+    }
+
+    pub fn detail_pane() -> NavMetadata {
+        NavMetadata::new().with(DETAIL_KEY, true)
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> Scene<T> for ListDetailScene<T> {
+    fn key(&self) -> ContentKey {
+        self.key.clone()
+    }
+
+    fn entries(&self) -> &[NavEntry<T>] {
+        &self.entries
+    }
+
+    fn previous_entries(&self) -> &[NavEntry<T>] {
+        &self.previous_entries
+    }
+
+    fn content(&self) {
+        ListDetailPanes(self.entries[0].clone(), self.entries[1].clone());
+    }
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ListDetailPanes<T: Clone + PartialEq + 'static>(
+    list_entry: NavEntry<T>,
+    detail_entry: NavEntry<T>,
+) {
+    let content_key = remember(|| {
+        compose_animation::ContentKey::of(|entry: &NavEntry<T>| entry.content_key().clone())
+    });
+    Row!(modifier = Modifier.fill_max_size(), move |scope: RowScope| {
+        let (list_entry, detail_entry, content_key) =
+            (list_entry.clone(), detail_entry.clone(), content_key.clone());
+        Column!(modifier = Modifier.weight(scope, 0.4), { list_entry.Content() });
+        Column!(modifier = Modifier.weight(scope, 0.6), {
+            AnimatedContent!(
+                detail_entry.clone(),
+                transition_spec = |scope: AnimatedContentTransitionScope<NavEntry<T>>| {
+                    scope
+                        .slide_into_container_with(SlideDirection::Up, tween(1000), |offset| offset)
+                        .together_with(ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED)
+                },
+                content_key = content_key.clone(),
+                content = |_: AnimatedContentScope, entry: NavEntry<T>| {
+                    entry.Content();
+                }
+            );
+        });
+    });
+}
+
+/// `ListDetailSceneStrategy` from `ListDetailSceneTest.kt`.
+pub fn list_detail_strategy<T: Clone + PartialEq + 'static>(
+    is_width_wide_enough: bool,
+) -> SceneStrategyRef<T> {
+    scene_strategy(move |_: &SceneStrategyScope<T>, entries: &[NavEntry<T>]| {
+        if !is_width_wide_enough {
+            return None;
+        }
+        let detail_entry = entries.last().filter(|e| e.metadata().contains_named(DETAIL_KEY))?;
+        let list_entry = entries.iter().rfind(|e| e.metadata().contains_named(LIST_KEY))?;
+        let scene: SceneRef<T> = Rc::new(ListDetailScene {
+            key: list_entry.content_key().clone(),
+            entries: [list_entry.clone(), detail_entry.clone()],
+            previous_entries: entries[..entries.len() - 1].to_vec(),
+        });
+        Some(scene)
+    })
+}
+
+#[composable(non_restartable)]
+pub fn remember_list_detail_scene_strategy<T: Clone + PartialEq + 'static>() -> SceneStrategyRef<T>
+{
+    remember(|| list_detail_strategy(true))
 }
