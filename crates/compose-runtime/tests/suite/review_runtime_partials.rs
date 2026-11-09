@@ -261,9 +261,8 @@ fn a_saver_returning_none_keeps_siblings_in_order_through_a_holder() {
 }
 
 /// A provider giving a placeholder itself saves nothing, as one giving `None`: the state stays
-/// empty, so a holder's or host's "nothing saved" holds.
+/// empty, so a holder's or host's "nothing saved" holds (D2200).
 #[test]
-#[ignore = "review: a provider giving SavedValue::Null saves a state that isn't empty"]
 fn a_provider_giving_a_placeholder_saves_nothing() {
     let registry = SaveableStateRegistry::new(None);
     registry.register_provider(KEY, || Some(SavedValue::Null));

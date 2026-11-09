@@ -34,7 +34,9 @@ use crate::state::{Owned, OwnedState, mutable_state_of};
 #[derive(Clone, PartialEq, Debug)]
 pub enum SavedValue {
     /// A placeholder among values registered under the same key when one's saver saved nothing,
-    /// keeping the others at their registration positions (D2140).
+    /// keeping the others at their registration positions (D2140). A saver giving it saves
+    /// nothing, as one giving `None`, and it restores as `None` (D2200); in a list it's a list's
+    /// null item. Bytes with it (tag 5) don't read where it's not known.
     Null,
     Bool(bool),
     Int(i64),
@@ -552,7 +554,9 @@ impl SaveableStateRegistry {
     }
 
     /// Every registered value's saved form, by key, and the values restored and not yet taken
-    /// back, as Compose's `performSave`. Values whose saver saved nothing are left out.
+    /// back, as Compose's `performSave`. A value whose saver saved nothing (`None`, or a
+    /// [`SavedValue::Null`]) is a placeholder where another under its key saved something, so
+    /// those after it restore in order; a key under which none saved anything is left out.
     ///
     /// # Panics
     ///
@@ -584,8 +588,11 @@ impl SaveableStateRegistry {
             .collect();
         let checks = self.checks_values();
         for (key, providers) in providers {
-            let saved: Vec<Option<SavedValue>> =
-                providers.iter().map(|provider| provider()).collect();
+            // A provider giving a placeholder itself saved nothing, as one giving `None` (D2200).
+            let saved: Vec<Option<SavedValue>> = providers
+                .iter()
+                .map(|provider| provider().filter(|value| !matches!(value, SavedValue::Null)))
+                .collect();
             if checks {
                 saved.iter().flatten().for_each(|value| self.require_can_be_saved(value));
             }
