@@ -162,6 +162,18 @@ pub trait LifecycleOwner {
     fn lifecycle(&self) -> Lifecycle;
 }
 
+impl<T: LifecycleOwner + ?Sized> LifecycleOwner for &T {
+    fn lifecycle(&self) -> Lifecycle {
+        (**self).lifecycle()
+    }
+}
+
+impl<T: LifecycleOwner + ?Sized> LifecycleOwner for Rc<T> {
+    fn lifecycle(&self) -> Lifecycle {
+        (**self).lifecycle()
+    }
+}
+
 /// A lifecycle, as AndroidX's `Lifecycle`: a handle (clones are the same one), compared by
 /// identity. It's also its own [`LifecycleOwner`].
 #[derive(Clone)]

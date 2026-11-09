@@ -206,7 +206,7 @@ impl Lifecycle {
 
 /// An observer that can take itself off the lifecycle (`on_event`'s last argument), holding itself
 /// weakly: left there, it goes with the lifecycle.
-fn removing_itself<F>(on_event: F) -> Rc<dyn LifecycleObserver>
+pub(crate) fn removing_itself<F>(on_event: F) -> Rc<dyn LifecycleObserver>
 where
     F: Fn(&Lifecycle, LifecycleEvent, &dyn Fn()) + 'static,
 {
