@@ -1250,4 +1250,57 @@ mod tests {
         assert_ne!(&*a.text, "world");
         assert_ne!(&*a.text, "");
     }
+
+    #[test]
+    fn coerced_composition_keeps_collapsed_ranges_and_utf8_boundaries() {
+        // 'a' (0..1), 'é' (1..3), '🙂' (3..7), 'b' (7..8): 8 UTF-8 bytes.
+        let text: Rc<str> = Rc::from("aé🙂b");
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::ZERO))
+                .composition,
+            Some(TextRange::ZERO)
+        );
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::new(12, 20)))
+                .composition,
+            Some(TextRange::at(8))
+        );
+        // Collapsed inside 'é' (byte 2) or '🙂' (byte 5) floors to the character's start.
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::at(2)))
+                .composition,
+            Some(TextRange::at(1))
+        );
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::at(5)))
+                .composition,
+            Some(TextRange::at(3))
+        );
+        // Non-collapsed inside multi-byte characters widens to character boundaries, direction kept.
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::new(2, 5)))
+                .composition,
+            Some(TextRange::new(1, 7))
+        );
+        assert_eq!(
+            TextFieldCharSequence::new(text.clone(), TextRange::ZERO, Some(TextRange::new(5, 2)))
+                .composition,
+            Some(TextRange::new(7, 1))
+        );
+        for start in 0..=10 {
+            for end in 0..=10 {
+                let value = TextFieldCharSequence::new(
+                    text.clone(),
+                    TextRange::new(start, end),
+                    Some(TextRange::new(end, start)),
+                );
+                let comp = value.composition.expect("composition stays");
+                assert!(value.text.is_char_boundary(value.selection.start));
+                assert!(value.text.is_char_boundary(value.selection.end));
+                assert!(value.text.is_char_boundary(comp.start));
+                assert!(value.text.is_char_boundary(comp.end));
+                let _ = comp.substring(&value.text);
+            }
+        }
+    }
 }
