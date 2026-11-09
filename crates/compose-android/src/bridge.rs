@@ -3026,6 +3026,20 @@ mod tests {
         assert_eq!(pressed(all), (true, true, true, true));
     }
 
+    #[test]
+    #[ignore = "review: key_event types the base character when Alt is held on Android"]
+    fn alt_shortcut_does_not_type_text() {
+        let (alt_a, alt_text) = key_event(0, 'a' as i32, true, META_ALT_ON, false).unwrap();
+        assert_eq!(alt_a.key, Key::Character('a'));
+        assert!(alt_a.modifiers.alt);
+        assert_eq!(alt_text, None);
+
+        let (shift_a, shift_text) = key_event(0, 'A' as i32, true, META_SHIFT_ON, false).unwrap();
+        assert_eq!(shift_a.key, Key::Character('A'));
+        assert!(shift_a.modifiers.shift);
+        assert_eq!(shift_text.as_deref(), Some("A"));
+    }
+
     /// A key from the view reaches a focused node's `on_key_event`, which consumes it, for a
     /// down alone and a down then an up (the Kotlin test's two parameters).
     // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/key/AndroidProcessKeyInputTest.kt, onKeyEvent_triggered
