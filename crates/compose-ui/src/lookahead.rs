@@ -397,9 +397,17 @@ impl UiTree {
     #[cold]
     #[inline(never)]
     fn place_ahead_now(&mut self, node: NodeId) {
+        let by_parent = self.node(node).lookahead.as_ref().is_some_and(|it| it.placed_by_parent);
         let pass = self.lookahead_pass(node);
         pass.tree.place_pass(node);
         drop(pass);
+        // Placed ahead in the pass now, not by its parent there: the parent's pass ahead still
+        // passes it over, and its next blocks ahead wait for it to be placed now again
+        // (`detachedFromParentLookaheadPlacement` holding until a placing ahead from the parent
+        // clears it, D2451).
+        if let Some(state) = self.node_mut(node).lookahead.as_mut() {
+            state.placed_by_parent = by_parent;
+        }
         if !self.ahead_readers.is_empty() {
             self.note_ahead_readers();
         }
