@@ -97,6 +97,7 @@ mod lazy_state_restoration;
 mod lazy_support;
 mod legacy;
 mod locals;
+mod lookahead_coordinates;
 mod lookahead_scenes;
 mod lookahead_toggle_placement;
 mod magnifier;
