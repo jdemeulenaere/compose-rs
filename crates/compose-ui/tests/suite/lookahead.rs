@@ -1802,7 +1802,6 @@ fn a_lookahead_block_runs_again_after_what_s_around_the_scope() {
     let (a, dp, o) = (around.handle(), deep.handle(), order.clone());
     let mut host = host(move || {
         let o = o.clone();
-        let a = a.clone();
         let reading = move |name: &'static str, o: Rc<RefCell<Vec<&'static str>>>| {
             measure_policy(move |scope, measurables, constraints| {
                 let placeables: Vec<_> =
@@ -1868,11 +1867,13 @@ fn a_lookahead_block_runs_again_after_what_s_around_the_scope() {
     assert_eq!(*order.borrow(), ["root", "holder", "deep ahead"]);
 }
 
+type ThreeLevelLog = Rc<RefCell<Vec<(&'static str, &'static str, bool)>>>;
+
 /// Three nested layouts in a scope (`L1` holding `L2` holding `L3`), each noting its passes,
 /// `L3` holding a child once `with_child`, `L1`'s measurement ahead reading `ahead` and the
 /// blocks of all three reading `blocks`.
 fn three_levels(
-    log: &Rc<RefCell<Vec<(&'static str, &'static str, bool)>>>,
+    log: &ThreeLevelLog,
     with_child: MutableState<bool>,
     ahead: MutableState<i32>,
     blocks: MutableState<i32>,
@@ -1880,7 +1881,7 @@ fn three_levels(
     let log = log.clone();
     move || {
         let log = log.clone();
-        let level = move |name: &'static str, log: &Rc<RefCell<Vec<_>>>| {
+        let level = move |name: &'static str, log: &ThreeLevelLog| {
             let log = log.clone();
             Modifier.layout(move |scope, measurable, constraints| {
                 let looking = scope.is_looking_ahead();
@@ -2235,4 +2236,145 @@ fn an_approach_moved_by_movable_content_is_where_it_is_in_its_scope() {
     box_id.set(3);
     host.frame();
     assert_eq!(at.get(), IntOffset::new(110, 110));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedLookaheadScope
+/// Nested `LookaheadScope`s with approach layouts on the inner and outer boxes: an approach's
+/// own `lookahead_scope()` gives the scope it's in (its coordinates match that scope's
+/// `lookahead_scope_coordinates` in both the outer box and both layers of the inner one).
+#[test]
+fn nested_lookahead_scopes_each_give_their_own_scope_coordinates() {
+    let checked = Rc::new(Cell::new(0));
+    let c = checked.clone();
+    let _host = large_host(move || {
+        let c = c.clone();
+        Stack!(modifier = Modifier.offset(20.dp(), 30.dp()), {
+            let c = c.clone();
+            scoped(move |outer| {
+                let c_outer = c.clone();
+                let check_outer = intermediate(move |scope, content, constraints| {
+                    let placeable = scope.measure(content, constraints);
+                    let approach_scope = scope.lookahead_scope();
+                    let c = c_outer.clone();
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        let expected = outer.lookahead_scope_coordinates(placement);
+                        let actual = approach_scope.lookahead_scope_coordinates(placement);
+                        assert!(expected.is_some());
+                        assert_eq!(actual, expected);
+                        c.set(c.get() + 1);
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                let c_stack = c.clone();
+                Stack!(
+                    modifier = Modifier
+                        .offset(50.dp(), 25.dp())
+                        .then(check_outer)
+                        .offset(15.dp(), 20.dp()),
+                    {
+                        let c_inner = c_stack.clone();
+                        scoped(move |inner| {
+                            let check_inner = |c: Rc<Cell<i32>>| {
+                                intermediate(move |scope, content, constraints| {
+                                    let placeable = scope.measure(content, constraints);
+                                    let approach_scope = scope.lookahead_scope();
+                                    let c = c.clone();
+                                    scope.layout_with(
+                                        placeable.width,
+                                        placeable.height,
+                                        move |placement| {
+                                            let expected =
+                                                inner.lookahead_scope_coordinates(placement);
+                                            let actual = approach_scope
+                                                .lookahead_scope_coordinates(placement);
+                                            assert!(expected.is_some());
+                                            assert_eq!(actual, expected);
+                                            c.set(c.get() + 1);
+                                            placement.place(&placeable, 0, 0);
+                                        },
+                                    )
+                                })
+                            };
+                            leaf(
+                                check_inner(c_inner.clone())
+                                    .then(sized(50))
+                                    .then(check_inner(c_inner.clone())),
+                            );
+                        });
+                    }
+                );
+            });
+        });
+    });
+    assert!(checked.get() >= 3, "checked {} times", checked.get());
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, testPerNodeMeasureAndLayout
+/// Per-node `force_remeasure` on `L1` after `L1` and `L3` need measuring ahead (while `L2`'s
+/// size holds so lookahead skips `L2`'s block) and all three need placing now: `L3`'s lookahead
+/// block runs before `L1`, `L2` and `L3`'s blocks now, all before `force_remeasure` returns.
+#[ignore = "needs w2-layout-scheduler remeasure_now place_pass (#83)"]
+#[test]
+fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
+    let (l1_ahead, l3_ahead, blocks) =
+        (mutable_state_of(0), mutable_state_of(0), mutable_state_of(0));
+    let log: ThreeLevelLog = Rc::default();
+    let held: Rc<Cell<Option<Remeasurement>>> = Rc::default();
+    let (l1a, l3a, bl, lg, h) =
+        (l1_ahead.handle(), l3_ahead.handle(), blocks.handle(), log.clone(), held.clone());
+    let mut host = host(move || {
+        let (lg, h) = (lg.clone(), h.clone());
+        let level =
+            move |name: &'static str, ahead: Option<MutableState<i32>>, lg: &ThreeLevelLog| {
+                let lg = lg.clone();
+                Modifier.layout(move |scope, measurable, constraints| {
+                    let looking = scope.is_looking_ahead();
+                    if looking && let Some(ahead) = ahead {
+                        ahead.get();
+                    }
+                    lg.borrow_mut().push((name, "measure", looking));
+                    let placeable = scope.measure(measurable, constraints);
+                    let lg = lg.clone();
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        let looking = placement.is_looking_ahead();
+                        if !looking {
+                            bl.get();
+                        }
+                        lg.borrow_mut().push((name, "place", looking));
+                        placement.place(&placeable, 0, 0);
+                    })
+                })
+            };
+        scoped(move |_| {
+            let h = h.clone();
+            let l1_mod = Modifier
+                .remeasurement_modifier(Rc::new(move |it| h.set(Some(it))))
+                .then(level("L1", Some(l1a), &lg));
+            let lg2 = lg.clone();
+            Stack!(modifier = l1_mod, {
+                let lg3 = lg2.clone();
+                Stack!(modifier = level("L2", None, &lg2), {
+                    Stack!(modifier = level("L3", Some(l3a), &lg3).then(sized(20)), {});
+                });
+            });
+        });
+    });
+    log.borrow_mut().clear();
+    l3_ahead.set(1);
+    l1_ahead.set(1);
+    blocks.set(1);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    host.with_tree(|tree| tree.apply_observed_writes());
+    held.get().expect("attached").force_remeasure();
+    let placed: Vec<_> =
+        log.borrow().iter().filter(|it| it.1 == "place").map(|it| (it.0, it.2)).collect();
+    let l3_ahead_at = placed.iter().position(|it| *it == ("L3", true)).expect("L3 placed ahead");
+    let l3_now_at = placed.iter().position(|it| *it == ("L3", false)).expect("L3 placed now");
+    assert!(l3_ahead_at < l3_now_at, "{placed:?}");
+    assert!(!placed.contains(&("L2", true)), "lookahead skipped L2: {placed:?}");
+    assert!(placed.contains(&("L1", false)) && placed.contains(&("L2", false)), "{placed:?}");
+    assert!(!host.needs_frame());
+    log.borrow_mut().clear();
+    host.frame();
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
 }

@@ -127,6 +127,12 @@ impl LookaheadState {
         self.layers.get(layer)
     }
 
+    /// Whether the pass it holds still has blocks waiting here or below.
+    #[allow(dead_code)]
+    pub(crate) fn needs_placement_pending(&self) -> bool {
+        self.needs_placement || self.subtree_needs_placement
+    }
+
     /// Changes this pass's fields and the other's around.
     fn change_with(&mut self, value: &mut LayoutNode) {
         // The chain may have changed while the other pass ran.
