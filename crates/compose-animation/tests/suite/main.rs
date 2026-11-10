@@ -38,6 +38,7 @@ mod physics;
 mod repeatable_animation;
 mod review_animation;
 mod review_deferred_shared_elements;
+mod review_lookahead;
 mod review_retained;
 mod review_round10;
 mod review_round11;

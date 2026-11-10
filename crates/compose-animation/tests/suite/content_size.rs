@@ -212,13 +212,12 @@ fn ahead_a_content_size_is_its_contents_new_size_at_once() {
     let sizes_ahead: Rc<RefCell<Vec<IntSize>>> = Rc::default();
     let (wanted, seen) = (size.handle(), sizes_ahead.clone());
     let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
-        let seen = seen.clone();
+        let noting = noting_size(Some(seen.clone()), Rc::default());
         compose_ui::LookaheadScope(callback(move |_| {
             let size = wanted.get();
             Box!(
-                modifier = noting_size(Some(seen.clone()), Rc::default())
-                    .animate_content_size()
-                    .size((size.width.dp(), size.height.dp())),
+                modifier =
+                    noting.clone().animate_content_size().size((size.width.dp(), size.height.dp())),
                 {
                     Box!(modifier = Modifier.size(20.dp()));
                 }
