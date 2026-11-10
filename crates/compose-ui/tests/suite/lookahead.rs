@@ -1717,3 +1717,664 @@ fn readers_of_lookahead_positions_leave_together() {
     host.frame();
     assert!(read.get() >= 7, "{}", read.get());
 }
+
+// ---- LookaheadScopeTest's cases on internal nodes, rewritten as scenes --------------------------
+
+/// `host` on a window large enough for the Kotlin tests' offsets (theirs fill a device).
+fn large_host(content: impl Fn() + 'static) -> compose_ui::platform::UiHost {
+    let mut host = compose_ui::platform::UiHost::headless(1000, 1000);
+    host.set_content(content);
+    host.frame();
+    host
+}
+
+/// The ten indices in an order a seeded generator shuffles, a Fisher–Yates step at a time as
+/// `generateRandomPlaceOrder`.
+fn shuffled(order: &mut [usize], seed: &mut u64) {
+    for at in 0..order.len() - 1 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let swap = at + (*seed >> 33) as usize % (order.len() - at);
+        order.swap(at, swap);
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, randomLookaheadPlacementOrder
+/// Ten children of a layout in a scope (Kotlin's in two virtual groups; a scope adds no node
+/// either), placed in an order that changes each frame, another ahead than now: each pass keeps
+/// its own order, so what's drawn, in the order placed now, follows now's, whatever ahead was.
+#[test]
+fn each_pass_keeps_the_order_it_placed_in() {
+    let orders = mutable_state_of((Vec::from_iter(0..10), Vec::from_iter(0..10)));
+    let drawn = Rc::new(RefCell::new(Vec::new()));
+    let (o, d) = (orders.handle(), drawn.clone());
+    let mut host = host(move || {
+        let d = d.clone();
+        scoped(move |_| {
+            let d = d.clone();
+            let placing = measure_policy(move |scope, measurables, constraints| {
+                assert_eq!(measurables.len(), 10);
+                let placeables: Vec<_> =
+                    measurables.iter().map(|it| scope.measure(*it, constraints)).collect();
+                let (ahead, now) = o.get();
+                let order = if scope.is_looking_ahead() { ahead } else { now };
+                scope.layout_with(100, 100, move |placement| {
+                    for &id in &order {
+                        placement.place(&placeables[id], 0, 0);
+                    }
+                })
+            });
+            let d = d.clone();
+            Layout(
+                Modifier,
+                placing,
+                callback(move || {
+                    for id in 0..10 {
+                        let d = d.clone();
+                        leaf(
+                            Modifier.draw_behind(move |_| d.borrow_mut().push(id)).then(sized(10)),
+                        );
+                    }
+                }),
+            );
+        });
+    });
+    let mut seed = 7;
+    for _ in 0..5 {
+        let (_, now) = orders.get();
+        assert_eq!(*drawn.borrow(), now);
+        let (mut ahead, mut now) = (Vec::from_iter(0..10), Vec::from_iter(0..10));
+        shuffled(&mut ahead, &mut seed);
+        shuffled(&mut now, &mut seed);
+        orders.set((ahead, now));
+        drawn.borrow_mut().clear();
+        host.frame();
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, testLookaheadPlacementInvalidatedAfterRoot
+/// A node deep in a scope whose lookahead block is to run again, and a root outside the scope
+/// placing again in the same frame: the root's block and the block of the node holding the scope
+/// run first, the lookahead block after them, once.
+#[test]
+fn a_lookahead_block_runs_again_after_what_s_around_the_scope() {
+    let (around, deep) = (mutable_state_of(0), mutable_state_of(0));
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let (a, dp, o) = (around.handle(), deep.handle(), order.clone());
+    let mut host = host(move || {
+        let o = o.clone();
+        let reading = move |name: &'static str, o: Rc<RefCell<Vec<&'static str>>>| {
+            measure_policy(move |scope, measurables, constraints| {
+                let placeables: Vec<_> =
+                    measurables.iter().map(|it| scope.measure(*it, constraints)).collect();
+                let o = o.clone();
+                scope.layout_with(100, 100, move |placement| {
+                    a.get();
+                    o.borrow_mut().push(name);
+                    for placeable in &placeables {
+                        placement.place(placeable, 0, 0);
+                    }
+                })
+            })
+        };
+        let (root, holder) = (reading("root", o.clone()), reading("holder", o.clone()));
+        Layout(
+            Modifier,
+            root,
+            callback(move || {
+                let o = o.clone();
+                Layout(
+                    Modifier,
+                    holder.clone(),
+                    callback(move || {
+                        let o = o.clone();
+                        scoped(move |_| {
+                            leaf(sized(10));
+                            let o = o.clone();
+                            Stack!({
+                                let o = o.clone();
+                                Stack!(
+                                    modifier = Modifier.layout(move |scope, measurable, c| {
+                                        let placeable = scope.measure(measurable, c);
+                                        let o = o.clone();
+                                        scope.layout_with(
+                                            placeable.width,
+                                            placeable.height,
+                                            move |placement| {
+                                                if placement.is_looking_ahead() {
+                                                    dp.get();
+                                                    o.borrow_mut().push("deep ahead");
+                                                }
+                                                placement.place(&placeable, 0, 0);
+                                            },
+                                        )
+                                    }),
+                                    { leaf(sized(5)) }
+                                );
+                                leaf(sized(10));
+                            });
+                            leaf(sized(10));
+                        });
+                    }),
+                );
+            }),
+        );
+    });
+    assert_eq!(*order.borrow(), ["root", "holder", "deep ahead"]);
+    order.borrow_mut().clear();
+    around.set(1);
+    deep.set(1);
+    host.frame();
+    assert_eq!(*order.borrow(), ["root", "holder", "deep ahead"]);
+}
+
+type ThreeLevelLog = Rc<RefCell<Vec<(&'static str, &'static str, bool)>>>;
+
+/// Three nested layouts in a scope (`L1` holding `L2` holding `L3`), each noting its passes,
+/// `L3` holding a child once `with_child`, `L1`'s measurement ahead reading `ahead` and the
+/// blocks of all three reading `blocks`.
+fn three_levels(
+    log: &ThreeLevelLog,
+    with_child: MutableState<bool>,
+    ahead: MutableState<i32>,
+    blocks: MutableState<i32>,
+) -> impl Fn() + 'static {
+    let log = log.clone();
+    move || {
+        let log = log.clone();
+        let level = move |name: &'static str, log: &ThreeLevelLog| {
+            let log = log.clone();
+            Modifier.layout(move |scope, measurable, constraints| {
+                let looking = scope.is_looking_ahead();
+                if name == "L1" && looking {
+                    ahead.get();
+                }
+                log.borrow_mut().push((name, "measure", looking));
+                let placeable = scope.measure(measurable, constraints);
+                let log = log.clone();
+                scope.layout_with(placeable.width, placeable.height, move |placement| {
+                    if name != "child" {
+                        blocks.get();
+                    }
+                    log.borrow_mut().push((name, "place", placement.is_looking_ahead()));
+                    placement.place(&placeable, 0, 0);
+                })
+            })
+        };
+        scoped(move |_| {
+            let log = log.clone();
+            Stack!(modifier = level("L1", &log), {
+                let log = log.clone();
+                Stack!(modifier = level("L2", &log), {
+                    let log = log.clone();
+                    Stack!(modifier = level("L3", &log).then(sized(20)), {
+                        if with_child.get() {
+                            leaf(level("child", &log).then(sized(10)));
+                        }
+                    });
+                });
+            });
+        });
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, testPlacementAfterLookaheadPlacement
+/// `L3` given a child, `L1` measured again ahead and all three placed again in one frame: the
+/// child is measured and placed in both passes, ahead first, and the frame leaves nothing to do.
+#[test]
+fn a_child_coming_deep_in_a_scope_is_measured_and_placed_in_both_passes() {
+    let (with_child, ahead, blocks) =
+        (mutable_state_of(false), mutable_state_of(0), mutable_state_of(0));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut host = host(three_levels(&log, with_child.handle(), ahead.handle(), blocks.handle()));
+    assert!(!log.borrow().is_empty());
+    log.borrow_mut().clear();
+    with_child.set(true);
+    ahead.set(1);
+    blocks.set(1);
+    host.frame();
+    let child: Vec<_> =
+        log.borrow().iter().filter(|it| it.0 == "child").map(|it| (it.1, it.2)).collect();
+    assert_eq!(child, [("measure", true), ("measure", false), ("place", true), ("place", false)]);
+    for name in ["L1", "L2", "L3"] {
+        let placed: Vec<_> = log
+            .borrow()
+            .iter()
+            .filter(|it| it.0 == name && it.1 == "place")
+            .map(|it| it.2)
+            .collect();
+        assert_eq!(placed, [true, false], "{name}");
+    }
+    assert!(!host.needs_frame());
+    log.borrow_mut().clear();
+    host.frame();
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, deactivedNodesInMeasureOnly
+/// A node in a scope asking to be measured again ahead, deactivated before the frame (as reusable
+/// content set inactive): the frame measures what's left without it, and once active again it's
+/// measured ahead and now again.
+#[test]
+fn a_node_deactivated_after_asking_to_be_measured_ahead_is_left_alone() {
+    let (active, ahead) = (mutable_state_of(true), mutable_state_of(0));
+    let log: Log = Rc::default();
+    let (act, a, l) = (active.handle(), ahead.handle(), log.clone());
+    let mut host = host(move || {
+        let l = l.clone();
+        scoped(move |_| {
+            leaf(sized(10));
+            let l = l.clone();
+            ReusableContentHost(act.get(), || {
+                let l = l.clone();
+                leaf(
+                    Modifier
+                        .layout(move |scope, measurable, constraints| {
+                            if scope.is_looking_ahead() {
+                                a.get();
+                            }
+                            let placeable = scope.measure(measurable, constraints);
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                placement.place(&placeable, 0, 0);
+                            })
+                        })
+                        .then(noting(&l))
+                        .then(sized(10)),
+                );
+            });
+            leaf(sized(10));
+        });
+    });
+    log.borrow_mut().clear();
+    ahead.set(1);
+    active.set(false);
+    host.frame();
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    active.set(true);
+    host.frame();
+    let measured: Vec<_> = log.borrow().iter().filter(|it| it.0 == "measure").copied().collect();
+    assert_eq!(measured, [("measure", true), ("measure", false)]);
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, forceMeasureSubtreeWhileLookaheadMeasureRequestedFromSubtree
+/// A column filling a scope (what its children ask measures it from the top), its child an
+/// approach reading a state: each change also swaps the modifiers of the child's child between a
+/// size and another approach with padding, measured ahead from the child before the column's
+/// pass now reaches it, without a panic.
+#[test]
+fn a_subtree_asking_ahead_while_measured_from_above_now_measures_once_each() {
+    let iterations = mutable_state_of(0);
+    let it = iterations.handle();
+    let mut host = host(move || {
+        Stack!(modifier = Modifier.fill_max_size(), {
+            scoped(move |_| {
+                Column!(modifier = Modifier.fill_max_size(), {
+                    let reading = intermediate(move |scope, content, _| {
+                        it.get();
+                        let placeable = scope.measure(content, Constraints::fixed(200, 200));
+                        scope.layout_with(placeable.width, placeable.height, move |placement| {
+                            placement.place(&placeable, 0, 0);
+                        })
+                    });
+                    Stack!(modifier = reading, {
+                        let modifier = if it.get() % 2 == 0 {
+                            sized(100)
+                        } else {
+                            intermediate(|scope, content, constraints| {
+                                let placeable = scope.measure(content, constraints);
+                                scope.layout_with(placeable.width, placeable.height, move |p| {
+                                    p.place(&placeable, 5, 5);
+                                })
+                            })
+                            .padding(5.dp())
+                        };
+                        leaf(modifier);
+                    });
+                });
+            });
+        });
+    });
+    for _ in 0..4 {
+        iterations.set(iterations.get() + 1);
+        host.frame();
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedVirtualNodeFromLookaheadScope
+/// A scope in a scope and a box beside it, all of their sizes and offsets changing: each box is
+/// where and how large its modifiers say, in both frames.
+#[test]
+fn boxes_of_nested_scopes_are_where_their_modifiers_say() {
+    let small = mutable_state_of(true);
+    let size1 = |small: bool| if small { 20 } else { 50 };
+    let size2 = |small: bool| if small { 60 } else { 120 };
+    let offset1 = |small: bool| if small { IntOffset::ZERO } else { IntOffset::new(80, 30) };
+    let offset2 =
+        |small: bool| if small { IntOffset::new(50, 100) } else { IntOffset::new(60, 170) };
+    let seen1 = Rc::new(Cell::new((IntSize::ZERO, IntOffset::ZERO)));
+    let seen2 = Rc::new(Cell::new((IntSize::ZERO, IntOffset::ZERO)));
+    let (s, a, b) = (small.handle(), seen1.clone(), seen2.clone());
+    let mut host = large_host(move || {
+        let (a, b) = (a.clone(), b.clone());
+        Stack!({
+            let (a, b) = (a.clone(), b.clone());
+            scoped(move |_| {
+                let a = a.clone();
+                scoped(move |_| {
+                    let a = a.clone();
+                    let at = offset1(s.get());
+                    leaf(
+                        Modifier
+                            .offset((at.x as f32).dp(), (at.y as f32).dp())
+                            .on_globally_positioned(move |it: LayoutCoordinates| {
+                                a.set((it.size(), it.local_to_root(Offset::ZERO).round()));
+                            })
+                            .then(sized(size1(s.get()))),
+                    );
+                });
+                let b = b.clone();
+                let at = offset2(s.get());
+                leaf(
+                    Modifier
+                        .offset((at.x as f32).dp(), (at.y as f32).dp())
+                        .on_globally_positioned(move |it: LayoutCoordinates| {
+                            b.set((it.size(), it.local_to_root(Offset::ZERO).round()));
+                        })
+                        .then(sized(size2(s.get()))),
+                );
+            });
+        });
+    });
+    for _ in 0..2 {
+        let small_now = small.get();
+        let (one, two) = (size1(small_now), size2(small_now));
+        assert_eq!(seen1.get(), (IntSize::new(one, one), offset1(small_now)));
+        assert_eq!(seen2.get(), (IntSize::new(two, two), offset2(small_now)));
+        small.set(!small_now);
+        host.frame();
+    }
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, moveLookaheadScope
+/// A scope in movable content moved from one box to another: its coordinates, read in a block of
+/// what's in it, are where it is in either box.
+#[test]
+fn a_scope_moved_by_movable_content_is_where_it_was_moved() {
+    let first = mutable_state_of(true);
+    let at = Rc::new(Cell::new(IntOffset::new(i32::MAX, i32::MAX)));
+    let (f, a) = (first.handle(), at.clone());
+    let mut host = large_host(move || {
+        let a = a.clone();
+        Stack!({
+            let a = a.clone();
+            let content = remember(move || {
+                let a = a.clone();
+                movable_content_of(move || {
+                    let a = a.clone();
+                    scoped(move |scope| {
+                        let a = a.clone();
+                        leaf(
+                            Modifier
+                                .layout(move |measure, measurable, constraints| {
+                                    let placeable = measure.measure(measurable, constraints);
+                                    let a = a.clone();
+                                    measure.layout_with(
+                                        placeable.width,
+                                        placeable.height,
+                                        move |placement| {
+                                            if let Some(coordinates) =
+                                                scope.lookahead_scope_coordinates(placement)
+                                            {
+                                                a.set(
+                                                    coordinates.local_to_root(Offset::ZERO).round(),
+                                                );
+                                            }
+                                            placement.place(&placeable, 0, 0);
+                                        },
+                                    )
+                                })
+                                .then(sized(200)),
+                        );
+                    });
+                })
+            });
+            let one = content.clone();
+            Stack!(modifier = Modifier.offset(100.dp(), 5.dp()), {
+                if f.get() {
+                    one();
+                }
+            });
+            let two = content.clone();
+            Stack!(modifier = Modifier.offset(40.dp(), 200.dp()), {
+                if !f.get() {
+                    two();
+                }
+            });
+        });
+    });
+    assert_eq!(at.get(), IntOffset::new(100, 5));
+    first.set(false);
+    host.frame();
+    assert_eq!(at.get(), IntOffset::new(40, 200));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, moveIntermediateLayout
+/// An approach in movable content, moved from a box in a scope nested in the outer one, to a box
+/// in the outer one, to a box whose own chain has an approach: where it is ahead in its scope's
+/// coordinates, as its approach's block asks of the scope it's in.
+#[test]
+fn an_approach_moved_by_movable_content_is_where_it_is_in_its_scope() {
+    let box_id = mutable_state_of(1);
+    let at = Rc::new(Cell::new(IntOffset::new(i32::MAX, i32::MAX)));
+    let (b, a) = (box_id.handle(), at.clone());
+    let mut host = large_host(move || {
+        let a = a.clone();
+        scoped(move |_| {
+            let a = a.clone();
+            let content = remember(move || {
+                let a = a.clone();
+                movable_content_of(move || {
+                    let a = a.clone();
+                    leaf(
+                        intermediate(move |scope, content, constraints| {
+                            let lookahead = scope.lookahead_scope();
+                            let placeable = scope.measure(content, constraints);
+                            let a = a.clone();
+                            scope.layout_with(placeable.width, placeable.height, move |placement| {
+                                if let (Some(coordinates), Some(own)) = (
+                                    lookahead.lookahead_scope_coordinates(placement),
+                                    placement.coordinates(),
+                                ) {
+                                    let at = lookahead.local_lookahead_position_of(
+                                        coordinates,
+                                        own,
+                                        Offset::ZERO,
+                                    );
+                                    a.set(at.round());
+                                }
+                            })
+                        })
+                        .then(sized(20)),
+                    );
+                })
+            });
+            let one = content.clone();
+            Stack!({
+                let one = one.clone();
+                scoped(move |_| {
+                    let one = one.clone();
+                    Stack!(modifier = Modifier.offset(100.dp(), 5.dp()), {
+                        if b.get() == 1 {
+                            one();
+                        }
+                    });
+                });
+            });
+            let two = content.clone();
+            Stack!(modifier = Modifier.offset(40.dp(), 200.dp()), {
+                if b.get() == 2 {
+                    two();
+                }
+            });
+            let three = content.clone();
+            Stack!(
+                modifier = Modifier
+                    .offset(50.dp(), 50.dp())
+                    .then(intermediate(passing))
+                    .offset(60.dp(), 60.dp()),
+                {
+                    if b.get() == 3 {
+                        three();
+                    }
+                }
+            );
+        });
+    });
+    assert_eq!(at.get(), IntOffset::new(100, 5));
+    box_id.set(2);
+    host.frame();
+    assert_eq!(at.get(), IntOffset::new(40, 200));
+    box_id.set(3);
+    host.frame();
+    assert_eq!(at.get(), IntOffset::new(110, 110));
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, nestedLookaheadScope
+/// Nested `LookaheadScope`s with approach layouts on the inner and outer boxes: an approach's
+/// own `lookahead_scope()` gives the scope it's in (its coordinates match that scope's
+/// `lookahead_scope_coordinates` in both the outer box and both layers of the inner one).
+#[test]
+fn nested_lookahead_scopes_each_give_their_own_scope_coordinates() {
+    let checked = Rc::new(Cell::new(0));
+    let c = checked.clone();
+    let _host = large_host(move || {
+        let c = c.clone();
+        Stack!(modifier = Modifier.offset(20.dp(), 30.dp()), {
+            let c = c.clone();
+            scoped(move |outer| {
+                let c_outer = c.clone();
+                let check_outer = intermediate(move |scope, content, constraints| {
+                    let placeable = scope.measure(content, constraints);
+                    let approach_scope = scope.lookahead_scope();
+                    let c = c_outer.clone();
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        let expected = outer.lookahead_scope_coordinates(placement);
+                        let actual = approach_scope.lookahead_scope_coordinates(placement);
+                        assert!(expected.is_some());
+                        assert_eq!(actual, expected);
+                        c.set(c.get() + 1);
+                        placement.place(&placeable, 0, 0);
+                    })
+                });
+                let c_stack = c.clone();
+                Stack!(
+                    modifier = Modifier
+                        .offset(50.dp(), 25.dp())
+                        .then(check_outer)
+                        .offset(15.dp(), 20.dp()),
+                    {
+                        let c_inner = c_stack.clone();
+                        scoped(move |inner| {
+                            let check_inner = |c: Rc<Cell<i32>>| {
+                                intermediate(move |scope, content, constraints| {
+                                    let placeable = scope.measure(content, constraints);
+                                    let approach_scope = scope.lookahead_scope();
+                                    let c = c.clone();
+                                    scope.layout_with(
+                                        placeable.width,
+                                        placeable.height,
+                                        move |placement| {
+                                            let expected =
+                                                inner.lookahead_scope_coordinates(placement);
+                                            let actual = approach_scope
+                                                .lookahead_scope_coordinates(placement);
+                                            assert!(expected.is_some());
+                                            assert_eq!(actual, expected);
+                                            c.set(c.get() + 1);
+                                            placement.place(&placeable, 0, 0);
+                                        },
+                                    )
+                                })
+                            };
+                            leaf(
+                                check_inner(c_inner.clone())
+                                    .then(sized(50))
+                                    .then(check_inner(c_inner.clone())),
+                            );
+                        });
+                    }
+                );
+            });
+        });
+    });
+    assert!(checked.get() >= 3, "checked {} times", checked.get());
+}
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt, testPerNodeMeasureAndLayout
+/// Per-node `force_remeasure` on `L1` after `L1` and `L3` need measuring ahead (while `L2`'s
+/// size holds so lookahead skips `L2`'s block) and all three need placing now: `L3`'s lookahead
+/// block runs before `L1`, `L2` and `L3`'s blocks now, all before `force_remeasure` returns.
+#[ignore = "needs w2-layout-scheduler remeasure_now place_pass (#83)"]
+#[test]
+fn a_per_node_force_remeasure_runs_lookahead_placement_before_now_placement() {
+    let (l1_ahead, l3_ahead, blocks) =
+        (mutable_state_of(0), mutable_state_of(0), mutable_state_of(0));
+    let log: ThreeLevelLog = Rc::default();
+    let held: Rc<Cell<Option<Remeasurement>>> = Rc::default();
+    let (l1a, l3a, bl, lg, h) =
+        (l1_ahead.handle(), l3_ahead.handle(), blocks.handle(), log.clone(), held.clone());
+    let mut host = host(move || {
+        let (lg, h) = (lg.clone(), h.clone());
+        let level =
+            move |name: &'static str, ahead: Option<MutableState<i32>>, lg: &ThreeLevelLog| {
+                let lg = lg.clone();
+                Modifier.layout(move |scope, measurable, constraints| {
+                    let looking = scope.is_looking_ahead();
+                    if looking && let Some(ahead) = ahead {
+                        ahead.get();
+                    }
+                    lg.borrow_mut().push((name, "measure", looking));
+                    let placeable = scope.measure(measurable, constraints);
+                    let lg = lg.clone();
+                    scope.layout_with(placeable.width, placeable.height, move |placement| {
+                        let looking = placement.is_looking_ahead();
+                        if !looking {
+                            bl.get();
+                        }
+                        lg.borrow_mut().push((name, "place", looking));
+                        placement.place(&placeable, 0, 0);
+                    })
+                })
+            };
+        scoped(move |_| {
+            let h = h.clone();
+            let l1_mod = Modifier
+                .remeasurement_modifier(Rc::new(move |it| h.set(Some(it))))
+                .then(level("L1", Some(l1a), &lg));
+            let lg2 = lg.clone();
+            Stack!(modifier = l1_mod, {
+                let lg3 = lg2.clone();
+                Stack!(modifier = level("L2", None, &lg2), {
+                    Stack!(modifier = level("L3", Some(l3a), &lg3).then(sized(20)), {});
+                });
+            });
+        });
+    });
+    log.borrow_mut().clear();
+    l3_ahead.set(1);
+    l1_ahead.set(1);
+    blocks.set(1);
+    compose_runtime::snapshots::Snapshot::send_apply_notifications();
+    host.with_tree(|tree| tree.apply_observed_writes());
+    held.get().expect("attached").force_remeasure();
+    let placed: Vec<_> =
+        log.borrow().iter().filter(|it| it.1 == "place").map(|it| (it.0, it.2)).collect();
+    let l3_ahead_at = placed.iter().position(|it| *it == ("L3", true)).expect("L3 placed ahead");
+    let l3_now_at = placed.iter().position(|it| *it == ("L3", false)).expect("L3 placed now");
+    assert!(l3_ahead_at < l3_now_at, "{placed:?}");
+    assert!(!placed.contains(&("L2", true)), "lookahead skipped L2: {placed:?}");
+    assert!(placed.contains(&("L1", false)) && placed.contains(&("L2", false)), "{placed:?}");
+    assert!(!host.needs_frame());
+    log.borrow_mut().clear();
+    host.frame();
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}

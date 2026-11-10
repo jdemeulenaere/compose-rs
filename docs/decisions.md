@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 186 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 474 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 482 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 169 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 122 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
@@ -1169,6 +1169,14 @@ The log is split by area into the files below, one table each, rows in number or
 | D2304 | [text](decisions/text.md#d2304) | revised by [D2426](decisions/text.md#d2426) |
 | D2305 | [text](decisions/text.md#d2305) | revised by [D2427](decisions/text.md#d2427) |
 | D2306 | [text](decisions/text.md#d2306) | current |
+| D2340 | [ui-and-layout](decisions/ui-and-layout.md#d2340) | current |
+| D2341 | [ui-and-layout](decisions/ui-and-layout.md#d2341) | revised by [D2420](decisions/ui-and-layout.md#d2420) |
+| D2350 | [ui-and-layout](decisions/ui-and-layout.md#d2350) | current |
+| D2351 | [ui-and-layout](decisions/ui-and-layout.md#d2351) | current |
+| D2352 | [ui-and-layout](decisions/ui-and-layout.md#d2352) | current |
+| D2353 | [ui-and-layout](decisions/ui-and-layout.md#d2353) | current |
+| D2420 | [ui-and-layout](decisions/ui-and-layout.md#d2420) | current |
+| D2421 | [ui-and-layout](decisions/ui-and-layout.md#d2421) | current |
 | D2425 | [text](decisions/text.md#d2425) | current |
 | D2426 | [text](decisions/text.md#d2426) | current |
 | D2427 | [text](decisions/text.md#d2427) | current |

@@ -16,9 +16,9 @@ use compose_runtime::{
 use std::hash::{Hash, Hasher};
 
 use compose_ui::{
-    Alignment, Constraints, IntOffset, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection,
-    LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
-    ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
+    Alignment, Constraints, IntOffset, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope,
+    LOCAL_LAYOUT_DIRECTION, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
 };
 
 use crate::deferred::MutableContentTransform;
@@ -866,7 +866,8 @@ impl<T: PartialEq + 'static> ComposeArg for StateKey<T> {
 }
 
 /// The contents stacked, each measured with the container's constraints, as large as the
-/// largest but a pending content, each aligned in it (left to right, as Compose's).
+/// largest but a pending content (ahead, in a `LookaheadScope`: as large as the target content),
+/// each aligned in it (left to right, as Compose's).
 struct ContentMeasurePolicy<T> {
     root: Rc<Root<T>>,
     /// The states shown: at measuring, one to a child, those whose contents left being gone.
@@ -910,21 +911,64 @@ impl<T: PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             }
         }
         let placeables: Vec<_> = placeables.into_iter().flatten().collect();
-        let mut size = IntSize::ZERO;
-        for (index, placeable) in placeables.iter().enumerate() {
-            if pending != Some(index) {
-                size = IntSize::new(
-                    size.width.max(placeable.width),
-                    size.height.max(placeable.height),
-                );
+        let size = if scope.is_looking_ahead() {
+            // Ahead, in a `LookaheadScope`, the target content's size: where the change ends,
+            // as Compose's `AnimatedContentMeasurePolicy` (D2350).
+            target.map_or(IntSize::ZERO, |target| placeables[target].size())
+        } else {
+            let mut size = IntSize::ZERO;
+            for (index, placeable) in placeables.iter().enumerate() {
+                if pending != Some(index) {
+                    size = IntSize::new(
+                        size.width.max(placeable.width),
+                        size.height.max(placeable.height),
+                    );
+                }
             }
-        }
+            size
+        };
         let alignment = self.root.content_alignment.get();
         for placeable in &placeables {
             let at = alignment.align(placeable.size(), size, LayoutDirection::Ltr);
             scope.place_at(placeable, at);
         }
         scope.layout(size.width, size.height)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_height(m, width)).max().unwrap_or(0)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -1035,6 +1079,13 @@ impl<T: Clone + PartialEq + 'static> LayoutModifierNode for SizeNode<T> {
     ) -> MeasureResult {
         let placeable = scope.measure(content, constraints);
         let current = placeable.size();
+        if scope.is_looking_ahead() {
+            // Ahead, the content's size, not animated and not kept as where an animation goes
+            // on from (nor as the container's size now), as Compose's `SizeModifierNode`: the
+            // content fills it (D2350).
+            scope.place(&placeable, 0, 0);
+            return scope.layout(current.width, current.height);
+        }
         let size = match &self.animation {
             None => {
                 self.last_size.set(Some(current));
@@ -1075,5 +1126,42 @@ impl<T: Clone + PartialEq + 'static> LayoutModifierNode for SizeNode<T> {
         let at = self.root.content_alignment.get().align(current, size, LayoutDirection::Ltr);
         scope.place_at(&placeable, at);
         scope.layout(size.width, size.height)
+    }
+
+    // Its content's, as Compose's `LayoutModifierNodeWithPassThroughIntrinsics`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }

@@ -17,11 +17,11 @@ use compose_runtime::{
 };
 use compose_ui::{
     Alignment, Color, ColumnScope, Constraints, DrawModifierNode, DrawScope, HorizontalAlignment,
-    IntOffset, IntSize, LayoutAwareModifierNode, LayoutCoordinates, LayoutDirection,
-    LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
-    ModifierLocal, ModifierLocalMap, ModifierLocalModifierNode, ModifierNode, ModifierNodeElement,
-    NodeContext, Paint, RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin,
-    VerticalAlignment,
+    IntOffset, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope, LayoutAwareModifierNode,
+    LayoutCoordinates, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ModifierLocal, ModifierLocalMap,
+    ModifierLocalModifierNode, ModifierNode, ModifierNodeElement, NodeContext, Paint,
+    RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin, VerticalAlignment,
 };
 
 use crate::deferred::{MutableTransform, SharedMutableTransformState};
@@ -961,7 +961,8 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
                 "Built-in",
             );
             let policy = remember(move || {
-                Rc::new(EnterExitMeasurePolicy { target_size }) as Rc<dyn MeasurePolicy>
+                Rc::new(EnterExitMeasurePolicy { target_size, has_lookahead: Cell::new(false) })
+                    as Rc<dyn MeasurePolicy>
             });
             compose_ui::Layout(
                 modifier.then(enter_exit),
@@ -973,9 +974,13 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
 }
 
 /// The content's children, stacked at the top start, as large as the largest: their size is the
-/// target size.
+/// target size (in a `LookaheadScope`, their size ahead, as Compose's
+/// `AnimatedEnterExitMeasurePolicy`: D2353).
 struct EnterExitMeasurePolicy {
     target_size: compose_runtime::MutableState<IntSize>,
+    /// Whether it's been measured ahead, as `hasLookaheadOccurred`: then only the pass ahead
+    /// sets the target size.
+    has_lookahead: Cell<bool>,
 }
 
 impl MeasurePolicy for EnterExitMeasurePolicy {
@@ -990,11 +995,52 @@ impl MeasurePolicy for EnterExitMeasurePolicy {
         let size = placeables.iter().fold(IntSize::ZERO, |size, placeable| {
             IntSize::new(size.width.max(placeable.width), size.height.max(placeable.height))
         });
-        self.target_size.set(size);
+        if scope.is_looking_ahead() {
+            self.has_lookahead.set(true);
+            self.target_size.set(size);
+        } else if !self.has_lookahead.get() {
+            self.target_size.set(size);
+        }
         for placeable in &placeables {
             scope.place(placeable, 0, 0);
         }
         scope.layout(size.width, size.height)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_height(m, width)).max().unwrap_or(0)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -1830,5 +1876,42 @@ impl LayoutModifierNode for EnterExitNode {
         let at = aligned + slide + offset_delta;
         scope.place(&placeable, at.x, at.y);
         scope.layout(size.width, size.height)
+    }
+
+    // Its content's, as Compose's `LayoutModifierNodeWithPassThroughIntrinsics`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }

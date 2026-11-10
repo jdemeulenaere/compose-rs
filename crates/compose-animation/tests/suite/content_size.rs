@@ -4,7 +4,7 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -185,4 +185,115 @@ fn a_content_size_animation_interrupted_by_reuse_takes_the_new_size_at_once() {
 #[test]
 fn a_content_size_animation_interrupted_by_deactivation_takes_the_new_size_at_once() {
     content_size_interrupted(true);
+}
+
+/// A layout noting its content's size: into `ahead` when measured ahead (if given), into `now`
+/// otherwise, as the tests' `TestModifier` and lookahead layout.
+fn noting_size(ahead: Option<Rc<RefCell<Vec<IntSize>>>>, now: Rc<Cell<IntSize>>) -> Modifier {
+    Modifier.layout(move |measure, measurable, constraints| {
+        let placeable = measure.measure(measurable, constraints);
+        match (&ahead, measure.is_looking_ahead()) {
+            (Some(ahead), true) => ahead.borrow_mut().push(placeable.size()),
+            (_, true) => {}
+            (_, false) => now.set(placeable.size()),
+        }
+        measure.layout_with(placeable.width, placeable.height, move |placement| {
+            placement.place(&placeable, 0, 0);
+        })
+    })
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt, testAnimatedContentSizeInLookahead
+/// In a `LookaheadScope`, its size ahead is its content's new size at once, change after
+/// change, and never the size animating towards it.
+#[test]
+fn ahead_a_content_size_is_its_contents_new_size_at_once() {
+    let size = mutable_state_of(IntSize::new(400, 600));
+    let sizes_ahead: Rc<RefCell<Vec<IntSize>>> = Rc::default();
+    let (wanted, seen) = (size.handle(), sizes_ahead.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let noting = noting_size(Some(seen.clone()), Rc::default());
+        compose_ui::LookaheadScope(callback(move |_| {
+            let size = wanted.get();
+            Box!(
+                modifier =
+                    noting.clone().animate_content_size().size((size.width.dp(), size.height.dp())),
+                {
+                    Box!(modifier = Modifier.size(20.dp()));
+                }
+            );
+        }));
+    });
+    ui.wait_for_idle();
+    // In Compose's random ranges (200 to 600 by 100 to 800), fixed so that the test repeats.
+    for (width, height) in
+        [(523, 140), (211, 777), (480, 455), (300, 100), (599, 799), (250, 610), (404, 302)]
+    {
+        let each = IntSize::new(width, height);
+        size.set(each);
+        sizes_ahead.borrow_mut().clear();
+        ui.wait_for_idle();
+        let seen = sizes_ahead.borrow();
+        assert!(!seen.is_empty(), "{each:?} measured ahead");
+        assert!(seen.iter().all(|it| *it == each), "{each:?}: {seen:?}");
+    }
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt, properFinalStateAfterReAttach
+/// Moved half-way through its animation (movable content into another container, which
+/// attaches its node again), it still ends at its content's size.
+#[test]
+fn moved_half_way_through_it_still_ends_at_its_contents_size() {
+    let (expanded, at_a) = (mutable_state_of(false), mutable_state_of(true));
+    let size = Rc::new(Cell::new(IntSize::ZERO));
+    let (e, a, s) = (expanded.handle(), at_a.handle(), size.clone());
+    let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+        let s = s.clone();
+        let animated = remember(move || {
+            movable_content_of(move || {
+                Box!(
+                    modifier = Modifier
+                        .wrap_content_size()
+                        .then(noting_size(None, s.clone()))
+                        .animate_content_size_with(
+                            tween(DURATION).easing(LINEAR_EASING),
+                            Alignment::TOP_START,
+                            None::<fn(_, _)>,
+                        ),
+                    {
+                        let side = if e.get() { 200 } else { 100 };
+                        Box!(modifier = Modifier.required_size(side.dp()));
+                    }
+                );
+            })
+        });
+        Box!(modifier = Modifier.size(300.dp()), move |_| {
+            let (in_a, in_b) = (animated.clone(), animated.clone());
+            Box!(modifier = Modifier.offset_with(|_| compose_ui::IntOffset::ZERO), move |_| {
+                if a.get() {
+                    in_a();
+                }
+            });
+            let to_b = Modifier.offset_with(|_| compose_ui::IntOffset::new(100, 100));
+            Box!(modifier = to_b, move |_| {
+                if !a.get() {
+                    in_b();
+                }
+            });
+        });
+    });
+    ui.wait_for_idle();
+    ui.set_auto_advance(false);
+    expanded.set(true);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_millis(u64::from(DURATION / 2)));
+    ui.wait_for_idle();
+    assert_eq!(size.get(), IntSize::new(150, 150));
+    // Moved: its node is attached again; let the animation run out.
+    at_a.set(false);
+    ui.set_auto_advance(true);
+    ui.wait_for_idle();
+    assert_eq!(size.get(), IntSize::new(200, 200));
 }
