@@ -286,7 +286,6 @@ impl ModifierNode for ThreeDelegatesNode {
 /// them in delegation order (`dispatchForKind`), as the main pass does, after what's inside it
 /// and before what's around it; by both cancels (D2120).
 #[test]
-#[ignore = "review: a cancel tells a delegating node's pointer input delegates last delegate first"]
 fn a_delegating_nodes_delegates_cancel_in_delegation_order() {
     for one in [false, true] {
         let log = Log::default();
@@ -454,7 +453,6 @@ fn a_node_leaving_mid_gesture_cancels_what_was_below_it() {
 /// forgot it), and its path is kept as a press's: its drag past the node and the next cancel still
 /// reach the node, and its release ends it (D2121).
 #[test]
-#[ignore = "review: a pointer held through a cancel is hit tested at each move, uncaptured, so its drag past the node and its release don't reach it"]
 fn a_pointer_down_through_a_cancel_keeps_the_path_it_comes_down_on_again() {
     for one in [false, true] {
         let log = Log::default();
