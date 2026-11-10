@@ -233,6 +233,27 @@ fn click_press_in_release_out() {
     );
 }
 
+/// Cancelling a mouse press (`MouseInjectionScope::cancel`) forgets the hover on the cancelled
+/// path, so the next unpressed move inside the box enters it again (`D2435`).
+#[test]
+#[ignore = "review: cancel_pointer leaves cancelled entries in hovered so MouseInjectionScope::cancel followed by move_to inside sends Move instead of Enter"]
+fn cancel_then_move_inside_reenters() {
+    let heard = run(|mouse| {
+        mouse.move_to(IN);
+        mouse.press(MouseButton::Primary);
+        mouse.cancel();
+        mouse.move_to(MOVE1);
+    });
+    assert_eq!(
+        summaries(&heard),
+        [
+            (T, Enter, false, IN, NONE),
+            (T, Press, true, IN, PRIMARY),
+            (3 * T, Enter, false, MOVE1, NONE),
+        ]
+    );
+}
+
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_twoButtons_symmetric
 /// A second button pressed and released keeps the pointer down: a `Press` and a `Release` of
 /// their own, where Compose's box hears moves telling the buttons (as the trackpad's test).
