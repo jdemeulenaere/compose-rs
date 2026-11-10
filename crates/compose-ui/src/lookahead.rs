@@ -183,9 +183,11 @@ impl UiTree {
                 self.lookahead_used = true;
                 self.invalidate_layout_of(node);
             }
-            (None, Some(_)) => {
-                // Composed out of any scope: unless it's under one, as what a subcomposition
-                // emits may be, it's out of it.
+            (None, Some(state)) => {
+                // Composed out of any scope: clear the explicit scope id so content moved out of a
+                // `LookaheadScope` under an approach's own root (or a subcomposition) doesn't keep
+                // its old id; if its parent isn't in lookahead either, drop the state altogether.
+                state.scope = 0;
                 let parent = value.parent;
                 let under_a_scope = parent
                     .and_then(|parent| self.get(parent))
@@ -202,10 +204,14 @@ impl UiTree {
     /// An approach layout's come to `node`: out of any scope, it looks ahead for itself.
     pub(crate) fn approach_attached(&mut self, node: NodeId) {
         let value = self.node_mut(node);
-        if value.lookahead.is_none() {
-            value.lookahead = Some(Box::new(LookaheadState::new(OWN_ROOT)));
-            self.lookahead_used = true;
-            self.invalidate_layout_of(node);
+        match &mut value.lookahead {
+            Some(state) if state.scope == 0 => state.scope = OWN_ROOT,
+            Some(_) => {}
+            None => {
+                value.lookahead = Some(Box::new(LookaheadState::new(OWN_ROOT)));
+                self.lookahead_used = true;
+                self.invalidate_layout_of(node);
+            }
         }
     }
 
@@ -275,6 +281,12 @@ impl UiTree {
             return;
         }
         let state = self.node(node).lookahead.as_ref().expect("a root has it");
+        if state.scope == 0 {
+            // A plain wrapper moved out of a lookahead subtree without recomposing (`None` to
+            // `None`): drop its leftover state so any `OWN_ROOT` child below becomes its own root.
+            self.node_mut(node).lookahead = None;
+            return;
+        }
         if state.constraints == Some(constraints)
             && !state.needs_measure
             && !state.subtree_needs_measure
@@ -321,6 +333,10 @@ impl UiTree {
             return;
         }
         let state = self.node(node).lookahead.as_ref().expect("a root has it");
+        if state.scope == 0 {
+            self.node_mut(node).lookahead = None;
+            return;
+        }
         if !state.needs_placement && !state.subtree_needs_placement {
             return;
         }
@@ -342,6 +358,10 @@ impl UiTree {
         value: i32,
     ) -> Option<i32> {
         if self.in_lookahead || !self.is_outermost_lookahead_root(node) {
+            return None;
+        }
+        if self.node(node).lookahead.as_ref().is_some_and(|state| state.scope == 0) {
+            self.node_mut(node).lookahead = None;
             return None;
         }
         self.node_mut(node).intrinsics_asked = true;
@@ -492,20 +512,23 @@ impl LookaheadScope {
         placement: &PlacementScope<'_>,
     ) -> Option<LayoutCoordinates> {
         if self.id == OWN_ROOT {
-            // An approach looking ahead for itself is its own root: its coordinates, as
-            // `lookaheadRoot.outerCoordinator`.
+            // An approach out of any `LookaheadScope` shares the outermost such approach ancestor
+            // as its root (`LayoutNode.lookaheadRoot`), its coordinates layer 0
+            // (`lookaheadRoot.outerCoordinator`).
             return placement
                 .own_coordinates()
                 .read_lookahead(|tree, node, _| {
                     let mut current = Some(node);
+                    let mut outermost = None;
                     while let Some(at) = current {
                         let value = tree.node(at);
-                        if value.lookahead.as_ref().is_some_and(|state| state.scope == OWN_ROOT) {
-                            return Some(tree.coordinates_of_layer(at, 0));
+                        let Some(state) = value.lookahead.as_ref() else { break };
+                        if state.scope == OWN_ROOT {
+                            outermost = Some(at);
                         }
-                        current = value.parent;
+                        current = (!value.overlay).then_some(value.parent).flatten();
                     }
-                    None
+                    outermost.map(|at| tree.coordinates_of_layer(at, 0))
                 })
                 .flatten();
         }
@@ -641,7 +664,9 @@ impl ApproachMeasureScope<'_, '_> {
         while let Some(node) = current {
             let value = tree.node(node);
             match value.lookahead.as_ref().map(|state| state.scope) {
-                Some(0) => current = value.parent,
+                Some(0 | OWN_ROOT) => {
+                    current = (!value.overlay).then_some(value.parent).flatten();
+                }
                 Some(id) => return LookaheadScope { id },
                 None => break,
             }

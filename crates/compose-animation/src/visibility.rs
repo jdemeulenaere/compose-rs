@@ -17,11 +17,11 @@ use compose_runtime::{
 };
 use compose_ui::{
     Alignment, Color, ColumnScope, Constraints, DrawModifierNode, DrawScope, HorizontalAlignment,
-    IntOffset, IntSize, LayoutAwareModifierNode, LayoutCoordinates, LayoutDirection,
-    LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
-    ModifierLocal, ModifierLocalMap, ModifierLocalModifierNode, ModifierNode, ModifierNodeElement,
-    NodeContext, Paint, RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin,
-    VerticalAlignment,
+    IntOffset, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope, LayoutAwareModifierNode,
+    LayoutCoordinates, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ModifierLocal, ModifierLocalMap,
+    ModifierLocalModifierNode, ModifierNode, ModifierNodeElement, NodeContext, Paint,
+    RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin, VerticalAlignment,
 };
 
 use crate::deferred::{MutableTransform, SharedMutableTransformState};
@@ -1007,6 +1007,42 @@ impl MeasurePolicy for EnterExitMeasurePolicy {
         scope.layout(size.width, size.height)
     }
 
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
     fn debug_name(&self) -> &'static str {
         "AnimatedEnterExit"
     }
@@ -1840,5 +1876,42 @@ impl LayoutModifierNode for EnterExitNode {
         let at = aligned + slide + offset_delta;
         scope.place(&placeable, at.x, at.y);
         scope.layout(size.width, size.height)
+    }
+
+    // Its content's, as Compose's `LayoutModifierNodeWithPassThroughIntrinsics`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }

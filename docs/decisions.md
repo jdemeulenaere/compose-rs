@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 186 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 480 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 482 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 159 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 122 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 34 |
@@ -1163,8 +1163,10 @@ The log is split by area into the files below, one table each, rows in number or
 | D2201 | [runtime](decisions/runtime.md#d2201) | current |
 | D2210 | [text](decisions/text.md#d2210) | current |
 | D2340 | [ui-and-layout](decisions/ui-and-layout.md#d2340) | current |
-| D2341 | [ui-and-layout](decisions/ui-and-layout.md#d2341) | current |
+| D2341 | [ui-and-layout](decisions/ui-and-layout.md#d2341) | revised by [D2420](decisions/ui-and-layout.md#d2420) |
 | D2350 | [ui-and-layout](decisions/ui-and-layout.md#d2350) | current |
 | D2351 | [ui-and-layout](decisions/ui-and-layout.md#d2351) | current |
 | D2352 | [ui-and-layout](decisions/ui-and-layout.md#d2352) | current |
 | D2353 | [ui-and-layout](decisions/ui-and-layout.md#d2353) | current |
+| D2420 | [ui-and-layout](decisions/ui-and-layout.md#d2420) | current |
+| D2421 | [ui-and-layout](decisions/ui-and-layout.md#d2421) | current |

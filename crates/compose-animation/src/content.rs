@@ -16,9 +16,9 @@ use compose_runtime::{
 use std::hash::{Hash, Hasher};
 
 use compose_ui::{
-    Alignment, Constraints, IntOffset, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection,
-    LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
-    ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
+    Alignment, Constraints, IntOffset, IntSize, IntrinsicMeasurable, IntrinsicMeasureScope,
+    LOCAL_LAYOUT_DIRECTION, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
 };
 
 use crate::deferred::MutableContentTransform;
@@ -935,6 +935,42 @@ impl<T: PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
         scope.layout(size.width, size.height)
     }
 
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.min_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_width(m, height)).max().unwrap_or(0)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        measurables.iter().map(|&m| scope.max_intrinsic_height(m, width)).max().unwrap_or(0)
+    }
+
     fn debug_name(&self) -> &'static str {
         "AnimatedContent"
     }
@@ -1090,5 +1126,42 @@ impl<T: Clone + PartialEq + 'static> LayoutModifierNode for SizeNode<T> {
         let at = self.root.content_alignment.get().align(current, size, LayoutDirection::Ltr);
         scope.place_at(&placeable, at);
         scope.layout(size.width, size.height)
+    }
+
+    // Its content's, as Compose's `LayoutModifierNodeWithPassThroughIntrinsics`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }
