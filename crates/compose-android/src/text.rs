@@ -1577,4 +1577,41 @@ mod tests {
         assert_eq!(runs[0].2, blue);
         assert_eq!(runs[1].2, blue);
     }
+
+    // Review of D2180: a span's transparent background clears the text style's on its run, as
+    // Compose's `BackgroundColorSpan(0)` leaves Android's `bgColor` 0; a resolved style's
+    // transparent background sends none (Kotlin sets no span for 0).
+    #[test]
+    fn review_a_transparent_span_background_sends_none_for_its_run() {
+        let blue = Color::from_argb(0xFF00_00FF);
+        let style = TextStyle { background: blue, ..TextStyle::DEFAULT };
+        let spanned = AnnotatedString::build(|builder| {
+            builder.with_style(
+                compose_ui::SpanStyle {
+                    background: Color::TRANSPARENT,
+                    ..compose_ui::SpanStyle::DEFAULT
+                },
+                |builder| {
+                    builder.append("ab");
+                },
+            );
+            builder.append("cd");
+        });
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        measurer.layout_annotated(
+            &spanned,
+            &style,
+            TextLayoutOptions::default(),
+            Constraints::unbounded(),
+            &Density::new(1.0),
+        );
+        let request = measurer.backend.requests.remove(0);
+        // The base style's background, then two runs, each ending with its background.
+        assert_eq!(u32_at(&request, PLAIN_REQUEST - 12), blue.to_argb());
+        let runs = paint_free_runs(&spanned, &style);
+        assert_eq!(runs.iter().map(|run| run.2).collect::<Vec<_>>(), [Color::TRANSPARENT, blue]);
+        let resolved =
+            TextStyle::resolve_defaults(&TextStyle::DEFAULT, compose_ui::LayoutDirection::Ltr);
+        assert_eq!(u32_at(&request_of(&resolved), PLAIN_REQUEST - 12), 0);
+    }
 }
