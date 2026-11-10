@@ -306,7 +306,15 @@ impl Brush {
     /// blendMode)`: each made a shader for the drawing's size (a solid color a vertical gradient
     /// of that color), blended as `CompositeShader`.
     pub fn composite(dst: Brush, src: Brush, blend_mode: BlendMode) -> Brush {
-        Brush::Shader(ShaderBrush::of(ShaderBrushKind::Composite { dst, src, blend_mode }))
+        let to_shader_brush = |brush: Brush| match brush {
+            Brush::Solid(color) => Brush::vertical_gradient([color, color]),
+            other => other,
+        };
+        Brush::Shader(ShaderBrush::of(ShaderBrushKind::Composite {
+            dst: to_shader_brush(dst),
+            src: to_shader_brush(src),
+            blend_mode,
+        }))
     }
 
     /// The size it has of its own, as `Brush.intrinsicSize`: a linear gradient's span (NaN on
@@ -365,11 +373,15 @@ impl Brush {
     }
 
     /// Resolves any dynamic [`CustomShaderBrush`] at `size` into a fixed shader brush, leaving
-    /// non-dynamic brushes as they are.
+    /// non-dynamic brushes as they are; over an empty or partial-NaN size, skips `create_shader`
+    /// as `ShaderBrushSpan` / `ShaderBrush.applyTo` (D2430, D2433).
     #[doc(hidden)]
     pub fn resolved_at(&self, size: Size) -> Brush {
         match self {
-            Brush::Shader(brush) if brush.is_dynamic() => Brush::Shader(brush.resolved_at(size)),
+            Brush::Shader(brush) if brush.is_dynamic() => match brush.resolved_at(size) {
+                Some(resolved) => Brush::Shader(resolved),
+                None => Brush::Solid(Color::BLACK.with_alpha(brush.alpha)),
+            },
             _ => self.clone(),
         }
     }
@@ -392,8 +404,8 @@ impl Brush {
     /// spanning every paragraph of a text, D2052).
     pub(crate) fn placed(&self, size: Size, origin: Offset) -> Brush {
         let point = |offset: Offset| {
-            let x = if offset.x.is_infinite() { size.width } else { offset.x };
-            let y = if offset.y.is_infinite() { size.height } else { offset.y };
+            let x = if offset.x == f32::INFINITY { size.width } else { offset.x };
+            let y = if offset.y == f32::INFINITY { size.height } else { offset.y };
             Offset::new(x + origin.x, y + origin.y)
         };
         let center = |center: Offset| {
@@ -411,19 +423,19 @@ impl Brush {
             Brush::Radial { gradient, center: at, radius } => Brush::Radial {
                 gradient: gradient.clone(),
                 center: center(*at),
-                radius: if radius.is_infinite() {
-                    size.width.min(size.height) / 2.0
-                } else {
-                    *radius
-                },
+                radius: if *radius == f32::INFINITY { size.min_dimension() / 2.0 } else { *radius },
             },
             Brush::Sweep { gradient, center: at } => {
                 Brush::Sweep { gradient: gradient.clone(), center: center(*at) }
             }
-            Brush::Shader(brush) => Brush::Shader(ShaderBrush {
-                alpha: 1.0,
-                ..ShaderBrush::of(ShaderBrushKind::Placed { brush: brush.clone(), size, origin })
-            }),
+            Brush::Shader(brush) => {
+                let mut unscaled = brush.clone();
+                unscaled.alpha = 1.0;
+                Brush::Shader(ShaderBrush {
+                    alpha: brush.alpha,
+                    ..ShaderBrush::of(ShaderBrushKind::Placed { brush: unscaled, size, origin })
+                })
+            }
         }
     }
 
@@ -435,7 +447,7 @@ impl Brush {
         match self {
             Brush::Solid(_) => None,
             Brush::Shader(brush) => brush.paint_shader(size, origin, alpha),
-            _ if size.is_empty() => None,
+            _ if !has_non_empty_area(size) => None,
             gradient => Some(PaintShader {
                 shader: gradient.gradient_shader(size)?.moved(origin),
                 transform: None,
@@ -645,6 +657,12 @@ struct ShaderBrushState {
     created: Option<(Size, Shader)>,
 }
 
+/// Both sides strictly positive (false when zero, negative, unspecified, or partially NaN).
+#[inline]
+fn has_non_empty_area(size: Size) -> bool {
+    size.width > 0.0 && size.height > 0.0
+}
+
 impl ShaderBrush {
     fn of(kind: ShaderBrushKind) -> ShaderBrush {
         let inner = ShaderBrushInner { kind, state: RefCell::new(ShaderBrushState::default()) };
@@ -712,26 +730,31 @@ impl ShaderBrush {
     }
 
     /// Resolves a dynamic [`ShaderBrush`] at `size` into a fixed [`ShaderBrush`], bypassing its
-    /// size cache so state reads happen inside `create_shader`.
+    /// size cache so state reads happen inside `create_shader`; `None` when `size` is empty or
+    /// partially NaN.
     #[doc(hidden)]
-    pub fn resolved_at(&self, size: Size) -> ShaderBrush {
+    pub fn resolved_at(&self, size: Size) -> Option<ShaderBrush> {
         if let ShaderBrushKind::Placed { brush, size, origin } = &self.inner.kind {
-            return ShaderBrush {
+            let resolved = brush.resolved_at(*size)?;
+            return Some(ShaderBrush {
                 alpha: self.alpha,
                 ..ShaderBrush::of(ShaderBrushKind::Placed {
-                    brush: brush.resolved_at(*size),
+                    brush: resolved,
                     size: *size,
                     origin: *origin,
                 })
-            };
+            });
+        }
+        if !has_non_empty_area(size) {
+            return None;
         }
         if !self.is_dynamic() {
-            return self.clone();
+            return Some(self.clone());
         }
         let mut resolved = ShaderBrush::new(self.create_shader(size));
         resolved.alpha = self.alpha;
         resolved.set_transform(self.transform());
-        resolved
+        Some(resolved)
     }
 
     /// Its shader for a drawing of `size`, made anew, as `createShader(size)`.
@@ -754,7 +777,7 @@ impl ShaderBrush {
         if let ShaderBrushKind::Placed { brush, size, origin: by } = &self.inner.kind {
             return brush.paint_shader(*size, origin + *by, alpha);
         }
-        if size.is_empty() {
+        if !has_non_empty_area(size) {
             self.state_mut().created = None;
             return None;
         }
@@ -796,7 +819,9 @@ impl PartialEq for ShaderBrush {
                 ShaderBrushKind::Composite { dst: da, src: sa, blend_mode: ma },
                 ShaderBrushKind::Composite { dst: db, src: sb, blend_mode: mb },
             ) => da == db && sa == sb && ma == mb && self.transform() == other.transform(),
-            (ShaderBrushKind::Custom(a), ShaderBrushKind::Custom(b)) => a.same(&**b),
+            (ShaderBrushKind::Custom(a), ShaderBrushKind::Custom(b)) => {
+                a.same(&**b) && self.transform() == other.transform()
+            }
             (
                 ShaderBrushKind::Placed { brush: a, size: sa, origin: oa },
                 ShaderBrushKind::Placed { brush: b, size: sb, origin: ob },

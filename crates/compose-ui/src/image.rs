@@ -150,7 +150,25 @@ impl ImageBitmap {
         has_alpha: bool,
         color_space: &ColorSpace,
     ) -> ImageBitmap {
-        let pixels = vec![0; width as usize * height as usize * config.bytes_per_pixel()].into();
+        let mut raw = vec![0u8; width as usize * height as usize * config.bytes_per_pixel()];
+        if !has_alpha {
+            // As Android's `Bitmap.createBitmap` (`nativeErase(0xff000000)`): opaque 32-bit and
+            // F16 bitmaps start as opaque black so untouched pixels carry alpha 1.0.
+            match config {
+                ImageBitmapConfig::Argb8888 | ImageBitmapConfig::Gpu => {
+                    for chunk in raw.chunks_exact_mut(4) {
+                        chunk[3] = 255;
+                    }
+                }
+                ImageBitmapConfig::F16 => {
+                    for chunk in raw.chunks_exact_mut(8) {
+                        chunk[6..8].copy_from_slice(&0x3c00u16.to_le_bytes());
+                    }
+                }
+                ImageBitmapConfig::Alpha8 | ImageBitmapConfig::Rgb565 => {}
+            }
+        }
+        let pixels = raw.into();
         let drawing = Drawing { pixels, pending: Default::default(), open: None };
         let drawable = Drawable {
             drawing: Mutex::new(drawing),

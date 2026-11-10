@@ -75,7 +75,14 @@ object ComposeRsImages {
         val h = height.coerceAtLeast(1)
         return when (config) {
             1 -> Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
-            2 -> Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+            2 -> Bitmap.createBitmap(
+                null,
+                w,
+                h,
+                Bitmap.Config.RGB_565,
+                false,
+                colorSpaceOf(colorSpaceId),
+            )
             3 -> Bitmap.createBitmap(
                 null,
                 w,

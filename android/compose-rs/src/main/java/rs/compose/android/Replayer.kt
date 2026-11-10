@@ -568,7 +568,7 @@ internal class Replayer(
             // Where the frame's records and operations start: after its resource changes and its
             // `LAYERS` section.
             if (!layersRetired && hardware && !recordingAhead && recordingGroup == null &&
-                tag != LAYERS && (tag < DEFINE_PATH || tag > DROP_IMAGE)
+                tag != LAYERS && tag != DEFINE_IMAGE_WITH && (tag < DEFINE_PATH || tag > DROP_IMAGE)
             ) {
                 retireLayers(buffer, buffer.position() - 1)
             }
@@ -992,6 +992,7 @@ internal class Replayer(
                     DEFINE_PATH -> definePath(buffer)
                     DROP_PATH -> dropPath(buffer.getInt())
                     DEFINE_IMAGE -> defineImage(buffer)
+                    DEFINE_IMAGE_WITH -> defineImageWith(buffer)
                     DROP_IMAGE -> {
                         val id = buffer.getInt()
                         images.get(id)?.recycle()

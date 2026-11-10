@@ -55,7 +55,7 @@ fn adopt(op: &mut DrawOp, from: Tables<'_>, into: &mut DisplayList) {
     if let Some(paint) = op.paint_mut()
         && let Some(shader) = paint.shader
     {
-        paint.shader = Some(into.push_shader(from.0[shader.index()].clone()));
+        paint.shader = Some(into.push_shader(from.0[shader.index()].snapshot()));
     }
     if let Some(filter) = op.color_filter_mut()
         && let Some(index) = *filter

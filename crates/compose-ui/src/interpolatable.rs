@@ -61,7 +61,9 @@ pub fn lerp(start: Option<Interpolant<'_>>, stop: Option<Interpolant<'_>>, t: f3
     let equal = match (start, stop) {
         (None, None) => true,
         (Some(a), Some(b)) => {
-            std::ptr::addr_eq(a.as_any(), b.as_any())
+            (std::mem::size_of_val(a.as_any()) > 0
+                && Any::type_id(a.as_any()) == Any::type_id(b.as_any())
+                && std::ptr::addr_eq(a.as_any(), b.as_any()))
                 || matches!(a, Interpolant::Interpolatable(a) if a.equals(b.as_any()))
         }
         _ => false,
