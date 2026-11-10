@@ -38,6 +38,7 @@ mod review_multi_paragraph_2;
 mod review_rtl;
 mod review_skia;
 mod review_text;
+mod review_text_style;
 mod sample_font;
 mod selection_handles;
 mod shadows;

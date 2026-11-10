@@ -1815,4 +1815,34 @@ mod tests {
         assert_eq!(f32_at(request, r1_attrs + 5), 0.25);
         assert_eq!(f32_at(request, r1_attrs + 9), -0.5);
     }
+
+    #[test]
+    #[ignore = "review: non-finite scale_x encodes NaN letter spacing in Android request"]
+    fn review_zero_and_non_finite_scale_x_encode_finite_letter_spacing() {
+        use compose_ui::{TextGeometricTransform, UnitExt};
+        let zero_em = TextStyle {
+            font_size: 20.0.sp(),
+            letter_spacing: 2.0.em(),
+            text_geometric_transform: Some(TextGeometricTransform { scale_x: 0.0, skew_x: 0.0 }),
+            ..TextStyle::DEFAULT
+        };
+        let req = request_of(&zero_em);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 0.0);
+
+        let zero_sp = TextStyle { letter_spacing: 5.0.sp(), ..zero_em };
+        let req = request_of(&zero_sp);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 5.0);
+
+        let nan_em = TextStyle {
+            font_size: 20.0.sp(),
+            letter_spacing: 2.0.em(),
+            text_geometric_transform: Some(TextGeometricTransform {
+                scale_x: f32::NAN,
+                skew_x: 0.0,
+            }),
+            ..TextStyle::DEFAULT
+        };
+        let req = request_of(&nan_em);
+        assert_eq!(f32_at(&req, DECORATION_AT - 4), 40.0);
+    }
 }
