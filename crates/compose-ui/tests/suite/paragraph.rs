@@ -1926,3 +1926,60 @@ fn a_text_styles_background_carries_into_its_runs_until_a_span_replaces_it() {
         text.runs(&style).into_iter().map(|(range, _, bg)| (range, bg)).collect();
     assert_eq!(backgrounds, vec![(0..2, blue), (2..4, green), (4..6, blue)]);
 }
+
+#[test]
+fn runs_accumulate_baseline_shift_and_geometric_transforms_and_ignore_inapplicable_shifts() {
+    use compose_ui::{BaselineShift, TextGeometricTransform};
+    let text = AnnotatedString::build(|builder| {
+        builder.with_style(
+            SpanStyle {
+                baseline_shift: Some(BaselineShift::SUBSCRIPT),
+                text_geometric_transform: Some(TextGeometricTransform {
+                    scale_x: 0.5,
+                    skew_x: 0.25,
+                }),
+                ..SpanStyle::DEFAULT
+            },
+            |builder| {
+                builder.with_style(
+                    SpanStyle {
+                        baseline_shift: Some(BaselineShift::SUPERSCRIPT),
+                        text_geometric_transform: Some(TextGeometricTransform {
+                            scale_x: 3.0,
+                            skew_x: 0.5,
+                        }),
+                        ..SpanStyle::DEFAULT
+                    },
+                    |builder| {
+                        builder.append("ab");
+                    },
+                );
+                builder.with_style(
+                    SpanStyle { baseline_shift: Some(BaselineShift::NONE), ..SpanStyle::DEFAULT },
+                    |builder| {
+                        builder.append("cd");
+                    },
+                );
+                builder.with_style(
+                    SpanStyle {
+                        baseline_shift: Some(BaselineShift(f32::INFINITY)),
+                        ..SpanStyle::DEFAULT
+                    },
+                    |builder| {
+                        builder.append("ef");
+                    },
+                );
+            },
+        );
+    });
+    let base = TextStyle { font_size: 20.0.sp(), ..TextStyle::DEFAULT };
+    let runs = text.runs(&base);
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[0].1.baseline_shift, None);
+    assert_eq!(
+        runs[0].1.text_geometric_transform,
+        Some(TextGeometricTransform { scale_x: 1.5, skew_x: 0.75 })
+    );
+    assert_eq!(runs[1].1.baseline_shift, Some(BaselineShift::SUBSCRIPT));
+    assert_eq!(runs[2].1.baseline_shift, Some(BaselineShift::SUBSCRIPT));
+}

@@ -164,6 +164,15 @@ impl TextStyle {
         }
     }
 
+    /// Whether lines make room for the font's tallest glyphs, as Compose's Android
+    /// `isIncludeFontPaddingEnabled`: its platform paragraph style's, false by default. Only
+    /// Android's measurer honours it, as Compose Desktop has none (D2306).
+    pub fn is_include_font_padding_enabled(&self) -> bool {
+        self.platform_style
+            .and_then(|platform| platform.paragraph_style)
+            .is_some_and(|paragraph| paragraph.include_font_padding)
+    }
+
     /// What the text is painted with: the brush if there's one, else the color.
     pub fn foreground(&self) -> TextForegroundStyle {
         TextForegroundStyle::of(self.color, self.brush.as_ref(), self.alpha)

@@ -201,8 +201,8 @@ pub mod platform {
     pub use crate::semantics::{SemanticsSnapshot, set_semantics_cache_check};
     pub use crate::text::{
         DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, SharedTextMeasurer,
-        TextLayoutOptions, TextMeasurer, TextPosition, resolve_font_size_px, resolve_text_color,
-        resolve_text_unit_px,
+        TextLayoutOptions, TextMeasurer, TextPosition, font_features, resolve_baseline_shift_px,
+        resolve_font_size_px, resolve_letter_spacing_px, resolve_text_color, resolve_text_unit_px,
     };
     pub use crate::text_measurer::{CacheTextLayoutInput, TextLayoutCache};
     pub use crate::text_toolbar::text_action_modes_of_composing_tree;

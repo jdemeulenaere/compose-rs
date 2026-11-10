@@ -372,13 +372,12 @@ fn draw_op(
             );
         }
         DrawOp::DrawParagraph(handle, offset) => {
-            if let Some(paragraph) = measurer.and_then(|measurer| measurer.skia_paragraph(*handle))
-            {
+            if let Some(measurer) = measurer {
                 // Through the canvas, not `paint`'s offset: a gradient in the paragraph's
                 // paint is in the paragraph's coordinates, wherever it's drawn.
                 canvas.save();
                 canvas.translate((offset.x, offset.y));
-                paragraph.paint(canvas, (0.0, 0.0));
+                measurer.paint_paragraph(*handle, canvas);
                 canvas.restore();
             }
         }

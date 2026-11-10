@@ -788,3 +788,25 @@ fn a_paragraph_s_letter_spacing_in_sp_spaces_its_text_with_or_without_spans() {
         });
     }
 }
+
+#[test]
+fn geometric_scale_x_scales_glyph_widths_and_em_letter_spacing_on_both_stacks() {
+    use compose::ui::TextGeometricTransform;
+    let scaled = TextStyle {
+        text_geometric_transform: Some(TextGeometricTransform { scale_x: 0.5, skew_x: 0.0 }),
+        ..style()
+    };
+    styled_on_each_stack(&"abc".into(), scaled.clone(), |stack, paragraph| {
+        assert_eq!(paragraph.max_intrinsic_width(), 30.0, "{stack}");
+        assert_eq!(paragraph.height(), 20.0, "{stack}");
+        assert_eq!(paragraph.get_bounding_box(1).width(), 10.0, "{stack}");
+    });
+    let scaled_em = TextStyle { letter_spacing: 2.0.em(), ..scaled.clone() };
+    styled_on_each_stack(&"abc".into(), scaled_em, |stack, paragraph| {
+        assert_eq!(paragraph.max_intrinsic_width(), 90.0, "{stack}");
+    });
+    let scaled_sp = TextStyle { letter_spacing: 5.0.sp(), ..scaled };
+    styled_on_each_stack(&"abc".into(), scaled_sp, |stack, paragraph| {
+        assert_eq!(paragraph.max_intrinsic_width(), 45.0, "{stack}");
+    });
+}

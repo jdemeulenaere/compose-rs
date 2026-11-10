@@ -7,12 +7,15 @@ use std::rc::Rc;
 
 use compose::test::basic_measure_font;
 use compose::ui::{
-    AnnotatedRange, BlendMode, Brush, Color, Constraints, Density, DrawScope, DrawStyle, Font,
-    FontFamily, FontLoadingStrategy, FontOptions, FontStyle, FontWeight,
-    LOCAL_FONT_FAMILY_RESOLVER, LocaleList, Offset, Paint, Paragraph, Rect, ResolvedTextDirection,
-    Shadow, SpanStyle, Stroke, StrokeCap, StrokeJoin, TextDecoration, TextDirection, TextOverflow,
-    TextRange, TextStyle, Typeface, TypefaceLoader, UnitExt, paragraph_of_text,
-    platform::{PlatformFontLoader, TextLayoutOptions, TextMeasurer},
+    AnnotatedRange, BaselineShift, BlendMode, Brush, Color, Constraints, Density, DrawScope,
+    DrawStyle, Font, FontFamily, FontLoadingStrategy, FontOptions, FontStyle, FontWeight,
+    LOCAL_FONT_FAMILY_RESOLVER, LocaleList, Offset, Paint, Paragraph, PlatformTextStyle, Rect,
+    ResolvedTextDirection, Shadow, SpanStyle, Stroke, StrokeCap, StrokeJoin, TextDecoration,
+    TextDirection, TextGeometricTransform, TextMotion, TextOverflow, TextRange, TextStyle,
+    Typeface, TypefaceLoader, UnitExt, paragraph_of_text,
+    platform::{
+        FixedFontMetrics, FixedTextMeasurer, PlatformFontLoader, TextLayoutOptions, TextMeasurer,
+    },
 };
 use compose_skia::SkiaTextMeasurer;
 
@@ -944,4 +947,760 @@ fn a_paragraph_in_a_custom_font_paints_the_typeface_its_loader_gives() {
     assert_eq!(loaded, default_paint((120, 50), "abc", sample_style(40.0), vec![], 120));
     let system = TextStyle { font_family: None, ..sample_style(40.0) };
     assert_ne!(loaded, default_paint((120, 50), "abc", system, vec![], 120));
+}
+
+// ---- `AndroidParagraphTest` text-style-model & `FontPaddingTest` ----
+
+fn painted_span(text: &'static str, span: SpanStyle, start: usize, end: usize) -> Picture {
+    default_paint(
+        (200, 80),
+        text,
+        sample_style(40.0),
+        vec![AnnotatedRange::new(span, start, end)],
+        200,
+    )
+}
+
+fn first_painted_y_bounds(
+    picture: &Picture,
+    x_range: std::ops::Range<i32>,
+    height: i32,
+) -> (i32, i32) {
+    let (mut top, mut bottom) = (i32::MAX, i32::MIN);
+    for y in 0..height {
+        for x in x_range.clone() {
+            if picture.pixel(x, y) != Color::WHITE {
+                top = top.min(y);
+                bottom = bottom.max(y);
+            }
+        }
+    }
+    (top, bottom)
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftOnWholeText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftOnPartText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testSpanStyle_baselineShift_appliedAsSpan
+#[test]
+fn baseline_shift_moves_superscript_up_and_subscript_down_for_whole_text_or_spans() {
+    let base = sample_style(40.0);
+    let sup = SpanStyle { baseline_shift: Some(BaselineShift::SUPERSCRIPT), ..SpanStyle::DEFAULT };
+    let sub = SpanStyle { baseline_shift: Some(BaselineShift::SUBSCRIPT), ..SpanStyle::DEFAULT };
+
+    // Whole text in a span matches the paragraph's own `TextStyle`.
+    let whole_sub = painted_span("abcde", sub.clone(), 0, 5);
+    let style_sub = default_paint(
+        (200, 80),
+        "abcde",
+        TextStyle { baseline_shift: Some(BaselineShift::SUBSCRIPT), ..base.clone() },
+        vec![],
+        200,
+    );
+    assert_eq!(whole_sub, style_sub);
+
+    // Partial span: "a" shifted up/down relative to plain "b".
+    let part_sup = painted_span("ab", sup, 0, 1);
+    let (sup_top, sup_bottom) = first_painted_y_bounds(&part_sup, 0..40, 80);
+    let (plain_after_sup_top, plain_after_sup_bottom) =
+        first_painted_y_bounds(&part_sup, 40..80, 80);
+    assert!(sup_top < plain_after_sup_top && sup_bottom < plain_after_sup_bottom);
+
+    let part_sub = painted_span("ab", sub, 0, 1);
+    let (sub_top, sub_bottom) = first_painted_y_bounds(&part_sub, 0..40, 80);
+    let (plain_after_sub_top, plain_after_sub_bottom) =
+        first_painted_y_bounds(&part_sub, 40..80, 80);
+    assert!(sub_top > plain_after_sub_top && sub_bottom > plain_after_sub_bottom);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftTwice_LastOneOnTop
+#[test]
+fn overlapping_baseline_shifts_stack_from_outer_to_inner_and_opposite_shifts_cancel() {
+    let sub = SpanStyle { baseline_shift: Some(BaselineShift::SUBSCRIPT), ..SpanStyle::DEFAULT };
+    let sup = SpanStyle { baseline_shift: Some(BaselineShift::SUPERSCRIPT), ..SpanStyle::DEFAULT };
+    // Subscript across "abcde", Superscript on "abc" cancels to unshifted while "de" stays low.
+    let stacked = default_paint(
+        (200, 80),
+        "abcde",
+        sample_style(40.0),
+        vec![AnnotatedRange::new(sub, 0, 5), AnnotatedRange::new(sup, 0, 3)],
+        200,
+    );
+    let (cancelled_top, cancelled_bottom) = first_painted_y_bounds(&stacked, 0..120, 80);
+    let (remaining_top, remaining_bottom) = first_painted_y_bounds(&stacked, 120..200, 80);
+    assert!(cancelled_top < remaining_top && cancelled_bottom < remaining_bottom);
+
+    // Two positive shifts stack higher than one.
+    let quarter = SpanStyle { baseline_shift: Some(BaselineShift(0.25)), ..SpanStyle::DEFAULT };
+    let doubled = default_paint(
+        (120, 80),
+        "ab",
+        sample_style(40.0),
+        vec![AnnotatedRange::new(quarter.clone(), 0, 2), AnnotatedRange::new(quarter, 0, 1)],
+        120,
+    );
+    let (first_top, _) = first_painted_y_bounds(&doubled, 0..40, 80);
+    let (second_top, _) = first_painted_y_bounds(&doubled, 40..80, 80);
+    assert!(first_top < second_top);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftNone_doesNotAddSpan
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftUnspecified_doesNotAddSpan
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftPositiveInfinity_doesNotAddSpan
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftNegativeInfinity_doesNotAddSpan
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setBaselineShiftCustomZeroMultiplier_doesNotAddSpan
+#[test]
+fn non_applicable_baseline_shifts_leave_text_unshifted() {
+    let plain = default_paint((200, 80), "abcde", sample_style(40.0), vec![], 200);
+    for shift in [
+        BaselineShift::NONE,
+        BaselineShift::UNSPECIFIED,
+        BaselineShift(f32::INFINITY),
+        BaselineShift(f32::NEG_INFINITY),
+        BaselineShift(0.0),
+    ] {
+        let span = SpanStyle { baseline_shift: Some(shift), ..SpanStyle::DEFAULT };
+        assert_eq!(painted_span("abcde", span, 0, 5), plain, "{shift:?}");
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setDefaultTextGeometricTransform
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setTextGeometricTransformWithScaleX
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setTextGeometricTransformWithSkewX
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testSpanStyle_scaleX_appliedOnTextPaint
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testSpanStyle_skewX_appliedOnTextPaint
+#[test]
+fn geometric_transform_scales_and_skews_glyphs_across_styles_and_spans() {
+    let base = sample_style(40.0);
+    let plain = default_paint((240, 50), "abcde", base.clone(), vec![], 240);
+    let default_transform = default_paint(
+        (240, 50),
+        "abcde",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle {
+                text_geometric_transform: Some(TextGeometricTransform::NONE),
+                ..SpanStyle::DEFAULT
+            },
+            0,
+            5,
+        )],
+        240,
+    );
+    assert_eq!(default_transform, plain);
+
+    // scaleX = 0.5 halves glyph widths while preserving height; TextStyle and SpanStyle agree.
+    let half = TextGeometricTransform { scale_x: 0.5, skew_x: 0.0 };
+    let span_half = default_paint(
+        (240, 50),
+        "abcde",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle { text_geometric_transform: Some(half), ..SpanStyle::DEFAULT },
+            0,
+            5,
+        )],
+        240,
+    );
+    let style_half = default_paint(
+        (240, 50),
+        "abcde",
+        TextStyle { text_geometric_transform: Some(half), ..base.clone() },
+        vec![],
+        240,
+    );
+    assert_eq!(span_half, style_half);
+    assert_ne!(span_half, plain);
+    // Five 40 px glyphs scaled by 0.5 end at x = 100, leaving x >= 101 blank.
+    assert!(!span_half.is_empty_from(0, 0) && span_half.is_empty_from(101, 0));
+
+    // skewX slants glyphs horizontally; TextStyle and SpanStyle agree.
+    let skew = TextGeometricTransform { scale_x: 1.0, skew_x: 0.5 };
+    let plain_spaced = default_paint((200, 50), " aa", base.clone(), vec![], 200);
+    let span_skew = default_paint(
+        (200, 50),
+        " aa",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle { text_geometric_transform: Some(skew), ..SpanStyle::DEFAULT },
+            0,
+            3,
+        )],
+        200,
+    );
+    let style_skew = default_paint(
+        (200, 50),
+        " aa",
+        TextStyle { text_geometric_transform: Some(skew), ..base.clone() },
+        vec![],
+        200,
+    );
+    assert_eq!(span_skew, style_skew);
+    assert_ne!(span_skew, plain_spaced);
+    // Positive skewX leans the top of glyph 1 ("a", starting at x=40) leftward into x < 40.
+    assert_ne!(span_skew.pixel(30, 5), Color::WHITE);
+    assert_eq!(plain_spaced.pixel(30, 5), Color::WHITE);
+
+    // Transformed glyphs keep gradients, shadows, and underlines.
+    let gradient = Brush::horizontal_gradient([Color::RED, Color::BLUE]);
+    let brushed = default_paint(
+        (160, 50),
+        "aa",
+        TextStyle {
+            text_geometric_transform: Some(TextGeometricTransform { scale_x: 2.0, skew_x: 0.0 }),
+            text_decoration: Some(TextDecoration::UNDERLINE),
+            shadow: Some(Shadow {
+                color: Color::GREEN,
+                offset: Offset::new(0.0, 10.0),
+                blur_radius: 0.0,
+            }),
+            ..base
+        }
+        .with_brush(Some(gradient), f32::NAN),
+        vec![],
+        160,
+    );
+    assert!(brushed.contains(Color::GREEN));
+    assert!(!brushed.is_empty_from(120, 0));
+}
+
+/// A minimal TTF with a `GSUB` table (`liga`: `'f'+'i'` -> full square; `locl` under `latn`:
+/// `SRB ` maps `'a'` -> top bar, `JAN ` maps `'a'` -> bottom bar), plus a tall variant with twice
+/// the vertical metrics (`ascent`/`descent`).
+fn custom_opentype_font(tall: bool) -> Font {
+    static REGULAR: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    static TALL: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let bytes = if tall { &TALL } else { &REGULAR }.get_or_init(|| {
+        #[derive(Default)]
+        struct T(Vec<u8>);
+        impl T {
+            fn u16(mut self, v: u16) -> Self {
+                self.0.extend_from_slice(&v.to_be_bytes());
+                self
+            }
+            fn i16(self, v: i16) -> Self {
+                self.u16(v as u16)
+            }
+            fn u32(mut self, v: u32) -> Self {
+                self.0.extend_from_slice(&v.to_be_bytes());
+                self
+            }
+            fn zeros(mut self, n: usize) -> Self {
+                self.0.resize(self.0.len() + n, 0);
+                self
+            }
+            fn tag(mut self, tag: &[u8; 4]) -> Self {
+                self.0.extend_from_slice(tag);
+                self
+            }
+        }
+
+        let (asc, desc, win_asc, win_desc): (i16, i16, u16, u16) =
+            if tall { (1600, -400, 2000, 400) } else { (800, -200, 1000, 200) };
+        let glyphs: [(u16, &[(i16, i16)]); 8] = [
+            (500, &[]),
+            (1000, &[(0, desc), (0, asc), (1000, (asc + desc) / 2)]),
+            (1000, &[(0, desc), (0, asc), (1000, (asc + desc) / 2)]),
+            (1000, &[(0, 0), (0, 80), (1000, 80), (1000, 0)]),
+            (1000, &[(0, desc), (0, asc), (1000, asc), (1000, desc)]),
+            (1000, &[(0, asc / 2), (0, asc), (1000, asc), (1000, asc / 2)]),
+            (1000, &[(0, desc), (0, 0), (1000, 0), (1000, desc)]),
+            (1000, &[]),
+        ];
+        let chars: [(u32, u16); 5] = [(0x0A, 7), (0x20, 7), (0x61, 1), (0x66, 2), (0x69, 3)];
+
+        let head = T::default()
+            .u32(0x0001_0000)
+            .u32(0x0001_0000)
+            .u32(0)
+            .u32(0x5F0F_3CF5)
+            .u16(0b11)
+            .u16(1000)
+            .zeros(16)
+            .i16(0)
+            .i16(desc)
+            .i16(1000)
+            .i16(asc)
+            .u16(0)
+            .u16(8)
+            .i16(2)
+            .i16(1)
+            .i16(0)
+            .0;
+        let hhea = T::default()
+            .u32(0x0001_0000)
+            .i16(asc)
+            .i16(desc)
+            .i16(0)
+            .u16(1000)
+            .i16(0)
+            .i16(0)
+            .i16(1000)
+            .i16(1)
+            .zeros(12)
+            .i16(0)
+            .u16(glyphs.len() as u16)
+            .0;
+        let maxp = T::default()
+            .u32(0x0001_0000)
+            .u16(glyphs.len() as u16)
+            .u16(4)
+            .u16(1)
+            .u16(0)
+            .u16(0)
+            .u16(1)
+            .zeros(16)
+            .0;
+        let os2 = T::default()
+            .u16(4)
+            .i16(1000)
+            .u16(400)
+            .u16(5)
+            .u16(0)
+            .zeros(22 + 10 + 16 + 4)
+            .u16(0x40)
+            .u16(0x0A)
+            .u16(0x69)
+            .i16(asc)
+            .i16(desc)
+            .i16(200)
+            .u16(win_asc)
+            .u16(win_desc)
+            .zeros(8 + 4 + 6)
+            .0;
+        let mut hmtx = T::default();
+        for (adv, _) in &glyphs {
+            hmtx = hmtx.u16(*adv).i16(0);
+        }
+        let mut cmap = T::default()
+            .u16(0)
+            .u16(2)
+            .u16(0)
+            .u16(4)
+            .u32(20)
+            .u16(3)
+            .u16(10)
+            .u32(20)
+            .u16(12)
+            .u16(0)
+            .u32(16 + chars.len() as u32 * 12)
+            .u32(0)
+            .u32(chars.len() as u32);
+        for (ch, g) in &chars {
+            cmap = cmap.u32(*ch).u32(*ch).u32(u32::from(*g));
+        }
+        let mut glyf = T::default();
+        let mut loca = T::default().u32(0);
+        let mut end = 0u32;
+        for (_, pts) in &glyphs {
+            if !pts.is_empty() {
+                let start = glyf.0.len();
+                let xs = pts.iter().map(|p| p.0);
+                let ys = pts.iter().map(|p| p.1);
+                glyf = glyf
+                    .i16(1)
+                    .i16(xs.clone().min().unwrap_or(0))
+                    .i16(ys.clone().min().unwrap_or(0))
+                    .i16(xs.max().unwrap_or(0))
+                    .i16(ys.max().unwrap_or(0))
+                    .u16(pts.len() as u16 - 1)
+                    .u16(0);
+                glyf.0.extend(std::iter::repeat_n(1u8, pts.len()));
+                let mut last = 0;
+                for p in *pts {
+                    glyf = glyf.i16(p.0 - last);
+                    last = p.0;
+                }
+                last = 0;
+                for p in *pts {
+                    glyf = glyf.i16(p.1 - last);
+                    last = p.1;
+                }
+                let padded = (glyf.0.len() - start).next_multiple_of(4);
+                glyf.0.resize(start + padded, 0);
+                end = glyf.0.len() as u32;
+            }
+            loca = loca.u32(end);
+        }
+        let label = if tall { "Compose Tall" } else { "Compose Feature" };
+        let enc: Vec<u8> = label.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        let mut name = T::default()
+            .u16(0)
+            .u16(1)
+            .u16(18)
+            .u16(3)
+            .u16(1)
+            .u16(0x409)
+            .u16(1)
+            .u16(enc.len() as u16)
+            .u16(0);
+        name.0.extend_from_slice(&enc);
+        let post = T::default().u32(0x0003_0000).u32(0).i16(-100).i16(50).zeros(20).0;
+
+        // GSUB v1.0:
+        // Header(10): scriptList=10, featureList=62, lookupList=100.
+        let gsub = T::default()
+            .u32(0x0001_0000)
+            .u16(10)
+            .u16(62)
+            .u16(100)
+            // ScriptList (52 bytes, offset 10..62):
+            .u16(1)
+            .tag(b"latn")
+            .u16(8)
+            // Script (at ScriptList+8): default=16, count=2, JAN=24, SRB=34
+            .u16(16)
+            .u16(2)
+            .tag(b"JAN ")
+            .u16(24)
+            .tag(b"SRB ")
+            .u16(34)
+            // DefaultLangSys (8 bytes): feature [0]
+            .u16(0)
+            .u16(0xFFFF)
+            .u16(1)
+            .u16(0)
+            // JAN LangSys (10 bytes): features [0, 2]
+            .u16(0)
+            .u16(0xFFFF)
+            .u16(2)
+            .u16(0)
+            .u16(2)
+            // SRB LangSys (10 bytes): features [0, 1]
+            .u16(0)
+            .u16(0xFFFF)
+            .u16(2)
+            .u16(0)
+            .u16(1)
+            // FeatureList (38 bytes, offset 62..100):
+            .u16(3)
+            .tag(b"liga")
+            .u16(20)
+            .tag(b"locl")
+            .u16(26)
+            .tag(b"locl")
+            .u16(32)
+            .u16(0)
+            .u16(1)
+            .u16(0)
+            .u16(0)
+            .u16(1)
+            .u16(1)
+            .u16(0)
+            .u16(1)
+            .u16(2)
+            // LookupList (at 100): 3 lookups at 8, 40, 62
+            .u16(3)
+            .u16(8)
+            .u16(40)
+            .u16(62)
+            // Lookup 0 (32 bytes): LigatureSubst (type 4) 'f'(2) + 'i'(3) -> glyph 4
+            .u16(4)
+            .u16(0)
+            .u16(1)
+            .u16(8)
+            .u16(1)
+            .u16(8)
+            .u16(1)
+            .u16(14)
+            .u16(1)
+            .u16(1)
+            .u16(2)
+            .u16(1)
+            .u16(4)
+            .u16(4)
+            .u16(2)
+            .u16(3)
+            // Lookup 1 (22 bytes): SingleSubst2 (type 1) 'a'(1) -> glyph 5 (SRB)
+            .u16(1)
+            .u16(0)
+            .u16(1)
+            .u16(8)
+            .u16(2)
+            .u16(8)
+            .u16(1)
+            .u16(5)
+            .u16(1)
+            .u16(1)
+            .u16(1)
+            // Lookup 2 (22 bytes): SingleSubst2 (type 1) 'a'(1) -> glyph 6 (JAN)
+            .u16(1)
+            .u16(0)
+            .u16(1)
+            .u16(8)
+            .u16(2)
+            .u16(8)
+            .u16(1)
+            .u16(6)
+            .u16(1)
+            .u16(1)
+            .u16(1)
+            .0;
+
+        let tables: [(&[u8; 4], Vec<u8>); 11] = [
+            (b"GSUB", gsub),
+            (b"OS/2", os2),
+            (b"cmap", cmap.0),
+            (b"glyf", glyf.0),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx.0),
+            (b"loca", loca.0),
+            (b"maxp", maxp),
+            (b"name", name.0),
+            (b"post", post),
+        ];
+        let checksum = |table: &[u8]| {
+            table.chunks(4).fold(0u32, |sum, word| {
+                let mut pad = [0; 4];
+                pad[..word.len()].copy_from_slice(word);
+                sum.wrapping_add(u32::from_be_bytes(pad))
+            })
+        };
+        let count = tables.len() as u16;
+        let pow = 1u16 << (15 - count.leading_zeros());
+        let mut dir = T::default()
+            .u32(0x0001_0000)
+            .u16(count)
+            .u16(pow * 16)
+            .u16(pow.trailing_zeros() as u16)
+            .u16((count - pow) * 16);
+        let mut offset = 12 + tables.len() * 16;
+        let mut head_offset = 0;
+        let mut body = Vec::new();
+        for (tag, table) in &tables {
+            dir = dir.tag(tag).u32(checksum(table)).u32(offset as u32).u32(table.len() as u32);
+            if *tag == b"head" {
+                head_offset = offset;
+            }
+            body.extend_from_slice(table);
+            let padded = table.len().next_multiple_of(4);
+            body.resize(body.len() + padded - table.len(), 0);
+            offset += padded;
+        }
+        let mut file = dir.0;
+        file.extend_from_slice(&body);
+        let adj = 0xB1B0_AFBAu32.wrapping_sub(checksum(&file));
+        file[head_offset + 8..head_offset + 12].copy_from_slice(&adj.to_be_bytes());
+        file
+    });
+    Font::from_bytes(bytes.as_slice(), FontOptions::default())
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_fontFeatureSetting_setSpanOnText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testSpanStyle_fontFeatureSettings_appliedOnTextPaint
+#[test]
+fn font_feature_settings_shape_whole_paragraphs_and_spans() {
+    let font = custom_opentype_font(false);
+    let base = TextStyle {
+        font_size: 40.0.sp(),
+        font_family: Some(font.to_font_family()),
+        ..TextStyle::DEFAULT
+    };
+    // With default "liga", "fi" forms one 40 px ligature square; with `"liga" 0`, two glyphs (80 px).
+    let ligated = default_paint((160, 50), "fi", base.clone(), vec![], 160);
+    let unligated_style = default_paint(
+        (160, 50),
+        "fi",
+        TextStyle { font_feature_settings: Some("\"liga\" 0".into()), ..base.clone() },
+        vec![],
+        160,
+    );
+    let unligated_span = default_paint(
+        (160, 50),
+        "fi",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle { font_feature_settings: Some("\"liga\" 0".into()), ..SpanStyle::DEFAULT },
+            0,
+            2,
+        )],
+        160,
+    );
+    assert_eq!(unligated_style, unligated_span);
+    assert_ne!(ligated, unligated_span);
+    assert!(ligated.is_empty_from(41, 0));
+    assert!(!unligated_span.is_empty_from(41, 0));
+
+    // Partial span disables ligatures on the first "fi" while keeping the second ligated (total 120 px).
+    let mixed = default_paint(
+        (160, 50),
+        "fifi",
+        base,
+        vec![AnnotatedRange::new(
+            SpanStyle { font_feature_settings: Some("\"liga\" 0".into()), ..SpanStyle::DEFAULT },
+            0,
+            2,
+        )],
+        160,
+    );
+    assert!(!mixed.is_empty_from(81, 0) && mixed.is_empty_from(121, 0));
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLocaleOnWholeText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLocaleOnPartText
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testAnnotatedString_setLocaleTwice_lastOneOverwrite
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, testSpanStyle_locale_appliedOnTextPaint
+#[test]
+fn locale_lists_shape_whole_paragraphs_spans_and_overwriting_inner_spans() {
+    let font = custom_opentype_font(false);
+    let base = TextStyle {
+        font_size: 40.0.sp(),
+        font_family: Some(font.to_font_family()),
+        ..TextStyle::DEFAULT
+    };
+    let sr = LocaleList::from_language_tags("sr");
+    let ja = LocaleList::from_language_tags("ja");
+
+    let default_a = default_paint((120, 50), "aa", base.clone(), vec![], 120);
+    let sr_style = default_paint(
+        (120, 50),
+        "aa",
+        TextStyle { locale_list: Some(sr.clone()), ..base.clone() },
+        vec![],
+        120,
+    );
+    let sr_whole_span = default_paint(
+        (120, 50),
+        "aa",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle { locale_list: Some(sr.clone()), ..SpanStyle::DEFAULT },
+            0,
+            2,
+        )],
+        120,
+    );
+    assert_eq!(sr_style, sr_whole_span);
+    assert_ne!(sr_style, default_a);
+
+    // Partial span: first "a" shaped with "sr" (top bar at y=4), second "a" default (empty at x=75, y=4).
+    let sr_part = default_paint(
+        (120, 50),
+        "aa",
+        base.clone(),
+        vec![AnnotatedRange::new(
+            SpanStyle { locale_list: Some(sr.clone()), ..SpanStyle::DEFAULT },
+            0,
+            1,
+        )],
+        120,
+    );
+    assert_eq!(sr_part.pixel(35, 4), Color::BLACK);
+    assert_eq!(sr_part.pixel(75, 4), Color::WHITE);
+
+    // Later inner span overwrites: "ja" on 0..1 (bottom bar: empty at y=4, black at y=36), "sr" on 1..2.
+    let overwritten = default_paint(
+        (120, 50),
+        "aa",
+        base,
+        vec![
+            AnnotatedRange::new(SpanStyle { locale_list: Some(sr), ..SpanStyle::DEFAULT }, 0, 2),
+            AnnotatedRange::new(SpanStyle { locale_list: Some(ja), ..SpanStyle::DEFAULT }, 0, 1),
+        ],
+        120,
+    );
+    assert_eq!(overwritten.pixel(35, 4), Color::WHITE);
+    assert_eq!(overwritten.pixel(35, 36), Color::BLACK);
+    assert_eq!(overwritten.pixel(75, 4), Color::BLACK);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, textMotionStatic_setsCorrectFlagsOnTextPaint
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, textMotionAnimated_setsCorrectFlagsOnTextPaint
+#[test]
+fn text_motion_switches_between_static_hinted_and_animated_subpixel_rendering() {
+    let static_style = TextStyle {
+        font_size: 15.0.sp(),
+        font_family: Some(FontFamily::SansSerif),
+        text_motion: Some(TextMotion::Static),
+        ..TextStyle::DEFAULT
+    };
+    let animated_style =
+        TextStyle { text_motion: Some(TextMotion::Animated), ..static_style.clone() };
+    let still = default_paint((200, 40), "Hello world 12345", static_style.clone(), vec![], 200);
+    let animated =
+        default_paint((200, 40), "Hello world 12345", animated_style.clone(), vec![], 200);
+    assert_ne!(still, animated);
+
+    // Switching TextMotion on a single measurer updates glyph positions (not stale-cached).
+    let mut measurer = SkiaTextMeasurer::new();
+    let options = TextLayoutOptions::default();
+    let constraints = Constraints::unbounded();
+    let density = Density::new(1.0);
+    let h_still =
+        measurer.layout("Hello world 12345", &static_style, options, constraints, &density);
+    let h_anim =
+        measurer.layout("Hello world 12345", &animated_style, options, constraints, &density);
+    let w_still = measurer.paragraph(h_still).max_intrinsic_width();
+    let w_anim = measurer.paragraph(h_anim).max_intrinsic_width();
+    assert_eq!(w_still.fract(), 0.0, "Static snaps advances: {w_still}");
+    assert_ne!(w_still, w_anim);
+}
+
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/AndroidParagraphTest.kt, withIncludeFontPadding
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, latinIncludeFontPaddingDoesNotAffectLineMetricsSingleLine
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, latinIncludeFontPaddingDoesNotAffectLineMetricsMultiLine
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, latinIncludeFontPaddingDoesNotAffectGetLineForVertical
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, tallIincludeFontPaddingDoesNotAffectLineMetricsSingleLine
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, tallIncludeFontPaddingDoesNotAffectLineMetricsMultiLine
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, tallIncludeFontPaddingDoesNotAffectGetLineForVertical
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, tallTypefaceTextIsTwiceTheHeightOfLatinTypefaceTextSingleLine
+// Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/android/FontPaddingTest.kt, tallTypefaceTextIsTwiceTheHeightOfLatinTypefaceTextMultiLine
+#[test]
+fn font_padding_and_tall_font_metrics_on_skia_and_fixed_measurers() {
+    let latin = custom_opentype_font(false);
+    let tall = custom_opentype_font(true);
+    let layout = |measurer: &mut dyn TextMeasurer, font: &Font, text: &str, include_pad: bool| {
+        let style = TextStyle {
+            font_size: 100.0.sp(),
+            font_family: Some(font.to_font_family()),
+            platform_style: Some(PlatformTextStyle::with_include_font_padding(include_pad)),
+            ..TextStyle::DEFAULT
+        };
+        let handle = measurer.layout(
+            text,
+            &style,
+            TextLayoutOptions::default(),
+            Constraints::new(0, 150, 0, Constraints::INFINITY),
+            &Density::new(1.0),
+        );
+        let paragraph = measurer.paragraph(handle);
+        measurer.release(handle);
+        paragraph
+    };
+
+    // Desktop/Skia has no Android font padding (D2306), so includeFontPadding leaves metrics alone.
+    for (font, single, multi) in [(&latin, "a", "a\na\na"), (&tall, "a", "a\na\na")] {
+        for text in [single, multi] {
+            let mut skia = SkiaTextMeasurer::new();
+            let with_pad = layout(&mut skia, font, text, true);
+            let without_pad = layout(&mut skia, font, text, false);
+            assert_eq!(with_pad.height(), without_pad.height());
+            for line in 0..with_pad.line_count() {
+                assert_eq!(with_pad.get_line_top(line), without_pad.get_line_top(line));
+                assert_eq!(with_pad.get_line_baseline(line), without_pad.get_line_baseline(line));
+                assert_eq!(with_pad.get_line_bottom(line), without_pad.get_line_bottom(line));
+            }
+            let mid = (with_pad.height() / 2.0) as i32 as f32;
+            assert_eq!(
+                with_pad.get_line_for_vertical_position(mid),
+                without_pad.get_line_for_vertical_position(mid)
+            );
+        }
+    }
+
+    // Tall font (ascent 1600, descent -400) has twice the height of Latin (800, -200).
+    for text in ["a", "a\na\na"] {
+        let mut skia = SkiaTextMeasurer::new();
+        let latin_p = layout(&mut skia, &latin, text, false);
+        let tall_p = layout(&mut skia, &tall, text, false);
+        assert_eq!(tall_p.height(), 2.0 * latin_p.height());
+
+        // FixedTextMeasurer uses fixed font metrics rather than the custom font's, while keeping
+        // includeFontPadding a no-op.
+        let mut fixed = FixedTextMeasurer::with_metrics(FixedFontMetrics::SAMPLE_FONT);
+        assert_eq!(
+            layout(&mut fixed, &latin, text, true).height(),
+            layout(&mut fixed, &latin, text, false).height()
+        );
+    }
 }
