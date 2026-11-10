@@ -200,7 +200,7 @@ impl DrawModifierNode for DrawWithCacheNode {
     }
 }
 
-/// `background`'s element and node in one, for a gradient brush.
+/// `background`'s element for a gradient brush.
 #[derive(Clone, PartialEq)]
 pub(crate) struct BackgroundBrushElement {
     pub(crate) brush: crate::brush::Brush,
@@ -208,13 +208,34 @@ pub(crate) struct BackgroundBrushElement {
     pub(crate) alpha: f32,
 }
 
+/// `background`'s node for a gradient brush, as Compose's `BackgroundNode`: its semantics say its
+/// shape, and an unspecified color (a gradient has none), without being its node's bounds
+/// (D2325).
+pub(crate) struct BackgroundBrushNode {
+    brush: crate::brush::Brush,
+    shape: crate::graphics::Shape,
+    alpha: f32,
+    semantics: crate::nodes::BackgroundSemantics,
+}
+
 impl ModifierNodeElement for BackgroundBrushElement {
-    type Node = Self;
-    fn create(&self) -> Self {
-        self.clone()
+    type Node = BackgroundBrushNode;
+    fn create(&self) -> BackgroundBrushNode {
+        BackgroundBrushNode {
+            brush: self.brush.clone(),
+            shape: self.shape.clone(),
+            alpha: self.alpha,
+            semantics: Default::default(),
+        }
     }
-    fn update(&self, node: &mut Self) {
-        *node = self.clone();
+    fn update(&self, node: &mut BackgroundBrushNode) {
+        node.brush = self.brush.clone();
+        node.alpha = self.alpha;
+        node.semantics.set_color(brush_color(&self.brush), self.alpha);
+        if node.shape != self.shape {
+            node.shape = self.shape.clone();
+            node.semantics.shape_changed = true;
+        }
     }
     fn same(&self, other: &Self) -> bool {
         other == self
@@ -224,13 +245,44 @@ impl ModifierNodeElement for BackgroundBrushElement {
     }
 }
 
-impl ModifierNode for BackgroundBrushElement {
+impl ModifierNode for BackgroundBrushNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
+    fn as_semantics(&mut self) -> Option<&mut dyn crate::modifier::SemanticsModifierNode> {
+        Some(self)
+    }
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+    fn auto_invalidated_kinds(&mut self) -> crate::node_chain::NodeKinds {
+        self.semantics.invalidated()
+    }
 }
 
-impl DrawModifierNode for BackgroundBrushElement {
+fn brush_color(brush: &crate::brush::Brush) -> crate::graphics::Color {
+    match brush {
+        crate::brush::Brush::Solid(color) => *color,
+        _ => crate::graphics::Color::UNSPECIFIED,
+    }
+}
+
+impl crate::modifier::SemanticsModifierNode for BackgroundBrushNode {
+    fn apply_semantics(&self, config: &mut crate::semantics::SemanticsConfiguration) {
+        // A solid brush is the color element's (`Modifier::background_of`): a gradient or a
+        // shader has no one color, as `determineBackgroundColor`.
+        self.semantics.apply(config, &self.shape, brush_color(&self.brush), self.alpha);
+    }
+
+    /// Nothing autofill reads (D1688).
+    fn apply_autofill_semantics(&self, _config: &mut crate::semantics::SemanticsConfiguration) {}
+
+    fn is_important_for_bounds(&self) -> bool {
+        false
+    }
+}
+
+impl DrawModifierNode for BackgroundBrushNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let paint = scope.brush_paint(&self.brush, self.alpha, crate::graphics::PaintStyle::Fill);
         let outline =

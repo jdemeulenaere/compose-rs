@@ -239,7 +239,7 @@ fn sized_extended_content(
         compose_runtime::callback(move || {
             Row(
                 Modifier.padding((start, Dp(0.0), end, Dp(0.0))),
-                Arrangement::CENTER.into(),
+                Arrangement::CENTER,
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
             );
@@ -902,7 +902,7 @@ pub fn ExtendedFloatingActionButtonContent(
                         Dp::UNSPECIFIED,
                     ))
                     .padding((20.dp(), Dp(0.0))),
-                Arrangement::CENTER.into(),
+                Arrangement::CENTER,
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
             );

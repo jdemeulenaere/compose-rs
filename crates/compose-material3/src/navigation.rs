@@ -67,7 +67,7 @@ pub fn NavigationBar(
                     .window_insets_padding(window_insets.clone())
                     .default_min_size(Dp::UNSPECIFIED, BAR_HEIGHT)
                     .selectable_group(),
-                Arrangement::spaced_by(8.dp()).into(),
+                Arrangement::spaced_by(8.dp()),
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
             );
@@ -521,7 +521,7 @@ pub fn NavigationRail(
                     .padding((Dp(0.0), 4.dp()))
                     .selectable_group()
                     .semantics(|config| config.set_is_traversal_group(true)),
-                Arrangement::spaced_by(4.dp()).into(),
+                Arrangement::spaced_by(4.dp()),
                 Alignment::CENTER_HORIZONTALLY,
                 compose_runtime::callback(move |column: ColumnScope| {
                     if let Some(header) = header.clone() {

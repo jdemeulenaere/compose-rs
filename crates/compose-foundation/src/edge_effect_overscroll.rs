@@ -599,11 +599,9 @@ impl OverscrollNode for Shared {
         self.invalidate();
         let density = scope.density();
         let padding = self.glow_draw_padding;
-        let (left, right) = if scope.layout_direction() == compose_ui::LayoutDirection::Rtl {
-            (padding.end, padding.start)
-        } else {
-            (padding.start, padding.end)
-        };
+        let direction = scope.layout_direction();
+        let (left, right) =
+            (padding.calculate_left_padding(direction), padding.calculate_right_padding(direction));
         self.stamp.set(self.stamp.get().wrapping_add(1));
         self.drawing.set(true);
         scope.begin_edge_effects(

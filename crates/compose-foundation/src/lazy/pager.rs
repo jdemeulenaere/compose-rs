@@ -10,7 +10,8 @@
 //! `calculateNewMaxScrollOffset`) are the list's own.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 use std::task::{Poll, Waker};
 
 use compose_animation::{
@@ -1492,13 +1493,24 @@ fn Pager(
             };
             match &key {
                 Some(key) => {
-                    // Each page's key asked once, as `NearestRangeKeyIndexMap` keeps them.
-                    let key = key.clone();
-                    let known = RefCell::new(std::collections::HashMap::new());
-                    let keyed = move |index: usize| {
-                        *known.borrow_mut().entry(index).or_insert_with(|| key(index))
-                    };
-                    scope.items_keyed(count, keyed, item);
+                    if let Some(provider) = find_pager_key_provider(key) {
+                        scope.items_keyed_provider(
+                            count,
+                            Rc::new(CachedHashKeyProvider {
+                                inner: provider,
+                                hashes: RefCell::new(HashMap::new()),
+                            }),
+                            item,
+                        );
+                    } else {
+                        // Each page's key asked once, as `NearestRangeKeyIndexMap` keeps them.
+                        let key = key.clone();
+                        let known = RefCell::new(HashMap::new());
+                        let keyed = move |index: usize| {
+                            *known.borrow_mut().entry(index).or_insert_with(|| key(index))
+                        };
+                        scope.items_keyed(count, keyed, item);
+                    }
                 }
                 None => scope.items(count, item),
             }
@@ -1608,16 +1620,65 @@ fn drag_direction_detector(state: PagerState) -> Modifier {
     })
 }
 
+type PagerKeyEntry = (Weak<dyn Fn(usize) -> u64>, Weak<dyn super::KeyProvider>);
+
+thread_local! {
+    static PAGER_KEYS: RefCell<HashMap<usize, PagerKeyEntry>> = RefCell::new(HashMap::new());
+}
+
+/// Remembers each page's hashed key once while keeping the typed [`KeyProvider`](super::KeyProvider)
+/// for exact `IndexForKey` matching.
+struct CachedHashKeyProvider {
+    inner: Rc<dyn super::KeyProvider>,
+    hashes: RefCell<HashMap<usize, u64>>,
+}
+
+impl super::KeyProvider for CachedHashKeyProvider {
+    fn hash_at(&self, local: usize) -> u64 {
+        *self.hashes.borrow_mut().entry(local).or_insert_with(|| self.inner.hash_at(local))
+    }
+
+    fn matches_type(&self, needle: &dyn std::any::Any) -> bool {
+        self.inner.matches_type(needle)
+    }
+
+    fn equals_at(&self, local: usize, needle: &dyn std::any::Any) -> bool {
+        self.inner.equals_at(local, needle)
+    }
+
+    #[cfg(debug_assertions)]
+    fn full_key_at(&self, local: usize) -> Box<dyn super::DynKey> {
+        self.inner.full_key_at(local)
+    }
+}
+
+fn find_pager_key_provider(key: &Rc<dyn Fn(usize) -> u64>) -> Option<Rc<dyn super::KeyProvider>> {
+    let ptr = Rc::as_ptr(key).cast::<()>() as usize;
+    PAGER_KEYS.with(|map| {
+        let map = map.borrow();
+        let (weak_fn, weak_provider) = map.get(&ptr)?;
+        let live_fn = weak_fn.upgrade()?;
+        Rc::ptr_eq(&live_fn, key).then(|| weak_provider.upgrade()).flatten()
+    })
+}
+
 /// A key of a page from what `key` gives, for `key`.
-pub fn pager_key<K: std::hash::Hash + 'static>(
+pub fn pager_key<K: std::hash::Hash + PartialEq + 'static>(
     key: impl Fn(usize) -> K + 'static,
 ) -> Rc<dyn Fn(usize) -> u64> {
-    Rc::new(move |index| {
-        use std::hash::Hasher;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&key(index), &mut hasher);
-        hasher.finish()
-    })
+    let provider: Rc<dyn super::KeyProvider> = Rc::new(super::TypedKey::new(key));
+    let fn_rc: Rc<dyn Fn(usize) -> u64> = {
+        let provider = provider.clone();
+        Rc::new(move |index| provider.hash_at(index))
+    };
+    let ptr = Rc::as_ptr(&fn_rc).cast::<()>() as usize;
+    let entry = (Rc::downgrade(&fn_rc), Rc::downgrade(&provider));
+    PAGER_KEYS.with(|map| {
+        let mut map = map.borrow_mut();
+        map.retain(|_, (weak_fn, _)| weak_fn.strong_count() > 0);
+        map.insert(ptr, entry);
+    });
+    fn_rc
 }
 
 /// Pages side by side, as Compose's `HorizontalPager`.

@@ -1103,12 +1103,9 @@ pub fn remember_lazy_list_state(
 /// A run of items: their count, keys, content types and content.
 struct Interval {
     count: usize,
-    key: Option<Rc<dyn Fn(usize) -> u64>>,
+    key: Option<Rc<dyn KeyProvider>>,
     /// The items' content types, hashed (`None`: Compose's default `{ null }`).
     content_type: Option<ContentType>,
-    /// The item's full key, to tell a duplicate key from a hash collision (debug builds).
-    #[cfg(debug_assertions)]
-    full_key: Option<FullKey>,
     /// A sticky header (`sticky_header`).
     sticky: bool,
     /// A grid's items' spans (`None`: one cell each, Compose's default).
@@ -1119,13 +1116,66 @@ struct Interval {
 /// An item's content type, hashed, by its index in its interval.
 type ContentType = Rc<dyn Fn(usize) -> u64>;
 
-/// An item's key, by its index in its interval.
-#[cfg(debug_assertions)]
-type FullKey = Rc<dyn Fn(usize) -> Box<dyn DynKey>>;
+/// How an interval reads and compares its items' keys: hashed for slots and layout, and typed for
+/// exact `IndexForKey` matching without allocations.
+pub(super) trait KeyProvider {
+    fn hash_at(&self, local: usize) -> u64;
+    fn matches_type(&self, needle: &dyn std::any::Any) -> bool;
+    fn equals_at(&self, local: usize, needle: &dyn std::any::Any) -> bool;
+    #[cfg(debug_assertions)]
+    fn full_key_at(&self, local: usize) -> Box<dyn DynKey>;
+}
+
+/// A typed key provider, built once per keyed interval.
+pub(super) struct TypedKey<K, F>(pub(super) F, std::marker::PhantomData<fn() -> K>);
+
+impl<K, F> TypedKey<K, F> {
+    pub(super) fn new(key: F) -> Self {
+        Self(key, std::marker::PhantomData)
+    }
+}
+
+fn as_str_key(any: &dyn std::any::Any) -> Option<&str> {
+    any.downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| any.downcast_ref::<&'static str>().copied())
+}
+
+fn is_str_key_type(type_id: std::any::TypeId) -> bool {
+    type_id == std::any::TypeId::of::<String>() || type_id == std::any::TypeId::of::<&'static str>()
+}
+
+impl<K: Hash + PartialEq + 'static, F: Fn(usize) -> K + 'static> KeyProvider for TypedKey<K, F> {
+    fn hash_at(&self, local: usize) -> u64 {
+        hash_key(&(self.0)(local))
+    }
+
+    fn matches_type(&self, needle: &dyn std::any::Any) -> bool {
+        let needle_id = needle.type_id();
+        needle_id == std::any::TypeId::of::<K>()
+            || (is_str_key_type(std::any::TypeId::of::<K>()) && is_str_key_type(needle_id))
+    }
+
+    fn equals_at(&self, local: usize, needle: &dyn std::any::Any) -> bool {
+        let item_key = (self.0)(local);
+        if let Some(expected) = needle.downcast_ref::<K>() {
+            return &item_key == expected;
+        }
+        if let (Some(item_str), Some(expected_str)) = (as_str_key(&item_key), as_str_key(needle)) {
+            return item_str == expected_str;
+        }
+        false
+    }
+
+    #[cfg(debug_assertions)]
+    fn full_key_at(&self, local: usize) -> Box<dyn DynKey> {
+        Box::new((self.0)(local))
+    }
+}
 
 /// A key compared through `dyn Any`, for the debug check of duplicate keys.
 #[cfg(debug_assertions)]
-trait DynKey: std::any::Any {
+pub(super) trait DynKey: std::any::Any {
     fn equals(&self, other: &dyn DynKey) -> bool;
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -1142,16 +1192,7 @@ impl<K: PartialEq + 'static> DynKey for K {
 
 impl Interval {
     fn new(count: usize, content: Rc<dyn Fn(usize)>) -> Interval {
-        Interval {
-            count,
-            key: None,
-            content_type: None,
-            #[cfg(debug_assertions)]
-            full_key: None,
-            sticky: false,
-            span: None,
-            content,
-        }
+        Interval { count, key: None, content_type: None, sticky: false, span: None, content }
     }
 
     /// With the items' content types.
@@ -1165,20 +1206,11 @@ impl Interval {
         key: impl Fn(usize) -> K + 'static,
         content: Rc<dyn Fn(usize)>,
     ) -> Interval {
-        let key = Rc::new(key);
-        Interval {
-            count,
-            #[cfg(debug_assertions)]
-            full_key: Some({
-                let key = key.clone();
-                Rc::new(move |index| Box::new(key(index)) as Box<dyn DynKey>)
-            }),
-            key: Some(Rc::new(move |index| hash_key(&key(index)))),
-            content_type: None,
-            sticky: false,
-            span: None,
-            content,
-        }
+        Self::keyed_with(count, Rc::new(TypedKey::new(key)), content)
+    }
+
+    fn keyed_with(count: usize, key: Rc<dyn KeyProvider>, content: Rc<dyn Fn(usize)>) -> Interval {
+        Interval { count, key: Some(key), content_type: None, sticky: false, span: None, content }
     }
 }
 
@@ -1468,6 +1500,15 @@ impl LazyListScope {
         self.intervals.borrow_mut().push(interval);
     }
 
+    pub(super) fn items_keyed_provider(
+        &self,
+        count: usize,
+        key: Rc<dyn KeyProvider>,
+        content: impl Fn(usize) + 'static,
+    ) {
+        self.push(Interval::keyed_with(count, key, Rc::new(content)));
+    }
+
     /// A sticky header: its key (an interval of one item with the key, its content replaced),
     /// its content type and its content. Not generic: the shims above are.
     fn push_sticky(
@@ -1721,6 +1762,38 @@ impl Items {
         interval.content_type.as_ref().map(|content_type| content_type(local))
     }
 
+    /// The index of the first item whose key equals `needle`, or `-1` if none (Compose's
+    /// `LazyLayoutItemProvider.getIndex`). Exact runtime types match; `String` and `&'static str`
+    /// also match each other so literal and owned string keys interoperate cleanly.
+    pub(super) fn index_of_key(&self, needle: &dyn std::any::Any) -> i32 {
+        let wanted_default = needle.downcast_ref::<u64>().copied();
+        for interval in self.intervals.intervals() {
+            let start = interval.start_index();
+            let count = interval.size();
+            match &interval.value().key {
+                Some(provider) => {
+                    if !provider.matches_type(needle) {
+                        continue;
+                    }
+                    for local in 0..count {
+                        if provider.equals_at(local, needle) {
+                            return i32::try_from(start + local).unwrap_or(i32::MAX);
+                        }
+                    }
+                }
+                None => {
+                    let Some(wanted) = wanted_default else { continue };
+                    for local in 0..count {
+                        if default_key(start + local) == wanted {
+                            return i32::try_from(start + local).unwrap_or(i32::MAX);
+                        }
+                    }
+                }
+            }
+        }
+        -1
+    }
+
     fn key(&self, index: usize) -> u64 {
         let default = || default_key(index);
         let Some(cached) = self.keys.get(index.checked_rem(self.keys.len()).unwrap_or(0)) else {
@@ -1739,7 +1812,7 @@ impl Items {
         // A key function reading state isn't kept: its keys follow the state, read each time
         // (observed by whoever asks), as Compose's key map is a derived state of what they read.
         let reads = compose_runtime::platform::state_reads();
-        let key = key(local);
+        let key = key.hash_at(local);
         if compose_runtime::platform::state_reads() == reads {
             cached.set((index, key));
         }
@@ -1759,7 +1832,7 @@ impl Items {
     fn check_keys(&self, indices: &[usize]) {
         let full_key = |index: usize| -> Box<dyn DynKey> {
             match self.find(index) {
-                Some((Interval { full_key: Some(key), .. }, local)) => key(local),
+                Some((Interval { key: Some(provider), .. }, local)) => provider.full_key_at(local),
                 _ => Box::new(DefaultKey(index)),
             }
         };
@@ -2414,23 +2487,15 @@ impl slots::ItemsMeasurePolicy for LazyListLayout {
         state.density.set(density.density);
         let direction = compose_ui::LayoutDirection::Ltr;
         let px = |dp: Dp| density.round_to_px(dp);
+        // Absolute sides taken in the layout's direction (D2320).
+        let padding = info.padding.resolved(layout_direction);
         // Positions along the axis are worked out from the list's start (its end, reversed:
         // the padding there comes first), and mirrored when placed if reversed.
         let reverse = info.reverse;
         let (mut before, mut after, cross_before, cross_after) = if vertical {
-            (
-                px(info.padding.top),
-                px(info.padding.bottom),
-                px(info.padding.start),
-                px(info.padding.end),
-            )
+            (px(padding.top), px(padding.bottom), px(padding.start), px(padding.end))
         } else {
-            (
-                px(info.padding.start),
-                px(info.padding.end),
-                px(info.padding.top),
-                px(info.padding.bottom),
-            )
+            (px(padding.start), px(padding.end), px(padding.top), px(padding.bottom))
         };
         if reverse {
             std::mem::swap(&mut before, &mut after);
@@ -2566,6 +2631,10 @@ impl slots::ItemsMeasurePolicy for LazyListLayout {
                 state.publish_can_scroll();
                 state.room_estimated.set((false, false));
                 state.tell_beyond((false, false), 0);
+                let layout_info = (0, 1.0, spacing, main_max, before + after);
+                if state.layout_info_written.replace(layout_info) != layout_info {
+                    state.layout_info.set(layout_info);
+                }
             }
             if let Some(observer) = state.observer.borrow().clone() {
                 compose_runtime::snapshots::Snapshot::without_read_observation(|| {
@@ -3756,16 +3825,19 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-        // As `LazyLayoutSemanticState`: a list's count isn't told, a grid's neither.
+        // As `LazyLayoutSemanticState`: a list tells its item count, a grid doesn't.
         let observer = inner.observer.borrow().clone();
         config.set_is_traversal_group(true);
+        let item_count = i32::try_from(count).unwrap_or(i32::MAX);
         config.set_collection_info(match &observer {
             Some(observer) => observer.collection_info(),
             None if inner.is_grid.get() => {
                 compose_ui::CollectionInfo { row_count: -1, column_count: -1 }
             }
-            None if self.vertical => compose_ui::CollectionInfo { row_count: -1, column_count: 1 },
-            None => compose_ui::CollectionInfo { row_count: 1, column_count: -1 },
+            None if self.vertical => {
+                compose_ui::CollectionInfo { row_count: item_count, column_count: 1 }
+            }
+            None => compose_ui::CollectionInfo { row_count: 1, column_count: item_count },
         });
         // The viewport without the content padding, and the padding before and after, as
         // Compose's `LazyLayoutSemantics`: a page, and what a shown item must clear.
@@ -3780,6 +3852,22 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
                 out.push(before as f32);
                 out.push(after as f32);
                 true
+            });
+        }
+        // Always set even with user scrolling off, as Compose's `LazyLayoutSemantics`.
+        {
+            let state = self.state;
+            config.index_for_key(move |needle| {
+                let items = {
+                    let Some(inner) = state.inner() else { return -1 };
+                    inner
+                        .factory
+                        .borrow()
+                        .as_ref()
+                        .map(|factory| factory.items.0.clone())
+                        .or_else(|| inner.laid_items.borrow().clone())
+                };
+                items.map_or(-1, |items| items.index_of_key(needle))
             });
         }
         // Not offered with user scrolling off, as Compose's (the range stays).

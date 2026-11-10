@@ -23,6 +23,7 @@ use crate::unit::{Dp, IntSize};
 pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
     match element {
         Element::Padding(padding) => Box::new(PaddingNode(*padding)),
+        Element::Visible(visible) => Box::new(VisibilityNode(*visible)),
         Element::MinimumTouchTarget(size) => Box::new(MinimumTouchTargetNode(*size)),
         Element::Size(spec) => Box::new(SizeNode(*spec)),
         Element::Fill(fill) => Box::new(FillNode(*fill)),
@@ -34,7 +35,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         | Element::FillCrossAxis(_)
         | Element::ZIndex(_) => Box::new(Inert),
         Element::LazyItemBoundary => Box::new(crate::graphics_layer::RepaintBoundaryNode),
-        Element::Background(color, shape) => Box::new(BackgroundNode(*color, shape.clone())),
+        Element::Background(color, shape) => Box::new(BackgroundNode::new(*color, shape.clone())),
         Element::Border(width, color, shape) => Box::new(crate::border::BorderNode {
             width: *width,
             brush: crate::brush::Brush::Solid(*color),
@@ -80,6 +81,7 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
     }
     match element {
         Element::Padding(padding) => set!(PaddingNode, PaddingNode(*padding)),
+        Element::Visible(visible) => set!(VisibilityNode, VisibilityNode(*visible)),
         Element::MinimumTouchTarget(size) => {
             set!(MinimumTouchTargetNode, MinimumTouchTargetNode(*size))
         }
@@ -92,7 +94,9 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         | Element::ZIndex(_)
         | Element::LazyItemBoundary => {}
         Element::Background(color, shape) => {
-            set!(BackgroundNode, BackgroundNode(*color, shape.clone()))
+            if let Some(node) = node.downcast_mut::<BackgroundNode>() {
+                node.update(*color, shape);
+            }
         }
         Element::Border(width, color, shape) => set!(
             crate::border::BorderNode,
@@ -161,7 +165,10 @@ impl LayoutModifierNode for PaddingNode {
         constraints: Constraints,
     ) -> MeasureResult {
         let density = scope.density();
-        let PaddingValues { start, top, end, bottom } = self.0;
+        if self.0.has_absolute_sides() {
+            return self.measure_absolute(scope, content, constraints);
+        }
+        let PaddingValues { start, top, end, bottom, .. } = self.0;
         let (start, top) = (density.round_to_px(start), density.round_to_px(top));
         let horizontal = start + density.round_to_px(end);
         let vertical = top + density.round_to_px(bottom);
@@ -171,6 +178,69 @@ impl LayoutModifierNode for PaddingNode {
         scope.place_relative(&placeable, start, top);
         scope.layout(width, height)
     }
+}
+
+impl PaddingNode {
+    /// With absolute sides, placed from the left whatever the direction, as Compose's
+    /// `PaddingValuesModifier` and `absolutePadding`'s node (`rtlAware = false`) (D2320).
+    #[cold]
+    fn measure_absolute(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let density = scope.density();
+        let direction = scope.layout_direction();
+        let padding = &self.0;
+        let left = density.round_to_px(padding.calculate_left_padding(direction));
+        let top = density.round_to_px(padding.top);
+        let horizontal = left + density.round_to_px(padding.calculate_right_padding(direction));
+        let vertical = top + density.round_to_px(padding.bottom);
+        let placeable = scope.measure(content, constraints.offset(-horizontal, -vertical));
+        let width = constraints.constrain_width(placeable.width + horizontal);
+        let height = constraints.constrain_height(placeable.height + vertical);
+        scope.place(&placeable, left, top);
+        scope.layout(width, height)
+    }
+}
+
+struct VisibilityNode(bool);
+
+impl ModifierNode for VisibilityNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for VisibilityNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        if self.0 {
+            scope.place(&placeable, 0, 0);
+        }
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
+impl SemanticsModifierNode for VisibilityNode {
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.set(&crate::semantics::SemanticsProperties::VISIBLE, self.0);
+        if !self.0 {
+            config.set_focused(false);
+        }
+    }
+
+    /// Nothing autofill reads (D1688).
+    fn apply_autofill_semantics(&self, _config: &mut SemanticsConfiguration) {}
 }
 
 struct MinimumTouchTargetNode(Dp);
@@ -383,19 +453,125 @@ impl LayoutModifierNode for FillNode {
 
 // ---- Drawing ---------------------------------------------------------------------------------
 
-struct BackgroundNode(Color, Shape);
+/// `background`'s node for a color, as Compose's `BackgroundNode`: it draws, and its semantics
+/// say its shape and color, without being its node's bounds (D2325).
+pub(crate) struct BackgroundNode {
+    color: Color,
+    shape: Shape,
+    semantics: BackgroundSemantics,
+}
+
+impl BackgroundNode {
+    fn new(color: Color, shape: Shape) -> BackgroundNode {
+        BackgroundNode { color, shape, semantics: BackgroundSemantics::default() }
+    }
+
+    /// Takes a new element's color and shape, as `BackgroundElement.update`.
+    fn update(&mut self, color: Color, shape: &Shape) {
+        self.color = color;
+        self.semantics.set_color(color, 1.0);
+        if self.shape != *shape {
+            self.shape = shape.clone();
+            self.semantics.shape_changed = true;
+        }
+    }
+}
+
+struct BackgroundColorState {
+    value: Rc<std::cell::Cell<(Color, f32)>>,
+    producer: crate::semantics::ColorProducer,
+}
+
+/// What a background's semantics keep: whether its shape changed since its last update was
+/// invalidated, and the color its `BackgroundColor` producer reads, allocated once when first
+/// asked (D2325). Keeping the `ColorProducer` across color-only updates keeps `PartialEq` equal
+/// in `check_semantics_cache` while its returned color updates in place, matching Compose's
+/// `BackgroundElement.update` (which invalidates semantics only when the shape changes).
+#[derive(Default)]
+pub(crate) struct BackgroundSemantics {
+    pub(crate) shape_changed: bool,
+    live: std::cell::OnceCell<Box<BackgroundColorState>>,
+}
+
+impl BackgroundSemantics {
+    pub(crate) fn set_color(&self, color: Color, alpha: f32) {
+        if let Some(live) = self.live.get() {
+            live.value.set((color, alpha));
+        }
+    }
+
+    /// Sets `shape` and a producer of the background's color (its alpha times `alpha`, a
+    /// brush's without one being unspecified), as `BackgroundNode.applySemantics`.
+    pub(crate) fn apply(
+        &self,
+        config: &mut SemanticsConfiguration,
+        shape: &Shape,
+        color: Color,
+        alpha: f32,
+    ) {
+        config.set_shape(shape.clone());
+        let live = self.live.get_or_init(|| {
+            let value = Rc::new(std::cell::Cell::new((color, alpha)));
+            let read = value.clone();
+            let producer = crate::semantics::ColorProducer(Rc::new(move || {
+                let (color, alpha) = read.get();
+                if alpha == 1.0 || !color.is_specified() {
+                    color
+                } else {
+                    color.with_alpha(color.alpha() * alpha)
+                }
+            }));
+            Box::new(BackgroundColorState { value, producer })
+        });
+        live.value.set((color, alpha));
+        config.set(&crate::semantics::SemanticsProperties::BACKGROUND_COLOR, live.producer.clone());
+    }
+
+    /// What an update invalidates: the drawing, and the semantics when the shape changed, as
+    /// `BackgroundElement.update` (`shouldAutoInvalidate` is false).
+    pub(crate) fn invalidated(&mut self) -> crate::node_chain::NodeKinds {
+        let draw = crate::node_chain::NodeKinds::DRAW;
+        if std::mem::take(&mut self.shape_changed) {
+            draw.with(crate::node_chain::NodeKinds::SEMANTICS)
+        } else {
+            draw
+        }
+    }
+}
 
 impl ModifierNode for BackgroundNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(self)
+    }
+    fn should_auto_invalidate(&self) -> bool {
+        false
+    }
+    fn auto_invalidated_kinds(&mut self) -> crate::node_chain::NodeKinds {
+        self.semantics.invalidated()
+    }
 }
 
 impl DrawModifierNode for BackgroundNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        if self.0.is_specified() {
-            scope.draw_shape(&self.1, self.0);
+        if self.color.is_specified() {
+            scope.draw_shape(&self.shape, self.color);
         }
+    }
+}
+
+impl SemanticsModifierNode for BackgroundNode {
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        self.semantics.apply(config, &self.shape, self.color, 1.0);
+    }
+
+    /// Nothing autofill reads (D1688).
+    fn apply_autofill_semantics(&self, _config: &mut SemanticsConfiguration) {}
+
+    fn is_important_for_bounds(&self) -> bool {
+        false
     }
 }
 

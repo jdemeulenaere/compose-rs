@@ -891,6 +891,8 @@ pub mod SemanticsProperties {
         SemanticsPropertyKey::new("IsPasswordObfuscated").for_accessibility();
     pub static ERROR: SemanticsPropertyKey<SharedString> =
         SemanticsPropertyKey::new("Error").for_accessibility();
+    /// Whether a node with `Modifier.visible` is visible, as `Visible.kt`'s `Visible`.
+    pub static VISIBLE: SemanticsPropertyKey<bool> = SemanticsPropertyKey::new("Visible");
     pub static INDEX_FOR_KEY: SemanticsPropertyKey<IndexForKey> =
         SemanticsPropertyKey::new("IndexForKey");
     pub static IS_EDITABLE: SemanticsPropertyKey<bool> = SemanticsPropertyKey::new("IsEditable");

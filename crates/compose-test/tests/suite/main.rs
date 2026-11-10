@@ -33,6 +33,7 @@ mod rule;
 mod run;
 mod run_without_implicit_wait;
 mod sample_font;
+mod scroll_to_key;
 mod selectors;
 mod swipes;
 mod touch_events;

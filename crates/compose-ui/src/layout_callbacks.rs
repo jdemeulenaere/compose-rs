@@ -936,34 +936,19 @@ impl UiTree {
     /// touch's, where the tests' bounds assertions go by the top left and the size.
     pub(crate) fn semantics_bounds_shown(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
         let (_, size, clipped) = self.semantics_coordinates(node)?;
-        let layer = self.own_semantics(node)?.layer;
-        let entry = self.first_semantics_entry(node, layer);
+        let own = self.own_semantics(node)?;
+        let (layer, entry) = (own.layer, own.bounds_entry);
         Some((self.rect_in_root(node, layer, Some(entry), size), clipped))
-    }
-
-    /// The chain entry that says where `node`'s semantics on `layer` are.
-    fn first_semantics_entry(&self, node: NodeId, layer: usize) -> usize {
-        let value = self.node(node);
-        let mut layer_of_entry = 0;
-        for (index, bits) in value.chain.iter().map(|entry| entry.kinds).enumerate() {
-            if layer_of_entry == layer && bits.any(NodeKinds::SEMANTICS) {
-                return index;
-            }
-            if bits.any(NodeKinds::LAYOUT) {
-                layer_of_entry += 1;
-            }
-        }
-        0
     }
 
     /// Where `node`'s semantic bounds' top left is in the root, their size, and those bounds clipped.
     fn semantics_coordinates(&mut self, node: NodeId) -> Option<(Offset, IntSize, Rect)> {
         self.get(node)?;
-        let layer = self.own_semantics(node)?.layer;
+        let own = self.own_semantics(node)?;
+        let (layer, entry) = (own.layer, own.bounds_entry);
         if !self.is_placed_in_root(node) {
             return None;
         }
-        let entry = self.first_semantics_entry(node, layer);
         let coordinates = self.coordinate_values(node, layer, entry);
         let size = self.node(node).layers[layer].measured;
         Some((coordinates.position_in_root, size, coordinates.clipped_bounds))
@@ -1006,19 +991,10 @@ impl UiTree {
     /// The clips around `node`'s semantics in the root, nearest first.
     pub(crate) fn clips_around_semantics(&mut self, node: NodeId) -> Vec<Rect> {
         let mut clips = Vec::new();
-        let Some(layer) = self.own_semantics(node).map(|own| own.layer) else { return clips };
-        let value = self.node(node);
-        let mut layer_of_entry = 0;
-        let mut entry = None;
-        for (index, bits) in value.chain.iter().map(|entry| entry.kinds).enumerate() {
-            if entry.is_none() && layer_of_entry == layer && bits.any(NodeKinds::SEMANTICS) {
-                entry = Some(index);
-            }
-            if bits.any(NodeKinds::LAYOUT) {
-                layer_of_entry += 1;
-            }
-        }
-        self.clips_of_node(node, entry, &mut clips);
+        let Some(entry) = self.own_semantics(node).map(|own| own.bounds_entry) else {
+            return clips;
+        };
+        self.clips_of_node(node, Some(entry), &mut clips);
         let value = self.node(node);
         let mut current = if value.overlay { None } else { value.parent };
         while let Some(id) = current {

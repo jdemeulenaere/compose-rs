@@ -1,4 +1,10 @@
-//! Alignment, as Compose's `Alignment`: a bias from -1 (start, top) to 1 (end, bottom).
+//! Alignment, as Compose's `Alignment`: a bias from -1 (start, top) to 1 (end, bottom), and
+//! custom horizontal/vertical alignment policies (`HorizontalAlignment::custom`,
+//! `VerticalAlignment::custom`).
+
+use std::any::Any;
+use std::fmt;
+use std::rc::Rc;
 
 use compose_runtime::ComposeArg;
 
@@ -79,6 +85,20 @@ fn biased(size: i32, space: i32, bias: f32) -> i32 {
 }
 
 impl HorizontalAlignment {
+    /// A custom horizontal alignment closure, as `object : Alignment.Horizontal`: takes `(size,
+    /// space, direction)` in pixels and returns the child's x offset inside `space`.
+    pub fn custom(
+        align: impl Fn(i32, i32, LayoutDirection) -> i32 + 'static,
+    ) -> AnyHorizontalAlignment {
+        AnyHorizontalAlignment::Custom(Rc::new(FnHorizontalAlignment(align)))
+    }
+
+    /// A custom horizontal alignment implementing [`HorizontalAlignmentPolicy`], allowing
+    /// structural equality (`same`) across recompositions.
+    pub fn custom_policy(policy: impl HorizontalAlignmentPolicy) -> AnyHorizontalAlignment {
+        AnyHorizontalAlignment::Custom(Rc::new(policy))
+    }
+
     pub fn align(&self, size: i32, space: i32, direction: LayoutDirection) -> i32 {
         let bias = if direction == LayoutDirection::Ltr { self.bias } else { -self.bias };
         biased(size, space, bias)
@@ -86,8 +106,165 @@ impl HorizontalAlignment {
 }
 
 impl VerticalAlignment {
+    /// A custom vertical alignment closure, as `object : Alignment.Vertical`: takes `(size,
+    /// space)` in pixels and returns the child's y offset inside `space`.
+    pub fn custom(align: impl Fn(i32, i32) -> i32 + 'static) -> AnyVerticalAlignment {
+        AnyVerticalAlignment::Custom(Rc::new(FnVerticalAlignment(align)))
+    }
+
+    /// A custom vertical alignment implementing [`VerticalAlignmentPolicy`], allowing
+    /// structural equality (`same`) across recompositions.
+    pub fn custom_policy(policy: impl VerticalAlignmentPolicy) -> AnyVerticalAlignment {
+        AnyVerticalAlignment::Custom(Rc::new(policy))
+    }
+
     pub fn align(&self, size: i32, space: i32) -> i32 {
         biased(size, space, self.bias)
+    }
+}
+
+/// How a custom horizontal alignment positions a box of `size` inside `space`, as
+/// Compose's `Alignment.Horizontal`.
+pub trait HorizontalAlignmentPolicy: Any {
+    fn align(&self, size: i32, space: i32, direction: LayoutDirection) -> i32;
+
+    /// Whether `other` aligns identically, so layouts needn't remeasure. Defaults to true only for
+    /// equal zero-sized types; policies with fields compare `other.downcast_ref::<Self>() == Some(self)`.
+    fn same(&self, other: &dyn Any) -> bool {
+        Any::type_id(self) == other.type_id() && std::mem::size_of_val(self) == 0
+    }
+}
+
+/// How a custom vertical alignment positions a box of `size` inside `space`, as
+/// Compose's `Alignment.Vertical`.
+pub trait VerticalAlignmentPolicy: Any {
+    fn align(&self, size: i32, space: i32) -> i32;
+
+    /// Whether `other` aligns identically, so layouts needn't remeasure.
+    fn same(&self, other: &dyn Any) -> bool {
+        Any::type_id(self) == other.type_id() && std::mem::size_of_val(self) == 0
+    }
+}
+
+struct FnHorizontalAlignment<F>(F);
+
+impl<F: Fn(i32, i32, LayoutDirection) -> i32 + 'static> HorizontalAlignmentPolicy
+    for FnHorizontalAlignment<F>
+{
+    fn align(&self, size: i32, space: i32, direction: LayoutDirection) -> i32 {
+        (self.0)(size, space, direction)
+    }
+}
+
+struct FnVerticalAlignment<F>(F);
+
+impl<F: Fn(i32, i32) -> i32 + 'static> VerticalAlignmentPolicy for FnVerticalAlignment<F> {
+    fn align(&self, size: i32, space: i32) -> i32 {
+        (self.0)(size, space)
+    }
+}
+
+/// Either a bias [`HorizontalAlignment`] or a custom [`HorizontalAlignmentPolicy`]: accepted by
+/// `Column`, `FlowColumn`, and `Modifier.align` so built-in bias alignments stay `Copy` (D2322).
+#[derive(Clone)]
+pub enum AnyHorizontalAlignment {
+    Bias(HorizontalAlignment),
+    Custom(Rc<dyn HorizontalAlignmentPolicy>),
+}
+
+impl AnyHorizontalAlignment {
+    /// Returns the underlying bias alignment if this is a bias alignment.
+    pub fn as_bias(&self) -> Option<HorizontalAlignment> {
+        match self {
+            AnyHorizontalAlignment::Bias(alignment) => Some(*alignment),
+            AnyHorizontalAlignment::Custom(_) => None,
+        }
+    }
+
+    pub fn align(&self, size: i32, space: i32, direction: LayoutDirection) -> i32 {
+        match self {
+            AnyHorizontalAlignment::Bias(alignment) => alignment.align(size, space, direction),
+            AnyHorizontalAlignment::Custom(policy) => policy.align(size, space, direction),
+        }
+    }
+}
+
+impl From<HorizontalAlignment> for AnyHorizontalAlignment {
+    fn from(alignment: HorizontalAlignment) -> AnyHorizontalAlignment {
+        AnyHorizontalAlignment::Bias(alignment)
+    }
+}
+
+impl PartialEq for AnyHorizontalAlignment {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AnyHorizontalAlignment::Bias(a), AnyHorizontalAlignment::Bias(b)) => a == b,
+            (AnyHorizontalAlignment::Custom(a), AnyHorizontalAlignment::Custom(b)) => {
+                std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)) || a.as_ref().same(&**b as &dyn Any)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for AnyHorizontalAlignment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AnyHorizontalAlignment::Bias(alignment) => alignment.fmt(formatter),
+            AnyHorizontalAlignment::Custom(_) => formatter.write_str("HorizontalAlignment::custom"),
+        }
+    }
+}
+
+/// Either a bias [`VerticalAlignment`] or a custom [`VerticalAlignmentPolicy`]: accepted by
+/// `Row`, `FlowRow`, and `Modifier.align` so built-in bias alignments stay `Copy` (D2322).
+#[derive(Clone)]
+pub enum AnyVerticalAlignment {
+    Bias(VerticalAlignment),
+    Custom(Rc<dyn VerticalAlignmentPolicy>),
+}
+
+impl AnyVerticalAlignment {
+    /// Returns the underlying bias alignment if this is a bias alignment.
+    pub fn as_bias(&self) -> Option<VerticalAlignment> {
+        match self {
+            AnyVerticalAlignment::Bias(alignment) => Some(*alignment),
+            AnyVerticalAlignment::Custom(_) => None,
+        }
+    }
+
+    pub fn align(&self, size: i32, space: i32) -> i32 {
+        match self {
+            AnyVerticalAlignment::Bias(alignment) => alignment.align(size, space),
+            AnyVerticalAlignment::Custom(policy) => policy.align(size, space),
+        }
+    }
+}
+
+impl From<VerticalAlignment> for AnyVerticalAlignment {
+    fn from(alignment: VerticalAlignment) -> AnyVerticalAlignment {
+        AnyVerticalAlignment::Bias(alignment)
+    }
+}
+
+impl PartialEq for AnyVerticalAlignment {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AnyVerticalAlignment::Bias(a), AnyVerticalAlignment::Bias(b)) => a == b,
+            (AnyVerticalAlignment::Custom(a), AnyVerticalAlignment::Custom(b)) => {
+                std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)) || a.as_ref().same(&**b as &dyn Any)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for AnyVerticalAlignment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AnyVerticalAlignment::Bias(alignment) => alignment.fmt(formatter),
+            AnyVerticalAlignment::Custom(_) => formatter.write_str("VerticalAlignment::custom"),
+        }
     }
 }
 
@@ -101,7 +278,14 @@ macro_rules! compose_arg_by_eq {
     };
 }
 
-compose_arg_by_eq!(Alignment, HorizontalAlignment, VerticalAlignment, LayoutDirection);
+compose_arg_by_eq!(
+    Alignment,
+    HorizontalAlignment,
+    VerticalAlignment,
+    AnyHorizontalAlignment,
+    AnyVerticalAlignment,
+    LayoutDirection
+);
 
 #[cfg(test)]
 mod tests {

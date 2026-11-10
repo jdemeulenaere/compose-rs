@@ -2421,7 +2421,7 @@ fn lazy_layouts_tell_their_collection_and_go_to_an_index() {
     let node = ui.on_node_with_tag("list").fetch_semantics_snapshot();
     assert_eq!(
         node.config.get(&SemanticsProperties::COLLECTION_INFO),
-        Some(&CollectionInfo { row_count: -1, column_count: 1 })
+        Some(&CollectionInfo { row_count: 50, column_count: 1 })
     );
     ui.on_node_with_tag("list").perform_semantics_action_with(
         &SemanticsActions::SCROLL_TO_INDEX,

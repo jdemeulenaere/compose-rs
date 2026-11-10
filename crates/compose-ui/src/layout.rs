@@ -358,6 +358,36 @@ impl IntrinsicMeasureScope<'_> {
         self.tree.node(measurable.node).parent_data
     }
 
+    /// The custom alignment set by `Modifier.align` with a custom alignment, if any (and if not
+    /// shadowed by an outer built-in `Modifier.align`, D2322).
+    #[doc(hidden)]
+    pub fn custom_alignment(
+        &self,
+        measurable: Measurable,
+    ) -> Option<crate::modifier::CustomCrossAlignment> {
+        let node = self.tree.get(measurable.node)?;
+        let custom = node
+            .custom_parent_data
+            .as_ref()?
+            .downcast_ref::<crate::modifier::CustomCrossAlignment>()?;
+        if node.parent_data.alignment.is_some() {
+            for element in node.modifier.elements() {
+                match element {
+                    crate::modifier::Element::Align(_) => return None,
+                    crate::modifier::Element::Custom(custom_element)
+                        if custom_element
+                            .downcast_ref::<crate::modifier::CustomAlignElement>()
+                            .is_some() =>
+                    {
+                        return Some(custom.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(custom.clone())
+    }
+
     /// The fractions its `fill_max_width` and `fill_max_height` fill, horizontally and
     /// vertically, as Compose's `FillModifierParentData`: what `FlexBox` grows a child by when it
     /// sets no grow of its own. Folded from the tail to the head as Compose's parent data: a

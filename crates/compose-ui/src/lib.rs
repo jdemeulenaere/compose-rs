@@ -175,6 +175,8 @@ pub mod platform {
     pub use crate::layout::{NO_INTRINSICS_MESSAGE, StackMeasurePolicy};
     pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
+    #[doc(hidden)]
+    pub use crate::modifier::{CustomCrossAlignment, apply_horizontal_align, apply_vertical_align};
     pub use crate::multi_paragraph::{
         ParagraphInfo, find_paragraph_by_index, find_paragraph_by_line_index, find_paragraph_by_y,
     };
@@ -217,7 +219,9 @@ pub mod platform {
 }
 
 pub use alignment::{
-    Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
+    Alignment, AnyHorizontalAlignment, AnyVerticalAlignment, HorizontalAlignment,
+    HorizontalAlignmentPolicy, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
+    VerticalAlignmentPolicy,
 };
 pub use alignment_line::{
     AlignmentLine, FIRST_BASELINE, HorizontalAlignmentLine, LAST_BASELINE, VerticalAlignmentLine,

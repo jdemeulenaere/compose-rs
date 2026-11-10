@@ -375,7 +375,7 @@ fn split_button(
                 let row = if trailing { center_optically(row, row_shape, padding) } else { row };
                 Row(
                     row.padding(padding),
-                    Arrangement::CENTER.into(),
+                    Arrangement::CENTER,
                     Alignment::CENTER_VERTICALLY,
                     content.clone(),
                 );

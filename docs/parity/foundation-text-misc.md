@@ -12,10 +12,10 @@ What Compose's `compose/foundation/foundation` tests and public API in this area
 
 | Status | Files | @Test |
 |---|---:|---:|
-| `ported` | 111 | 1,468 |
+| `ported` | 112 | 1,491 |
 | `covered` | 10 | 56 |
 | `port` | 1 | 1 |
-| `partial` | 54 | 1,521 |
+| `partial` | 53 | 1,498 |
 | `feature:<name>` | 69 | 820 |
 | `n/a` | 85 | 1,071 |
 | **Total** | **330** | **4,937** |
@@ -38,7 +38,7 @@ Paths are relative to `frameworks/support`. A status cites the compose-rs tests 
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/AdvancedBorderTest.kt` | 30 | `Modifier.border` on triangle/`GenericShape`/non-simple rounded outlines, fill area, outline bounds | ported — `compose-skia/tests/suite/advanced_border.rs` (30: the 27 pixel tests share their bodies with `AdvancedBorderRendererTest`'s, drawn through `Modifier.border_with`; the 3 equality tests through `ComposeArg::same`); the old border implementation's runs (`isNewBorderImplementationEnabled` false) n/a, compose-rs has only the new one |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/AndroidEmbeddedExternalSurfaceTest.kt` | 10 | `AndroidEmbeddedExternalSurface` (TextureView): surface create/change/destroy, reuse in a lazy list, opacity, transform | feature:android-external-surface |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/AndroidExternalSurfaceTest.kt` | 10 | `AndroidExternalSurface` (SurfaceView): lifecycle, z-order, secure, opacity | feature:android-external-surface |
-| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt` | 23 | `background` with color or brush in rectangle/circle; changing color, brush, alpha, shape; observable custom shapes; RTL; equality | partial — `compose-skia/tests/suite/background.rs`: 14 ported (the 12 pixel tests with `assertShape`, the 2 equality ones); the 7 semantics tests (`*_setsShapeSemanticsProperty`, `shapeChange_*`, `backgroundColor_setsBackgroundColorSemanticsProvider`) written and ignored: compose-rs's background sets no `Shape` or `BackgroundColor` semantics (Compose's `BackgroundNode` is a `SemanticsModifierNode`); the 2 inspectable-value cases n/a (no inspector) |
+| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt` | 23 | `background` with color or brush in rectangle/circle; changing color, brush, alpha, shape; observable custom shapes; RTL; equality | ported — `compose-skia/tests/suite/background.rs`: 21 ported (the 12 pixel tests with `assertShape`, the 2 equality ones, and the 7 semantics tests `*_setsShapeSemanticsProperty`, `shapeChange_*`, `backgroundColor_setsBackgroundColorSemanticsProvider`, D2324); the 2 inspectable-value cases n/a (no inspector) |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BasicMarqueeTest.kt` | 23 | `Modifier.basicMarquee`: iterations, delays, spacing, velocity, RTL, `WhileFocused` mode, cancellation | feature:basic-marquee |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BasicTooltipTest.kt` | 8 | `BasicTooltipBox`: default gestures (long press, hover), constraints propagation, anchor/popup semantics | feature:basic-tooltip |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BorderRendererTest.kt` | 13 | `BorderRenderer`: solid/gradient/shader brushes, fill when too thick, negative/unspecified/zero-size draws nothing, hairline = 1 px, fractional widths round up, inset scopes | partial — `compose-skia/tests/suite/border_shapes.rs`: solid and gradient brushes, bigger than the bounds, negative, unspecified, zero size, hairline, fractional widths; left: changing width/brush mid-test, inset draw scopes, several renderers (port next with `BorderRenderer::draw_border` in a `draw_behind`) |

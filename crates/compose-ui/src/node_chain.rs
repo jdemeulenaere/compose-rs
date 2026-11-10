@@ -398,10 +398,8 @@ impl ChainEntry {
     pub(crate) fn updated_kinds(&mut self) -> NodeKinds {
         if self.state & entry_state::DELEGATING != 0 {
             crate::delegation::updated_kinds(&mut *self.node, self.own, NodeKinds::ALL)
-        } else if self.node.should_auto_invalidate() {
-            self.kinds
         } else {
-            NodeKinds::NONE
+            self.kinds.and(self.node.auto_invalidated_kinds())
         }
     }
 

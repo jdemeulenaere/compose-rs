@@ -488,8 +488,7 @@ pub(crate) fn updated_kinds(
     own: NodeKinds,
     remaining: NodeKinds,
 ) -> NodeKinds {
-    let mut kinds =
-        if node.should_auto_invalidate() { own.and(remaining) } else { NodeKinds::NONE };
+    let mut kinds = own.and(remaining).and(node.auto_invalidated_kinds());
     if let Some(delegates) = node.delegates() {
         let remaining = remaining.without(own);
         for entry in &mut delegates.entries {
