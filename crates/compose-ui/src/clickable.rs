@@ -791,10 +791,14 @@ impl PointerInputModifierNode for ClickableNode {
                 }
             }
         }
-        if matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
+        let changes = &event.changes;
+        // A hover's own: nothing of a press. A held mouse's move coming over or leaving it is its
+        // `Enter` or `Exit` (D2361), a move for the press, as Compose's clickable takes any event.
+        if matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit)
+            && !changes.iter().any(|change| change.pressed || change.previous_pressed)
+        {
             return;
         }
-        let changes = &event.changes;
         match pass {
             PointerEventPass::Main => {
                 if self.down.is_none() {

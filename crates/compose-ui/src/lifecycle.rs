@@ -447,6 +447,8 @@ impl UiTree {
     /// `on_detach`, parents before children, tail to head, every one still attached; then they
     /// are marked detached.
     pub(crate) fn detach_subtree(&mut self, root: NodeId) {
+        // What pointers hit or hover there hears its cancel first (D2363).
+        self.pointer_paths_leaving(root);
         self.focus_subtree_detaching(root);
         let nodes = self.subtree(root);
         if !self.unplaced_aware.is_empty() {
@@ -502,8 +504,8 @@ impl UiTree {
         let detaching = Detaching(self, depth);
         detaching.0.detach_subtree(node);
         drop(detaching);
-        // What pointers hit or hover there is let go untold, as Compose's hit paths drop the
-        // nodes detached: hit again where it went (a resting mouse enters it again).
+        // Cancelled and cut off the paths above; and should it come back (moved), what was
+        // hit there is hit again where it went (a resting mouse enters it again).
         if !self.captures.is_empty() || !self.hovered.is_empty() || !self.stylus_hovered.is_empty()
         {
             for each in self.subtree(node) {

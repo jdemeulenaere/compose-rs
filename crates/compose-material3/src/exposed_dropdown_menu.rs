@@ -321,7 +321,7 @@ impl PointerInputModifierNode for ExpandableNode {
         bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        match (pass, event.kind) {
+        match (pass, event.kind_moving()) {
             (PointerEventPass::Initial, PointerEventType::Press) if self.pressed > 0 => {
                 self.pressed += 1;
             }

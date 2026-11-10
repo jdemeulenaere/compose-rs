@@ -425,7 +425,6 @@ fn a_cancel_after_a_captured_leaf_left_tells_what_stayed() {
 /// hearing that gesture no more. compose-rs lets the node go untold, and what was below it keeps
 /// hearing the gesture.
 #[test]
-#[ignore = "review: a pointer input node leaving mid-gesture doesn't cancel what's below it on the path"]
 fn a_node_leaving_mid_gesture_cancels_what_was_below_it() {
     let log = Log::default();
     let with_outer = mutable_state_of(true);
@@ -486,7 +485,6 @@ fn a_pointer_down_through_a_cancel_keeps_the_path_it_comes_down_on_again() {
 /// clears it: the mouse's next move enters them again. compose-rs's cancels only what pointers
 /// pressed, and keeps the hover: the next move is a move.
 #[test]
-#[ignore = "review: cancel_pointers neither cancels nor forgets what the mouse hovers"]
 fn a_cancel_cancels_the_hover_and_the_next_move_enters_again() {
     let log = Log::default();
     let seen = log.clone();
@@ -500,4 +498,141 @@ fn a_cancel_cancels_the_hover_and_the_next_move_enters_again() {
     host.with_tree(|tree| tree.cancel_pointers());
     host.send_pointer(PointerEvent::moved(Offset::new(12.0, 10.0), false));
     assert_eq!(*log.borrow(), ["box cancel", "box Enter"]);
+}
+
+/// A touch capture and a mouse hover sharing a parent: `cancel_pointers` cancels both children
+/// before the shared parent (once), and clears the resting cursor so a layout frame before the
+/// next move does not re-enter the hover.
+#[test]
+fn a_cancel_with_a_touch_and_a_hover_cancels_children_before_their_shared_parent_and_forgets_the_hover()
+ {
+    let log = Log::default();
+    let tick = mutable_state_of(0);
+    let handle = tick.handle();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let _ = handle.get();
+        let log = seen.clone();
+        Row!(modifier = probe("parent", &log), {
+            Leaf(Modifier.size(50.dp()).then(probe("child_a", &log)));
+            Leaf(Modifier.size(50.dp()).then(probe("child_b", &log)));
+        });
+    });
+    host.send_pointer(finger_down(1, 10.0, 10.0));
+    host.send_pointer(PointerEvent::moved(Offset::new(60.0, 10.0), false));
+    log.borrow_mut().clear();
+    host.with_tree(|tree| tree.cancel_pointers());
+    assert_eq!(*log.borrow(), ["child_a cancel", "child_b cancel", "parent cancel"]);
+    log.borrow_mut().clear();
+    tick.set(1);
+    host.frame();
+    assert!(log.borrow().is_empty(), "frame after cancel must not re-enter: {:?}", log.borrow());
+    host.send_pointer(PointerEvent::moved(Offset::new(62.0, 10.0), false));
+    assert_eq!(*log.borrow(), ["child_b Enter", "parent Enter"]);
+}
+
+/// A hovered node leaving (either its layout node or a modifier entry on it) cancels it and what
+/// was below it on the hover path, while what's above it stays hovered (the next move moves there,
+/// not entering again).
+#[test]
+fn a_hovered_node_leaving_cancels_it_and_what_was_below_it_keeping_its_parent_hovered() {
+    struct KeyedProbe<const SLOT: usize>(&'static str, Log);
+    impl<const SLOT: usize> ModifierNodeElement for KeyedProbe<SLOT> {
+        type Node = ProbeNode;
+        fn create(&self) -> ProbeNode {
+            ProbeNode(self.0, self.1.clone())
+        }
+        fn update(&self, node: &mut ProbeNode) {
+            node.0 = self.0;
+        }
+        fn same(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    fn slot_probe<const SLOT: usize>(name: &'static str, log: &Log) -> Modifier {
+        Modifier.then_custom(KeyedProbe::<SLOT>(name, log.clone()))
+    }
+
+    for by_chain in [false, true] {
+        let log = Log::default();
+        let keep = mutable_state_of(true);
+        let handle = keep.handle();
+        let seen = log.clone();
+        let mut host = host(move || {
+            let log = seen.clone();
+            if by_chain {
+                let mid = if handle.get() { slot_probe::<1>("mid", &log) } else { Modifier };
+                Leaf(
+                    Modifier
+                        .size(50.dp())
+                        .then(slot_probe::<0>("parent", &log))
+                        .then(mid)
+                        .then(slot_probe::<2>("leaf", &log)),
+                );
+            } else {
+                let inner = log.clone();
+                Stack!(modifier = Modifier.size(50.dp()).then(probe("parent", &log)), {
+                    if handle.get() {
+                        let leaf_log = inner.clone();
+                        Stack!(modifier = probe("mid", &inner), {
+                            Leaf(Modifier.size(50.dp()).then(probe("leaf", &leaf_log)));
+                        });
+                    }
+                });
+            }
+        });
+        host.send_pointer(PointerEvent::moved(Offset::new(10.0, 10.0), false));
+        log.borrow_mut().clear();
+        keep.set(false);
+        host.frame();
+        if by_chain {
+            // `mid` and `leaf` cancel as `mid` leaves the chain; `refresh_hover` then enters `leaf`
+            // under the resting cursor while `parent` stayed hovered throughout.
+            assert_eq!(*log.borrow(), ["leaf cancel", "mid cancel", "leaf Enter"]);
+            log.borrow_mut().clear();
+            host.send_pointer(PointerEvent::moved(Offset::new(12.0, 10.0), false));
+            assert_eq!(*log.borrow(), ["leaf Move", "parent Move"]);
+        } else {
+            assert_eq!(*log.borrow(), ["leaf cancel", "mid cancel"]);
+            log.borrow_mut().clear();
+            host.send_pointer(PointerEvent::moved(Offset::new(12.0, 10.0), false));
+            assert_eq!(*log.borrow(), ["parent Move"]);
+        }
+    }
+}
+
+/// Pressing outside a non-focusable `Popup` hits its pass-through dismiss catcher and the content
+/// beneath it; when the popup closes mid-gesture, its catcher leaves without cancelling the
+/// underlying window's gesture.
+#[test]
+fn a_pass_through_popup_closing_on_an_outside_press_leaves_the_gesture_beneath_it_alive() {
+    let log = Log::default();
+    let open = mutable_state_of(true);
+    let handle = open.handle();
+    let dismiss = open.handle();
+    let seen = log.clone();
+    let mut host = host(move || {
+        let log = seen.clone();
+        Stack!(modifier = Modifier.size(100.dp()), {
+            if handle.get() {
+                Popup!(
+                    on_dismiss_request = Some(move || dismiss.set(false)),
+                    properties = PopupProperties::default(),
+                    {
+                        Leaf(Modifier.size(20.dp()));
+                    }
+                );
+            }
+            Leaf(Modifier.offset(40.dp(), 40.dp()).size(40.dp()).then(probe("beneath", &log)));
+        });
+    });
+    host.send_pointer(finger_down(1, 50.0, 50.0));
+    assert!(!open.get(), "outside press dismissed the popup");
+    assert_eq!(*log.borrow(), ["beneath Press down"]);
+    log.borrow_mut().clear();
+    host.frame();
+    assert!(log.borrow().is_empty(), "closing popup must not cancel beneath: {:?}", log.borrow());
+    host.send_pointer(finger(1, 52.0, 50.0));
+    host.send_pointer(finger_up(1, 52.0, 50.0));
+    assert_eq!(*log.borrow(), ["beneath Move", "beneath Release"]);
 }

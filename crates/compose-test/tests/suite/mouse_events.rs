@@ -140,10 +140,9 @@ fn hover_out_of_root_bounds() {
 }
 
 // Compose: compose/ui/ui-test/src/androidHostTest/kotlin/androidx/compose/ui/test/inputdispatcher/MouseEventsTest.kt, moveOutOfRootBounds
-/// Pressed, the cursor out of the window still moves what it pressed; the buttons pressed and
-/// released out there are heard (Compose's turns them into moves), the last release an up. The
-/// root the press came over (its `Enter`) hears its `Exit` with the release out of it (as
-/// `input.rs`'s `a_press_ends_the_hover`).
+/// Pressed, the cursor out of the window exits the root it left as a pressed `Exit`, still
+/// moves what it pressed, and the buttons pressed and released out there are heard (Compose's
+/// turns them into moves), the last release an up.
 #[test]
 fn move_out_of_root_bounds() {
     let heard = mice(|scope| {
@@ -163,10 +162,9 @@ fn move_out_of_root_bounds() {
         [
             mouse(Enter, 0, Offset::ZERO, PRIMARY, false),
             mouse(Press, 0, Offset::ZERO, PRIMARY, true),
-            mouse(Move, T, POSITION_MIN_1, PRIMARY, true),
+            mouse(Exit, T, POSITION_MIN_1, PRIMARY, true),
             mouse(Press, 2 * T, POSITION_MIN_1, both(PRIMARY, SECONDARY), true),
             mouse(Release, 3 * T, POSITION_MIN_1, PRIMARY, true),
-            mouse(Exit, 4 * T, POSITION_MIN_1, NONE, false),
             mouse(Release, 4 * T, POSITION_MIN_1, NONE, false),
         ]
     );

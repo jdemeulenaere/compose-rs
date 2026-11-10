@@ -92,3 +92,34 @@ fn a_scrollbar_follows_a_lazy_list_and_hides_when_it_fits() {
     });
     assert_eq!(thumb(&mut ui), None);
 }
+
+#[test]
+fn a_scrollbar_thumb_drag_keeps_scrolling_outside_and_back_over_its_bounds() {
+    let state = ScrollState::new(0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
+        let state = given;
+        Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
+            Column!(modifier = Modifier.weight(row, 1.0).vertical_scroll(state), {
+                for _ in 0..20 {
+                    Box!(modifier = Modifier.size(50.dp()));
+                }
+            });
+            let adapter = remember_scrollbar_adapter(state);
+            VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
+        });
+    });
+    // Pressed on the thumb (x = 296), dragged left off the 8 px bar (pressed Exit at y = 60),
+    // dragged further outside (y = 100), then back onto the bar (pressed Enter at y = 140).
+    ui.host().send_pointer(PointerEvent::press(Offset::new(296.0, 20.0)));
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(100.0, 60.0), true));
+    ui.wait_for_idle();
+    assert_eq!(state.value(), 200);
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(100.0, 100.0), true));
+    ui.wait_for_idle();
+    assert_eq!(state.value(), 400);
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(296.0, 140.0), true));
+    ui.host().send_pointer(PointerEvent::release(Offset::new(296.0, 140.0)));
+    ui.wait_for_idle();
+    assert_eq!(state.value(), 600);
+}

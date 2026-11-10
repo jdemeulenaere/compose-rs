@@ -1920,7 +1920,7 @@ impl PointerInputModifierNode for SelectionContainerNode {
                 finger.long && !finger.slop_pending && finger.pointer == event.pointer
             });
             if let Some(finger) = dragging
-                && event.kind == PointerEventType::Move
+                && event.kind_moving() == PointerEventType::Move
                 && event.pressed
                 && !event.consumed
             {
@@ -1952,7 +1952,7 @@ impl PointerInputModifierNode for SelectionContainerNode {
             self.on_finger_event(event, position, context);
             return;
         }
-        match event.kind {
+        match event.kind_moving() {
             PointerEventType::Press => {
                 if event.consumed {
                     // A clickable inside took it: the selection goes, as Compose's tap.
@@ -2024,7 +2024,7 @@ impl SelectionContainerNode {
         if self.finger.as_ref().is_some_and(|finger| finger.pointer != event.pointer) {
             return;
         }
-        match event.kind {
+        match event.kind_moving() {
             PointerEventType::Press => {
                 self.end_finger();
                 // A mouse's press still selecting ends as the finger comes, as Android cancels it.

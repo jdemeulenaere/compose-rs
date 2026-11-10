@@ -413,8 +413,8 @@ fn click_press_in_release_in() {
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/trackpad/ClickTest.kt, click_pressIn_moveOutIn_releaseIn
-/// A drag stays with what it pressed: the box hears its moves out and back (Compose's hears
-/// them as a pressed `Exit` and `Enter`).
+/// A held trackpad button dragged out of the box and back: the box hears it exit and enter,
+/// pressed.
 #[test]
 fn click_press_in_move_out_in_release_in() {
     let heard = run(|trackpad| {
@@ -429,8 +429,8 @@ fn click_press_in_move_out_in_release_in() {
         [
             (T, Enter, false, IN, NONE),
             (T, Press, true, IN, PRIMARY),
-            (2 * T, Move, true, OUT, PRIMARY),
-            (3 * T, Move, true, MOVE1, PRIMARY),
+            (2 * T, Exit, true, OUT, PRIMARY),
+            (3 * T, Enter, true, MOVE1, PRIMARY),
             (3 * T, Release, false, MOVE1, NONE),
             (3 * T, Move, false, MOVE1, NONE),
         ]
@@ -438,8 +438,7 @@ fn click_press_in_move_out_in_release_in() {
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/trackpad/ClickTest.kt, click_pressIn_releaseOut
-/// Released out of the box, the box hears the release there, then its exit as the cursor
-/// hovers again (Compose's hears a pressed `Exit` as the drag leaves, then the release).
+/// Released out of the box, the box heard its pressed exit as the drag left it, then the release.
 #[test]
 fn click_press_in_release_out() {
     let heard = run(|trackpad| {
@@ -453,8 +452,7 @@ fn click_press_in_release_out() {
         [
             (T, Enter, false, IN, NONE),
             (T, Press, true, IN, PRIMARY),
-            (2 * T, Move, true, OUT, PRIMARY),
-            (2 * T, Exit, false, OUT, NONE),
+            (2 * T, Exit, true, OUT, PRIMARY),
             (2 * T, Release, false, OUT, NONE),
         ]
     );

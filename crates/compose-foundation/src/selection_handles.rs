@@ -859,7 +859,7 @@ impl PointerInputModifierNode for HandleNode {
             self.source.mouse_event();
         }
         let Some(position) = context.pointer_position() else { return };
-        match event.kind {
+        match event.kind_moving() {
             PointerEventType::Press if !event.consumed => {
                 event.consume();
                 self.end_drag();

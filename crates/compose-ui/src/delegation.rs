@@ -756,7 +756,7 @@ impl UiTree {
     pub(crate) fn remap_same_entries(&mut self, node: NodeId) {
         let same: SmallVec<[Option<usize>; 8]> =
             (0..self.node(node).chain.len()).map(Some).collect();
-        self.remap_captures(node, &same);
+        self.remap_captures(node, &same, &mut []);
     }
 }
 

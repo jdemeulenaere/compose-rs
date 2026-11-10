@@ -334,11 +334,12 @@ impl PointerInputModifierNode for ScrollbarNode {
         }
         let along = |position: Offset| if self.vertical { position.y } else { position.x };
         let track = if self.vertical { bounds.height } else { bounds.width } as f32;
-        match event.kind {
-            PointerEventType::Enter | PointerEventType::Exit => {
-                self.hovered = event.kind == PointerEventType::Enter;
-                context.invalidate_draw();
-            }
+        if matches!(event.kind, PointerEventType::Enter | PointerEventType::Exit) {
+            self.hovered = event.kind == PointerEventType::Enter;
+            context.invalidate_draw();
+        }
+        // A held mouse leaving or coming back over the bar still drags its thumb (D2361).
+        match event.kind_moving() {
             PointerEventType::Press if !event.consumed => {
                 let Some((start, length)) = self.thumb(track) else { return };
                 let at = along(event.position);
@@ -374,5 +375,6 @@ impl PointerInputModifierNode for ScrollbarNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.drag = None;
+        self.hovered = false;
     }
 }

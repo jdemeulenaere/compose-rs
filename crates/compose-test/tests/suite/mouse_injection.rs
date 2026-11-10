@@ -191,8 +191,6 @@ fn click_press_in_release_in() {
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_pressIn_moveOutIn_releaseIn
 /// A held mouse dragged out of the box and back: the box hears it exit and enter, pressed.
 #[test]
-#[ignore = "a held mouse moved out of a node doesn't exit it (handoff.md, ignored tests: \
-            press_move_release)"]
 fn click_press_in_move_out_in_release_in() {
     let heard = run(|mouse| {
         mouse.move_to(IN);
@@ -217,8 +215,6 @@ fn click_press_in_move_out_in_release_in() {
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/ClickTest.kt, click_pressIn_releaseOut
 /// Released out of the box, the box heard its pressed exit as the drag left it, then the release.
 #[test]
-#[ignore = "a held mouse moved out of a node doesn't exit it (handoff.md, ignored tests: \
-            press_move_release)"]
 fn click_press_in_release_out() {
     let heard = run(|mouse| {
         mouse.move_to(IN);
@@ -233,6 +229,26 @@ fn click_press_in_release_out() {
             (T, Press, true, IN, PRIMARY),
             (2 * T, Exit, true, OUT, PRIMARY),
             (2 * T, Release, false, OUT, NONE),
+        ]
+    );
+}
+
+/// Cancelling a mouse press (`MouseInjectionScope::cancel`) forgets the hover on the cancelled
+/// path, so the next unpressed move inside the box enters it again (`D2435`).
+#[test]
+fn cancel_then_move_inside_reenters() {
+    let heard = run(|mouse| {
+        mouse.move_to(IN);
+        mouse.press(MouseButton::Primary);
+        mouse.cancel();
+        mouse.move_to(MOVE1);
+    });
+    assert_eq!(
+        summaries(&heard),
+        [
+            (T, Enter, false, IN, NONE),
+            (T, Press, true, IN, PRIMARY),
+            (3 * T, Enter, false, MOVE1, NONE),
         ]
     );
 }

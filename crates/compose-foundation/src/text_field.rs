@@ -3007,7 +3007,7 @@ impl TextFieldNode {
         // Something around took a move of the press (a page scrolling): no tap, as
         // `detectTapAndPress`, the field having left the moves to it (below).
         if pass == PointerEventPass::Final
-            && event.kind == PointerEventType::Move
+            && event.kind_moving() == PointerEventType::Move
             && event.consumed
             && self.press.as_ref().is_some_and(|press| !press.dragging && !press.long)
         {
@@ -3024,7 +3024,7 @@ impl TextFieldNode {
             && event.position.x < bounds.width as f32
             && event.position.y < bounds.height as f32;
         let at = event.position + self.scroll;
-        match event.kind {
+        match event.kind_moving() {
             // A right click shows the menu (D2040), neither moving the cursor nor focusing, as
             // Compose's `showTextContextMenuOnSecondaryClick` takes it before the selection's
             // gestures, which take the primary button only.
@@ -4454,7 +4454,7 @@ impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
         }
         // Taken by something around (a page scrolling), or gone off: no press any more.
         if pass == compose_ui::PointerEventPass::Final
-            && event.kind == PointerEventType::Move
+            && event.kind_moving() == PointerEventType::Move
             && (event.consumed || context.is_out_of_touch_target(event, bounds))
         {
             self.end_press(false);

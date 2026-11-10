@@ -1486,3 +1486,32 @@ fn reversed_the_deltas_and_the_velocity_are_negated() {
     assert!(total.get() < 0.0);
     assert!((velocity.get() + 500.0).abs() < 1.0, "{}", velocity.get());
 }
+
+#[test]
+fn a_mouse_drag_leaving_and_entering_its_box_keeps_its_boundary_deltas() {
+    let (total, add) = counter();
+    let mut ui = dragging(Orientation::Horizontal, add, || DraggableOptions {
+        start_drag_immediately: true,
+        ..DraggableOptions::default()
+    });
+    ui.on_root().perform_mouse_input(|mouse| {
+        mouse.move_to(CENTER);
+        mouse.press(MouseButton::Primary);
+        // Leaves the 100x100 box: delivered as a pressed Exit (+100 px).
+        mouse.move_to(Offset::new(150.0, 50.0));
+    });
+    ui.wait_for_idle();
+    assert_eq!(total.get(), 100.0);
+    ui.on_root().perform_mouse_input(|mouse| {
+        mouse.move_to(Offset::new(200.0, 50.0));
+    });
+    ui.wait_for_idle();
+    assert_eq!(total.get(), 150.0);
+    ui.on_root().perform_mouse_input(|mouse| {
+        // Re-enters the 100x100 box: delivered as a pressed Enter (-120 px).
+        mouse.move_to(Offset::new(80.0, 50.0));
+        mouse.release(MouseButton::Primary);
+    });
+    ui.wait_for_idle();
+    assert_eq!(total.get(), 30.0);
+}

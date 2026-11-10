@@ -1433,7 +1433,7 @@ impl PointerInputModifierNode for SliderInputNode {
         }
         let x = self.start_offset(event.position, bounds, context);
         let slop = context.density().to_px(8.dp());
-        match event.kind {
+        match event.kind_moving() {
             PointerEventType::Press if self.down.is_none() && !event.consumed => {
                 // As `detectTapGestures`, the down is consumed: a clickable around doesn't react.
                 event.consume();

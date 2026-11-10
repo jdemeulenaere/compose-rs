@@ -949,7 +949,7 @@ impl PointerInputModifierNode for RangePressDragNode {
         }
         let rtl = context.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let released = event.kind == PointerEventType::Release;
-        let moved = released || event.kind == PointerEventType::Move;
+        let moved = released || event.kind_moving() == PointerEventType::Move;
         // Other fingers down, for when the one dragging lifts.
         if let Gesture::Down { pointer, .. } | Gesture::Dragging { pointer, .. } = self.gesture
             && pointer != event.pointer
