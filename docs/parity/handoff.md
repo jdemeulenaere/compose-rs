@@ -102,7 +102,7 @@ Never merge the `ime-logging` branch (it records everything typed) or `parked/na
 
 ## In flight
 
-As of 2026-11-10, `main` is 8e56fd94 plus wave 1 (the local branch `parity-wave1`: 14,722 tests passing, the 7 known machine-specific failures aside). Nothing is in flight. Every branch below is merged and reviewed. Still owed: the instruction cost of D2111 and D2141 (`compare_instructions.py` on a Mac: this VM has no PMU) and the Miri slice for compose-ui's `dispatch.rs` (D2120). A branch marked "review pending" was merged without the usual review; review it first.
+As of 2026-11-10, wave 1 is pushed: `origin/main` is at 48c35b41 (14,722 tests passing, the 7 known machine-specific failures aside). Nothing is in flight. Every branch below is merged and reviewed. Still owed: the instruction cost of D2111 and D2141 (`compare_instructions.py` on a Mac: this VM has no PMU) and the Miri slice for compose-ui's `dispatch.rs` (D2120). A branch marked "review pending" was merged without the usual review; review it first.
 
 | Branch | What | State |
 |---|---|---|
