@@ -279,7 +279,7 @@ pub fn ContextMenuItem(
     let (label, icon) = (label.clone(), leading_icon.clone());
     crate::layout::Row(
         row,
-        Arrangement::spaced_by(ContextMenuSpec::HORIZONTAL_PADDING).into(),
+        Arrangement::spaced_by(ContextMenuSpec::HORIZONTAL_PADDING),
         ContextMenuSpec::LABEL_VERTICAL_TEXT_ALIGNMENT,
         compose_runtime::callback(move |scope| {
             if let Some(icon) = icon.clone() {

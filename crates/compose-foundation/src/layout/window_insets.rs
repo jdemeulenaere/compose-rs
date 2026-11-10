@@ -287,15 +287,12 @@ impl WindowInsets {
                 if sides.has_any(allowed) { of(insets) } else { 0 }
             }
             Inner::Padding(padding) => {
-                let dp =
-                    match (side, direction) {
-                        (Side::Left, LayoutDirection::Ltr)
-                        | (Side::Right, LayoutDirection::Rtl) => padding.start,
-                        (Side::Left, LayoutDirection::Rtl)
-                        | (Side::Right, LayoutDirection::Ltr) => padding.end,
-                        (Side::Top, _) => padding.top,
-                        (Side::Bottom, _) => padding.bottom,
-                    };
+                let dp = match side {
+                    Side::Left => padding.calculate_left_padding(direction),
+                    Side::Right => padding.calculate_right_padding(direction),
+                    Side::Top => padding.top,
+                    Side::Bottom => padding.bottom,
+                };
                 density.round_to_px(dp)
             }
             Inner::Mutable(mutable) => of(&mutable.insets()),
@@ -360,6 +357,7 @@ impl WindowInsets {
             top: dp(self.get_top(density)),
             end: dp(end),
             bottom: dp(self.get_bottom(density)),
+            ..PaddingValues::ZERO
         }
     }
 }
@@ -428,7 +426,10 @@ impl fmt::Display for WindowInsets {
             Inner::Padding(padding) => write!(
                 formatter,
                 "PaddingValues({:?}, {:?}, {:?}, {:?})",
-                padding.start, padding.top, padding.end, padding.bottom
+                padding.calculate_left_padding(LayoutDirection::Ltr),
+                padding.top,
+                padding.calculate_right_padding(LayoutDirection::Ltr),
+                padding.bottom
             ),
             Inner::Mutable(mutable) => {
                 write!(formatter, "MutableWindowInsets({})", mutable.insets())

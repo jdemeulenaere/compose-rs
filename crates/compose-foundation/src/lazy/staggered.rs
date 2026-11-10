@@ -1403,7 +1403,12 @@ fn LazyStaggeredGrid(
     let fallback = around.and_then(|around| {
         let px = |dp: Dp| density.round_to_px(dp);
         let (available, padding) = if vertical {
-            (around.max_width, px(content_padding.start) + px(content_padding.end))
+            {
+                // Either way round: its two sides' sum.
+                let ltr = compose_ui::LayoutDirection::Ltr;
+                let left = px(content_padding.calculate_left_padding(ltr));
+                (around.max_width, left + px(content_padding.calculate_right_padding(ltr)))
+            }
         } else {
             (around.max_height, px(content_padding.top) + px(content_padding.bottom))
         };
@@ -2201,20 +2206,12 @@ impl ItemsMeasurePolicy for StaggeredLayout {
         state.rtl.set(scope.layout_direction() == compose_ui::LayoutDirection::Rtl);
         state.density.set(density.density);
         let px = |dp: Dp| density.round_to_px(dp);
+        // Absolute sides taken in the layout's direction (D2320).
+        let padding = info.padding.resolved(scope.layout_direction());
         let (mut before, mut after, cross_before, cross_after) = if vertical {
-            (
-                px(info.padding.top),
-                px(info.padding.bottom),
-                px(info.padding.start),
-                px(info.padding.end),
-            )
+            (px(padding.top), px(padding.bottom), px(padding.start), px(padding.end))
         } else {
-            (
-                px(info.padding.start),
-                px(info.padding.end),
-                px(info.padding.top),
-                px(info.padding.bottom),
-            )
+            (px(padding.start), px(padding.end), px(padding.top), px(padding.bottom))
         };
         if reverse {
             std::mem::swap(&mut before, &mut after);
@@ -2302,6 +2299,10 @@ impl ItemsMeasurePolicy for StaggeredLayout {
                 state.publish_can_scroll();
                 state.room_estimated.set((false, false));
                 state.tell_beyond((false, false), 0);
+                let layout_info = (count, 1.0, spacing, main_max, before + after);
+                if state.layout_info_written.replace(layout_info) != layout_info {
+                    state.layout_info.set(layout_info);
+                }
             }
             // Its items gone, what they drew may fade out, and it holds their room for that.
             let animator = &state.item_animator;

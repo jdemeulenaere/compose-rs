@@ -351,7 +351,6 @@ fn shaped(shape: impl Fn() -> Shape + 'static) -> ComposeTestRule {
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, rectangleShape_setsShapeSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn rectangle_shape_sets_shape_semantics_property() {
     let mut ui = shaped(|| Shape::Rectangle);
     ui.on_node_with_tag(SEMANTICS_TAG)
@@ -360,7 +359,6 @@ fn rectangle_shape_sets_shape_semantics_property() {
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, roundedCornerShape_setsShapeSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn rounded_corner_shape_sets_shape_semantics_property() {
     let mut ui = shaped(|| RoundedCornerShape(1.dp()));
     ui.on_node_with_tag(SEMANTICS_TAG)
@@ -369,7 +367,6 @@ fn rounded_corner_shape_sets_shape_semantics_property() {
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, genericShape_setsShapeSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn generic_shape_sets_shape_semantics_property() {
     let mut ui = shaped(|| CutCornerShape(2.dp()));
     ui.on_node_with_tag(SEMANTICS_TAG)
@@ -388,28 +385,24 @@ fn shape_change(from: Shape, to: Shape) {
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, shapeChange_fromRectangle_invalidatesSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn shape_change_from_rectangle_invalidates_semantics_property() {
     shape_change(Shape::Rectangle, CIRCLE_SHAPE);
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, shapeChange_toRectangle_invalidatesSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn shape_change_to_rectangle_invalidates_semantics_property() {
     shape_change(CIRCLE_SHAPE, Shape::Rectangle);
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, shapeChange_betweenNonRectangles_invalidatesSemanticsProperty
 #[test]
-#[ignore = "background doesn't set the Shape semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn shape_change_between_non_rectangles_invalidates_semantics_property() {
     shape_change(CIRCLE_SHAPE, CutCornerShape(2.dp()));
 }
 
 // Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/BackgroundTest.kt, backgroundColor_setsBackgroundColorSemanticsProvider
 #[test]
-#[ignore = "background doesn't set the BackgroundColor semantics property (Compose's BackgroundNode is a SemanticsModifierNode setting `shape` and `backgroundColor`)"]
 fn background_color_sets_background_color_semantics_provider() {
     let mut ui = semantic_parent(|| {
         Container(

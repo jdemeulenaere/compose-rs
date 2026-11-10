@@ -46,9 +46,21 @@ impl Lazy {
         cross_after: Dp,
     ) -> PaddingValues {
         if self.vertical {
-            PaddingValues { start: cross_before, top: before, end: cross_after, bottom: after }
+            PaddingValues {
+                start: cross_before,
+                top: before,
+                end: cross_after,
+                bottom: after,
+                ..PaddingValues::ZERO
+            }
         } else {
-            PaddingValues { start: before, top: cross_before, end: after, bottom: cross_after }
+            PaddingValues {
+                start: before,
+                top: cross_before,
+                end: after,
+                bottom: cross_after,
+                ..PaddingValues::ZERO
+            }
         }
     }
 

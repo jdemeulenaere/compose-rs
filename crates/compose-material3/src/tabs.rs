@@ -977,7 +977,7 @@ pub fn ContentTab(
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         Column(
             modifier.clone(),
-            Arrangement::CENTER.into(),
+            Arrangement::CENTER,
             Alignment::CENTER_HORIZONTALLY,
             content.clone(),
         );
@@ -1016,7 +1016,7 @@ pub fn LeadingIconTab(
         let (text, icon) = (text.clone(), icon.clone());
         Row(
             modifier.clone(),
-            Arrangement::CENTER.into(),
+            Arrangement::CENTER,
             Alignment::CENTER_VERTICALLY,
             compose_runtime::callback(move |_| {
                 icon();

@@ -13,7 +13,8 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Alignment, IntSize, IntrinsicSize, LayoutCoordinates, LayoutDirection, Rect, UnitExt,
+    Alignment, HorizontalAlignment, IntSize, IntrinsicSize, LayoutCoordinates, LayoutDirection,
+    Rect, UnitExt, VerticalAlignment,
 };
 
 fn size_cell() -> Rc<Cell<IntSize>> {
@@ -465,8 +466,6 @@ fn last_items_cross_offset(row: bool, align_each: bool, centered: bool) -> f32 {
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testFlowRow_alignItemsDefaultsToLeft,
 // testFlowRow_alignItemsCenterVertically, testFlowRow_alignItemsCenterVertically_UsingTopLevelAPI, testFlowColumn_alignItemsDefaultsToTop,
 // testFlowColumn_alignItemsCenterHorizontally and testFlowColumn_alignItemsCenterHorizontally_UsingTopLevelAPI
-// (the custom `Alignment.Vertical`/`Horizontal` objects of `testRow_withCustomVertical_alignment` and its three siblings wait on
-// custom alignments, feature:alignment-api)
 #[test]
 fn items_align_across_their_line_by_their_own_alignment_or_the_flows() {
     for row in [true, false] {
@@ -474,6 +473,132 @@ fn items_align_across_their_line_by_their_own_alignment_or_the_flows() {
         assert_eq!(last_items_cross_offset(row, true, false), 5.0);
         assert_eq!(last_items_cross_offset(row, false, true), 5.0);
     }
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testRow_withCustomVertical_alignment
+#[test]
+fn flow_row_with_custom_vertical_alignment() {
+    let row_height = 200;
+    let box_size = 20;
+    let offset = Rc::new(Cell::new(0.0f32));
+    let captured_space = Rc::new(Cell::new(0));
+    let captured_size = Rc::new(Cell::new(0));
+    let (o, space_out, size_out) = (offset.clone(), captured_space.clone(), captured_size.clone());
+    let _ui = rule(800, move || {
+        let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+        let alignment = VerticalAlignment::custom(move |size, space| {
+            space_out.set(space);
+            size_out.set(size);
+            ((space - size) / 2).clamp(0, space - size)
+        });
+        FlowRow!(item_vertical_alignment = alignment, |_| {
+            let o = o.clone();
+            Box!(
+                modifier = Modifier
+                    .size(box_size.dp())
+                    .on_placed(move |c: LayoutCoordinates| o.set(c.position_in_parent().y))
+            );
+            Box!(modifier = Modifier.size(row_height.dp()));
+        });
+    });
+    assert_eq!(offset.get(), ((row_height - box_size) / 2) as f32);
+    assert_eq!(captured_size.get(), row_height);
+    assert_eq!(captured_space.get(), row_height);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testColumn_withCustomHorizontal_alignment
+#[test]
+fn flow_column_with_custom_horizontal_alignment() {
+    let column_width = 300;
+    let box_size = 40;
+    let offset = Rc::new(Cell::new(0.0f32));
+    let captured_space = Rc::new(Cell::new(0));
+    let captured_size = Rc::new(Cell::new(0));
+    let (o, space_out, size_out) = (offset.clone(), captured_space.clone(), captured_size.clone());
+    let _ui = rule(800, move || {
+        let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+        let alignment = HorizontalAlignment::custom(move |size, space, _| {
+            space_out.set(space);
+            size_out.set(size);
+            ((space - size) / 2).clamp(0, space - size)
+        });
+        FlowColumn!(item_horizontal_alignment = alignment, |_| {
+            let o = o.clone();
+            Box!(
+                modifier = Modifier
+                    .size(box_size.dp())
+                    .on_placed(move |c: LayoutCoordinates| o.set(c.position_in_parent().x))
+            );
+            Box!(modifier = Modifier.size(column_width.dp()));
+        });
+    });
+    assert_eq!(offset.get(), ((column_width - box_size) / 2) as f32);
+    assert_eq!(captured_size.get(), column_width);
+    assert_eq!(captured_space.get(), column_width);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testColumn_withCustomHorizontalAlignModifier
+#[test]
+fn flow_column_with_custom_horizontal_align_modifier() {
+    let column_width = 300;
+    let box_size = 20;
+    let offset = Rc::new(Cell::new(0.0f32));
+    let captured_space = Rc::new(Cell::new(0));
+    let captured_size = Rc::new(Cell::new(0));
+    let (o, space_out, size_out) = (offset.clone(), captured_space.clone(), captured_size.clone());
+    let _ui = rule(800, move || {
+        let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+        FlowColumn!(|column| {
+            let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+            let alignment = HorizontalAlignment::custom(move |size, space, _| {
+                space_out.set(space);
+                size_out.set(size);
+                ((space - size) / 2).clamp(0, space - size)
+            });
+            Box!(
+                modifier = Modifier
+                    .size(box_size.dp())
+                    .align(column, alignment)
+                    .on_placed(move |c: LayoutCoordinates| o.set(c.position_in_parent().x))
+            );
+            Box!(modifier = Modifier.size(column_width.dp()));
+        });
+    });
+    assert_eq!(offset.get(), ((column_width - box_size) / 2) as f32);
+    assert_eq!(captured_size.get(), box_size);
+    assert_eq!(captured_space.get(), column_width);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt, testRow_withCustomVerticalAlignModifier
+#[test]
+fn flow_row_with_custom_vertical_align_modifier() {
+    let row_height = 200;
+    let box_size = 20;
+    let offset = Rc::new(Cell::new(0.0f32));
+    let captured_space = Rc::new(Cell::new(0));
+    let captured_size = Rc::new(Cell::new(0));
+    let (o, space_out, size_out) = (offset.clone(), captured_space.clone(), captured_size.clone());
+    let _ui = rule(800, move || {
+        let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+        FlowRow!(|row| {
+            let (o, space_out, size_out) = (o.clone(), space_out.clone(), size_out.clone());
+            let alignment = VerticalAlignment::custom(move |size, space| {
+                space_out.set(space);
+                size_out.set(size);
+                ((space - size) / 2).clamp(0, space - size)
+            });
+            Box!(
+                modifier = Modifier
+                    .size(box_size.dp())
+                    .align(row, alignment)
+                    .on_placed(move |c: LayoutCoordinates| o.set(c.position_in_parent().y))
+            );
+            Box!(modifier = Modifier.size(row_height.dp()));
+        });
+    });
+    assert_eq!(offset.get(), ((row_height - box_size) / 2) as f32);
+    assert_eq!(captured_size.get(), box_size);
+    assert_eq!(captured_space.get(), row_height);
 }
 
 // ---- Aligned by a line ---------------------------------------------------------------------

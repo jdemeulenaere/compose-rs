@@ -107,7 +107,8 @@ fn the_padding_is_applied() {
                 start: SMALL_PADDING.dp(),
                 top: ITEM_SIZE.dp(),
                 end: SMALL_PADDING.dp(),
-                bottom: ITEM_SIZE.dp()
+                bottom: ITEM_SIZE.dp(),
+                ..PaddingValues::ZERO
             },
             |scope: LazyGridScope| {
                 scope.items(1, |_| Spacer(Modifier.height(ITEM_SIZE.dp()).test_tag(ITEM)));
@@ -235,7 +236,7 @@ fn scrolling_to_the_end_shows_the_end_padding() {
 }
 
 fn uneven() -> PaddingValues {
-    PaddingValues { start: 2.dp(), top: 4.dp(), end: 6.dp(), bottom: 8.dp() }
+    PaddingValues { start: 2.dp(), top: 4.dp(), end: 6.dp(), bottom: 8.dp(), ..PaddingValues::ZERO }
 }
 
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt, verticalGrid_contentPaddingFixedWidthContainer

@@ -735,8 +735,13 @@ fn a_fields_interaction_source_paddings_and_shape_are_its_own() {
                 placeholder = Some(|| {
                     Spacer(Modifier.width(20.dp()).height(30.dp()).test_tag(INNER));
                 }),
-                content_padding =
-                    Some(PaddingValues { start: 7.dp(), top: 3.dp(), end: 0.dp(), bottom: 5.dp() }),
+                content_padding = Some(PaddingValues {
+                    start: 7.dp(),
+                    top: 3.dp(),
+                    end: 0.dp(),
+                    bottom: 5.dp(),
+                    ..PaddingValues::ZERO
+                }),
                 shape = Shape::Rectangle,
                 interaction_source = Some(source.clone())
             );
@@ -1166,6 +1171,7 @@ fn the_cut_is_between_the_paddings() {
                     top: 16.dp(),
                     end: 10.dp(),
                     bottom: 16.dp(),
+                    ..PaddingValues::ZERO
                 }),
                 container = Some(|| {
                     Box!(modifier = Modifier.background(Color::RED));

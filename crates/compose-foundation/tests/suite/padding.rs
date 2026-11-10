@@ -1,8 +1,7 @@
 //! Compose's `PaddingTest`: `padding`'s overloads applied to a child, with too little room and
-//! right to left, through the `LayoutTest` helpers of [`layout_test`](crate::layout_test). Its
-//! intrinsics test is in `intrinsics.rs`; `PaddingValuesTest` at the end. Not ported: `absolutePadding` and
-//! `PaddingValues.Absolute`, and the negative padding checks (the layout-modifiers feature); its
-//! inspector tests are n/a.
+//! right to left, `absolutePadding` and `PaddingValues.Absolute`, and the negative padding checks,
+//! through the `LayoutTest` helpers of [`layout_test`](crate::layout_test). Its intrinsics test
+//! is in `intrinsics.rs`; `PaddingValuesTest` at the end. Its inspector tests are n/a.
 
 use compose_foundation::layout::*;
 use compose_foundation::*;
@@ -56,6 +55,57 @@ fn assert_insets(padding: Modifier, left: Dp, top: Dp, right: Dp, bottom: Dp) {
     assert_eq!(probe.position(0), offset(x, y));
 }
 
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, negativeStartPadding_throws
+#[test]
+#[should_panic(expected = "Padding must be non-negative")]
+fn negative_start_padding_panics() {
+    let _ = Modifier.padding(PaddingValues { start: Dp(-1.0), ..PaddingValues::ZERO });
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, negativeTopPadding_throws
+#[test]
+#[should_panic(expected = "Padding must be non-negative")]
+fn negative_top_padding_panics() {
+    let _ = Modifier.padding(PaddingValues { top: Dp(-1.0), ..PaddingValues::ZERO });
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, negativeEndPadding_throws
+#[test]
+#[should_panic(expected = "Padding must be non-negative")]
+fn negative_end_padding_panics() {
+    let _ = Modifier.padding(PaddingValues { end: Dp(-1.0), ..PaddingValues::ZERO });
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, negativeBottomPadding_throws
+#[test]
+#[should_panic(expected = "Padding must be non-negative")]
+fn negative_bottom_padding_panics() {
+    let _ = Modifier.padding(PaddingValues { bottom: Dp(-1.0), ..PaddingValues::ZERO });
+}
+
+/// Compose's constructors check too (`PaddingValuesImpl`, `PaddingValues.Absolute`,
+/// `absolutePadding`'s element); an unspecified side is no padding, as `padding(start, …)`'s.
+#[test]
+fn every_padding_constructor_refuses_a_negative_side() {
+    let negative = Dp(-1.0);
+    let panics = |make: fn(Dp)| std::panic::catch_unwind(move || make(negative)).is_err();
+    assert!(panics(|side| {
+        let _ = PaddingValues::new(side, Dp(0.0), Dp(0.0), Dp(0.0));
+    }));
+    assert!(panics(|side| {
+        let _ = PaddingValues::all(side);
+    }));
+    assert!(panics(|side| {
+        let _ = PaddingValues::absolute(Dp(0.0), Dp(0.0), side, Dp(0.0));
+    }));
+    assert!(panics(|side| drop(Modifier.absolute_padding(side, Dp(0.0), Dp(0.0), Dp(0.0)))));
+    assert!(panics(|side| {
+        drop(Modifier.padding(PaddingValues { left: side, ..PaddingValues::ZERO }))
+    }));
+    let unspecified = PaddingValues { start: Dp::UNSPECIFIED, ..PaddingValues::ZERO };
+    let _ = Modifier.padding(unspecified);
+}
+
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, allEqualToAbsoluteWithExplicitSides
 #[test]
 fn all_equal_to_absolute_with_explicit_sides() {
@@ -81,8 +131,23 @@ fn padding_all_applied_to_child() {
 #[test]
 fn padding_padding_values_applied_to_child() {
     let (start, top, end, bottom) = (Dp(1.0), Dp(3.0), Dp(6.0), Dp(10.0));
-    let padding = PaddingValues { start, top, end, bottom };
+    let padding = PaddingValues { start, top, end, bottom, ..PaddingValues::ZERO };
     assert_insets(Modifier.padding(padding), start, top, end, bottom);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, absolutePaddingAppliedToChild
+#[test]
+fn absolute_padding_applied_to_child() {
+    let (left, top, right, bottom) = (Dp(10.0), Dp(15.0), Dp(20.0), Dp(30.0));
+    let padding = Modifier.absolute_padding(left, top, right, bottom);
+    assert_insets(padding, left, top, right, bottom);
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, paddingAbsolutePaddingValuesAppliedToChild
+#[test]
+fn padding_absolute_padding_values_applied_to_child() {
+    let padding = PaddingValues::absolute(Dp(1.0), Dp(3.0), Dp(6.0), Dp(10.0));
+    assert_insets(Modifier.padding(padding), Dp(1.0), Dp(3.0), Dp(6.0), Dp(10.0));
 }
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, insufficientSpaceAvailable
@@ -138,6 +203,81 @@ fn padding_rtl() {
     for index in 0..3 {
         assert_eq!(probe.size(index), self::size(size, size));
     }
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, testAbsolutePadding_rtl
+#[test]
+fn absolute_padding_rtl() {
+    let size_dp = px(100.0);
+    let size = round(size_dp);
+    let (padding1_dp, padding2_dp, padding3_dp) = (Dp(5.0), Dp(10.0), Dp(15.0));
+    let (padding1, padding2, padding3) =
+        (round(padding1_dp), round(padding2_dp), round(padding3_dp));
+    let probe = Probe::new(2);
+    let p = probe.clone();
+    // Left to right: P1 S P2 | S P3; right to left: S P3 | P1 S P2.
+    let _ui = show(move || {
+        let p = p.clone();
+        rtl(move || {
+            let p = p.clone();
+            Row!(modifier = Modifier.fill_max_size(), |_| {
+                let zero = Dp(0.0);
+                let first = Modifier.absolute_padding(padding1_dp, zero, padding2_dp, zero);
+                Box!(modifier = first.size(size_dp).then(p.at(0)));
+                let second = Modifier.absolute_padding(zero, zero, padding3_dp, zero);
+                Box!(modifier = second.size(size_dp).then(p.at(1)));
+            });
+        });
+    });
+    let width = ROOT.width;
+    assert_eq!(probe.position(0), offset(width - padding2 - size, 0));
+    let second = width - size * 2 - padding1 - padding2 - padding3;
+    assert_eq!(probe.position(1), offset(second, 0));
+}
+
+/// `PaddingValues.Absolute` given to `padding` right to left keeps its left on the left, too
+/// little room or not, as Compose's `PaddingValuesModifier` (`place`, not `placeRelative`).
+#[test]
+fn absolute_padding_values_keep_their_sides_right_to_left() {
+    let probe = Probe::new(2);
+    let p = probe.clone();
+    let _ui = show(move || {
+        let p = p.clone();
+        rtl(move || {
+            let p = p.clone();
+            Row!(modifier = Modifier.fill_max_size(), |_| {
+                let padding = PaddingValues::absolute(px(5.0), px(0.0), px(10.0), px(0.0));
+                Box!(modifier = Modifier.padding(padding).size(px(100.0)).then(p.at(0)));
+                // 30 px of padding in 20: the content still starts 25 px from the left.
+                let tight = PaddingValues::absolute(px(25.0), px(0.0), px(5.0), px(0.0));
+                let modifier = Modifier.required_width(px(20.0)).padding(tight).then(p.at(1));
+                Box!(modifier = modifier);
+            });
+        });
+    });
+    let width = ROOT.width;
+    assert_eq!(probe.position(0), offset(width - 10 - 100, 0));
+    assert_eq!(probe.size(1), size(0, 0));
+    let tight_left = width - 115 - 20;
+    assert_eq!(probe.position(1), offset(tight_left + 25, 0));
+}
+
+/// An absolute and a relative padding added keep both kinds of sides, as Compose's `plus`
+/// reads each in the layout's direction (D2320).
+#[test]
+fn absolute_and_relative_paddings_add_side_by_side() {
+    let absolute = PaddingValues::absolute(Dp(1.0), Dp(2.0), Dp(3.0), Dp(4.0));
+    let relative = PaddingValues::new(Dp(10.0), Dp(20.0), Dp(30.0), Dp(40.0));
+    let sum = absolute + relative;
+    assert_eq!(sides(sum), [Dp(11.0), Dp(22.0), Dp(33.0), Dp(44.0)]);
+    assert_eq!(sum.calculate_left_padding(LayoutDirection::Rtl), Dp(31.0));
+    assert_eq!(sum.calculate_right_padding(LayoutDirection::Rtl), Dp(13.0));
+    assert_eq!(sum.calculate_start_padding(LayoutDirection::Rtl), Dp(13.0));
+    assert_eq!(sum.calculate_end_padding(LayoutDirection::Rtl), Dp(31.0));
+    let resolved = sum.resolved(LayoutDirection::Rtl);
+    assert_eq!((resolved.start, resolved.end), (Dp(13.0), Dp(31.0)));
+    assert_eq!((resolved.left, resolved.right), (Dp(0.0), Dp(0.0)));
+    assert_ne!(absolute, PaddingValues::new(Dp(1.0), Dp(2.0), Dp(3.0), Dp(4.0)));
 }
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt, testPaddingValuesRtl

@@ -619,8 +619,13 @@ pub struct ExposedDropdownMenuDefaults;
 impl ExposedDropdownMenuDefaults {
     /// The padding of a `DropdownMenuItem` lining it up with the text field, as
     /// `ItemContentPadding`.
-    pub const ITEM_CONTENT_PADDING: PaddingValues =
-        PaddingValues { start: Dp(16.0), top: Dp(0.0), end: Dp(16.0), bottom: Dp(0.0) };
+    pub const ITEM_CONTENT_PADDING: PaddingValues = PaddingValues {
+        start: Dp(16.0),
+        top: Dp(0.0),
+        end: Dp(16.0),
+        bottom: Dp(0.0),
+        ..PaddingValues::ZERO
+    };
 
     /// The arrow, pointing up while `expanded`, as `TrailingIcon`.
     pub fn trailing_icon(expanded: bool, modifier: Modifier) {

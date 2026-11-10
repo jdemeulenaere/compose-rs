@@ -9,12 +9,16 @@ use std::rc::Rc;
 use compose_runtime::{ComposeArg, composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    AlignByScope, AlignScope, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
-    IntrinsicMeasureScope, Layout, LayoutDirection, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, WeightScope,
+    AlignByScope, AlignScope, Alignment, AlignmentLine, AnyHorizontalAlignment,
+    AnyVerticalAlignment, Constraints, IntrinsicMeasurable, IntrinsicMeasureScope, Layout,
+    LayoutDirection, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
+    ParentAlignment, Placeable, WeightScope,
 };
 
-use super::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
+use super::{
+    CrossAxisDefault, HorizontalArrangement, MainAxisArrangement, VerticalArrangement,
+    align_cross_axis,
+};
 
 /// The content scope of a `FlowRow`, as Compose's `FlowRowScope` (a `RowScope`): `weight` and
 /// `align` take it, and `fill_max_row_height`.
@@ -29,16 +33,22 @@ impl WeightScope for FlowRowScope {}
 impl WeightScope for FlowColumnScope {}
 
 impl AlignScope for FlowRowScope {
-    type Alignment = VerticalAlignment;
-    fn parent_alignment(alignment: VerticalAlignment) -> ParentAlignment {
-        ParentAlignment::Vertical(alignment)
+    type Alignment = AnyVerticalAlignment;
+    fn parent_alignment(alignment: AnyVerticalAlignment) -> ParentAlignment {
+        ParentAlignment::Vertical(alignment.as_bias().unwrap_or(Alignment::TOP))
+    }
+    fn align_modifier(modifier: Modifier, alignment: AnyVerticalAlignment) -> Modifier {
+        compose_ui::platform::apply_vertical_align(modifier, alignment)
     }
 }
 
 impl AlignScope for FlowColumnScope {
-    type Alignment = HorizontalAlignment;
-    fn parent_alignment(alignment: HorizontalAlignment) -> ParentAlignment {
-        ParentAlignment::Horizontal(alignment)
+    type Alignment = AnyHorizontalAlignment;
+    fn parent_alignment(alignment: AnyHorizontalAlignment) -> ParentAlignment {
+        ParentAlignment::Horizontal(alignment.as_bias().unwrap_or(Alignment::START))
+    }
+    fn align_modifier(modifier: Modifier, alignment: AnyHorizontalAlignment) -> Modifier {
+        compose_ui::platform::apply_horizontal_align(modifier, alignment)
     }
 }
 
@@ -104,23 +114,26 @@ impl FlowLayoutModifiers for Modifier {
 /// `horizontal_arrangement`, its items aligned by `item_vertical_alignment` (or their own
 /// `align`), the rows arranged by `vertical_arrangement`. A `weight` shares what's left of the
 /// row an item ends up in.
-#[composable]
+#[composable(non_restartable)]
 pub fn FlowRow(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
-    #[default(crate::Alignment::TOP)] item_vertical_alignment: VerticalAlignment,
+    #[default(crate::Alignment::TOP)] item_vertical_alignment: impl Into<AnyVerticalAlignment>,
     #[default(u32::MAX)] max_items_in_each_row: u32,
     #[default(u32::MAX)] max_lines: u32,
     content: impl Fn(FlowRowScope) + 'static,
 ) {
+    let horizontal_arrangement = horizontal_arrangement.into();
+    let vertical_arrangement = vertical_arrangement.into();
+    let item_vertical_alignment = item_vertical_alignment.into();
     let policy = remember_keyed(
         (
             horizontal_arrangement.clone(),
             vertical_arrangement.clone(),
-            item_vertical_alignment,
+            item_vertical_alignment.clone(),
             max_items_in_each_row,
             max_lines,
         ),
@@ -129,35 +142,41 @@ pub fn FlowRow(
                 horizontal: true,
                 main: horizontal_arrangement.0.clone(),
                 cross: vertical_arrangement.0.clone(),
-                bias: item_vertical_alignment.bias,
+                cross_alignment: CrossAxisDefault::from_vertical(item_vertical_alignment),
                 max_items: max_items_in_each_row,
                 max_lines,
             }) as Rc<dyn MeasurePolicy>
         },
     );
-    Layout(modifier, policy, compose_runtime::callback(move || content(FlowRowScope(()))));
+    let content = remember_keyed(content.clone(), || {
+        compose_runtime::callback(move || content(FlowRowScope(())))
+    });
+    Layout(modifier, policy, content);
 }
 
 /// Children from the top, wrapping onto a new column beside when the next doesn't fit, as
 /// Compose's `FlowColumn` (`FlowRow` turned: the first column at the start, on the right in a
 /// right-to-left layout).
-#[composable]
+#[composable(non_restartable)]
 pub fn FlowColumn(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
-    #[default(crate::Alignment::START)] item_horizontal_alignment: HorizontalAlignment,
+    #[default(crate::Alignment::START)] item_horizontal_alignment: impl Into<AnyHorizontalAlignment>,
     #[default(u32::MAX)] max_items_in_each_column: u32,
     #[default(u32::MAX)] max_lines: u32,
     content: impl Fn(FlowColumnScope) + 'static,
 ) {
+    let vertical_arrangement = vertical_arrangement.into();
+    let horizontal_arrangement = horizontal_arrangement.into();
+    let item_horizontal_alignment = item_horizontal_alignment.into();
     let policy = remember_keyed(
         (
             vertical_arrangement.clone(),
             horizontal_arrangement.clone(),
-            item_horizontal_alignment,
+            item_horizontal_alignment.clone(),
             max_items_in_each_column,
             max_lines,
         ),
@@ -166,13 +185,16 @@ pub fn FlowColumn(
                 horizontal: false,
                 main: vertical_arrangement.0.clone(),
                 cross: horizontal_arrangement.0.clone(),
-                bias: item_horizontal_alignment.bias,
+                cross_alignment: CrossAxisDefault::from_horizontal(item_horizontal_alignment),
                 max_items: max_items_in_each_column,
                 max_lines,
             }) as Rc<dyn MeasurePolicy>
         },
     );
-    Layout(modifier, policy, compose_runtime::callback(move || content(FlowColumnScope(()))));
+    let content = remember_keyed(content.clone(), || {
+        compose_runtime::callback(move || content(FlowColumnScope(())))
+    });
+    Layout(modifier, policy, content);
 }
 
 /// The flow layouts' policy, as Compose's `FlowMeasurePolicy` with `FlowRowOverflow.Clip`.
@@ -185,7 +207,7 @@ struct FlowMeasurePolicy {
     /// Of the lines: a row's vertical arrangement, a column's horizontal one.
     cross: MainAxisArrangement,
     /// The items' alignment across their line.
-    bias: f32,
+    cross_alignment: CrossAxisDefault,
     max_items: u32,
     max_lines: u32,
 }
@@ -447,9 +469,8 @@ impl FlowMeasurePolicy {
         }
         let main = ((fixed as i64 + weighted_space).max(0) as i32).max(main_min);
         // Those aligned by a line, what's before and after the line they share, as a row's.
-        let any_align_by = range
-            .clone()
-            .any(|index| super::is_align_by(scope.parent_data(measurables[index]).alignment));
+        let any_align_by =
+            range.clone().any(|index| super::has_align_by(scope, measurables[index]));
         let (mut before_line, mut after_line) = (0, 0);
         if any_align_by {
             for index in range.clone() {
@@ -491,20 +512,14 @@ impl FlowMeasurePolicy {
                     };
                     return Placed { index, main: positions[index - start], cross };
                 }
-                // As `RowColumnMeasurePolicy::cross_bias_of` (D1927, D2111): an alignment of the
-                // other axis aligns across too; a vertical one isn't mirrored in a right-to-left
-                // column, and a horizontal one isn't mirrored in a row.
-                let (mut own, mirrored) = match scope.parent_data(measurables[index]).alignment {
-                    Some(ParentAlignment::Vertical(alignment)) => (alignment.bias, false),
-                    Some(ParentAlignment::Horizontal(alignment)) => {
-                        (alignment.bias, !self.horizontal)
-                    }
-                    _ => (self.bias, !self.horizontal),
-                };
-                if rtl_column && mirrored {
-                    own = -own;
-                }
-                let cross = VerticalAlignment { bias: own }.align(item_cross, cross);
+                let cross = align_cross_axis(
+                    &self.cross_alignment,
+                    scope,
+                    measurables[index],
+                    item_cross,
+                    cross,
+                    self.horizontal,
+                );
                 Placed { index, main: positions[index - start], cross }
             })
             .collect();

@@ -572,6 +572,7 @@ fn right_to_left_the_cut_is_on_the_right() {
                             top: 16.dp(),
                             end: 10.dp(),
                             bottom: 16.dp(),
+                            ..PaddingValues::ZERO
                         }),
                         colors = TextFieldColors {
                             unfocused_container_color: Color::RED,

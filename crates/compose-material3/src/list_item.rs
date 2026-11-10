@@ -847,7 +847,11 @@ fn interactive_list_item(
     );
     let Slots { leading_content, trailing_content, overline_content, supporting_content, content } =
         slots;
-    let (leading_start, trailing_end) = (content_padding.start, content_padding.end);
+    let direction = compose_ui::LOCAL_LAYOUT_DIRECTION.current();
+    let (leading_start, trailing_end) = (
+        content_padding.calculate_start_padding(direction),
+        content_padding.calculate_end_padding(direction),
+    );
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         Layout(
             modifier.clone(),

@@ -498,7 +498,7 @@ pub fn ToggleButton(
             provide_content_color_text_style(content_color, text_style, || {
                 Row(
                     Modifier.default_min_size(Dp::UNSPECIFIED, height).padding(content_padding),
-                    Arrangement::CENTER.into(),
+                    Arrangement::CENTER,
                     Alignment::CENTER_VERTICALLY,
                     compose_runtime::callback(move |scope: RowScope| {
                         if let Some(icon) = icon.clone() {

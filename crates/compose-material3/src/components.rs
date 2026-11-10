@@ -948,7 +948,13 @@ impl TextFieldDefaults {
     /// A filled field's paddings with a label inside, as `contentPaddingWithLabel()`: 16 dp at the
     /// sides, 8 above and below. Change them with struct update.
     pub const fn content_padding_with_label() -> compose_ui::PaddingValues {
-        compose_ui::PaddingValues { start: Dp(16.0), top: Dp(8.0), end: Dp(16.0), bottom: Dp(8.0) }
+        compose_ui::PaddingValues {
+            start: Dp(16.0),
+            top: Dp(8.0),
+            end: Dp(16.0),
+            bottom: Dp(8.0),
+            ..compose_ui::PaddingValues::ZERO
+        }
     }
 
     /// Without one inside, as `contentPaddingWithoutLabel()`: 16 dp all round.
@@ -958,6 +964,7 @@ impl TextFieldDefaults {
             top: Dp(16.0),
             end: Dp(16.0),
             bottom: Dp(16.0),
+            ..compose_ui::PaddingValues::ZERO
         }
     }
 

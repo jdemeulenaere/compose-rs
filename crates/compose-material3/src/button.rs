@@ -476,7 +476,7 @@ pub fn Button(
                     Modifier
                         .default_min_size(ButtonDefaults::MIN_WIDTH, ButtonDefaults::MIN_HEIGHT)
                         .padding(content_padding),
-                    Arrangement::CENTER.into(),
+                    Arrangement::CENTER,
                     Alignment::CENTER_VERTICALLY,
                     content.clone(),
                 );

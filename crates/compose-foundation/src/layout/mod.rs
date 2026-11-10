@@ -14,18 +14,23 @@ use std::rc::Rc;
 use compose_runtime::{composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    AlignScope, Alignment, AlignmentLine, Constraints, HorizontalAlignment, IntrinsicMeasurable,
-    IntrinsicMeasureScope, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
-    Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
+    AlignScope, Alignment, AlignmentLine, AnyHorizontalAlignment, AnyVerticalAlignment,
+    Constraints, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment,
+    empty_measure_policy,
 };
 use smallvec_free::Buffer;
 
 pub(crate) use arrangement::MainAxisArrangement;
 pub use arrangement::{
-    AlignedBy, Arrangement, HorizontalArrangement, HorizontalArrangementPolicy,
-    HorizontalOrVerticalArrangement, SpacedBy, VerticalArrangement, VerticalArrangementPolicy,
+    AbsoluteArrangement, AbsoluteSpacedBy, AlignedBy, Arrangement, HorizontalArrangement,
+    HorizontalArrangementPolicy, HorizontalOrVerticalArrangement, SpacedBy, VerticalArrangement,
+    VerticalArrangementPolicy,
 };
-pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
+pub use compose_ui::{
+    BoxScope, ColumnScope, HorizontalAlignmentPolicy, PaddingValues, RowScope, SizeSpec,
+    VerticalAlignmentPolicy,
+};
 pub use flex::{
     FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBox, FlexBoxConfig,
     FlexBoxConfigScope, FlexBoxModifiers, FlexBoxScope, FlexConfig, FlexConfigScope, FlexDirection,
@@ -114,6 +119,87 @@ impl AxisConstraints {
     }
 }
 
+/// How a `Row`, `Column`, `FlowRow`, or `FlowColumn` aligns children across its main axis:
+/// a fast bias by default, or a custom horizontal/vertical alignment policy (D2322).
+#[derive(Clone, PartialEq)]
+pub(crate) enum CrossAxisDefault {
+    Bias(f32),
+    Horizontal(AnyHorizontalAlignment),
+    Vertical(AnyVerticalAlignment),
+}
+
+impl CrossAxisDefault {
+    pub(crate) fn from_horizontal(alignment: AnyHorizontalAlignment) -> CrossAxisDefault {
+        match alignment.as_bias() {
+            Some(bias) => CrossAxisDefault::Bias(bias.bias),
+            None => CrossAxisDefault::Horizontal(alignment),
+        }
+    }
+
+    pub(crate) fn from_vertical(alignment: AnyVerticalAlignment) -> CrossAxisDefault {
+        match alignment.as_bias() {
+            Some(bias) => CrossAxisDefault::Bias(bias.bias),
+            None => CrossAxisDefault::Vertical(alignment),
+        }
+    }
+}
+
+/// Cross-axis offset of `measurable` (of size `child_cross` in `cross_size`) in a row
+/// (`horizontal == true`) or column (`horizontal == false`).
+pub(crate) fn align_cross_axis(
+    default: &CrossAxisDefault,
+    scope: &MeasureScope<'_>,
+    measurable: Measurable,
+    child_cross: i32,
+    cross_size: i32,
+    horizontal: bool,
+) -> i32 {
+    let layout_direction = scope.layout_direction();
+    let rtl_column = !horizontal && layout_direction == compose_ui::LayoutDirection::Rtl;
+    let direction = if horizontal { compose_ui::LayoutDirection::Ltr } else { layout_direction };
+    if let Some(custom) = scope.custom_alignment(measurable) {
+        return match custom {
+            compose_ui::platform::CustomCrossAlignment::Horizontal(alignment) => {
+                alignment.align(child_cross, cross_size, direction)
+            }
+            compose_ui::platform::CustomCrossAlignment::Vertical(alignment) => {
+                alignment.align(child_cross, cross_size)
+            }
+        };
+    }
+    match scope.parent_data(measurable).alignment {
+        Some(ParentAlignment::Vertical(alignment)) => {
+            if child_cross == cross_size || alignment.bias == -1.0 {
+                0
+            } else {
+                alignment.align(child_cross, cross_size)
+            }
+        }
+        Some(ParentAlignment::Horizontal(alignment)) => {
+            let bias = if rtl_column { -alignment.bias } else { alignment.bias };
+            if child_cross == cross_size || bias == -1.0 {
+                0
+            } else {
+                VerticalAlignment { bias }.align(child_cross, cross_size)
+            }
+        }
+        _ => match default {
+            CrossAxisDefault::Bias(bias) => {
+                let bias = if rtl_column { -*bias } else { *bias };
+                if child_cross == cross_size || bias == -1.0 {
+                    0
+                } else {
+                    VerticalAlignment { bias }.align(child_cross, cross_size)
+                }
+            }
+            CrossAxisDefault::Horizontal(alignment) => {
+                alignment.align(child_cross, cross_size, direction)
+            }
+            CrossAxisDefault::Vertical(alignment) => alignment.align(child_cross, cross_size),
+        },
+    }
+}
+
 /// `Row`'s and `Column`'s measure policy, as Compose's `RowColumnMeasurePolicy`: children
 /// without weight measured first with the space left, then the weighted ones sharing what
 /// remains in proportion; placed by the arrangement along the main axis and by their alignment
@@ -122,8 +208,8 @@ impl AxisConstraints {
 pub(crate) struct RowColumnMeasurePolicy {
     orientation: Orientation,
     arrangement: MainAxisArrangement,
-    /// A `Row`'s vertical bias or a `Column`'s horizontal bias.
-    cross_bias: f32,
+    /// A `Row`'s vertical alignment or a `Column`'s horizontal alignment.
+    cross_alignment: CrossAxisDefault,
 }
 
 impl RowColumnMeasurePolicy {
@@ -138,35 +224,6 @@ impl RowColumnMeasurePolicy {
         match self.orientation {
             Orientation::Horizontal => placeable.height,
             Orientation::Vertical => placeable.width,
-        }
-    }
-
-    /// The child's bias across the axis, mirrored in a right-to-left column (`rtl_column`) for a
-    /// horizontal alignment, never in a row (Compose's `Row` aligns across in `Ltr`). An
-    /// alignment of the other axis aligns across all the same, as Compose's `CrossAxisAlignment`
-    /// (a `ColumnScope.align(End)` child of a row goes to its bottom, D1927, D2111).
-    fn cross_bias_of(
-        &self,
-        scope: &MeasureScope<'_>,
-        measurable: Measurable,
-        rtl_column: bool,
-    ) -> f32 {
-        match scope.parent_data(measurable).alignment {
-            Some(ParentAlignment::Vertical(alignment)) => alignment.bias,
-            Some(ParentAlignment::Horizontal(alignment)) => {
-                if rtl_column {
-                    -alignment.bias
-                } else {
-                    alignment.bias
-                }
-            }
-            _ => {
-                if rtl_column {
-                    -self.cross_bias
-                } else {
-                    self.cross_bias
-                }
-            }
         }
     }
 }
@@ -201,7 +258,7 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         let mut any_align_by = false;
         for (index, &measurable) in measurables.iter().enumerate() {
             let data = scope.parent_data(measurable);
-            any_align_by |= is_align_by(data.alignment);
+            any_align_by |= has_align_by(scope, measurable);
             if let Some((weight, _)) = data.weight {
                 total_weight += weight;
                 weighted += 1;
@@ -319,12 +376,14 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
                     before_line - position
                 }
             } else {
-                let bias = self.cross_bias_of(scope, measurable, rtl_column);
-                if child_cross == cross_size || bias == -1.0 {
-                    0
-                } else {
-                    VerticalAlignment { bias }.align(child_cross, cross_size)
-                }
+                align_cross_axis(
+                    &self.cross_alignment,
+                    scope,
+                    measurable,
+                    child_cross,
+                    cross_size,
+                    self.orientation == Orientation::Horizontal,
+                )
             };
             match self.orientation {
                 Orientation::Horizontal => scope.place(&placeable, positions[index], cross),
@@ -412,17 +471,24 @@ impl RowColumnMeasurePolicy {
     }
 }
 
-/// Whether it's aligned by a line, as Compose's `isRelative`.
-fn is_align_by(alignment: Option<ParentAlignment>) -> bool {
-    matches!(alignment, Some(ParentAlignment::Line(_) | ParentAlignment::Block(_)))
+/// Whether it's aligned by a line (and not overridden by an outer custom alignment), as
+/// Compose's `isRelative`.
+pub(crate) fn has_align_by(scope: &MeasureScope<'_>, measurable: Measurable) -> bool {
+    matches!(
+        scope.parent_data(measurable).alignment,
+        Some(ParentAlignment::Line(_) | ParentAlignment::Block(_))
+    ) && scope.custom_alignment(measurable).is_none()
 }
 
-/// Where its line is, if it's aligned by one.
+/// Where its line is, if it's aligned by one (and not overridden by an outer custom alignment).
 fn line_position(
     scope: &mut MeasureScope<'_>,
     measurable: Measurable,
     placeable: &Placeable,
 ) -> Option<i32> {
+    if scope.custom_alignment(measurable).is_some() {
+        return None;
+    }
     match scope.parent_data(measurable).alignment {
         Some(ParentAlignment::Line(line)) => Some(scope.alignment_line(placeable, line)),
         Some(ParentAlignment::Block(_)) => {
@@ -676,41 +742,53 @@ pub fn Canvas_with(
 }
 
 /// A row: its children side by side, as Compose's `Row`.
-#[composable]
+#[composable(non_restartable)]
 pub fn Row(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
-    #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
+    #[default(crate::Alignment::TOP)] vertical_alignment: impl Into<AnyVerticalAlignment>,
     content: impl Fn(RowScope) + 'static,
 ) {
-    let policy = remember_keyed((horizontal_arrangement.clone(), vertical_alignment), || {
-        Rc::new(RowColumnMeasurePolicy {
-            orientation: Orientation::Horizontal,
-            arrangement: horizontal_arrangement.0,
-            cross_bias: vertical_alignment.bias,
-        }) as Rc<dyn MeasurePolicy>
+    let horizontal_arrangement = horizontal_arrangement.into();
+    let vertical_alignment = vertical_alignment.into();
+    let policy =
+        remember_keyed((horizontal_arrangement.clone(), vertical_alignment.clone()), || {
+            Rc::new(RowColumnMeasurePolicy {
+                orientation: Orientation::Horizontal,
+                arrangement: horizontal_arrangement.0,
+                cross_alignment: CrossAxisDefault::from_vertical(vertical_alignment),
+            }) as Rc<dyn MeasurePolicy>
+        });
+    let content = remember_keyed(content.clone(), || {
+        compose_runtime::callback(move || content(RowScope::__new()))
     });
-    Layout(modifier, policy, compose_runtime::callback(move || content(RowScope::__new())));
+    Layout(modifier, policy, content);
 }
 
 /// A column: its children one below the other, as Compose's `Column`.
-#[composable]
+#[composable(non_restartable)]
 pub fn Column(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
-    #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
+    #[default(crate::Alignment::START)] horizontal_alignment: impl Into<AnyHorizontalAlignment>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    let policy = remember_keyed((vertical_arrangement.clone(), horizontal_alignment), || {
-        Rc::new(RowColumnMeasurePolicy {
-            orientation: Orientation::Vertical,
-            arrangement: vertical_arrangement.0,
-            cross_bias: horizontal_alignment.bias,
-        }) as Rc<dyn MeasurePolicy>
+    let vertical_arrangement = vertical_arrangement.into();
+    let horizontal_alignment = horizontal_alignment.into();
+    let policy =
+        remember_keyed((vertical_arrangement.clone(), horizontal_alignment.clone()), || {
+            Rc::new(RowColumnMeasurePolicy {
+                orientation: Orientation::Vertical,
+                arrangement: vertical_arrangement.0,
+                cross_alignment: CrossAxisDefault::from_horizontal(horizontal_alignment),
+            }) as Rc<dyn MeasurePolicy>
+        });
+    let content = remember_keyed(content.clone(), || {
+        compose_runtime::callback(move || content(ColumnScope::__new()))
     });
-    Layout(modifier, policy, compose_runtime::callback(move || content(ColumnScope::__new())));
+    Layout(modifier, policy, content);
 }
 
 // ---- Box and Spacer --------------------------------------------------------------------------

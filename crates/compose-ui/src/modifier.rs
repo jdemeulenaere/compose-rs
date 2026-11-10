@@ -9,7 +9,9 @@ use std::rc::Rc;
 use compose_runtime::{Callback, ComposeArg, IntoCallback};
 use smallvec::SmallVec;
 
-use crate::alignment::{Alignment, HorizontalAlignment, VerticalAlignment};
+use crate::alignment::{
+    Alignment, AnyHorizontalAlignment, AnyVerticalAlignment, HorizontalAlignment, VerticalAlignment,
+};
 use crate::brush::Brush;
 use crate::constraints::Constraints;
 use crate::draw::DrawScope;
@@ -65,12 +67,41 @@ impl Modifier {
     /// Space around the content, as `Modifier.padding`'s overloads: `padding(8.dp())` on every
     /// side, `padding((16.dp(), 8.dp()))` horizontally and vertically, and
     /// `padding(PaddingValues { start: 8.dp(), ..PaddingValues::ZERO })` per side.
+    /// Panics if a side is negative, as Compose's (`Dp::UNSPECIFIED` is none).
+    #[track_caller]
     pub fn padding(self, padding: impl Into<PaddingValues>) -> Modifier {
         self.padding_of(padding.into())
     }
 
+    #[track_caller]
     fn padding_of(self, padding: PaddingValues) -> Modifier {
-        self.then_element(Element::Padding(padding))
+        let PaddingValues { start, top, end, bottom, left, right } = padding;
+        check_padding([start, top, end, bottom, left, right], true);
+        let finite_or_zero = |dp: Dp| if dp.0.is_nan() { Dp(0.0) } else { dp };
+        self.then_element(Element::Padding(PaddingValues {
+            start: finite_or_zero(start),
+            top: finite_or_zero(top),
+            end: finite_or_zero(end),
+            bottom: finite_or_zero(bottom),
+            left: finite_or_zero(left),
+            right: finite_or_zero(right),
+        }))
+    }
+
+    /// Space around the content on the left, top, right and bottom whatever the layout's
+    /// direction, as `Modifier.absolutePadding`. Panics if a side is negative, as Compose's
+    /// (`Dp::UNSPECIFIED` is none).
+    #[track_caller]
+    pub fn absolute_padding(self, left: Dp, top: Dp, right: Dp, bottom: Dp) -> Modifier {
+        let zero = Dp(0.0);
+        self.padding_of(PaddingValues { start: zero, top, end: zero, bottom, left, right })
+    }
+
+    /// Shows or hides the content while keeping the space it measured, as `Modifier.visible`:
+    /// hidden (`false`), it still measures and takes its place in its parent, and is not placed
+    /// (not drawn, hit or focused).
+    pub fn visible(self, visible: bool) -> Modifier {
+        self.then_element(Element::Visible(visible))
     }
 
     /// Lays the content out at least `size` in both directions, centered, so small controls are
@@ -242,9 +273,9 @@ impl Modifier {
     }
 
     /// The child's alignment in its parent: a `BoxScope` takes an `Alignment`, a `RowScope` a
-    /// `VerticalAlignment`, a `ColumnScope` a `HorizontalAlignment`.
-    pub fn align<S: AlignScope>(self, _scope: S, alignment: S::Alignment) -> Modifier {
-        self.then_element(Element::Align(S::parent_alignment(alignment)))
+    /// `VerticalAlignment` (or custom), a `ColumnScope` a `HorizontalAlignment` (or custom).
+    pub fn align<S: AlignScope>(self, _scope: S, alignment: impl Into<S::Alignment>) -> Modifier {
+        S::align_modifier(self, alignment.into())
     }
 
     /// Sizes it as its `Box` once the box's other children have sized it, as
@@ -705,28 +736,96 @@ impl Default for ClickableOptions {
 /// Padding in `Dp`, as `PaddingValues`: `PaddingValues::from(8.dp())` on every side,
 /// `PaddingValues::from((16.dp(), 8.dp()))` horizontally and vertically, or per side by struct
 /// update, `PaddingValues { start: 8.dp(), ..PaddingValues::ZERO }` (Compose's zero defaults).
+/// `PaddingValues::absolute(left, top, right, bottom)` is `PaddingValues.Absolute`, whatever
+/// the layout's direction.
+///
+/// Compose's `PaddingValues` is an interface with two implementations, relative (`start`,
+/// `end`) and absolute (`left`, `right`), and their sums; one value holds both kinds of sides
+/// here, each read through `calculate_left_padding` and the others (D2320). Code reading the
+/// sides takes them `resolved` in its layout's direction.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct PaddingValues {
     pub start: Dp,
     pub top: Dp,
     pub end: Dp,
     pub bottom: Dp,
+    /// Padding on the left whatever the direction, as `PaddingValues.Absolute`'s `left`.
+    pub left: Dp,
+    /// Padding on the right whatever the direction, as `PaddingValues.Absolute`'s `right`.
+    pub right: Dp,
+}
+
+/// Panics unless every side is at least zero (or unspecified, where `allow_unspecified`), as
+/// Compose's padding preconditions.
+#[track_caller]
+const fn check_padding(sides: [Dp; 6], allow_unspecified: bool) {
+    let mut index = 0;
+    while index < sides.len() {
+        let side = sides[index].0;
+        assert!(
+            side >= 0.0 || (allow_unspecified && side.is_nan()),
+            "Padding must be non-negative"
+        );
+        index += 1;
+    }
 }
 
 impl PaddingValues {
     /// No padding.
     pub const ZERO: PaddingValues = PaddingValues::new(Dp(0.0), Dp(0.0), Dp(0.0), Dp(0.0));
 
+    /// Padding at the start, top, end and bottom, as `PaddingValues(start, top, end, bottom)`.
+    /// Panics if one is negative, as Compose's.
+    #[track_caller]
     pub const fn new(start: Dp, top: Dp, end: Dp, bottom: Dp) -> PaddingValues {
-        PaddingValues { start, top, end, bottom }
+        let zero = Dp(0.0);
+        check_padding([start, top, end, bottom, zero, zero], false);
+        PaddingValues { start, top, end, bottom, left: zero, right: zero }
     }
 
+    #[track_caller]
     pub const fn all(all: Dp) -> PaddingValues {
         PaddingValues::new(all, all, all, all)
     }
 
+    #[track_caller]
     pub const fn symmetric(horizontal: Dp, vertical: Dp) -> PaddingValues {
         PaddingValues::new(horizontal, vertical, horizontal, vertical)
+    }
+
+    /// Padding on the left, top, right and bottom whatever the layout's direction, as
+    /// `PaddingValues.Absolute(left, top, right, bottom)`. Panics if one is negative.
+    #[track_caller]
+    pub const fn absolute(left: Dp, top: Dp, right: Dp, bottom: Dp) -> PaddingValues {
+        let zero = Dp(0.0);
+        check_padding([zero, top, zero, bottom, left, right], false);
+        PaddingValues { start: zero, top, end: zero, bottom, left, right }
+    }
+
+    /// The same padding with its sides relative to `direction`: the absolute ones folded into
+    /// `start` and `end`, so code reading `start` and `end` in that direction reads them all.
+    pub fn resolved(&self, direction: crate::alignment::LayoutDirection) -> PaddingValues {
+        let zero = Dp(0.0);
+        if self.left == zero && self.right == zero {
+            return *self;
+        }
+        let (start, end) = match direction {
+            crate::alignment::LayoutDirection::Ltr => (self.left, self.right),
+            crate::alignment::LayoutDirection::Rtl => (self.right, self.left),
+        };
+        PaddingValues {
+            start: self.start + start,
+            top: self.top,
+            end: self.end + end,
+            bottom: self.bottom,
+            left: zero,
+            right: zero,
+        }
+    }
+
+    /// Whether it has absolute sides (`left`, `right`).
+    pub(crate) fn has_absolute_sides(&self) -> bool {
+        self.left != Dp(0.0) || self.right != Dp(0.0)
     }
 }
 
@@ -760,17 +859,35 @@ impl ComposeArg for PaddingValues {
 impl PaddingValues {
     /// The padding on the left in `direction`, as `calculateLeftPadding`.
     pub fn calculate_left_padding(&self, direction: crate::alignment::LayoutDirection) -> Dp {
-        match direction {
-            crate::alignment::LayoutDirection::Ltr => self.start,
-            crate::alignment::LayoutDirection::Rtl => self.end,
-        }
+        self.left
+            + match direction {
+                crate::alignment::LayoutDirection::Ltr => self.start,
+                crate::alignment::LayoutDirection::Rtl => self.end,
+            }
     }
 
     /// The padding on the right in `direction`, as `calculateRightPadding`.
     pub fn calculate_right_padding(&self, direction: crate::alignment::LayoutDirection) -> Dp {
+        self.right
+            + match direction {
+                crate::alignment::LayoutDirection::Ltr => self.end,
+                crate::alignment::LayoutDirection::Rtl => self.start,
+            }
+    }
+
+    /// The padding at the start in `direction`, as `calculateStartPadding`.
+    pub fn calculate_start_padding(&self, direction: crate::alignment::LayoutDirection) -> Dp {
         match direction {
-            crate::alignment::LayoutDirection::Ltr => self.end,
-            crate::alignment::LayoutDirection::Rtl => self.start,
+            crate::alignment::LayoutDirection::Ltr => self.calculate_left_padding(direction),
+            crate::alignment::LayoutDirection::Rtl => self.calculate_right_padding(direction),
+        }
+    }
+
+    /// The padding at the end in `direction`, as `calculateEndPadding`.
+    pub fn calculate_end_padding(&self, direction: crate::alignment::LayoutDirection) -> Dp {
+        match direction {
+            crate::alignment::LayoutDirection::Ltr => self.calculate_right_padding(direction),
+            crate::alignment::LayoutDirection::Rtl => self.calculate_left_padding(direction),
         }
     }
 
@@ -790,27 +907,34 @@ impl std::ops::Add for PaddingValues {
 
     /// Each side's sum, as `PaddingValues.plus` (D1930).
     fn add(self, other: PaddingValues) -> PaddingValues {
-        PaddingValues::new(
-            self.start + other.start,
-            self.top + other.top,
-            self.end + other.end,
-            self.bottom + other.bottom,
-        )
+        PaddingValues {
+            start: self.start + other.start,
+            top: self.top + other.top,
+            end: self.end + other.end,
+            bottom: self.bottom + other.bottom,
+            left: self.left + other.left,
+            right: self.right + other.right,
+        }
     }
 }
 
 impl std::ops::Sub for PaddingValues {
     type Output = PaddingValues;
 
-    /// Each side's difference, at least zero, as `PaddingValues.minus` (D1930).
+    /// Each side's difference, at least zero, as `PaddingValues.minus` (D1930). Compose takes
+    /// the difference of each side in the direction it's read in; with sides of one kind on
+    /// each, so does this. A relative padding less an absolute one (or the other way) is taken
+    /// side by side of each kind (D2320).
     fn sub(self, other: PaddingValues) -> PaddingValues {
         let side = |a: Dp, b: Dp| (a - b).max(Dp(0.0));
-        PaddingValues::new(
-            side(self.start, other.start),
-            side(self.top, other.top),
-            side(self.end, other.end),
-            side(self.bottom, other.bottom),
-        )
+        PaddingValues {
+            start: side(self.start, other.start),
+            top: side(self.top, other.top),
+            end: side(self.end, other.end),
+            bottom: side(self.bottom, other.bottom),
+            left: side(self.left, other.left),
+            right: side(self.right, other.right),
+        }
     }
 }
 
@@ -881,6 +1005,85 @@ pub trait WeightScope: Copy {}
 pub trait AlignScope: Copy {
     type Alignment;
     fn parent_alignment(alignment: Self::Alignment) -> ParentAlignment;
+    #[doc(hidden)]
+    fn align_modifier(modifier: Modifier, alignment: Self::Alignment) -> Modifier {
+        modifier.then_element(Element::Align(Self::parent_alignment(alignment)))
+    }
+}
+
+/// A custom cross-axis alignment stored as custom parent data (`CustomAlignElement`) so
+/// `ParentAlignment` and `ParentData` stay `Copy` (D2322).
+#[doc(hidden)]
+#[derive(Clone, PartialEq)]
+pub enum CustomCrossAlignment {
+    Horizontal(AnyHorizontalAlignment),
+    Vertical(AnyVerticalAlignment),
+}
+
+pub(crate) struct CustomAlignElement(pub(crate) CustomCrossAlignment);
+
+pub(crate) struct CustomAlignNode {
+    alignment: CustomCrossAlignment,
+    data: Rc<dyn Any>,
+}
+
+impl ModifierNodeElement for CustomAlignElement {
+    type Node = CustomAlignNode;
+    fn create(&self) -> CustomAlignNode {
+        CustomAlignNode { alignment: self.0.clone(), data: Rc::new(self.0.clone()) }
+    }
+    fn update(&self, node: &mut CustomAlignNode) {
+        node.alignment = self.0.clone();
+        node.data = Rc::new(self.0.clone());
+    }
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+    fn name(&self) -> &'static str {
+        "align"
+    }
+}
+
+impl ModifierNode for CustomAlignNode {
+    fn as_parent_data(&self) -> Option<&dyn crate::parent_data::ParentDataModifierNode> {
+        Some(self)
+    }
+}
+
+impl crate::parent_data::ParentDataModifierNode for CustomAlignNode {
+    fn modify_parent_data(
+        &self,
+        _: crate::unit::Density,
+        _: Option<Rc<dyn Any>>,
+    ) -> Option<Rc<dyn Any>> {
+        Some(self.data.clone())
+    }
+}
+
+/// Applies `alignment` to `modifier`: bias alignments stay inline in `Element::Align`, while custom
+/// ones use a `ParentDataModifierNode`.
+#[doc(hidden)]
+pub fn apply_horizontal_align(modifier: Modifier, alignment: AnyHorizontalAlignment) -> Modifier {
+    match alignment {
+        AnyHorizontalAlignment::Bias(bias) => {
+            modifier.then_element(Element::Align(ParentAlignment::Horizontal(bias)))
+        }
+        custom => {
+            modifier.then_custom(CustomAlignElement(CustomCrossAlignment::Horizontal(custom)))
+        }
+    }
+}
+
+/// Applies `alignment` to `modifier`: bias alignments stay inline in `Element::Align`, while custom
+/// ones use a `ParentDataModifierNode`.
+#[doc(hidden)]
+pub fn apply_vertical_align(modifier: Modifier, alignment: AnyVerticalAlignment) -> Modifier {
+    match alignment {
+        AnyVerticalAlignment::Bias(bias) => {
+            modifier.then_element(Element::Align(ParentAlignment::Vertical(bias)))
+        }
+        custom => modifier.then_custom(CustomAlignElement(CustomCrossAlignment::Vertical(custom))),
+    }
 }
 
 /// A scope whose children take an `align_by`, what kind of line saying which way it aligns.
@@ -935,16 +1138,22 @@ impl WeightScope for RowScope {}
 impl WeightScope for ColumnScope {}
 
 impl AlignScope for RowScope {
-    type Alignment = VerticalAlignment;
-    fn parent_alignment(alignment: VerticalAlignment) -> ParentAlignment {
-        ParentAlignment::Vertical(alignment)
+    type Alignment = AnyVerticalAlignment;
+    fn parent_alignment(alignment: AnyVerticalAlignment) -> ParentAlignment {
+        ParentAlignment::Vertical(alignment.as_bias().unwrap_or(Alignment::TOP))
+    }
+    fn align_modifier(modifier: Modifier, alignment: AnyVerticalAlignment) -> Modifier {
+        apply_vertical_align(modifier, alignment)
     }
 }
 
 impl AlignScope for ColumnScope {
-    type Alignment = HorizontalAlignment;
-    fn parent_alignment(alignment: HorizontalAlignment) -> ParentAlignment {
-        ParentAlignment::Horizontal(alignment)
+    type Alignment = AnyHorizontalAlignment;
+    fn parent_alignment(alignment: AnyHorizontalAlignment) -> ParentAlignment {
+        ParentAlignment::Horizontal(alignment.as_bias().unwrap_or(Alignment::START))
+    }
+    fn align_modifier(modifier: Modifier, alignment: AnyHorizontalAlignment) -> Modifier {
+        apply_horizontal_align(modifier, alignment)
     }
 }
 
@@ -973,6 +1182,7 @@ pub(crate) use crate::clickable::Clickable;
 #[derive(Clone)]
 pub(crate) enum Element {
     Padding(PaddingValues),
+    Visible(bool),
     MinimumTouchTarget(Dp),
     Size(SizeSpec),
     Fill(Fill),
@@ -1012,16 +1222,24 @@ impl Element {
         const ANY: NodeKinds = NodeKinds::ANY;
         Some(match self {
             Element::Padding(_)
+            | Element::Visible(_)
             | Element::MinimumTouchTarget(_)
             | Element::Size(_)
-            | Element::Fill(_) => ANY.with(NodeKinds::LAYOUT),
+            | Element::Fill(_) => {
+                if matches!(self, Element::Visible(_)) {
+                    ANY.with(NodeKinds::LAYOUT).with(NodeKinds::SEMANTICS)
+                } else {
+                    ANY.with(NodeKinds::LAYOUT)
+                }
+            }
             Element::Weight(..)
             | Element::Align(_)
             | Element::AlignBlock(_)
             | Element::ZIndex(_)
             | Element::FillCrossAxis(_) => ANY,
             Element::LazyItemBoundary => ANY.with(NodeKinds::REPAINT_BOUNDARY),
-            Element::Background(..) | Element::Border(..) => ANY.with(NodeKinds::DRAW),
+            Element::Background(..) => ANY.with(NodeKinds::DRAW).with(NodeKinds::SEMANTICS),
+            Element::Border(..) => ANY.with(NodeKinds::DRAW),
             Element::Clip(_) => ANY.with(NodeKinds::DRAW).with(NodeKinds::GRAPHICS_LAYER),
             Element::Clickable(clickable) => {
                 let kinds = ANY
@@ -1057,6 +1275,7 @@ impl Element {
         use Element::*;
         match (self, other) {
             (Padding(a), Padding(b)) => a == b,
+            (Visible(a), Visible(b)) => a == b,
             (MinimumTouchTarget(a), MinimumTouchTarget(b)) => a == b,
             (Size(a), Size(b)) => a == b,
             (Fill(a), Fill(b)) => a == b,
@@ -1084,11 +1303,22 @@ impl fmt::Debug for Element {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Element::*;
         match self {
+            Padding(padding) if padding.has_absolute_sides() => write!(
+                formatter,
+                "padding({:?}, {:?}, {:?}, {:?}, absolute {:?}, {:?})",
+                padding.start,
+                padding.top,
+                padding.end,
+                padding.bottom,
+                padding.left,
+                padding.right
+            ),
             Padding(padding) => write!(
                 formatter,
                 "padding({:?}, {:?}, {:?}, {:?})",
                 padding.start, padding.top, padding.end, padding.bottom
             ),
+            Visible(visible) => write!(formatter, "visible({visible})"),
             MinimumTouchTarget(size) => write!(formatter, "minimum_touch_target({size:?})"),
             Size(spec) => {
                 let bound =
@@ -1400,6 +1630,18 @@ pub trait ModifierNode: Any {
     /// A node that invalidates itself, and only when its update changed something, says no.
     fn should_auto_invalidate(&self) -> bool {
         true
+    }
+    /// What an update of the node by its element invalidates of its kinds: all of them, or none
+    /// if `should_auto_invalidate` says not to. compose-rs's, for a built-in node that
+    /// invalidates part of what it is only when its update changed that (a background's
+    /// semantics when its shape changed, as Compose's `BackgroundElement.update`, D2324).
+    #[doc(hidden)]
+    fn auto_invalidated_kinds(&mut self) -> crate::node_chain::NodeKinds {
+        if self.should_auto_invalidate() {
+            crate::node_chain::NodeKinds::ALL
+        } else {
+            crate::node_chain::NodeKinds::NONE
+        }
     }
     /// The node was attached, as `Modifier.Node.onAttach`: its layout node is in the tree and
     /// active, and every node of the layout nodes attached with it is marked attached already.
