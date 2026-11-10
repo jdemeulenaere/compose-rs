@@ -101,6 +101,18 @@ pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
     }
 }
 
+/// Like [`remember`], storing `Rc<T>` directly as the slot's allocation rather than wrapping an
+/// `Rc<T>` in a second `Rc` (so `SlotValue::data_ptr` names `T` directly, D2141).
+pub(crate) fn remember_rc<T: 'static>(calc: impl FnOnce() -> T) -> Rc<T> {
+    let (position, existing) = slot_next(TypeId::of::<T>());
+    if let Some(existing) = existing {
+        return existing.downcast::<T>().expect("slot type checked by TypeId");
+    }
+    let stored = Rc::new(calc());
+    slot_set(position, SlotValue::Plain(stored.clone()), type_name::<T>());
+    stored
+}
+
 /// Like [`remember`], but content reused around it (`ReusableContent` with another key, a lazy
 /// list's item reused for another) finds the value it remembered, where `remember` computes a
 /// new one: as a value of Compose's `ReusableRememberObserver` (`rememberCompositionContext`'s, a

@@ -772,6 +772,7 @@ fn two_groups_of_one_key_find_their_own_values() {
 }
 
 // Compose: compose/runtime/runtime-retain/src/commonTest/kotlin/androidx/compose/runtime/retain/RetainTests.kt, abandonCompositionTest_gapComposer
+// Compose: compose/runtime/runtime-retain/src/commonTest/kotlin/androidx/compose/runtime/retain/RetainTests.kt, abandonCompositionTest_linkComposer
 #[test]
 fn a_composition_abandoned_says_who_was_unused() {
     let (store1, store2) = (ManagedRetainedValuesStore::new(), ManagedRetainedValuesStore::new());
@@ -1124,6 +1125,7 @@ fn a_retained_registry_goes_with_its_store() {
 }
 
 // Compose: compose/runtime/runtime-retain/src/commonTest/kotlin/androidx/compose/runtime/retain/RetainTests.kt, retainedValuesStoreRegistry_manualDispose_gapComposer
+// Compose: compose/runtime/runtime-retain/src/commonTest/kotlin/androidx/compose/runtime/retain/RetainTests.kt, retainedValuesStoreRegistry_manualDispose_linkComposer
 #[test]
 #[should_panic(
     expected = "Cannot get a RetainedValuesStore after a RetainedValuesStoreRegistry has been disposed."

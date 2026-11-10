@@ -39,6 +39,7 @@ pub struct View {
 /// A view's lifecycle callbacks.
 #[derive(Default)]
 pub struct ViewCallbacks {
+    pub on_attach: Option<Box<dyn Fn()>>,
     pub on_reuse: Option<Box<dyn Fn()>>,
     pub on_deactivate: Option<Box<dyn Fn()>>,
     pub on_release: Option<Box<dyn Fn()>>,
@@ -159,6 +160,9 @@ impl Applier for ViewApplier {
 
     fn insert(&mut self, parent: NodeRef, index: usize, node: View) -> NodeRef {
         self.changes += 1;
+        if let Some(on_attach) = node.callbacks.as_ref().and_then(|c| c.on_attach.as_ref()) {
+            on_attach();
+        }
         Applier::insert(&mut self.tree, parent, index, node)
     }
 
@@ -235,6 +239,11 @@ impl Applier for ViewApplier {
 
     fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
         self.changes += 1;
+        if let Some(callbacks) = self.callbacks(node)
+            && let Some(on_attach) = &callbacks.on_attach
+        {
+            on_attach();
+        }
         Applier::attach(&mut self.tree, parent, index, node)
     }
 
@@ -298,6 +307,7 @@ pub fn LinearWithCallbacks(
     let factory = move || {
         let mut view = View::new("linear");
         view.callbacks = Some(Rc::new(ViewCallbacks {
+            on_attach: None,
             on_reuse: Some(Box::new(move || (on_reuse.borrow().clone())())),
             on_deactivate: Some(Box::new(move || (on_deactivate.borrow().clone())())),
             on_release: Some(Box::new(move || (on_release.borrow().clone())())),

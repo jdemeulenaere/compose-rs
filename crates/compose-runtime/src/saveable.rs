@@ -23,16 +23,21 @@ use std::rc::Rc;
 
 pub use crate::saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
 
-use crate::composer::record_effect;
+use crate::composer::record_boxed_effect;
 use crate::local::CompositionLocal;
 use crate::remember::{Remember, RememberObserver, remember_observer};
-use crate::runtime::{DeferredEffect, with_runtime};
+use crate::runtime::with_runtime;
 use crate::slot_table::{GroupKind, NONE};
 use crate::state::{Owned, OwnedState, mutable_state_of};
 
 /// A saved value: what a platform's saved state (an Android `Bundle`) can hold.
 #[derive(Clone, PartialEq, Debug)]
 pub enum SavedValue {
+    /// A placeholder among values registered under the same key when one's saver saved nothing,
+    /// keeping the others at their registration positions (D2140). A saver giving it saves
+    /// nothing, as one giving `None`, and it restores as `None` (D2200); in a list it's a list's
+    /// null item. Bytes with it (tag 5) don't read where it's not known.
+    Null,
     Bool(bool),
     Int(i64),
     Float(f64),
@@ -350,6 +355,7 @@ impl SavedState {
 
 fn write_value(value: &SavedValue, bytes: &mut Vec<u8>) {
     match value {
+        SavedValue::Null => bytes.push(5),
         SavedValue::Bool(value) => bytes.extend_from_slice(&[0, u8::from(*value)]),
         SavedValue::Int(value) => {
             bytes.push(1);
@@ -416,6 +422,7 @@ impl<'a> Reader<'a> {
                 }
                 SavedValue::List(values)
             }
+            5 => SavedValue::Null,
             _ => return None,
         })
     }
@@ -519,7 +526,7 @@ impl SaveableStateRegistry {
         if values.is_empty() {
             restored.remove(&key);
         }
-        value
+        value.filter(|value| *value != SavedValue::Null)
     }
 
     /// Registers `provider`, called by [`perform_save`](Self::perform_save) for the value to
@@ -547,7 +554,9 @@ impl SaveableStateRegistry {
     }
 
     /// Every registered value's saved form, by key, and the values restored and not yet taken
-    /// back, as Compose's `performSave`. Values whose saver saved nothing are left out.
+    /// back, as Compose's `performSave`. A value whose saver saved nothing (`None`, or a
+    /// [`SavedValue::Null`]) is a placeholder where another under its key saved something, so
+    /// those after it restore in order; a key under which none saved anything is left out.
     ///
     /// # Panics
     ///
@@ -579,15 +588,24 @@ impl SaveableStateRegistry {
             .collect();
         let checks = self.checks_values();
         for (key, providers) in providers {
-            let saved: Vec<SavedValue> =
-                providers.iter().filter_map(|provider| provider()).collect();
+            // A provider giving a placeholder itself saved nothing, as one giving `None` (D2200).
+            let saved: Vec<Option<SavedValue>> = providers
+                .iter()
+                .map(|provider| provider().filter(|value| !matches!(value, SavedValue::Null)))
+                .collect();
             if checks {
-                saved.iter().for_each(|value| self.require_can_be_saved(value));
+                saved.iter().flatten().for_each(|value| self.require_can_be_saved(value));
             }
-            if saved.is_empty() {
+            if saved.iter().all(Option::is_none) {
                 values.remove(&key);
             } else {
-                values.insert(key, saved);
+                // Placeholders keep later providers under this key at their registration positions
+                // (D2140), as Compose's `SaveableStateValue.performSave` keeps nulls in multi-value
+                // lists.
+                values.insert(
+                    key,
+                    saved.into_iter().map(|value| value.unwrap_or(SavedValue::Null)).collect(),
+                );
             }
         }
         SavedState { values }
@@ -861,7 +879,7 @@ impl<T: Clone + 'static> RememberSaveable for T {
 impl<V: Clone + PartialEq + 'static> RememberSaveable for OwnedState<V> {
     type Value = V;
     fn with_value<R>(stored: &OwnedState<V>, save: impl FnOnce(&V) -> R) -> R {
-        save(&stored.handle().get())
+        stored.handle().with(save)
     }
     fn from_value(value: V) -> OwnedState<V> {
         mutable_state_of(value)
@@ -1078,13 +1096,11 @@ pub(crate) fn remember_saveable_in<T: RememberSaveable, Sv: Saver<T::Value>>(
             // the pass, if it doesn't), as `remember_keyed`'s.
             let value = Rc::new(init().into_stored());
             let old = holder.value.stored.replace(value);
-            record_effect(DeferredEffect::Boxed(Box::new(move || drop(old))));
+            record_boxed_effect(Box::new(move || drop(old)));
         }
         if !same_registry(&holder.registry.borrow(), &registry) {
             let holder = holder.clone();
-            record_effect(DeferredEffect::Boxed(Box::new(move || {
-                holder.update_registry(registry)
-            })));
+            record_boxed_effect(Box::new(move || holder.update_registry(registry)));
         }
     }
     T::output(&holder.value.stored.borrow())

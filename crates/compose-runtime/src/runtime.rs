@@ -589,16 +589,26 @@ impl Deferred {
 
 /// A side effect to run at the end of a pass.
 pub(crate) enum DeferredEffect {
-    /// Recorded with `Composer::record_side_effect`.
-    Boxed(Box<dyn FnOnce()>),
+    /// Recorded with `Composer::record_side_effect` or `KeyedSideEffect` in its `u32` group.
+    Boxed(u32, Box<dyn FnOnce()>),
     /// Recorded by `SideEffect`, whose closure waits in a remembered slot: no allocation.
     Slot(Rc<dyn RunEffect>),
 }
 
 impl DeferredEffect {
+    #[inline]
+    pub fn target(&self) -> crate::stack_trace::TraceTarget {
+        match self {
+            DeferredEffect::Boxed(group, _) => crate::stack_trace::TraceTarget::Group(*group),
+            DeferredEffect::Slot(slot) => {
+                crate::stack_trace::TraceTarget::Slot(Rc::as_ptr(slot) as *const ())
+            }
+        }
+    }
+
     pub fn run(self) {
         match self {
-            DeferredEffect::Boxed(effect) => effect(),
+            DeferredEffect::Boxed(_, effect) => effect(),
             DeferredEffect::Slot(slot) => slot.run(),
         }
     }
