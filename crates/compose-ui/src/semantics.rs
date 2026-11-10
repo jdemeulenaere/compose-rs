@@ -197,11 +197,45 @@ thread_local! {
 }
 
 impl UiTree {
-    /// Whether `node` is left out of the semantics tree: not placed, unless it's deactivated
-    /// content and the tree takes that in.
+    /// Whether `node` is left out of the semantics tree: not placed (nor carrying semantics on an
+    /// outer placed layer, D2383), unless it's deactivated content and the tree takes that in.
     fn left_out(&self, node: NodeId) -> bool {
         let value = self.node(node);
-        !value.placed && !(value.deactivated && WITH_DEACTIVATED.with(std::cell::Cell::get))
+        if value.placed {
+            return false;
+        }
+        if value.deactivated && WITH_DEACTIVATED.with(std::cell::Cell::get) {
+            return false;
+        }
+        !self.has_placed_semantics_layer(node)
+    }
+
+    /// `node` isn't placed inside (a layout modifier didn't place its content), yet `node` itself
+    /// was placed by a placed parent and has a semantics modifier in a placed layer outside that
+    /// layout modifier (`MoveByWithUnplacedUiTest`, D2383).
+    #[cold]
+    fn has_placed_semantics_layer(&self, node: NodeId) -> bool {
+        let value = self.node(node);
+        if value.unplaced_layers == 0
+            || !value.kinds.any(NodeKinds::SEMANTICS)
+            || !self.is_layer_placed(node, 0)
+        {
+            return false;
+        }
+        let first_unplaced = value.unplaced_layers.trailing_zeros() as usize;
+        let mut layer = 0;
+        for entry in &value.chain {
+            if entry.kinds.any(NodeKinds::SEMANTICS) {
+                return layer <= first_unplaced;
+            }
+            if entry.kinds.any(NodeKinds::LAYOUT) {
+                layer += 1;
+                if layer > first_unplaced {
+                    return false;
+                }
+            }
+        }
+        false
     }
 
     /// The semantics tree with deactivated content in it too (a lazy list's items kept for

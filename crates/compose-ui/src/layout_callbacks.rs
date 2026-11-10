@@ -960,7 +960,7 @@ impl UiTree {
     fn semantics_coordinates(&mut self, node: NodeId) -> Option<(Offset, IntSize, Rect)> {
         self.get(node)?;
         let layer = self.own_semantics(node)?.layer;
-        if !self.is_placed_in_root(node) {
+        if !self.is_layer_placed(node, layer) {
             return None;
         }
         let entry = self.first_semantics_entry(node, layer);

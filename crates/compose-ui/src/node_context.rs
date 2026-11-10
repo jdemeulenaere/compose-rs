@@ -656,7 +656,10 @@ impl NodeHandle {
             return;
         }
         requests.node_invalidations.borrow_mut().push((self.node, self.entry, what));
-        requests.wake();
+        // The layout running applies it (D2382).
+        if !requests.laying_out.get() {
+            requests.wake();
+        }
     }
 
     /// Runs `block`, observing the state it reads, as `observeReads` from where a node has no

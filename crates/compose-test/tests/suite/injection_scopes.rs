@@ -276,7 +276,6 @@ fn move_while_unplaced(
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/MoveByWithUnplacedUiTest.kt, onePointer_moveByWithUnPlaceUi_stopsTrackingChanges
 #[test]
-#[ignore = "a node whose layout modifier doesn't place its content stays placed (ui-core §5, difference 13): its pointer input still hears the move"]
 fn one_pointer_move_by_with_un_place_ui_stops_tracking_changes() {
     let placed = mutable_state_of(true);
     let (mut ui, (kind, position)) = unplaced_target(placed.handle());
@@ -285,7 +284,6 @@ fn one_pointer_move_by_with_un_place_ui_stops_tracking_changes() {
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/MoveByWithUnplacedUiTest.kt, onePointer_moveByAndUnPlaceUiThenPlaceUi_temporarilyStopsTrackingChangesDuringUnPlace
 #[test]
-#[ignore = "a node whose layout modifier doesn't place its content stays placed (ui-core §5, difference 13): its pointer input still hears the move"]
 fn one_pointer_move_by_and_un_place_ui_then_place_ui_temporarily_stops_tracking_changes_during_un_place()
  {
     let placed = mutable_state_of(true);

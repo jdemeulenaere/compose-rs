@@ -194,7 +194,6 @@ fn toggle_placement_in_modifier() {
 /// `LayoutNode.isPlacedInLookahead` is internal).
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TogglePlacementInLookaheadScopeTest.kt, togglePlacementInModifierAndVerifyLookaheadRootPlacement
 #[test]
-#[ignore = "a node whose layout modifier doesn't place its content stays placed, its children too"]
 fn toggle_placement_in_modifier_and_verify_lookahead_root_placement() {
     let (place, new_child) = (mutable_state_of(true), mutable_state_of(false));
     let placed = no_placements();

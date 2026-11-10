@@ -783,7 +783,11 @@ impl UiTree {
         waiting_parent: bool,
         delivery: &mut Delivery<'_>,
     ) {
-        if self.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
+        if self.get(entry.node).is_none_or(|value| {
+            value.chain_version != entry.version
+                || !value.attached
+                || (!value.placed && delivery.kind != PointerEventType::Exit)
+        }) {
             return;
         }
         // A block waiting in another pass: nothing to make its event for.

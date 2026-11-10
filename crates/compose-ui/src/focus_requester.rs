@@ -53,6 +53,10 @@ pub(crate) struct FocusRequests {
     /// applies observed writes (`UiTree::apply_node_requests`).
     pub(crate) node_invalidations:
         RefCell<Vec<(NodeId, crate::node_chain::EntryId, crate::node_context::Invalidation)>>,
+    /// The host's layout is running (`UiHost::lay_out`): it applies what handles ask until it
+    /// ends, so a request asks for no frame more, as Compose's returns
+    /// `!duringFullMeasureLayoutPass` (D2382). What it leaves asks for one after.
+    pub(crate) laying_out: Cell<bool>,
     /// Layout nodes a `Remeasurement` asked to measure while their tree was busy: measured in
     /// the next layout.
     pub(crate) measure_requests: RefCell<Vec<NodeId>>,

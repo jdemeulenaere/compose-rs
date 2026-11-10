@@ -326,6 +326,10 @@ impl LayoutCoordinates {
         include_motion_frame_of_reference: bool,
     ) -> Offset {
         self.read_position(|tree, place| {
+            assert_eq!(
+                self.tree, source.tree,
+                "compose-ui: layouts are not part of the same hierarchy"
+            );
             note_position_read(source.node);
             let Some(from) = tree.find_place(source) else { return Offset::ZERO };
             let mut point = relative_to_source;
@@ -344,7 +348,12 @@ impl LayoutCoordinates {
         self.read(|tree| {
             note_position_read(self.node);
             note_position_read(source.node);
-            let (to, from) = (tree.find_place(self)?, tree.find_place(source)?);
+            let to = tree.find_place(self)?;
+            assert_eq!(
+                self.tree, source.tree,
+                "compose-ui: layouts are not part of the same hierarchy"
+            );
+            let from = tree.find_place(source)?;
             Some(tree.bounding_box(from, to, clip_bounds))
         })
         .flatten()
@@ -356,6 +365,10 @@ impl LayoutCoordinates {
     pub fn transform_from(&self, source: &LayoutCoordinates, matrix: &mut Matrix) {
         *matrix = Matrix::new();
         self.read_position(|tree, place| {
+            assert_eq!(
+                self.tree, source.tree,
+                "compose-ui: layouts are not part of the same hierarchy"
+            );
             note_position_read(source.node);
             let Some(from) = tree.find_place(source) else { return };
             tree.walk(from, place, true, &mut |step| step.apply_to(matrix));

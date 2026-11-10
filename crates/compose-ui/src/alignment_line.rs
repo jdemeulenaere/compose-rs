@@ -358,7 +358,7 @@ impl UiTree {
             for node in requests {
                 let Some(value) = self.get(node) else { continue };
                 let (measure, placement, placed) =
-                    (value.needs_measure, value.needs_placement, value.placed);
+                    (value.needs_measure, value.needs_placement, value.placed_by_parent);
                 let parent = value.parent;
                 if measure {
                     let mut above = parent;

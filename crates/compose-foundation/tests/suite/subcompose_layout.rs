@@ -4025,9 +4025,6 @@ fn precomposing_over_what_was_kept_with_an_auto_invalidated_element_measures_and
 /// updates and invalidates measurement before `premeasure` must neither measure itself early nor
 /// trigger a parent `SubcomposeLayout` remeasure.
 #[test]
-#[ignore = "review: an invalidation in a precomposed slot never measured remeasures its \
-            SubcomposeLayout (`remeasure_children_in_place` answers true for a child without \
-            constraints); Compose swallows it, the node being measure-pending already"]
 fn a_new_precomposed_slot_invalidated_before_premeasure_waits_for_it() {
     let state = SubcomposeLayoutState::new();
     let (measured, placed, layout_measures) =
